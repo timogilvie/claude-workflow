@@ -22,12 +22,13 @@ Perform these steps one at a time and confirm before proceeding:
   # For hokusai-infrastructure repo:
   npx tsx ~/.claude/tools/get-backlog.ts "Hokusai infrastructure"
   ```
+- This tool retrieves only items in "Backlog" state from Linear
 - Review the output and select a task by providing its title. Number them and prompt the user to select one by choosing a number. 
 - The tool will display:
   - Task title
   - Description
   - Labels
-  - Current state
+  - Current state (will always show "Backlog")
 
 ### Step 2: Create Git Branch
 - When the user selects a task, sanitize the title and create a git branch:
@@ -37,13 +38,31 @@ Perform these steps one at a time and confirm before proceeding:
 
 # After creating the branch
 mkdir -p features/<feature-name>
+mkdir -p project-knowledge/features
 
-### Step 3: Generate PRD
-- Use the project-investigator subagent to prepare a file containing the relevant documentation
-- Use the flow-mapper subagent to prepare a file mapping the flow
+### Step 3: Generate PRD with Knowledge Management
+#### 3.1: Check and Load Existing Knowledge
+- Check if `project-knowledge/codebase-map.md` exists
+- If it exists, read it to understand already-documented components, flows, and patterns
+- This provides cumulative context from all previous feature implementations
+
+#### 3.2: Targeted Investigation
+- Use the project-investigator subagent, focusing on areas NOT already documented in codebase-map.md
+- Save investigation results to `features/<feature-name>/investigation.md`
+- Use the flow-mapper subagent for any undocumented flows related to this feature
+- Save flow mapping to `features/<feature-name>/flow-mapping.md`
+
+#### 3.3: Generate PRD
 - Use the prompt in `prd-prompt-template.md`
+- Include context from: codebase-map.md + new investigations + flow mappings
 - Replace `{{PROJECT_SUMMARY}}` with the selected Linear task's title + description
 - Save the AI-generated PRD to `features/<feature-name>/prd.md`
+
+#### 3.4: Update Knowledge Base
+- Extract 3-5 key discoveries from the investigation and flow mapping
+- Update or create `project-knowledge/codebase-map.md` with these insights
+- Keep entries concise (1-2 lines each) with references to detailed docs
+- Archive full investigation docs to `project-knowledge/features/<feature-name>-<date>/`
 
 ### Step 4: Generate Tasks
 - Use the prompt in `tasks-prompt-template.md` to convert `prd.md` into a list of actionable dev tasks
@@ -109,7 +128,15 @@ BEHAVIOUR: add password-reset endpoint (happy path)
 - [x] All tasks in `tasks.md` completed
 - [x] Tests pass locally and on CI
 - [x] Feature validated on Vercel preview: [preview-link]
+- [x] Codebase knowledge map updated with new discoveries
 - [ ] Reviewer confirmed PRD alignment
+
+### Step 8: Post-Feature Knowledge Extraction
+After PR is merged:
+- Review the implemented feature for any additional patterns or insights discovered during implementation
+- Update `project-knowledge/codebase-map.md` with implementation learnings
+- Document any gotchas, workarounds, or important context for future features
+- Keep the map concise - aim for under 200 lines total even after many features
 
 ## Error Handling
 
@@ -173,12 +200,68 @@ If tests fail:
    npm install
    ```
 
+## Codebase Knowledge Map Structure
+
+The `project-knowledge/codebase-map.md` should follow this structure:
+
+```markdown
+# Codebase Knowledge Map
+_Last updated: [date]_
+
+## Components & Services
+- component-name: Brief description, key responsibilities [details: features/investigation-date.md]
+
+## Documented Flows
+- flow-name: Start → middle → end pattern [details: features/flow-date.md]
+
+## Architecture Patterns
+- Pattern description and where it's used
+
+## Tech Stack & Conventions
+- Framework/library: How it's used in this project
+
+## External Integrations
+- Service: Purpose and integration points
+
+## Database Schema Insights
+- Key tables and relationships discovered
+
+## API Patterns
+- Endpoint conventions and authentication methods
+
+## Testing Patterns
+- Test framework and organization discovered
+```
+
 ## Notes
 - Each step should be completed in sequence
+- The codebase map is a living document that grows with each feature
+- Keep map entries concise - detailed docs go in archive folders
 - Document any deviations from the standard process
 - Keep the PRD and tasks updated as implementation progresses
 - Regular commits with clear messages are recommended
 - If you need help with environment setup, refer to the project's setup documentation
+
+__________________________________________
+
+## KNOWLEDGE MAP UPDATE PROMPT
+
+After completing investigation and flow mapping for a feature:
+
+ROLE: You are a technical documentation specialist extracting key insights for future reference.
+
+TASK: Review the investigation and flow mapping documents and extract 3-5 crucial insights that would help future developers understand this codebase better.
+
+FORMAT:
+- Each insight should be 1-2 lines maximum
+- Include a reference to the detailed documentation file
+- Focus on patterns, conventions, and architectural decisions
+- Avoid feature-specific details unless they reveal broader patterns
+
+EXAMPLE ENTRIES:
+- auth-service: JWT with Redis sessions, 15min expiry, refresh via /api/auth/refresh [details: features/auth-flow-2024-01.md]
+- All API errors use AppError class with structured logging to CloudWatch [details: features/error-handling-2024-01.md]
+- Database migrations use TypeORM with naming convention: timestamp-description.ts [details: features/db-investigation-2024-02.md]
 
 __________________________________________
 
