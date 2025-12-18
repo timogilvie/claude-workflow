@@ -1,20 +1,14 @@
-import { execSync } from "child_process";
+import { createBranch, sanitizeBranchName } from '../shared/lib/git.js';
 
-export const createGitBranch = (name: string) => {
-  const sanitized = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-  const branchName = `feature/${sanitized}`;
+export const createGitBranch = (name: string, prefix = 'feature') => {
   try {
-    execSync(`git checkout -b ${branchName}`, { stdio: "inherit" });
+    const branchName = createBranch(name, prefix);
     return `✅ Created and switched to branch: ${branchName}`;
   } catch (err) {
     return `❌ Failed to create branch: ${err}`;
   }
 };
 
-// Test the function
-const result = createGitBranch("test-branch");
-console.log(result);
+export const formatBranchName = (name: string, prefix = 'feature') => {
+  return sanitizeBranchName(name, prefix);
+};

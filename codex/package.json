@@ -1,0 +1,11 @@
+{
+  "name": "codex-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Codex workflow helpers with gating and shared config",
+  "scripts": {
+    "workflow": "node src/commands/workflow.js",
+    "state": "node src/commands/workflow.js status"
+  }
+}

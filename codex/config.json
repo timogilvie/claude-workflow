@@ -1,0 +1,16 @@
+{
+  "linear": {
+    "defaultProject": "Hokusai infrastructure",
+    "projects": ["Hokusai infrastructure", "Hokusai data pipeline"]
+  },
+  "git": {
+    "featurePrefix": "feature",
+    "bugfixPrefix": "bugfix"
+  },
+  "checks": {
+    "test": "npm test",
+    "lint": "npm run lint",
+    "build": "npm run build",
+    "typecheck": "npm run typecheck"
+  }
+}
