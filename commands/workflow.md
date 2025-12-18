@@ -10,15 +10,12 @@ This command provides a continuous flow while clearing context between major pha
 Use the **linear-task-selector** skill to:
 - Fetch tasks from Linear backlog (check CLAUDE.md for project name)
 - Display numbered task list to user
-- Save selected task context to `/tmp/selected-linear-task.json`
+- Create feature directory: `features/<feature-name>/`
+- Save selected task context to `features/<feature-name>/selected-task.json`
 
-### 1B. Create Working Directory
-```bash
-# Create feature directory based on selected task
-mkdir -p features/<feature-name>
-```
+The skill handles directory creation and context saving together, preventing conflicts when multiple Claude sessions run concurrently.
 
-**Context Handoff**: Task details saved to `/tmp/selected-linear-task.json`
+**Context Handoff**: Task details saved to `features/<feature-name>/selected-task.json`
 
 ---
 
@@ -34,7 +31,7 @@ This may take a few minutes.
 
 ### 2B. Execute Plan Creation
 Follow the `/create-plan` workflow:
-1. Read task context from `/tmp/selected-linear-task.json`
+1. Read task context from `features/<feature-name>/selected-task.json`
 2. Use **research-orchestrator** agent for parallel research
 3. Generate structured plan with phases
 4. Save to `features/<feature-name>/plan.md`
@@ -191,7 +188,7 @@ Next Steps:
 4. **Focus on current phase** goals only
 
 ### What Gets Saved:
-- Task details → `/tmp/selected-linear-task.json`
+- Task details → `features/<feature-name>/selected-task.json`
 - Plan → `features/<feature-name>/plan.md`
 - Validation → `features/<feature-name>/validation-report.md`
 - Code → Git commits
