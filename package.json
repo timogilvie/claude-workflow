@@ -1,0 +1,26 @@
+{
+  "name": "claude-codex-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unified workflow and skills for Claude and Codex AI assistants",
+  "type": "module",
+  "workspaces": [
+    "codex"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "test:codex": "npm run test -w codex",
+    "codex:workflow": "npm run workflow -w codex",
+    "codex:state": "npm run state -w codex"
+  },
+  "keywords": [
+    "claude",
+    "codex",
+    "workflow",
+    "linear",
+    "ai-tools"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

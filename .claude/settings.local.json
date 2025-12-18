@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Read(//Users/timothyogilvie/.claude/tools/**)"
+      "Read(//Users/timothyogilvie/.claude/tools/**)",
+      "Read(//Users/timothyogilvie/.claude/commands/**)"
     ],
     "deny": [],
     "ask": []

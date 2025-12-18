@@ -1,0 +1,7 @@
+{
+  "/workflow": "node codex/src/commands/start-workflow.js",
+  "/bugfix": "node codex/src/commands/start-bugfix.js",
+  "/plan": "node codex/src/commands/start-plan.js",
+  "/backlog": "node codex/src/commands/backlog.js",
+  "/generate-doc": "node codex/src/commands/generate-doc.js"
+}

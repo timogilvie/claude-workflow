@@ -23,3 +23,15 @@ tools/package-lock.json
 # Logs
 *.log
 npm-debug.log*
+
+# State directories (ephemeral workflow state)
+.codex/state/
+.claude/state/
+
+# Workspace artifacts
+features/*/
+bugs/*/
+epics/*/
+!features/.gitkeep
+!bugs/.gitkeep
+!epics/.gitkeep

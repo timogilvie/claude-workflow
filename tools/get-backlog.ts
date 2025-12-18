@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { getBacklog, getProjects } from './linear-tasks.js';
+import { getBacklog, getProjects } from './linear-tasks.ts';
 import dotenv from 'dotenv';
 import readline from 'readline';
 
@@ -50,20 +50,40 @@ async function selectProject() {
 async function displayBacklog(projectName) {
   try {
     const backlog = await getBacklog(projectName);
-    
+
     if (backlog.length === 0) {
       console.log(`No issues found${projectName ? ` for project "${projectName}"` : ''}.`);
       return;
     }
-    
-    console.log(`\nBacklog Items${projectName ? ` for "${projectName}"` : ''}:`);
-    backlog.forEach((issue, index) => {
+
+    // Filter to show only parent issues (issues without a parent)
+    const parentIssues = backlog.filter(issue => !issue.parent);
+
+    console.log(`\nBacklog State Items${projectName ? ` for "${projectName}"` : ''} (only showing items in "Backlog" state):`);
+    parentIssues.forEach((issue, index) => {
       console.log(`\n${index + 1}. ---`);
       console.log(`Title: ${issue.title}`);
       console.log(`Project: ${issue.project?.name || 'Unknown'}`);
       console.log(`State: ${issue.state?.name || 'Unknown'}`);
       console.log(`Description: ${issue.description || 'No description'}`);
       console.log('Labels:', issue.labels.nodes.map((label) => label.name).join(', ') || 'None');
+
+      // Display child issues if they exist
+      if (issue.children?.nodes && issue.children.nodes.length > 0) {
+        console.log(`\n   Sub-tasks (${issue.children.nodes.length}):`);
+        issue.children.nodes.forEach((child, childIndex) => {
+          console.log(`\n   ${index + 1}.${childIndex + 1}. ${child.identifier}: ${child.title}`);
+          console.log(`   State: ${child.state?.name || 'Unknown'}`);
+          if (child.description) {
+            // Show first 100 chars of description
+            const desc = child.description.length > 100
+              ? child.description.substring(0, 100) + '...'
+              : child.description;
+            console.log(`   Description: ${desc}`);
+          }
+          console.log('   Labels:', child.labels.nodes.map((label) => label.name).join(', ') || 'None');
+        });
+      }
     });
   } catch (error) {
     console.error('Error fetching backlog:', error);
