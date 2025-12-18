@@ -63,7 +63,18 @@ Please select a task by entering its number:
   - State
 
 ### Step 5: Save Context
-Save the selected task context to `/tmp/selected-linear-task.json`:
+1. Sanitize the task title to create a feature name:
+   - Lowercase all characters
+   - Replace spaces with hyphens
+   - Remove special characters (keep only alphanumeric and hyphens)
+   - Example: "Add User Authentication!" → `add-user-authentication`
+
+2. Create the feature directory:
+```bash
+mkdir -p features/<feature-name>
+```
+
+3. Save the selected task context to `features/<feature-name>/selected-task.json`:
 ```json
 {
   "taskId": "HOK-123",
@@ -73,6 +84,8 @@ Save the selected task context to `/tmp/selected-linear-task.json`:
   "state": "Backlog",
   "projectName": "SalesBot MVP",
   "workflowType": "feature",
+  "featureName": "add-user-authentication",
+  "contextPath": "features/add-user-authentication/selected-task.json",
   "selectedAt": "2025-01-11T10:30:00Z"
 }
 ```
@@ -87,7 +100,8 @@ Return a concise summary to the user:
 ```
 ✓ Selected: [HOK-123] Add user authentication
   Type: feature
-  Context saved to: /tmp/selected-linear-task.json
+  Feature directory: features/add-user-authentication/
+  Context saved to: features/add-user-authentication/selected-task.json
 ```
 
 ## Examples
@@ -100,8 +114,9 @@ Assistant uses linear-task-selector:
 2. Runs: npx tsx ~/.claude/tools/get-backlog.ts "SalesBot MVP"
 3. Displays 5 tasks with numbers
 4. User selects: 3
-5. Saves task to /tmp/selected-linear-task.json
-6. Returns: "✓ Selected: [HOK-125] Implement email generation"
+5. Creates: features/implement-email-generation/
+6. Saves task to features/implement-email-generation/selected-task.json
+7. Returns: "✓ Selected: [HOK-125] Implement email generation"
 ```
 
 ### Example 2: Bug Selection
@@ -112,8 +127,9 @@ Assistant uses linear-task-selector:
 2. Runs: npx tsx ~/.claude/tools/get-backlog.ts "SalesBot MVP" "bug"
 3. Displays 3 bugs with numbers
 4. User selects: 1
-5. Saves bug to /tmp/selected-linear-task.json with workflowType: "bugfix"
-6. Returns: "✓ Selected: [HOK-130] Fix contact discovery timeout"
+5. Creates: features/fix-contact-discovery-timeout/
+6. Saves bug to features/fix-contact-discovery-timeout/selected-task.json with workflowType: "bugfix"
+7. Returns: "✓ Selected: [HOK-130] Fix contact discovery timeout"
 ```
 
 ## Error Handling
@@ -141,9 +157,12 @@ If user selects an invalid number:
 ## Output
 
 This skill outputs:
-- `/tmp/selected-linear-task.json`: Selected task context for downstream workflows
+- `features/<feature-name>/selected-task.json`: Selected task context for downstream workflows
+- `features/<feature-name>/`: Created feature directory for all workflow artifacts
 - Console: Summary message confirming selection
 - Side effect: Beep sound to alert user
+
+Note: Using feature-specific paths prevents conflicts when multiple Claude sessions run concurrently.
 
 ## Integration
 

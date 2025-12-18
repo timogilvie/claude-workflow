@@ -17,39 +17,34 @@ Use this skill when:
 ## Instructions
 
 ### Step 1: Load Task Context
-Read the selected task from `/tmp/selected-linear-task.json`:
-```bash
-cat /tmp/selected-linear-task.json
-```
+Read the selected task from the appropriate directory (created by linear-task-selector):
+- For features: `features/<feature-name>/selected-task.json`
+- For bugs: `bugs/<bug-name>/selected-task.json`
+- For epics: `epics/<epic-name>/selected-task.json`
+
+The `featureName` field in the JSON tells you which directory to use.
 
 Extract:
 - `workflowType`: "feature", "bugfix", or "plan"
+- `featureName`: Directory name for locating/storing files
 - `title`: Task title
 - `description`: Full task description
 - `taskId`: Linear issue ID
 
-### Step 2: Create Directory Structure
+### Step 2: Verify Directory Structure
+
+The directory should already exist (created by linear-task-selector).
 
 **For feature workflows:**
-```bash
-mkdir -p features/<sanitized-feature-name>
-```
+Use existing `features/<feature-name>/` directory
 
 **For bugfix workflows:**
-```bash
-mkdir -p bugs/<sanitized-bug-name>
-```
+Use existing `bugs/<bug-name>/` directory
 
 **For plan workflows:**
-```bash
-mkdir -p /tmp/plan-decomposition
-```
+Use existing `epics/<epic-name>/` directory
 
-Sanitize names by:
-- Converting to lowercase
-- Replacing spaces with hyphens
-- Removing special characters except hyphens
-- Limiting to 50 characters
+If directory doesn't exist, create it using the `featureName` from selected-task.json.
 
 ### Step 3: Generate Documents
 
@@ -160,7 +155,7 @@ Required sections:
 #### For Plan Workflow
 
 **3a. Generate Decomposition Request**
-Output: `/tmp/linear-decomposition-request.json`
+Output: `epics/<epic-name>/decomposition-request.json`
 
 ```json
 {
@@ -177,10 +172,10 @@ Use Read, Grep, Glob tools to:
 - Identify what's missing
 - Find relevant files and patterns
 
-Output: `/tmp/plan-decomposition/research.md`
+Output: `epics/<epic-name>/research.md`
 
 **3c. Generate Decomposition Plan**
-Output: `/tmp/linear-decomposition-plan.json`
+Output: `epics/<epic-name>/decomposition-plan.json`
 
 ```json
 {
@@ -230,9 +225,9 @@ Next step: Review PRD and tasks, then begin implementation
 
 ### Example 1: Feature Documentation
 ```
-Input: /tmp/selected-linear-task.json with workflowType: "feature"
+Input: features/add-user-auth/selected-task.json with workflowType: "feature"
 Process:
-1. Create features/add-user-auth/
+1. Use existing features/add-user-auth/
 2. Generate prd.md from template + task description
 3. Generate tasks.md from PRD
 4. Return: "✓ PRD and tasks created"
@@ -240,9 +235,9 @@ Process:
 
 ### Example 2: Bug Documentation
 ```
-Input: /tmp/selected-linear-task.json with workflowType: "bugfix"
+Input: bugs/contact-discovery-timeout/selected-task.json with workflowType: "bugfix"
 Process:
-1. Create bugs/contact-discovery-timeout/
+1. Use existing bugs/contact-discovery-timeout/
 2. Generate investigation.md from template + bug description
 3. Generate hypotheses.md with 3-5 initial hypotheses
 4. Generate fix-tasks.md template
@@ -251,9 +246,9 @@ Process:
 
 ### Example 3: Plan Documentation
 ```
-Input: /tmp/selected-linear-task.json with workflowType: "plan"
+Input: epics/user-management-system/selected-task.json with workflowType: "plan"
 Process:
-1. Create /tmp/plan-decomposition/
+1. Use existing epics/user-management-system/
 2. Generate decomposition-request.json
 3. Research existing codebase → research.md
 4. Generate decomposition-plan.json with 5 sub-issues
@@ -263,7 +258,7 @@ Process:
 ## Error Handling
 
 ### Missing Task Context
-If `/tmp/selected-linear-task.json` doesn't exist:
+If no selected-task.json exists in the expected directory:
 1. Error: "No task selected. Run linear-task-selector first."
 2. Exit gracefully
 
@@ -284,8 +279,10 @@ If template generation fails:
 This skill outputs:
 - Feature workflow: `features/<name>/prd.md`, `features/<name>/tasks.md`
 - Bugfix workflow: `bugs/<name>/investigation.md`, `bugs/<name>/hypotheses.md`, `bugs/<name>/fix-tasks.md`
-- Plan workflow: `/tmp/linear-decomposition-request.json`, `/tmp/linear-decomposition-plan.json`
+- Plan workflow: `epics/<name>/decomposition-request.json`, `epics/<name>/decomposition-plan.json`, `epics/<name>/research.md`
 - Console: Summary of created documents
+
+Note: All files are stored in workflow-specific directories to prevent conflicts when multiple Claude sessions run concurrently.
 
 ## Integration
 

@@ -4,11 +4,12 @@ Execute the bug investigation workflow using agent skills:
 Use the **linear-task-selector** skill to:
 - Fetch bugs from Linear backlog (check CLAUDE.md for project name)
 - Display numbered bug list to user
-- Save selected bug context to `/tmp/selected-linear-task.json`
+- Create bug directory: `bugs/<bug-name>/`
+- Save selected bug context to `bugs/<bug-name>/selected-task.json`
 
 ## Phase 2: Investigation Documentation
 Use the **document-orchestrator** skill to:
-- Create `bugs/<bug-name>/` directory
+- Use existing `bugs/<bug-name>/` directory
 - Generate `investigation.md` with systematic investigation plan
 - Generate `hypotheses.md` with 3-5 initial root cause hypotheses
 - Generate `fix-tasks.md` template
