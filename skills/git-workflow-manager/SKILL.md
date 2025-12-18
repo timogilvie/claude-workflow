@@ -18,13 +18,15 @@ Use this skill when:
 ## Instructions
 
 ### Step 1: Load Task Context
-Read the selected task from `/tmp/selected-linear-task.json`:
-```bash
-cat /tmp/selected-linear-task.json
-```
+Read the selected task from the feature/bug directory:
+- For features: `features/<feature-name>/selected-task.json`
+- For bugs: `bugs/<bug-name>/selected-task.json`
+
+The `featureName` field in the JSON tells you which directory to look in.
 
 Extract:
 - `workflowType`: "feature" or "bugfix"
+- `featureName`: Directory name for locating files
 - `title`: Task title for branch naming
 - `taskId`: Linear issue ID for commit references
 - `description`: For PR body
@@ -228,7 +230,7 @@ Ready for review checklist:
 
 ### Example 1: Feature Workflow
 ```
-Input: /tmp/selected-linear-task.json with workflowType: "feature"
+Input: features/add-email-generation/selected-task.json with workflowType: "feature"
 Process:
 1. Create branch: feature/add-email-generation
 2. (User implements feature)
@@ -240,7 +242,7 @@ Process:
 
 ### Example 2: Bugfix Workflow
 ```
-Input: /tmp/selected-linear-task.json with workflowType: "bugfix"
+Input: bugs/contact-discovery-timeout/selected-task.json with workflowType: "bugfix"
 Process:
 1. Create branch: bugfix/contact-discovery-timeout
 2. (User fixes bug)

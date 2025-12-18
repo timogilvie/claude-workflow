@@ -4,11 +4,12 @@ Execute the plan decomposition workflow using agent skills:
 Use the **linear-task-selector** skill to:
 - Fetch large work items (epics) from Linear backlog
 - Display numbered epic list to user
-- Save selected epic context to `/tmp/selected-linear-task.json`
+- Create epic directory: `epics/<epic-name>/`
+- Save selected epic context to `epics/<epic-name>/selected-task.json`
 
 ## Phase 2: Research & Documentation
 Use the **document-orchestrator** skill to:
-- Create `/tmp/plan-decomposition/` directory
+- Use existing `epics/<epic-name>/` directory
 - Generate decomposition request JSON from epic context
 - Research existing codebase implementation (what exists vs. what's missing)
 - Document research findings in `research.md`
@@ -21,7 +22,7 @@ Use the **document-orchestrator** skill to:
 - Define clear dependencies using array indices
 - Assign estimates (1-2 simple, 3-5 moderate, 5-8 complex)
 - Set priorities (1 urgent, 2 high, 3 normal, 4 low)
-- Save plan to `/tmp/linear-decomposition-plan.json`
+- Save plan to `epics/<epic-name>/decomposition-plan.json`
 
 ## Phase 4: Create Sub-Issues in Linear
 Run the creation script:
