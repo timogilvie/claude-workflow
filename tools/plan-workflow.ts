@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // @ts-nocheck
-import { getBacklog, getTeams, createIssue, createIssueRelation } from './linear-tasks.ts';
+import { getBacklog, getTeams, createIssue, createIssueRelation, getOrCreateProjectMilestone } from './linear-tasks.ts';
 import dotenv from 'dotenv';
 import readline from 'readline';
 import { writeFileSync, readFileSync, existsSync } from 'fs';
@@ -71,6 +71,27 @@ async function createIssuesInLinear(
   const projectId = parentIssue.project?.id;
   const createdIssues: any[] = [];
 
+  // Get or create milestone based on parent issue title
+  let milestoneId: string | undefined;
+  if (projectId) {
+    console.log(`\nCreating/finding milestone: "${parentIssue.title}"...`);
+    try {
+      milestoneId = await getOrCreateProjectMilestone(projectId, parentIssue.title);
+      console.log(`✓ Using milestone: ${parentIssue.title}`);
+    } catch (error) {
+      console.warn(`⚠ Could not create milestone: ${error.message}`);
+    }
+  }
+
+  // Check if parent ID is a valid UUID
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const hasValidParentId = parentIssue.id && uuidRegex.test(parentIssue.id);
+
+  if (!hasValidParentId) {
+    console.log(`\n⚠ Parent issue ID "${parentIssue.id}" is not a valid UUID`);
+    console.log('Creating sub-issues without parent link (they will be standalone issues)');
+  }
+
   // Create all sub-issues first
   console.log('\nCreating sub-issues...');
   for (let i = 0; i < plan.subIssues.length; i++) {
@@ -80,7 +101,7 @@ async function createIssuesInLinear(
     const enhancedDescription = `${subIssue.description}
 
 ---
-**Parent Issue:** ${parentIssue.title} (${parentIssue.id})
+**Parent Epic:** ${parentIssue.title}${parentIssue.id ? ` (${parentIssue.id})` : ''}
 ${plan.masterDocumentPath ? `**Master Document:** ${plan.masterDocumentPath}` : ''}
 ${plan.relevantFiles.length > 0 ? `**Relevant Files:**
 ${plan.relevantFiles.map(f => `- \`${f}\``).join('\n')}` : ''}
@@ -89,15 +110,22 @@ This is issue ${i + 1} of ${plan.subIssues.length} for the parent epic.`;
 
     console.log(`  Creating: ${subIssue.title}`);
 
-    const created = await createIssue({
+    const issueData: any = {
       title: subIssue.title,
       description: enhancedDescription,
       teamId,
       projectId,
-      parentId: parentIssue.id,
       priority: subIssue.priority,
-      estimate: subIssue.estimate
-    });
+      estimate: subIssue.estimate,
+      projectMilestoneId: milestoneId
+    };
+
+    // Only add parentId if it's a valid UUID
+    if (hasValidParentId) {
+      issueData.parentId = parentIssue.id;
+    }
+
+    const created = await createIssue(issueData);
 
     createdIssues.push(created);
     console.log(`    ✓ Created: ${created.identifier} - ${created.url}`);
@@ -111,9 +139,11 @@ This is issue ${i + 1} of ${plan.subIssues.length} for the parent epic.`;
       for (const depIndex of subIssue.dependencies) {
         if (depIndex >= 0 && depIndex < createdIssues.length && depIndex !== i) {
           console.log(`  ${createdIssues[i].identifier} blocked by ${createdIssues[depIndex].identifier}`);
+          // IMPORTANT: createIssueRelation(A, B, 'blocks') means "A blocks B"
+          // Since issue i depends on depIndex, we want "depIndex blocks i"
           await createIssueRelation(
-            createdIssues[i].id,
-            createdIssues[depIndex].id,
+            createdIssues[depIndex].id,  // The dependency (blocker)
+            createdIssues[i].id,         // The current issue (blocked)
             'blocks'
           );
         }
@@ -142,7 +172,7 @@ async function main() {
     const mode = process.argv[3]; // 'select' or 'create'
 
     if (mode === 'create') {
-      // Step 2: Read the plan and create issues
+      // Step 2: Read the plan and create issues (NON-INTERACTIVE)
       const requestPath = '/tmp/linear-decomposition-request.json';
       const planPath = '/tmp/linear-decomposition-plan.json';
 
@@ -155,46 +185,28 @@ async function main() {
       const plan = JSON.parse(readFileSync(planPath, 'utf-8'));
 
       console.log('='.repeat(60));
-      console.log('CREATING ISSUES FROM PLAN');
+      console.log('CREATING ISSUES FROM PLAN (AUTO)');
       console.log('='.repeat(60));
 
-      // Get team ID
-      console.log('\nSelect team for issues:');
+      // Get team ID - AUTO-SELECT
+      console.log('\nFetching teams...');
       const teams = await getTeams();
 
       if (teams.length === 0) {
         console.log('No teams found. Exiting.');
-        rl.close();
         process.exit(1);
       }
 
-      console.log('\nAvailable teams:');
-      teams.forEach((team, index) => {
-        console.log(`${index + 1}. ${team.name} (${team.key})`);
-      });
-
-      const teamSelection = await question('\nSelect team (number): ');
-      const teamIndex = parseInt(teamSelection) - 1;
-
-      if (teamIndex < 0 || teamIndex >= teams.length) {
-        console.log('Invalid team selection. Exiting.');
-        rl.close();
-        process.exit(1);
+      // Auto-select team: prefer "Hokusai" team, otherwise use first team
+      let selectedTeam = teams.find(t => t.name.toLowerCase().includes('hokusai'));
+      if (!selectedTeam) {
+        selectedTeam = teams[0];
       }
 
-      const selectedTeam = teams[teamIndex];
-      console.log(`✓ Selected team: ${selectedTeam.name}`);
-
-      const confirm = await question('\nProceed with creating issues? (y/n): ');
-
-      if (confirm.toLowerCase() !== 'y') {
-        console.log('Cancelled. No issues created.');
-        rl.close();
-        process.exit(0);
-      }
+      console.log(`✓ Auto-selected team: ${selectedTeam.name} (${selectedTeam.key})`);
+      console.log(`\nCreating ${plan.subIssues.length} sub-issues for: ${request.issue.title}`);
 
       await createIssuesInLinear(request.issue, plan, selectedTeam.id);
-      rl.close();
       return;
     }
 

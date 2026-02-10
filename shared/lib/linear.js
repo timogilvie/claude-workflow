@@ -69,11 +69,14 @@ export async function getBacklog(projectName) {
       issues(${filterClause}) {
         nodes {
           id
+          identifier
           title
           description
-          state { name }
+          state { name id }
           labels { nodes { name } }
           project { id name }
+          estimate
+          priority
           parent {
             id
             identifier
@@ -95,6 +98,40 @@ export async function getBacklog(projectName) {
   `);
 
   return data.issues?.nodes || [];
+}
+
+export async function getWorkflowStates(teamId) {
+  const data = await request(`
+    query {
+      workflowStates(filter: { team: { id: { eq: "${teamId}" } } }) {
+        nodes {
+          id
+          name
+          type
+        }
+      }
+    }
+  `);
+
+  return data.workflowStates?.nodes || [];
+}
+
+export async function setIssueState(identifier, stateName) {
+  // First get the issue to find its team and current workflow states
+  const issue = await getIssue(identifier);
+
+  // Get workflow states for this team
+  const states = await getWorkflowStates(issue.team.id);
+
+  // Find the target state
+  const targetState = states.find(s => s.name.toLowerCase() === stateName.toLowerCase());
+
+  if (!targetState) {
+    throw new Error(`State "${stateName}" not found. Available: ${states.map(s => s.name).join(', ')}`);
+  }
+
+  // Update the issue with the new state
+  return await updateIssue(issue.id, { stateId: targetState.id });
 }
 
 export async function createIssue(params) {
@@ -199,6 +236,84 @@ export async function getOrCreateProjectMilestone(projectId, milestoneName) {
   );
 
   return createData.projectMilestoneCreate?.projectMilestone?.id;
+}
+
+export async function getIssue(identifier) {
+  // identifier is e.g. "HOK-356" — we need to split into team key + number
+  const match = identifier.match(/^([A-Z]+)-(\d+)$/);
+  if (!match) {
+    throw new Error(`Invalid issue identifier: ${identifier}. Expected format: HOK-123`);
+  }
+
+  const data = await request(`
+    query {
+      issues(filter: { number: { eq: ${match[2]} }, team: { key: { eq: "${match[1]}" } } }, first: 1) {
+        nodes {
+          id
+          identifier
+          title
+          description
+          state { name }
+          labels { nodes { name } }
+          project { id name }
+          priority
+          estimate
+          assignee { name email }
+          creator { name email }
+          team { id name key }
+          parent {
+            id
+            identifier
+            title
+          }
+          children {
+            nodes {
+              id
+              identifier
+              title
+              description
+              state { name }
+              labels { nodes { name } }
+            }
+          }
+          comments {
+            nodes {
+              body
+              user { name }
+              createdAt
+            }
+          }
+          url
+        }
+      }
+    }
+  `);
+
+  const issue = data.issues?.nodes?.[0];
+  if (!issue) {
+    throw new Error(`Issue not found: ${identifier}`);
+  }
+  return issue;
+}
+
+export async function updateIssue(issueId, input) {
+  const data = await request(
+    `
+      mutation($issueId: String!, $input: IssueUpdateInput!) {
+        issueUpdate(id: $issueId, input: $input) {
+          success
+          issue {
+            id
+            identifier
+            url
+          }
+        }
+      }
+    `,
+    { issueId, input },
+  );
+
+  return data.issueUpdate;
 }
 
 export async function createIssueRelation(issueId, relatedIssueId, type) {
