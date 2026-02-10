@@ -226,43 +226,91 @@ write_task_packet() {
 }
 
 
-# Conflict-aware task selection
+# Conflict-aware task selection with multi-factor priority scoring
 # Shows up to 9 candidates, selects up to MAX_PARALLEL avoiding conflicts
 pick_candidates() {
   local backlog_json="$1"
   local show_limit=9
 
 
-  # Extract tasks with conflict scoring
+  # Score and rank tasks with multi-factor prioritization
   echo "$backlog_json" | jq -r --argjson show_limit "$show_limit" '
     # Filter to backlog/todo only
     map(select((.state.name|ascii_downcase) == "todo" or (.state.name|ascii_downcase) == "backlog"))
 
-
-    # Extract area labels (common patterns: "Area: X", "Component: X", or any capitalized label)
+    # Enrich each task with scoring factors
     | map(. + {
+        # Extract area for conflict detection
         area: (
-          .labels.nodes
+          (.labels.nodes // [])
           | map(.name)
           | map(select(test("^(Area|Component|Page|Route):")))
           | .[0] // ""
+        ),
+
+        # Check if task has detailed description (task packet)
+        has_detailed_plan: (
+          .description // ""
+          | test("##+ (1\\\\.|Objective|What|Technical Context|Success Criteria|Implementation)")
+        ),
+
+        # Check for foundational labels
+        is_foundational: (
+          (.labels.nodes // [])
+          | map(.name | ascii_downcase)
+          | any(test("foundational|architecture|epic|infrastructure"))
+        ),
+
+        # Count how many issues this blocks (foundational work)
+        blocks_count: (
+          (.relations.nodes // [])
+          | map(select(.type == "blocks"))
+          | length
+        ),
+
+        # Count how many issues block this (dependency risk)
+        blocked_by_count: (
+          (.relations.nodes // [])
+          | map(select(.type == "blocked"))
+          | length
         )
       })
 
+    # Calculate composite priority score (higher = higher priority)
+    | map(. + {
+        score: (
+          # Base: Linear priority (1=urgent, 0=none, 4=low)
+          (if .priority > 0 then (5 - .priority) * 20 else 0 end)
 
-    # Sort by estimate (prefer smaller tasks)
-    | sort_by(.estimate // 999)
+          # Boost: Has detailed task packet (+30 points)
+          + (if .has_detailed_plan then 30 else 0 end)
 
+          # Boost: Foundational/architecture work (+25 points)
+          + (if .is_foundational then 25 else 0 end)
 
-    # Take up to show_limit for display
+          # Boost: Blocks other work (+10 per blocked issue)
+          + (.blocks_count * 10)
+
+          # Penalty: Blocked by other work (-15 per blocker)
+          - (.blocked_by_count * 15)
+
+          # Penalty: Large estimates (prefer smaller, deliverable work)
+          - ((.estimate // 3) * 2)
+        )
+      })
+
+    # Sort by score descending (higher score = higher priority)
+    | sort_by(-.score)
+
+    # Take top candidates for display
     | .[0:$show_limit]
     | .[]
-    | "\(.identifier)|\(.title|ascii_downcase|gsub("[^a-z0-9]+";"-"))|\(.title)"
+    | "\(.identifier)|\(.title|ascii_downcase|gsub("[^a-z0-9]+";"-"))|\(.title)|\(.area)|\(.score)"
   '
 }
 
 
-# Smart selection that avoids conflicts
+# Smart selection that avoids area conflicts
 smart_select_from_candidates() {
   local candidates="$1"
   local selected_numbers="$2"
@@ -270,30 +318,33 @@ smart_select_from_candidates() {
 
   if [[ -z "$selected_numbers" ]]; then
     # Auto-select up to MAX_PARALLEL with conflict avoidance
-    local -a areas=()
+    local -A area_used=()
     local -a result=()
     local count=0
 
 
     while IFS= read -r line && [[ $count -lt $MAX_PARALLEL ]]; do
-      IFS='|' read -r issue slug title <<<"$line"
+      IFS='|' read -r issue slug title area score <<<"$line"
 
 
-      # Get area from Linear (simplified - just use first label)
-      local area=""
-      # For now, assume no conflicts if no area specified
+      # Check area conflict - skip if area already in use
+      if [[ -n "$area" ]] && [[ -n "${area_used[$area]:-}" ]]; then
+        continue
+      fi
 
 
-      result+=("$line")
+      # Accept this task
+      result+=("$issue|$slug|$title")
+      [[ -n "$area" ]] && area_used["$area"]=1
       ((count++))
     done <<<"$candidates"
 
 
     printf '%s\n' "${result[@]}"
   else
-    # User selected specific numbers
+    # User selected specific numbers - extract first 3 fields only
     while read -r n; do
-      echo "$candidates" | sed -n "${n}p"
+      echo "$candidates" | sed -n "${n}p" | cut -d'|' -f1-3
     done <<<"$(echo "$selected_numbers" | tr ' ' '\n')"
   fi
 }
@@ -432,8 +483,8 @@ fi
 
 
 echo ""
-log "Available tasks (up to 9 shown, select up to $MAX_PARALLEL):"
-echo "$CANDIDATES" | nl -w2 -s'. '
+log "Available tasks (ranked by priority, up to 9 shown):"
+echo "$CANDIDATES" | awk -F'|' '{printf "%s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}' | head -9
 echo ""
 echo "Enter numbers to run (e.g. 1 3 5) or press Enter to auto-select first $MAX_PARALLEL:"
 read -r SELECTED
@@ -450,6 +501,16 @@ done <<<"$SELECTED_LINES"
 log "Normalizing issues with task packets and launching work..."
 LAUNCH_ARGS=()
 EXPANSION_NEEDED=false
+
+
+# Pre-allocate migration numbers for parallel work
+# Find highest existing migration number in the repo
+NEXT_MIGRATION_NUM=1
+if [[ -d "$REPO_DIR/alembic/versions" ]]; then
+  HIGHEST=$(find "$REPO_DIR/alembic/versions" -name "*.py" -exec basename {} \; | grep -oE '^[0-9]+' | sort -n | tail -1 || echo "0")
+  NEXT_MIGRATION_NUM=$((HIGHEST + 1))
+fi
+log "Next available migration number: $NEXT_MIGRATION_NUM"
 
 
 for t in "${TASKS[@]}"; do
@@ -472,6 +533,31 @@ for t in "${TASKS[@]}"; do
     # For now, just use the raw description
     # In future: integrate /issue-writer skill
     echo "$current_desc" > "$PACKET_FILE"
+  fi
+
+
+  # Check if task involves database migration (label-based detection preferred, keyword fallback)
+  has_migration_label=$(echo "$issue_json" | jq -r '.labels.nodes[]? | select(.name | ascii_downcase | IN("migration", "database", "schema", "alembic")) | .name' | head -1)
+  is_migration=false
+
+  if [[ -n "$has_migration_label" ]]; then
+    log "  → Migration detected (label: $has_migration_label), assigning number: $NEXT_MIGRATION_NUM"
+    is_migration=true
+  elif echo "$current_desc" | grep -qi "alembic\|migration.*file\|database.*migration\|schema.*migration"; then
+    log "  → Migration detected (keyword match), assigning number: $NEXT_MIGRATION_NUM"
+    log "    Tip: Add 'migration' label to $ISSUE for more reliable detection"
+    is_migration=true
+  fi
+
+  if [[ "$is_migration" == "true" ]]; then
+    # Append migration hint to task packet
+    echo "" >> "$PACKET_FILE"
+    echo "---" >> "$PACKET_FILE"
+    echo "**ASSIGNED MIGRATION NUMBER**: $NEXT_MIGRATION_NUM" >> "$PACKET_FILE"
+    echo "" >> "$PACKET_FILE"
+    echo "Use revision='$(printf '%03d' $NEXT_MIGRATION_NUM)' in your Alembic migration file." >> "$PACKET_FILE"
+    echo "CRITICAL: This number has been reserved to avoid conflicts with parallel tasks." >> "$PACKET_FILE"
+    NEXT_MIGRATION_NUM=$((NEXT_MIGRATION_NUM + 1))
   fi
 
 
