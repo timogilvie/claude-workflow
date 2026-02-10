@@ -9,7 +9,13 @@ TOOLS_DIR="${TOOLS_DIR:-$HOME/.claude/tools}"
 AGENT_CMD="${AGENT_CMD:-claude}"
 MAX_PARALLEL="${MAX_PARALLEL:-3}"
 POLL_SECONDS="${POLL_SECONDS:-10}"
+
+# Auto-detect project name from repo-specific config or fallback
+if [[ -f "$REPO_DIR/.hokusai-config.json" ]]; then
+  PROJECT_NAME="${PROJECT_NAME:-$(jq -r '.linear.project // empty' "$REPO_DIR/.hokusai-config.json")}"
+fi
 PROJECT_NAME="${PROJECT_NAME:-Hokusai public website}"
+
 BASE_BRANCH="${BASE_BRANCH:-main}"
 
 
@@ -716,9 +722,8 @@ while :; do
     log "🎉 All tasks complete!"
     log "Run: git -C \"$REPO_DIR\" worktree prune"
     echo ""
-    log "Press Ctrl+C to exit monitoring, or wait for next workflow run..."
-    sleep 30
-    # Loop forever - ready for next run
+    log "Monitoring stopped. Exiting..."
+    exit 0
   fi
 
 

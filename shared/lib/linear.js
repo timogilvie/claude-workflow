@@ -56,7 +56,7 @@ export async function getTeams() {
 }
 
 export async function getBacklog(projectName) {
-  const filters = ['state: { name: { eq: "Backlog" } }'];
+  const filters = ['state: { name: { in: ["Backlog", "Todo"] } }'];
 
   if (projectName) {
     filters.push(`project: { name: { eq: "${projectName}" } }`);
