@@ -153,6 +153,7 @@ sync_to_claude() {
     cp -v "$REPO_DIR/tools/linear-tasks.ts" "$CLAUDE_DIR/tools/"
     cp -v "$REPO_DIR/tools/git.ts" "$CLAUDE_DIR/tools/"
     cp -v "$REPO_DIR/tools/github.ts" "$CLAUDE_DIR/tools/"
+    cp -v "$REPO_DIR/tools/expand-issue.ts" "$CLAUDE_DIR/tools/"
 
     # Sync commands (repo → ~/.claude)
     echo -e "\nCopying commands..."
@@ -163,6 +164,13 @@ sync_to_claude() {
         echo -e "\nCopying templates..."
         mkdir -p "$CLAUDE_DIR/tools/prompts"
         rsync -av "$REPO_DIR/tools/prompts/" "$CLAUDE_DIR/tools/prompts/"
+    fi
+
+    # Sync prompts (repo → ~/.claude)
+    if [ -d "$REPO_DIR/prompts" ]; then
+        echo -e "\nCopying prompts..."
+        mkdir -p "$CLAUDE_DIR/prompts"
+        rsync -av "$REPO_DIR/prompts/" "$CLAUDE_DIR/prompts/"
     fi
 
     echo -e "\n${GREEN}✓ Sync to ~/.claude complete${NC}"
