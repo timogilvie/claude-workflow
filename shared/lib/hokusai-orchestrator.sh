@@ -193,10 +193,15 @@ done
 set -e
 
 
-# Add status tracking panel in control window
-echo "Setting up status tracking panel..."
-tmux split-window -t "$SESSION:control" -h -l 40%
-tmux send-keys -t "$SESSION:control.1" "watch -n 2 'echo \"=== Task Status ===\" && for dir in $WORKTREE_ROOT/*/; do echo \"\" && basename \$dir && git -C \$dir status -sb 2>/dev/null || echo \"  (not initialized)\"; done && echo \"\" && echo \"=== Logs ===\" && tail -n 5 $LOG_FILE 2>/dev/null || echo \"(no errors)\"; echo \"\" && echo \"Ctrl+B then W to switch windows\"'" C-m
+# Add status tracking panel in control window (only if not already exists)
+PANE_COUNT=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l)
+if [[ "$PANE_COUNT" -eq 1 ]]; then
+  echo "Setting up status tracking panel..."
+  tmux split-window -t "$SESSION:control" -h -l 40%
+  tmux send-keys -t "$SESSION:control.1" "watch -n 2 'echo \"=== Task Status ===\" && for dir in $WORKTREE_ROOT/*/; do echo \"\" && basename \$dir && git -C \$dir status -sb 2>/dev/null || echo \"  (not initialized)\"; done && echo \"\" && echo \"=== Logs ===\" && tail -n 5 $LOG_FILE 2>/dev/null || echo \"(no errors)\"; echo \"\" && echo \"Ctrl+B then W to switch windows\"'" C-m
+else
+  echo "Status tracking panel already exists, skipping..."
+fi
 
 
 echo ""
