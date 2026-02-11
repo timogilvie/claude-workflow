@@ -28,6 +28,9 @@ npm-debug.log*
 .codex/state/
 .claude/state/
 
+# Local settings (machine-specific permissions)
+.claude/settings.local.json
+
 # Workspace artifacts
 features/*/
 bugs/*/
