@@ -439,6 +439,11 @@ validate_pr_merge() {
     return 1
   fi
 
+  # Check 4: CI checks must be complete (not pending)
+  if echo "$checks" | grep -q "PENDING"; then
+    log_warn "PR #$pr CI checks still pending"
+    return 1
+  fi
 
   return 0
 }
@@ -714,15 +719,39 @@ pr_details() {
 validate_pr_merge() {
   local pr="$1"
   local details="$(pr_details "$pr")"
-  [[ -z "$details" ]] && return 1
 
+  if [[ -z "$details" ]]; then
+    log_warn "Failed to fetch PR #$pr details"
+    return 1
+  fi
 
   local state=$(echo "$details" | jq -r '.state')
   local base_branch=$(echo "$details" | jq -r '.baseRefName')
+  local checks=$(echo "$details" | jq -r '.statusCheckRollup[]?.conclusion // "PENDING"')
 
+  # Check 1: Must be MERGED (not CLOSED)
+  if [[ "$state" != "MERGED" ]]; then
+    return 1
+  fi
 
-  [[ "$state" != "MERGED" ]] && return 1
-  [[ "$base_branch" != "$BASE_BRANCH" ]] && { log_error "PR #$pr merged to wrong base: $base_branch"; return 1; }
+  # Check 2: Must be merged to correct base branch
+  if [[ "$base_branch" != "$BASE_BRANCH" ]]; then
+    log_error "PR #$pr merged to wrong base: $base_branch (expected: $BASE_BRANCH)"
+    return 1
+  fi
+
+  # Check 3: All CI checks must pass (if checks exist)
+  if echo "$checks" | grep -qE "FAILURE|CANCELLED"; then
+    log_warn "PR #$pr has failing CI checks - waiting for resolution"
+    return 1
+  fi
+
+  # Check 4: CI checks must be complete (not pending)
+  if echo "$checks" | grep -q "PENDING"; then
+    log "PR #$pr CI checks still pending - waiting..."
+    return 1
+  fi
+
   return 0
 }
 
