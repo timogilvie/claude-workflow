@@ -31,7 +31,7 @@ log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
 # ============================================================================
-# LINEAR API HELPERS
+# LINEAR API HELPERS (read-only; writes go through expand-issue.ts)
 # ============================================================================
 
 linear_list_backlog() {
@@ -45,17 +45,6 @@ linear_get_issue() {
   npx tsx "$TOOLS_DIR/get-issue-json.ts" "$issue_id" 2>&1 | sed '/^\[dotenv/d' | sed '/^$/d'
 }
 
-linear_update_description() {
-  local issue_id="$1"
-  local file="$2"
-  npx tsx "$TOOLS_DIR/update-issue.ts" "$issue_id" --file "$file" >/dev/null 2>&1
-}
-
-linear_add_label() {
-  local issue_id="$1"
-  local label="$2"
-  npx tsx "$TOOLS_DIR/add-issue-label.ts" "$issue_id" "$label" >/dev/null 2>&1
-}
 
 # ============================================================================
 # MAIN WORKFLOW
@@ -160,45 +149,12 @@ main() {
       echo ""
       log "  ✓ Expanded and updated in Linear"
 
-      # Read expanded content
-      if [[ -f "$EXPANDED_FILE" ]]; then
-        EXPANDED_CONTENT=$(cat "$EXPANDED_FILE")
-
-        # Extract suggested labels
-        LABELS=$(extract_labels_from_description "$EXPANDED_CONTENT")
-
-        # Add labels to Linear
-        if [[ -n "$LABELS" ]]; then
-          log "  → Adding labels..."
-          while IFS= read -r label; do
-            if [[ -n "$label" ]]; then
-              # Disable exit-on-error for label addition (non-critical operation)
-              set +e
-              linear_add_label "$ISSUE" "$label" 2>/dev/null
-              local label_result=$?
-              set -e
-
-              if [[ $label_result -eq 0 ]]; then
-                log "    ✓ Added: $label"
-              else
-                log_warn "    ✗ Failed to add: $label (label may not exist in Linear)"
-              fi
-            fi
-          done <<<"$LABELS"
-        else
-          log "  → No suggested labels found in expanded description"
-        fi
-
-        # Cleanup
-        rm -f "$EXPANDED_FILE"
-        ((SUCCESS_COUNT++))
-      else
-        log_error "  ✗ Expanded but output file not found"
-        ((FAIL_COUNT++))
-      fi
+      # Cleanup temp file (labeling is handled by auto-label-issue.ts inside expand-issue.ts)
+      rm -f "$EXPANDED_FILE"
+      ((++SUCCESS_COUNT))
     else
       log_error "  ✗ Expansion failed for $ISSUE (see /tmp/expand-issue-${ISSUE}.log)"
-      ((FAIL_COUNT++))
+      ((++FAIL_COUNT))
     fi
 
     echo ""
