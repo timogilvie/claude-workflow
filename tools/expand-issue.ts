@@ -19,92 +19,18 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { getIssue, updateIssue } from './linear-tasks.ts';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const LINEAR_ENDPOINT = 'https://api.linear.app/graphql';
-const LINEAR_API_KEY = process.env.LINEAR_API_KEY;
 const CLAUDE_CMD = process.env.CLAUDE_CMD || 'claude';
 
-if (!LINEAR_API_KEY) {
+if (!process.env.LINEAR_API_KEY) {
   console.error('Error: LINEAR_API_KEY not found in environment');
   process.exit(1);
-}
-
-// Linear API helpers
-async function linearRequest(query: string, variables?: any) {
-  const res = await fetch(LINEAR_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Authorization': LINEAR_API_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-
-  const data = await res.json();
-  if (data.errors) {
-    throw new Error(`Linear API error: ${JSON.stringify(data.errors)}`);
-  }
-  return data.data;
-}
-
-async function getIssue(identifier: string) {
-  const data = await linearRequest(`
-    query($identifier: String!) {
-      issue(id: $identifier) {
-        id
-        identifier
-        title
-        description
-        state { name }
-        labels { nodes { name } }
-        project { id name }
-        priority
-        estimate
-        assignee { name email }
-        creator { name email }
-        team { id name key }
-        parent {
-          identifier
-          title
-        }
-        children {
-          nodes {
-            identifier
-            title
-            state { name }
-          }
-        }
-        url
-      }
-    }
-  `, { identifier });
-
-  return data.issue;
-}
-
-async function updateIssue(issueId: string, description: string) {
-  const data = await linearRequest(`
-    mutation($issueId: String!, $description: String!) {
-      issueUpdate(
-        id: $issueId
-        input: { description: $description }
-      ) {
-        success
-        issue {
-          id
-          identifier
-          url
-        }
-      }
-    }
-  `, { issueId, description });
-
-  return data.issueUpdate;
 }
 
 // Claude CLI helper - uses your local Claude subscription
@@ -112,7 +38,7 @@ async function expandWithClaude(prompt: string, issueContext: string): Promise<s
   return new Promise((resolve, reject) => {
     const fullPrompt = `${prompt}\n\n---\n\n${issueContext}`;
 
-    const claude = spawn(CLAUDE_CMD, [], {
+    const claude = spawn(CLAUDE_CMD, ['--print'], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -276,10 +202,14 @@ Environment Variables:
     console.log('─'.repeat(80));
     console.log('\n');
 
-    // Handle output
+    // Handle output (don't let file write failure block Linear update)
     if (outputFile) {
-      await fs.writeFile(outputFile, expandedDescription, 'utf-8');
-      console.log(`✓ Expanded description saved to: ${outputFile}`);
+      try {
+        await fs.writeFile(outputFile, expandedDescription, 'utf-8');
+        console.log(`✓ Expanded description saved to: ${outputFile}`);
+      } catch (writeError) {
+        console.warn(`⚠️  Failed to write output file: ${writeError.message}`);
+      }
     } else {
       console.log('Expanded Description:\n');
       console.log(expandedDescription);
@@ -289,10 +219,32 @@ Environment Variables:
     // Update Linear if requested
     if (shouldUpdate) {
       console.log(`Updating Linear issue ${issue.identifier}...`);
-      const result = await updateIssue(issue.id, expandedDescription);
+      const result = await updateIssue(issue.id, { description: expandedDescription });
 
       if (result.success) {
         console.log(`✓ Successfully updated: ${result.issue.url}`);
+
+        // Auto-label the issue based on expanded content
+        console.log(`\nAuto-labeling issue ${issue.identifier}...`);
+        try {
+          const autoLabel = spawn('npx', ['tsx', path.join(__dirname, 'auto-label-issue.ts'), issue.identifier], {
+            stdio: 'inherit'
+          });
+
+          await new Promise((resolve, reject) => {
+            autoLabel.on('close', (code) => {
+              if (code === 0) {
+                resolve(true);
+              } else {
+                reject(new Error(`Auto-labeling exited with code ${code}`));
+              }
+            });
+            autoLabel.on('error', reject);
+          });
+        } catch (error) {
+          console.warn(`⚠️  Auto-labeling failed: ${error.message}`);
+          console.warn('   Issue was updated but labels were not applied');
+        }
       } else {
         console.error('Failed to update issue');
         process.exit(1);

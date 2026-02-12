@@ -64,7 +64,7 @@ score_and_rank_issues() {
         # Check if task has detailed description (task packet)
         has_detailed_plan: (
           .description // ""
-          | test("##+ (1\\\\.|Objective|What|Technical Context|Success Criteria|Implementation)")
+          | test("##+ (1\\.|Objective|What|Technical Context|Success Criteria|Implementation)")
         ),
 
         # Check for foundational labels
@@ -194,43 +194,4 @@ write_task_packet() {
     echo "$current_desc" > "$out_file"
     return 1
   fi
-}
-
-# ============================================================================
-# LABEL EXTRACTION
-# ============================================================================
-
-# Extract suggested labels from expanded issue description
-# Looks for the "Label Summary" section with format:
-# Suggested labels for this task:
-# - Label: Value
-# - Label: Value
-extract_labels_from_description() {
-  local description="$1"
-
-  # Extract labels from the code block format
-  # Match lines like: "- Risk: Medium" or "- Area: Landing"
-  echo "$description" | \
-    awk '/Suggested labels for this task:/,/```/' | \
-    grep -E '^[[:space:]]*-[[:space:]]+[^:]+:[[:space:]]*' | \
-    sed 's/^[[:space:]]*-[[:space:]]*//' | \
-    sed 's/:[[:space:]]*/: /' | \
-    awk -F': ' '{
-      # For labels like "Risk: Medium", output "Risk: Medium"
-      # For labels like "Files: path1, path2", split by comma and output each
-      label=$1
-      value=$2
-      if (index(value, ",") > 0) {
-        # Multiple values - output each as separate label
-        split(value, vals, ",")
-        for (i in vals) {
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", vals[i])
-          if (vals[i] != "") print label ": " vals[i]
-        }
-      } else {
-        # Single value
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-        if (value != "") print label ": " value
-      }
-    }'
 }
