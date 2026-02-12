@@ -102,8 +102,8 @@ for t in "${TASKS[@]}"; do
         echo "Branch $BRANCH already exists, using it"
         git worktree add "$WT_DIR" "$BRANCH"
       else
-        echo "Creating new branch $BRANCH from $BASE_BRANCH"
-        git worktree add "$WT_DIR" -b "$BRANCH" "$BASE_BRANCH"
+        echo "Creating new branch $BRANCH from origin/$BASE_BRANCH"
+        git worktree add "$WT_DIR" -b "$BRANCH" "origin/$BASE_BRANCH"
       fi
     fi
 
