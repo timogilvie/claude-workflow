@@ -446,7 +446,7 @@ for t in "${TASKS[@]}"; do
 
 
   # Check if task involves database migration (label-based detection preferred, keyword fallback)
-  has_migration_label=$(echo "$issue_json" | jq -r '.labels.nodes[]? | select(.name | ascii_downcase | IN("migration", "database", "schema", "alembic")) | .name' | head -1)
+  has_migration_label=$(echo "$issue_json" | jq -r '.labels.nodes[]? | select(.name | ascii_downcase | test("migration|database|schema|alembic")) | .name' | head -1)
   is_migration=false
 
   if [[ -n "$has_migration_label" ]]; then
@@ -521,6 +521,10 @@ if [[ ! -f "$ORCHESTRATOR" ]]; then
   exit 1
 fi
 
+
+# Fetch latest base branch so worktrees start from up-to-date main
+log "Fetching latest $BASE_BRANCH from remote..."
+git -C "$REPO_DIR" fetch origin "$BASE_BRANCH"
 
 # Call the launcher script (don't attach yet)
 ORCHESTRATOR_NO_ATTACH=1 "$ORCHESTRATOR" "$SESSION" "${LAUNCH_ARGS[@]}"
