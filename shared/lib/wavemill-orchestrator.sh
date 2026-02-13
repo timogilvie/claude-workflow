@@ -55,7 +55,8 @@ fi
 
 
 # Start session if not exists
-tmux has-session -t "$SESSION" 2>/dev/null || tmux new-session -d -s "$SESSION" -c "$REPO_DIR" -n control
+TMUX_CONF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd ../.. && pwd)/.tmux.conf"
+tmux has-session -t "$SESSION" 2>/dev/null || tmux -f "$TMUX_CONF" new-session -d -s "$SESSION" -c "$REPO_DIR" -n control
 
 
 # Control window message
