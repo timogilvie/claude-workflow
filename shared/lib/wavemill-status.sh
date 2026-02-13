@@ -88,11 +88,11 @@ agent_status() {
 
 # ── Task discovery ────────────────────────────────────────────────────────
 # Prefer state file (from mill), fall back to worktree directories.
-# Output: issue|slug|branch|worktree  per line
+# Output: issue|slug|branch|worktree|status  per line
 
 gather_tasks() {
   if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
-    jq -r '.tasks | to_entries[] | "\(.key)|\(.value.slug)|\(.value.branch)|\(.value.worktree)"' \
+    jq -r '.tasks | to_entries[] | "\(.key)|\(.value.slug)|\(.value.branch)|\(.value.worktree)|\(.value.status // "")"' \
       "$STATE_FILE" 2>/dev/null
   else
     for dir in "$WORKTREE_ROOT"/*/; do
@@ -101,7 +101,7 @@ gather_tasks() {
       slug=$(basename "$dir")
       local branch
       branch=$(git -C "$dir" branch --show-current 2>/dev/null || echo "?")
-      echo "—|$slug|$branch|$dir"
+      echo "—|$slug|$branch|$dir|"
     done
   fi
 }
@@ -143,7 +143,7 @@ while true; do
     count=0
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
-      IFS='|' read -r issue slug branch worktree <<<"$line"
+      IFS='|' read -r issue slug branch worktree task_status <<<"$line"
 
       # Window name
       win="${issue}-${slug}"
@@ -158,12 +158,16 @@ while true; do
       t=$(elapsed "$worktree")
 
       # Agent
-      st=$(agent_status "$win")
-      case "$st" in
-        running) st_str="${G}● running${N}" ;;
-        exited)  st_str="${Y}○ exited${N}" ;;
-        *)       st_str="${D}  done${N}"   ;;
-      esac
+      if [[ "$task_status" == "merged" ]]; then
+        st_str="${G}✓ merged${N}"
+      else
+        st=$(agent_status "$win")
+        case "$st" in
+          running) st_str="${G}● running${N}" ;;
+          exited)  st_str="${Y}○ exited${N}" ;;
+          *)       st_str="${D}  done${N}"   ;;
+        esac
+      fi
 
       # PR
       pr_str="${D}—${N}"

@@ -117,6 +117,7 @@ save_task_state() {
   local branch="$3"
   local worktree="$4"
   local pr="${5:-}"
+  local status="${6:-}"
 
 
   local tmp=$(mktemp)
@@ -125,7 +126,8 @@ save_task_state() {
      --arg branch "$branch" \
      --arg worktree "$worktree" \
      --arg pr "$pr" \
-     '.tasks[$issue] = {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, updated: (now | todate)}' \
+     --arg status "$status" \
+     '.tasks[$issue] = {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)}' \
      "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
 }
 
@@ -705,6 +707,39 @@ while :; do
     PR="${PR_BY_ISSUE[$ISSUE]:-}"
 
 
+    # If already merged (requireConfirm), wait for window close then cleanup
+    local task_status
+    task_status=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null)
+    if [[ "$task_status" == "merged" ]]; then
+      WIN="$ISSUE-$SLUG"
+      if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+        # Window still open — user is reviewing
+        all_done=false
+        continue
+      fi
+
+      # Window closed or pane dead — finish cleanup
+      execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+
+      WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+      if [[ -d "$WT_DIR" ]]; then
+        execute git -C "$REPO_DIR" worktree remove "$WT_DIR" --force 2>/dev/null || true
+        log "  ✓ Removed worktree: $WT_DIR"
+      fi
+
+      local task_branch="task/${SLUG}"
+      if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+        execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+        log "  ✓ Deleted branch: $task_branch"
+      fi
+
+      remove_task_state "$ISSUE"
+      CLEANED["$ISSUE"]=1
+      log "  ✓ Complete: $ISSUE (post-review cleanup)"
+      continue
+    fi
+
+
     # Check if PR exists
     if [[ -z "$PR" ]]; then
       PR="$(find_pr_for_branch "$BRANCH")"
@@ -725,12 +760,12 @@ while :; do
       log "✓ $ISSUE → PR #$PR MERGED"
 
 
-      # Auto-cleanup if REQUIRE_CONFIRM=false
+      # When requireConfirm is on, mark as merged but keep polling
+      # so the user can inspect the window before cleanup
       if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-        log "  → Manual cleanup required: tmux kill-window -t $SESSION:$ISSUE-$SLUG"
-        # Don't auto-clean, but mark as done in Linear
+        log "  → Window stays open for review — close it when ready"
         linear_set_state "$ISSUE" "Done"
-        CLEANED["$ISSUE"]=1
+        save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged"
         all_done=false
         continue
       fi
