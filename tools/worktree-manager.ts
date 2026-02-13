@@ -48,7 +48,8 @@ function getMainBranch(): string {
 }
 
 function createWorktree(branchName: string, baseBranch?: string): void {
-  const base = baseBranch || getMainBranch();
+  const mainBranch = baseBranch || getMainBranch();
+  const remoteRef = `origin/${mainBranch}`;
   const sanitized = sanitizeBranchName(branchName);
   const worktreePath = path.join(WORKTREE_BASE, sanitized);
   const fullBranchName = `feature/${sanitized}`;
@@ -64,11 +65,18 @@ function createWorktree(branchName: string, baseBranch?: string): void {
     return;
   }
 
-  // Create branch if it doesn't exist
+  // Fetch latest base branch so worktree starts from up-to-date main
+  console.log(`Fetching latest ${mainBranch} from origin...`);
+  run(`git fetch origin ${mainBranch}`, { silent: true });
+
+  // Create or reset branch to latest origin ref
   const existingBranches = run('git branch --list', { silent: true });
-  if (!existingBranches.includes(fullBranchName)) {
-    console.log(`Creating branch: ${fullBranchName} from ${base}`);
-    run(`git branch ${fullBranchName} ${base}`);
+  if (existingBranches.includes(fullBranchName)) {
+    console.log(`Branch ${fullBranchName} exists, resetting to ${remoteRef}`);
+    run(`git branch -f ${fullBranchName} ${remoteRef}`);
+  } else {
+    console.log(`Creating branch: ${fullBranchName} from ${remoteRef}`);
+    run(`git branch ${fullBranchName} ${remoteRef}`);
   }
 
   // Create worktree

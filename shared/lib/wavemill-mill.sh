@@ -329,6 +329,7 @@ cleanup_on_exit() {
   local exit_code=$?
   if [[ ${#ISSUES_IN_PROGRESS[@]} -gt 0 ]]; then
     log_warn "Interrupted - resetting Linear state for unfinished tasks..."
+    log_warn "Worktrees and branches preserved for resumption on next run."
     for issue in "${ISSUES_IN_PROGRESS[@]}"; do
       linear_set_state "$issue" "Backlog" 2>/dev/null || true
       remove_task_state "$issue" 2>/dev/null || true
@@ -752,6 +753,12 @@ while :; do
         log "  ✓ Removed worktree: $WT_DIR"
       fi
 
+      # Clean up the merged branch to avoid stale reuse
+      local task_branch="task/${SLUG}"
+      if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+        execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+        log "  ✓ Deleted branch: $task_branch"
+      fi
 
       remove_task_state "$ISSUE"
       CLEANED["$ISSUE"]=1

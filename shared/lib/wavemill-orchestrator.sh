@@ -105,10 +105,10 @@ for t in "${TASKS[@]}"; do
 
     # Create worktree + branch (check for existing branch first)
     if [[ -d "$WT_DIR" ]]; then
-      echo "Worktree exists: $WT_DIR (skipping create)"
+      echo "Worktree exists: $WT_DIR (resuming)"
     else
       if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-        echo "Branch $BRANCH already exists, using it"
+        echo "Branch $BRANCH already exists, resuming from it"
         git worktree add "$WT_DIR" "$BRANCH"
       else
         echo "Creating new branch $BRANCH from origin/$BASE_BRANCH"
