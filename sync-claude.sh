@@ -51,7 +51,7 @@ show_status() {
     fi
 
     # Check tools
-    for file in get-backlog.ts linear-tasks.ts git.ts github.ts; do
+    for file in get-backlog.ts linear-tasks.ts git.ts github.ts expand-issue.ts auto-label-issue.ts; do
         if [ -f "$CLAUDE_DIR/tools/$file" ] && [ -f "$REPO_DIR/tools/$file" ]; then
             if ! diff -q "$CLAUDE_DIR/tools/$file" "$REPO_DIR/tools/$file" > /dev/null 2>&1; then
                 echo -e "${RED}✗${NC} tools/$file - DIFFERS"
@@ -148,6 +148,7 @@ sync_to_claude() {
     cp -v "$REPO_DIR/tools/git.ts" "$CLAUDE_DIR/tools/"
     cp -v "$REPO_DIR/tools/github.ts" "$CLAUDE_DIR/tools/"
     cp -v "$REPO_DIR/tools/expand-issue.ts" "$CLAUDE_DIR/tools/"
+    cp -v "$REPO_DIR/tools/auto-label-issue.ts" "$CLAUDE_DIR/tools/"
 
     # Sync commands (repo → ~/.claude)
     echo -e "\nCopying commands..."
@@ -180,7 +181,7 @@ sync_from_claude() {
 
     # Sync tools (only if ~/.claude version is newer)
     echo -e "\nChecking tools for newer versions in ~/.claude..."
-    for file in get-backlog.ts linear-tasks.ts git.ts github.ts; do
+    for file in get-backlog.ts linear-tasks.ts git.ts github.ts expand-issue.ts auto-label-issue.ts; do
         if [ "$CLAUDE_DIR/tools/$file" -nt "$REPO_DIR/tools/$file" ]; then
             echo "  Copying newer tools/$file from ~/.claude"
             cp -v "$CLAUDE_DIR/tools/$file" "$REPO_DIR/tools/"

@@ -1,0 +1,21 @@
+{
+  "linear": {
+    "project": ""
+  },
+  "mill": {
+    "session": "wavemill",
+    "maxParallel": 3,
+    "pollSeconds": 10,
+    "baseBranch": "main",
+    "worktreeRoot": "../worktrees",
+    "agentCmd": "claude",
+    "requireConfirm": true,
+    "maxRetries": 3,
+    "retryDelay": 2
+    
+  },
+  "expand": {
+    "maxSelect": 3,
+    "maxDisplay": 9
+  }
+}
