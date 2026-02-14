@@ -3,10 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Claude workflow tools",
-  "scripts": {
-    "workflow": "node workflow.js",
-    "bug-workflow": "node bug-workflow.js"
-  },
+  "scripts": {},
   "dependencies": {
     "@linear/sdk": "^63.2.0",
     "dotenv": "^17.2.3"
