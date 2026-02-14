@@ -710,7 +710,6 @@ while :; do
 
 
     # If already merged (requireConfirm), wait for window close then cleanup
-    local task_status
     task_status=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null)
     if [[ "$task_status" == "merged" ]]; then
       WIN="$ISSUE-$SLUG"
@@ -729,7 +728,7 @@ while :; do
         log "  ✓ Removed worktree: $WT_DIR"
       fi
 
-      local task_branch="task/${SLUG}"
+      task_branch="task/${SLUG}"
       if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
         execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
         log "  ✓ Deleted branch: $task_branch"
@@ -791,7 +790,7 @@ while :; do
       fi
 
       # Clean up the merged branch to avoid stale reuse
-      local task_branch="task/${SLUG}"
+      task_branch="task/${SLUG}"
       if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
         execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
         log "  ✓ Deleted branch: $task_branch"
