@@ -70,6 +70,11 @@ ${GREEN}Commands:${NC}
              - Select one to decompose with Claude
              - Creates phased milestones and issues in Linear
 
+  ${CYAN}eval${NC}      Evaluate LLM performance on a completed workflow
+             - Auto-detects recent workflow context
+             - Invokes LLM-as-judge with structured rubric
+             - Prints scored evaluation summary (0–1 scale)
+
   ${CYAN}init${NC}      Generate a template .wavemill-config.json in the current directory
 
   ${CYAN}version${NC}   Show version information
@@ -87,6 +92,12 @@ ${GREEN}Examples:${NC}
 
   # Expand issues interactively
   wavemill expand
+
+  # Evaluate most recent completed workflow
+  wavemill eval
+
+  # Evaluate a specific issue and PR
+  wavemill eval --issue HOK-123 --pr 456
 
 ${GREEN}Configuration:${NC}
   Settings are loaded in this order (later wins):
@@ -193,6 +204,18 @@ run_expand() {
   exec "$expand_script" "$@"
 }
 
+run_eval() {
+  local eval_tool="$TOOLS_DIR/eval-workflow.ts"
+
+  if [[ ! -f "$eval_tool" ]]; then
+    echo -e "${RED}Error:${NC} Eval tool not found at: $eval_tool" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Eval...${NC}"
+  exec npx tsx "$eval_tool" "$@"
+}
+
 run_plan() {
   local plan_script="$LIB_DIR/wavemill-plan.sh"
 
@@ -225,6 +248,10 @@ case "${1:-}" in
     check_claude_sync
     shift
     run_plan "$@"
+    ;;
+  eval)
+    shift
+    run_eval "$@"
     ;;
   init)
     shift
