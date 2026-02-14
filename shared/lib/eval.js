@@ -1,15 +1,18 @@
 // Shared eval module — LLM judge for scoring autonomous task execution.
-// Follows the same patterns as linear.js: direct fetch, env-based auth, ES modules.
+// Builds on the eval-schema (HOK-697) types and rubric.
 
 import { readFile } from 'fs/promises';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { getScoreBand } from './eval-schema.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
+const SCHEMA_VERSION = '1.0.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 30_000;
 
@@ -20,23 +23,13 @@ const TIMEOUT_MS = 30_000;
  */
 
 /**
- * @typedef {Object} EvalRecord
- * @property {number} score - 0 to 1 inclusive
- * @property {string} rationale - Human-readable explanation
- * @property {number} interventionCount - Number of interventions
- * @property {string[]} interventionDetails - Descriptions of each intervention
- * @property {string[]} interventionFlags - Flags from the judge
- * @property {string} issueId - Linear issue identifier
- * @property {string} timestamp - ISO 8601 timestamp
- * @property {Record<string, unknown>} metadata - Extensible metadata
- */
-
-/**
  * @typedef {Object} EvalInput
  * @property {string} taskPrompt - The original task description
  * @property {string} prReviewOutput - PR review text / diff summary
  * @property {InterventionMeta[]} [interventions] - Optional intervention metadata
  * @property {string} [issueId] - Linear issue ID (e.g. HOK-698)
+ * @property {string} [prUrl] - Pull request URL
+ * @property {number} [timeSeconds] - Wall-clock time for task completion
  * @property {Record<string, unknown>} [metadata] - Extra metadata to pass through
  */
 
@@ -132,12 +125,24 @@ function parseJudgeResponse(raw) {
 /**
  * Evaluate a task execution using an LLM judge.
  *
+ * Returns an EvalRecord (as defined in eval-schema.ts) populated with
+ * the judge's score, rationale, and the derived score band.
+ *
  * @param {EvalInput} input
- * @returns {Promise<EvalRecord>}
+ * @returns {Promise<import('./eval-schema.ts').EvalRecord>}
  */
 export async function evaluateTask(input) {
-  const { taskPrompt, prReviewOutput, interventions = [], issueId = '', metadata = {} } = input;
+  const {
+    taskPrompt,
+    prReviewOutput,
+    interventions = [],
+    issueId,
+    prUrl,
+    timeSeconds = 0,
+    metadata = {},
+  } = input;
 
+  const model = process.env.EVAL_MODEL || DEFAULT_MODEL;
   const template = await loadPromptTemplate();
   const prompt = buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions);
 
@@ -154,16 +159,25 @@ export async function evaluateTask(input) {
 
     try {
       const { score, rationale, interventionFlags } = parseJudgeResponse(raw);
+      const band = getScoreBand(score);
 
       return {
+        id: randomUUID(),
+        schemaVersion: SCHEMA_VERSION,
+        originalPrompt: taskPrompt,
+        modelId: model,
+        modelVersion: model,
         score,
-        rationale,
+        scoreBand: band.label,
+        timeSeconds,
+        timestamp: new Date().toISOString(),
+        interventionRequired: interventions.length > 0,
         interventionCount: interventions.length,
         interventionDetails: interventions.map((i) => i.description),
-        interventionFlags,
-        issueId,
-        timestamp: new Date().toISOString(),
-        metadata,
+        rationale,
+        ...(issueId && { issueId }),
+        ...(prUrl && { prUrl }),
+        metadata: { ...metadata, interventionFlags },
       };
     } catch (parseErr) {
       lastError = parseErr;
