@@ -39,6 +39,27 @@ function isValidTaskPacket(text: string): boolean {
   return /##\s*(1\.|Objective|What|Technical Context|Success Criteria|Implementation)/i.test(text);
 }
 
+// Strip tool_call XML, conversational narration, and other non-markdown noise
+// that Claude may emit in --print mode
+function cleanOutput(text: string): string {
+  // Remove <tool_call>...</tool_call> blocks (including multiline)
+  let cleaned = text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
+
+  // Remove any other XML-style tags that aren't standard markdown
+  cleaned = cleaned.replace(/<\/?(?:tool_name|parameters|prompt|command|subagent_type|pattern|file_path|include|path|output_mode|context)[^>]*>[\s\S]*?(?:<\/(?:tool_name|parameters|prompt|command|subagent_type|pattern|file_path|include|path|output_mode|context)>)?/g, '');
+
+  // Strip conversational preamble before the first markdown heading
+  const firstHeading = cleaned.search(/^#\s/m);
+  if (firstHeading > 0) {
+    cleaned = cleaned.substring(firstHeading);
+  }
+
+  // Collapse runs of 3+ blank lines into 2
+  cleaned = cleaned.replace(/\n{4,}/g, '\n\n\n');
+
+  return cleaned.trim();
+}
+
 // Claude CLI helper - uses your local Claude subscription
 async function expandWithClaude(prompt: string, issueContext: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -48,7 +69,7 @@ async function expandWithClaude(prompt: string, issueContext: string): Promise<s
       '--print',
       '--tools', '',
       '--append-system-prompt',
-      'Your ENTIRE response must be the task packet markdown. Do not include conversational text, preamble, apologies, or questions. Output ONLY the markdown document.',
+      'You have NO tools available. Do NOT output <tool_call> tags, XML markup, or attempt to call any tools. Your ENTIRE response must be the task packet markdown and nothing else. No conversational text, no preamble, no apologies, no questions. Start directly with the first markdown heading.',
     ], {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -68,7 +89,7 @@ async function expandWithClaude(prompt: string, issueContext: string): Promise<s
       if (code !== 0) {
         reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
       } else {
-        resolve(stdout.trim());
+        resolve(cleanOutput(stdout));
       }
     });
 
