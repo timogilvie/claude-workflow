@@ -451,6 +451,7 @@ for t in "${TASKS[@]}"; do
   fi
 done
 
+EXPANSION_FAILED=false
 if (( ${#EXPAND_PIDS[@]} > 0 )); then
   log "Expanding ${#EXPAND_PIDS[@]} issue(s) in parallel..."
   for i in "${!EXPAND_PIDS[@]}"; do
@@ -458,6 +459,7 @@ if (( ${#EXPAND_PIDS[@]} > 0 )); then
       log "  ✓ ${EXPAND_ISSUES[$i]} expanded"
     else
       log_warn "  ✗ ${EXPAND_ISSUES[$i]} expansion failed (see /tmp/${SESSION}-${EXPAND_ISSUES[$i]}-expand.log)"
+      EXPANSION_FAILED=true
     fi
   done
 fi
@@ -505,10 +507,10 @@ for t in "${TASKS[@]}"; do
 done
 
 
-# Warn if expansion was needed but skipped
-if [[ "$EXPANSION_NEEDED" == "true" ]]; then
+# Warn if expansion failed
+if [[ "$EXPANSION_FAILED" == "true" ]]; then
   echo ""
-  log_warn "Some issues need expansion. Consider running /issue-writer on them first:"
+  log_warn "Some issues failed to expand. Consider running /issue-writer on them first:"
   log_warn "  See: skills/issue-writer/SKILL.md"
   echo ""
   if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
@@ -590,11 +592,11 @@ log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
 # Import functions
 save_task_state() {
-  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}"
+  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}"
   local tmp=$(mktemp)
   jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-     --arg worktree "$worktree" --arg pr "$pr" \
-     '.tasks[$issue] = {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, updated: (now | todate)}' \
+     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" \
+     '.tasks[$issue] = {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)}' \
      "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
 }
 
@@ -708,7 +710,6 @@ while :; do
 
 
     # If already merged (requireConfirm), wait for window close then cleanup
-    local task_status
     task_status=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null)
     if [[ "$task_status" == "merged" ]]; then
       WIN="$ISSUE-$SLUG"
@@ -727,7 +728,7 @@ while :; do
         log "  ✓ Removed worktree: $WT_DIR"
       fi
 
-      local task_branch="task/${SLUG}"
+      task_branch="task/${SLUG}"
       if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
         execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
         log "  ✓ Deleted branch: $task_branch"
@@ -789,7 +790,7 @@ while :; do
       fi
 
       # Clean up the merged branch to avoid stale reuse
-      local task_branch="task/${SLUG}"
+      task_branch="task/${SLUG}"
       if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
         execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
         log "  ✓ Deleted branch: $task_branch"
