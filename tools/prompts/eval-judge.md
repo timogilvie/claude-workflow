@@ -8,13 +8,13 @@ Score the execution on a scale of **0.0 to 1.0** using the rubric below.
 
 ## Scoring Rubric
 
-| Score Range | Label        | Criteria |
-|-------------|-------------|----------|
-| 0.9 – 1.0  | Excellent   | Task fully completed, clean implementation, no interventions needed, PR review is positive |
-| 0.7 – 0.89 | Good        | Task completed with minor issues (style nits, small oversights), minimal interventions |
-| 0.5 – 0.69 | Acceptable  | Task mostly completed but with notable gaps, some interventions required |
-| 0.3 – 0.49 | Poor        | Task partially completed, significant issues, multiple interventions needed |
-| 0.0 – 0.29 | Failed      | Task not completed, major errors, excessive interventions, or fundamentally wrong approach |
+| Score Range | Label             | Criteria |
+|-------------|-------------------|----------|
+| 1.0         | Full Success      | Task completed autonomously with no human intervention; output is production-ready |
+| 0.8 – 0.9  | Minor Feedback    | Task completed with minor corrections; output was nearly autonomous |
+| 0.5 – 0.7  | Assisted Success  | Task completed with notable human intervention; core goal achieved but required guidance |
+| 0.2 – 0.4  | Partial           | Some progress but major gaps remain; output is not usable without significant rework |
+| 0.0 – 0.1  | Failure           | Task not completed; fundamental misunderstanding or no meaningful output |
 
 ## Scoring Factors
 

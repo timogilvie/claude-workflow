@@ -29,7 +29,7 @@ describe('evaluateTask', () => {
     delete process.env.ANTHROPIC_API_KEY;
   });
 
-  it('returns a valid EvalRecord on successful LLM response', async () => {
+  it('returns a valid EvalRecord conforming to eval-schema', async () => {
     const validResponse = JSON.stringify({
       score: 0.85,
       rationale: 'Task was completed successfully with clean implementation.',
@@ -43,14 +43,37 @@ describe('evaluateTask', () => {
       issueId: 'HOK-100',
     });
 
+    // Core EvalRecord fields from eval-schema.ts
+    assert.ok(result.id, 'should have a UUID id');
+    assert.equal(result.schemaVersion, '1.0.0');
+    assert.equal(result.originalPrompt, 'Add a loading spinner');
+    assert.ok(result.modelId);
+    assert.ok(result.modelVersion);
     assert.equal(result.score, 0.85);
-    assert.equal(result.rationale, 'Task was completed successfully with clean implementation.');
-    assert.deepEqual(result.interventionFlags, []);
+    assert.equal(result.scoreBand, 'Minor Feedback');
+    assert.equal(typeof result.timeSeconds, 'number');
+    assert.ok(new Date(result.timestamp).toISOString() === result.timestamp);
+    assert.equal(result.interventionRequired, false);
     assert.equal(result.interventionCount, 0);
     assert.deepEqual(result.interventionDetails, []);
+    assert.equal(result.rationale, 'Task was completed successfully with clean implementation.');
     assert.equal(result.issueId, 'HOK-100');
-    assert.ok(result.timestamp);
-    assert.ok(new Date(result.timestamp).toISOString() === result.timestamp);
+  });
+
+  it('derives correct score band from eval-schema rubric', async () => {
+    const validResponse = JSON.stringify({
+      score: 1.0,
+      rationale: 'Perfect autonomous execution.',
+      interventionFlags: [],
+    });
+    mockFetch(validResponse);
+
+    const result = await evaluateTask({
+      taskPrompt: 'Simple task',
+      prReviewOutput: 'Flawless',
+    });
+
+    assert.equal(result.scoreBand, 'Full Success');
   });
 
   it('passes intervention metadata through to the result', async () => {
@@ -71,12 +94,14 @@ describe('evaluateTask', () => {
       issueId: 'HOK-200',
     });
 
+    assert.equal(result.interventionRequired, true);
     assert.equal(result.interventionCount, 2);
     assert.deepEqual(result.interventionDetails, [
       'Corrected component structure',
       'Fixed import path',
     ]);
-    assert.deepEqual(result.interventionFlags, ['needed-design-guidance']);
+    assert.deepEqual(result.metadata.interventionFlags, ['needed-design-guidance']);
+    assert.equal(result.scoreBand, 'Assisted Success');
   });
 
   it('retries on malformed JSON and succeeds on second attempt', async () => {
@@ -216,5 +241,6 @@ describe('evaluateTask', () => {
 
     assert.equal(result.score, 0.7);
     assert.equal(result.rationale, 'Decent execution with fenced response.');
+    assert.equal(result.scoreBand, 'Assisted Success');
   });
 });
