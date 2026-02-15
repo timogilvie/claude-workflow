@@ -74,6 +74,9 @@ ${GREEN}Commands:${NC}
              - Auto-detects recent workflow context
              - Invokes LLM-as-judge with structured rubric
              - Prints scored evaluation summary (0–1 scale)
+             Subcommands:
+               ${CYAN}eval report${NC}  Aggregate eval statistics and trends
+                            --from, --to, --model, --limit, --json
 
   ${CYAN}init${NC}      Generate a template .wavemill-config.json in the current directory
 
@@ -98,6 +101,12 @@ ${GREEN}Examples:${NC}
 
   # Evaluate a specific issue and PR
   wavemill eval --issue HOK-123 --pr 456
+
+  # View aggregate eval report
+  wavemill eval report
+
+  # Filter report by model and date range
+  wavemill eval report --model claude-opus-4-6 --from 2026-01-01
 
 ${GREEN}Configuration:${NC}
   Settings are loaded in this order (later wins):
@@ -205,6 +214,15 @@ run_expand() {
 }
 
 run_eval() {
+  # Check for eval subcommands before falling through to eval-workflow.ts
+  case "${1:-}" in
+    report)
+      shift
+      run_eval_report "$@"
+      return
+      ;;
+  esac
+
   local eval_tool="$TOOLS_DIR/eval-workflow.ts"
 
   if [[ ! -f "$eval_tool" ]]; then
@@ -214,6 +232,21 @@ run_eval() {
 
   echo -e "${CYAN}Starting Wavemill Eval...${NC}"
   exec npx tsx "$eval_tool" "$@"
+}
+
+run_eval_report() {
+  local report_script="$LIB_DIR/wavemill-eval-report.sh"
+
+  if [[ ! -f "$report_script" ]]; then
+    echo -e "${RED}Error:${NC} Eval report script not found at: $report_script" >&2
+    exit 1
+  fi
+
+  if [[ ! -x "$report_script" ]]; then
+    chmod +x "$report_script"
+  fi
+
+  exec "$report_script" "$@"
 }
 
 run_plan() {
