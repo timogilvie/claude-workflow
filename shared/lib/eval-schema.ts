@@ -155,6 +155,12 @@ export interface EvalRecord {
   /** Specific model version string for reproducibility */
   modelVersion: string;
 
+  /** Model ID used by the LLM judge for this eval */
+  judgeModel?: string;
+
+  /** Provider used by the LLM judge for this eval (e.g. "anthropic") */
+  judgeProvider?: string;
+
   /** Numeric score between 0 and 1 (inclusive) */
   score: number;
 
