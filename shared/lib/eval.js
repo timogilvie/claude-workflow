@@ -2,9 +2,10 @@
 // Builds on the eval-schema (HOK-697) types and rubric.
 
 import { readFile } from 'fs/promises';
+import { readFileSync, existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { getScoreBand } from './eval-schema.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -12,9 +13,50 @@ const __dirname = dirname(__filename);
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
+const DEFAULT_PROVIDER = 'anthropic';
+const SUPPORTED_PROVIDERS = ['anthropic'];
 const SCHEMA_VERSION = '1.0.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 30_000;
+
+/**
+ * Load judge config from .wavemill-config.json.
+ * Returns { model, provider } with defaults applied.
+ * Validates provider against supported list.
+ */
+function loadJudgeConfig() {
+  let configModel = DEFAULT_MODEL;
+  let configProvider = DEFAULT_PROVIDER;
+
+  const configPath = resolve('.wavemill-config.json');
+  if (existsSync(configPath)) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (config.eval?.judge?.model) {
+        configModel = config.eval.judge.model;
+      }
+      if (config.eval?.judge?.provider) {
+        configProvider = config.eval.judge.provider;
+      }
+    } catch {
+      // Malformed config — use defaults
+    }
+  }
+
+  // Validate provider
+  if (!SUPPORTED_PROVIDERS.includes(configProvider)) {
+    throw new Error(
+      `Invalid eval judge provider: "${configProvider}". Supported providers: ${SUPPORTED_PROVIDERS.join(', ')}`
+    );
+  }
+
+  // Validate model is non-empty
+  if (typeof configModel !== 'string' || configModel.trim().length === 0) {
+    throw new Error('Invalid eval judge model: model must be a non-empty string.');
+  }
+
+  return { model: configModel, provider: configProvider };
+}
 
 /**
  * @typedef {Object} InterventionMeta
@@ -56,7 +98,7 @@ function buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions) {
     .replace('{{INTERVENTION_METADATA}}', interventionText);
 }
 
-async function callClaude(prompt) {
+async function callClaude(prompt, model) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error('ANTHROPIC_API_KEY environment variable is required');
@@ -74,7 +116,7 @@ async function callClaude(prompt) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: process.env.EVAL_MODEL || DEFAULT_MODEL,
+        model,
         max_tokens: 1024,
         messages: [{ role: 'user', content: prompt }],
       }),
@@ -142,7 +184,11 @@ export async function evaluateTask(input) {
     metadata = {},
   } = input;
 
-  const model = process.env.EVAL_MODEL || DEFAULT_MODEL;
+  // Resolve judge model: env var > config file > default
+  const judgeConfig = loadJudgeConfig();
+  const model = process.env.EVAL_MODEL || judgeConfig.model;
+  const provider = judgeConfig.provider;
+
   const template = await loadPromptTemplate();
   const prompt = buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions);
 
@@ -151,7 +197,7 @@ export async function evaluateTask(input) {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     let raw;
     try {
-      raw = await callClaude(prompt);
+      raw = await callClaude(prompt, model);
     } catch (err) {
       // Do not retry on timeout or network errors — only on parse failures
       throw err;
@@ -167,6 +213,8 @@ export async function evaluateTask(input) {
         originalPrompt: taskPrompt,
         modelId: model,
         modelVersion: model,
+        judgeModel: model,
+        judgeProvider: provider,
         score,
         scoreBand: band.label,
         timeSeconds,

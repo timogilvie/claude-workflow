@@ -17,5 +17,11 @@
     "maxSelect": 3,
     "maxDisplay": 9
   },
+  "eval": {
+    "judge": {
+      "model": "claude-sonnet-4-5-20250929",
+      "provider": "anthropic"
+    }
+  },
   "autoEval": true
 }

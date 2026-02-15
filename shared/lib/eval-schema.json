@@ -42,6 +42,14 @@
       "type": "string",
       "description": "Specific model version string for reproducibility."
     },
+    "judgeModel": {
+      "type": "string",
+      "description": "Model ID used by the LLM judge for this eval."
+    },
+    "judgeProvider": {
+      "type": "string",
+      "description": "Provider used by the LLM judge for this eval (e.g. 'anthropic')."
+    },
     "score": {
       "type": "number",
       "minimum": 0,
