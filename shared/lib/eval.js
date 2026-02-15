@@ -69,6 +69,7 @@ function loadJudgeConfig() {
  * @property {string} taskPrompt - The original task description
  * @property {string} prReviewOutput - PR review text / diff summary
  * @property {InterventionMeta[]} [interventions] - Optional intervention metadata
+ * @property {string} [interventionText] - Pre-formatted structured intervention text for the judge (overrides interventions list formatting)
  * @property {string} [issueId] - Linear issue ID (e.g. HOK-698)
  * @property {string} [prUrl] - Pull request URL
  * @property {number} [timeSeconds] - Wall-clock time for task completion
@@ -84,18 +85,24 @@ async function loadPromptTemplate() {
   return _promptTemplate;
 }
 
-function buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions) {
-  let interventionText = 'No interventions recorded.';
-  if (interventions && interventions.length > 0) {
-    interventionText = interventions
+function buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, interventionText) {
+  let finalInterventionText;
+  if (interventionText) {
+    // Use pre-formatted structured intervention text (from intervention-detector)
+    finalInterventionText = interventionText;
+  } else if (interventions && interventions.length > 0) {
+    // Fall back to legacy flat list format
+    finalInterventionText = interventions
       .map((i, idx) => `${idx + 1}. [${i.severity || 'unknown'}] ${i.description}`)
       .join('\n');
+  } else {
+    finalInterventionText = 'No interventions recorded.';
   }
 
   return template
     .replace('{{TASK_PROMPT}}', taskPrompt)
     .replace('{{PR_REVIEW_OUTPUT}}', prReviewOutput)
-    .replace('{{INTERVENTION_METADATA}}', interventionText);
+    .replace('{{INTERVENTION_METADATA}}', finalInterventionText);
 }
 
 async function callClaude(prompt, model) {
@@ -178,6 +185,7 @@ export async function evaluateTask(input) {
     taskPrompt,
     prReviewOutput,
     interventions = [],
+    interventionText,
     issueId,
     prUrl,
     timeSeconds = 0,
@@ -190,7 +198,7 @@ export async function evaluateTask(input) {
   const provider = judgeConfig.provider;
 
   const template = await loadPromptTemplate();
-  const prompt = buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions);
+  const prompt = buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, interventionText);
 
   let lastError;
 
