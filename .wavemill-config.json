@@ -1,6 +1,6 @@
 {
   "linear": {
-    "project": ""
+    "project": "wavemill"
   },
   "mill": {
     "session": "wavemill",
@@ -9,7 +9,7 @@
     "baseBranch": "main",
     "worktreeRoot": "../worktrees",
     "agentCmd": "claude",
-    "requireConfirm": true,
+    "requireConfirm": false,
     "maxRetries": 3,
     "retryDelay": 2
   },
