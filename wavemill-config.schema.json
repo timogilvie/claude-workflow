@@ -107,6 +107,25 @@
           "default": ".wavemill/evals",
           "description": "Directory for persisting eval result JSONL files. Relative paths resolve against the repo root."
         },
+        "judge": {
+          "type": "object",
+          "description": "LLM judge configuration for eval scoring.",
+          "properties": {
+            "model": {
+              "type": "string",
+              "default": "claude-sonnet-4-5-20250929",
+              "minLength": 1,
+              "description": "Model ID for the eval judge (e.g. 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001')."
+            },
+            "provider": {
+              "type": "string",
+              "default": "anthropic",
+              "enum": ["anthropic"],
+              "description": "LLM provider for the eval judge. Currently only 'anthropic' is supported."
+            }
+          },
+          "additionalProperties": false
+        },
         "interventionPenalties": {
           "type": "object",
           "description": "Penalty weights per intervention type. Each value is the score penalty (0-1) applied per occurrence of that intervention type.",

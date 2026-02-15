@@ -240,7 +240,8 @@ function formatEvalRecord(record) {
   // Metadata
   if (record.issueId) lines.push(`  ${DIM}Issue:${NC}  ${record.issueId}`);
   if (record.prUrl) lines.push(`  ${DIM}PR:${NC}     ${record.prUrl}`);
-  lines.push(`  ${DIM}Model:${NC}  ${record.modelId}`);
+  lines.push(`  ${DIM}Model:${NC}  ${record.judgeModel || record.modelId}`);
+  if (record.judgeProvider) lines.push(`  ${DIM}Provider:${NC} ${record.judgeProvider}`);
   if (record.timeSeconds > 0) lines.push(`  ${DIM}Time:${NC}   ${record.timeSeconds}s`);
   lines.push('');
 
