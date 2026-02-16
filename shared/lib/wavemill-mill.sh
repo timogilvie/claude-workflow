@@ -550,6 +550,39 @@ if [[ "$EXPANSION_FAILED" == "true" ]]; then
 fi
 
 
+# ── Phase 4: Model routing suggestions ─────────────────────────────────
+if [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
+  SUGGEST_TOOL="$TOOLS_DIR/suggest-model.ts"
+  if [[ -f "$SUGGEST_TOOL" ]]; then
+    log "Running model router..."
+    for t in "${TASKS[@]}"; do
+      IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+      PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
+      if [[ -f "$PACKET_FILE" ]]; then
+        SUGGESTION=$(npx tsx "$SUGGEST_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+        if [[ -n "$SUGGESTION" ]]; then
+          RECOMMENDED=$(echo "$SUGGESTION" | jq -r '.recommendedModel // empty' 2>/dev/null)
+          CONFIDENCE=$(echo "$SUGGESTION" | jq -r '.confidence // empty' 2>/dev/null)
+          TASK_TYPE=$(echo "$SUGGESTION" | jq -r '.taskType // empty' 2>/dev/null)
+          INSUFFICIENT=$(echo "$SUGGESTION" | jq -r '.insufficientData // false' 2>/dev/null)
+          REASONING=$(echo "$SUGGESTION" | jq -r '.reasoning // empty' 2>/dev/null)
+
+          if [[ "$INSUFFICIENT" == "true" ]]; then
+            log "  $ISSUE: Using default model (insufficient eval data)"
+          else
+            log "  $ISSUE: Recommended model: $RECOMMENDED (confidence: $CONFIDENCE, task type: $TASK_TYPE)"
+          fi
+
+          # Store recommendation for orchestrator
+          echo "$SUGGESTION" > "/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
+        fi
+      fi
+    done
+    echo ""
+  fi
+fi
+
+
 # User confirmed (or no confirmation needed) - now set issues to In Progress
 INITIAL_PHASE="executing"
 [[ "$PLANNING_MODE" == "interactive" ]] && INITIAL_PHASE="planning"

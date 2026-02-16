@@ -200,6 +200,41 @@
       "type": "boolean",
       "default": false,
       "description": "When true, automatically run eval after workflow/bugfix command completion (PR creation). Eval failures are logged as warnings and never fail the workflow."
+    },
+    "router": {
+      "type": "object",
+      "description": "Settings for the prompt-to-model router that suggests the best LLM for a task based on historical eval data.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable model routing suggestions before workflow execution."
+        },
+        "defaultModel": {
+          "type": "string",
+          "default": "claude-sonnet-4-5-20250929",
+          "description": "Fallback model when insufficient eval data exists for routing."
+        },
+        "minRecords": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "description": "Minimum total eval records required before the router makes suggestions."
+        },
+        "minModels": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 1,
+          "description": "Minimum distinct models with eval data before routing is active."
+        },
+        "models": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

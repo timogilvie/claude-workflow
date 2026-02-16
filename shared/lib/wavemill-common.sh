@@ -81,7 +81,9 @@ load_config() {
       "_CFG_MAX_SELECT=\($c.expand.maxSelect)",
       "_CFG_MAX_DISPLAY=\($c.expand.maxDisplay)",
       "_CFG_PLAN_MAX_DISPLAY=\($c.plan.maxDisplay)",
-      "_CFG_PLAN_RESEARCH=\($c.plan.research // false)"
+      "_CFG_PLAN_RESEARCH=\($c.plan.research // false)",
+      "_CFG_ROUTER_ENABLED=\($c.router.enabled // true)",
+      "_CFG_ROUTER_DEFAULT_MODEL=\($c.router.defaultModel // "claude-sonnet-4-5-20250929" | @sh)"
     ] | .[]
     '
   ) || {
@@ -108,6 +110,8 @@ load_config() {
   MAX_DISPLAY="${MAX_DISPLAY:-$_CFG_MAX_DISPLAY}"
   PLAN_MAX_DISPLAY="${PLAN_MAX_DISPLAY:-$_CFG_PLAN_MAX_DISPLAY}"
   PLAN_RESEARCH="${PLAN_RESEARCH:-$_CFG_PLAN_RESEARCH}"
+  ROUTER_ENABLED="${ROUTER_ENABLED:-$_CFG_ROUTER_ENABLED}"
+  ROUTER_DEFAULT_MODEL="${ROUTER_DEFAULT_MODEL:-$_CFG_ROUTER_DEFAULT_MODEL}"
 
   # WORKTREE_ROOT: resolve relative paths against repo_dir
   local wt_raw="${WORKTREE_ROOT:-$_CFG_WORKTREE_ROOT}"
@@ -121,12 +125,14 @@ load_config() {
   export SESSION MAX_PARALLEL POLL_SECONDS BASE_BRANCH WORKTREE_ROOT
   export AGENT_CMD REQUIRE_CONFIRM PLANNING_MODE MAX_RETRIES RETRY_DELAY
   export PROJECT_NAME MAX_SELECT MAX_DISPLAY PLAN_MAX_DISPLAY PLAN_RESEARCH
+  export ROUTER_ENABLED ROUTER_DEFAULT_MODEL
 
   # Clean up temp variables
   unset _CFG_PROJECT _CFG_SESSION _CFG_MAX_PARALLEL _CFG_POLL_SECONDS
   unset _CFG_BASE_BRANCH _CFG_WORKTREE_ROOT _CFG_AGENT_CMD _CFG_REQUIRE_CONFIRM
   unset _CFG_PLANNING_MODE _CFG_MAX_RETRIES _CFG_RETRY_DELAY _CFG_MAX_SELECT _CFG_MAX_DISPLAY
   unset _CFG_PLAN_MAX_DISPLAY _CFG_PLAN_RESEARCH
+  unset _CFG_ROUTER_ENABLED _CFG_ROUTER_DEFAULT_MODEL
 
   # Sentinel so downstream scripts can skip re-loading
   _WAVEMILL_CONFIG_LOADED=1
