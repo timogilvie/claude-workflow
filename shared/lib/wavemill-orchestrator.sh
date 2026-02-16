@@ -107,6 +107,23 @@ for t in "${TASKS[@]}"; do
     fi
 
 
+    # Load model suggestion if available
+    MODEL_SUGGESTION_FILE="/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
+    MODEL_HINT=""
+    if [[ -f "$MODEL_SUGGESTION_FILE" ]]; then
+      RECOMMENDED_MODEL=$(jq -r '.recommendedModel // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+      MODEL_CONFIDENCE=$(jq -r '.confidence // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+      MODEL_TASK_TYPE=$(jq -r '.taskType // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+      MODEL_REASONING=$(jq -r '.reasoning // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+      MODEL_INSUFFICIENT=$(jq -r '.insufficientData // false' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+
+      if [[ "$MODEL_INSUFFICIENT" != "true" && -n "$RECOMMENDED_MODEL" ]]; then
+        MODEL_HINT="Model recommendation: ${RECOMMENDED_MODEL} (confidence: ${MODEL_CONFIDENCE}, task type: ${MODEL_TASK_TYPE})"
+        echo "Model suggestion: $RECOMMENDED_MODEL (confidence: $MODEL_CONFIDENCE)"
+      fi
+    fi
+
+
     # Create worktree + branch (check for existing branch first)
     if [[ -d "$WT_DIR" ]]; then
       echo "Worktree exists: $WT_DIR (resuming)"
@@ -174,6 +191,8 @@ Base branch: $BASE_BRANCH
 ${ISSUE_DESCRIPTION:+Issue Description:
 $ISSUE_DESCRIPTION
 }
+${MODEL_HINT:+$MODEL_HINT
+}
 ---
 
 ## Your Workflow
@@ -231,6 +250,7 @@ Base branch: BASE_BRANCH_PLACEHOLDER
 
 DESCRIPTION_PLACEHOLDER
 
+MODEL_HINT_PLACEHOLDER
 
 Goal:
 - Implement the feature/fix described by the issue and title.
@@ -265,6 +285,7 @@ $ISSUE_DESCRIPTION
       else
         INSTR="${INSTR//DESCRIPTION_PLACEHOLDER/}"
       fi
+      INSTR="${INSTR//MODEL_HINT_PLACEHOLDER/$MODEL_HINT}"
 
       # Write instructions to temp file and use it to start agent
       INSTR_FILE="/tmp/${SESSION}-${ISSUE}-instructions.txt"
