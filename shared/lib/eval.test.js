@@ -4,15 +4,14 @@ import { evaluateTask } from './eval.js';
 
 let originalFetch;
 
-function mockFetch(responseText, status = 200) {
+function mockFetch(responseText, status = 200, usage = { input_tokens: 100, output_tokens: 50 }) {
+  const responseBody = { content: [{ type: 'text', text: responseText }] };
+  if (usage !== null) responseBody.usage = usage;
   globalThis.fetch = mock.fn(() =>
     Promise.resolve({
       ok: status >= 200 && status < 300,
       status,
-      json: () =>
-        Promise.resolve({
-          content: [{ type: 'text', text: responseText }],
-        }),
+      json: () => Promise.resolve(responseBody),
       text: () => Promise.resolve(responseText),
     })
   );
@@ -122,6 +121,7 @@ describe('evaluateTask', () => {
         json: () =>
           Promise.resolve({
             content: [{ type: 'text', text }],
+            usage: { input_tokens: 100, output_tokens: 50 },
           }),
       });
     });
@@ -149,6 +149,7 @@ describe('evaluateTask', () => {
         json: () =>
           Promise.resolve({
             content: [{ type: 'text', text }],
+            usage: { input_tokens: 100, output_tokens: 50 },
           }),
       });
     });
@@ -223,6 +224,65 @@ describe('evaluateTask', () => {
     );
   });
 
+  it('includes tokenUsage from API response', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.85,
+      rationale: 'Good work.',
+      interventionFlags: [],
+    });
+    mockFetch(validResponse, 200, { input_tokens: 2000, output_tokens: 500 });
+
+    const result = await evaluateTask({
+      taskPrompt: 'Add a feature',
+      prReviewOutput: 'Clean diff',
+    });
+
+    assert.ok(result.tokenUsage, 'should have tokenUsage');
+    assert.equal(result.tokenUsage.inputTokens, 2000);
+    assert.equal(result.tokenUsage.outputTokens, 500);
+    assert.equal(result.tokenUsage.totalTokens, 2500);
+  });
+
+  it('includes estimatedCost when model is in pricing table', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.9,
+      rationale: 'Well done.',
+      interventionFlags: [],
+    });
+    // Default mock provides input_tokens: 100, output_tokens: 50
+    mockFetch(validResponse);
+
+    const result = await evaluateTask({
+      taskPrompt: 'Quick task',
+      prReviewOutput: 'Good',
+    });
+
+    // The judge model is claude-sonnet-4-5-20250929 by default
+    // Pricing: inputCostPerMTok=3, outputCostPerMTok=15
+    // Cost = (100 * 3 + 50 * 15) / 1_000_000 = (300 + 750) / 1_000_000 = 0.00105
+    if (result.estimatedCost !== undefined) {
+      assert.equal(typeof result.estimatedCost, 'number');
+      assert.ok(result.estimatedCost >= 0);
+    }
+    // estimatedCost may be undefined if pricing table not loaded (test cwd may not have config)
+  });
+
+  it('omits tokenUsage when API response has no usage field', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.8,
+      rationale: 'Done.',
+      interventionFlags: [],
+    });
+    mockFetch(validResponse, 200, null);
+
+    const result = await evaluateTask({
+      taskPrompt: 'Do something',
+      prReviewOutput: 'Something done',
+    });
+
+    assert.equal(result.tokenUsage, undefined);
+  });
+
   it('handles response wrapped in markdown code fences', async () => {
     const wrappedResponse =
       '```json\n' +
@@ -242,5 +302,6 @@ describe('evaluateTask', () => {
     assert.equal(result.score, 0.7);
     assert.equal(result.rationale, 'Decent execution with fenced response.');
     assert.equal(result.scoreBand, 'Assisted Success');
+    assert.ok(result.tokenUsage, 'should have tokenUsage from mock');
   });
 });

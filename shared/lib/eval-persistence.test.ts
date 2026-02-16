@@ -292,6 +292,52 @@ test('empty file returns empty array', () => {
 });
 
 // ────────────────────────────────────────────────────────────────
+// Cost Field Persistence Tests
+// ────────────────────────────────────────────────────────────────
+
+console.log('\n--- Cost Field Persistence Tests ---\n');
+
+test('tokenUsage and estimatedCost survive round-trip', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    const record = makeRecord({
+      id: 'cost-1',
+      tokenUsage: { inputTokens: 2000, outputTokens: 500, totalTokens: 2500 },
+      estimatedCost: 0.01350,
+    });
+    appendEvalRecord(record, { dir: evalsDir });
+
+    const records = readEvalRecords({ dir: evalsDir });
+    assert.equal(records.length, 1);
+    assert.ok(records[0].tokenUsage, 'should have tokenUsage');
+    assert.equal(records[0].tokenUsage!.inputTokens, 2000);
+    assert.equal(records[0].tokenUsage!.outputTokens, 500);
+    assert.equal(records[0].tokenUsage!.totalTokens, 2500);
+    assert.equal(records[0].estimatedCost, 0.01350);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('records without cost fields read correctly (backward compat)', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    // Record without tokenUsage/estimatedCost
+    const record = makeRecord({ id: 'no-cost-1' });
+    appendEvalRecord(record, { dir: evalsDir });
+
+    const records = readEvalRecords({ dir: evalsDir });
+    assert.equal(records.length, 1);
+    assert.equal(records[0].tokenUsage, undefined);
+    assert.equal(records[0].estimatedCost, undefined);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────
 
