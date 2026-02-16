@@ -208,17 +208,18 @@ export function detectManualEdits(branchName: string, baseBranch: string, repoDi
   const event: InterventionEvent = { type: 'manual_edit', count: 0, details: [] };
 
   try {
-    // Get all commits on this branch that don't have the agent co-author tag
+    // Get all commits on this branch that don't have the agent co-author tag.
+    // Use %x00 (null byte) as record separator because %b (body) can contain newlines.
     const commitsRaw = execSync(
-      `git log ${baseBranch}..${branchName} --format='%H|%s|%an|%b' 2>/dev/null || echo ''`,
+      `git log ${baseBranch}..${branchName} --format='%H|%s|%an|%b%x00' 2>/dev/null || echo ''`,
       { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 10_000 }
     ).trim();
 
     if (!commitsRaw) return event;
 
-    const lines = commitsRaw.split('\n').filter(Boolean);
-    for (const line of lines) {
-      const [sha, subject, author, ...bodyParts] = line.split('|');
+    const records = commitsRaw.split('\0').filter(Boolean);
+    for (const record of records) {
+      const [sha, subject, author, ...bodyParts] = record.split('|');
       const body = bodyParts.join('|');
 
       // Heuristic: commits without "Co-Authored-By: Claude" are likely manual edits
