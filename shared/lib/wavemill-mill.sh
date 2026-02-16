@@ -26,6 +26,7 @@ REPO_DIR="${REPO_DIR:-$PWD}"
 # Resolution: env vars > .wavemill-config.json > ~/.wavemill/config.json > defaults
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/wavemill-common.sh"
+source "$SCRIPT_DIR/agent-adapters.sh"
 load_config "$REPO_DIR"
 
 # Derived variables (not in config files)
@@ -38,7 +39,7 @@ command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq
 command -v gh >/dev/null || { echo "Error: gh required (install: brew install gh && gh auth login)"; exit 1; }
 command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
 command -v tmux >/dev/null || { echo "Error: tmux required (install: brew install tmux)"; exit 1; }
-command -v "$AGENT_CMD" >/dev/null || { echo "Error: agent '$AGENT_CMD' not found"; exit 1; }
+agent_validate "$AGENT_CMD" || { echo "Error: agent '$AGENT_CMD' not found"; exit 1; }
 
 
 # ============================================================================
@@ -363,6 +364,7 @@ log "  Repository: $REPO_DIR"
 log "  Base branch: $BASE_BRANCH"
 log "  Worktree root: $WORKTREE_ROOT"
 log "  Project: ${PROJECT_NAME:-(all projects)}"
+log "  Agent: $AGENT_CMD ($(agent_name "$AGENT_CMD"))"
 log "  Max parallel: $MAX_PARALLEL"
 log "  Planning mode: $PLANNING_MODE"
 log "  State file: $STATE_FILE"

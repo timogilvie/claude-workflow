@@ -47,7 +47,8 @@
         "agentCmd": {
           "type": "string",
           "default": "claude",
-          "description": "Agent CLI to use (e.g. 'claude', 'codex')."
+          "description": "Agent CLI to use. Built-in support for 'claude' and 'codex'. Other CLIs work via generic tmux passthrough. Can be overridden with --agent flag or AGENT_CMD env var.",
+          "examples": ["claude", "codex"]
         },
         "requireConfirm": {
           "type": "boolean",
