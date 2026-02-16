@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   type EvalRecord,
+  type TokenUsage,
   SCORE_BANDS,
   getScoreBand,
 } from './eval-schema.ts';
@@ -142,6 +143,12 @@ const scenarios: { name: string; record: EvalRecord }[] = [
         'Agent completed the task fully autonomously. Created the logout button component, wired up session clearing logic, added redirect, and all tests pass. No human intervention was needed.',
       issueId: 'HOK-500',
       prUrl: 'https://github.com/org/repo/pull/42',
+      tokenUsage: {
+        inputTokens: 1500,
+        outputTokens: 350,
+        totalTokens: 1850,
+      },
+      estimatedCost: 0.00456,
     },
   },
   {
@@ -372,6 +379,31 @@ test('Rejects record with invalid schemaVersion format', () => {
     result.errors.some((e) => e.includes('schemaVersion')),
     'Should mention schemaVersion pattern',
   );
+});
+
+console.log('\n--- Cost Field Tests ---\n');
+
+test('Record with tokenUsage and estimatedCost validates', () => {
+  const record = {
+    ...scenarios[0].record,
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record without tokenUsage and estimatedCost validates (backward compat)', () => {
+  // Scenario 3 has no tokenUsage or estimatedCost
+  const record = scenarios[2].record as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('TokenUsage fields are correct types in scenario 1', () => {
+  const tu = scenarios[0].record.tokenUsage!;
+  assert.equal(typeof tu.inputTokens, 'number');
+  assert.equal(typeof tu.outputTokens, 'number');
+  assert.equal(typeof tu.totalTokens, 'number');
+  assert.equal(tu.totalTokens, tu.inputTokens + tu.outputTokens);
 });
 
 // ────────────────────────────────────────────────────────────────

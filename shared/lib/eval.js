@@ -140,10 +140,59 @@ async function callClaude(prompt, model) {
     if (!text) {
       throw new Error('Empty response from Anthropic API');
     }
-    return text;
+
+    // Extract token usage from the API response
+    const usage = data.usage
+      ? {
+          inputTokens: data.usage.input_tokens || 0,
+          outputTokens: data.usage.output_tokens || 0,
+          totalTokens: (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0),
+        }
+      : null;
+
+    return { text, usage };
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/**
+ * Load the pricing table from .wavemill-config.json.
+ * Returns a map of model ID to { inputCostPerMTok, outputCostPerMTok }.
+ */
+function loadPricingTable() {
+  const configPath = resolve('.wavemill-config.json');
+  if (existsSync(configPath)) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (config.eval?.pricing && typeof config.eval.pricing === 'object') {
+        return config.eval.pricing;
+      }
+    } catch {
+      // Malformed config — return empty
+    }
+  }
+  return {};
+}
+
+/**
+ * Compute estimated cost in USD from token usage and a pricing table.
+ * Returns undefined if the model is not found in the pricing table.
+ *
+ * @param {string} modelId
+ * @param {{ inputTokens: number, outputTokens: number }} usage
+ * @param {Record<string, { inputCostPerMTok: number, outputCostPerMTok: number }>} pricingTable
+ * @returns {number | undefined}
+ */
+function computeCost(modelId, usage, pricingTable) {
+  if (!usage || !pricingTable) return undefined;
+
+  const pricing = pricingTable[modelId];
+  if (!pricing) return undefined;
+
+  const inputCost = (usage.inputTokens * pricing.inputCostPerMTok) / 1_000_000;
+  const outputCost = (usage.outputTokens * pricing.outputCostPerMTok) / 1_000_000;
+  return inputCost + outputCost;
 }
 
 function parseJudgeResponse(raw) {
@@ -196,6 +245,7 @@ export async function evaluateTask(input) {
   const judgeConfig = loadJudgeConfig();
   const model = process.env.EVAL_MODEL || judgeConfig.model;
   const provider = judgeConfig.provider;
+  const pricingTable = loadPricingTable();
 
   const template = await loadPromptTemplate();
   const prompt = buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, interventionText);
@@ -203,17 +253,20 @@ export async function evaluateTask(input) {
   let lastError;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    let raw;
+    let response;
     try {
-      raw = await callClaude(prompt, model);
+      response = await callClaude(prompt, model);
     } catch (err) {
       // Do not retry on timeout or network errors — only on parse failures
       throw err;
     }
 
     try {
-      const { score, rationale, interventionFlags } = parseJudgeResponse(raw);
+      const { score, rationale, interventionFlags } = parseJudgeResponse(response.text);
       const band = getScoreBand(score);
+
+      const tokenUsage = response.usage || undefined;
+      const estimatedCost = computeCost(model, tokenUsage, pricingTable);
 
       return {
         id: randomUUID(),
@@ -233,6 +286,8 @@ export async function evaluateTask(input) {
         rationale,
         ...(issueId && { issueId }),
         ...(prUrl && { prUrl }),
+        ...(tokenUsage && { tokenUsage }),
+        ...(estimatedCost !== undefined && { estimatedCost }),
         metadata: { ...metadata, interventionFlags },
       };
     } catch (parseErr) {
