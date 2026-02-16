@@ -351,6 +351,90 @@ trap cleanup_on_exit INT TERM
 init_state_ledger
 
 
+# Prune stale tasks from previous runs
+# Check each task: if PR merged or branch deleted, clean up worktree + state
+cleanup_stale_tasks() {
+  local stale_issues
+  stale_issues=$(jq -r '.tasks | to_entries[] | .key' "$STATE_FILE" 2>/dev/null)
+  [[ -z "$stale_issues" ]] && return 0
+
+  # Check if the tmux session from a previous run is still alive
+  local session_alive=false
+  tmux has-session -t "$SESSION" 2>/dev/null && session_alive=true
+
+  local cleaned=0
+  while IFS= read -r issue; do
+    [[ -z "$issue" ]] && continue
+    local task_json
+    task_json=$(jq -r --arg i "$issue" '.tasks[$i]' "$STATE_FILE")
+    local slug branch worktree pr
+    slug=$(echo "$task_json" | jq -r '.slug')
+    branch=$(echo "$task_json" | jq -r '.branch')
+    worktree=$(echo "$task_json" | jq -r '.worktree')
+    pr=$(echo "$task_json" | jq -r '.pr // empty')
+
+    local should_clean=false
+    local full_clean=false  # true = also remove worktree+branch
+    local reason=""
+
+    # Check if branch still exists
+    if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
+      should_clean=true
+      full_clean=true
+      reason="branch deleted"
+    # Check if PR was merged or closed
+    elif [[ -n "$pr" ]]; then
+      local pr_st
+      pr_st=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || echo "")
+      if [[ "$pr_st" == "MERGED" ]]; then
+        should_clean=true
+        full_clean=true
+        reason="PR #$pr merged"
+      elif [[ "$pr_st" == "CLOSED" ]]; then
+        should_clean=true
+        full_clean=true
+        reason="PR #$pr closed"
+      fi
+    fi
+
+    # If no tmux session exists, orphaned tasks should be removed from state
+    # (worktree+branch preserved so user can resume manually if needed)
+    if [[ "$should_clean" == "false" ]] && [[ "$session_alive" == "false" ]]; then
+      should_clean=true
+      full_clean=false
+      reason="orphaned (no active session)"
+    fi
+
+    if [[ "$should_clean" == "true" ]]; then
+      log "  Pruning $issue ($reason)"
+      if [[ "$full_clean" == "true" ]]; then
+        # Clean up worktree + branch for completed tasks
+        if [[ -d "$worktree" ]]; then
+          execute git -C "$REPO_DIR" worktree remove "$worktree" --force 2>/dev/null || true
+        fi
+        if [[ "$reason" != "branch deleted" ]]; then
+          git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
+        fi
+      fi
+      # Remove from state file (dashboard will stop showing it)
+      remove_task_state "$issue"
+      cleaned=$((cleaned + 1))
+    fi
+  done <<<"$stale_issues"
+
+  if (( cleaned > 0 )); then
+    execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+    log "  Cleaned $cleaned stale task(s)"
+  fi
+}
+
+stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
+if (( stale_count > 0 )); then
+  log "Found $stale_count task(s) in state file from previous run. Checking..."
+  cleanup_stale_tasks
+fi
+
+
 # Display configuration
 if [[ "$DRY_RUN" == "true" ]]; then
   echo "============================================"
