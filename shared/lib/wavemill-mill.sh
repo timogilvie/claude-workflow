@@ -287,6 +287,7 @@ validate_pr_merge() {
 
   local state=$(echo "$details" | jq -r '.state')
   local base_branch=$(echo "$details" | jq -r '.baseRefName')
+  local has_checks=$(echo "$details" | jq '.statusCheckRollup | length > 0')
   local checks=$(echo "$details" | jq -r '.statusCheckRollup[]?.conclusion // "PENDING"')
 
 
@@ -304,16 +305,19 @@ validate_pr_merge() {
   fi
 
 
-  # Check 3: All CI checks must pass (if checks exist)
-  if echo "$checks" | grep -qE "FAILURE|CANCELLED"; then
-    log_warn "PR #$pr has failing CI checks"
-    return 1
-  fi
+  # Only validate CI checks if checks exist (repos without CI skip this)
+  if [[ "$has_checks" == "true" ]]; then
+    # Check 3: All CI checks must pass
+    if echo "$checks" | grep -qE "FAILURE|CANCELLED"; then
+      log_warn "PR #$pr has failing CI checks"
+      return 1
+    fi
 
-  # Check 4: CI checks must be complete (not pending)
-  if echo "$checks" | grep -q "PENDING"; then
-    log_warn "PR #$pr CI checks still pending"
-    return 1
+    # Check 4: CI checks must be complete (not pending)
+    if echo "$checks" | grep -q "PENDING"; then
+      log_warn "PR #$pr CI checks still pending"
+      return 1
+    fi
   fi
 
   return 0
@@ -644,6 +648,7 @@ validate_pr_merge() {
 
   local state=$(echo "$details" | jq -r '.state')
   local base_branch=$(echo "$details" | jq -r '.baseRefName')
+  local has_checks=$(echo "$details" | jq '.statusCheckRollup | length > 0')
   local checks=$(echo "$details" | jq -r '.statusCheckRollup[]?.conclusion // "PENDING"')
 
   # Check 1: Must be MERGED (not CLOSED)
@@ -657,16 +662,19 @@ validate_pr_merge() {
     return 1
   fi
 
-  # Check 3: All CI checks must pass (if checks exist)
-  if echo "$checks" | grep -qE "FAILURE|CANCELLED"; then
-    log_warn "PR #$pr has failing CI checks - waiting for resolution"
-    return 1
-  fi
+  # Only validate CI checks if checks exist (repos without CI skip this)
+  if [[ "$has_checks" == "true" ]]; then
+    # Check 3: All CI checks must pass
+    if echo "$checks" | grep -qE "FAILURE|CANCELLED"; then
+      log_warn "PR #$pr has failing CI checks - waiting for resolution"
+      return 1
+    fi
 
-  # Check 4: CI checks must be complete (not pending)
-  if echo "$checks" | grep -q "PENDING"; then
-    log "PR #$pr CI checks still pending - waiting..."
-    return 1
+    # Check 4: CI checks must be complete (not pending)
+    if echo "$checks" | grep -q "PENDING"; then
+      log "PR #$pr CI checks still pending - waiting..."
+      return 1
+    fi
   fi
 
   return 0
