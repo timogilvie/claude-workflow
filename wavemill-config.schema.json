@@ -138,6 +138,27 @@
           },
           "additionalProperties": false
         },
+        "pricing": {
+          "type": "object",
+          "description": "Per-model pricing table for cost estimation. Keys are model identifiers, values specify cost per million tokens.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "inputCostPerMTok": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Cost in USD per million input tokens."
+              },
+              "outputCostPerMTok": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Cost in USD per million output tokens."
+              }
+            },
+            "required": ["inputCostPerMTok", "outputCostPerMTok"],
+            "additionalProperties": false
+          }
+        },
         "interventionPenalties": {
           "type": "object",
           "description": "Penalty weights per intervention type. Each value is the score penalty (0-1) applied per occurrence of that intervention type.",

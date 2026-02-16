@@ -129,6 +129,22 @@ export function getScoreBand(score: number): ScoreBand {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Token Usage
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Token usage from an LLM API call.
+ */
+export interface TokenUsage {
+  /** Number of input (prompt) tokens */
+  inputTokens: number;
+  /** Number of output (completion) tokens */
+  outputTokens: number;
+  /** Total tokens (input + output) */
+  totalTokens: number;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -190,6 +206,12 @@ export interface EvalRecord {
 
   /** Pull request URL, if the task produced a PR */
   prUrl?: string;
+
+  /** Token usage from the LLM judge API call */
+  tokenUsage?: TokenUsage;
+
+  /** Estimated cost in USD based on the pricing table */
+  estimatedCost?: number;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;

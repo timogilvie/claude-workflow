@@ -22,6 +22,11 @@
     "judge": {
       "model": "claude-sonnet-4-5-20250929",
       "provider": "anthropic"
+    },
+    "pricing": {
+      "claude-opus-4-6": { "inputCostPerMTok": 15, "outputCostPerMTok": 75 },
+      "claude-sonnet-4-5-20250929": { "inputCostPerMTok": 3, "outputCostPerMTok": 15 },
+      "claude-haiku-4-5-20251001": { "inputCostPerMTok": 0.80, "outputCostPerMTok": 4 }
     }
   },
   "autoEval": true

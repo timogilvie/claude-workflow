@@ -106,6 +106,34 @@
       "format": "uri",
       "description": "Pull request URL, if the task produced a PR."
     },
+    "tokenUsage": {
+      "type": "object",
+      "description": "Token usage from the LLM judge API call.",
+      "properties": {
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of input (prompt) tokens."
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of output (completion) tokens."
+        },
+        "totalTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total tokens (input + output)."
+        }
+      },
+      "required": ["inputTokens", "outputTokens", "totalTokens"],
+      "additionalProperties": false
+    },
+    "estimatedCost": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Estimated cost in USD based on the pricing table."
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
