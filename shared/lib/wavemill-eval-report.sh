@@ -187,6 +187,8 @@ if [[ "$RECORD_COUNT" -eq 0 ]]; then
       '{
         record_count: 0,
         overall_average: null,
+        total_cost: null,
+        avg_cost: null,
         per_model: [],
         distribution: {},
         worst_tasks: [],
@@ -226,6 +228,11 @@ REPORT_JSON=$(echo "$RECORDS_JSON" | jq \
 '
   (map(.score) | add / length) as $overall_avg |
 
+  # Overall cost stats (only from records that have estimatedCost)
+  ([.[] | select(.estimatedCost != null) | .estimatedCost]) as $costs |
+  (if ($costs | length) > 0 then ($costs | add) else null end) as $total_cost |
+  (if ($costs | length) > 0 then ($costs | add / length) else null end) as $avg_cost |
+
   # Per-model averages
   (group_by(.modelId)
    | map({
@@ -233,7 +240,16 @@ REPORT_JSON=$(echo "$RECORDS_JSON" | jq \
        count: length,
        avg: (map(.score) | add / length),
        min: (map(.score) | min),
-       max: (map(.score) | max)
+       max: (map(.score) | max),
+       avg_cost: (
+         [.[] | select(.estimatedCost != null) | .estimatedCost] |
+         if length > 0 then (add / length) else null end
+       ),
+       cost_per_score_point: (
+         ([.[] | select(.estimatedCost != null) | .estimatedCost] | if length > 0 then (add / length) else null end) as $ac |
+         (map(.score) | add / length) as $as |
+         if $ac != null and $as > 0 then ($ac / $as) else null end
+       )
      })
    | sort_by(-.avg)
   ) as $per_model |
@@ -280,6 +296,8 @@ REPORT_JSON=$(echo "$RECORDS_JSON" | jq \
   {
     record_count: length,
     overall_average: ($overall_avg * 100 | round / 100),
+    total_cost: $total_cost,
+    avg_cost: (if $avg_cost != null then ($avg_cost * 10000 | round / 10000) else null end),
     per_model: $per_model_filtered,
     per_model_all: $per_model,
     distribution: $distribution,
@@ -337,6 +355,8 @@ make_bar() {
 # ============================================================================
 
 OVERALL_AVG=$(echo "$REPORT_JSON" | jq -r '.overall_average')
+TOTAL_COST=$(echo "$REPORT_JSON" | jq -r '.total_cost // "null"')
+AVG_COST=$(echo "$REPORT_JSON" | jq -r '.avg_cost // "null"')
 
 echo ""
 echo "${BOLD}${CYAN}${SEPARATOR}${NC}"
@@ -357,6 +377,11 @@ fi
 SC_COLOR=$(score_color "$OVERALL_AVG")
 echo "  ${DIM}Records:${NC} ${RECORD_COUNT}"
 echo "  ${BOLD}Overall Average:${NC} ${SC_COLOR}${OVERALL_AVG}${NC}"
+if [[ "$TOTAL_COST" != "null" ]]; then
+  TOTAL_COST_FMT=$(printf "%.4f" "$TOTAL_COST")
+  AVG_COST_FMT=$(printf "%.4f" "$AVG_COST")
+  echo "  ${DIM}Total Cost:${NC} \$${TOTAL_COST_FMT}  ${DIM}Avg Cost/Eval:${NC} \$${AVG_COST_FMT}"
+fi
 echo ""
 
 # ── Per-Model Averages ─────────────────────────────────────────────────────
@@ -366,9 +391,9 @@ echo "  ${DIM}${LINE}${NC}"
 
 echo "$REPORT_JSON" | jq -r '
   .per_model[] |
-  "\(.model)|\(.avg)|\(.count)|\(.min)|\(.max)"
+  "\(.model)|\(.avg)|\(.count)|\(.min)|\(.max)|\(.avg_cost // "null")|\(.cost_per_score_point // "null")"
 ' | \
-while IFS='|' read -r model avg count min_s max_s; do
+while IFS='|' read -r model avg count min_s max_s avg_cost cost_per_sp; do
   avg_fmt=$(printf "%.2f" "$avg")
   min_fmt=$(printf "%.2f" "$min_s")
   max_fmt=$(printf "%.2f" "$max_s")
@@ -376,9 +401,16 @@ while IFS='|' read -r model avg count min_s max_s; do
   filled=$(awk "BEGIN {printf \"%d\", $avg * 10}")
   bar=$(make_bar "$filled" 10)
 
-  printf "  %-28s %s%s%s %s %s(n=%s, %s-%s)%s\n" \
+  cost_str=""
+  if [[ "$avg_cost" != "null" ]]; then
+    cost_fmt=$(printf "%.4f" "$avg_cost")
+    cpsp_fmt=$(printf "%.4f" "$cost_per_sp")
+    cost_str="  ${DIM}\$${cost_fmt}/eval, \$${cpsp_fmt}/score-pt${NC}"
+  fi
+
+  printf "  %-28s %s%s%s %s %s(n=%s, %s-%s)%s%s\n" \
     "$model" "$color" "$avg_fmt" "$NC" "$bar" \
-    "$DIM" "$count" "$min_fmt" "$max_fmt" "$NC"
+    "$DIM" "$count" "$min_fmt" "$max_fmt" "$NC" "$cost_str"
 done
 echo ""
 
