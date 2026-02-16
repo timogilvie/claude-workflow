@@ -14,7 +14,7 @@ _WAVEMILL_DEFAULTS='{
     "maxParallel": 3,
     "pollSeconds": 10,
     "baseBranch": "main",
-    "worktreeRoot": "../worktrees",
+    "worktreeRoot": "worktrees",
     "agentCmd": "claude",
     "requireConfirm": true,
     "planningMode": "skip",
