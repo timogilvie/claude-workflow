@@ -39,3 +39,4 @@ epics/*/
 !bugs/.gitkeep
 !epics/.gitkeep
 .wavemill/
+worktrees/
