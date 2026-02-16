@@ -717,6 +717,7 @@ PROJECT_NAME='$PROJECT_NAME'
 PLANNING_MODE='$PLANNING_MODE'
 AGENT_CMD='$AGENT_CMD'
 MAX_PARALLEL='$MAX_PARALLEL'
+AUTO_EVAL='$AUTO_EVAL'
 ENVEOF
 
 
@@ -1217,6 +1218,15 @@ while :; do
     # Check if merged
     if validate_pr_merge "$PR"; then
       log "✓ $ISSUE → PR #$PR MERGED"
+
+      # Post-merge eval (non-blocking: always exits 0)
+      if [[ "$AUTO_EVAL" == "true" ]]; then
+        log "  📊 Running post-merge eval..."
+        npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+          --issue "$ISSUE" --pr "$PR" --branch "$BRANCH" \
+          --workflow-type mill --repo-dir "$REPO_DIR" \
+          2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
+      fi
 
       if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
         log "  → Window stays open for review — close it when ready"
