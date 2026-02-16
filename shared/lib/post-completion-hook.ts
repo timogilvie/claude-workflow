@@ -122,11 +122,6 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     return;
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.warn('Post-completion eval: skipped (ANTHROPIC_API_KEY not set)');
-    return;
-  }
-
   try {
     console.log('Post-completion eval: gathering context...');
 
