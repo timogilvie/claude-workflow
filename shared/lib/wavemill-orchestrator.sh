@@ -20,6 +20,10 @@ if [[ -z "${_WAVEMILL_CONFIG_LOADED:-}" ]]; then
   load_config "$REPO_DIR"
 fi
 
+# Load agent adapter functions
+_ORCH_DIR="${_ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+source "$_ORCH_DIR/agent-adapters.sh"
+
 # Positional arg overrides config for session name
 SESSION="${1:-$SESSION}"
 BASE_BRANCH="${BASE_BRANCH:-$(cd "$REPO_DIR" && git symbolic-ref --short HEAD)}"
@@ -27,7 +31,7 @@ LINEAR_TOOL="${LINEAR_TOOL:-${TOOLS_DIR:?TOOLS_DIR must be set}/get-issue-json.t
 
 
 # Validate agent command exists
-command -v "$AGENT_CMD" >/dev/null || { echo "Error: Agent command '$AGENT_CMD' not found"; exit 1; }
+agent_validate "$AGENT_CMD" || { echo "Error: Agent command '$AGENT_CMD' not found"; exit 1; }
 
 
 mkdir -p "$WORKTREE_ROOT"
@@ -125,7 +129,7 @@ for t in "${TASKS[@]}"; do
 
     if [[ "${PLANNING_MODE:-skip}" == "interactive" ]]; then
       # ── Interactive planning mode ─────────────────────────────────────
-      # Launch Claude interactively so the user can guide the planning
+      # Launch agent interactively so the user can guide the planning
       # phase from the tmux window before implementation begins.
 
       # Pre-seed selected-task.json for the /create-plan workflow
@@ -209,15 +213,8 @@ EOF_PLAN
       PROMPT_FILE="/tmp/${SESSION}-${ISSUE}-plan-prompt.txt"
       echo "$PLAN_PROMPT" > "$PROMPT_FILE"
 
-      LAUNCHER="/tmp/${SESSION}-${ISSUE}-launcher.sh"
-      cat > "$LAUNCHER" <<LAUNCHEOF
-#!/bin/bash
-exec claude "\$(cat '$PROMPT_FILE')"
-LAUNCHEOF
-      chmod +x "$LAUNCHER"
-
-      # Launch Claude interactively via the launcher
-      tmux send-keys -t "$SESSION:$WIN" "'$LAUNCHER'" C-m
+      # Launch agent interactively via adapter
+      agent_launch_interactive "$SESSION" "$WIN" "$PROMPT_FILE" "$AGENT_CMD"
 
     else
       # ── Skip mode (current autonomous behavior) ───────────────────────
@@ -273,19 +270,8 @@ $ISSUE_DESCRIPTION
       INSTR_FILE="/tmp/${SESSION}-${ISSUE}-instructions.txt"
       echo "$INSTR" > "$INSTR_FILE"
 
-      # Start agent in that window with instructions file
-      if [[ "$AGENT_CMD" == "claude" ]]; then
-        tmux send-keys -t "$SESSION:$WIN" "cat '$INSTR_FILE' | $AGENT_CMD" C-m
-      elif [[ "$AGENT_CMD" == "codex" ]]; then
-        tmux send-keys -t "$SESSION:$WIN" "$AGENT_CMD /task \"\$(cat '$INSTR_FILE')\"" C-m
-      else
-        # Generic approach: just start agent and paste instructions
-        tmux send-keys -t "$SESSION:$WIN" "$AGENT_CMD" C-m
-        sleep 0.3
-        tmux set-buffer "$INSTR"
-        tmux paste-buffer -t "$SESSION:$WIN"
-        tmux send-keys -t "$SESSION:$WIN" C-m
-      fi
+      # Start agent in that window via adapter
+      agent_launch_autonomous "$SESSION" "$WIN" "$INSTR_FILE" "$AGENT_CMD"
     fi
 
 
