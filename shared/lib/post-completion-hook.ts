@@ -34,21 +34,6 @@ export interface PostCompletionContext {
 }
 
 /**
- * Read the autoEval setting from .wavemill-config.json.
- * Returns false if the config file is missing or the key is absent.
- */
-function isAutoEvalEnabled(repoDir: string): boolean {
-  const configPath = join(repoDir, '.wavemill-config.json');
-  if (!existsSync(configPath)) return false;
-  try {
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    return config.autoEval === true;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Resolve the evalsDir from config, falling back to the default.
  */
 function resolveEvalsDir(repoDir: string): string | undefined {
@@ -105,7 +90,9 @@ function fetchPrContext(prNumber: string, repoDir: string): { diff: string; url:
 /**
  * Run the post-completion eval hook.
  *
- * - Checks autoEval config; returns early if disabled.
+ * Callers are responsible for gating on autoEval before invoking this function
+ * (e.g. the mill script checks AUTO_EVAL, the workflow command calls explicitly).
+ *
  * - Gathers context (issue details, PR diff).
  * - Invokes the LLM judge via evaluateTask().
  * - Persists the result via appendEvalRecord() from eval-persistence.
@@ -113,12 +100,6 @@ function fetchPrContext(prNumber: string, repoDir: string): { diff: string; url:
  */
 export async function runPostCompletionEval(ctx: PostCompletionContext): Promise<void> {
   const repoDir = ctx.repoDir || process.cwd();
-
-  // 1. Check config
-  if (!isAutoEvalEnabled(repoDir)) {
-    console.log('Post-completion eval: skipped (autoEval is disabled in config)');
-    return;
-  }
 
   if (!ctx.issueId && !ctx.prNumber) {
     console.warn('Post-completion eval: skipped (no issue ID or PR number provided)');
