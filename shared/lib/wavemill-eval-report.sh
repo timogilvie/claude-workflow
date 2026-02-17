@@ -228,8 +228,9 @@ REPORT_JSON=$(echo "$RECORDS_JSON" | jq \
 '
   (map(.score) | add / length) as $overall_avg |
 
-  # Overall cost stats (only from records that have estimatedCost)
-  ([.[] | select(.estimatedCost != null) | .estimatedCost]) as $costs |
+  # Overall cost stats (prefer workflowCost, fall back to estimatedCost)
+  ([.[] | select(.workflowCost != null) | .workflowCost] +
+   [.[] | select(.workflowCost == null and .estimatedCost != null) | .estimatedCost]) as $costs |
   (if ($costs | length) > 0 then ($costs | add) else null end) as $total_cost |
   (if ($costs | length) > 0 then ($costs | add / length) else null end) as $avg_cost |
 
@@ -242,11 +243,13 @@ REPORT_JSON=$(echo "$RECORDS_JSON" | jq \
        min: (map(.score) | min),
        max: (map(.score) | max),
        avg_cost: (
-         [.[] | select(.estimatedCost != null) | .estimatedCost] |
+         ([.[] | select(.workflowCost != null) | .workflowCost] +
+          [.[] | select(.workflowCost == null and .estimatedCost != null) | .estimatedCost]) |
          if length > 0 then (add / length) else null end
        ),
        cost_per_score_point: (
-         ([.[] | select(.estimatedCost != null) | .estimatedCost] | if length > 0 then (add / length) else null end) as $ac |
+         (([.[] | select(.workflowCost != null) | .workflowCost] +
+           [.[] | select(.workflowCost == null and .estimatedCost != null) | .estimatedCost]) | if length > 0 then (add / length) else null end) as $ac |
          (map(.score) | add / length) as $as |
          if $ac != null and $as > 0 then ($ac / $as) else null end
        )
@@ -380,7 +383,7 @@ echo "  ${BOLD}Overall Average:${NC} ${SC_COLOR}${OVERALL_AVG}${NC}"
 if [[ "$TOTAL_COST" != "null" ]]; then
   TOTAL_COST_FMT=$(printf "%.4f" "$TOTAL_COST")
   AVG_COST_FMT=$(printf "%.4f" "$AVG_COST")
-  echo "  ${DIM}Total Cost:${NC} \$${TOTAL_COST_FMT}  ${DIM}Avg Cost/Eval:${NC} \$${AVG_COST_FMT}"
+  echo "  ${DIM}Total Workflow Cost:${NC} \$${TOTAL_COST_FMT}  ${DIM}Avg Cost/Eval:${NC} \$${AVG_COST_FMT}"
 fi
 echo ""
 
