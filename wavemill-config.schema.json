@@ -200,6 +200,13 @@
               "minimum": 0,
               "maximum": 1,
               "description": "Penalty per interactive test fix detected in commit messages."
+            },
+            "sessionRedirect": {
+              "type": "number",
+              "default": 0.12,
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Penalty per user redirection detected in the Claude session transcript (user sent a message correcting the agent mid-session)."
             }
           },
           "additionalProperties": false

@@ -138,6 +138,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       branchName,
       baseBranch: 'main',
       repoDir,
+      worktreePath: ctx.worktreePath,
     });
     const interventionMeta = toInterventionMeta(interventionSummary);
     const penalties = loadPenalties(repoDir);
