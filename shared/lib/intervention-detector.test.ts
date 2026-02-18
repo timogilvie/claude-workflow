@@ -1,14 +1,78 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   DEFAULT_PENALTIES,
   loadPenalties,
   toInterventionMeta,
   formatForJudge,
+  detectSessionRedirects,
   type InterventionSummary,
   type InterventionEvent,
   type InterventionPenalties,
 } from './intervention-detector.ts';
+import { encodeProjectDir } from './workflow-cost.ts';
+
+// ── Helpers for session JSONL fixtures ──────────────────────────
+
+function userEntry(opts: { branch: string; content: string | unknown[]; sessionId?: string }): string {
+  return JSON.stringify({
+    type: 'user',
+    userType: 'external',
+    gitBranch: opts.branch,
+    sessionId: opts.sessionId || 'test-session',
+    message: { role: 'user', content: opts.content },
+  });
+}
+
+function assistantEntry(opts: { branch: string }): string {
+  return JSON.stringify({
+    type: 'assistant',
+    gitBranch: opts.branch,
+    message: {
+      role: 'assistant',
+      model: 'claude-opus-4-6',
+      content: [{ type: 'text', text: 'response' }],
+      usage: { input_tokens: 100, output_tokens: 30 },
+    },
+  });
+}
+
+function toolResultContent(toolUseId: string, result: string): unknown[] {
+  return [{ type: 'tool_result', tool_use_id: toolUseId, content: result }];
+}
+
+/**
+ * Set up a fake ~/.claude/projects/<encoded>/ directory structure.
+ * Returns the worktreePath that resolves to the temp projects dir.
+ *
+ * We create a temp dir that acts as ~/.claude/projects/<encoded>/
+ * and use a worktree path whose encoding matches.
+ */
+function setupSessionDir(): { tmpHome: string; worktreePath: string; projectsDir: string; cleanup: () => void } {
+  const tmpHome = mkdtempSync(join(tmpdir(), 'intervention-test-'));
+  // Use a fake worktree path; we'll create the matching projects dir
+  const worktreePath = join(tmpHome, 'fake-worktree');
+  const encoded = encodeProjectDir(worktreePath);
+  const projectsDir = join(tmpHome, '.claude', 'projects', encoded);
+  mkdirSync(projectsDir, { recursive: true });
+
+  // Patch HOME so resolveProjectsDir resolves to our temp dir
+  const origHome = process.env.HOME;
+  process.env.HOME = tmpHome;
+
+  return {
+    tmpHome,
+    worktreePath,
+    projectsDir,
+    cleanup: () => {
+      process.env.HOME = origHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    },
+  };
+}
 
 describe('intervention-detector', () => {
   describe('DEFAULT_PENALTIES', () => {
@@ -17,6 +81,7 @@ describe('intervention-detector', () => {
       assert.equal(DEFAULT_PENALTIES.post_pr_commit, 0.08);
       assert.equal(DEFAULT_PENALTIES.manual_edit, 0.10);
       assert.equal(DEFAULT_PENALTIES.test_fix, 0.06);
+      assert.equal(DEFAULT_PENALTIES.session_redirect, 0.12);
     });
   });
 
@@ -35,6 +100,7 @@ describe('intervention-detector', () => {
           { type: 'post_pr_commit', count: 0, details: [] },
           { type: 'manual_edit', count: 0, details: [] },
           { type: 'test_fix', count: 0, details: [] },
+          { type: 'session_redirect', count: 0, details: [] },
         ],
         totalInterventionScore: 0,
       };
@@ -62,12 +128,17 @@ describe('intervention-detector', () => {
             details: ['def5678: manual fix (by tim)'],
           },
           { type: 'test_fix', count: 0, details: [] },
+          {
+            type: 'session_redirect',
+            count: 1,
+            details: ['I want to change the meta title instead'],
+          },
         ],
-        totalInterventionScore: 0.28,
+        totalInterventionScore: 0.40,
       };
 
       const meta = toInterventionMeta(summary);
-      assert.equal(meta.length, 4);
+      assert.equal(meta.length, 5);
 
       // review_comment events should be minor severity
       assert.equal(meta[0].severity, 'minor');
@@ -80,6 +151,10 @@ describe('intervention-detector', () => {
       // manual_edit events should be major severity
       assert.equal(meta[3].severity, 'major');
       assert.ok(meta[3].description.includes('[manual_edit]'));
+
+      // session_redirect events should be major severity
+      assert.equal(meta[4].severity, 'major');
+      assert.ok(meta[4].description.includes('[session_redirect]'));
     });
   });
 
@@ -99,6 +174,7 @@ describe('intervention-detector', () => {
           },
           { type: 'manual_edit', count: 0, details: [] },
           { type: 'test_fix', count: 0, details: [] },
+          { type: 'session_redirect', count: 0, details: [] },
         ],
         totalInterventionScore: 0.31,
       };
@@ -108,10 +184,11 @@ describe('intervention-detector', () => {
       const parsed = JSON.parse(text);
 
       assert.ok(Array.isArray(parsed.interventions));
-      assert.equal(parsed.interventions.length, 4);
+      assert.equal(parsed.interventions.length, 5);
       assert.equal(parsed.totalInterventionScore, 0.31);
       assert.ok(parsed.penaltyWeights);
       assert.equal(parsed.penaltyWeights.review_comment, 0.05);
+      assert.equal(parsed.penaltyWeights.session_redirect, 0.12);
 
       // Verify count and penaltyPerOccurrence are present
       const reviewItem = parsed.interventions.find((i: any) => i.type === 'review_comment');
@@ -126,6 +203,7 @@ describe('intervention-detector', () => {
           { type: 'post_pr_commit', count: 0, details: [] },
           { type: 'manual_edit', count: 0, details: [] },
           { type: 'test_fix', count: 0, details: [] },
+          { type: 'session_redirect', count: 0, details: [] },
         ],
         totalInterventionScore: 0,
       };
@@ -141,6 +219,188 @@ describe('intervention-detector', () => {
     });
   });
 
+  describe('detectSessionRedirects', () => {
+    it('returns count 0 when projects dir does not exist', () => {
+      const event = detectSessionRedirects('/nonexistent/worktree', 'task/foo');
+      assert.equal(event.type, 'session_redirect');
+      assert.equal(event.count, 0);
+      assert.equal(event.details.length, 0);
+    });
+
+    it('returns count 0 when session has only the initial task prompt', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const branch = 'task/my-feature';
+        const lines = [
+          userEntry({ branch, content: 'You are working on: My Feature (HOK-100)\n\nTask details...' }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, branch);
+        assert.equal(event.count, 0);
+        assert.equal(event.details.length, 0);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('returns count 0 when user messages are only tool results (array content)', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const branch = 'task/my-feature';
+        const lines = [
+          userEntry({ branch, content: 'You are working on: My Feature (HOK-100)' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: toolResultContent('toolu_123', 'No matches found') }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: toolResultContent('toolu_456', 'file.ts:10: hello') }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, branch);
+        assert.equal(event.count, 0);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('detects 1 redirect when user sends a correction after the task prompt', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const branch = 'task/my-feature';
+        const lines = [
+          userEntry({ branch, content: 'You are working on: My Feature (HOK-100)' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: toolResultContent('toolu_123', 'result') }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'No, I want to change the title not the H1' }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, branch);
+        assert.equal(event.count, 1);
+        assert.equal(event.details.length, 1);
+        assert.ok(event.details[0].includes('change the title'));
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('detects multiple redirects', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const branch = 'task/my-feature';
+        const lines = [
+          userEntry({ branch, content: 'You are working on: My Feature (HOK-100)' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'Actually change the meta title' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'Also update the favicon while you are at it' }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, branch);
+        assert.equal(event.count, 2);
+        assert.ok(event.details[0].includes('meta title'));
+        assert.ok(event.details[1].includes('favicon'));
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('filters by branch name', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const targetBranch = 'task/my-feature';
+        const otherBranch = 'task/other-feature';
+        const lines = [
+          userEntry({ branch: targetBranch, content: 'Task prompt for my-feature' }),
+          assistantEntry({ branch: targetBranch }),
+          userEntry({ branch: otherBranch, content: 'Task prompt for other-feature' }),
+          assistantEntry({ branch: otherBranch }),
+          userEntry({ branch: otherBranch, content: 'Redirect on other branch' }),
+          assistantEntry({ branch: otherBranch }),
+          userEntry({ branch: targetBranch, content: 'Redirect on target branch' }),
+          assistantEntry({ branch: targetBranch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, targetBranch);
+        assert.equal(event.count, 1);
+        assert.ok(event.details[0].includes('Redirect on target branch'));
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('truncates long user messages to 200 chars', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const branch = 'task/my-feature';
+        const longMessage = 'x'.repeat(500);
+        const lines = [
+          userEntry({ branch, content: 'Task prompt' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: longMessage }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, branch);
+        assert.equal(event.count, 1);
+        assert.equal(event.details[0].length, 200);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('reads across multiple session files', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const branch = 'task/my-feature';
+
+        // Session 1: task prompt + redirect
+        const session1 = [
+          userEntry({ branch, content: 'Task prompt session 1' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'First redirect' }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), session1.join('\n'));
+
+        // Session 2: continuation with another redirect (no new task prompt)
+        const session2 = [
+          userEntry({ branch, content: 'Second redirect in session 2' }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session2.jsonl'), session2.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, branch);
+        // First string message across all files is skipped (task prompt).
+        // "First redirect" and "Second redirect in session 2" are counted.
+        assert.equal(event.count, 2);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('handles empty session files gracefully', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        writeFileSync(join(projectsDir, 'empty.jsonl'), '');
+
+        const event = detectSessionRedirects(worktreePath, 'task/foo');
+        assert.equal(event.count, 0);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
   describe('score differentiation validation', () => {
     it('multi-intervention summary produces meaningfully higher penalty than zero', () => {
       // Scenario: 3 review comments + 2 post-PR commits = should produce >10% penalty
@@ -152,6 +412,7 @@ describe('intervention-detector', () => {
           { type: 'post_pr_commit', count: 0, details: [] },
           { type: 'manual_edit', count: 0, details: [] },
           { type: 'test_fix', count: 0, details: [] },
+          { type: 'session_redirect', count: 0, details: [] },
         ],
         totalInterventionScore: 0,
       };
@@ -171,6 +432,7 @@ describe('intervention-detector', () => {
           },
           { type: 'manual_edit', count: 0, details: [] },
           { type: 'test_fix', count: 0, details: [] },
+          { type: 'session_redirect', count: 0, details: [] },
         ],
         totalInterventionScore: 3 * penalties.review_comment + 2 * penalties.post_pr_commit,
       };

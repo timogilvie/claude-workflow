@@ -10,8 +10,9 @@
  */
 
 import { execSync } from 'child_process';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
+import { resolveProjectsDir } from './workflow-cost.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -32,7 +33,7 @@ export interface PrCommit {
 }
 
 export interface InterventionEvent {
-  type: 'review_comment' | 'post_pr_commit' | 'manual_edit' | 'test_fix';
+  type: 'review_comment' | 'post_pr_commit' | 'manual_edit' | 'test_fix' | 'session_redirect';
   count: number;
   details: string[];
 }
@@ -47,6 +48,7 @@ export interface InterventionPenalties {
   post_pr_commit: number;
   manual_edit: number;
   test_fix: number;
+  session_redirect: number;
 }
 
 /** Format expected by evaluateTask() in eval.js */
@@ -64,6 +66,7 @@ export const DEFAULT_PENALTIES: InterventionPenalties = {
   post_pr_commit: 0.08,
   manual_edit: 0.10,
   test_fix: 0.06,
+  session_redirect: 0.12,
 };
 
 // ────────────────────────────────────────────────────────────────
@@ -85,6 +88,7 @@ export function loadPenalties(repoDir?: string): InterventionPenalties {
       post_pr_commit: configured.postPrCommit ?? DEFAULT_PENALTIES.post_pr_commit,
       manual_edit: configured.manualEdit ?? DEFAULT_PENALTIES.manual_edit,
       test_fix: configured.testFix ?? DEFAULT_PENALTIES.test_fix,
+      session_redirect: configured.sessionRedirect ?? DEFAULT_PENALTIES.session_redirect,
     };
   } catch {
     return { ...DEFAULT_PENALTIES };
@@ -287,6 +291,83 @@ export function detectTestFixes(branchName: string, baseBranch: string, repoDir?
 }
 
 // ────────────────────────────────────────────────────────────────
+// Session-based Detection
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Detect user redirections from Claude session JSONL data.
+ *
+ * Reads session files from `~/.claude/projects/<encoded-worktree>/`.
+ * Real user messages have `message.content` as a string (not an array of
+ * tool_result blocks). The first string-content user message is the automated
+ * task prompt injected by wavemill — all subsequent ones are user redirections.
+ */
+export function detectSessionRedirects(worktreePath: string, branchName: string): InterventionEvent {
+  const event: InterventionEvent = { type: 'session_redirect', count: 0, details: [] };
+
+  try {
+    const projectsDir = resolveProjectsDir(worktreePath);
+    if (!existsSync(projectsDir)) return event;
+
+    let sessionFiles: string[];
+    try {
+      sessionFiles = readdirSync(projectsDir)
+        .filter((f) => f.endsWith('.jsonl'))
+        .map((f) => join(projectsDir, f));
+    } catch {
+      return event;
+    }
+
+    const userMessages: string[] = [];
+
+    for (const filePath of sessionFiles) {
+      try {
+        const content = readFileSync(filePath, 'utf-8');
+        const lines = content.split('\n');
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          let entry: Record<string, unknown>;
+          try {
+            entry = JSON.parse(line);
+          } catch {
+            continue;
+          }
+
+          if (entry.type !== 'user') continue;
+          if (entry.gitBranch !== branchName) continue;
+
+          const message = entry.message as Record<string, unknown> | undefined;
+          if (!message) continue;
+
+          // Real user text has content as a string.
+          // Tool results / approvals have content as an array.
+          if (typeof message.content !== 'string') continue;
+
+          userMessages.push(message.content as string);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    // Skip the first string-content user message (automated task prompt from wavemill)
+    const redirections = userMessages.slice(1);
+
+    for (const text of redirections) {
+      event.details.push(text.slice(0, 200));
+    }
+    event.count = redirections.length;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[intervention-detector] Failed to detect session redirects: ${message}`);
+  }
+
+  return event;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Aggregation
 // ────────────────────────────────────────────────────────────────
 
@@ -295,6 +376,7 @@ export interface DetectOptions {
   branchName?: string;
   baseBranch?: string;
   repoDir?: string;
+  worktreePath?: string;
 }
 
 /**
@@ -316,6 +398,11 @@ export function detectAllInterventions(opts: DetectOptions): InterventionSummary
   if (branch) {
     interventions.push(detectManualEdits(branch, base, opts.repoDir));
     interventions.push(detectTestFixes(branch, base, opts.repoDir));
+  }
+
+  // Session transcript detection (requires worktree path + branch)
+  if (opts.worktreePath && branch) {
+    interventions.push(detectSessionRedirects(opts.worktreePath, branch));
   }
 
   // Calculate weighted score
@@ -342,7 +429,8 @@ export function toInterventionMeta(summary: InterventionSummary): InterventionMe
     if (event.count === 0) continue;
 
     const severity: 'minor' | 'major' =
-      event.type === 'manual_edit' || event.type === 'post_pr_commit' ? 'major' : 'minor';
+      event.type === 'manual_edit' || event.type === 'post_pr_commit' || event.type === 'session_redirect'
+        ? 'major' : 'minor';
 
     for (const detail of event.details) {
       meta.push({ description: `[${event.type}] ${detail}`, severity });
