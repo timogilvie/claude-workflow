@@ -1341,6 +1341,7 @@ while :; do
           --issue "$ISSUE" --pr "$PR" --branch "$BRANCH" \
           --worktree "${WORKTREE_ROOT}/${SLUG}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
+          --agent "$AGENT_CMD" \
           2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
       fi
 

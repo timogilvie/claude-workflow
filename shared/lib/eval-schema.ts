@@ -213,7 +213,10 @@ export interface EvalRecord {
   /** Estimated cost in USD based on the pricing table */
   estimatedCost?: number;
 
-  /** Total estimated cost in USD to build the feature (all Claude sessions on this branch) */
+  /** Agent that produced the work being evaluated (e.g. "claude", "codex") */
+  agentType?: string;
+
+  /** Total estimated cost in USD to build the feature (all agent sessions on this branch) */
   workflowCost?: number;
 
   /** Per-model token usage breakdown from the workflow sessions */

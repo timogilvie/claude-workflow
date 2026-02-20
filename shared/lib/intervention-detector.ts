@@ -408,6 +408,7 @@ export interface DetectOptions {
   baseBranch?: string;
   repoDir?: string;
   worktreePath?: string;
+  agentType?: string;
 }
 
 /**
@@ -440,8 +441,9 @@ export function detectAllInterventions(opts: DetectOptions): InterventionSummary
   interventions.push(postPrEvent);
   interventions.push(manualEditEvent);
 
-  // Session transcript detection (requires worktree path + branch)
-  if (opts.worktreePath && branch) {
+  // Session transcript detection (requires worktree path + branch).
+  // Only applies to Claude — Codex autonomous mode has no user messages.
+  if (opts.worktreePath && branch && (!opts.agentType || opts.agentType === 'claude')) {
     interventions.push(detectSessionRedirects(opts.worktreePath, branch));
   }
 
