@@ -9,6 +9,7 @@ import {
   toInterventionMeta,
   formatForJudge,
   detectSessionRedirects,
+  deduplicatePostPrAndManualEdits,
   type InterventionSummary,
   type InterventionEvent,
   type InterventionPenalties,
@@ -398,6 +399,89 @@ describe('intervention-detector', () => {
       } finally {
         cleanup();
       }
+    });
+  });
+
+  describe('deduplicatePostPrAndManualEdits', () => {
+    it('removes post_pr entries whose SHA also appears in manual_edit', () => {
+      const postPr: InterventionEvent = {
+        type: 'post_pr_commit',
+        count: 2,
+        details: [
+          '4009eb9: fix: query compatibility',
+          '320afe6: fix: csrf fallback',
+        ],
+      };
+      const manualEdit: InterventionEvent = {
+        type: 'manual_edit',
+        count: 2,
+        details: [
+          '4009eb9: fix: query compatibility (by tim)',
+          '320afe6: fix: csrf fallback (by tim)',
+        ],
+      };
+
+      deduplicatePostPrAndManualEdits(postPr, manualEdit);
+
+      assert.equal(postPr.count, 0);
+      assert.equal(postPr.details.length, 0);
+      // manual_edit is unchanged
+      assert.equal(manualEdit.count, 2);
+    });
+
+    it('keeps post_pr entries that are NOT in manual_edit', () => {
+      const postPr: InterventionEvent = {
+        type: 'post_pr_commit',
+        count: 2,
+        details: [
+          'abc1234: fix: agent post-PR fix',
+          'def5678: fix: another fix',
+        ],
+      };
+      const manualEdit: InterventionEvent = {
+        type: 'manual_edit',
+        count: 1,
+        details: [
+          'def5678: fix: another fix (by tim)',
+        ],
+      };
+
+      deduplicatePostPrAndManualEdits(postPr, manualEdit);
+
+      assert.equal(postPr.count, 1);
+      assert.equal(postPr.details[0], 'abc1234: fix: agent post-PR fix');
+    });
+
+    it('is a no-op when either event has zero count', () => {
+      const postPr: InterventionEvent = { type: 'post_pr_commit', count: 0, details: [] };
+      const manualEdit: InterventionEvent = {
+        type: 'manual_edit',
+        count: 1,
+        details: ['abc1234: manual fix (by tim)'],
+      };
+
+      deduplicatePostPrAndManualEdits(postPr, manualEdit);
+
+      assert.equal(postPr.count, 0);
+      assert.equal(manualEdit.count, 1);
+    });
+
+    it('is a no-op when there is no SHA overlap', () => {
+      const postPr: InterventionEvent = {
+        type: 'post_pr_commit',
+        count: 1,
+        details: ['aaa1111: agent fix'],
+      };
+      const manualEdit: InterventionEvent = {
+        type: 'manual_edit',
+        count: 1,
+        details: ['bbb2222: manual fix (by tim)'],
+      };
+
+      deduplicatePostPrAndManualEdits(postPr, manualEdit);
+
+      assert.equal(postPr.count, 1);
+      assert.equal(manualEdit.count, 1);
     });
   });
 
