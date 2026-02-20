@@ -31,6 +31,7 @@ export interface PostCompletionContext {
   repoDir?: string;
   branchName?: string;
   worktreePath?: string;
+  agentType?: string;
 }
 
 /**
@@ -139,6 +140,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       baseBranch: 'main',
       repoDir,
       worktreePath: ctx.worktreePath,
+      agentType: ctx.agentType,
     });
     const interventionMeta = toInterventionMeta(interventionSummary);
     const penalties = loadPenalties(repoDir);
@@ -159,7 +161,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       metadata: { workflowType: ctx.workflowType, hookTriggered: true, interventionSummary },
     });
 
-    // 5. Compute workflow cost from Claude session data
+    // 5. Compute workflow cost from agent session data
     //    Pricing lives in the wavemill repo config, not the target repo,
     //    so resolve it from this script's location.
     if (ctx.worktreePath && branchName) {
@@ -172,10 +174,12 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
           branchName,
           repoDir,
           pricingTable,
+          agentType: ctx.agentType,
         });
         if (costResult) {
           record.workflowCost = costResult.totalCostUsd;
           record.workflowTokenUsage = costResult.models;
+          record.agentType = ctx.agentType || 'claude';
           console.log(
             `Post-completion eval: workflow cost $${costResult.totalCostUsd.toFixed(4)} ` +
             `(${costResult.turnCount} turns across ${costResult.sessionCount} session(s))`
