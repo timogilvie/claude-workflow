@@ -258,6 +258,11 @@ MODEL_HINT_PLACEHOLDER
 Goal:
 - Implement the feature/fix described by the issue and title.
 
+IMPORTANT: You are running autonomously with NO user interaction.
+- Do NOT ask questions or request user input — make your best judgment call.
+- If a decision is ambiguous, choose the most reasonable default and document your choice in the PR description.
+- If you truly cannot proceed without clarification, note the blocker in the PR description and implement what you can.
+
 
 Success criteria:
 - [ ] Implementation matches issue requirements
