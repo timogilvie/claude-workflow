@@ -120,16 +120,20 @@ save_task_state() {
   local pr="${5:-}"
   local status="${6:-}"
 
-
-  local tmp=$(mktemp)
-  jq --arg issue "$issue" \
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --arg issue "$issue" \
      --arg slug "$slug" \
      --arg branch "$branch" \
      --arg worktree "$worktree" \
      --arg pr "$pr" \
      --arg status "$status" \
      '.tasks[$issue] = {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)}' \
-     "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 
@@ -158,24 +162,39 @@ get_next_migration_num() {
 save_migration_reservation() {
   local issue="$1"
   local num="$2"
-  local tmp=$(mktemp)
-  jq --arg issue "$issue" --argjson num "$num" \
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --arg issue "$issue" --argjson num "$num" \
      '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
-     "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 save_next_migration_num() {
   local num="$1"
-  local tmp=$(mktemp)
-  jq --argjson num "$num" '.nextMigrationNum = $num' \
-     "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --argjson num "$num" '.nextMigrationNum = $num' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 
 remove_task_state() {
   local issue="$1"
-  local tmp=$(mktemp)
-  jq --arg issue "$issue" 'del(.tasks[$issue])' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --arg issue "$issue" 'del(.tasks[$issue])' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 
@@ -817,25 +836,37 @@ trap cleanup_dashboard_pane EXIT INT TERM
 
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}"
-  local tmp=$(mktemp)
-  jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+  local tmp
+  tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
      --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" \
      '.tasks[$issue] = {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)}' \
-     "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "save_task_state: failed to update $issue"
+  fi
 }
 
 
 remove_task_state() {
   local issue="$1"
-  local tmp=$(mktemp)
-  jq --arg issue "$issue" 'del(.tasks[$issue])' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+  local tmp
+  tmp=$(mktemp) || { log_warn "remove_task_state: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" 'del(.tasks[$issue])' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "remove_task_state: failed to remove $issue"
+  fi
 }
 
 
 linear_set_state() {
   local issue="$1" state="$2"
   [[ "$DRY_RUN" == "true" ]] && { log "[DRY-RUN] Would set $issue → $state"; return 0; }
-  npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1
+  npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1 || log_warn "Failed to set $issue → $state in Linear"
 }
 
 
@@ -901,10 +932,16 @@ execute() {
 
 set_task_phase() {
   local issue="$1" phase="$2"
-  local tmp=$(mktemp)
-  jq --arg issue "$issue" --arg phase "$phase" \
+  local tmp
+  tmp=$(mktemp) || { log_warn "set_task_phase: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" --arg phase "$phase" \
      '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
-     "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "set_task_phase: failed to update $issue"
+  fi
 }
 
 
@@ -1073,10 +1110,15 @@ launch_task() {
 
     # Persist reservation so subsequent launches continue the sequence
     local _mig_tmp
-    _mig_tmp=$(mktemp)
-    jq --arg issue "$issue" --argjson num "$next_num" \
+    _mig_tmp=$(mktemp) || true
+    if [[ -n "$_mig_tmp" ]] && jq --arg issue "$issue" --argjson num "$next_num" \
        '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
-       "$STATE_FILE" > "$_mig_tmp" && mv "$_mig_tmp" "$STATE_FILE"
+       "$STATE_FILE" > "$_mig_tmp" 2>/dev/null; then
+      mv "$_mig_tmp" "$STATE_FILE"
+    else
+      rm -f "$_mig_tmp"
+      log_warn "Failed to persist migration reservation for $issue"
+    fi
 
     # Re-read packet content with migration hint included
     packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
@@ -1218,6 +1260,11 @@ $packet_content
 
 Goal:
 - Implement the feature/fix described by the issue and title.
+
+IMPORTANT: You are running autonomously with NO user interaction.
+- Do NOT ask questions or request user input — make your best judgment call.
+- If a decision is ambiguous, choose the most reasonable default and document your choice in the PR description.
+- If you truly cannot proceed without clarification, note the blocker in the PR description and implement what you can.
 
 Success criteria:
 - [ ] Implementation matches issue requirements

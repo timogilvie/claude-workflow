@@ -36,12 +36,13 @@ agent_launch_autonomous() {
   local instr_file="$3"
   local agent_cmd="$4"
 
+  # Wrap agent command so exit status is visible and the shell survives
   case "$agent_cmd" in
     claude)
-      tmux send-keys -t "$session:$window" "cat '$instr_file' | claude" C-m
+      tmux send-keys -t "$session:$window" "cat '$instr_file' | claude; echo '[wavemill] Agent exited (\$?)'" C-m
       ;;
     codex)
-      tmux send-keys -t "$session:$window" "codex exec --dangerously-bypass-approvals-and-sandbox - < '$instr_file'" C-m
+      tmux send-keys -t "$session:$window" "codex exec --dangerously-bypass-approvals-and-sandbox - < '$instr_file'; echo '[wavemill] Agent exited (\$?)'" C-m
       ;;
     *)
       # Generic fallback: start the agent, then paste instructions via tmux buffer.
@@ -76,23 +77,27 @@ agent_launch_interactive() {
 
   local launcher="/tmp/${session}-$(basename "$prompt_file" .txt)-launcher.sh"
 
+  # Don't use exec — keep the shell alive so the window persists after agent exit
   case "$agent_cmd" in
     claude)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-exec claude "\$(cat '$prompt_file')"
+claude "\$(cat '$prompt_file')"
+echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;
     codex)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-exec codex "\$(cat '$prompt_file')"
+codex "\$(cat '$prompt_file')"
+echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;
     *)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-exec $agent_cmd "\$(cat '$prompt_file')"
+$agent_cmd "\$(cat '$prompt_file')"
+echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;
   esac
