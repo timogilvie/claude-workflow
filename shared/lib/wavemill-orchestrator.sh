@@ -200,7 +200,7 @@ ${MODEL_HINT:+$MODEL_HINT
 
 ## Your Workflow
 
-You have TWO phases. Do them in order.
+You have THREE phases. Do them in order.
 
 ### Phase 1: Planning (interactive)
 Task context is pre-seeded at: features/$SLUG/selected-task.json
@@ -226,6 +226,13 @@ Success criteria:
 - [ ] Lint/tests pass
 - [ ] No regressions
 - [ ] PR created with clear description linked to $ISSUE
+
+### Phase 3: Review & Respond
+After creating the PR:
+1. Present a brief summary of what was implemented and any decisions you made
+2. Remain available — the user may have questions, want changes, or need you to address CI failures
+3. If asked to make changes, push them to the same branch to update the PR
+4. Do NOT exit until the user confirms they are done
 
 Start with Phase 1 now. Read the task context and begin researching.
 EOF_PLAN
