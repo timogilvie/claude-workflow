@@ -88,11 +88,11 @@ agent_status() {
 
 # ── Task discovery ────────────────────────────────────────────────────────
 # Prefer state file (from mill), fall back to worktree directories.
-# Output: issue|slug|branch|worktree|status|phase  per line
+# Output: issue|slug|branch|worktree|status|phase|pr  per line
 
 gather_tasks() {
   if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
-    jq -r '.tasks | to_entries[] | "\(.key)|\(.value.slug)|\(.value.branch)|\(.value.worktree)|\(.value.status // "")|\(.value.phase // "executing")"' \
+    jq -r '.tasks | to_entries[] | "\(.key)|\(.value.slug)|\(.value.branch)|\(.value.worktree)|\(.value.status // "")|\(.value.phase // "executing")|\(.value.pr // "")"' \
       "$STATE_FILE" 2>/dev/null
   else
     for dir in "$WORKTREE_ROOT"/*/; do
@@ -101,7 +101,7 @@ gather_tasks() {
       slug=$(basename "$dir")
       local branch
       branch=$(git -C "$dir" branch --show-current 2>/dev/null || echo "?")
-      echo "—|$slug|$branch|$dir||executing"
+      echo "—|$slug|$branch|$dir||executing|"
     done
   fi
 }
@@ -143,7 +143,7 @@ while true; do
     count=0
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
-      IFS='|' read -r issue slug branch worktree task_status task_phase <<<"$line"
+      IFS='|' read -r issue slug branch worktree task_status task_phase state_pr <<<"$line"
       task_phase="${task_phase:-executing}"
 
       # Window name
@@ -170,9 +170,13 @@ while true; do
         esac
       fi
 
-      # PR
+      # PR – only look up from cache if the state file already records a PR,
+      # otherwise a stale PR on the same branch name could appear.
       pr_str="${D}—${N}"
-      pr_info=$(pr_for_branch "$branch")
+      pr_info=""
+      if [[ -n "$state_pr" ]]; then
+        pr_info=$(pr_for_branch "$branch")
+      fi
       if [[ -n "$pr_info" ]]; then
         IFS='|' read -r pr_num pr_state <<<"$pr_info"
         case "$pr_state" in
