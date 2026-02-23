@@ -19,7 +19,8 @@ _WAVEMILL_DEFAULTS='{
     "requireConfirm": true,
     "planningMode": "skip",
     "maxRetries": 3,
-    "retryDelay": 2
+    "retryDelay": 2,
+    "setupCommand": ""
   },
   "expand": {
     "maxSelect": 3,
@@ -40,7 +41,7 @@ _WAVEMILL_DEFAULTS='{
 #
 # Sets: SESSION, MAX_PARALLEL, POLL_SECONDS, BASE_BRANCH, WORKTREE_ROOT,
 #        AGENT_CMD, REQUIRE_CONFIRM, PLANNING_MODE, MAX_RETRIES, RETRY_DELAY,
-#        PROJECT_NAME, MAX_SELECT, MAX_DISPLAY
+#        PROJECT_NAME, MAX_SELECT, MAX_DISPLAY, SETUP_CMD
 #
 # Args: $1 = repo directory (default: $PWD)
 load_config() {
@@ -84,7 +85,8 @@ load_config() {
       "_CFG_PLAN_RESEARCH=\($c.plan.research // false)",
       "_CFG_ROUTER_ENABLED=\($c.router.enabled // true)",
       "_CFG_ROUTER_DEFAULT_MODEL=\($c.router.defaultModel // "claude-sonnet-4-5-20250929" | @sh)",
-      "_CFG_AUTO_EVAL=\($c.autoEval // false)"
+      "_CFG_AUTO_EVAL=\($c.autoEval // false)",
+      "_CFG_SETUP_CMD=\($c.mill.setupCommand // "" | @sh)"
     ] | .[]
     '
   ) || {
@@ -114,6 +116,7 @@ load_config() {
   ROUTER_ENABLED="${ROUTER_ENABLED:-$_CFG_ROUTER_ENABLED}"
   ROUTER_DEFAULT_MODEL="${ROUTER_DEFAULT_MODEL:-$_CFG_ROUTER_DEFAULT_MODEL}"
   AUTO_EVAL="${AUTO_EVAL:-$_CFG_AUTO_EVAL}"
+  SETUP_CMD="${SETUP_CMD:-$_CFG_SETUP_CMD}"
 
   # WORKTREE_ROOT: resolve relative paths against repo_dir
   local wt_raw="${WORKTREE_ROOT:-$_CFG_WORKTREE_ROOT}"
@@ -127,14 +130,14 @@ load_config() {
   export SESSION MAX_PARALLEL POLL_SECONDS BASE_BRANCH WORKTREE_ROOT
   export AGENT_CMD REQUIRE_CONFIRM PLANNING_MODE MAX_RETRIES RETRY_DELAY
   export PROJECT_NAME MAX_SELECT MAX_DISPLAY PLAN_MAX_DISPLAY PLAN_RESEARCH
-  export ROUTER_ENABLED ROUTER_DEFAULT_MODEL AUTO_EVAL
+  export ROUTER_ENABLED ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD
 
   # Clean up temp variables
   unset _CFG_PROJECT _CFG_SESSION _CFG_MAX_PARALLEL _CFG_POLL_SECONDS
   unset _CFG_BASE_BRANCH _CFG_WORKTREE_ROOT _CFG_AGENT_CMD _CFG_REQUIRE_CONFIRM
   unset _CFG_PLANNING_MODE _CFG_MAX_RETRIES _CFG_RETRY_DELAY _CFG_MAX_SELECT _CFG_MAX_DISPLAY
   unset _CFG_PLAN_MAX_DISPLAY _CFG_PLAN_RESEARCH
-  unset _CFG_ROUTER_ENABLED _CFG_ROUTER_DEFAULT_MODEL _CFG_AUTO_EVAL
+  unset _CFG_ROUTER_ENABLED _CFG_ROUTER_DEFAULT_MODEL _CFG_AUTO_EVAL _CFG_SETUP_CMD
 
   # Sentinel so downstream scripts can skip re-loading
   _WAVEMILL_CONFIG_LOADED=1

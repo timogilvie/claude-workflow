@@ -72,6 +72,12 @@
           "default": 2,
           "minimum": 1,
           "description": "Initial retry delay in seconds (doubles on each retry)."
+        },
+        "setupCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Shell command to run in each new worktree before agent launch (e.g., 'npm install'). Skipped when resuming an existing worktree.",
+          "examples": ["npm install", "pnpm install", "pip install -r requirements.txt"]
         }
       }
     },
