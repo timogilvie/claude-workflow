@@ -1391,7 +1391,35 @@ while :; do
         linear_set_state "$ISSUE" "In Review"
         log "✓ $ISSUE → PR #$PR (In Review)"
       else
-        active_count=$((active_count + 1))
+        # No PR found — check if agent pane is still alive
+        WIN="$ISSUE-$SLUG"
+        if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+          # Pane still running — agent is working, keep slot active
+          active_count=$((active_count + 1))
+          continue
+        fi
+
+        # Agent exited without creating a PR — clean up the slot
+        log "⚠ $ISSUE → Agent exited without PR — releasing slot"
+        execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+
+        WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+        if [[ -d "$WT_DIR" ]]; then
+          execute git -C "$REPO_DIR" worktree remove "$WT_DIR" --force 2>/dev/null || true
+          log "  ✓ Removed worktree: $WT_DIR"
+        fi
+
+        task_branch="task/${SLUG}"
+        if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+          execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+          log "  ✓ Deleted branch: $task_branch"
+        fi
+
+        remove_task_state "$ISSUE"
+        CLEANED["$ISSUE"]=1
+        log "  ✓ Released: $ISSUE (no PR created)"
+
+        execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
         continue
       fi
     fi
