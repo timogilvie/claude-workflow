@@ -504,6 +504,7 @@ log "  Project: ${PROJECT_NAME:-(all projects)}"
 log "  Agent: $AGENT_CMD ($(agent_name "$AGENT_CMD"))"
 log "  Max parallel: $MAX_PARALLEL"
 log "  Planning mode: $PLANNING_MODE"
+[[ -n "${SETUP_CMD:-}" ]] && log "  Setup command: $SETUP_CMD"
 log "  State file: $STATE_FILE"
 echo ""
 
@@ -1126,14 +1127,17 @@ launch_task() {
   fi
 
   # Create worktree + branch
+  local created_new=false
   if [[ -d "$wt_dir" ]]; then
     log "  Worktree exists: $wt_dir (resuming)"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
     log "  Branch $branch exists, resuming"
     git -C "$REPO_DIR" worktree add "$wt_dir" "$branch"
+    created_new=true
   else
     log "  Creating branch $branch from origin/$BASE_BRANCH"
     git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH"
+    created_new=true
   fi
 
   # Set Linear state
@@ -1171,6 +1175,25 @@ launch_task() {
   # Create tmux window
   local win="$issue-$slug"
   tmux new-window -t "$SESSION" -n "$win" -c "$wt_dir"
+
+  # Run setup command in new worktrees (e.g., npm install)
+  if [[ -n "${SETUP_CMD:-}" ]] && [[ "$created_new" == "true" ]]; then
+    log "  Running setup: $SETUP_CMD"
+    local _sentinel="/tmp/.wavemill-setup-${issue//[^a-zA-Z0-9_-]/_}"
+    rm -f "$_sentinel"
+    tmux send-keys -t "$SESSION:$win" \
+      "$SETUP_CMD && touch '$_sentinel' || touch '$_sentinel'" C-m
+    local _t=0
+    while [[ ! -f "$_sentinel" ]] && (( _t < 180 )); do
+      sleep 2; (( _t += 2 ))
+    done
+    rm -f "$_sentinel"
+    if (( _t >= 180 )); then
+      log_warn "  Setup timed out after 180s, proceeding anyway"
+    else
+      log "  Setup complete"
+    fi
+  fi
 
   # Launch agent
   if [[ "$PLANNING_MODE" == "interactive" ]]; then
