@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import { ensureCleanTree } from './git.js';
 
-export const openPullRequest = ({ summary, dryRun = false, commitMessagePrefix = 'feat' }) => {
+export const openPullRequest = ({ summary, body = '', dryRun = false, commitMessagePrefix = 'feat' }) => {
   const status = execSync('git status --porcelain', { encoding: 'utf-8' }).trim();
 
   if (status && dryRun) {
@@ -19,6 +19,13 @@ export const openPullRequest = ({ summary, dryRun = false, commitMessagePrefix =
 
   ensureCleanTree();
   execSync(`git push --set-upstream origin HEAD`, { stdio: 'inherit' });
-  const prOutput = execSync(`gh pr create --fill`, { encoding: 'utf-8' });
+  const title = `${commitMessagePrefix}: ${summary}`;
+  const prArgs = ['gh', 'pr', 'create', '--title', title];
+  if (body) {
+    prArgs.push('--body', body);
+  } else {
+    prArgs.push('--body', `## Summary\n\n${summary}`);
+  }
+  const prOutput = execSync(prArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' '), { encoding: 'utf-8' });
   return `✅ Pull request created: ${prOutput}`;
 };

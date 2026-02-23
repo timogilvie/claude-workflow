@@ -218,14 +218,20 @@ Do NOT proceed to Phase 2 until the user has approved the plan.
 After plan approval:
 1. Execute the plan phase by phase
 2. Run tests/lint between phases — pause if anything fails
-3. Create a PR using GitHub CLI: gh pr create --fill
+3. Create a PR using GitHub CLI with a descriptive title and body:
+   gh pr create --title "$ISSUE: <concise summary>" --body "<PR body>"
+   The PR body MUST include:
+   - A "## Summary" section with 2-4 bullet points describing what changed and why
+   - A "## Changes" section listing the key files/modules modified
+   - A "## Test plan" section describing how the changes were validated
+   Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
 4. Link the PR to $ISSUE
 
 Success criteria:
 - [ ] Implementation matches plan and issue requirements
 - [ ] Lint/tests pass
 - [ ] No regressions
-- [ ] PR created with clear description linked to $ISSUE
+- [ ] PR created with descriptive summary linked to $ISSUE
 
 ### Phase 3: Review & Respond
 After creating the PR:
@@ -283,7 +289,13 @@ Process:
 1. Inspect repo and find relevant code
 2. Make minimal, high-quality changes
 3. Run tests/lint
-4. Create a PR using GitHub CLI: gh pr create --fill
+4. Create a PR using GitHub CLI with a descriptive title and body:
+   gh pr create --title "ISSUE_PLACEHOLDER: <concise summary of changes>" --body "<PR body>"
+   The PR body MUST include:
+   - A "## Summary" section with 2-4 bullet points describing what changed and why
+   - A "## Changes" section listing the key files/modules modified
+   - A "## Test plan" section describing how the changes were validated
+   Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
 5. Post back with summary of changes, commands run + results, and PR link
 EOF_INSTR
 )
