@@ -4,6 +4,16 @@
 
 This repo also includes traditional LLM workflow helpers for Claude and Codex: backlog triage, planning, bugfixes, and doc generation via slash commands.
 
+## Website Docs
+
+Text-first website/docs content for `wavemill.org` lives in `docs/`.
+
+- Local entrypoint: `docs/index.md`
+- Getting started: `docs/getting-started.md`
+- Feature workflow: `docs/feature-workflow.md`
+- Autonomous mode: `docs/mill-mode.md`
+- Deployment and DNS: `docs/deploy.md`
+
 ## Requirements
 
 - **Node.js** >= 18
