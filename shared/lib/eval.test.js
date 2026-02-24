@@ -20,6 +20,7 @@ describe('evaluateTask', () => {
         prReviewOutput: 'Clean diff, all tests pass',
         issueId: 'HOK-100',
       },
+      undefined,
       { _callFn: mockCallFn(validResponse) }
     );
 
@@ -52,6 +53,7 @@ describe('evaluateTask', () => {
         taskPrompt: 'Simple task',
         prReviewOutput: 'Flawless',
       },
+      undefined,
       { _callFn: mockCallFn(validResponse) }
     );
 
@@ -75,6 +77,7 @@ describe('evaluateTask', () => {
         ],
         issueId: 'HOK-200',
       },
+      undefined,
       { _callFn: mockCallFn(validResponse) }
     );
 
@@ -108,6 +111,7 @@ describe('evaluateTask', () => {
         taskPrompt: 'Fix a bug',
         prReviewOutput: 'Bug fixed correctly',
       },
+      undefined,
       { _callFn: callFn }
     );
 
@@ -131,6 +135,7 @@ describe('evaluateTask', () => {
         taskPrompt: 'Add feature',
         prReviewOutput: 'Feature added',
       },
+      undefined,
       { _callFn: callFn }
     );
 
@@ -148,6 +153,7 @@ describe('evaluateTask', () => {
             taskPrompt: 'Do something',
             prReviewOutput: 'Did something',
           },
+          undefined,
           { _callFn: callFn }
         ),
       (err) => {
@@ -170,6 +176,7 @@ describe('evaluateTask', () => {
             taskPrompt: 'Do something',
             prReviewOutput: 'Did something',
           },
+          undefined,
           { _callFn: callFn }
         ),
       (err) => {
@@ -195,6 +202,7 @@ describe('evaluateTask', () => {
         taskPrompt: 'Add a feature',
         prReviewOutput: 'Clean diff',
       },
+      undefined,
       { _callFn: mockCallFn(validResponse, usage) }
     );
 
@@ -217,6 +225,7 @@ describe('evaluateTask', () => {
         taskPrompt: 'Quick task',
         prReviewOutput: 'Good',
       },
+      undefined,
       { _callFn: mockCallFn(validResponse, usage) }
     );
 
@@ -240,6 +249,7 @@ describe('evaluateTask', () => {
         taskPrompt: 'Quick task',
         prReviewOutput: 'Good',
       },
+      undefined,
       { _callFn: mockCallFn(validResponse, usage, 0.03078) }
     );
 
@@ -258,6 +268,7 @@ describe('evaluateTask', () => {
         taskPrompt: 'Do something',
         prReviewOutput: 'Something done',
       },
+      undefined,
       { _callFn: mockCallFn(validResponse, null) }
     );
 
@@ -279,6 +290,7 @@ describe('evaluateTask', () => {
         taskPrompt: 'Refactor module',
         prReviewOutput: 'Refactoring looks good',
       },
+      undefined,
       { _callFn: mockCallFn(wrappedResponse) }
     );
 
