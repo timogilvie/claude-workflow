@@ -3,6 +3,6 @@ markdown: kramdown
 theme: minima
 header_pages:
   - getting-started.md
-  - feature-workflow.md
   - mill-mode.md
+  - plan-mode.md
   - troubleshooting.md
