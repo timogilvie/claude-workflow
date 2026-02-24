@@ -75,6 +75,7 @@ function loadJudgeConfig() {
  * @property {string} [issueId] - Linear issue ID (e.g. HOK-698)
  * @property {string} [prUrl] - Pull request URL
  * @property {number} [timeSeconds] - Wall-clock time for task completion
+ * @property {import('./eval-schema.ts').RoutingDecision} [routingDecision] - Routing decision metadata (HOK-775)
  * @property {Record<string, unknown>} [metadata] - Extra metadata to pass through
  */
 
@@ -248,6 +249,7 @@ export async function evaluateTask(input, outcomes = undefined, options = {}) {
     issueId,
     prUrl,
     timeSeconds = 0,
+    routingDecision,
     metadata = {},
   } = input;
 
@@ -314,6 +316,7 @@ export async function evaluateTask(input, outcomes = undefined, options = {}) {
         ...(tokenUsage && { tokenUsage }),
         ...(estimatedCost !== undefined && { estimatedCost }),
         ...(outcomes && { outcomes }),
+        ...(routingDecision && { routingDecision }),
         metadata: { ...metadata, interventionFlags },
       };
     } catch (parseErr) {
