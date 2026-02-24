@@ -13,6 +13,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readEvalRecords } from './eval-persistence.ts';
 import type { EvalRecord } from './eval-schema.ts';
+import { recommendModelLLM } from './llm-router.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -222,6 +223,12 @@ export interface ModelRecommendation {
   promptCharacteristics: PromptCharacteristics;
   candidates: CandidateScore[];
   insufficientData: boolean;
+  /** Risk flags identified by the LLM router (empty/undefined for heuristic mode) */
+  riskFlags?: string[];
+  /** Expected cost band: "low", "medium", "high", or "unknown" */
+  costEstimate?: string;
+  /** Which routing mode produced this recommendation */
+  routingMode?: 'heuristic' | 'llm';
 }
 
 export interface RouterOptions {
@@ -239,17 +246,32 @@ export interface RouterOptions {
   agentMap?: Record<string, string>;
   /** Fallback agent when no agentMap match (default: 'claude') */
   defaultAgent?: string;
+  /** Routing mode: 'heuristic' (regex), 'llm' (DSPy artifact), 'auto' (try LLM, fall back) */
+  mode?: 'heuristic' | 'llm' | 'auto';
+  /** Repository directory (for finding artifacts and config) */
+  repoDir?: string;
+  /** Repository name (for LLM routing context) */
+  repoName?: string;
+  /** Model to use for the LLM router itself (default: gpt-4o-mini) */
+  llmModel?: string;
+  /** Provider for the LLM router (default: 'openai') */
+  llmProvider?: 'openai' | 'anthropic';
 }
 
-const DEFAULT_ROUTER_OPTIONS: Required<RouterOptions> = {
+const DEFAULT_ROUTER_OPTIONS = {
   evalsDir: '',
   minRecords: 20,
   minModels: 2,
   defaultModel: 'claude-sonnet-4-5-20250929',
-  models: [],
-  agentMap: {},
+  models: [] as string[],
+  agentMap: {} as Record<string, string>,
   defaultAgent: 'claude',
-};
+  mode: 'auto' as const,
+  repoDir: '',
+  repoName: '',
+  llmModel: '',
+  llmProvider: 'openai' as const,
+} satisfies Required<RouterOptions>;
 
 /**
  * Resolve which agent CLI should run a given model.
@@ -287,6 +309,9 @@ export function loadRouterConfig(repoDir?: string): RouterOptions {
     if (r.models !== undefined) opts.models = r.models;
     if (r.agentMap !== undefined) opts.agentMap = r.agentMap;
     if (r.defaultAgent !== undefined) opts.defaultAgent = r.defaultAgent;
+    if (r.mode !== undefined) opts.mode = r.mode;
+    if (r.llmModel !== undefined) opts.llmModel = r.llmModel;
+    if (r.llmProvider !== undefined) opts.llmProvider = r.llmProvider;
     return opts;
   } catch {
     return {};
@@ -310,23 +335,68 @@ export function isRouterEnabled(repoDir?: string): boolean {
 }
 
 /**
- * Recommend the best model for a given prompt based on historical eval data.
- *
- * When insufficient data exists (below minRecords or minModels thresholds),
- * returns the default model with `insufficientData: true`.
+ * Load eval records from per-repo file and optionally merge with the
+ * aggregated cross-repo file. Deduplicates by record `id`.
  */
-export function recommendModel(
-  prompt: string,
-  options?: RouterOptions,
-): ModelRecommendation {
-  const opts = { ...DEFAULT_ROUTER_OPTIONS, ...options };
-  const characteristics = analyzePrompt(prompt);
-  const taskType = characteristics.taskType;
-
-  // Load eval records
-  const records = readEvalRecords(
+function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
+  const perRepo = readEvalRecords(
     opts.evalsDir ? { dir: opts.evalsDir } : undefined,
   );
+
+  // Try loading aggregated cross-repo data
+  const repoDir = opts.repoDir || '.';
+  const configPath = resolve(repoDir, '.wavemill-config.json');
+  let aggregatedPath = resolve(repoDir, '.wavemill/evals/aggregated-evals.jsonl');
+
+  try {
+    if (existsSync(configPath)) {
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (config.eval?.aggregation?.outputPath) {
+        aggregatedPath = resolve(repoDir, config.eval.aggregation.outputPath);
+      }
+    }
+  } catch {
+    // Ignore config read errors
+  }
+
+  if (!existsSync(aggregatedPath)) return perRepo;
+
+  try {
+    const lines = readFileSync(aggregatedPath, 'utf-8')
+      .split('\n')
+      .filter((l) => l.trim().length > 0);
+    const seen = new Set(perRepo.map((r) => r.id));
+    const merged = [...perRepo];
+    for (const line of lines) {
+      try {
+        const record = JSON.parse(line) as EvalRecord;
+        if (!seen.has(record.id)) {
+          seen.add(record.id);
+          merged.push(record);
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+    return merged;
+  } catch {
+    return perRepo;
+  }
+}
+
+/**
+ * Heuristic model recommendation based on regex task classification
+ * and historical eval score averages.
+ */
+function recommendModelHeuristic(
+  prompt: string,
+  characteristics: PromptCharacteristics,
+  opts: Required<RouterOptions>,
+): ModelRecommendation {
+  const taskType = characteristics.taskType;
+
+  // Load eval records (per-repo + aggregated cross-repo data)
+  const records = loadMergedEvalRecords(opts);
 
   // Count distinct models
   const distinctModels = new Set(records.map((r) => r.modelId));
@@ -345,6 +415,7 @@ export function recommendModel(
       promptCharacteristics: characteristics,
       candidates: [],
       insufficientData: true,
+      routingMode: 'heuristic',
     };
   }
 
@@ -366,6 +437,7 @@ export function recommendModel(
       promptCharacteristics: characteristics,
       candidates: [],
       insufficientData: true,
+      routingMode: 'heuristic',
     };
   }
 
@@ -415,5 +487,48 @@ export function recommendModel(
     promptCharacteristics: characteristics,
     candidates,
     insufficientData: false,
+    routingMode: 'heuristic',
   };
+}
+
+/**
+ * Recommend the best model for a given prompt.
+ *
+ * Supports three modes via `options.mode`:
+ *   - `'heuristic'`: regex-based classification + historical averages
+ *   - `'llm'`: DSPy-optimized Haiku selector (falls back to heuristic on failure)
+ *   - `'auto'` (default): try LLM first, fall back silently to heuristic
+ */
+export function recommendModel(
+  prompt: string,
+  options?: RouterOptions,
+): ModelRecommendation {
+  const opts = { ...DEFAULT_ROUTER_OPTIONS, ...options };
+  const characteristics = analyzePrompt(prompt);
+  const mode = opts.mode || 'auto';
+
+  // Try LLM routing when mode is 'llm' or 'auto'
+  if (mode === 'llm' || mode === 'auto') {
+    try {
+      const llmResult = recommendModelLLM(prompt, characteristics, {
+        repoDir: opts.repoDir || undefined,
+        repoName: opts.repoName || undefined,
+        agentMap: opts.agentMap,
+        defaultAgent: opts.defaultAgent,
+        models: opts.models?.length ? opts.models : undefined,
+        llmModel: opts.llmModel || undefined,
+        llmProvider: opts.llmProvider || undefined,
+      });
+      if (llmResult) return llmResult;
+    } catch {
+      // LLM routing failed, fall through to heuristic
+    }
+
+    if (mode === 'llm') {
+      console.error('WARN: LLM router failed, falling back to heuristic');
+    }
+  }
+
+  // Heuristic fallback
+  return recommendModelHeuristic(prompt, characteristics, opts);
 }

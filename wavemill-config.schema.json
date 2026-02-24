@@ -120,6 +120,24 @@
       "type": "object",
       "description": "Settings for the 'wavemill eval' command.",
       "properties": {
+        "aggregation": {
+          "type": "object",
+          "description": "Cross-repo eval aggregation settings for training the DSPy-optimized model router.",
+          "properties": {
+            "repos": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": [],
+              "description": "Absolute paths to repository directories to aggregate evals from."
+            },
+            "outputPath": {
+              "type": "string",
+              "default": ".wavemill/evals/aggregated-evals.jsonl",
+              "description": "Output path for the aggregated eval file, relative to repo root."
+            }
+          },
+          "additionalProperties": false
+        },
         "evalsDir": {
           "type": "string",
           "default": ".wavemill/evals",
@@ -269,9 +287,25 @@
             "type": "string",
             "description": "Agent CLI command name (e.g. 'claude', 'codex')."
           }
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["heuristic", "llm", "auto"],
+          "default": "auto",
+          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized Haiku selector, 'auto' tries LLM first then falls back to heuristic."
+        },
+        "llmModel": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "Model to use for LLM-based routing decisions. Should be fast and cheap."
+        },
+        "llmProvider": {
+          "type": "string",
+          "enum": ["openai", "anthropic"],
+          "default": "openai",
+          "description": "API provider for LLM routing calls. OpenAI recommended (gpt-4o-mini is fast and cheap)."
         }
-      },
-      "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false
