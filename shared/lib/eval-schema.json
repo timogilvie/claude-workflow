@@ -91,7 +91,50 @@
       "items": {
         "type": "string"
       },
-      "description": "Brief description of each human intervention."
+      "description": "Brief description of each human intervention (legacy - prefer interventions field)."
+    },
+    "interventions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["timestamp", "type", "severity", "note"],
+        "additionalProperties": false,
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime when the intervention occurred."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "clarification",
+              "bugfix",
+              "manual_merge",
+              "environment_fix",
+              "prompt_edit",
+              "scope_change",
+              "rollback"
+            ],
+            "description": "Type of intervention (reason for human involvement)."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["low", "med", "high"],
+            "description": "Severity/impact of the intervention."
+          },
+          "note": {
+            "type": "string",
+            "description": "Human-readable description of what was done."
+          },
+          "timeSpentSeconds": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Optional time spent on this intervention in seconds."
+          }
+        }
+      },
+      "description": "Structured intervention events (machine-usable)."
     },
     "rationale": {
       "type": "string",
