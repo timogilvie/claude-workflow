@@ -231,9 +231,13 @@ function parseJudgeResponse(raw) {
  * the judge's score, rationale, and the derived score band.
  *
  * @param {EvalInput} input
+ * @param {import('./eval-schema.ts').Outcomes} [outcomes] - Optional pre-collected outcome components
+ * @param {Object} [options] - Optional configuration
+ * @param {Function} [options._callFn] - Override for the LLM call function (testing)
  * @returns {Promise<import('./eval-schema.ts').EvalRecord>}
  */
-export async function evaluateTask(input, { _callFn } = {}) {
+export async function evaluateTask(input, outcomes = undefined, options = {}) {
+  const { _callFn } = options;
   const {
     taskPrompt,
     prReviewOutput,
@@ -296,6 +300,7 @@ export async function evaluateTask(input, { _callFn } = {}) {
         ...(prUrl && { prUrl }),
         ...(tokenUsage && { tokenUsage }),
         ...(estimatedCost !== undefined && { estimatedCost }),
+        ...(outcomes && { outcomes }),
         metadata: { ...metadata, interventionFlags },
       };
     } catch (parseErr) {

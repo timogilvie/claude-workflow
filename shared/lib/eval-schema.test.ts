@@ -442,6 +442,84 @@ test('Record without workflowCost validates (backward compat)', () => {
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
+console.log('\n--- Outcome Decomposition Tests (HOK-776) ---\n');
+
+test('Record with outcomes field validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    outcomes: {
+      success: true,
+      ci: {
+        ran: true,
+        passed: true,
+        checks: [
+          { name: 'test', status: 'success', durationSeconds: 45 },
+          { name: 'lint', status: 'success' },
+        ],
+      },
+      tests: {
+        added: true,
+        passRate: 1.0,
+        durationSeconds: 30,
+      },
+      staticAnalysis: {
+        lintDelta: 0,
+        typecheckPassed: true,
+        securityFindingsDelta: 0,
+      },
+      review: {
+        humanReviewRequired: false,
+        rounds: 0,
+        approvals: 1,
+        changeRequests: 0,
+      },
+      rework: {
+        agentIterations: 2,
+        toolFailures: 0,
+      },
+      delivery: {
+        prCreated: true,
+        merged: true,
+        timeToMergeSeconds: 3600,
+      },
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record without outcomes field validates (backward compat)', () => {
+  // Existing scenarios don't have outcomes - should still validate
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  assert.ok(!('outcomes' in record), 'Scenario 1 should not have outcomes');
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with minimal outcomes (only required fields) validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    outcomes: {
+      success: false,
+      review: {
+        humanReviewRequired: true,
+        rounds: 2,
+        approvals: 0,
+        changeRequests: 1,
+      },
+      rework: {
+        agentIterations: 5,
+      },
+      delivery: {
+        prCreated: true,
+        merged: false,
+      },
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
 // ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────
