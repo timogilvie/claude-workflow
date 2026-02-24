@@ -19,6 +19,15 @@
     "maxDisplay": 9
   },
   "eval": {
+    "aggregation": {
+      "repos": [
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-auth-service",
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-data-pipeline",
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-docs",
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-site",
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-token"
+      ]
+    },
     "judge": {
       "model": "claude-sonnet-4-5-20250929",
       "provider": "anthropic"
@@ -37,6 +46,8 @@
       "claude-sonnet-4-5-20250929": "claude",
       "claude-haiku-4-5-20251001": "claude",
       "gpt-5.3-codex": "codex"
-    }
+    },
+    "llmProvider": "openai",
+    "llmModel": "gpt-4o-mini"
   }
 }
