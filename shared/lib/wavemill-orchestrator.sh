@@ -107,21 +107,36 @@ for t in "${TASKS[@]}"; do
     fi
 
 
-    # Load model suggestion if available
+    # Load model suggestion and select per-task agent + model
     MODEL_SUGGESTION_FILE="/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
-    MODEL_HINT=""
-    if [[ -f "$MODEL_SUGGESTION_FILE" ]]; then
+    TASK_AGENT_CMD="$AGENT_CMD"
+    TASK_MODEL=""
+    if [[ "${AGENT_CMD_EXPLICIT:-}" != "true" ]] && [[ -f "$MODEL_SUGGESTION_FILE" ]]; then
       RECOMMENDED_MODEL=$(jq -r '.recommendedModel // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-      MODEL_CONFIDENCE=$(jq -r '.confidence // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-      MODEL_TASK_TYPE=$(jq -r '.taskType // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-      MODEL_REASONING=$(jq -r '.reasoning // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+      RECOMMENDED_AGENT=$(jq -r '.recommendedAgent // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
       MODEL_INSUFFICIENT=$(jq -r '.insufficientData // false' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+      MODEL_CONFIDENCE=$(jq -r '.confidence // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
 
-      if [[ "$MODEL_INSUFFICIENT" != "true" && -n "$RECOMMENDED_MODEL" ]]; then
-        MODEL_HINT="Model recommendation: ${RECOMMENDED_MODEL} (confidence: ${MODEL_CONFIDENCE}, task type: ${MODEL_TASK_TYPE})"
-        echo "Model suggestion: $RECOMMENDED_MODEL (confidence: $MODEL_CONFIDENCE)"
+      if [[ "$MODEL_INSUFFICIENT" != "true" ]] && [[ -n "$RECOMMENDED_MODEL" ]]; then
+        TASK_MODEL="$RECOMMENDED_MODEL"
+        if [[ -n "$RECOMMENDED_AGENT" ]]; then
+          TASK_AGENT_CMD="$RECOMMENDED_AGENT"
+        fi
+        echo "Router: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL (confidence: $MODEL_CONFIDENCE)"
+      else
+        echo "Router: $ISSUE -> using default agent (insufficient eval data)"
       fi
     fi
+
+    # Validate the selected agent exists, fall back to global default if not
+    if ! agent_validate "$TASK_AGENT_CMD"; then
+      echo "WARN: Agent '$TASK_AGENT_CMD' not found, falling back to '$AGENT_CMD'"
+      TASK_AGENT_CMD="$AGENT_CMD"
+      TASK_MODEL=""
+    fi
+
+    # Override AGENT_CMD for pretrust_directory and other functions in this subshell
+    AGENT_CMD="$TASK_AGENT_CMD"
 
 
     # Create worktree + branch (check for existing branch first)
@@ -194,8 +209,6 @@ Base branch: $BASE_BRANCH
 ${ISSUE_DESCRIPTION:+Issue Description:
 $ISSUE_DESCRIPTION
 }
-${MODEL_HINT:+$MODEL_HINT
-}
 ---
 
 ## Your Workflow
@@ -249,7 +262,7 @@ EOF_PLAN
       echo "$PLAN_PROMPT" > "$PROMPT_FILE"
 
       # Launch agent interactively via adapter
-      agent_launch_interactive "$SESSION" "$WIN" "$PROMPT_FILE" "$AGENT_CMD"
+      agent_launch_interactive "$SESSION" "$WIN" "$PROMPT_FILE" "$TASK_AGENT_CMD" "$TASK_MODEL"
 
     else
       # ── Skip mode (current autonomous behavior) ───────────────────────
@@ -265,8 +278,6 @@ Base branch: BASE_BRANCH_PLACEHOLDER
 
 
 DESCRIPTION_PLACEHOLDER
-
-MODEL_HINT_PLACEHOLDER
 
 Goal:
 - Implement the feature/fix described by the issue and title.
@@ -312,14 +323,12 @@ $ISSUE_DESCRIPTION
       else
         INSTR="${INSTR//DESCRIPTION_PLACEHOLDER/}"
       fi
-      INSTR="${INSTR//MODEL_HINT_PLACEHOLDER/$MODEL_HINT}"
-
       # Write instructions to temp file and use it to start agent
       INSTR_FILE="/tmp/${SESSION}-${ISSUE}-instructions.txt"
       echo "$INSTR" > "$INSTR_FILE"
 
       # Start agent in that window via adapter
-      agent_launch_autonomous "$SESSION" "$WIN" "$INSTR_FILE" "$AGENT_CMD"
+      agent_launch_autonomous "$SESSION" "$WIN" "$INSTR_FILE" "$TASK_AGENT_CMD" "$TASK_MODEL"
     fi
 
 

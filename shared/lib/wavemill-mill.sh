@@ -119,6 +119,7 @@ save_task_state() {
   local worktree="$4"
   local pr="${5:-}"
   local status="${6:-}"
+  local agent="${7:-}"
 
   local tmp
   tmp=$(mktemp) || return 0
@@ -128,7 +129,8 @@ save_task_state() {
      --arg worktree "$worktree" \
      --arg pr "$pr" \
      --arg status "$status" \
-     '.tasks[$issue] = {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)}' \
+     --arg agent "$agent" \
+     '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)} | if $agent != "" then .tasks[$issue].agent = $agent else . end' \
      "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
   else
@@ -501,7 +503,8 @@ log "  Repository: $REPO_DIR"
 log "  Base branch: $BASE_BRANCH"
 log "  Worktree root: $WORKTREE_ROOT"
 log "  Project: ${PROJECT_NAME:-(all projects)}"
-log "  Agent: $AGENT_CMD ($(agent_name "$AGENT_CMD"))"
+log "  Agent: $AGENT_CMD ($(agent_name "$AGENT_CMD"))${AGENT_CMD_EXPLICIT:+ [explicit override]}"
+log "  Router: ${ROUTER_ENABLED:-true} (per-task agent+model selection)"
 log "  Max parallel: $MAX_PARALLEL"
 log "  Planning mode: $PLANNING_MODE"
 [[ -n "${SETUP_CMD:-}" ]] && log "  Setup command: $SETUP_CMD"
@@ -719,10 +722,11 @@ if [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
           INSUFFICIENT=$(echo "$SUGGESTION" | jq -r '.insufficientData // false' 2>/dev/null)
           REASONING=$(echo "$SUGGESTION" | jq -r '.reasoning // empty' 2>/dev/null)
 
+          RECOMMENDED_AGENT=$(echo "$SUGGESTION" | jq -r '.recommendedAgent // empty' 2>/dev/null)
           if [[ "$INSUFFICIENT" == "true" ]]; then
-            log "  $ISSUE: Using default model (insufficient eval data)"
+            log "  $ISSUE: Using default agent (insufficient eval data)"
           else
-            log "  $ISSUE: Recommended model: $RECOMMENDED (confidence: $CONFIDENCE, task type: $TASK_TYPE)"
+            log "  $ISSUE: Recommended: $RECOMMENDED_AGENT --model $RECOMMENDED (confidence: $CONFIDENCE, task type: $TASK_TYPE)"
           fi
 
           # Store recommendation for orchestrator
@@ -785,6 +789,8 @@ BASE_BRANCH='$BASE_BRANCH'
 PROJECT_NAME='$PROJECT_NAME'
 PLANNING_MODE='$PLANNING_MODE'
 AGENT_CMD='$AGENT_CMD'
+AGENT_CMD_EXPLICIT='${AGENT_CMD_EXPLICIT:-}'
+ROUTER_ENABLED='${ROUTER_ENABLED:-true}'
 MAX_PARALLEL='$MAX_PARALLEL'
 AUTO_EVAL='$AUTO_EVAL'
 ENVEOF
@@ -836,12 +842,12 @@ trap cleanup_dashboard_pane EXIT INT TERM
 # ============================================================================
 
 save_task_state() {
-  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}"
+  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local tmp
   tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
   if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" \
-     '.tasks[$issue] = {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)}' \
+     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
+     '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)} | if $agent != "" then .tasks[$issue].agent = $agent else . end' \
      "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
   else
@@ -1143,18 +1149,49 @@ launch_task() {
   # Set Linear state
   linear_set_state "$issue" "In Progress"
 
-  # Save to state ledger
-  local initial_phase="executing"
-  [[ "$PLANNING_MODE" == "interactive" ]] && initial_phase="planning"
-  save_task_state "$issue" "$slug" "$branch" "$wt_dir"
-  set_task_phase "$issue" "$initial_phase"
-
   # Track in monitor arrays
   BRANCH_BY_ISSUE["$issue"]="$branch"
   SLUG_BY_ISSUE["$issue"]="$slug"
 
+  # ── Per-task model routing ──────────────────────────────────────────
+  local task_agent_cmd="$AGENT_CMD"
+  local task_model=""
+  if [[ "${AGENT_CMD_EXPLICIT:-}" != "true" ]]; then
+    local suggest_tool="$TOOLS_DIR/suggest-model.ts"
+    if [[ "${ROUTER_ENABLED:-true}" == "true" ]] && [[ -f "$suggest_tool" ]] && [[ -f "$packet_file" ]]; then
+      local suggestion
+      suggestion=$(npx tsx "$suggest_tool" --json --file "$packet_file" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+      if [[ -n "$suggestion" ]]; then
+        local rec_model rec_agent rec_insufficient rec_confidence
+        rec_model=$(echo "$suggestion" | jq -r '.recommendedModel // empty' 2>/dev/null)
+        rec_agent=$(echo "$suggestion" | jq -r '.recommendedAgent // empty' 2>/dev/null)
+        rec_insufficient=$(echo "$suggestion" | jq -r '.insufficientData // false' 2>/dev/null)
+        rec_confidence=$(echo "$suggestion" | jq -r '.confidence // empty' 2>/dev/null)
+
+        if [[ "$rec_insufficient" != "true" ]] && [[ -n "$rec_model" ]]; then
+          task_model="$rec_model"
+          [[ -n "$rec_agent" ]] && task_agent_cmd="$rec_agent"
+          log "  Router: $task_agent_cmd --model $task_model (confidence: $rec_confidence)"
+        fi
+      fi
+    fi
+  fi
+
+  # Validate the selected agent exists
+  if ! agent_validate "$task_agent_cmd"; then
+    log_warn "  Agent '$task_agent_cmd' not found, falling back to '$AGENT_CMD'"
+    task_agent_cmd="$AGENT_CMD"
+    task_model=""
+  fi
+
+  # Save to state ledger (after routing so agent is known)
+  local initial_phase="executing"
+  [[ "$PLANNING_MODE" == "interactive" ]] && initial_phase="planning"
+  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd"
+  set_task_phase "$issue" "$initial_phase"
+
   # Pre-trust worktree directory so Claude doesn't prompt
-  if [[ "$AGENT_CMD" == "claude" ]] && [[ -f "$HOME/.claude.json" ]]; then
+  if [[ "$task_agent_cmd" == "claude" ]] && [[ -f "$HOME/.claude.json" ]]; then
     local already_trusted
     already_trusted=$(jq -r --arg p "$wt_dir" '.projects[$p].hasTrustDialogAccepted // false' "$HOME/.claude.json" 2>/dev/null)
     if [[ "$already_trusted" != "true" ]]; then
@@ -1272,7 +1309,7 @@ Success criteria:
 Start with Phase 1 now. Read the task context and begin researching.
 PLAN_PROMPT_EOF
 
-    agent_launch_interactive "$SESSION" "$win" "$prompt_file" "$AGENT_CMD"
+    agent_launch_interactive "$SESSION" "$win" "$prompt_file" "$task_agent_cmd" "$task_model"
   else
     # Skip mode — pipe instructions to agent
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
@@ -1316,10 +1353,10 @@ Process:
 5. Post back with summary of changes, commands run + results, and PR link
 INSTR_EOF
 
-    agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$AGENT_CMD"
+    agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model"
   fi
 
-  log "  ✓ $issue launched (phase: ${initial_phase})"
+  log "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
 }
 
 
@@ -1454,11 +1491,14 @@ while :; do
       # Post-merge eval (non-blocking: always exits 0)
       if [[ "$AUTO_EVAL" == "true" ]]; then
         log "  📊 Running post-merge eval..."
+        local eval_agent
+        eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+        [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
         npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$ISSUE" --pr "$PR" --branch "$BRANCH" \
           --worktree "${WORKTREE_ROOT}/${SLUG}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
-          --agent "$AGENT_CMD" \
+          --agent "$eval_agent" \
           2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
       fi
 

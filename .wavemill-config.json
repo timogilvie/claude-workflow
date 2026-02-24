@@ -30,5 +30,13 @@
       "gpt-5.3-codex": { "inputCostPerMTok": 1.75, "outputCostPerMTok": 14, "cacheReadCostPerMTok": 0.44 }
     }
   },
-  "autoEval": true
+  "autoEval": true,
+  "router": {
+    "agentMap": {
+      "claude-opus-4-6": "claude",
+      "claude-sonnet-4-5-20250929": "claude",
+      "claude-haiku-4-5-20251001": "claude",
+      "gpt-5.3-codex": "codex"
+    }
+  }
 }

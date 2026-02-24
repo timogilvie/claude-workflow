@@ -215,6 +215,7 @@ export interface CandidateScore {
 
 export interface ModelRecommendation {
   recommendedModel: string;
+  recommendedAgent: string;
   confidence: 'high' | 'medium' | 'low';
   reasoning: string;
   taskType: TaskType;
@@ -234,6 +235,10 @@ export interface RouterOptions {
   defaultModel?: string;
   /** Candidate model IDs to consider (if set, only these models are scored) */
   models?: string[];
+  /** Map of model ID -> agent CLI command (e.g. "claude", "codex") */
+  agentMap?: Record<string, string>;
+  /** Fallback agent when no agentMap match (default: 'claude') */
+  defaultAgent?: string;
 }
 
 const DEFAULT_ROUTER_OPTIONS: Required<RouterOptions> = {
@@ -242,7 +247,28 @@ const DEFAULT_ROUTER_OPTIONS: Required<RouterOptions> = {
   minModels: 2,
   defaultModel: 'claude-sonnet-4-5-20250929',
   models: [],
+  agentMap: {},
+  defaultAgent: 'claude',
 };
+
+/**
+ * Resolve which agent CLI should run a given model.
+ *
+ * Resolution order:
+ *   1. Explicit agentMap entry
+ *   2. Prefix heuristic (claude- prefix = claude, gpt-/o prefix = codex)
+ *   3. defaultAgent fallback
+ */
+export function resolveAgent(
+  modelId: string,
+  agentMap: Record<string, string>,
+  defaultAgent: string,
+): string {
+  if (agentMap[modelId]) return agentMap[modelId];
+  if (modelId.startsWith('claude-')) return 'claude';
+  if (modelId.startsWith('gpt-') || /^o\d/.test(modelId)) return 'codex';
+  return defaultAgent;
+}
 
 /**
  * Load router config from `.wavemill-config.json`.
@@ -259,6 +285,8 @@ export function loadRouterConfig(repoDir?: string): RouterOptions {
     if (r.minRecords !== undefined) opts.minRecords = r.minRecords;
     if (r.minModels !== undefined) opts.minModels = r.minModels;
     if (r.models !== undefined) opts.models = r.models;
+    if (r.agentMap !== undefined) opts.agentMap = r.agentMap;
+    if (r.defaultAgent !== undefined) opts.defaultAgent = r.defaultAgent;
     return opts;
   } catch {
     return {};
@@ -307,6 +335,7 @@ export function recommendModel(
   if (records.length < opts.minRecords || distinctModels.size < opts.minModels) {
     return {
       recommendedModel: opts.defaultModel,
+      recommendedAgent: resolveAgent(opts.defaultModel, opts.agentMap, opts.defaultAgent),
       confidence: 'low',
       reasoning:
         `Insufficient eval data for routing (${records.length} records, ` +
@@ -330,6 +359,7 @@ export function recommendModel(
   if (modelStats.length === 0) {
     return {
       recommendedModel: opts.defaultModel,
+      recommendedAgent: resolveAgent(opts.defaultModel, opts.agentMap, opts.defaultAgent),
       confidence: 'low',
       reasoning: 'No eval data found for configured candidate models. Using default model.',
       taskType,
@@ -378,6 +408,7 @@ export function recommendModel(
 
   return {
     recommendedModel: best.modelId,
+    recommendedAgent: resolveAgent(best.modelId, opts.agentMap, opts.defaultAgent),
     confidence,
     reasoning,
     taskType,
