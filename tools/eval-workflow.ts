@@ -27,6 +27,9 @@ import {
   formatForJudge,
   loadPenalties,
 } from '../shared/lib/intervention-detector.ts';
+import { analyzePrDifficulty } from '../shared/lib/difficulty-analyzer.ts';
+import { analyzeTaskContext } from '../shared/lib/task-context-analyzer.ts';
+import { analyzeRepoContext } from '../shared/lib/repo-context-analyzer.ts';
 
 dotenv.config({ quiet: true });
 
@@ -353,6 +356,83 @@ async function main() {
     const totalInterventions = interventionSummary.interventions.reduce((sum, e) => sum + e.count, 0);
     console.log(`  Detected ${totalInterventions} intervention event(s) (weighted penalty: ${interventionSummary.totalInterventionScore})`);
 
+    // 3a. Analyze difficulty from PR diff (HOK-777)
+    let difficultyData = null;
+    if (ctx.prNumber && ctx.prReviewOutput) {
+      try {
+        console.log('\nAnalyzing PR difficulty...');
+        difficultyData = analyzePrDifficulty({
+          prDiff: ctx.prReviewOutput,
+          prNumber: ctx.prNumber,
+          repoDir: ctx.repoDir,
+        });
+        if (difficultyData) {
+          console.log(
+            `  Difficulty: ${difficultyData.difficultyBand} ` +
+            `(${difficultyData.difficultySignals.locTouched} LOC, ` +
+            `${difficultyData.difficultySignals.filesTouched} files, ` +
+            `stratum: ${difficultyData.stratum})`
+          );
+        }
+      } catch (diffErr) {
+        console.warn(`  Warning: difficulty analysis failed — ${diffErr.message}`);
+      }
+    }
+
+    // 3b. Analyze task context (HOK-774)
+    let taskContextData = null;
+    if (ctx.issueId || ctx.prReviewOutput) {
+      try {
+        console.log('\nAnalyzing task context...');
+        // Fetch issue data for task context
+        let issueData;
+        if (ctx.issueId) {
+          try {
+            const toolPath = path.resolve(__dirname, 'get-issue-json.ts');
+            const raw = execSync(
+              `npx tsx "${toolPath}" "${ctx.issueId}" 2>/dev/null | sed '/^\\[dotenv/d'`,
+              { encoding: 'utf-8', cwd: ctx.repoDir, shell: '/bin/bash' }
+            ).trim();
+            issueData = JSON.parse(raw);
+          } catch {
+            // Issue fetch failed - continue with partial data
+          }
+        }
+
+        taskContextData = analyzeTaskContext({
+          issue: issueData,
+          prDiff: ctx.prReviewOutput,
+          locTouched: difficultyData?.difficultySignals.locTouched,
+          filesTouched: difficultyData?.difficultySignals.filesTouched,
+        });
+
+        if (taskContextData) {
+          console.log(
+            `  Task context: ${taskContextData.taskType} / ` +
+            `${taskContextData.changeKind} / complexity ${taskContextData.complexity}`
+          );
+        }
+      } catch (taskErr) {
+        console.warn(`  Warning: task context analysis failed — ${taskErr.message}`);
+      }
+    }
+
+    // 3c. Analyze repo context (HOK-774)
+    let repoContextData = null;
+    try {
+      console.log('\nAnalyzing repo context...');
+      repoContextData = analyzeRepoContext(ctx.repoDir);
+      if (repoContextData) {
+        console.log(
+          `  Repo context: ${repoContextData.primaryLanguage} / ` +
+          `${repoContextData.repoVisibility} / ` +
+          `${repoContextData.repoSize?.fileCount || 0} files`
+        );
+      }
+    } catch (repoErr) {
+      console.warn(`  Warning: repo context analysis failed — ${repoErr.message}`);
+    }
+
     // 4. Invoke judge via shared evaluateTask()
     console.log('\nInvoking LLM judge...');
     const record = await evaluateTask({
@@ -371,6 +451,19 @@ async function main() {
     if (args.solutionModel) {
       record.modelId = args.solutionModel;
       record.modelVersion = args.solutionModel;
+    }
+
+    // 4c. Attach difficulty, task context, and repo context to record
+    if (difficultyData) {
+      record.difficultyBand = difficultyData.difficultyBand;
+      record.difficultySignals = difficultyData.difficultySignals;
+      record.stratum = difficultyData.stratum;
+    }
+    if (taskContextData) {
+      record.taskContext = taskContextData;
+    }
+    if (repoContextData) {
+      record.repoContext = repoContextData;
     }
 
     // 5. Persist eval record to disk
