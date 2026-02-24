@@ -15,6 +15,7 @@ import { appendEvalRecord } from './eval-persistence.ts';
 import {
   detectAllInterventions,
   toInterventionMeta,
+  toInterventionRecords,
   formatForJudge,
   loadPenalties,
 } from './intervention-detector.ts';
@@ -144,6 +145,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       agentType: ctx.agentType,
     });
     const interventionMeta = toInterventionMeta(interventionSummary);
+    const interventionRecords = toInterventionRecords(interventionSummary);
     const penalties = loadPenalties(repoDir);
     const interventionText = formatForJudge(interventionSummary, penalties);
 
@@ -181,6 +183,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       taskPrompt,
       prReviewOutput,
       interventions: interventionMeta,
+      interventionRecords,
       interventionText,
       issueId: ctx.issueId || undefined,
       prUrl: prUrl || undefined,

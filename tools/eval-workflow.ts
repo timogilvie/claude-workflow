@@ -23,6 +23,7 @@ import { appendEvalRecord } from '../shared/lib/eval-persistence.ts';
 import {
   detectAllInterventions,
   toInterventionMeta,
+  toInterventionRecords,
   formatForJudge,
   loadPenalties,
 } from '../shared/lib/intervention-detector.ts';
@@ -271,8 +272,20 @@ function formatEvalRecord(record) {
   // Interventions
   if (record.interventionRequired) {
     lines.push(`  ${BOLD}${YELLOW}Interventions:${NC} ${record.interventionCount}`);
-    for (const detail of record.interventionDetails) {
-      lines.push(`    ${YELLOW}-${NC} ${detail}`);
+
+    // Show structured interventions if available
+    if (record.interventions && record.interventions.length > 0) {
+      for (const intervention of record.interventions) {
+        const severityColor = intervention.severity === 'high' ? RED : intervention.severity === 'med' ? YELLOW : DIM;
+        const timestamp = new Date(intervention.timestamp).toLocaleTimeString();
+        lines.push(`    ${severityColor}[${intervention.severity.toUpperCase()}]${NC} ${YELLOW}${intervention.type}${NC} @ ${timestamp}`);
+        lines.push(`      ${DIM}${intervention.note}${NC}`);
+      }
+    } else {
+      // Fallback to legacy interventionDetails
+      for (const detail of record.interventionDetails) {
+        lines.push(`    ${YELLOW}-${NC} ${detail}`);
+      }
     }
     lines.push('');
   } else {
@@ -333,6 +346,7 @@ async function main() {
       agentType: args.agent,
     });
     const interventionMeta = toInterventionMeta(interventionSummary);
+    const interventionRecords = toInterventionRecords(interventionSummary);
     const penalties = loadPenalties(ctx.repoDir);
     const interventionText = formatForJudge(interventionSummary, penalties);
 
@@ -345,6 +359,7 @@ async function main() {
       taskPrompt: ctx.taskPrompt,
       prReviewOutput: ctx.prReviewOutput,
       interventions: interventionMeta,
+      interventionRecords,
       interventionText,
       issueId: ctx.issueId || undefined,
       prUrl: ctx.prUrl || undefined,
