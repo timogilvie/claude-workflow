@@ -1491,7 +1491,6 @@ while :; do
       # Post-merge eval (non-blocking: always exits 0)
       if [[ "$AUTO_EVAL" == "true" ]]; then
         log "  📊 Running post-merge eval..."
-        local eval_agent
         eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
         [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
         npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
