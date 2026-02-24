@@ -105,7 +105,7 @@ function formatRecommendation(rec: ModelRecommendation): string {
 
   if (rec.insufficientData) {
     lines.push(`  ${YELLOW}Insufficient eval data for routing.${NC}`);
-    lines.push(`  ${DIM}Fallback:${NC} ${rec.recommendedModel}`);
+    lines.push(`  ${DIM}Fallback:${NC} ${rec.recommendedModel} (agent: ${rec.recommendedAgent})`);
     lines.push('');
     lines.push(`  ${DIM}${rec.reasoning}${NC}`);
   } else {
@@ -113,7 +113,7 @@ function formatRecommendation(rec: ModelRecommendation): string {
     const best = rec.candidates[0];
     if (best) {
       lines.push(
-        `  ${BOLD}${GREEN}Recommended:${NC} ${BOLD}${best.modelId}${NC}`,
+        `  ${BOLD}${GREEN}Recommended:${NC} ${BOLD}${best.modelId}${NC} (agent: ${rec.recommendedAgent})`,
       );
       lines.push(
         `    Avg Score: ${GREEN}${best.avgScore.toFixed(2)}${NC}` +

@@ -255,6 +255,20 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data."
+        },
+        "defaultAgent": {
+          "type": "string",
+          "default": "claude",
+          "description": "Fallback agent CLI when router has insufficient data or no agentMap entry matches the recommended model.",
+          "examples": ["claude", "codex"]
+        },
+        "agentMap": {
+          "type": "object",
+          "description": "Maps model IDs to agent CLI commands. Used to determine which agent CLI to launch when the router recommends a model.",
+          "additionalProperties": {
+            "type": "string",
+            "description": "Agent CLI command name (e.g. 'claude', 'codex')."
+          }
         }
       },
       "additionalProperties": false

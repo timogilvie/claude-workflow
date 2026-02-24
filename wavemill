@@ -301,6 +301,7 @@ case "${1:-}" in
       case "$1" in
         --agent)
           export AGENT_CMD="$2"
+          export AGENT_CMD_EXPLICIT=true
           shift 2
           ;;
         *)
