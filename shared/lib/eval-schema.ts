@@ -368,6 +368,118 @@ export interface RepoContext {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Outcome Decomposition (HOK-776)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Status of a single CI check run.
+ */
+export interface CiCheck {
+  /** Check name (e.g. "tests", "lint", "build") */
+  name: string;
+  /** Check status */
+  status: 'success' | 'failure' | 'pending' | 'skipped' | 'cancelled';
+  /** Check duration in seconds (if available) */
+  durationSeconds?: number;
+}
+
+/**
+ * CI/CD outcome: whether checks ran and their results.
+ */
+export interface CiOutcome {
+  /** Whether CI checks were triggered for this PR */
+  ran: boolean;
+  /** Whether all CI checks passed */
+  passed: boolean;
+  /** Individual check results */
+  checks: CiCheck[];
+}
+
+/**
+ * Test outcome: test additions and results.
+ */
+export interface TestsOutcome {
+  /** Whether new test files were added in this PR */
+  added: boolean;
+  /** Test pass rate (0-1), if test results are available */
+  passRate?: number;
+  /** Total test execution time in seconds, if available */
+  durationSeconds?: number;
+}
+
+/**
+ * Static analysis outcome: lint, typecheck, and security findings.
+ */
+export interface StaticAnalysisOutcome {
+  /** Change in lint errors (negative = improvement, positive = regression) */
+  lintDelta?: number;
+  /** Whether typecheck passed */
+  typecheckPassed?: boolean;
+  /** Change in security findings (negative = improvement) */
+  securityFindingsDelta?: number;
+}
+
+/**
+ * Review outcome: human review activity on the PR.
+ */
+export interface ReviewOutcome {
+  /** Whether human review was required (any review comments or changes requested) */
+  humanReviewRequired: boolean;
+  /** Number of distinct review submission rounds */
+  rounds: number;
+  /** Number of approval reviews */
+  approvals: number;
+  /** Number of change request reviews */
+  changeRequests: number;
+}
+
+/**
+ * Rework outcome: agent iterations and failures during implementation.
+ */
+export interface ReworkOutcome {
+  /** Number of agent iterations (session turns, commits, or retries) */
+  agentIterations: number;
+  /** Number of tool/API call failures, if tracked */
+  toolFailures?: number;
+}
+
+/**
+ * Delivery outcome: PR creation, merge status, and timing.
+ */
+export interface DeliveryOutcome {
+  /** Whether a PR was created */
+  prCreated: boolean;
+  /** Whether the PR was merged */
+  merged: boolean;
+  /** Time from PR creation to merge in seconds, if merged */
+  timeToMergeSeconds?: number;
+}
+
+/**
+ * Decomposed outcome components for granular eval analysis.
+ *
+ * Stores the raw outcome data that contributes to the overall score.
+ * This enables re-scoring with different utility functions and
+ * routing based on outcome patterns.
+ */
+export interface Outcomes {
+  /** Hard gate: whether the task succeeded (derived from score) */
+  success: boolean;
+  /** CI/CD check results */
+  ci?: CiOutcome;
+  /** Test additions and results */
+  tests?: TestsOutcome;
+  /** Static analysis results */
+  staticAnalysis?: StaticAnalysisOutcome;
+  /** Human review activity */
+  review: ReviewOutcome;
+  /** Agent rework and failures */
+  rework: ReworkOutcome;
+  /** PR delivery status */
+  delivery: DeliveryOutcome;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -471,6 +583,9 @@ export interface EvalRecord {
 
   /** Repository context metadata for routing and evaluation (HOK-774) */
   repoContext?: RepoContext;
+
+  /** Decomposed outcome components (quality, cost, speed, risk dimensions) */
+  outcomes?: Outcomes;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;

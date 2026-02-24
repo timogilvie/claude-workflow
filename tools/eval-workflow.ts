@@ -30,6 +30,15 @@ import {
 import { analyzePrDifficulty } from '../shared/lib/difficulty-analyzer.ts';
 import { analyzeTaskContext } from '../shared/lib/task-context-analyzer.ts';
 import { analyzeRepoContext } from '../shared/lib/repo-context-analyzer.ts';
+import {
+  collectCiOutcome,
+  collectTestsOutcome,
+  collectStaticAnalysisOutcome,
+  collectReviewOutcome,
+  collectReworkOutcome,
+  collectDeliveryOutcome,
+} from '../shared/lib/outcome-collectors.ts';
+import type { Outcomes } from '../shared/lib/eval-schema.ts';
 
 dotenv.config({ quiet: true });
 
@@ -306,6 +315,48 @@ function formatEvalRecord(record) {
     lines.push('');
   }
 
+  // Outcomes Summary
+  if (record.outcomes) {
+    const o = record.outcomes;
+    lines.push(`  ${BOLD}Outcomes:${NC}`);
+    lines.push(`    ${BOLD}Success:${NC}   ${o.success ? GREEN + '✓' : RED + '✗'}${NC}`);
+
+    if (o.ci) {
+      const ciStatus = o.ci.passed ? GREEN + 'passed' : RED + 'failed';
+      lines.push(`    ${BOLD}CI:${NC}        ${ciStatus}${NC} (${o.ci.checks.length} checks)`);
+    }
+
+    if (o.tests) {
+      const testInfo = o.tests.added
+        ? `added${o.tests.passRate !== undefined ? ` (${Math.round(o.tests.passRate * 100)}% pass)` : ''}`
+        : 'none added';
+      lines.push(`    ${BOLD}Tests:${NC}     ${testInfo}`);
+    }
+
+    if (o.staticAnalysis && Object.keys(o.staticAnalysis).length > 0) {
+      const parts = [];
+      if (o.staticAnalysis.typecheckPassed !== undefined) {
+        parts.push(o.staticAnalysis.typecheckPassed ? 'typecheck ✓' : 'typecheck ✗');
+      }
+      if (o.staticAnalysis.lintDelta !== undefined) {
+        const lintStatus = o.staticAnalysis.lintDelta === 0 ? '✓' : `+${o.staticAnalysis.lintDelta}`;
+        parts.push(`lint ${lintStatus}`);
+      }
+      if (parts.length > 0) {
+        lines.push(`    ${BOLD}Analysis:${NC}  ${parts.join(', ')}`);
+      }
+    }
+
+    lines.push(`    ${BOLD}Review:${NC}    ${o.review.approvals} approvals, ${o.review.changeRequests} change requests, ${o.review.rounds} rounds`);
+    lines.push(`    ${BOLD}Rework:${NC}    ${o.rework.agentIterations} iterations${o.rework.toolFailures ? `, ${o.rework.toolFailures} tool failures` : ''}`);
+
+    const deliveryStatus = o.delivery.merged
+      ? `merged${o.delivery.timeToMergeSeconds ? ` (${Math.round(o.delivery.timeToMergeSeconds / 3600)}h)` : ''}`
+      : o.delivery.prCreated ? 'PR created' : 'no PR';
+    lines.push(`    ${BOLD}Delivery:${NC}  ${deliveryStatus}`);
+    lines.push('');
+  }
+
   lines.push(`${BOLD}${CYAN}${'═'.repeat(63)}${NC}`);
   lines.push('');
 
@@ -433,7 +484,33 @@ async function main() {
       console.warn(`  Warning: repo context analysis failed — ${repoErr.message}`);
     }
 
-    // 4. Invoke judge via shared evaluateTask()
+    // 4. Collect outcome components
+    console.log('\nCollecting outcome components...');
+    const outcomes: Outcomes = {
+      success: false, // Will be set after scoring based on score threshold
+      ci: ctx.prNumber ? collectCiOutcome(ctx.prNumber, ctx.repoDir) : undefined,
+      tests: ctx.prNumber && ctx.branch ? collectTestsOutcome(ctx.prNumber, ctx.branch, 'main', ctx.repoDir) : undefined,
+      staticAnalysis: ctx.prNumber && ctx.branch ? collectStaticAnalysisOutcome(ctx.prNumber, ctx.branch, 'main', ctx.repoDir) : undefined,
+      review: ctx.prNumber ? collectReviewOutcome(ctx.prNumber, interventionSummary, ctx.repoDir) : {
+        humanReviewRequired: interventionSummary.interventions.some(e => e.type === 'review_comment' && e.count > 0),
+        rounds: 0,
+        approvals: 0,
+        changeRequests: 0,
+      },
+      rework: collectReworkOutcome(ctx.repoDir, ctx.branch, args.agent, ctx.repoDir),
+      delivery: ctx.prNumber ? collectDeliveryOutcome(ctx.prNumber, ctx.repoDir) : {
+        prCreated: false,
+        merged: false,
+      },
+    };
+
+    console.log(`  CI: ${outcomes.ci?.ran ? (outcomes.ci.passed ? 'passed' : 'failed') : 'not run'}`);
+    console.log(`  Tests: ${outcomes.tests?.added ? 'added' : 'none added'}`);
+    console.log(`  Review: ${outcomes.review.approvals} approvals, ${outcomes.review.changeRequests} change requests`);
+    console.log(`  Rework: ${outcomes.rework.agentIterations} iterations`);
+    console.log(`  Delivery: ${outcomes.delivery.merged ? 'merged' : outcomes.delivery.prCreated ? 'PR created' : 'no PR'}`);
+
+    // 5. Invoke judge via shared evaluateTask()
     console.log('\nInvoking LLM judge...');
     const record = await evaluateTask({
       taskPrompt: ctx.taskPrompt,
@@ -444,16 +521,21 @@ async function main() {
       issueId: ctx.issueId || undefined,
       prUrl: ctx.prUrl || undefined,
       metadata: { interventionSummary },
-    });
+    }, outcomes);
 
-    // 4b. Set agentType and solution model so eval records reflect which agent/model ran
+    // 5b. Set success flag based on score threshold
+    if (record.outcomes) {
+      record.outcomes.success = record.score >= 0.5;
+    }
+
+    // 5c. Set agentType and solution model so eval records reflect which agent/model ran
     record.agentType = args.agent || 'claude';
     if (args.solutionModel) {
       record.modelId = args.solutionModel;
       record.modelVersion = args.solutionModel;
     }
 
-    // 4c. Attach difficulty, task context, and repo context to record
+    // 5d. Attach difficulty, task context, and repo context to record
     if (difficultyData) {
       record.difficultyBand = difficultyData.difficultyBand;
       record.difficultySignals = difficultyData.difficultySignals;
@@ -466,17 +548,17 @@ async function main() {
       record.repoContext = repoContextData;
     }
 
-    // 5. Persist eval record to disk
+    // 6. Persist eval record to disk
     try {
       appendEvalRecord(record);
     } catch (err) {
       console.error(`Warning: failed to persist eval record: ${err.message}`);
     }
 
-    // 6. Format and print
+    // 7. Format and print
     console.log(formatEvalRecord(record));
 
-    // 7. Print raw JSON for piping
+    // 8. Print raw JSON for piping
     if (process.stdout.isTTY === false) {
       console.log(JSON.stringify(record, null, 2));
     }
