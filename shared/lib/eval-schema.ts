@@ -189,6 +189,49 @@ export interface InterventionRecord {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Difficulty Classification (HOK-777)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Difficulty band classification for task complexity.
+ *
+ * Derived from quantifiable signals (LOC touched, files modified, etc.)
+ * to enable weighted rewards and stratified evaluation.
+ */
+export type DifficultyBand = 'trivial' | 'easy' | 'medium' | 'hard' | 'very_hard';
+
+/**
+ * Quantifiable difficulty signals computed from PR data.
+ *
+ * These metrics are derived from git diff analysis and provide
+ * objective measures of task complexity.
+ */
+export interface DifficultySignals {
+  /** Lines of code touched (additions + deletions) */
+  locTouched: number;
+
+  /** Number of files modified in the PR */
+  filesTouched: number;
+
+  /** Dependency depth (optional - 0 if not computed) */
+  dependencyDepth?: number;
+
+  /** Test runtime in seconds (optional) */
+  testRuntime?: number;
+
+  /** Module hotspot score 0-100 (optional - based on git history) */
+  moduleHotspotScore?: number;
+}
+
+/**
+ * Tech stack and size stratum for stratified evaluation.
+ *
+ * Format: "{tech_stack}_{size_band}"
+ * Examples: "ts_nextjs_small", "py_django_med", "go_std_large"
+ */
+export type Stratum = string;
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -277,6 +320,15 @@ export interface EvalRecord {
       costUsd: number;
     }
   >;
+
+  /** Difficulty band classification (e.g. "easy", "medium", "hard") */
+  difficultyBand?: DifficultyBand;
+
+  /** Quantifiable difficulty metrics from PR analysis */
+  difficultySignals?: DifficultySignals;
+
+  /** Tech stack and size stratum (e.g. "ts_nextjs_small", "py_django_med") */
+  stratum?: Stratum;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;
