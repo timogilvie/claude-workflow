@@ -64,3 +64,4 @@ The decomposition plan is pushed to Linear:
 ## See Also
 
 - [Feature Workflow](feature-workflow.md) — guided single-issue execution with plan → implement → validate gates
+- [Labels](LABEL-SYSTEM.md) — how labels control parallel task scheduling
