@@ -259,6 +259,254 @@ export interface RoutingDecision {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Task Context (HOK-774)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Task type classification for routing and evaluation.
+ */
+export type TaskType =
+  | 'bugfix'
+  | 'feature'
+  | 'refactor'
+  | 'chore'
+  | 'docs'
+  | 'test'
+  | 'infra';
+
+/**
+ * Change kind classification for understanding task scope.
+ */
+export type ChangeKind = 'modify_existing' | 'create_new' | 'mixed';
+
+/**
+ * Complexity band classification for task difficulty.
+ */
+export type ComplexityBand = 'xs' | 's' | 'm' | 'l' | 'xl';
+
+/**
+ * Task constraints that affect how the task can be executed.
+ */
+export interface TaskConstraints {
+  /** Whether the task requires strict adherence to a style guide */
+  hasStrictStyle?: boolean;
+
+  /** Whether the task has modules/files that must not be touched */
+  mustNotTouchX?: boolean;
+
+  /** Whether the task is timeboxed with a deadline */
+  timeboxed?: boolean;
+
+  /** Whether the task must be completed without network access */
+  noNetAccess?: boolean;
+}
+
+/**
+ * Task context metadata for routing and evaluation.
+ *
+ * Describes the nature of the task to enable better model selection,
+ * routing decisions, and stratified evaluation.
+ */
+export interface TaskContext {
+  /** Type of task being performed */
+  taskType: TaskType;
+
+  /** Whether the task modifies existing code, creates new code, or both */
+  changeKind: ChangeKind;
+
+  /** Complexity score (0-1) or band classification */
+  complexity: number | ComplexityBand;
+
+  /** Special constraints that apply to this task */
+  constraints?: TaskConstraints;
+
+  /** Estimated number of files to be touched */
+  filesTouchedEstimate?: number;
+
+  /** Estimated lines of code to be changed */
+  expectedLoCChange?: number;
+
+  /** Domain-specific knowledge required (e.g., "payments", "auth", "k8s") */
+  requiresDomainKnowledge?: string | boolean;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Repo Context (HOK-774)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Repository visibility classification.
+ */
+export type RepoVisibility = 'oss' | 'private';
+
+/**
+ * Repository size metrics.
+ */
+export interface RepoSize {
+  /** Total number of files in the repository */
+  fileCount: number;
+
+  /** Total lines of code in the repository */
+  loc: number;
+
+  /** Number of dependencies (approximate) */
+  dependencyCount: number;
+}
+
+/**
+ * Repository context metadata for routing and evaluation.
+ *
+ * Describes the repository characteristics to enable better model selection,
+ * routing decisions, and stratified evaluation.
+ */
+export interface RepoContext {
+  /** Stable identifier for the repository (hash or slug) */
+  repoId: string;
+
+  /** Whether the repository is open source or private */
+  repoVisibility: RepoVisibility;
+
+  /** Primary programming language */
+  primaryLanguage: string;
+
+  /** Map of language to percentage (e.g., {"TypeScript": 75, "JavaScript": 25}) */
+  languages?: Record<string, number>;
+
+  /** Frameworks used in the repository */
+  frameworks?: string[];
+
+  /** Build system (e.g., "webpack", "vite", "gradle") */
+  buildSystem?: string;
+
+  /** Package manager (e.g., "npm", "yarn", "pnpm") */
+  packageManager?: string;
+
+  /** Test frameworks (e.g., ["jest", "vitest"]) */
+  testFrameworks?: string[];
+
+  /** CI provider (e.g., "github-actions", "gitlab-ci") */
+  ciProvider?: string;
+
+  /** Repository size metrics */
+  repoSize?: RepoSize;
+
+  /** Whether the repository is a monorepo */
+  monorepo?: boolean;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Outcome Decomposition (HOK-776)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Status of a single CI check run.
+ */
+export interface CiCheck {
+  /** Check name (e.g. "tests", "lint", "build") */
+  name: string;
+  /** Check status */
+  status: 'success' | 'failure' | 'pending' | 'skipped' | 'cancelled';
+  /** Check duration in seconds (if available) */
+  durationSeconds?: number;
+}
+
+/**
+ * CI/CD outcome: whether checks ran and their results.
+ */
+export interface CiOutcome {
+  /** Whether CI checks were triggered for this PR */
+  ran: boolean;
+  /** Whether all CI checks passed */
+  passed: boolean;
+  /** Individual check results */
+  checks: CiCheck[];
+}
+
+/**
+ * Test outcome: test additions and results.
+ */
+export interface TestsOutcome {
+  /** Whether new test files were added in this PR */
+  added: boolean;
+  /** Test pass rate (0-1), if test results are available */
+  passRate?: number;
+  /** Total test execution time in seconds, if available */
+  durationSeconds?: number;
+}
+
+/**
+ * Static analysis outcome: lint, typecheck, and security findings.
+ */
+export interface StaticAnalysisOutcome {
+  /** Change in lint errors (negative = improvement, positive = regression) */
+  lintDelta?: number;
+  /** Whether typecheck passed */
+  typecheckPassed?: boolean;
+  /** Change in security findings (negative = improvement) */
+  securityFindingsDelta?: number;
+}
+
+/**
+ * Review outcome: human review activity on the PR.
+ */
+export interface ReviewOutcome {
+  /** Whether human review was required (any review comments or changes requested) */
+  humanReviewRequired: boolean;
+  /** Number of distinct review submission rounds */
+  rounds: number;
+  /** Number of approval reviews */
+  approvals: number;
+  /** Number of change request reviews */
+  changeRequests: number;
+}
+
+/**
+ * Rework outcome: agent iterations and failures during implementation.
+ */
+export interface ReworkOutcome {
+  /** Number of agent iterations (session turns, commits, or retries) */
+  agentIterations: number;
+  /** Number of tool/API call failures, if tracked */
+  toolFailures?: number;
+}
+
+/**
+ * Delivery outcome: PR creation, merge status, and timing.
+ */
+export interface DeliveryOutcome {
+  /** Whether a PR was created */
+  prCreated: boolean;
+  /** Whether the PR was merged */
+  merged: boolean;
+  /** Time from PR creation to merge in seconds, if merged */
+  timeToMergeSeconds?: number;
+}
+
+/**
+ * Decomposed outcome components for granular eval analysis.
+ *
+ * Stores the raw outcome data that contributes to the overall score.
+ * This enables re-scoring with different utility functions and
+ * routing based on outcome patterns.
+ */
+export interface Outcomes {
+  /** Hard gate: whether the task succeeded (derived from score) */
+  success: boolean;
+  /** CI/CD check results */
+  ci?: CiOutcome;
+  /** Test additions and results */
+  tests?: TestsOutcome;
+  /** Static analysis results */
+  staticAnalysis?: StaticAnalysisOutcome;
+  /** Human review activity */
+  review: ReviewOutcome;
+  /** Agent rework and failures */
+  rework: ReworkOutcome;
+  /** PR delivery status */
+  delivery: DeliveryOutcome;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Difficulty Classification (HOK-777)
 // ────────────────────────────────────────────────────────────────
 
@@ -399,6 +647,15 @@ export interface EvalRecord {
 
   /** Tech stack and size stratum (e.g. "ts_nextjs_small", "py_django_med") */
   stratum?: Stratum;
+
+  /** Task context metadata for routing and evaluation (HOK-774) */
+  taskContext?: TaskContext;
+
+  /** Repository context metadata for routing and evaluation (HOK-774) */
+  repoContext?: RepoContext;
+
+  /** Decomposed outcome components (quality, cost, speed, risk dimensions) */
+  outcomes?: Outcomes;
 
   /** Routing decision metadata (required if training routing models) */
   routingDecision?: RoutingDecision;

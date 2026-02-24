@@ -1,4 +1,6 @@
-# Feature Workflow
+---
+title: Feature Workflow
+---
 
 Use this mode when you want explicit planning, implementation checkpoints, and reviewable outputs for each Linear issue.
 

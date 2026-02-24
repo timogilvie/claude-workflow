@@ -411,6 +411,110 @@ const scenarios: { name: string; record: EvalRecord }[] = [
       },
     },
   },
+  {
+    name: 'Scenario 10: With task and repo context (HOK-774)',
+    record: {
+      id: '550e8400-e29b-41d4-a716-446655440010',
+      schemaVersion: '1.0.0',
+      originalPrompt: 'Fix authentication redirect loop on logout',
+      modelId: 'claude-sonnet-4-5-20250929',
+      modelVersion: 'claude-sonnet-4-5-20250929',
+      score: 0.9,
+      scoreBand: 'Minor Feedback',
+      timeSeconds: 600,
+      timestamp: '2026-02-24T15:00:00Z',
+      interventionRequired: false,
+      interventionCount: 0,
+      interventionDetails: [],
+      rationale: 'Agent correctly identified and fixed the redirect loop with minimal guidance.',
+      issueId: 'HOK-774',
+      prUrl: 'https://github.com/org/repo/pull/60',
+      taskContext: {
+        taskType: 'bugfix',
+        changeKind: 'modify_existing',
+        complexity: 's',
+        filesTouchedEstimate: 2,
+        expectedLoCChange: 15,
+      },
+      repoContext: {
+        repoId: 'org/repo',
+        repoVisibility: 'private',
+        primaryLanguage: 'TypeScript',
+        languages: { TypeScript: 75, JavaScript: 25 },
+        frameworks: ['Next.js', 'React'],
+        buildSystem: 'webpack',
+        packageManager: 'npm',
+        testFrameworks: ['jest'],
+        ciProvider: 'github-actions',
+        repoSize: {
+          fileCount: 250,
+          loc: 15000,
+          dependencyCount: 45,
+        },
+        monorepo: false,
+      },
+    },
+  },
+  {
+    name: 'Scenario 11: Complex task with constraints (HOK-774)',
+    record: {
+      id: '550e8400-e29b-41d4-a716-446655440011',
+      schemaVersion: '1.0.0',
+      originalPrompt: 'Add payment processing with strict PCI compliance',
+      modelId: 'claude-opus-4-6',
+      modelVersion: 'claude-opus-4-6-20250514',
+      score: 0.7,
+      scoreBand: 'Assisted Success',
+      timeSeconds: 2400,
+      timestamp: '2026-02-24T16:00:00Z',
+      interventionRequired: true,
+      interventionCount: 3,
+      interventionDetails: [
+        'Fixed PCI compliance issue',
+        'Added missing error handling',
+        'Updated security headers',
+      ],
+      rationale: 'Agent implemented the payment flow but required security guidance.',
+      issueId: 'HOK-775',
+      prUrl: 'https://github.com/org/repo/pull/61',
+      taskContext: {
+        taskType: 'feature',
+        changeKind: 'create_new',
+        complexity: 'xl',
+        constraints: {
+          hasStrictStyle: true,
+          mustNotTouchX: false,
+          timeboxed: false,
+          noNetAccess: false,
+        },
+        filesTouchedEstimate: 10,
+        expectedLoCChange: 500,
+        requiresDomainKnowledge: 'payment',
+      },
+      repoContext: {
+        repoId: 'org/repo',
+        repoVisibility: 'oss',
+        primaryLanguage: 'Python',
+        languages: { Python: 90, JavaScript: 10 },
+        frameworks: ['Django'],
+        packageManager: 'pip',
+        testFrameworks: ['pytest'],
+        ciProvider: 'github-actions',
+        repoSize: {
+          fileCount: 500,
+          loc: 50000,
+          dependencyCount: 120,
+        },
+        monorepo: false,
+      },
+      difficultyBand: 'very_hard',
+      difficultySignals: {
+        locTouched: 520,
+        filesTouched: 12,
+      },
+      stratum: 'py_django_med',
+    },
+  },
 ];
 
 // ────────────────────────────────────────────────────────────────
@@ -755,6 +859,84 @@ test('RoutingCandidate structure has all expected fields', () => {
   assert.equal(typeof candidate.modelId, 'string');
   assert.equal(typeof candidate.modelVersion, 'string');
   assert.equal(typeof candidate.priceTier, 'string');
+});
+
+console.log('\n--- Outcome Decomposition Tests (HOK-776) ---\n');
+
+test('Record with outcomes field validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    outcomes: {
+      success: true,
+      ci: {
+        ran: true,
+        passed: true,
+        checks: [
+          { name: 'test', status: 'success', durationSeconds: 45 },
+          { name: 'lint', status: 'success' },
+        ],
+      },
+      tests: {
+        added: true,
+        passRate: 1.0,
+        durationSeconds: 30,
+      },
+      staticAnalysis: {
+        lintDelta: 0,
+        typecheckPassed: true,
+        securityFindingsDelta: 0,
+      },
+      review: {
+        humanReviewRequired: false,
+        rounds: 0,
+        approvals: 1,
+        changeRequests: 0,
+      },
+      rework: {
+        agentIterations: 2,
+        toolFailures: 0,
+      },
+      delivery: {
+        prCreated: true,
+        merged: true,
+        timeToMergeSeconds: 3600,
+      },
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record without outcomes field validates (backward compat)', () => {
+  // Existing scenarios don't have outcomes - should still validate
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  assert.ok(!('outcomes' in record), 'Scenario 1 should not have outcomes');
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with minimal outcomes (only required fields) validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    outcomes: {
+      success: false,
+      review: {
+        humanReviewRequired: true,
+        rounds: 2,
+        approvals: 0,
+        changeRequests: 1,
+      },
+      rework: {
+        agentIterations: 5,
+      },
+      delivery: {
+        prCreated: true,
+        merged: false,
+      },
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
 // ────────────────────────────────────────────────────────────────

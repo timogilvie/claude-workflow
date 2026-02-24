@@ -350,6 +350,330 @@
       "required": ["candidates", "chosen", "decisionPolicyVersion"],
       "additionalProperties": false
     },
+    "taskContext": {
+      "type": "object",
+      "description": "Task context metadata for routing and evaluation (HOK-774).",
+      "properties": {
+        "taskType": {
+          "type": "string",
+          "enum": ["bugfix", "feature", "refactor", "chore", "docs", "test", "infra"],
+          "description": "Type of task being performed."
+        },
+        "changeKind": {
+          "type": "string",
+          "enum": ["modify_existing", "create_new", "mixed"],
+          "description": "Whether the task modifies existing code, creates new code, or both."
+        },
+        "complexity": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Complexity score (0-1)."
+            },
+            {
+              "type": "string",
+              "enum": ["xs", "s", "m", "l", "xl"],
+              "description": "Complexity band classification."
+            }
+          ],
+          "description": "Complexity score (0-1) or band classification."
+        },
+        "constraints": {
+          "type": "object",
+          "description": "Special constraints that apply to this task.",
+          "properties": {
+            "hasStrictStyle": {
+              "type": "boolean",
+              "description": "Whether the task requires strict adherence to a style guide."
+            },
+            "mustNotTouchX": {
+              "type": "boolean",
+              "description": "Whether the task has modules/files that must not be touched."
+            },
+            "timeboxed": {
+              "type": "boolean",
+              "description": "Whether the task is timeboxed with a deadline."
+            },
+            "noNetAccess": {
+              "type": "boolean",
+              "description": "Whether the task must be completed without network access."
+            }
+          },
+          "additionalProperties": false
+        },
+        "filesTouchedEstimate": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Estimated number of files to be touched."
+        },
+        "expectedLoCChange": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Estimated lines of code to be changed."
+        },
+        "requiresDomainKnowledge": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Domain-specific knowledge required (e.g., 'payments', 'auth', 'k8s')."
+            },
+            {
+              "type": "boolean",
+              "description": "Whether domain knowledge is required (boolean form)."
+            }
+          ],
+          "description": "Domain-specific knowledge required."
+        }
+      },
+      "required": ["taskType", "changeKind", "complexity"],
+      "additionalProperties": false
+    },
+    "repoContext": {
+      "type": "object",
+      "description": "Repository context metadata for routing and evaluation (HOK-774).",
+      "properties": {
+        "repoId": {
+          "type": "string",
+          "description": "Stable identifier for the repository (hash or slug)."
+        },
+        "repoVisibility": {
+          "type": "string",
+          "enum": ["oss", "private"],
+          "description": "Whether the repository is open source or private."
+        },
+        "primaryLanguage": {
+          "type": "string",
+          "description": "Primary programming language."
+        },
+        "languages": {
+          "type": "object",
+          "description": "Map of language to percentage.",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "frameworks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Frameworks used in the repository."
+        },
+        "buildSystem": {
+          "type": "string",
+          "description": "Build system (e.g., 'webpack', 'vite', 'gradle')."
+        },
+        "packageManager": {
+          "type": "string",
+          "description": "Package manager (e.g., 'npm', 'yarn', 'pnpm')."
+        },
+        "testFrameworks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Test frameworks used."
+        },
+        "ciProvider": {
+          "type": "string",
+          "description": "CI provider (e.g., 'github-actions', 'gitlab-ci')."
+        },
+        "repoSize": {
+          "type": "object",
+          "description": "Repository size metrics.",
+          "properties": {
+            "fileCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total number of files in the repository."
+            },
+            "loc": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total lines of code in the repository."
+            },
+            "dependencyCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of dependencies (approximate)."
+            }
+          },
+          "required": ["fileCount", "loc", "dependencyCount"],
+          "additionalProperties": false
+        },
+        "monorepo": {
+          "type": "boolean",
+          "description": "Whether the repository is a monorepo."
+        }
+      },
+      "required": ["repoId", "repoVisibility", "primaryLanguage"],
+      "additionalProperties": false
+    },
+    "outcomes": {
+      "type": "object",
+      "description": "Decomposed outcome components for granular eval analysis.",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "description": "Hard gate: whether the task succeeded (derived from score)."
+        },
+        "ci": {
+          "type": "object",
+          "description": "CI/CD check results.",
+          "properties": {
+            "ran": {
+              "type": "boolean",
+              "description": "Whether CI checks were triggered for this PR."
+            },
+            "passed": {
+              "type": "boolean",
+              "description": "Whether all CI checks passed."
+            },
+            "checks": {
+              "type": "array",
+              "description": "Individual check results.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Check name (e.g. tests, lint, build)."
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": ["success", "failure", "pending", "skipped", "cancelled"],
+                    "description": "Check status."
+                  },
+                  "durationSeconds": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Check duration in seconds (if available)."
+                  }
+                },
+                "required": ["name", "status"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["ran", "passed", "checks"],
+          "additionalProperties": false
+        },
+        "tests": {
+          "type": "object",
+          "description": "Test additions and results.",
+          "properties": {
+            "added": {
+              "type": "boolean",
+              "description": "Whether new test files were added in this PR."
+            },
+            "passRate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Test pass rate (0-1), if test results are available."
+            },
+            "durationSeconds": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Total test execution time in seconds, if available."
+            }
+          },
+          "required": ["added"],
+          "additionalProperties": false
+        },
+        "staticAnalysis": {
+          "type": "object",
+          "description": "Static analysis results.",
+          "properties": {
+            "lintDelta": {
+              "type": "number",
+              "description": "Change in lint errors (negative = improvement, positive = regression)."
+            },
+            "typecheckPassed": {
+              "type": "boolean",
+              "description": "Whether typecheck passed."
+            },
+            "securityFindingsDelta": {
+              "type": "number",
+              "description": "Change in security findings (negative = improvement)."
+            }
+          },
+          "additionalProperties": false
+        },
+        "review": {
+          "type": "object",
+          "description": "Human review activity on the PR.",
+          "properties": {
+            "humanReviewRequired": {
+              "type": "boolean",
+              "description": "Whether human review was required (any review comments or changes requested)."
+            },
+            "rounds": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of distinct review submission rounds."
+            },
+            "approvals": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of approval reviews."
+            },
+            "changeRequests": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of change request reviews."
+            }
+          },
+          "required": ["humanReviewRequired", "rounds", "approvals", "changeRequests"],
+          "additionalProperties": false
+        },
+        "rework": {
+          "type": "object",
+          "description": "Agent rework and failures during implementation.",
+          "properties": {
+            "agentIterations": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of agent iterations (session turns, commits, or retries)."
+            },
+            "toolFailures": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of tool/API call failures, if tracked."
+            }
+          },
+          "required": ["agentIterations"],
+          "additionalProperties": false
+        },
+        "delivery": {
+          "type": "object",
+          "description": "PR delivery status.",
+          "properties": {
+            "prCreated": {
+              "type": "boolean",
+              "description": "Whether a PR was created."
+            },
+            "merged": {
+              "type": "boolean",
+              "description": "Whether the PR was merged."
+            },
+            "timeToMergeSeconds": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Time from PR creation to merge in seconds, if merged."
+            }
+          },
+          "required": ["prCreated", "merged"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["success", "review", "rework", "delivery"],
+      "additionalProperties": false
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
