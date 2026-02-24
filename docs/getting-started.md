@@ -14,7 +14,7 @@ title: Getting Started
 ## 1) Install Wavemill
 
 ```bash
-git clone <repo-url> wavemill
+git clone https://github.com/timogilvie/wavemill/ wavemill
 cd wavemill
 ./install.sh
 wavemill help

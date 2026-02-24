@@ -1,6 +1,8 @@
 title: Wavemill
+description: Wavemill helps developers build software more effectively with LLMs.
 markdown: kramdown
 theme: minima
+github_username: timogilvie
 header_pages:
   - getting-started.md
   - mill-mode.md
