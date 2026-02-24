@@ -1,3 +1,8 @@
 title: Wavemill
 markdown: kramdown
 theme: minima
+header_pages:
+  - getting-started.md
+  - feature-workflow.md
+  - mill-mode.md
+  - troubleshooting.md
