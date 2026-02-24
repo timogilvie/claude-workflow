@@ -19,6 +19,7 @@ import {
   loadPenalties,
 } from './intervention-detector.ts';
 import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
+import { analyzePrDifficulty } from './difficulty-analyzer.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -149,7 +150,32 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     const totalInterventions = interventionSummary.interventions.reduce((sum, e) => sum + e.count, 0);
     console.log(`Post-completion eval: ${totalInterventions} intervention(s) detected`);
 
-    // 4. Run eval
+    // 4. Compute difficulty metrics from PR diff (HOK-777)
+    let difficultyData: ReturnType<typeof analyzePrDifficulty> = null;
+    if (ctx.prNumber && prReviewOutput) {
+      try {
+        console.log('Post-completion eval: analyzing PR difficulty...');
+        difficultyData = analyzePrDifficulty({
+          prDiff: prReviewOutput,
+          prNumber: ctx.prNumber,
+          repoDir,
+        });
+        if (difficultyData) {
+          console.log(
+            `Post-completion eval: difficulty ${difficultyData.difficultyBand} ` +
+            `(${difficultyData.difficultySignals.locTouched} LOC, ` +
+            `${difficultyData.difficultySignals.filesTouched} files, ` +
+            `stratum: ${difficultyData.stratum})`
+          );
+        }
+      } catch (diffErr: unknown) {
+        const diffMsg = diffErr instanceof Error ? diffErr.message : String(diffErr);
+        console.warn(`Post-completion eval: difficulty analysis failed — ${diffMsg}`);
+        // Non-blocking: continue without difficulty data
+      }
+    }
+
+    // 5. Run eval
     console.log('Post-completion eval: invoking LLM judge...');
     const record = await evaluateTask({
       taskPrompt,
@@ -164,7 +190,14 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     // Set agentType unconditionally so eval records always reflect which agent ran
     record.agentType = ctx.agentType || 'claude';
 
-    // 5. Compute workflow cost from agent session data
+    // 6. Attach difficulty data to record (HOK-777)
+    if (difficultyData) {
+      record.difficultyBand = difficultyData.difficultyBand;
+      record.difficultySignals = difficultyData.difficultySignals;
+      record.stratum = difficultyData.stratum;
+    }
+
+    // 7. Compute workflow cost from agent session data
     //    Pricing lives in the wavemill repo config, not the target repo,
     //    so resolve it from this script's location.
     if (ctx.worktreePath && branchName) {
@@ -195,11 +228,11 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       }
     }
 
-    // 6. Persist via eval-persistence
+    // 8. Persist via eval-persistence
     const evalsDir = resolveEvalsDir(repoDir);
     appendEvalRecord(record, evalsDir ? { dir: evalsDir } : undefined);
 
-    // 7. Print summary
+    // 9. Print summary
     const scoreDisplay = (record.score as number).toFixed(2);
     const costSuffix = record.workflowCost !== undefined
       ? `, workflow cost: $${record.workflowCost.toFixed(4)}`
