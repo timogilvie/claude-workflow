@@ -145,6 +145,50 @@ export interface TokenUsage {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Intervention Record
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Intervention type enum — describes the reason for human intervention.
+ */
+export type InterventionType =
+  | 'clarification'
+  | 'bugfix'
+  | 'manual_merge'
+  | 'environment_fix'
+  | 'prompt_edit'
+  | 'scope_change'
+  | 'rollback';
+
+/**
+ * Intervention severity enum — indicates impact level.
+ */
+export type InterventionSeverity = 'low' | 'med' | 'high';
+
+/**
+ * A single structured intervention event.
+ *
+ * Captures when, why, and how a human intervened during task execution.
+ * Enables ML routing to learn which task characteristics lead to babysitting.
+ */
+export interface InterventionRecord {
+  /** ISO 8601 datetime when the intervention occurred */
+  timestamp: string;
+
+  /** Type of intervention (reason) */
+  type: InterventionType;
+
+  /** Severity/impact of the intervention */
+  severity: InterventionSeverity;
+
+  /** Human-readable description of what was done */
+  note: string;
+
+  /** Optional time spent on this intervention in seconds */
+  timeSpentSeconds?: number;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Difficulty Classification (HOK-777)
 // ────────────────────────────────────────────────────────────────
 
@@ -238,8 +282,11 @@ export interface EvalRecord {
   /** Number of distinct human interventions during the task */
   interventionCount: number;
 
-  /** Brief description of each human intervention */
+  /** Brief description of each human intervention (legacy - prefer interventions field) */
   interventionDetails: string[];
+
+  /** Structured intervention events (machine-usable) */
+  interventions?: InterventionRecord[];
 
   /** Free-text rationale from the LLM judge explaining the score */
   rationale: string;
