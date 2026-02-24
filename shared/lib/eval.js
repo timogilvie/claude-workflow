@@ -69,7 +69,8 @@ function loadJudgeConfig() {
  * @typedef {Object} EvalInput
  * @property {string} taskPrompt - The original task description
  * @property {string} prReviewOutput - PR review text / diff summary
- * @property {InterventionMeta[]} [interventions] - Optional intervention metadata
+ * @property {InterventionMeta[]} [interventions] - Optional intervention metadata (legacy format)
+ * @property {import('./eval-schema.ts').InterventionRecord[]} [interventionRecords] - Structured intervention events (new format)
  * @property {string} [interventionText] - Pre-formatted structured intervention text for the judge (overrides interventions list formatting)
  * @property {string} [issueId] - Linear issue ID (e.g. HOK-698)
  * @property {string} [prUrl] - Pull request URL
@@ -238,12 +239,21 @@ export async function evaluateTask(input, { _callFn } = {}) {
     taskPrompt,
     prReviewOutput,
     interventions = [],
+    interventionRecords,
     interventionText,
     issueId,
     prUrl,
     timeSeconds = 0,
     metadata = {},
   } = input;
+
+  // Determine which intervention format to use
+  // If interventionRecords provided, prefer it; else use legacy interventions
+  const hasStructuredInterventions = interventionRecords && interventionRecords.length > 0;
+  const interventionsToUse = hasStructuredInterventions ? interventionRecords : interventions;
+  const interventionCount = hasStructuredInterventions
+    ? interventionRecords.length
+    : interventions.length;
 
   // Resolve judge model: env var > config file > default
   const judgeConfig = loadJudgeConfig();
@@ -288,9 +298,12 @@ export async function evaluateTask(input, { _callFn } = {}) {
         scoreBand: band.label,
         timeSeconds,
         timestamp: new Date().toISOString(),
-        interventionRequired: interventions.length > 0,
-        interventionCount: interventions.length,
-        interventionDetails: interventions.map((i) => i.description),
+        interventionRequired: interventionCount > 0,
+        interventionCount,
+        interventionDetails: hasStructuredInterventions
+          ? interventionRecords.map((i) => i.note)
+          : interventions.map((i) => i.description),
+        ...(hasStructuredInterventions && { interventions: interventionRecords }),
         rationale,
         ...(issueId && { issueId }),
         ...(prUrl && { prUrl }),
