@@ -13,6 +13,11 @@ import { execSync } from 'child_process';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { resolveProjectsDir } from './workflow-cost.ts';
+import type {
+  InterventionRecord,
+  InterventionType,
+  InterventionSeverity,
+} from './eval-schema.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -36,6 +41,7 @@ export interface InterventionEvent {
   type: 'review_comment' | 'post_pr_commit' | 'manual_edit' | 'test_fix' | 'session_redirect';
   count: number;
   details: string[];
+  timestamps?: string[]; // ISO 8601 timestamps parallel to details array
 }
 
 export interface InterventionSummary {
@@ -105,7 +111,7 @@ export function loadPenalties(repoDir?: string): InterventionPenalties {
  */
 export function detectReviewComments(prNumber: string, repoDir?: string): InterventionEvent {
   const cwd = repoDir || process.cwd();
-  const event: InterventionEvent = { type: 'review_comment', count: 0, details: [] };
+  const event: InterventionEvent = { type: 'review_comment', count: 0, details: [], timestamps: [] };
 
   try {
     // Fetch reviews (top-level review submissions with state)
@@ -122,13 +128,14 @@ export function detectReviewComments(prNumber: string, repoDir?: string): Interv
       for (const r of changeRequests) {
         if (r.body && r.body.trim()) {
           event.details.push(`[${r.state}] ${r.author}: ${r.body.slice(0, 200)}`);
+          event.timestamps!.push(r.submittedAt);
         }
       }
     }
 
     // Fetch inline review comments (code-level feedback)
     const commentsRaw = execSync(
-      `gh api repos/{owner}/{repo}/pulls/${prNumber}/comments --jq '[.[] | {author: .user.login, body: .body, path: .path, line: .line}]'`,
+      `gh api repos/{owner}/{repo}/pulls/${prNumber}/comments --jq '[.[] | {author: .user.login, body: .body, path: .path, line: .line, createdAt: .created_at}]'`,
       { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
     ).trim();
 
@@ -137,6 +144,7 @@ export function detectReviewComments(prNumber: string, repoDir?: string): Interv
       for (const c of comments) {
         const location = c.path ? ` (${c.path}:${c.line || '?'})` : '';
         event.details.push(`[INLINE] ${c.author}${location}: ${c.body.slice(0, 200)}`);
+        event.timestamps!.push(c.createdAt || new Date().toISOString());
       }
     }
 
@@ -179,7 +187,7 @@ export function fetchPrCommits(prNumber: string, repoDir?: string): PrCommit[] {
  */
 export function detectPostPrCommits(prNumber: string, repoDir?: string, prCommits?: PrCommit[]): InterventionEvent {
   const cwd = repoDir || process.cwd();
-  const event: InterventionEvent = { type: 'post_pr_commit', count: 0, details: [] };
+  const event: InterventionEvent = { type: 'post_pr_commit', count: 0, details: [], timestamps: [] };
 
   try {
     // Get PR creation timestamp
@@ -204,6 +212,7 @@ export function detectPostPrCommits(prNumber: string, repoDir?: string, prCommit
 
     for (const c of postPrCommits) {
       event.details.push(`${c.sha.slice(0, 7)}: ${c.message.split('\n')[0].slice(0, 200)}`);
+      event.timestamps!.push(c.date);
     }
     event.count = postPrCommits.length;
   } catch (err: unknown) {
@@ -253,7 +262,7 @@ export function detectManualEdits(
   prCommits?: PrCommit[],
 ): InterventionEvent {
   const cwd = repoDir || process.cwd();
-  const event: InterventionEvent = { type: 'manual_edit', count: 0, details: [] };
+  const event: InterventionEvent = { type: 'manual_edit', count: 0, details: [], timestamps: [] };
 
   try {
     if (prNumber) {
@@ -264,12 +273,13 @@ export function detectManualEdits(
         const body = c.message.includes('\n') ? c.message.slice(c.message.indexOf('\n') + 1) : '';
         if (!isAgentCommit(subject, c.author, body)) {
           event.details.push(`${c.sha.slice(0, 7)}: ${subject} (by ${c.author})`);
+          event.timestamps!.push(c.date);
         }
       }
     } else {
       // Fallback: git log (less reliable post-merge, but works without a PR)
       const commitsRaw = execSync(
-        `git log ${baseBranch}..${branchName} --format='%H|%s|%an|%b%x00' 2>/dev/null || echo ''`,
+        `git log ${baseBranch}..${branchName} --format='%H|%s|%an|%ad|%b%x00' --date=iso-strict 2>/dev/null || echo ''`,
         { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 10_000 }
       ).trim();
 
@@ -278,11 +288,12 @@ export function detectManualEdits(
       const records = commitsRaw.split('\0').filter((r) => r.trim());
       for (const record of records) {
         const trimmed = record.trim();
-        const [sha, subject, author, ...bodyParts] = trimmed.split('|');
+        const [sha, subject, author, date, ...bodyParts] = trimmed.split('|');
         const body = bodyParts.join('|');
 
         if (!isAgentCommit(subject, author, body) && sha) {
           event.details.push(`${sha.slice(0, 7)}: ${subject} (by ${author})`);
+          event.timestamps!.push(date || new Date().toISOString());
         }
       }
     }
@@ -310,7 +321,7 @@ export function detectTestFixes(
   prCommits?: PrCommit[],
 ): InterventionEvent {
   const cwd = repoDir || process.cwd();
-  const event: InterventionEvent = { type: 'test_fix', count: 0, details: [] };
+  const event: InterventionEvent = { type: 'test_fix', count: 0, details: [], timestamps: [] };
 
   const testFixPatterns = [
     /fix.*test/i,
@@ -329,11 +340,12 @@ export function detectTestFixes(
         const subject = c.message.split('\n')[0];
         if (testFixPatterns.some((p) => p.test(subject))) {
           event.details.push(`${c.sha.slice(0, 7)}: ${subject}`);
+          event.timestamps!.push(c.date);
         }
       }
     } else {
       const commitsRaw = execSync(
-        `git log ${baseBranch}..${branchName} --format='%H|%s' 2>/dev/null || echo ''`,
+        `git log ${baseBranch}..${branchName} --format='%H|%s|%ad' --date=iso-strict 2>/dev/null || echo ''`,
         { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 10_000 }
       ).trim();
 
@@ -342,11 +354,11 @@ export function detectTestFixes(
       const lines = commitsRaw.split('\n').filter(Boolean);
       for (const line of lines) {
         const trimmed = line.trim();
-        const [sha, ...subjectParts] = trimmed.split('|');
-        const subject = subjectParts.join('|');
+        const [sha, subject, date] = trimmed.split('|');
 
         if (testFixPatterns.some((p) => p.test(subject))) {
           event.details.push(`${sha.slice(0, 7)}: ${subject}`);
+          event.timestamps!.push(date || new Date().toISOString());
         }
       }
     }
@@ -372,7 +384,7 @@ export function detectTestFixes(
  * task prompt injected by wavemill — all subsequent ones are user redirections.
  */
 export function detectSessionRedirects(worktreePath: string, branchName: string): InterventionEvent {
-  const event: InterventionEvent = { type: 'session_redirect', count: 0, details: [] };
+  const event: InterventionEvent = { type: 'session_redirect', count: 0, details: [], timestamps: [] };
 
   try {
     const projectsDir = resolveProjectsDir(worktreePath);
@@ -387,7 +399,11 @@ export function detectSessionRedirects(worktreePath: string, branchName: string)
       return event;
     }
 
-    const userMessages: string[] = [];
+    interface UserMessage {
+      content: string;
+      timestamp: string;
+    }
+    const userMessages: UserMessage[] = [];
 
     for (const filePath of sessionFiles) {
       try {
@@ -414,7 +430,13 @@ export function detectSessionRedirects(worktreePath: string, branchName: string)
           // Tool results / approvals have content as an array.
           if (typeof message.content !== 'string') continue;
 
-          userMessages.push(message.content as string);
+          const timestamp = typeof entry.timestamp === 'string'
+            ? entry.timestamp
+            : new Date().toISOString();
+          userMessages.push({
+            content: message.content as string,
+            timestamp,
+          });
         }
       } catch {
         continue;
@@ -424,8 +446,9 @@ export function detectSessionRedirects(worktreePath: string, branchName: string)
     // Skip the first string-content user message (automated task prompt from wavemill)
     const redirections = userMessages.slice(1);
 
-    for (const text of redirections) {
-      event.details.push(text.slice(0, 200));
+    for (const msg of redirections) {
+      event.details.push(msg.content.slice(0, 200));
+      event.timestamps!.push(msg.timestamp);
     }
     event.count = redirections.length;
   } catch (err: unknown) {
@@ -536,7 +559,7 @@ export function detectAllInterventions(opts: DetectOptions): InterventionSummary
 
 /**
  * Convert an InterventionSummary to the InterventionMeta[] format
- * expected by evaluateTask() in eval.js.
+ * expected by evaluateTask() in eval.js (legacy format).
  */
 export function toInterventionMeta(summary: InterventionSummary): InterventionMeta[] {
   const meta: InterventionMeta[] = [];
@@ -554,6 +577,76 @@ export function toInterventionMeta(summary: InterventionSummary): InterventionMe
   }
 
   return meta;
+}
+
+/**
+ * Map detection event type to semantic intervention type.
+ */
+function mapToInterventionType(detectionType: string, detail: string): InterventionType {
+  switch (detectionType) {
+    case 'review_comment':
+      // If review requested changes, likely a bugfix; otherwise clarification
+      return detail.includes('CHANGES_REQUESTED') ? 'bugfix' : 'clarification';
+    case 'post_pr_commit':
+      return 'bugfix';
+    case 'manual_edit':
+      // Could be manual_merge or bugfix depending on context
+      // Default to manual_merge, but check if it looks like a fix
+      if (/fix|repair|correct/i.test(detail)) {
+        return 'bugfix';
+      }
+      return 'manual_merge';
+    case 'test_fix':
+      return 'bugfix';
+    case 'session_redirect':
+      // Could be scope_change or clarification
+      // Default to scope_change for user redirections
+      return 'scope_change';
+    default:
+      return 'clarification';
+  }
+}
+
+/**
+ * Map legacy severity to new severity enum.
+ */
+function mapToSeverity(legacySeverity: 'minor' | 'major'): InterventionSeverity {
+  return legacySeverity === 'minor' ? 'low' : 'med';
+}
+
+/**
+ * Convert an InterventionSummary to structured InterventionRecord[] format.
+ *
+ * This is the new structured format that enables ML routing to learn from
+ * intervention patterns.
+ */
+export function toInterventionRecords(summary: InterventionSummary): InterventionRecord[] {
+  const records: InterventionRecord[] = [];
+
+  for (const event of summary.interventions) {
+    if (event.count === 0) continue;
+
+    const legacySeverity: 'minor' | 'major' =
+      event.type === 'manual_edit' || event.type === 'post_pr_commit' || event.type === 'session_redirect'
+        ? 'major' : 'minor';
+
+    const severity = mapToSeverity(legacySeverity);
+
+    for (let i = 0; i < event.details.length; i++) {
+      const detail = event.details[i];
+      const timestamp = event.timestamps?.[i] || new Date().toISOString();
+      const type = mapToInterventionType(event.type, detail);
+
+      records.push({
+        timestamp,
+        type,
+        severity,
+        note: `[${event.type}] ${detail}`,
+      });
+    }
+  }
+
+  return records;
 }
 
 /**

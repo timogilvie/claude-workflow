@@ -23,9 +23,13 @@ import { appendEvalRecord } from '../shared/lib/eval-persistence.ts';
 import {
   detectAllInterventions,
   toInterventionMeta,
+  toInterventionRecords,
   formatForJudge,
   loadPenalties,
 } from '../shared/lib/intervention-detector.ts';
+import { analyzePrDifficulty } from '../shared/lib/difficulty-analyzer.ts';
+import { analyzeTaskContext } from '../shared/lib/task-context-analyzer.ts';
+import { analyzeRepoContext } from '../shared/lib/repo-context-analyzer.ts';
 import {
   collectCiOutcome,
   collectTestsOutcome,
@@ -280,8 +284,20 @@ function formatEvalRecord(record) {
   // Interventions
   if (record.interventionRequired) {
     lines.push(`  ${BOLD}${YELLOW}Interventions:${NC} ${record.interventionCount}`);
-    for (const detail of record.interventionDetails) {
-      lines.push(`    ${YELLOW}-${NC} ${detail}`);
+
+    // Show structured interventions if available
+    if (record.interventions && record.interventions.length > 0) {
+      for (const intervention of record.interventions) {
+        const severityColor = intervention.severity === 'high' ? RED : intervention.severity === 'med' ? YELLOW : DIM;
+        const timestamp = new Date(intervention.timestamp).toLocaleTimeString();
+        lines.push(`    ${severityColor}[${intervention.severity.toUpperCase()}]${NC} ${YELLOW}${intervention.type}${NC} @ ${timestamp}`);
+        lines.push(`      ${DIM}${intervention.note}${NC}`);
+      }
+    } else {
+      // Fallback to legacy interventionDetails
+      for (const detail of record.interventionDetails) {
+        lines.push(`    ${YELLOW}-${NC} ${detail}`);
+      }
     }
     lines.push('');
   } else {
@@ -384,11 +400,89 @@ async function main() {
       agentType: args.agent,
     });
     const interventionMeta = toInterventionMeta(interventionSummary);
+    const interventionRecords = toInterventionRecords(interventionSummary);
     const penalties = loadPenalties(ctx.repoDir);
     const interventionText = formatForJudge(interventionSummary, penalties);
 
     const totalInterventions = interventionSummary.interventions.reduce((sum, e) => sum + e.count, 0);
     console.log(`  Detected ${totalInterventions} intervention event(s) (weighted penalty: ${interventionSummary.totalInterventionScore})`);
+
+    // 3a. Analyze difficulty from PR diff (HOK-777)
+    let difficultyData = null;
+    if (ctx.prNumber && ctx.prReviewOutput) {
+      try {
+        console.log('\nAnalyzing PR difficulty...');
+        difficultyData = analyzePrDifficulty({
+          prDiff: ctx.prReviewOutput,
+          prNumber: ctx.prNumber,
+          repoDir: ctx.repoDir,
+        });
+        if (difficultyData) {
+          console.log(
+            `  Difficulty: ${difficultyData.difficultyBand} ` +
+            `(${difficultyData.difficultySignals.locTouched} LOC, ` +
+            `${difficultyData.difficultySignals.filesTouched} files, ` +
+            `stratum: ${difficultyData.stratum})`
+          );
+        }
+      } catch (diffErr) {
+        console.warn(`  Warning: difficulty analysis failed — ${diffErr.message}`);
+      }
+    }
+
+    // 3b. Analyze task context (HOK-774)
+    let taskContextData = null;
+    if (ctx.issueId || ctx.prReviewOutput) {
+      try {
+        console.log('\nAnalyzing task context...');
+        // Fetch issue data for task context
+        let issueData;
+        if (ctx.issueId) {
+          try {
+            const toolPath = path.resolve(__dirname, 'get-issue-json.ts');
+            const raw = execSync(
+              `npx tsx "${toolPath}" "${ctx.issueId}" 2>/dev/null | sed '/^\\[dotenv/d'`,
+              { encoding: 'utf-8', cwd: ctx.repoDir, shell: '/bin/bash' }
+            ).trim();
+            issueData = JSON.parse(raw);
+          } catch {
+            // Issue fetch failed - continue with partial data
+          }
+        }
+
+        taskContextData = analyzeTaskContext({
+          issue: issueData,
+          prDiff: ctx.prReviewOutput,
+          locTouched: difficultyData?.difficultySignals.locTouched,
+          filesTouched: difficultyData?.difficultySignals.filesTouched,
+        });
+
+        if (taskContextData) {
+          console.log(
+            `  Task context: ${taskContextData.taskType} / ` +
+            `${taskContextData.changeKind} / complexity ${taskContextData.complexity}`
+          );
+        }
+      } catch (taskErr) {
+        console.warn(`  Warning: task context analysis failed — ${taskErr.message}`);
+      }
+    }
+
+    // 3c. Analyze repo context (HOK-774)
+    let repoContextData = null;
+    try {
+      console.log('\nAnalyzing repo context...');
+      repoContextData = analyzeRepoContext(ctx.repoDir);
+      if (repoContextData) {
+        console.log(
+          `  Repo context: ${repoContextData.primaryLanguage} / ` +
+          `${repoContextData.repoVisibility} / ` +
+          `${repoContextData.repoSize?.fileCount || 0} files`
+        );
+      }
+    } catch (repoErr) {
+      console.warn(`  Warning: repo context analysis failed — ${repoErr.message}`);
+    }
 
     // 4. Collect outcome components
     console.log('\nCollecting outcome components...');
@@ -422,6 +516,7 @@ async function main() {
       taskPrompt: ctx.taskPrompt,
       prReviewOutput: ctx.prReviewOutput,
       interventions: interventionMeta,
+      interventionRecords,
       interventionText,
       issueId: ctx.issueId || undefined,
       prUrl: ctx.prUrl || undefined,
@@ -438,6 +533,19 @@ async function main() {
     if (args.solutionModel) {
       record.modelId = args.solutionModel;
       record.modelVersion = args.solutionModel;
+    }
+
+    // 5d. Attach difficulty, task context, and repo context to record
+    if (difficultyData) {
+      record.difficultyBand = difficultyData.difficultyBand;
+      record.difficultySignals = difficultyData.difficultySignals;
+      record.stratum = difficultyData.stratum;
+    }
+    if (taskContextData) {
+      record.taskContext = taskContextData;
+    }
+    if (repoContextData) {
+      record.repoContext = repoContextData;
     }
 
     // 6. Persist eval record to disk
