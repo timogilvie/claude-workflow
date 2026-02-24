@@ -222,6 +222,49 @@
         "additionalProperties": false
       }
     },
+    "difficultyBand": {
+      "type": "string",
+      "enum": ["trivial", "easy", "medium", "hard", "very_hard"],
+      "description": "Difficulty band classification derived from signals."
+    },
+    "difficultySignals": {
+      "type": "object",
+      "description": "Quantifiable difficulty metrics computed from PR data.",
+      "properties": {
+        "locTouched": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Lines of code touched (additions + deletions)."
+        },
+        "filesTouched": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of files modified in the PR."
+        },
+        "dependencyDepth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Dependency depth (optional)."
+        },
+        "testRuntime": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Test runtime in seconds (optional)."
+        },
+        "moduleHotspotScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Module hotspot score based on git history (optional)."
+        }
+      },
+      "required": ["locTouched", "filesTouched"],
+      "additionalProperties": false
+    },
+    "stratum": {
+      "type": "string",
+      "description": "Tech stack and size stratum (e.g., 'ts_nextjs_small', 'py_django_med')."
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
