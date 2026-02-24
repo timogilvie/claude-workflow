@@ -1590,6 +1590,8 @@ while :; do
         fi
 
         if read -t "$POLL_SECONDS" -r REPLY; then
+          # Strip ANSI escape sequences (e.g. arrow keys buffered during wait)
+          REPLY=$(printf '%s' "$REPLY" | LC_ALL=C tr -d '\033' | sed 's/\[[A-Za-z0-9;]*//g')
           if [[ "$REPLY" =~ ^[Qq] ]]; then
             if (( active_count == 0 )); then
               log "Quitting."
@@ -1602,6 +1604,11 @@ while :; do
             # Parse user selection and launch tasks (up to free_slots)
             launched=0
             for n in $REPLY; do
+              # Validate n is a positive integer to prevent sed injection
+              if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
+                log_warn "Invalid selection: $n (must be a number)"
+                continue
+              fi
               if (( launched >= free_slots )); then
                 log_warn "No more free slots — skipping remaining selections"
                 break
