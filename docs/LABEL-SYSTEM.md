@@ -1,4 +1,6 @@
-# Labels
+---
+title: Labels
+---
 
 Labels on Linear issues help identify which tasks can safely run in parallel in autonomous workflows.
 
