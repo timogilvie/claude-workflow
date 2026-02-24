@@ -46,3 +46,5 @@ wavemill expand
 ```
 
 For full setup, go to [Getting Started](getting-started.md).
+
+Wavemill is open source under the [MIT License](https://github.com/timogilvie/wavemill/blob/main/LICENSE).
