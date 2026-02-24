@@ -50,6 +50,8 @@ function parseArgs(argv) {
       args.agent = argv[++i];
     } else if (argv[i] === '--solution-model' && argv[i + 1]) {
       args.solutionModel = argv[++i];
+    } else if (argv[i] === '--routing-decision' && argv[i + 1]) {
+      args.routingDecision = argv[++i];
     } else if (argv[i] === '--help' || argv[i] === '-h') {
       args.help = true;
     }
@@ -71,6 +73,7 @@ Options:
   --repo-dir DIR  Repository directory (default: current directory)
   --agent TYPE    Agent type: claude or codex (default: claude)
   --solution-model ID  Model that produced the solution (e.g., codex-1, claude-opus-4-6)
+  --routing-decision JSON  Routing decision metadata (JSON string)
   --help, -h      Show this help message
 
 Examples:
@@ -353,6 +356,17 @@ async function main() {
     const totalInterventions = interventionSummary.interventions.reduce((sum, e) => sum + e.count, 0);
     console.log(`  Detected ${totalInterventions} intervention event(s) (weighted penalty: ${interventionSummary.totalInterventionScore})`);
 
+    // 3b. Parse routing decision if provided
+    let routingDecision = undefined;
+    if (args.routingDecision) {
+      try {
+        routingDecision = JSON.parse(args.routingDecision);
+        console.log(`  Routing decision: ${routingDecision.candidates.length} candidates, policy: ${routingDecision.decisionPolicyVersion}`);
+      } catch (err) {
+        console.error(`Warning: failed to parse routing decision JSON: ${err.message}`);
+      }
+    }
+
     // 4. Invoke judge via shared evaluateTask()
     console.log('\nInvoking LLM judge...');
     const record = await evaluateTask({
@@ -363,6 +377,7 @@ async function main() {
       interventionText,
       issueId: ctx.issueId || undefined,
       prUrl: ctx.prUrl || undefined,
+      routingDecision,
       metadata: { interventionSummary },
     });
 

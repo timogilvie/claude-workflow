@@ -281,6 +281,136 @@ const scenarios: { name: string; record: EvalRecord }[] = [
       stratum: 'unknown_small',
     },
   },
+  {
+    name: 'Scenario 7: Router decision with full candidate details (HOK-775)',
+    record: {
+      id: '550e8400-e29b-41d4-a716-446655440007',
+      schemaVersion: '1.0.0',
+      originalPrompt: 'Add search filtering to product catalog page',
+      modelId: 'claude-sonnet-4-5-20250929',
+      modelVersion: 'claude-sonnet-4-5-20250929',
+      score: 0.9,
+      scoreBand: 'Minor Feedback',
+      timeSeconds: 600,
+      timestamp: '2026-02-14T16:00:00Z',
+      interventionRequired: true,
+      interventionCount: 1,
+      interventionDetails: ['Adjusted filter UI alignment'],
+      rationale: 'Feature implemented correctly with minor UI adjustment needed.',
+      issueId: 'HOK-775',
+      prUrl: 'https://github.com/org/repo/pull/52',
+      routingDecision: {
+        candidates: [
+          {
+            agentType: 'claude',
+            modelId: 'claude-haiku-4-5-20251001',
+            modelVersion: 'claude-haiku-4-5-20251001',
+            priceTier: 'low',
+          },
+          {
+            agentType: 'claude',
+            modelId: 'claude-sonnet-4-5-20250929',
+            modelVersion: 'claude-sonnet-4-5-20250929',
+            priceTier: 'medium',
+          },
+          {
+            agentType: 'claude',
+            modelId: 'claude-opus-4-6',
+            modelVersion: 'claude-opus-4-6-20250514',
+            priceTier: 'high',
+          },
+        ],
+        chosen: 1, // chose sonnet (index 1)
+        decisionPolicyVersion: 'router-v1.0',
+        decisionRationale:
+          'Medium complexity task with UI work. Balanced cost/quality tradeoff. Haiku insufficient for component design, Opus overkill.',
+      },
+    },
+  },
+  {
+    name: 'Scenario 8: Router decision with chosen as object reference (HOK-775)',
+    record: {
+      id: '550e8400-e29b-41d4-a716-446655440008',
+      schemaVersion: '1.0.0',
+      originalPrompt: 'Implement Redis caching layer for API endpoints',
+      modelId: 'claude-opus-4-6',
+      modelVersion: 'claude-opus-4-6-20250514',
+      score: 1.0,
+      scoreBand: 'Full Success',
+      timeSeconds: 1800,
+      timestamp: '2026-02-14T17:00:00Z',
+      interventionRequired: false,
+      interventionCount: 0,
+      interventionDetails: [],
+      rationale: 'Complex infrastructure task completed autonomously with proper error handling and cache invalidation.',
+      issueId: 'HOK-780',
+      prUrl: 'https://github.com/org/repo/pull/53',
+      routingDecision: {
+        candidates: [
+          {
+            agentType: 'claude',
+            modelId: 'claude-sonnet-4-5-20250929',
+            priceTier: 'medium',
+          },
+          {
+            agentType: 'claude',
+            modelId: 'claude-opus-4-6',
+            priceTier: 'high',
+          },
+          {
+            agentType: 'codex',
+            modelId: 'gpt-5.3-codex',
+            priceTier: 'medium',
+          },
+        ],
+        chosen: {
+          agentType: 'claude',
+          modelId: 'claude-opus-4-6',
+          modelVersion: 'claude-opus-4-6-20250514',
+          priceTier: 'high',
+        },
+        decisionPolicyVersion: 'router-v1.0',
+        decisionRationale:
+          'High complexity infrastructure task requiring deep reasoning about distributed systems and edge cases.',
+      },
+    },
+  },
+  {
+    name: 'Scenario 9: Router decision minimal (no rationale) (HOK-775)',
+    record: {
+      id: '550e8400-e29b-41d4-a716-446655440009',
+      schemaVersion: '1.0.0',
+      originalPrompt: 'Update button color in theme config',
+      modelId: 'claude-haiku-4-5',
+      modelVersion: 'claude-haiku-4-5-20251001',
+      score: 1.0,
+      scoreBand: 'Full Success',
+      timeSeconds: 30,
+      timestamp: '2026-02-14T18:00:00Z',
+      interventionRequired: false,
+      interventionCount: 0,
+      interventionDetails: [],
+      rationale: 'Simple config change completed correctly.',
+      issueId: 'HOK-781',
+      prUrl: 'https://github.com/org/repo/pull/54',
+      routingDecision: {
+        candidates: [
+          {
+            agentType: 'claude',
+            modelId: 'claude-haiku-4-5-20251001',
+            priceTier: 'low',
+          },
+          {
+            agentType: 'claude',
+            modelId: 'claude-sonnet-4-5-20250929',
+            priceTier: 'medium',
+          },
+        ],
+        chosen: 0, // chose haiku (index 0)
+        decisionPolicyVersion: 'baseline',
+      },
+    },
+  },
 ];
 
 // ────────────────────────────────────────────────────────────────
@@ -564,6 +694,67 @@ test('Trivial difficulty record validates correctly', () => {
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
   assert.equal((record as any).difficultyBand, 'trivial');
   assert.equal((record as any).stratum, 'unknown_small');
+});
+
+console.log('\n--- Routing Decision Field Tests (HOK-775) ---\n');
+
+test('Record with full routing decision validates', () => {
+  const record = scenarios[6].record as unknown as Record<string, unknown>; // Scenario 7
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+  assert.ok('routingDecision' in record);
+});
+
+test('Record with routing decision chosen as object validates', () => {
+  const record = scenarios[7].record as unknown as Record<string, unknown>; // Scenario 8
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+  const routing = (record as any).routingDecision;
+  assert.ok(typeof routing.chosen === 'object');
+  assert.ok(routing.chosen.modelId);
+});
+
+test('Record with routing decision chosen as index validates', () => {
+  const record = scenarios[6].record as unknown as Record<string, unknown>; // Scenario 7
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+  const routing = (record as any).routingDecision;
+  assert.equal(typeof routing.chosen, 'number');
+  assert.equal(routing.chosen, 1);
+});
+
+test('Record with routing decision but no rationale validates', () => {
+  const record = scenarios[8].record as unknown as Record<string, unknown>; // Scenario 9
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+  const routing = (record as any).routingDecision;
+  assert.ok(!routing.decisionRationale);
+});
+
+test('Record without routing decision validates (backward compat)', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>; // Scenario 1
+  assert.ok(!('routingDecision' in record), 'Scenario 1 should not have routingDecision');
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('RoutingDecision structure is correct in scenario 7', () => {
+  const record = scenarios[6].record as any;
+  assert.ok(record.routingDecision);
+  assert.ok(Array.isArray(record.routingDecision.candidates));
+  assert.equal(record.routingDecision.candidates.length, 3);
+  assert.equal(typeof record.routingDecision.chosen, 'number');
+  assert.equal(typeof record.routingDecision.decisionPolicyVersion, 'string');
+  assert.equal(typeof record.routingDecision.decisionRationale, 'string');
+});
+
+test('RoutingCandidate structure has all expected fields', () => {
+  const record = scenarios[6].record as any;
+  const candidate = record.routingDecision.candidates[0];
+  assert.equal(typeof candidate.agentType, 'string');
+  assert.equal(typeof candidate.modelId, 'string');
+  assert.equal(typeof candidate.modelVersion, 'string');
+  assert.equal(typeof candidate.priceTier, 'string');
 });
 
 // ────────────────────────────────────────────────────────────────
