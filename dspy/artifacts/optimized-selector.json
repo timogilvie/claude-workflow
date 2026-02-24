@@ -1,0 +1,67 @@
+{
+  "version": "1.0.0",
+  "created_at": "2026-02-24T20:59:40.335610+00:00",
+  "optimizer": "MIPROv2",
+  "teacher_model": "claude-sonnet-4-5-20250929",
+  "runtime_model": "claude-haiku-4-5-20251001",
+  "system_prompt": "Route a software engineering task to the best AI agent and model based on code modification type and risk profile.\n\n**Primary routing logic:**\n- Use Claude (claude-sonnet) for brownfield work: modifying existing code, schema migrations, infrastructure changes, refactoring, integrations, compliance work, bug fixes, and documentation\n- Use Codex (gpt-5.3-codex) ONLY for greenfield UI component creation with no existing code dependencies\n\n**Critical considerations:**\n1. Analyze the actual task specification content\u2014do NOT rely solely on task_type_hint, which is often incorrect\n2. Identify risk flags: schema-migration, modifies-existing-runtime, large-scope-refactor, foundational-infrastructure, compliance-governance\n3. Estimate cost based on number of files to be touched, not conceptual complexity (low: <3 files, medium: 3-8 files, high: >8 files)\n4. Set confidence to 'high' for typical brownfield/infrastructure work routed to Claude, 'medium' when task boundaries are ambiguous, 'low' for novel greenfield UI without clear scope\n5. Consider repository technology stack and any referenced planning documents or task dependencies\n\nWhen in doubt between Claude and Codex, default to Claude for reliability on modification-heavy tasks. Prefer cheaper models only when the task is clearly greenfield UI creation with no integration complexity.",
+  "few_shot_examples": [
+    {
+      "task_prompt": "# HOK-701: Auto-capture execution metadata during workflows\n\n# Task Packet: Auto-capture Execution Metadata During Workflows\n\n## 1\\. Objective\n\n### What\n\nInstrument wavemill workflow execution paths to automatically capture and persist session metadata (prompt, model, version, execution time, PR identifier) so that `wavemill eval` can consume it without manual arguments.\n\n### Why\n\nCurrently, evaluating workflow outcomes requires manual input of execution details. By auto-capturing metadata during workflows, we enable automated eval pipelines, reduce friction for developers, and create a foundation for measuring and improving AI-assisted workflow quality over time.\n\n### Scope In\n\n* Session metadata schema definition (prompt/task description, model ID, model version, wall-clock execution time excluding user wait time, PR identifier, workflow type, timestamps)\n* Session file persistence to `.wavemill/sessions/latest.json` (and optionally a timestamped archive)\n* Instrumentation of feature workflow, bugfix workflow, and plan execution paths\n* Timer logic that excludes user prompt/wait time from execution duration\n* Non-intrusive error handling \u2014 metadata capture failures must not block workflows\n* Making session metadata consumable by a future `wavemill eval` command\n\n### Scope Out\n\n* The `wavemill eval` command itself (separate issue)\n* Retroactive metadata capture for past workflow runs\n* Cloud storage or sync of session files\n* UI/dashboard for viewing session history\n* Token usage tracking or cost estimation\n* Modifying the workflow logic itself (only adding instrumentation hooks)\n\n---\n\n## 2\\. Technical Context\n\n### Repository\n\n`wavemill` (this repo: `/Users/timothyogilvie/Dropbox/wavemill`)\n\n### Key Files\n\n**To Create:**\n\n* `.wavemill/sessions/` \u2014 Directory for session files (gitignored)\n* `shared/lib/session.js` (or `.ts`) \u2014 Session metadata capture and persistence logic\n* `shared/lib/session-timer.js` \u2014 Timer that can pause/resume to exclude user wait time\n\n**To ",
+      "repo_name": "wavemill",
+      "task_type_hint": "bugfix",
+      "available_models": "claude-sonnet-4-5-20250929,gpt-5.3-codex",
+      "recommended_model": "claude-sonnet-4-5-20250929",
+      "recommended_agent": "claude",
+      "confidence": "high",
+      "risk_flags": [
+        "schema-migration",
+        "modifies-existing-runtime"
+      ],
+      "cost_estimate": "medium",
+      "reasoning": "Medium-scope instrumentation task with schema creation and runtime modifications. Multiple risk flags (schema-migration, modifies-existing-runtime) indicate Claude routing per historical pattern."
+    },
+    {
+      "task_prompt": "# HOK-697: Define eval scoring rubric and data schema\n\n# Task Packet: HOK-697 \u2014 Define eval scoring rubric and data schema\n\n---\n\n## 1\\. Objective\n\n### What\n\nDefine a scoring rubric that maps autonomous task outcomes to a 0\u20131 score, and create the corresponding TypeScript type definitions and JSON schema for eval result records.\n\n### Why\n\nThe eval system needs a consistent, well-documented scoring framework so that results across different models, tasks, and time periods are comparable and analyzable. This is foundational infrastructure for the eval feature \u2014 without a stable schema, nothing downstream (recording, judging, dashboards) can be built reliably.\n\n### Scope In\n\n* Scoring rubric definition with specific score bands and criteria\n* TypeScript type/interface definitions in `shared/lib/`\n* JSON Schema file for external validation\n* Documentation within the files (JSDoc + schema `description` fields)\n* Validation against 3\u20134 hypothetical scenarios demonstrating correct rubric application\n\n### Scope Out\n\n* LLM judge implementation (separate task)\n* Eval runner / orchestration logic\n* Database storage or persistence layer\n* UI for viewing eval results\n* CLI commands for running evals\n\n---\n\n## 2\\. Technical Context\n\n### Repository\n\n`wavemill` (this repo)\n\n### Key Files\n\n* `shared/lib/eval-schema.ts` \u2014 TypeScript types and scoring rubric constants (CREATE)\n* `shared/lib/eval-schema.json` \u2014 JSON Schema file (CREATE)\n* `shared/lib/eval-schema.test.ts` \u2014 Validation against hypothetical scenarios (CREATE)\n\n### Dependencies\n\n* No external dependencies. This is a standalone schema definition task.\n* Downstream consumers (eval runner, LLM judge, dashboard) will import from these files but are not part of this task.\n\n### Architecture Notes\n\n* Follow existing patterns in `shared/lib/` \u2014 export types and constants as named exports\n* The JSON Schema should be self-contained and usable independently of TypeScript (e.g., for validating records from non-TS tooling)\n* Keep the Typ",
+      "repo_name": "wavemill",
+      "task_type_hint": "bugfix",
+      "available_models": "claude-sonnet-4-5-20250929,gpt-5.3-codex",
+      "recommended_model": "claude-sonnet-4-5-20250929",
+      "recommended_agent": "claude",
+      "confidence": "high",
+      "risk_flags": [
+        "schema-migration",
+        "foundational-infrastructure"
+      ],
+      "cost_estimate": "low",
+      "reasoning": "Schema definition with foundational infrastructure - Claude excels at design-heavy documentation work."
+    },
+    {
+      "task_prompt": "# HOK-699: Create `wavemill eval` CLI command\n\n# Task Packet: HOK-699 \u2014 Create `wavemill eval` CLI command\n\n---\n\n## 1\\. Objective\n\n### What\n\nAdd a `wavemill eval` CLI command that evaluates LLM performance on a completed workflow by invoking an LLM-as-judge and printing a formatted score summary to stdout.\n\n### Why\n\nAfter a workflow completes, developers need a feedback loop to understand how well the LLM performed. This is the foundation of the eval feature \u2014 a proof-of-concept that enables iterative improvement of prompts, models, and workflows by providing measurable quality signals.\n\n### Scope In\n\n* New `eval` command registered in the wavemill CLI\n* LLM-as-judge function that scores a completed workflow\n* Gathering context from the most recent workflow run (original prompt, PR diff/review, model used, time taken)\n* Explicit argument overrides for all inputs\n* Human-readable formatted output to stdout (score, rationale, metadata)\n* Integration with existing wavemill state/config patterns\n\n### Scope Out\n\n* Persistent eval storage / history database\n* Dashboard or web UI for eval results\n* Automated eval triggering (post-workflow hooks)\n* Comparative analysis across multiple evals\n* Custom rubric configuration (use a sensible default rubric for PoC)\n* CI/CD integration\n\n---\n\n## 2\\. Technical Context\n\n### Repository\n\n`/Users/timothyogilvie/Dropbox/wavemill` (this repo)\n\n### Key Files\n\n**To investigate first (existing patterns):**\n\n* `commands/` \u2014 Existing command definitions to follow as patterns\n* `tools/` \u2014 Existing TypeScript tool wrappers\n* `shared/lib/` \u2014 Shared helpers (Linear, Git, GitHub APIs)\n* `.wavemill-config.json` \u2014 Runtime config (may contain state about recent runs)\n* `wavemill-config.schema.json` \u2014 Config schema\n* `claude/config.json` \u2014 Claude-specific config (model info, project settings)\n* `tools/prompts/` \u2014 Existing prompt templates\n\n**To create/modify:**\n\n* `commands/eval.md` \u2014 Command definition for `/eval`\n* `tools/eval-workflow.ts` \u2014 Main eva",
+      "repo_name": "wavemill",
+      "task_type_hint": "bugfix",
+      "available_models": "claude-sonnet-4-5-20250929,gpt-5.3-codex",
+      "recommended_model": "claude-sonnet-4-5-20250929",
+      "recommended_agent": "claude",
+      "confidence": "high",
+      "risk_flags": [
+        "infrastructure-addition"
+      ],
+      "cost_estimate": "medium",
+      "reasoning": "New CLI command with LLM judge integration requires infrastructure work and pattern following. Medium scope with config/state integration."
+    }
+  ],
+  "model_candidates": [
+    "claude-sonnet-4-5-20250929",
+    "gpt-5.3-codex",
+    "claude-opus-4-6",
+    "claude-haiku-4-5-20251001"
+  ],
+  "metadata": {
+    "training_records": 67,
+    "validation_records": 17,
+    "val_score": 65.59,
+    "data_source": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/aggregated-evals.jsonl",
+    "data_hash": "sha256:32fd4dbf1314c063"
+  }
+}

@@ -194,7 +194,7 @@ function main() {
 
   // Load config and get recommendation
   const routerConfig = loadRouterConfig(repoDir);
-  const recommendation = recommendModel(prompt, routerConfig);
+  const recommendation = recommendModel(prompt, { ...routerConfig, repoDir });
 
   if (args.json) {
     console.log(JSON.stringify(recommendation, null, 2));
