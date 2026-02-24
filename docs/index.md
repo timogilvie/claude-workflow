@@ -2,16 +2,7 @@
 title: Wavemill
 ---
 
-Wavemill helps developer teams run Linear-driven software delivery with LLM agents and clear human checkpoints.
-
-This site is for engineers who use Linear as the source of truth and Claude/Codex as implementation agents.
-
-## Start Here
-
-1. [Getting Started](getting-started.md)
-2. [Feature Workflow (Plan -> Implement -> Validate -> PR)](feature-workflow.md)
-3. [Autonomous Mode (`wavemill mill`)](mill-mode.md)
-4. [Troubleshooting](troubleshooting.md)
+Wavemill helps developers build software more effectively with LLMs. It connects a backlog in Linear with tools to plan and build faster. Wavemill supports using Linear as backlog planner and Claude/Codex as implementation agents but makes it easy to extend to other tools. 
 
 ## What Wavemill Handles
 
@@ -22,13 +13,17 @@ This site is for engineers who use Linear as the source of truth and Claude/Code
 
 ## Core Modes
 
-### 1) Human-in-the-loop workflow
+### 1) Autonomous mill mode
+
+Use `wavemill mill` to continuously process backlog tasks in parallel. 
+
+### 2) Epic planning
+
+Use `wavemill plan` to break an epic/larger body of work into chunks that LLMs can handle and add them as Linear tasks that can be milled later.
+
+### 3) Human-in-the-loop workflow
 
 Use workflow commands to move one feature from backlog to PR with explicit review gates.
-
-### 2) Autonomous mill mode
-
-Use `wavemill mill` to continuously process backlog tasks in parallel.
 
 ## Quick Command Reference
 
@@ -42,6 +37,9 @@ wavemill init
 
 # autonomous backlog loop
 wavemill mill
+
+# Expand an epic
+wavemill plan
 
 # expand backlog issues into task packets
 wavemill expand

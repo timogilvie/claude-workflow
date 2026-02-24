@@ -2,12 +2,13 @@
 title: Mill Mode
 ---
 
-Use `wavemill mill` when you want continuous, autonomous execution of backlog tasks with parallel agents.
+Use `wavemill mill` when you want continuous execution of backlog tasks with parallel agents.
 
 ## What It Does
 
-- Fetches and ranks backlog tasks from Linear.
-- Expands issues that are missing implementation detail.
+- Fetches and ranks backlog tasks from Linear and prompts you for what's next.
+- Expands issues that are missing implementation detail into effective plans.
+- Assesses the task and chooses the best model 
 - Launches parallel worktrees/agents via `tmux`.
 - Monitors PR and merge status.
 - Cleans up completed tasks and updates issue state.
