@@ -1,4 +1,6 @@
-# Mill Mode (`wavemill mill`)
+---
+title: Mill Mode
+---
 
 Use `wavemill mill` when you want continuous, autonomous execution of backlog tasks with parallel agents.
 

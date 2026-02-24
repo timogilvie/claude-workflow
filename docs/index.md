@@ -1,4 +1,6 @@
-# Wavemill
+---
+title: Wavemill
+---
 
 Wavemill helps developer teams run Linear-driven software delivery with LLM agents and clear human checkpoints.
 
@@ -10,7 +12,6 @@ This site is for engineers who use Linear as the source of truth and Claude/Code
 2. [Feature Workflow (Plan -> Implement -> Validate -> PR)](feature-workflow.md)
 3. [Autonomous Mode (`wavemill mill`)](mill-mode.md)
 4. [Troubleshooting](troubleshooting.md)
-5. [Deploy to `wavemill.org`](deploy.md)
 
 ## What Wavemill Handles
 
