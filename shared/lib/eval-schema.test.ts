@@ -227,6 +227,164 @@ const scenarios: { name: string; record: EvalRecord }[] = [
       },
     },
   },
+  {
+    name: 'Scenario 5: Medium difficulty with stratum (HOK-777)',
+    record: {
+      id: '550e8400-e29b-41d4-a716-446655440005',
+      schemaVersion: '1.0.0',
+      originalPrompt:
+        'Add user profile editing feature with form validation',
+      modelId: 'claude-opus-4-6',
+      modelVersion: 'claude-opus-4-6-20250514',
+      score: 0.85,
+      scoreBand: 'Minor Feedback',
+      timeSeconds: 1200,
+      timestamp: '2026-02-14T14:00:00Z',
+      interventionRequired: true,
+      interventionCount: 1,
+      interventionDetails: ['Fixed validation regex pattern'],
+      rationale:
+        'Agent completed the feature with one minor correction to the validation logic.',
+      issueId: 'HOK-777',
+      prUrl: 'https://github.com/org/repo/pull/50',
+      difficultyBand: 'medium',
+      difficultySignals: {
+        locTouched: 250,
+        filesTouched: 7,
+      },
+      stratum: 'ts_nextjs_med',
+    },
+  },
+  {
+    name: 'Scenario 6: Trivial difficulty (HOK-777)',
+    record: {
+      id: '550e8400-e29b-41d4-a716-446655440006',
+      schemaVersion: '1.0.0',
+      originalPrompt: 'Fix typo in documentation',
+      modelId: 'claude-haiku-4-5',
+      modelVersion: 'claude-haiku-4-5-20251001',
+      score: 1.0,
+      scoreBand: 'Full Success',
+      timeSeconds: 45,
+      timestamp: '2026-02-14T15:00:00Z',
+      interventionRequired: false,
+      interventionCount: 0,
+      interventionDetails: [],
+      rationale: 'Typo fixed correctly, no issues.',
+      issueId: 'HOK-778',
+      prUrl: 'https://github.com/org/repo/pull/51',
+      difficultyBand: 'trivial',
+      difficultySignals: {
+        locTouched: 2,
+        filesTouched: 1,
+      },
+      stratum: 'unknown_small',
+    },
+  },
+  {
+    name: 'Scenario 7: With task and repo context (HOK-774)',
+    record: {
+      id: '550e8400-e29b-41d4-a716-446655440007',
+      schemaVersion: '1.0.0',
+      originalPrompt: 'Fix authentication redirect loop on logout',
+      modelId: 'claude-sonnet-4-5-20250929',
+      modelVersion: 'claude-sonnet-4-5-20250929',
+      score: 0.9,
+      scoreBand: 'Minor Feedback',
+      timeSeconds: 600,
+      timestamp: '2026-02-24T15:00:00Z',
+      interventionRequired: false,
+      interventionCount: 0,
+      interventionDetails: [],
+      rationale: 'Agent correctly identified and fixed the redirect loop with minimal guidance.',
+      issueId: 'HOK-774',
+      prUrl: 'https://github.com/org/repo/pull/60',
+      taskContext: {
+        taskType: 'bugfix',
+        changeKind: 'modify_existing',
+        complexity: 's',
+        filesTouchedEstimate: 2,
+        expectedLoCChange: 15,
+      },
+      repoContext: {
+        repoId: 'org/repo',
+        repoVisibility: 'private',
+        primaryLanguage: 'TypeScript',
+        languages: { TypeScript: 75, JavaScript: 25 },
+        frameworks: ['Next.js', 'React'],
+        buildSystem: 'webpack',
+        packageManager: 'npm',
+        testFrameworks: ['jest'],
+        ciProvider: 'github-actions',
+        repoSize: {
+          fileCount: 250,
+          loc: 15000,
+          dependencyCount: 45,
+        },
+        monorepo: false,
+      },
+    },
+  },
+  {
+    name: 'Scenario 8: Complex task with constraints (HOK-774)',
+    record: {
+      id: '550e8400-e29b-41d4-a716-446655440008',
+      schemaVersion: '1.0.0',
+      originalPrompt: 'Add payment processing with strict PCI compliance',
+      modelId: 'claude-opus-4-6',
+      modelVersion: 'claude-opus-4-6-20250514',
+      score: 0.7,
+      scoreBand: 'Assisted Success',
+      timeSeconds: 2400,
+      timestamp: '2026-02-24T16:00:00Z',
+      interventionRequired: true,
+      interventionCount: 3,
+      interventionDetails: [
+        'Fixed PCI compliance issue',
+        'Added missing error handling',
+        'Updated security headers',
+      ],
+      rationale: 'Agent implemented the payment flow but required security guidance.',
+      issueId: 'HOK-775',
+      prUrl: 'https://github.com/org/repo/pull/61',
+      taskContext: {
+        taskType: 'feature',
+        changeKind: 'create_new',
+        complexity: 'xl',
+        constraints: {
+          hasStrictStyle: true,
+          mustNotTouchX: false,
+          timeboxed: false,
+          noNetAccess: false,
+        },
+        filesTouchedEstimate: 10,
+        expectedLoCChange: 500,
+        requiresDomainKnowledge: 'payment',
+      },
+      repoContext: {
+        repoId: 'org/repo',
+        repoVisibility: 'oss',
+        primaryLanguage: 'Python',
+        languages: { Python: 90, JavaScript: 10 },
+        frameworks: ['Django'],
+        packageManager: 'pip',
+        testFrameworks: ['pytest'],
+        ciProvider: 'github-actions',
+        repoSize: {
+          fileCount: 500,
+          loc: 50000,
+          dependencyCount: 120,
+        },
+        monorepo: false,
+      },
+      difficultyBand: 'very_hard',
+      difficultySignals: {
+        locTouched: 520,
+        filesTouched: 12,
+      },
+      stratum: 'py_django_med',
+    },
+  },
 ];
 
 // ────────────────────────────────────────────────────────────────
@@ -442,6 +600,76 @@ test('Record without workflowCost validates (backward compat)', () => {
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
+console.log('\n--- Difficulty Field Tests (HOK-777) ---\n');
+
+test('Record with all difficulty fields validates', () => {
+  const record = scenarios[4].record as unknown as Record<string, unknown>; // Scenario 5
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+  assert.ok('difficultyBand' in record);
+  assert.ok('difficultySignals' in record);
+  assert.ok('stratum' in record);
+});
+
+test('Record without difficulty fields validates (backward compat)', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  assert.ok(!('difficultyBand' in record), 'Scenario 1 should not have difficulty fields');
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Rejects invalid difficultyBand enum value', () => {
+  const bad = {
+    ...scenarios[4].record,
+    difficultyBand: 'super_hard',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(
+    result.errors.some((e) => e.includes('difficultyBand')),
+    'Should mention difficultyBand',
+  );
+});
+
+test('DifficultySignals with optional fields validates', () => {
+  const record = {
+    ...scenarios[4].record,
+    difficultySignals: {
+      locTouched: 250,
+      filesTouched: 7,
+      dependencyDepth: 3,
+      testRuntime: 5.2,
+      moduleHotspotScore: 75.5,
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('DifficultySignals structure is correct', () => {
+  const record = scenarios[4].record as any;
+  assert.ok(record.difficultySignals);
+  assert.equal(typeof record.difficultySignals.locTouched, 'number');
+  assert.equal(typeof record.difficultySignals.filesTouched, 'number');
+  assert.ok(record.difficultySignals.locTouched >= 0);
+  assert.ok(record.difficultySignals.filesTouched >= 0);
+});
+
+test('Stratum string validates', () => {
+  const record = scenarios[4].record as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+  assert.equal((record as any).stratum, 'ts_nextjs_med');
+});
+
+test('Trivial difficulty record validates correctly', () => {
+  const record = scenarios[5].record as unknown as Record<string, unknown>; // Scenario 6
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+  assert.equal((record as any).difficultyBand, 'trivial');
+  assert.equal((record as any).stratum, 'unknown_small');
+});
+
 console.log('\n--- Outcome Decomposition Tests (HOK-776) ---\n');
 
 test('Record with outcomes field validates', () => {
@@ -519,6 +747,7 @@ test('Record with minimal outcomes (only required fields) validates', () => {
   const result = validateAgainstSchema(record);
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
+
 
 // ────────────────────────────────────────────────────────────────
 // Summary

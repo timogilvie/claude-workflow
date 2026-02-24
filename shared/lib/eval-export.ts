@@ -39,6 +39,7 @@ export interface ExportRow {
   intervention_required: boolean;
   intervention_count: number;
   intervention_details: string;
+  interventions: string;
 
   // Judge metadata
   judge_model: string;
@@ -74,6 +75,7 @@ const COLUMNS: (keyof ExportRow)[] = [
   'intervention_required',
   'intervention_count',
   'intervention_details',
+  'interventions',
   'judge_model',
   'judge_provider',
   'rationale',
@@ -163,6 +165,7 @@ export function flattenRecord(
     intervention_required: record.interventionRequired,
     intervention_count: record.interventionCount,
     intervention_details: JSON.stringify(record.interventionDetails),
+    interventions: JSON.stringify(record.interventions || []),
 
     judge_model: record.judgeModel ?? '',
     judge_provider: record.judgeProvider ?? '',

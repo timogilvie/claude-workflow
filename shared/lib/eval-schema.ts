@@ -145,6 +145,229 @@ export interface TokenUsage {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Intervention Record
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Intervention type enum — describes the reason for human intervention.
+ */
+export type InterventionType =
+  | 'clarification'
+  | 'bugfix'
+  | 'manual_merge'
+  | 'environment_fix'
+  | 'prompt_edit'
+  | 'scope_change'
+  | 'rollback';
+
+/**
+ * Intervention severity enum — indicates impact level.
+ */
+export type InterventionSeverity = 'low' | 'med' | 'high';
+
+/**
+ * A single structured intervention event.
+ *
+ * Captures when, why, and how a human intervened during task execution.
+ * Enables ML routing to learn which task characteristics lead to babysitting.
+ */
+export interface InterventionRecord {
+  /** ISO 8601 datetime when the intervention occurred */
+  timestamp: string;
+
+  /** Type of intervention (reason) */
+  type: InterventionType;
+
+  /** Severity/impact of the intervention */
+  severity: InterventionSeverity;
+
+  /** Human-readable description of what was done */
+  note: string;
+
+  /** Optional time spent on this intervention in seconds */
+  timeSpentSeconds?: number;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Difficulty Classification (HOK-777)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Difficulty band classification for task complexity.
+ *
+ * Derived from quantifiable signals (LOC touched, files modified, etc.)
+ * to enable weighted rewards and stratified evaluation.
+ */
+export type DifficultyBand = 'trivial' | 'easy' | 'medium' | 'hard' | 'very_hard';
+
+/**
+ * Quantifiable difficulty signals computed from PR data.
+ *
+ * These metrics are derived from git diff analysis and provide
+ * objective measures of task complexity.
+ */
+export interface DifficultySignals {
+  /** Lines of code touched (additions + deletions) */
+  locTouched: number;
+
+  /** Number of files modified in the PR */
+  filesTouched: number;
+
+  /** Dependency depth (optional - 0 if not computed) */
+  dependencyDepth?: number;
+
+  /** Test runtime in seconds (optional) */
+  testRuntime?: number;
+
+  /** Module hotspot score 0-100 (optional - based on git history) */
+  moduleHotspotScore?: number;
+}
+
+/**
+ * Tech stack and size stratum for stratified evaluation.
+ *
+ * Format: "{tech_stack}_{size_band}"
+ * Examples: "ts_nextjs_small", "py_django_med", "go_std_large"
+ */
+export type Stratum = string;
+
+// ────────────────────────────────────────────────────────────────
+// Task Context (HOK-774)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Task type classification for routing and evaluation.
+ */
+export type TaskType =
+  | 'bugfix'
+  | 'feature'
+  | 'refactor'
+  | 'chore'
+  | 'docs'
+  | 'test'
+  | 'infra';
+
+/**
+ * Change kind classification for understanding task scope.
+ */
+export type ChangeKind = 'modify_existing' | 'create_new' | 'mixed';
+
+/**
+ * Complexity band classification for task difficulty.
+ */
+export type ComplexityBand = 'xs' | 's' | 'm' | 'l' | 'xl';
+
+/**
+ * Task constraints that affect how the task can be executed.
+ */
+export interface TaskConstraints {
+  /** Whether the task requires strict adherence to a style guide */
+  hasStrictStyle?: boolean;
+
+  /** Whether the task has modules/files that must not be touched */
+  mustNotTouchX?: boolean;
+
+  /** Whether the task is timeboxed with a deadline */
+  timeboxed?: boolean;
+
+  /** Whether the task must be completed without network access */
+  noNetAccess?: boolean;
+}
+
+/**
+ * Task context metadata for routing and evaluation.
+ *
+ * Describes the nature of the task to enable better model selection,
+ * routing decisions, and stratified evaluation.
+ */
+export interface TaskContext {
+  /** Type of task being performed */
+  taskType: TaskType;
+
+  /** Whether the task modifies existing code, creates new code, or both */
+  changeKind: ChangeKind;
+
+  /** Complexity score (0-1) or band classification */
+  complexity: number | ComplexityBand;
+
+  /** Special constraints that apply to this task */
+  constraints?: TaskConstraints;
+
+  /** Estimated number of files to be touched */
+  filesTouchedEstimate?: number;
+
+  /** Estimated lines of code to be changed */
+  expectedLoCChange?: number;
+
+  /** Domain-specific knowledge required (e.g., "payments", "auth", "k8s") */
+  requiresDomainKnowledge?: string | boolean;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Repo Context (HOK-774)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Repository visibility classification.
+ */
+export type RepoVisibility = 'oss' | 'private';
+
+/**
+ * Repository size metrics.
+ */
+export interface RepoSize {
+  /** Total number of files in the repository */
+  fileCount: number;
+
+  /** Total lines of code in the repository */
+  loc: number;
+
+  /** Number of dependencies (approximate) */
+  dependencyCount: number;
+}
+
+/**
+ * Repository context metadata for routing and evaluation.
+ *
+ * Describes the repository characteristics to enable better model selection,
+ * routing decisions, and stratified evaluation.
+ */
+export interface RepoContext {
+  /** Stable identifier for the repository (hash or slug) */
+  repoId: string;
+
+  /** Whether the repository is open source or private */
+  repoVisibility: RepoVisibility;
+
+  /** Primary programming language */
+  primaryLanguage: string;
+
+  /** Map of language to percentage (e.g., {"TypeScript": 75, "JavaScript": 25}) */
+  languages?: Record<string, number>;
+
+  /** Frameworks used in the repository */
+  frameworks?: string[];
+
+  /** Build system (e.g., "webpack", "vite", "gradle") */
+  buildSystem?: string;
+
+  /** Package manager (e.g., "npm", "yarn", "pnpm") */
+  packageManager?: string;
+
+  /** Test frameworks (e.g., ["jest", "vitest"]) */
+  testFrameworks?: string[];
+
+  /** CI provider (e.g., "github-actions", "gitlab-ci") */
+  ciProvider?: string;
+
+  /** Repository size metrics */
+  repoSize?: RepoSize;
+
+  /** Whether the repository is a monorepo */
+  monorepo?: boolean;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Outcome Decomposition (HOK-776)
 // ────────────────────────────────────────────────────────────────
 
@@ -307,8 +530,11 @@ export interface EvalRecord {
   /** Number of distinct human interventions during the task */
   interventionCount: number;
 
-  /** Brief description of each human intervention */
+  /** Brief description of each human intervention (legacy - prefer interventions field) */
   interventionDetails: string[];
+
+  /** Structured intervention events (machine-usable) */
+  interventions?: InterventionRecord[];
 
   /** Free-text rationale from the LLM judge explaining the score */
   rationale: string;
@@ -342,6 +568,21 @@ export interface EvalRecord {
       costUsd: number;
     }
   >;
+
+  /** Difficulty band classification (e.g. "easy", "medium", "hard") */
+  difficultyBand?: DifficultyBand;
+
+  /** Quantifiable difficulty metrics from PR analysis */
+  difficultySignals?: DifficultySignals;
+
+  /** Tech stack and size stratum (e.g. "ts_nextjs_small", "py_django_med") */
+  stratum?: Stratum;
+
+  /** Task context metadata for routing and evaluation (HOK-774) */
+  taskContext?: TaskContext;
+
+  /** Repository context metadata for routing and evaluation (HOK-774) */
+  repoContext?: RepoContext;
 
   /** Decomposed outcome components (quality, cost, speed, risk dimensions) */
   outcomes?: Outcomes;
