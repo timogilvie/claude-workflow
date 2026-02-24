@@ -189,47 +189,74 @@ export interface InterventionRecord {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Difficulty Classification (HOK-777)
+// Routing Decision (HOK-775)
 // ────────────────────────────────────────────────────────────────
 
 /**
- * Difficulty band classification for task complexity.
+ * A single candidate configuration considered during routing.
  *
- * Derived from quantifiable signals (LOC touched, files modified, etc.)
- * to enable weighted rewards and stratified evaluation.
+ * Captures the full specification of a model + agent + toolset combination
+ * that was eligible for selection by the router.
  */
-export type DifficultyBand = 'trivial' | 'easy' | 'medium' | 'hard' | 'very_hard';
+export interface RoutingCandidate {
+  /** Agent type (e.g., "claude", "codex") */
+  agentType: string;
 
-/**
- * Quantifiable difficulty signals computed from PR data.
- *
- * These metrics are derived from git diff analysis and provide
- * objective measures of task complexity.
- */
-export interface DifficultySignals {
-  /** Lines of code touched (additions + deletions) */
-  locTouched: number;
+  /** Model identifier (e.g., "claude-opus-4-6", "gpt-5.3-codex") */
+  modelId: string;
 
-  /** Number of files modified in the PR */
-  filesTouched: number;
+  /** Specific model version string (optional) */
+  modelVersion?: string;
 
-  /** Dependency depth (optional - 0 if not computed) */
-  dependencyDepth?: number;
+  /** Toolset variant identifier (optional) */
+  toolsetId?: string;
 
-  /** Test runtime in seconds (optional) */
-  testRuntime?: number;
-
-  /** Module hotspot score 0-100 (optional - based on git history) */
-  moduleHotspotScore?: number;
+  /** Price tier classification (e.g., "low", "medium", "high") */
+  priceTier?: string;
 }
 
 /**
- * Tech stack and size stratum for stratified evaluation.
+ * Routing decision metadata capturing all candidates considered.
  *
- * Format: "{tech_stack}_{size_band}"
- * Examples: "ts_nextjs_small", "py_django_med", "go_std_large"
+ * Records the full decision context: which models were eligible,
+ * which was chosen, and why. Essential for training routing models
+ * to learn cost/quality tradeoffs.
+ *
+ * **Why this matters:** Without the candidate set, a router can't learn
+ * "use cheaper model when similar quality" because it never sees what
+ * "similar" meant relative to the alternatives.
  */
-export type Stratum = string;
+export interface RoutingDecision {
+  /**
+   * All candidate configurations that were eligible for this task.
+   *
+   * Should include at least 2 candidates (otherwise no decision was made).
+   */
+  candidates: RoutingCandidate[];
+
+  /**
+   * The chosen candidate.
+   *
+   * Can be either:
+   * - A full RoutingCandidate object (reference)
+   * - A number (index into the candidates array)
+   */
+  chosen: RoutingCandidate | number;
+
+  /**
+   * Decision policy version that made this choice.
+   *
+   * Examples: "baseline", "router-v1.0", "router-v2.1-prod"
+   */
+  decisionPolicyVersion: string;
+
+  /**
+   * Optional rationale or top features used for the decision.
+   *
+   * Can be free text or structured (e.g., JSON of feature weights).
+   */
+  decisionRationale?: string;
+}
 
 // ────────────────────────────────────────────────────────────────
 // Task Context (HOK-774)
@@ -480,6 +507,49 @@ export interface Outcomes {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Difficulty Classification (HOK-777)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Difficulty band classification for task complexity.
+ *
+ * Derived from quantifiable signals (LOC touched, files modified, etc.)
+ * to enable weighted rewards and stratified evaluation.
+ */
+export type DifficultyBand = 'trivial' | 'easy' | 'medium' | 'hard' | 'very_hard';
+
+/**
+ * Quantifiable difficulty signals computed from PR data.
+ *
+ * These metrics are derived from git diff analysis and provide
+ * objective measures of task complexity.
+ */
+export interface DifficultySignals {
+  /** Lines of code touched (additions + deletions) */
+  locTouched: number;
+
+  /** Number of files modified in the PR */
+  filesTouched: number;
+
+  /** Dependency depth (optional - 0 if not computed) */
+  dependencyDepth?: number;
+
+  /** Test runtime in seconds (optional) */
+  testRuntime?: number;
+
+  /** Module hotspot score 0-100 (optional - based on git history) */
+  moduleHotspotScore?: number;
+}
+
+/**
+ * Tech stack and size stratum for stratified evaluation.
+ *
+ * Format: "{tech_stack}_{size_band}"
+ * Examples: "ts_nextjs_small", "py_django_med", "go_std_large"
+ */
+export type Stratum = string;
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -586,6 +656,9 @@ export interface EvalRecord {
 
   /** Decomposed outcome components (quality, cost, speed, risk dimensions) */
   outcomes?: Outcomes;
+
+  /** Routing decision metadata (required if training routing models) */
+  routingDecision?: RoutingDecision;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;
