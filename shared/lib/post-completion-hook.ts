@@ -21,6 +21,8 @@ import {
 } from './intervention-detector.ts';
 import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
 import { analyzePrDifficulty } from './difficulty-analyzer.ts';
+import { analyzeTaskContext } from './task-context-analyzer.ts';
+import { analyzeRepoContext } from './repo-context-analyzer.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -177,6 +179,64 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       }
     }
 
+    // 4a. Analyze task context (HOK-774)
+    let taskContextData: ReturnType<typeof analyzeTaskContext> | null = null;
+    if (ctx.issueId || prReviewOutput) {
+      try {
+        console.log('Post-completion eval: analyzing task context...');
+        // Fetch issue data for task context
+        let issueData;
+        if (ctx.issueId) {
+          try {
+            const toolPath = resolve(__dirname, '../../tools/get-issue-json.ts');
+            const raw = execSync(
+              `npx tsx "${toolPath}" "${ctx.issueId}" 2>/dev/null | sed '/^\\[dotenv/d'`,
+              { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+            ).trim();
+            issueData = JSON.parse(raw);
+          } catch {
+            // Issue fetch failed - continue with partial data
+          }
+        }
+
+        taskContextData = analyzeTaskContext({
+          issue: issueData,
+          prDiff: prReviewOutput,
+          locTouched: difficultyData?.difficultySignals.locTouched,
+          filesTouched: difficultyData?.difficultySignals.filesTouched,
+        });
+
+        if (taskContextData) {
+          console.log(
+            `Post-completion eval: task context ${taskContextData.taskType} / ` +
+            `${taskContextData.changeKind} / complexity ${taskContextData.complexity}`
+          );
+        }
+      } catch (taskErr: unknown) {
+        const taskMsg = taskErr instanceof Error ? taskErr.message : String(taskErr);
+        console.warn(`Post-completion eval: task context analysis failed — ${taskMsg}`);
+        // Non-blocking: continue without task context
+      }
+    }
+
+    // 4b. Analyze repo context (HOK-774)
+    let repoContextData: ReturnType<typeof analyzeRepoContext> | null = null;
+    try {
+      console.log('Post-completion eval: analyzing repo context...');
+      repoContextData = analyzeRepoContext(repoDir);
+      if (repoContextData) {
+        console.log(
+          `Post-completion eval: repo context ${repoContextData.primaryLanguage} / ` +
+          `${repoContextData.repoVisibility} / ` +
+          `${repoContextData.repoSize?.fileCount || 0} files`
+        );
+      }
+    } catch (repoErr: unknown) {
+      const repoMsg = repoErr instanceof Error ? repoErr.message : String(repoErr);
+      console.warn(`Post-completion eval: repo context analysis failed — ${repoMsg}`);
+      // Non-blocking: continue without repo context
+    }
+
     // 5. Run eval
     console.log('Post-completion eval: invoking LLM judge...');
     const record = await evaluateTask({
@@ -198,6 +258,16 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       record.difficultyBand = difficultyData.difficultyBand;
       record.difficultySignals = difficultyData.difficultySignals;
       record.stratum = difficultyData.stratum;
+    }
+
+    // 6a. Attach task context to record (HOK-774)
+    if (taskContextData) {
+      record.taskContext = taskContextData;
+    }
+
+    // 6b. Attach repo context to record (HOK-774)
+    if (repoContextData) {
+      record.repoContext = repoContextData;
     }
 
     // 7. Compute workflow cost from agent session data

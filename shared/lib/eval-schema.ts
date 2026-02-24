@@ -232,6 +232,142 @@ export interface DifficultySignals {
 export type Stratum = string;
 
 // ────────────────────────────────────────────────────────────────
+// Task Context (HOK-774)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Task type classification for routing and evaluation.
+ */
+export type TaskType =
+  | 'bugfix'
+  | 'feature'
+  | 'refactor'
+  | 'chore'
+  | 'docs'
+  | 'test'
+  | 'infra';
+
+/**
+ * Change kind classification for understanding task scope.
+ */
+export type ChangeKind = 'modify_existing' | 'create_new' | 'mixed';
+
+/**
+ * Complexity band classification for task difficulty.
+ */
+export type ComplexityBand = 'xs' | 's' | 'm' | 'l' | 'xl';
+
+/**
+ * Task constraints that affect how the task can be executed.
+ */
+export interface TaskConstraints {
+  /** Whether the task requires strict adherence to a style guide */
+  hasStrictStyle?: boolean;
+
+  /** Whether the task has modules/files that must not be touched */
+  mustNotTouchX?: boolean;
+
+  /** Whether the task is timeboxed with a deadline */
+  timeboxed?: boolean;
+
+  /** Whether the task must be completed without network access */
+  noNetAccess?: boolean;
+}
+
+/**
+ * Task context metadata for routing and evaluation.
+ *
+ * Describes the nature of the task to enable better model selection,
+ * routing decisions, and stratified evaluation.
+ */
+export interface TaskContext {
+  /** Type of task being performed */
+  taskType: TaskType;
+
+  /** Whether the task modifies existing code, creates new code, or both */
+  changeKind: ChangeKind;
+
+  /** Complexity score (0-1) or band classification */
+  complexity: number | ComplexityBand;
+
+  /** Special constraints that apply to this task */
+  constraints?: TaskConstraints;
+
+  /** Estimated number of files to be touched */
+  filesTouchedEstimate?: number;
+
+  /** Estimated lines of code to be changed */
+  expectedLoCChange?: number;
+
+  /** Domain-specific knowledge required (e.g., "payments", "auth", "k8s") */
+  requiresDomainKnowledge?: string | boolean;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Repo Context (HOK-774)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Repository visibility classification.
+ */
+export type RepoVisibility = 'oss' | 'private';
+
+/**
+ * Repository size metrics.
+ */
+export interface RepoSize {
+  /** Total number of files in the repository */
+  fileCount: number;
+
+  /** Total lines of code in the repository */
+  loc: number;
+
+  /** Number of dependencies (approximate) */
+  dependencyCount: number;
+}
+
+/**
+ * Repository context metadata for routing and evaluation.
+ *
+ * Describes the repository characteristics to enable better model selection,
+ * routing decisions, and stratified evaluation.
+ */
+export interface RepoContext {
+  /** Stable identifier for the repository (hash or slug) */
+  repoId: string;
+
+  /** Whether the repository is open source or private */
+  repoVisibility: RepoVisibility;
+
+  /** Primary programming language */
+  primaryLanguage: string;
+
+  /** Map of language to percentage (e.g., {"TypeScript": 75, "JavaScript": 25}) */
+  languages?: Record<string, number>;
+
+  /** Frameworks used in the repository */
+  frameworks?: string[];
+
+  /** Build system (e.g., "webpack", "vite", "gradle") */
+  buildSystem?: string;
+
+  /** Package manager (e.g., "npm", "yarn", "pnpm") */
+  packageManager?: string;
+
+  /** Test frameworks (e.g., ["jest", "vitest"]) */
+  testFrameworks?: string[];
+
+  /** CI provider (e.g., "github-actions", "gitlab-ci") */
+  ciProvider?: string;
+
+  /** Repository size metrics */
+  repoSize?: RepoSize;
+
+  /** Whether the repository is a monorepo */
+  monorepo?: boolean;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -329,6 +465,12 @@ export interface EvalRecord {
 
   /** Tech stack and size stratum (e.g. "ts_nextjs_small", "py_django_med") */
   stratum?: Stratum;
+
+  /** Task context metadata for routing and evaluation (HOK-774) */
+  taskContext?: TaskContext;
+
+  /** Repository context metadata for routing and evaluation (HOK-774) */
+  repoContext?: RepoContext;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;

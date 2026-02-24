@@ -265,6 +265,169 @@
       "type": "string",
       "description": "Tech stack and size stratum (e.g., 'ts_nextjs_small', 'py_django_med')."
     },
+    "taskContext": {
+      "type": "object",
+      "description": "Task context metadata for routing and evaluation (HOK-774).",
+      "properties": {
+        "taskType": {
+          "type": "string",
+          "enum": ["bugfix", "feature", "refactor", "chore", "docs", "test", "infra"],
+          "description": "Type of task being performed."
+        },
+        "changeKind": {
+          "type": "string",
+          "enum": ["modify_existing", "create_new", "mixed"],
+          "description": "Whether the task modifies existing code, creates new code, or both."
+        },
+        "complexity": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Complexity score (0-1)."
+            },
+            {
+              "type": "string",
+              "enum": ["xs", "s", "m", "l", "xl"],
+              "description": "Complexity band classification."
+            }
+          ],
+          "description": "Complexity score (0-1) or band classification."
+        },
+        "constraints": {
+          "type": "object",
+          "description": "Special constraints that apply to this task.",
+          "properties": {
+            "hasStrictStyle": {
+              "type": "boolean",
+              "description": "Whether the task requires strict adherence to a style guide."
+            },
+            "mustNotTouchX": {
+              "type": "boolean",
+              "description": "Whether the task has modules/files that must not be touched."
+            },
+            "timeboxed": {
+              "type": "boolean",
+              "description": "Whether the task is timeboxed with a deadline."
+            },
+            "noNetAccess": {
+              "type": "boolean",
+              "description": "Whether the task must be completed without network access."
+            }
+          },
+          "additionalProperties": false
+        },
+        "filesTouchedEstimate": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Estimated number of files to be touched."
+        },
+        "expectedLoCChange": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Estimated lines of code to be changed."
+        },
+        "requiresDomainKnowledge": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Domain-specific knowledge required (e.g., 'payments', 'auth', 'k8s')."
+            },
+            {
+              "type": "boolean",
+              "description": "Whether domain knowledge is required (boolean form)."
+            }
+          ],
+          "description": "Domain-specific knowledge required."
+        }
+      },
+      "required": ["taskType", "changeKind", "complexity"],
+      "additionalProperties": false
+    },
+    "repoContext": {
+      "type": "object",
+      "description": "Repository context metadata for routing and evaluation (HOK-774).",
+      "properties": {
+        "repoId": {
+          "type": "string",
+          "description": "Stable identifier for the repository (hash or slug)."
+        },
+        "repoVisibility": {
+          "type": "string",
+          "enum": ["oss", "private"],
+          "description": "Whether the repository is open source or private."
+        },
+        "primaryLanguage": {
+          "type": "string",
+          "description": "Primary programming language."
+        },
+        "languages": {
+          "type": "object",
+          "description": "Map of language to percentage.",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "frameworks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Frameworks used in the repository."
+        },
+        "buildSystem": {
+          "type": "string",
+          "description": "Build system (e.g., 'webpack', 'vite', 'gradle')."
+        },
+        "packageManager": {
+          "type": "string",
+          "description": "Package manager (e.g., 'npm', 'yarn', 'pnpm')."
+        },
+        "testFrameworks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Test frameworks used."
+        },
+        "ciProvider": {
+          "type": "string",
+          "description": "CI provider (e.g., 'github-actions', 'gitlab-ci')."
+        },
+        "repoSize": {
+          "type": "object",
+          "description": "Repository size metrics.",
+          "properties": {
+            "fileCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total number of files in the repository."
+            },
+            "loc": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total lines of code in the repository."
+            },
+            "dependencyCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of dependencies (approximate)."
+            }
+          },
+          "required": ["fileCount", "loc", "dependencyCount"],
+          "additionalProperties": false
+        },
+        "monorepo": {
+          "type": "boolean",
+          "description": "Whether the repository is a monorepo."
+        }
+      },
+      "required": ["repoId", "repoVisibility", "primaryLanguage"],
+      "additionalProperties": false
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
