@@ -57,6 +57,9 @@ export interface ExportRow {
   files_changed: number | null;
   lines_added: number | null;
   lines_removed: number | null;
+
+  // Routing decision (HOK-775)
+  routing_decision: string;
 }
 
 /** Column order for CSV output. */
@@ -85,6 +88,7 @@ const COLUMNS: (keyof ExportRow)[] = [
   'files_changed',
   'lines_added',
   'lines_removed',
+  'routing_decision',
 ];
 
 // ────────────────────────────────────────────────────────────────
@@ -179,6 +183,10 @@ export function flattenRecord(
     files_changed: filesChanged,
     lines_added: linesAdded,
     lines_removed: linesRemoved,
+
+    routing_decision: record.routingDecision
+      ? JSON.stringify(record.routingDecision)
+      : '',
   };
 }
 

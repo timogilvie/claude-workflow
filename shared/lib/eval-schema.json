@@ -265,6 +265,91 @@
       "type": "string",
       "description": "Tech stack and size stratum (e.g., 'ts_nextjs_small', 'py_django_med')."
     },
+    "routingDecision": {
+      "type": "object",
+      "description": "Routing decision metadata capturing all candidates considered (required if training routing models).",
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["agentType", "modelId"],
+            "additionalProperties": false,
+            "properties": {
+              "agentType": {
+                "type": "string",
+                "description": "Agent type (e.g., 'claude', 'codex')."
+              },
+              "modelId": {
+                "type": "string",
+                "description": "Model identifier (e.g., 'claude-opus-4-6', 'gpt-5.3-codex')."
+              },
+              "modelVersion": {
+                "type": "string",
+                "description": "Specific model version string (optional)."
+              },
+              "toolsetId": {
+                "type": "string",
+                "description": "Toolset variant identifier (optional)."
+              },
+              "priceTier": {
+                "type": "string",
+                "description": "Price tier classification (e.g., 'low', 'medium', 'high')."
+              }
+            }
+          },
+          "description": "All candidate configurations that were eligible for this task."
+        },
+        "chosen": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["agentType", "modelId"],
+              "additionalProperties": false,
+              "properties": {
+                "agentType": {
+                  "type": "string",
+                  "description": "Agent type (e.g., 'claude', 'codex')."
+                },
+                "modelId": {
+                  "type": "string",
+                  "description": "Model identifier (e.g., 'claude-opus-4-6', 'gpt-5.3-codex')."
+                },
+                "modelVersion": {
+                  "type": "string",
+                  "description": "Specific model version string (optional)."
+                },
+                "toolsetId": {
+                  "type": "string",
+                  "description": "Toolset variant identifier (optional)."
+                },
+                "priceTier": {
+                  "type": "string",
+                  "description": "Price tier classification (e.g., 'low', 'medium', 'high')."
+                }
+              }
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Index into the candidates array."
+            }
+          ],
+          "description": "The chosen candidate (full object or index into candidates array)."
+        },
+        "decisionPolicyVersion": {
+          "type": "string",
+          "description": "Decision policy version that made this choice (e.g., 'baseline', 'router-v1.0')."
+        },
+        "decisionRationale": {
+          "type": "string",
+          "description": "Optional rationale or top features used for the decision."
+        }
+      },
+      "required": ["candidates", "chosen", "decisionPolicyVersion"],
+      "additionalProperties": false
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,

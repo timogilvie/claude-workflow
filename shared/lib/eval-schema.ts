@@ -189,6 +189,76 @@ export interface InterventionRecord {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Routing Decision (HOK-775)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * A single candidate configuration considered during routing.
+ *
+ * Captures the full specification of a model + agent + toolset combination
+ * that was eligible for selection by the router.
+ */
+export interface RoutingCandidate {
+  /** Agent type (e.g., "claude", "codex") */
+  agentType: string;
+
+  /** Model identifier (e.g., "claude-opus-4-6", "gpt-5.3-codex") */
+  modelId: string;
+
+  /** Specific model version string (optional) */
+  modelVersion?: string;
+
+  /** Toolset variant identifier (optional) */
+  toolsetId?: string;
+
+  /** Price tier classification (e.g., "low", "medium", "high") */
+  priceTier?: string;
+}
+
+/**
+ * Routing decision metadata capturing all candidates considered.
+ *
+ * Records the full decision context: which models were eligible,
+ * which was chosen, and why. Essential for training routing models
+ * to learn cost/quality tradeoffs.
+ *
+ * **Why this matters:** Without the candidate set, a router can't learn
+ * "use cheaper model when similar quality" because it never sees what
+ * "similar" meant relative to the alternatives.
+ */
+export interface RoutingDecision {
+  /**
+   * All candidate configurations that were eligible for this task.
+   *
+   * Should include at least 2 candidates (otherwise no decision was made).
+   */
+  candidates: RoutingCandidate[];
+
+  /**
+   * The chosen candidate.
+   *
+   * Can be either:
+   * - A full RoutingCandidate object (reference)
+   * - A number (index into the candidates array)
+   */
+  chosen: RoutingCandidate | number;
+
+  /**
+   * Decision policy version that made this choice.
+   *
+   * Examples: "baseline", "router-v1.0", "router-v2.1-prod"
+   */
+  decisionPolicyVersion: string;
+
+  /**
+   * Optional rationale or top features used for the decision.
+   *
+   * Can be free text or structured (e.g., JSON of feature weights).
+   */
+  decisionRationale?: string;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Difficulty Classification (HOK-777)
 // ────────────────────────────────────────────────────────────────
 
@@ -329,6 +399,9 @@ export interface EvalRecord {
 
   /** Tech stack and size stratum (e.g. "ts_nextjs_small", "py_django_med") */
   stratum?: Stratum;
+
+  /** Routing decision metadata (required if training routing models) */
+  routingDecision?: RoutingDecision;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;
