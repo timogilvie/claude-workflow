@@ -24,7 +24,12 @@
         "test": { "type": "string" },
         "lint": { "type": "string" },
         "build": { "type": "string" },
-        "typecheck": { "type": "string" }
+        "typecheck": { "type": "string" },
+        "requireBuildBeforePR": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, build check must pass before PR creation. Can be disabled to bypass the build gate."
+        }
       }
     }
   },
