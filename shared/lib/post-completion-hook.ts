@@ -165,11 +165,14 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
           repoDir,
         });
         if (difficultyData) {
+          const uncertainSuffix = difficultyData.difficultySignals.diffUncertain
+            ? ' ⚠ UNCERTAIN — diff may be incomplete'
+            : '';
           console.log(
             `Post-completion eval: difficulty ${difficultyData.difficultyBand} ` +
             `(${difficultyData.difficultySignals.locTouched} LOC, ` +
             `${difficultyData.difficultySignals.filesTouched} files, ` +
-            `stratum: ${difficultyData.stratum})`
+            `stratum: ${difficultyData.stratum})${uncertainSuffix}`
           );
         }
       } catch (diffErr: unknown) {

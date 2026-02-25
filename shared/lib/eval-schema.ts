@@ -539,6 +539,9 @@ export interface DifficultySignals {
 
   /** Module hotspot score 0-100 (optional - based on git history) */
   moduleHotspotScore?: number;
+
+  /** True when diff parsing returned suspicious results (e.g. 0 LOC with files present) */
+  diffUncertain?: boolean;
 }
 
 /**
