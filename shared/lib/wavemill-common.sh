@@ -217,14 +217,14 @@ score_and_rank_issues() {
         # Count how many issues this blocks (foundational work)
         blocks_count: (
           (.relations.nodes // [])
-          | map(select(.type == "blocks"))
+          | map(select(.type == "blocks" and .relatedIssue.completedAt == null and .relatedIssue.canceledAt == null))
           | length
         ),
 
-        # Count how many issues block this (dependency risk)
+        # Count how many incomplete issues block this (dependency risk)
         blocked_by_count: (
-          (.relations.nodes // [])
-          | map(select(.type == "blocked"))
+          (.inverseRelations.nodes // [])
+          | map(select(.type == "blocks" and .issue.completedAt == null and .issue.canceledAt == null))
           | length
         )
       })
@@ -264,7 +264,7 @@ score_and_rank_issues() {
     # Take top candidates for display
     | .[0:$show_limit]
     | .[]
-    | "\(.identifier)|\(.title|ascii_downcase|gsub("[^a-z0-9]+";"-"))|\(.title)|\(.area)|\(.score)|\(.has_detailed_plan)"
+    | "\(.identifier)|\(.title|ascii_downcase|gsub("[^a-z0-9]+";"-"))|\(.title)|\(.area)|\(.score)|\(.has_detailed_plan)|\(.blocked_by_count)"
   '
 }
 
