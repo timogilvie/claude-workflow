@@ -38,5 +38,10 @@ epics/*/
 !features/.gitkeep
 !bugs/.gitkeep
 !epics/.gitkeep
-.wavemill/
+
+# Wavemill runtime state (per-repo, not committed)
+.wavemill/workflow-state.json
+.wavemill/project-context.md
+.wavemill/evals/
+
 worktrees/

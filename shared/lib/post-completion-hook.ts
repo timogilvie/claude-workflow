@@ -5,8 +5,8 @@
  * Non-blocking: eval failures log a warning but never fail the workflow.
  */
 
-import { readFileSync, existsSync } from 'fs';
-import { execSync } from 'child_process';
+import { readFileSync, existsSync, appendFileSync } from 'fs';
+import { execSync, spawn } from 'child_process';
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -308,7 +308,10 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     const evalsDir = resolveEvalsDir(repoDir);
     appendEvalRecord(record, evalsDir ? { dir: evalsDir } : undefined);
 
-    // 9. Print summary
+    // 9. Update project context
+    await updateProjectContext(ctx, prReviewOutput, taskPrompt);
+
+    // 10. Print summary
     const scoreDisplay = (record.score as number).toFixed(2);
     const costSuffix = record.workflowCost !== undefined
       ? `, workflow cost: $${record.workflowCost.toFixed(4)}`
@@ -318,4 +321,124 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`Post-completion eval: failed (workflow unaffected) — ${message}`);
   }
+}
+
+/**
+ * Update project context after PR merge.
+ *
+ * Analyzes the PR diff and generates a summary to append to project-context.md.
+ * Non-blocking: failures log warnings but don't fail the workflow.
+ */
+async function updateProjectContext(
+  ctx: PostCompletionContext,
+  prDiff: string,
+  issueContext: string
+): Promise<void> {
+  const repoDir = ctx.repoDir || process.cwd();
+  const contextPath = join(repoDir, '.wavemill', 'project-context.md');
+
+  // Skip if project-context.md doesn't exist (not initialized)
+  if (!existsSync(contextPath)) {
+    console.log('Project context: skipped (not initialized — run init-project-context.ts)');
+    return;
+  }
+
+  try {
+    console.log('Project context: generating update...');
+
+    // Generate summary using Claude CLI
+    const summary = await generateContextUpdate({
+      issueId: ctx.issueId || 'Unknown',
+      prUrl: ctx.prUrl || '',
+      prDiff,
+      issueContext,
+    });
+
+    // Append to project-context.md
+    appendContextUpdate(contextPath, summary);
+
+    console.log('Project context: updated successfully');
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Project context: update failed — ${message}`);
+  }
+}
+
+/**
+ * Generate a context update summary from PR diff using Claude CLI.
+ */
+async function generateContextUpdate(opts: {
+  issueId: string;
+  prUrl: string;
+  prDiff: string;
+  issueContext: string;
+}): Promise<string> {
+  const promptPath = resolve(__dirname, '../../tools/prompts/context-update-template.md');
+  const promptTemplate = readFileSync(promptPath, 'utf-8');
+
+  // Extract issue title from context
+  const titleMatch = opts.issueContext.match(/^#\s*[A-Z]+-\d+:\s*(.+)$/m);
+  const issueTitle = titleMatch ? titleMatch[1] : 'Unknown';
+
+  // Fill in template placeholders
+  const timestamp = new Date().toISOString();
+  let prompt = promptTemplate
+    .replace('{TIMESTAMP}', timestamp)
+    .replace('{ISSUE_ID}', opts.issueId)
+    .replace('{ISSUE_TITLE}', issueTitle)
+    .replace('{PR_URL}', opts.prUrl)
+    .replace('{ISSUE_DESCRIPTION}', opts.issueContext)
+    .replace('{PR_DIFF}', opts.prDiff.substring(0, 50000)); // Limit diff size
+
+  // Use Claude CLI to generate summary
+  return new Promise((resolve, reject) => {
+    const claudeCmd = process.env.CLAUDE_CMD || 'claude';
+    const claude = spawn(claudeCmd, [
+      '--print',
+      '--tools', '',
+      '--append-system-prompt',
+      'You have NO tools available. Output ONLY the markdown summary in the exact format specified. No conversational text, no preamble, no XML tags. Start directly with the heading.',
+    ], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    claude.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    claude.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    claude.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
+      } else {
+        // Clean up any XML tags that might have leaked through
+        const cleaned = stdout
+          .replace(/<\/?[^>]+(>|$)/g, '') // Remove XML tags
+          .trim();
+        resolve(cleaned);
+      }
+    });
+
+    claude.on('error', (error) => {
+      reject(new Error(`Failed to spawn Claude CLI: ${error.message}`));
+    });
+
+    // Send prompt to Claude via stdin
+    claude.stdin.write(prompt);
+    claude.stdin.end();
+  });
+}
+
+/**
+ * Append a context update to project-context.md.
+ */
+function appendContextUpdate(contextPath: string, summary: string): void {
+  const update = `\n\n${summary}\n\n---`;
+  appendFileSync(contextPath, update, 'utf-8');
 }
