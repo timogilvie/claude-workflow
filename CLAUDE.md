@@ -35,6 +35,63 @@ Available in `~/.claude/commands/`:
 - `/implement-plan` - Execute plan with phase gates
 - `/validate-plan` - Validate implementation against plan
 
+## Project Context
+
+The `.wavemill/project-context.md` file maintains living documentation of:
+- **Architectural decisions and patterns** established in the codebase
+- **Key conventions** (state management, API patterns, styling approach)
+- **Recent work log** - automatically updated after each PR merge
+- **Known gotchas** and constraints discovered during development
+
+This file is automatically included when agents expand Linear issues, enabling them to build on previous work rather than starting from scratch.
+
+### Initialization
+
+**Recommended:** Use `wavemill init` which will prompt you to initialize project context:
+
+```bash
+cd ~/your-repo
+wavemill init
+# Answer 'Y' when prompted to initialize project context
+```
+
+**Manual initialization** (if you skipped it during `wavemill init`):
+
+```bash
+npx tsx tools/init-project-context.ts
+
+# Overwrite existing context (use with caution)
+npx tsx tools/init-project-context.ts --force
+```
+
+**Auto-initialization:** When you run `wavemill mill` or `wavemill expand` for the first time, you'll be prompted to initialize if the file doesn't exist. You can skip this check with:
+
+```bash
+SKIP_CONTEXT_CHECK=true wavemill mill
+```
+
+### Automatic Updates
+
+The "Recent Work" section is automatically updated after each PR merge in mill mode. The post-completion hook:
+1. Analyzes the PR diff
+2. Generates a concise summary using LLM
+3. Appends the summary to project-context.md
+
+Manual edits to other sections (Architecture, Conventions, etc.) are encouraged to keep documentation current.
+
+### Size Management
+
+If the file exceeds 100KB, you'll receive warnings during issue expansion. To manage size:
+
+```bash
+# Archive old entries
+mv .wavemill/project-context.md .wavemill/project-context-archive-$(date +%Y%m).md
+npx tsx tools/init-project-context.ts
+# Then manually copy relevant patterns/conventions to new file
+```
+
+Best practice: Keep the "Recent Work" log to the last 20-30 entries, archiving older history.
+
 ## Syncing with ~/.claude
 
 This repo is the source of truth. `~/.claude/` is a consumer that can optionally sync from the repo for use by Claude commands outside of wavemill.
