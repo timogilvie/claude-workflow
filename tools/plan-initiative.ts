@@ -36,6 +36,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const CLAUDE_CMD = process.env.CLAUDE_CMD || 'claude';
+const PLAN_MODEL = process.env.PLAN_MODEL || 'claude-opus-4-6';
 
 if (!process.env.LINEAR_API_KEY) {
   console.error('Error: LINEAR_API_KEY not found in environment');
@@ -113,6 +114,7 @@ async function decomposeWithClaude(systemPrompt: string, initiativeContext: stri
 
     const claude = spawn(CLAUDE_CMD, [
       '--print',
+      '--model', PLAN_MODEL,
       '--tools', '',
       '--append-system-prompt',
       'You have NO tools available. Do NOT output <tool_call> tags, XML markup, or attempt to call any tools. Your ENTIRE response must be valid JSON matching the specified schema. No conversational text, no preamble, no markdown code fences. Start directly with the opening { brace.',
@@ -173,6 +175,7 @@ async function runResearch(researchPrompt: string, initiativeContext: string): P
 
     const claude = spawn(CLAUDE_CMD, [
       '--print',
+      '--model', PLAN_MODEL,
       '--tools', '',
       '--append-system-prompt',
       'You have NO tools available. Do NOT output <tool_call> tags, XML markup, or attempt to call any tools. Your ENTIRE response must be the structured markdown research summary and nothing else. No conversational text, no preamble. Start directly with the first markdown heading.',
