@@ -6,6 +6,23 @@ Given the issue details below, produce a detailed task specification following t
 
 ---
 
+## Codebase Context
+
+You have been provided with lightweight codebase context to ground your task packet in reality. Use this information to:
+
+1. **Reference real file paths** instead of guessing
+2. **Follow existing patterns** visible in recent commits
+3. **Understand the project structure** to place new files correctly
+4. **Identify similar implementations** to maintain consistency
+
+**Important**:
+- If a file path exists in the context, USE IT
+- If you see a pattern in recent commits, FOLLOW IT
+- If the context shows conventions (from CLAUDE.md), HONOR THEM
+- Only propose new files if clearly necessary; prefer editing existing files
+
+---
+
 ## 1. Objective
 
 ### What
@@ -25,16 +42,16 @@ Given the issue details below, produce a detailed task specification following t
 ## 2. Technical Context
 
 ### Repository
-*Which repo(s) this work happens in.*
+*Which repo(s) this work happens in. CHECK the codebase context above.*
 
 ### Key Files
-*Exact file paths that will be created or modified. Use glob patterns if multiple files follow a pattern.*
+*Exact file paths that will be created or modified. Use paths from the codebase context wherever possible. Use glob patterns if multiple files follow a pattern.*
 
 ### Dependencies
-*Services, APIs, packages, or other issues this depends on.*
+*Services, APIs, packages, or other issues this depends on. Check recent git activity for clues.*
 
 ### Architecture Notes
-*Relevant patterns, conventions, or architectural decisions the agent should follow. Reference existing implementations as examples.*
+*Relevant patterns, conventions, or architectural decisions the agent should follow. Reference existing implementations from the codebase context as examples.*
 
 ---
 
