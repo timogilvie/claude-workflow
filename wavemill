@@ -82,7 +82,9 @@ ${GREEN}Commands:${NC}
                ${CYAN}eval export${NC}  Export records for ML training
                             --format csv|jsonl, --redact, --output FILE
 
-  ${CYAN}init${NC}      Generate a template .wavemill-config.json in the current directory
+  ${CYAN}init${NC}      Initialize wavemill in current directory
+             - Creates .wavemill-config.json
+             - Optionally initializes project context (.wavemill/project-context.md)
 
   ${CYAN}version${NC}   Show version information
   ${CYAN}help${NC}      Show this help message
@@ -153,6 +155,42 @@ show_version() {
   echo "Location: $SCRIPT_DIR"
 }
 
+# Check if project context is initialized, offer to create if missing
+check_project_context() {
+  # Skip if project context already exists
+  [[ -f ".wavemill/project-context.md" ]] && return 0
+
+  # Skip if explicitly disabled
+  [[ "${SKIP_CONTEXT_CHECK:-false}" == "true" ]] && return 0
+
+  echo -e "${YELLOW}Notice:${NC} No project context found (.wavemill/project-context.md)"
+  echo -e "  Project context helps agents learn from previous work and follow established patterns."
+  echo ""
+  echo -e "Initialize now? This will analyze your codebase and create .wavemill/project-context.md"
+  read -p "[Y/n] " -n 1 -r
+  echo
+
+  if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    # Create .wavemill directory if it doesn't exist
+    mkdir -p .wavemill
+
+    # Run init-project-context.ts
+    local init_tool="$TOOLS_DIR/init-project-context.ts"
+    if [[ -f "$init_tool" ]]; then
+      echo ""
+      npx tsx "$init_tool"
+      echo ""
+    else
+      echo -e "${YELLOW}Warning:${NC} Could not find init-project-context.ts"
+      return 1
+    fi
+  else
+    echo -e "${CYAN}Skipped.${NC} Initialize later with: ${CYAN}npx tsx tools/init-project-context.ts${NC}"
+    echo -e "  Or run with: ${CYAN}SKIP_CONTEXT_CHECK=true wavemill mill${NC} to skip this prompt"
+    echo ""
+  fi
+}
+
 run_mill() {
   local mill_script="$LIB_DIR/wavemill-mill.sh"
 
@@ -171,7 +209,9 @@ run_mill() {
 
 run_init() {
   local target=".wavemill-config.json"
+  local context_exists=false
 
+  # Check if config already exists
   if [[ -f "$target" ]]; then
     echo -e "${YELLOW}Warning:${NC} $target already exists"
     read -p "Overwrite? [y/N] " -n 1 -r
@@ -179,6 +219,7 @@ run_init() {
     [[ $REPLY =~ ^[Yy]$ ]] || exit 0
   fi
 
+  # Create config file
   cat > "$target" <<'INIT_EOF'
 {
   "linear": {
@@ -202,9 +243,44 @@ run_init() {
 }
 INIT_EOF
 
-  echo -e "${GREEN}Created${NC} $target"
-  echo -e "Edit ${CYAN}linear.project${NC} to set your Linear project name."
-  echo -e "All values shown are defaults - remove any you don't need to override."
+  echo -e "${GREEN}✓${NC} Created $target"
+  echo -e "  Edit ${CYAN}linear.project${NC} to set your Linear project name."
+  echo ""
+
+  # Check if project context already exists
+  if [[ -f ".wavemill/project-context.md" ]]; then
+    context_exists=true
+    echo -e "${GREEN}✓${NC} Project context already exists (.wavemill/project-context.md)"
+  else
+    # Offer to initialize project context
+    echo -e "${CYAN}Initialize project context?${NC}"
+    echo -e "  This analyzes your codebase to create .wavemill/project-context.md"
+    echo -e "  (helps agents learn from previous work and follow established patterns)"
+    echo ""
+    read -p "Initialize project context? [Y/n] " -n 1 -r
+    echo
+
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+      # Create .wavemill directory if it doesn't exist
+      mkdir -p .wavemill
+
+      # Run init-project-context.ts
+      local init_tool="$TOOLS_DIR/init-project-context.ts"
+      if [[ -f "$init_tool" ]]; then
+        echo ""
+        npx tsx "$init_tool"
+      else
+        echo -e "${YELLOW}Warning:${NC} Could not find init-project-context.ts"
+        echo -e "  You can initialize later with: ${CYAN}npx tsx tools/init-project-context.ts${NC}"
+      fi
+    else
+      echo -e "${CYAN}Skipped.${NC} You can initialize later with:"
+      echo -e "  ${CYAN}npx tsx tools/init-project-context.ts${NC}"
+    fi
+  fi
+
+  echo ""
+  echo -e "${GREEN}Done!${NC} Your repository is configured for Wavemill."
 }
 
 run_expand() {
@@ -295,6 +371,7 @@ run_plan() {
 case "${1:-}" in
   mill)
     check_claude_sync
+    check_project_context
     shift
     # Parse mill-specific flags before delegating
     while [[ $# -gt 0 ]]; do
@@ -313,6 +390,7 @@ case "${1:-}" in
     ;;
   expand)
     check_claude_sync
+    check_project_context
     shift
     run_expand "$@"
     ;;
