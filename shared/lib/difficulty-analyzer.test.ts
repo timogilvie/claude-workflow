@@ -9,6 +9,7 @@ import {
   computeDifficultyBand,
   computeStratum,
   analyzePrDifficulty,
+  fetchPrStatsFromApi,
 } from './difficulty-analyzer.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -422,6 +423,46 @@ test('Handles very small PR (1 LOC, 1 file)', () => {
   assert.equal(result.difficultyBand, 'trivial');
   assert.equal(result.difficultySignals.locTouched, 1);
   assert.equal(result.difficultySignals.filesTouched, 1);
+});
+
+// ────────────────────────────────────────────────────────────────
+// Diff Uncertainty / API Fallback Tests
+// ────────────────────────────────────────────────────────────────
+
+console.log('\n--- Diff Uncertainty Tests ---\n');
+
+test('Marks as uncertain when unified diff has 0 LOC but files present (no API fallback)', () => {
+  // Simulate a file-mode-only change: diff --git header present but no +/- content lines
+  const modeOnlyDiff = `diff --git a/src/service.py b/src/service.py
+old mode 100644
+new mode 100755`;
+  const result = analyzePrDifficulty({ prDiff: modeOnlyDiff });
+  assert.ok(result !== null);
+  assert.equal(result.difficultySignals.locTouched, 0);
+  assert.equal(result.difficultySignals.filesTouched, 1);
+  assert.equal(result.difficultySignals.diffUncertain, true);
+});
+
+test('Does not mark as uncertain when diff has real LOC', () => {
+  const diff = `50\t30\tsrc/main.py`;
+  const result = analyzePrDifficulty({ prDiff: diff });
+  assert.ok(result !== null);
+  assert.equal(result.difficultySignals.locTouched, 80);
+  assert.equal(result.difficultySignals.diffUncertain, undefined);
+});
+
+test('Does not mark as uncertain for trivial PR with real LOC', () => {
+  const diff = `3\t1\tsrc/config.ts`;
+  const result = analyzePrDifficulty({ prDiff: diff });
+  assert.ok(result !== null);
+  assert.equal(result.difficultyBand, 'trivial');
+  assert.equal(result.difficultySignals.diffUncertain, undefined);
+});
+
+test('fetchPrStatsFromApi returns null for invalid PR number', () => {
+  // This calls gh with a nonexistent PR in a non-repo directory — should return null gracefully
+  const result = fetchPrStatsFromApi('999999', '/tmp');
+  assert.equal(result, null);
 });
 
 // ────────────────────────────────────────────────────────────────

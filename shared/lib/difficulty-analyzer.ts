@@ -111,6 +111,40 @@ export function analyzeDiffStats(prDiff: string): {
 }
 
 // ────────────────────────────────────────────────────────────────
+// GitHub API Fallback
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch PR stats from the GitHub API as a cross-check / fallback.
+ *
+ * Uses `gh pr view --json additions,deletions,changedFiles` which returns
+ * GitHub's own counts independent of diff parsing.
+ *
+ * @returns Stats from the API, or null if unavailable
+ */
+export function fetchPrStatsFromApi(
+  prNumber: string,
+  repoDir: string,
+): { locTouched: number; filesTouched: number } | null {
+  try {
+    const raw = execSync(
+      `gh pr view ${prNumber} --json additions,deletions,changedFiles`,
+      { encoding: 'utf-8', cwd: repoDir, timeout: 10_000 },
+    ).trim();
+    const data = JSON.parse(raw);
+    const additions = typeof data.additions === 'number' ? data.additions : 0;
+    const deletions = typeof data.deletions === 'number' ? data.deletions : 0;
+    const changedFiles = typeof data.changedFiles === 'number' ? data.changedFiles : 0;
+    return {
+      locTouched: additions + deletions,
+      filesTouched: changedFiles,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
 // Tech Stack Detection
 // ────────────────────────────────────────────────────────────────
 
@@ -375,25 +409,63 @@ export function analyzePrDifficulty(opts: {
 }): DifficultyAnalysis | null {
   const { prDiff, prNumber, repoDir } = opts;
 
-  // 1. Analyze diff stats
-  const stats = analyzeDiffStats(prDiff);
+  // 1. Analyze diff stats from the raw diff
+  let stats = analyzeDiffStats(prDiff);
+
+  // 2. Cross-validate with GitHub API when diff parsing looks suspicious
+  //    (0 LOC with files present usually means the diff was truncated or malformed)
+  let diffUncertain = false;
+  const diffLooksSuspicious = stats && stats.locTouched === 0 && stats.filesTouched > 0;
+  const diffIsEmpty = !stats;
+
+  if ((diffLooksSuspicious || diffIsEmpty) && prNumber && repoDir) {
+    const apiStats = fetchPrStatsFromApi(prNumber, repoDir);
+    if (apiStats && (apiStats.locTouched > 0 || apiStats.filesTouched > 0)) {
+      if (diffLooksSuspicious) {
+        console.warn(
+          `difficulty-analyzer: diff parsing returned 0 LOC but GitHub API reports ` +
+          `${apiStats.locTouched} LOC across ${apiStats.filesTouched} files — using API stats`,
+        );
+      } else {
+        console.warn(
+          `difficulty-analyzer: diff parsing failed but GitHub API reports ` +
+          `${apiStats.locTouched} LOC across ${apiStats.filesTouched} files — using API stats`,
+        );
+      }
+      stats = apiStats;
+    } else if (diffLooksSuspicious) {
+      // API also returned nothing useful — flag as uncertain
+      diffUncertain = true;
+      console.warn(
+        'difficulty-analyzer: 0 LOC with files present and API fallback unavailable — marking as uncertain',
+      );
+    }
+  } else if (diffLooksSuspicious) {
+    // No prNumber/repoDir to attempt API fallback — flag as uncertain
+    diffUncertain = true;
+    console.warn(
+      'difficulty-analyzer: 0 LOC with files present (no API context available) — marking as uncertain',
+    );
+  }
+
   if (!stats) {
     return null;
   }
 
-  // 2. Build difficulty signals
+  // 3. Build difficulty signals
   const signals: DifficultySignals = {
     locTouched: stats.locTouched,
     filesTouched: stats.filesTouched,
+    ...(diffUncertain ? { diffUncertain: true } : {}),
   };
 
-  // 3. Detect tech stack
+  // 4. Detect tech stack
   const techStack = detectTechStack(prDiff, repoDir);
 
-  // 4. Compute difficulty band
+  // 5. Compute difficulty band
   const difficultyBand = computeDifficultyBand(signals);
 
-  // 5. Compute stratum
+  // 6. Compute stratum
   const stratum = computeStratum(techStack, signals);
 
   return {
