@@ -437,6 +437,11 @@ cleanup_stale_tasks() {
       should_clean=true
       full_clean=true
       reason="branch deleted"
+    # Check if Linear issue is completed (handles cross-repo PRs)
+    elif linear_is_completed "$issue" 2>/dev/null; then
+      should_clean=true
+      full_clean=true
+      reason="Linear issue completed externally"
     # Check if PR was merged or closed
     elif [[ -n "$pr" ]]; then
       local pr_st
@@ -921,6 +926,15 @@ linear_set_state() {
   local issue="$1" state="$2"
   [[ "$DRY_RUN" == "true" ]] && { log "[DRY-RUN] Would set $issue → $state"; return 0; }
   npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1 || log_warn "Failed to set $issue → $state in Linear"
+}
+
+
+linear_is_completed() {
+  local issue="$1"
+  local state
+  state=$(npx tsx "$TOOLS_DIR/get-issue-state.ts" "$issue" 2>/dev/null || echo "active")
+  [[ "$state" == "completed" ]] && return 0
+  return 1
 }
 
 
@@ -1498,7 +1512,60 @@ while :; do
         linear_set_state "$ISSUE" "In Review"
         log "✓ $ISSUE → PR #$PR (In Review)"
       else
-        # No PR found — check if agent pane is still alive
+        # No PR in current repo — check Linear issue state for cross-repo completion
+        if linear_is_completed "$ISSUE"; then
+          log "✓ $ISSUE → Completed externally (cross-repo or manual)"
+
+          # Post-completion eval (non-blocking: always exits 0)
+          if [[ "$AUTO_EVAL" == "true" ]]; then
+            log "  📊 Running post-completion eval..."
+            eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+            [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+            npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+              --issue "$ISSUE" --branch "$BRANCH" \
+              --worktree "${WORKTREE_ROOT}/${SLUG}" \
+              --workflow-type mill --repo-dir "$REPO_DIR" \
+              --agent "$eval_agent" \
+              2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
+          fi
+
+          if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
+            log "  → Window stays open for review — close it when ready"
+            linear_set_state "$ISSUE" "Done"
+            save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "completed-external"
+            active_count=$((active_count + 1))
+            continue
+          fi
+
+          # Clean up worktree and state
+          linear_set_state "$ISSUE" "Done"
+
+          WIN="$ISSUE-$SLUG"
+          if tmux has-session -t "$SESSION:$WIN" 2>/dev/null; then
+            execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+            log "  ✓ Closed window: $WIN"
+          fi
+
+          WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+          if [[ -d "$WT_DIR" ]]; then
+            execute git -C "$REPO_DIR" worktree remove "$WT_DIR" --force 2>/dev/null || true
+            log "  ✓ Removed worktree: $WT_DIR"
+          fi
+
+          task_branch="task/${SLUG}"
+          if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+            execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+            log "  ✓ Deleted branch: $task_branch"
+          fi
+
+          execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+          remove_task_state "$ISSUE"
+          CLEANED["$ISSUE"]=1
+          log "  ✓ Complete: $ISSUE (external completion)"
+          continue
+        fi
+
+        # Not completed externally — check if agent pane is still alive
         WIN="$ISSUE-$SLUG"
         if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
           # Pane still running — agent is working, keep slot active

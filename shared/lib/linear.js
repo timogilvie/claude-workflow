@@ -296,6 +296,8 @@ export async function getIssue(identifier) {
             }
           }
           url
+          completedAt
+          canceledAt
         }
       }
     }
