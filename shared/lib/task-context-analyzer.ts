@@ -76,7 +76,12 @@ export function inferTaskType(issue?: IssueData): TaskType {
   if (!issue) return 'feature';
 
   const text = `${issue.title || ''} ${issue.description || ''}`.toLowerCase();
-  const labels = (issue.labels || []).map((l) => l.toLowerCase());
+  // Normalize labels: accept string[] or Linear's { nodes: [{ name }] } shape
+  const rawLabels = issue.labels || [];
+  const labels: string[] = (Array.isArray(rawLabels)
+    ? rawLabels
+    : ((rawLabels as any).nodes || []).map((n: any) => n.name)
+  ).map((l: string) => l.toLowerCase());
 
   // Check labels first (most explicit)
   for (const [type, keywords] of Object.entries(TASK_TYPE_KEYWORDS)) {
