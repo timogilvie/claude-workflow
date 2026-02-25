@@ -92,6 +92,18 @@ export async function getBacklog(projectName) {
               labels { nodes { name } }
             }
           }
+          relations {
+            nodes {
+              type
+              relatedIssue { id identifier completedAt canceledAt }
+            }
+          }
+          inverseRelations {
+            nodes {
+              type
+              issue { id identifier completedAt canceledAt }
+            }
+          }
         }
       }
     }

@@ -249,14 +249,14 @@ linear_set_description() {
 
 
 # Conflict-aware task selection with multi-factor priority scoring
-# Shows up to 9 candidates, selects up to MAX_PARALLEL avoiding conflicts
-# Note: Uses score_and_rank_issues() from wavemill-common.sh, then strips the has_detailed_plan field
+# Fetches up to 30 candidates so we have enough unblocked items after filtering
+# Output: identifier|slug|title|area|score|blocked_by_count
 pick_candidates() {
   local backlog_json="$1"
-  local show_limit=9
+  local show_limit=30
 
-  # Use shared scoring function, then strip last field (has_detailed_plan)
-  score_and_rank_issues "$backlog_json" "$show_limit" | cut -d'|' -f1-5
+  # Use shared scoring function; strip has_detailed_plan (field 6), keep blocked_by_count (field 7→6)
+  score_and_rank_issues "$backlog_json" "$show_limit" | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}'
 }
 
 
@@ -274,7 +274,7 @@ smart_select_from_candidates() {
 
 
     while IFS= read -r line && [[ $count -lt $MAX_PARALLEL ]]; do
-      IFS='|' read -r issue slug title area score <<<"$line"
+      IFS='|' read -r issue slug title area score blocked_by <<<"$line"
 
 
       # Check area conflict - skip if area already in use
@@ -531,16 +531,63 @@ if [[ -z "$CANDIDATES" ]]; then
 fi
 
 
+# Split candidates into unblocked and blocked
+UNBLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 == 0 || $6 == ""')
+BLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 > 0')
+BLOCKED_COUNT=0
+[[ -n "$BLOCKED" ]] && BLOCKED_COUNT=$(echo "$BLOCKED" | grep -c .)
+
 echo ""
-log "Available tasks (ranked by priority, up to 9 shown):"
-echo "$CANDIDATES" | awk -F'|' '{printf "%s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}' | head -9
+log "Available tasks (ranked by priority):"
+if [[ -n "$UNBLOCKED" ]]; then
+  echo "$UNBLOCKED" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
+else
+  echo "  (no unblocked tasks)"
+fi
+
+if (( BLOCKED_COUNT > 0 )); then
+  echo ""
+  echo "  ($BLOCKED_COUNT blocked task(s) hidden — enter 'm' to show all)"
+fi
+
 echo ""
-echo "Enter numbers to run (e.g. 1 3 5), q to quit, or press Enter to auto-select first $MAX_PARALLEL:"
+if (( BLOCKED_COUNT > 0 )); then
+  echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+else
+  echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+fi
 read -r SELECTED
+
+# Handle 'm' to show all tasks including blocked
+if [[ "$SELECTED" =~ ^[mM] ]]; then
+  ALL_CANDIDATES=$(printf '%s\n%s' "$UNBLOCKED" "$BLOCKED" | grep .)
+  echo ""
+  log "All tasks (ranked by priority):"
+  line_num=0
+  while IFS= read -r line; do
+    line_num=$((line_num + 1))
+    IFS='|' read -r id slug title area score blocked_by <<<"$line"
+    if (( blocked_by > 0 )); then
+      printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$line_num" "$id" "$title" "$score"
+    else
+      printf "  %s. %s - %s (score: %.0f)\n" "$line_num" "$id" "$title" "$score"
+    fi
+  done <<<"$ALL_CANDIDATES"
+  echo ""
+  echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+  read -r SELECTED
+  # Use full list for selection
+  CANDIDATES="$ALL_CANDIDATES"
+fi
 
 if [[ "$SELECTED" =~ ^[qQ](uit)?$ ]]; then
   log "Cancelled by user."
   exit 0
+fi
+
+# When auto-selecting (empty input), only pick from unblocked candidates
+if [[ -z "$SELECTED" ]] && [[ -n "$UNBLOCKED" ]]; then
+  CANDIDATES="$UNBLOCKED"
 fi
 
 # Use smart selection
@@ -1001,14 +1048,14 @@ fetch_candidates() {
     return
   fi
 
-  BACKLOG_CACHE=$(echo "$backlog_json" | jq -r --argjson show_limit 9 '
+  BACKLOG_CACHE=$(echo "$backlog_json" | jq -r --argjson show_limit 30 '
     map(select((.state.name|ascii_downcase) == "todo" or (.state.name|ascii_downcase) == "backlog"))
     | map(. + {
         area: ((.labels.nodes // []) | map(.name) | map(select(test("^(Area|Component|Page|Route):"))) | .[0] // ""),
         has_detailed_plan: (.description // "" | test("##+ (1\\.|Objective|What|Technical Context|Success Criteria|Implementation)")),
         is_foundational: ((.labels.nodes // []) | map(.name | ascii_downcase) | any(test("foundational|architecture|epic|infrastructure"))),
-        blocks_count: ((.relations.nodes // []) | map(select(.type == "blocks")) | length),
-        blocked_by_count: ((.relations.nodes // []) | map(select(.type == "blocked")) | length)
+        blocks_count: ((.relations.nodes // []) | map(select(.type == "blocks" and .relatedIssue.completedAt == null and .relatedIssue.canceledAt == null)) | length),
+        blocked_by_count: ((.inverseRelations.nodes // []) | map(select(.type == "blocks" and .issue.completedAt == null and .issue.canceledAt == null)) | length)
       })
     | map(. + {
         score: (20 + (if .priority > 0 then (5 - .priority) * 20 else 0 end) + (if .has_detailed_plan then 30 else 0 end) + (if .is_foundational then 25 else 0 end) + (.blocks_count * 10) + (if .blocked_by_count == 0 then 15 else 0 end) - (.blocked_by_count * 20) - ((.estimate // 3) * 2))
@@ -1016,7 +1063,7 @@ fetch_candidates() {
     | sort_by(-.score)
     | .[0:$show_limit]
     | .[]
-    | "\(.identifier)|\(.title|ascii_downcase|gsub("[^a-z0-9]+";"-"))|\(.title)|\(.area)|\(.score)"
+    | "\(.identifier)|\(.title|ascii_downcase|gsub("[^a-z0-9]+";"-"))|\(.title)|\(.area)|\(.score)|\(.blocked_by_count)"
   ' 2>/dev/null)
   LAST_BACKLOG_FETCH=$now
   echo "$BACKLOG_CACHE"
@@ -1576,21 +1623,69 @@ while :; do
       available=$(filter_active_issues "$candidates")
 
       if [[ -n "$available" ]]; then
+        # Split into unblocked and blocked
+        avail_unblocked=$(echo "$available" | awk -F'|' '$6 == 0 || $6 == ""')
+        avail_blocked=$(echo "$available" | awk -F'|' '$6 > 0')
+        avail_blocked_count=0
+        [[ -n "$avail_blocked" ]] && avail_blocked_count=$(echo "$avail_blocked" | grep -c .)
+
         # Only re-render the prompt when the display would actually change
-        display_fingerprint="${free_slots}|${available}"
+        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
           echo ""
           log "$free_slots slot(s) available. Next tasks:"
-          echo "$available" | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}' | head -9
+          if [[ -n "$avail_unblocked" ]]; then
+            echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
+          else
+            echo "  (no unblocked tasks)"
+          fi
+          if (( avail_blocked_count > 0 )); then
+            echo ""
+            echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
+          fi
           echo ""
-          echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+          if (( avail_blocked_count > 0 )); then
+            echo "Enter number(s) to start (e.g. 1 3), 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+          else
+            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+          fi
           LAST_DISPLAY="$display_fingerprint"
           LAST_ACTIVE_COUNT=$active_count
         fi
 
+        # Default: selection against unblocked list only
+        select_from="$avail_unblocked"
+
         if read -t "$POLL_SECONDS" -r REPLY; then
           # Strip ANSI escape sequences (e.g. arrow keys buffered during wait)
           REPLY=$(printf '%s' "$REPLY" | LC_ALL=C tr -d '\033' | sed 's/\[[A-Za-z0-9;]*//g')
+
+          # Handle 'm' to show all tasks including blocked
+          if [[ "$REPLY" =~ ^[mM] ]]; then
+            all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
+            echo ""
+            log "$free_slots slot(s) available. All tasks:"
+            ln=0
+            while IFS= read -r mline; do
+              ln=$((ln + 1))
+              IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
+              if (( mblocked > 0 )); then
+                printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
+              else
+                printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
+              fi
+            done <<<"$all_avail"
+            echo ""
+            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            select_from="$all_avail"
+            # Re-read for actual selection
+            if read -t "$POLL_SECONDS" -r REPLY; then
+              REPLY=$(printf '%s' "$REPLY" | LC_ALL=C tr -d '\033' | sed 's/\[[A-Za-z0-9;]*//g')
+            else
+              REPLY=""
+            fi
+          fi
+
           if [[ "$REPLY" =~ ^[Qq] ]]; then
             if (( active_count == 0 )); then
               log "Quitting."
@@ -1612,12 +1707,12 @@ while :; do
                 log_warn "No more free slots — skipping remaining selections"
                 break
               fi
-              local_line=$(echo "$available" | sed -n "${n}p")
+              local_line=$(echo "$select_from" | sed -n "${n}p")
               if [[ -z "$local_line" ]]; then
                 log_warn "Invalid selection: $n"
                 continue
               fi
-              IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score <<<"$local_line"
+              IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
               launch_task "$sel_issue" "$sel_slug" "$sel_title"
               launched=$((launched + 1))
             done
