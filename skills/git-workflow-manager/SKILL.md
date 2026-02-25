@@ -127,6 +127,33 @@ Check for any errors:
 - Permission issues → Report to user
 - Network issues → Retry once
 
+### Step 4.5: Run Build Check
+
+**IMPORTANT: Before creating a PR, the build must pass.**
+
+Run the build check from the config:
+```bash
+# Read build command from config (claude/config.json or codex/config.json)
+# Default build command is typically: npm run build
+npm run build
+```
+
+**What to do if build fails:**
+1. Review the build errors carefully
+2. Fix any build errors
+3. Commit the fixes
+4. Re-run the build check
+5. Only proceed to PR creation after build passes
+
+**Override (rare cases only):**
+If you need to bypass the build check (e.g., for documentation-only changes), you can set `"requireBuildBeforePR": false` in the `checks` section of your config. However, this should be avoided in most cases.
+
+**Why this matters:**
+- Prevents broken code from being submitted for review
+- Catches build errors early before CI runs
+- Maintains code quality standards
+- Reduces wasted reviewer time
+
 ### Step 5: Create Pull Request
 
 **Generate PR title:**
@@ -236,8 +263,9 @@ Process:
 2. (User implements feature)
 3. Commit: "feat: Add DSPy email generation\n\nImplements: HOK-125"
 4. Push: git push -u origin feature/add-email-generation
-5. Create PR with summary from tasks.md
-6. Return PR URL
+5. Run build check: npm run build (must pass before PR)
+6. Create PR with summary from tasks.md
+7. Return PR URL
 ```
 
 ### Example 2: Bugfix Workflow
@@ -248,8 +276,9 @@ Process:
 2. (User fixes bug)
 3. Commit: "fix: Contact discovery timeout\n\nRoot cause: Missing timeout config\nFixes: HOK-130"
 4. Push: git push -u origin bugfix/contact-discovery-timeout
-5. Create PR with root cause and solution
-6. Return PR URL
+5. Run build check: npm run build (must pass before PR)
+6. Create PR with root cause and solution
+7. Return PR URL
 ```
 
 ## Error Handling
@@ -270,6 +299,30 @@ Options:
 1. Ask user: "Commit these changes? (y/n)"
 2. If yes, proceed with commit
 3. If no, suggest: `git stash`
+
+### Build Check Failures
+If the build check fails:
+1. Display the build error output clearly
+2. Guide user to fix the errors:
+   ```
+   ❌ Build check failed. Cannot create PR until build passes.
+
+   Build errors:
+   [show error output]
+
+   Steps to fix:
+   1. Review the errors above
+   2. Fix the build issues
+   3. Run 'npm run build' locally to verify
+   4. Commit your fixes
+   5. Try PR creation again
+
+   To bypass (not recommended): Set "requireBuildBeforePR": false in config
+   ```
+3. Wait for user to fix and confirm
+4. Re-run build check before proceeding
+
+**Note:** Do not bypass the build check unless explicitly requested by the user for special cases (e.g., documentation-only PRs).
 
 ### Push Conflicts
 If push fails with conflicts:
