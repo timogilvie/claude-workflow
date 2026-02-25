@@ -47,12 +47,33 @@ Use mill mode when your backlog has many independent tasks and your team is comf
 
 ## Project Context Integration
 
-Mill mode automatically maintains a `.wavemill/project-context.md` file that helps agents learn from previous work:
+Mill mode automatically maintains a `.wavemill/project-context.md` file that helps agents learn from previous work.
 
-**First-time setup:**
+### Setup
+
+**Option 1: Use `wavemill init` (Recommended)**
+```bash
+cd ~/your-repo
+wavemill init
+# Answer 'Y' when prompted to initialize project context
+```
+
+**Option 2: Auto-initialization**
+
+When you first run `wavemill mill` or `wavemill expand`, you'll be prompted:
+```bash
+wavemill mill
+# Will prompt: "Initialize project context? [Y/n]"
+```
+
+Skip the prompt with: `SKIP_CONTEXT_CHECK=true wavemill mill`
+
+**Option 3: Manual initialization**
 ```bash
 npx tsx tools/init-project-context.ts
 ```
+
+### How It Works
 
 After initialization, the file is **automatically updated** after each PR merge with:
 - What changed in the implementation
@@ -61,7 +82,8 @@ After initialization, the file is **automatically updated** after each PR merge 
 
 This ensures that agent #5 knows what agents #1-4 built, leading to more consistent implementations and fewer repeated mistakes.
 
-**Manual maintenance:**
+### Maintenance
+
 - The "Recent Work" section is auto-updated (append-only)
 - Other sections (Architecture, Conventions) can be manually edited
 - Agents receive this context when expanding Linear issues

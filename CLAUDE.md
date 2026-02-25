@@ -47,12 +47,27 @@ This file is automatically included when agents expand Linear issues, enabling t
 
 ### Initialization
 
+**Recommended:** Use `wavemill init` which will prompt you to initialize project context:
+
 ```bash
-# Create initial project context by analyzing the codebase
+cd ~/your-repo
+wavemill init
+# Answer 'Y' when prompted to initialize project context
+```
+
+**Manual initialization** (if you skipped it during `wavemill init`):
+
+```bash
 npx tsx tools/init-project-context.ts
 
 # Overwrite existing context (use with caution)
 npx tsx tools/init-project-context.ts --force
+```
+
+**Auto-initialization:** When you run `wavemill mill` or `wavemill expand` for the first time, you'll be prompted to initialize if the file doesn't exist. You can skip this check with:
+
+```bash
+SKIP_CONTEXT_CHECK=true wavemill mill
 ```
 
 ### Automatic Updates
