@@ -113,6 +113,11 @@
           "type": "boolean",
           "default": false,
           "description": "When true, always run the research phase before plan decomposition. Can be overridden by the --research CLI flag."
+        },
+        "model": {
+          "type": "string",
+          "default": "claude-opus-4-6",
+          "description": "Claude model to use for plan decomposition and research. Can be overridden with PLAN_MODEL env var."
         }
       }
     },
