@@ -152,6 +152,7 @@ MAX_PARALLEL=5 wavemill mill
 - **Migration conflict prevention** - Pre-assigns migration numbers to parallel tasks
 - **Validation gates** - Checks CI status and merge target before marking tasks "Done"
 - **State persistence** - Tracks all work in `.wavemill/workflow-state.json`
+- **Project context learning** - Automatically maintains `.wavemill/project-context.md` with architectural decisions, patterns, and lessons learned from each completed task
 
 **Environment variables:**
 - `MAX_PARALLEL` - Number of parallel tasks (default: 3)

@@ -182,19 +182,34 @@ async function getDirectoryTree(repoPath: string, maxDepth: number = 3): Promise
   }
 }
 
-// Load key files reference from .wavemill/codebase-context.md or CLAUDE.md
+// Load key files reference from .wavemill/project-context.md, codebase-context.md, or CLAUDE.md
 async function getKeyFilesReference(repoPath: string): Promise<string> {
   const candidates = [
-    path.join(repoPath, '.wavemill', 'codebase-context.md'),
-    path.join(repoPath, 'CLAUDE.md'),
+    { path: path.join(repoPath, '.wavemill', 'project-context.md'), maxLines: Infinity }, // Full content
+    { path: path.join(repoPath, '.wavemill', 'codebase-context.md'), maxLines: 1000 },
+    { path: path.join(repoPath, 'CLAUDE.md'), maxLines: 1000 },
   ];
 
-  for (const filePath of candidates) {
+  for (const { path: filePath, maxLines } of candidates) {
     try {
       const content = await fs.readFile(filePath, 'utf-8');
-      // Extract just the relevant sections (limit to 1000 lines)
-      const lines = content.split('\n').slice(0, 1000);
-      return `Source: ${path.basename(filePath)}\n\n${lines.join('\n')}`;
+      const lines = content.split('\n');
+
+      // Validate size for project-context.md
+      if (filePath.includes('project-context.md')) {
+        const sizeKB = Buffer.byteLength(content, 'utf-8') / 1024;
+        if (sizeKB > 100) {
+          console.warn(`⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (>100KB limit)`);
+          console.warn('   Consider archiving old "Recent Work" entries to project-context-archive.md');
+          // Still proceed but warn
+        } else if (sizeKB > 50) {
+          console.warn(`⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (approaching 100KB limit)`);
+        }
+      }
+
+      // Extract relevant sections (full content for project-context, limited for others)
+      const limitedLines = maxLines === Infinity ? lines : lines.slice(0, maxLines);
+      return `Source: ${path.basename(filePath)}\n\n${limitedLines.join('\n')}`;
     } catch {
       continue;
     }
