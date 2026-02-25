@@ -18,7 +18,7 @@ import dotenv from 'dotenv';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { getIssue, updateIssue } from '../shared/lib/linear.js';
 
 dotenv.config({ quiet: true });
@@ -61,9 +61,13 @@ function cleanOutput(text: string): string {
 }
 
 // Claude CLI helper - uses your local Claude subscription
-async function expandWithClaude(prompt: string, issueContext: string): Promise<string> {
+async function expandWithClaude(prompt: string, issueContext: string, codebaseContext: string = ''): Promise<string> {
   return new Promise((resolve, reject) => {
-    const fullPrompt = `${prompt}\n\n---\n\n${issueContext}`;
+    const contextParts = [prompt, issueContext];
+    if (codebaseContext) {
+      contextParts.push(codebaseContext);
+    }
+    const fullPrompt = contextParts.join('\n\n---\n\n');
 
     const claude = spawn(CLAUDE_CMD, [
       '--print',
@@ -160,6 +164,123 @@ function formatIssueContext(issue: any): string {
   return context;
 }
 
+// Gather directory tree context (depth-limited)
+async function getDirectoryTree(repoPath: string, maxDepth: number = 3): Promise<string> {
+  try {
+    // Use find with depth limit, exclude common noise
+    const cmd = `cd "${repoPath}" && find . -type d -maxdepth ${maxDepth} \
+      ! -path "*/node_modules/*" \
+      ! -path "*/.git/*" \
+      ! -path "*/dist/*" \
+      ! -path "*/build/*" \
+      | sort | head -100`;
+
+    const result = execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+    return result.trim() || '(No directories found)';
+  } catch (error) {
+    return '(Directory tree unavailable)';
+  }
+}
+
+// Load key files reference from .wavemill/codebase-context.md or CLAUDE.md
+async function getKeyFilesReference(repoPath: string): Promise<string> {
+  const candidates = [
+    path.join(repoPath, '.wavemill', 'codebase-context.md'),
+    path.join(repoPath, 'CLAUDE.md'),
+  ];
+
+  for (const filePath of candidates) {
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      // Extract just the relevant sections (limit to 1000 lines)
+      const lines = content.split('\n').slice(0, 1000);
+      return `Source: ${path.basename(filePath)}\n\n${lines.join('\n')}`;
+    } catch {
+      continue;
+    }
+  }
+
+  return '(No codebase context file found)';
+}
+
+// Get recent git activity to understand active areas
+function getRecentGitActivity(repoPath: string, limit: number = 20): string {
+  try {
+    const cmd = `cd "${repoPath}" && git log --oneline --name-only -${limit}`;
+    const result = execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+    return result.trim() || '(No recent commits found)';
+  } catch (error) {
+    return '(Git history unavailable)';
+  }
+}
+
+// Find files matching keywords from issue title
+async function findRelevantFiles(repoPath: string, issueTitle: string): Promise<string> {
+  // Extract meaningful keywords (exclude common words)
+  const stopWords = new Set(['add', 'fix', 'update', 'the', 'a', 'an', 'to', 'for', 'in', 'on', 'and', 'or', 'with']);
+  const keywords = issueTitle
+    .toLowerCase()
+    .split(/\W+/)
+    .filter(word => word.length > 3 && !stopWords.has(word))
+    .slice(0, 3); // Top 3 keywords
+
+  if (keywords.length === 0) {
+    return '(No relevant keywords found)';
+  }
+
+  const results: string[] = [];
+
+  for (const keyword of keywords) {
+    try {
+      const cmd = `cd "${repoPath}" && grep -r --include="*.{ts,js,tsx,jsx,md}" -l "${keyword}" . 2>/dev/null \
+        | grep -v node_modules \
+        | grep -v .git \
+        | head -10`;
+
+      const output = execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+      if (output.trim()) {
+        results.push(`Keyword: "${keyword}"\n${output.trim()}`);
+      }
+    } catch {
+      // Grep returns non-zero if no matches, that's okay
+    }
+  }
+
+  return results.length > 0 ? results.join('\n\n') : '(No matching files found)';
+}
+
+// Gather all codebase context
+async function gatherCodebaseContext(repoPath: string, issueTitle: string): Promise<string> {
+  console.log('Gathering codebase context...');
+
+  const [dirTree, keyFiles, gitActivity, relevantFiles] = await Promise.all([
+    getDirectoryTree(repoPath),
+    getKeyFilesReference(repoPath),
+    Promise.resolve(getRecentGitActivity(repoPath)),
+    findRelevantFiles(repoPath, issueTitle),
+  ]);
+
+  return `
+# Codebase Context
+
+## Directory Structure
+\`\`\`
+${dirTree}
+\`\`\`
+
+## Key Files & Conventions
+${keyFiles}
+
+## Recent Git Activity
+\`\`\`
+${gitActivity}
+\`\`\`
+
+## Relevant Files (keyword search)
+${relevantFiles}
+`.trim();
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -175,6 +296,7 @@ Arguments:
 
 Options:
   --update       Update the Linear issue with the expanded description
+  --repo-path    Path to target repository (default: current directory)
   --dry-run      Show what would be updated without making changes (default)
   --output FILE  Save expanded description to file instead of stdout
   --help, -h     Show this help message
@@ -203,6 +325,8 @@ Environment Variables:
   const shouldUpdate = args.includes('--update');
   const outputFileIndex = args.indexOf('--output');
   const outputFile = outputFileIndex >= 0 ? args[outputFileIndex + 1] : null;
+  const repoPathIndex = args.indexOf('--repo-path');
+  const repoPath = repoPathIndex >= 0 ? args[repoPathIndex + 1] : process.cwd();
 
   try {
     // Parse and fetch issue
@@ -227,10 +351,13 @@ Environment Variables:
     // Format issue context
     const issueContext = formatIssueContext(issue);
 
+    // Gather codebase context
+    const codebaseContext = await gatherCodebaseContext(repoPath, issue.title);
+
     // Expand with Claude
     console.log('Expanding issue with Claude...\n');
     console.log('─'.repeat(80));
-    const expandedDescription = await expandWithClaude(promptTemplate, issueContext);
+    const expandedDescription = await expandWithClaude(promptTemplate, issueContext, codebaseContext);
     console.log('─'.repeat(80));
     console.log('\n');
 
