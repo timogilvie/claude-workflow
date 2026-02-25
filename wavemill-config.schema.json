@@ -311,6 +311,59 @@
           "description": "API provider for LLM routing calls. OpenAI recommended (gpt-4o-mini is fast and cheap)."
         }
       }
+    },
+    "validation": {
+      "type": "object",
+      "description": "Settings for task packet validation (quality gate after issue expansion).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether validation is enabled. Can be bypassed per-expansion with --skip-validation flag."
+        },
+        "layer1": {
+          "type": "object",
+          "description": "Layer 1 deterministic validation (file paths, structure).",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether Layer 1 validation is enabled."
+            }
+          },
+          "additionalProperties": false
+        },
+        "layer2": {
+          "type": "object",
+          "description": "Layer 2 LLM-based validation (vague specs, contradictions).",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether Layer 2 validation is enabled."
+            },
+            "model": {
+              "type": "string",
+              "default": "claude-haiku-4-5-20251001",
+              "description": "LLM model to use for task packet review. Should be fast and cheap (Haiku recommended)."
+            },
+            "provider": {
+              "type": "string",
+              "enum": ["claude-cli", "anthropic"],
+              "default": "claude-cli",
+              "description": "LLM provider for Layer 2 validation. 'claude-cli' uses local subscription, 'anthropic' uses API key."
+            }
+          },
+          "additionalProperties": false
+        },
+        "onFailure": {
+          "type": "string",
+          "enum": ["conservative", "auto-fix", "proceed"],
+          "default": "conservative",
+          "description": "Behavior when validation fails: 'conservative' (skip update), 'auto-fix' (retry expansion with feedback), 'proceed' (update anyway with warnings attached)."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

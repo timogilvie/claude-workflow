@@ -20,6 +20,15 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn, execSync } from 'child_process';
 import { getIssue, updateIssue } from '../shared/lib/linear.js';
+import {
+  validateTaskPacket,
+  DEFAULT_VALIDATION_CONFIG,
+  type ValidationConfig,
+  type ValidationResult,
+  type ValidationIssue,
+} from '../shared/lib/task-packet-validator.js';
+import { existsSync, readFileSync } from 'fs';
+import { createInterface } from 'readline';
 
 dotenv.config({ quiet: true });
 
@@ -281,6 +290,75 @@ ${relevantFiles}
 `.trim();
 }
 
+// Load validation configuration
+function loadValidationConfig(): ValidationConfig {
+  const configPath = path.resolve('.wavemill-config.json');
+  if (existsSync(configPath)) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (config.validation) {
+        return {
+          ...DEFAULT_VALIDATION_CONFIG,
+          ...config.validation,
+          layer1: { ...DEFAULT_VALIDATION_CONFIG.layer1, ...config.validation.layer1 },
+          layer2: { ...DEFAULT_VALIDATION_CONFIG.layer2, ...config.validation.layer2 },
+        };
+      }
+    } catch {
+      // Malformed config — use defaults
+    }
+  }
+  return DEFAULT_VALIDATION_CONFIG;
+}
+
+// Format validation issues for display
+function formatValidationIssues(issues: ValidationIssue[]): string {
+  if (issues.length === 0) {
+    return '✓ No validation issues found';
+  }
+
+  // Group by severity
+  const errors = issues.filter(i => i.severity === 'error');
+  const warnings = issues.filter(i => i.severity === 'warning');
+
+  let output = '';
+
+  if (errors.length > 0) {
+    output += `\n❌ ERRORS (${errors.length}):\n`;
+    errors.forEach((issue, idx) => {
+      output += `\n${idx + 1}. [${issue.type}] ${issue.section}\n`;
+      output += `   ${issue.description}\n`;
+      output += `   → ${issue.suggestedFix}\n`;
+    });
+  }
+
+  if (warnings.length > 0) {
+    output += `\n⚠️  WARNINGS (${warnings.length}):\n`;
+    warnings.forEach((issue, idx) => {
+      output += `\n${idx + 1}. [${issue.type}] ${issue.section}\n`;
+      output += `   ${issue.description}\n`;
+      output += `   → ${issue.suggestedFix}\n`;
+    });
+  }
+
+  return output;
+}
+
+// Ask user for confirmation
+async function promptUser(question: string): Promise<boolean> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase().startsWith('y'));
+    });
+  });
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -295,11 +373,12 @@ Arguments:
   <issue-id>     Linear issue identifier (e.g., LIN-123) or full Linear URL
 
 Options:
-  --update       Update the Linear issue with the expanded description
-  --repo-path    Path to target repository (default: current directory)
-  --dry-run      Show what would be updated without making changes (default)
-  --output FILE  Save expanded description to file instead of stdout
-  --help, -h     Show this help message
+  --update            Update the Linear issue with the expanded description
+  --repo-path         Path to target repository (default: current directory)
+  --dry-run           Show what would be updated without making changes (default)
+  --output FILE       Save expanded description to file instead of stdout
+  --skip-validation   Skip quality gate validation (not recommended)
+  --help, -h          Show this help message
 
 Examples:
   # Preview expanded issue (dry-run)
@@ -323,6 +402,7 @@ Environment Variables:
 
   const issueInput = args[0];
   const shouldUpdate = args.includes('--update');
+  const skipValidation = args.includes('--skip-validation');
   const outputFileIndex = args.indexOf('--output');
   const outputFile = outputFileIndex >= 0 ? args[outputFileIndex + 1] : null;
   const repoPathIndex = args.indexOf('--repo-path');
@@ -381,6 +461,47 @@ Environment Variables:
       console.error('  First 200 chars:', expandedDescription.substring(0, 200));
       console.error('  Skipping Linear update to avoid overwriting with bad content.');
       process.exit(1);
+    }
+
+    // Run quality gate validation (unless skipped)
+    let validationResult: ValidationResult | null = null;
+    if (!skipValidation) {
+      console.log('\nRunning quality gate validation...');
+
+      const validationConfig = loadValidationConfig();
+
+      try {
+        validationResult = await validateTaskPacket(expandedDescription, repoPath, validationConfig);
+
+        console.log(formatValidationIssues(validationResult.issues));
+
+        if (!validationResult.passed) {
+          console.error('\n❌ Validation FAILED');
+
+          if (shouldUpdate) {
+            // Ask user whether to proceed
+            console.log('\nThe task packet has quality issues that may cause problems for autonomous agents.');
+            const proceed = await promptUser('Do you want to update Linear anyway? (y/N): ');
+
+            if (!proceed) {
+              console.log('✗ Cancelled. Fix the issues and try again.');
+              process.exit(1);
+            } else {
+              console.log('⚠️  Proceeding with update despite validation failures...');
+            }
+          } else {
+            console.log('\nℹ This is a dry-run. Use --update to save to Linear (with confirmation).');
+            console.log('  Or use --skip-validation to bypass quality gate.');
+          }
+        } else {
+          console.log('\n✓ Validation PASSED');
+        }
+      } catch (validationError) {
+        console.warn(`\n⚠️  Validation failed with error: ${validationError.message}`);
+        console.warn('   Proceeding without validation...');
+      }
+    } else {
+      console.log('\n⚠️  Skipping validation (--skip-validation flag)');
     }
 
     // Update Linear if requested
