@@ -146,8 +146,15 @@ main() {
       echo ""
       log "  ✓ Expanded and updated in Linear"
 
-      # Cleanup temp file (labeling is handled by auto-label-issue.ts inside expand-issue.ts)
-      rm -f "$EXPANDED_FILE"
+      # Report generated files
+      local header_file="${EXPANDED_FILE%.md}-header.md"
+      local details_file="${EXPANDED_FILE%.md}-details.md"
+      if [[ -f "$header_file" ]] && [[ -f "$details_file" ]]; then
+        log "  ✓ Header and details files generated"
+      fi
+
+      # Cleanup temp files (labeling is handled by auto-label-issue.ts inside expand-issue.ts)
+      rm -f "$EXPANDED_FILE" "$header_file" "$details_file"
       ((++SUCCESS_COUNT))
     else
       log_error "  ✗ Expansion failed for $ISSUE (see /tmp/expand-issue-${ISSUE}.log)"
