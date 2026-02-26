@@ -95,6 +95,114 @@ Note: Internal function calls within the codebase generally don't need defensive
 
 ---
 
+## Plan Compliance Review
+
+**CONDITIONAL**: Only include this section in your review if `{{TASK_PACKET_CONTEXT}}` is provided (not "No task packet provided").
+
+If no task packet is available, **skip this entire section** in your output.
+
+### When to Evaluate Plan Compliance
+
+When a task packet is available, perform a dedicated evaluation of whether the implementation delivers what was planned. This goes beyond checking individual requirements — it's about verifying the implementation matches the intent and completeness of the original specification.
+
+### Evaluation Criteria
+
+When a task packet is provided, evaluate these three aspects:
+
+#### 1. Acceptance Criteria Coverage
+
+**Check**: Are all acceptance criteria from the task packet addressed in the implementation?
+
+- Look for explicit acceptance criteria in the task packet (often in "Success Criteria" or "Definition of Done" sections)
+- Verify each criterion has corresponding implementation in the diff
+- Flag any criteria that are completely missing from the implementation
+- Flag any criteria that are only partially implemented
+
+**Examples**:
+- ✅ Report: "Task packet Section 4 requires 'User receives email confirmation after signup' but no email service call found in diff"
+- ✅ Report: "Task packet specifies 'Form validates all fields before submission' but implementation only validates email field"
+- ❌ Skip: "Could add more validation rules" (not in acceptance criteria)
+
+#### 2. Unexpected Deviations from Plan
+
+**Check**: Does the implementation deviate from the planned approach in significant ways?
+
+- Compare the implementation approach against the plan document (if available)
+- Flag deviations that change core architecture, technologies, or patterns
+- Flag deviations that introduce new dependencies or external services not in the plan
+- **Don't flag**: Minor implementation details or reasonable refactorings
+
+**Examples**:
+- ✅ Report: "Plan specifies using Redis for caching but implementation uses in-memory cache instead. This changes scalability characteristics"
+- ✅ Report: "Plan calls for REST API endpoint but implementation uses GraphQL mutation. Architecture deviation not discussed in plan"
+- ❌ Skip: "Used different variable name than plan suggested" (trivial deviation)
+- ❌ Skip: "Extracted a helper function not mentioned in plan" (reasonable refactoring)
+
+**Important**: Only flag **unexpected** deviations. If the deviation appears intentional and well-reasoned (e.g., fixing a plan mistake or improving the approach), it's acceptable. Focus on deviations that:
+- Contradict explicit constraints
+- Change user-facing behavior unexpectedly
+- Introduce technical risk not acknowledged in the plan
+
+#### 3. Missing Planned Items
+
+**Check**: Are there planned features or components that are missing from the implementation?
+
+- Review the implementation plan or task packet for listed features, files, or components
+- Verify each planned item appears in the diff
+- Flag planned items that are completely absent
+- Flag planned items mentioned in the plan but not implemented
+
+**Examples**:
+- ✅ Report: "Plan includes implementing error boundary component in src/components/ErrorBoundary.tsx but this file is not in the diff"
+- ✅ Report: "Task packet specifies adding unit tests for new validators but no test files are included"
+- ❌ Skip: "Could add more tests" (not explicitly planned)
+
+### Severity Guidelines for Plan Compliance
+
+- **`blocker`** - Use when:
+  - Acceptance criterion is completely missing
+  - Planned feature is not implemented at all
+  - Deviation fundamentally breaks requirements or constraints
+  - Missing implementation will cause user-facing functionality to fail
+
+- **`warning`** - Use when:
+  - Acceptance criterion is partially implemented
+  - Deviation is significant but might be intentional
+  - Planned item is missing but may have been moved to future work
+  - Implementation detail differs from plan but doesn't affect outcomes
+
+### Output Category
+
+Plan compliance findings should use category `"plan_compliance"` in the `codeReviewFindings` array.
+
+**Example findings**:
+```json
+{
+  "severity": "blocker",
+  "location": "task-packet.md:Section 4",
+  "category": "plan_compliance",
+  "description": "Acceptance criterion 'User can reset password via email link' is not implemented. No password reset endpoint or UI found in diff"
+}
+```
+
+```json
+{
+  "severity": "warning",
+  "location": "plan.md:Phase 2",
+  "category": "plan_compliance",
+  "description": "Plan specifies implementing rate limiting middleware but implementation is absent. This may be intentional deferral but should be confirmed"
+}
+```
+
+### What NOT to Report
+
+- **Hypothetical improvements**: Don't flag things that could be added but weren't in the original plan
+- **Trivial implementation differences**: Don't flag minor deviations in variable names, code structure, or equivalent approaches
+- **Intentional improvements**: If the implementation improves on the plan in a clear way, don't flag it as a deviation
+- **Out of scope features**: Don't flag missing features that were never part of the task packet or plan
+
+---
+
 ## Context Documents
 
 ### Diff to Review
@@ -189,7 +297,7 @@ Return your review as a JSON object with this exact structure:
     {
       "severity": "blocker" | "warning",
       "location": "file.ts:line",
-      "category": "logic" | "security" | "requirements" | "error_handling" | "architecture",
+      "category": "logic" | "security" | "requirements" | "error_handling" | "architecture" | "plan_compliance",
       "description": "Clear description of the issue and why it matters"
     }
   ],
@@ -318,6 +426,62 @@ Return your review as a JSON object with this exact structure:
       "location": "src/pages/dashboard.tsx:45",
       "category": "responsive",
       "description": "Fixed width w-96 on dashboard layout component will overflow on mobile. Consider adding responsive variants like w-full md:w-96"
+    }
+  ]
+}
+```
+
+### Example 5: Plan Compliance Issues (Task Packet Provided)
+
+```json
+{
+  "verdict": "not_ready",
+  "codeReviewFindings": [
+    {
+      "severity": "blocker",
+      "location": "task-packet.md:Section 4",
+      "category": "plan_compliance",
+      "description": "Acceptance criterion 'User receives confirmation email after signup' is not implemented. No email service integration found in the diff"
+    },
+    {
+      "severity": "blocker",
+      "location": "task-packet.md:Section 6",
+      "category": "plan_compliance",
+      "description": "Validation step 'Test with invalid email formats' is missing. No test file for email validation included in diff"
+    },
+    {
+      "severity": "warning",
+      "location": "plan.md:Phase 2",
+      "category": "plan_compliance",
+      "description": "Plan specifies using bcrypt for password hashing but implementation uses argon2. While argon2 is secure, this deviation from the plan should be acknowledged"
+    }
+  ]
+}
+```
+
+### Example 6: Mixed Findings with Plan Compliance
+
+```json
+{
+  "verdict": "not_ready",
+  "codeReviewFindings": [
+    {
+      "severity": "blocker",
+      "location": "src/auth/login.ts:34",
+      "category": "security",
+      "description": "Password comparison using == instead of constant-time comparison. Vulnerable to timing attacks"
+    },
+    {
+      "severity": "blocker",
+      "location": "task-packet.md:Section 4",
+      "category": "plan_compliance",
+      "description": "Acceptance criterion 'Implement rate limiting on login endpoint' is missing. No rate limiting middleware found"
+    },
+    {
+      "severity": "warning",
+      "location": "src/auth/session.ts:67",
+      "category": "error_handling",
+      "description": "Redis session store has no error handling for connection failures. Will crash on Redis downtime"
     }
   ]
 }
