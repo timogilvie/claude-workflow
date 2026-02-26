@@ -40,7 +40,7 @@ function testSaveConstraintRules() {
     rules: [
       {
         id: 'CONSTRAINT-1',
-        filename: '01-file-no-modify-config.js',
+        filename: '01-file-no-modify-config.cjs',
         code: '#!/usr/bin/env node\nconsole.log("Rule 1");',
         constraint: {
           id: 'CONSTRAINT-1',
@@ -52,7 +52,7 @@ function testSaveConstraintRules() {
       },
       {
         id: 'CONSTRAINT-2',
-        filename: '02-code-style-use-typescript.js',
+        filename: '02-code-style-use-typescript.cjs',
         code: '#!/usr/bin/env node\nconsole.log("Rule 2");',
         constraint: {
           id: 'CONSTRAINT-2',
@@ -87,11 +87,11 @@ function testSaveConstraintRules() {
     'Rules subdirectory should be created'
   );
   assert(
-    fs.existsSync(path.join(savedDir, 'rules', '01-file-no-modify-config.js')),
+    fs.existsSync(path.join(savedDir, 'rules', '01-file-no-modify-config.cjs')),
     'First rule file should be saved'
   );
   assert(
-    fs.existsSync(path.join(savedDir, 'rules', '02-code-style-use-typescript.js')),
+    fs.existsSync(path.join(savedDir, 'rules', '02-code-style-use-typescript.cjs')),
     'Second rule file should be saved'
   );
   assert(
@@ -104,7 +104,7 @@ function testSaveConstraintRules() {
   );
 
   // Check that rule files are executable
-  const stat = fs.statSync(path.join(savedDir, 'rules', '01-file-no-modify-config.js'));
+  const stat = fs.statSync(path.join(savedDir, 'rules', '01-file-no-modify-config.cjs'));
   assert((stat.mode & 0o111) !== 0, 'Rule files should be executable');
 }
 
@@ -185,7 +185,7 @@ function testSaveWithoutManualReview() {
     rules: [
       {
         id: 'CONSTRAINT-1',
-        filename: '01-file-test.js',
+        filename: '01-file-test.cjs',
         code: '#!/usr/bin/env node\nconsole.log("Test");',
         constraint: {
           id: 'CONSTRAINT-1',

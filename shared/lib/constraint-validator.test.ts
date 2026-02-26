@@ -7,9 +7,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { validateConstraints, formatValidationResult } from './constraint-validator.js';
-import { saveConstraintRules } from './constraint-storage.js';
-import type { RuleGenerationResult } from './rule-generator.js';
+import { validateConstraints, formatValidationResult } from './constraint-validator\.cjs';
+import { saveConstraintRules } from './constraint-storage\.cjs';
+import type { RuleGenerationResult } from './rule-generator\.cjs';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -34,7 +34,7 @@ function setupPassingConstraint() {
     rules: [
       {
         id: 'CONSTRAINT-1',
-        filename: '01-test-passing.js',
+        filename: '01-test-passing.cjs',
         code: `#!/usr/bin/env node
 console.log('✓ CONSTRAINT-1: Test constraint passed');
 process.exit(0);`,
@@ -63,7 +63,7 @@ function setupFailingConstraint() {
     rules: [
       {
         id: 'CONSTRAINT-2',
-        filename: '01-test-failing.js',
+        filename: '01-test-failing\.cjs',
         code: `#!/usr/bin/env node
 console.error('❌ CONSTRAINT-2: Test constraint failed');
 console.error('This is a test failure');
@@ -93,7 +93,7 @@ function setupMixedConstraints() {
     rules: [
       {
         id: 'CONSTRAINT-3',
-        filename: '01-test-pass.js',
+        filename: '01-test-pass\.cjs',
         code: `#!/usr/bin/env node
 console.log('✓ CONSTRAINT-3: Passed');
 process.exit(0);`,
@@ -107,7 +107,7 @@ process.exit(0);`,
       },
       {
         id: 'CONSTRAINT-4',
-        filename: '02-test-fail.js',
+        filename: '02-test-fail\.cjs',
         code: `#!/usr/bin/env node
 console.error('❌ CONSTRAINT-4: Failed');
 process.exit(1);`,
@@ -121,7 +121,7 @@ process.exit(1);`,
       },
       {
         id: 'CONSTRAINT-5',
-        filename: '03-test-pass.js',
+        filename: '03-test-pass\.cjs',
         code: `#!/usr/bin/env node
 console.log('✓ CONSTRAINT-5: Passed');
 process.exit(0);`,
@@ -150,7 +150,7 @@ function setupManualReviewConstraints() {
     rules: [
       {
         id: 'CONSTRAINT-6',
-        filename: '01-test-pass.js',
+        filename: '01-test-pass\.cjs',
         code: `#!/usr/bin/env node
 console.log('✓ CONSTRAINT-6: Passed');
 process.exit(0);`,

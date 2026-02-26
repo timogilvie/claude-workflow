@@ -79,7 +79,7 @@ function generateFilename(constraint: Constraint): string {
     .substring(0, 40)
     .replace(/-+$/, '');
 
-  return `${prefix.padStart(2, '0')}-${category}-${sanitized}.js`;
+  return `${prefix.padStart(2, '0')}-${category}-${sanitized}.cjs`;
 }
 
 /**

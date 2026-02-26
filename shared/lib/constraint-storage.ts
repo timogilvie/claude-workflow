@@ -94,7 +94,7 @@ export function loadConstraintRules(
   if (fs.existsSync(rulesDir)) {
     ruleFiles.push(
       ...fs.readdirSync(rulesDir)
-        .filter(f => f.endsWith('.js'))
+        .filter(f => f.endsWith('.cjs') || f.endsWith('.js'))
         .map(f => path.join(rulesDir, f))
     );
   }
