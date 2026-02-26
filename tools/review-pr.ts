@@ -118,109 +118,8 @@ The review focuses on major issues:
 // Context Gathering
 // ────────────────────────────────────────────────────────────────
 
-/**
- * Extract slug from branch name.
- * Supports: task/*, feature/*, bugfix/*, bug/*
- */
-function extractSlugFromBranch(branchName: string): string | null {
-  const match = branchName.match(/^(?:task|feature|bugfix|bug)\/(.+)$/);
-  return match ? match[1] : null;
-}
-
-/**
- * Find task packet for a given branch name.
- * Checks features/ and bugs/ directories.
- */
-function findTaskPacketForBranch(branchName: string, repoDir: string): string | null {
-  const slug = extractSlugFromBranch(branchName);
-  if (!slug) return null;
-
-  // Try new split format in features/
-  const featureHeaderPath = join(repoDir, 'features', slug, 'task-packet-header.md');
-  const featureDetailsPath = join(repoDir, 'features', slug, 'task-packet-details.md');
-
-  if (existsSync(featureHeaderPath)) {
-    try {
-      let content = readFileSync(featureHeaderPath, 'utf-8');
-      if (existsSync(featureDetailsPath)) {
-        const details = readFileSync(featureDetailsPath, 'utf-8');
-        content = `${content}\n\n---\n\n${details}`;
-      }
-      return content;
-    } catch {
-      // Continue
-    }
-  }
-
-  // Try legacy format in features/
-  const featureLegacyPath = join(repoDir, 'features', slug, 'task-packet.md');
-  if (existsSync(featureLegacyPath)) {
-    try {
-      return readFileSync(featureLegacyPath, 'utf-8');
-    } catch {
-      // Continue
-    }
-  }
-
-  // Try bugs/ directory
-  const bugsHeaderPath = join(repoDir, 'bugs', slug, 'task-packet-header.md');
-  const bugsDetailsPath = join(repoDir, 'bugs', slug, 'task-packet-details.md');
-
-  if (existsSync(bugsHeaderPath)) {
-    try {
-      let content = readFileSync(bugsHeaderPath, 'utf-8');
-      if (existsSync(bugsDetailsPath)) {
-        const details = readFileSync(bugsDetailsPath, 'utf-8');
-        content = `${content}\n\n---\n\n${details}`;
-      }
-      return content;
-    } catch {
-      // Continue
-    }
-  }
-
-  const bugsLegacyPath = join(repoDir, 'bugs', slug, 'task-packet.md');
-  if (existsSync(bugsLegacyPath)) {
-    try {
-      return readFileSync(bugsLegacyPath, 'utf-8');
-    } catch {
-      // Not found
-    }
-  }
-
-  return null;
-}
-
-/**
- * Find plan for a given branch name.
- * Checks features/ and bugs/ directories.
- */
-function findPlanForBranch(branchName: string, repoDir: string): string | null {
-  const slug = extractSlugFromBranch(branchName);
-  if (!slug) return null;
-
-  // Try features/
-  const featurePlanPath = join(repoDir, 'features', slug, 'plan.md');
-  if (existsSync(featurePlanPath)) {
-    try {
-      return readFileSync(featurePlanPath, 'utf-8');
-    } catch {
-      // Continue
-    }
-  }
-
-  // Try bugs/
-  const bugsPlanPath = join(repoDir, 'bugs', slug, 'plan.md');
-  if (existsSync(bugsPlanPath)) {
-    try {
-      return readFileSync(bugsPlanPath, 'utf-8');
-    } catch {
-      // Not found
-    }
-  }
-
-  return null;
-}
+// Note: Task packet and plan finding logic moved to shared/lib/review-context-gatherer.ts
+// We now use the shared implementations: findTaskPacket() and findPlan()
 
 // ────────────────────────────────────────────────────────────────
 // LLM Integration
@@ -372,14 +271,20 @@ function displayResults(result: ReviewResult, prNumber: number, prTitle: string)
     console.log('❌ \x1b[31mNOT READY\x1b[0m - Blocking issues must be addressed\n');
   }
 
+  // Separate plan compliance findings from other code findings
+  const planComplianceFindings = result.codeReviewFindings.filter(f => f.category === 'plan_compliance');
+  const otherCodeFindings = result.codeReviewFindings.filter(f => f.category !== 'plan_compliance');
+
   // Count findings by severity
-  const codeBlockers = result.codeReviewFindings.filter(f => f.severity === 'blocker');
-  const codeWarnings = result.codeReviewFindings.filter(f => f.severity === 'warning');
+  const codeBlockers = otherCodeFindings.filter(f => f.severity === 'blocker');
+  const codeWarnings = otherCodeFindings.filter(f => f.severity === 'warning');
+  const planBlockers = planComplianceFindings.filter(f => f.severity === 'blocker');
+  const planWarnings = planComplianceFindings.filter(f => f.severity === 'warning');
   const uiBlockers = result.uiFindings?.filter(f => f.severity === 'blocker') || [];
   const uiWarnings = result.uiFindings?.filter(f => f.severity === 'warning') || [];
 
-  const totalBlockers = codeBlockers.length + uiBlockers.length;
-  const totalWarnings = codeWarnings.length + uiWarnings.length;
+  const totalBlockers = codeBlockers.length + planBlockers.length + uiBlockers.length;
+  const totalWarnings = codeWarnings.length + planWarnings.length + uiWarnings.length;
 
   // Display summary
   console.log('📊 \x1b[1mSummary\x1b[0m');
@@ -387,8 +292,8 @@ function displayResults(result: ReviewResult, prNumber: number, prTitle: string)
   console.log(`   Warnings: ${totalWarnings}`);
   console.log('');
 
-  // Display code review findings
-  if (result.codeReviewFindings.length > 0) {
+  // Display code review findings (excluding plan compliance)
+  if (otherCodeFindings.length > 0) {
     console.log('💻 \x1b[1mCode Review Findings\x1b[0m\n');
 
     if (codeBlockers.length > 0) {
@@ -409,6 +314,27 @@ function displayResults(result: ReviewResult, prNumber: number, prTitle: string)
   } else {
     console.log('💻 \x1b[1mCode Review\x1b[0m');
     console.log('   \x1b[32m✓\x1b[0m No issues found\n');
+  }
+
+  // Display plan compliance findings (if present)
+  if (planComplianceFindings.length > 0) {
+    console.log('📋 \x1b[1mPlan Compliance\x1b[0m\n');
+
+    if (planBlockers.length > 0) {
+      console.log('  \x1b[31m🚫 BLOCKERS\x1b[0m\n');
+      planBlockers.forEach((finding, idx) => {
+        console.log(`  ${idx + 1}. \x1b[31m${finding.location}\x1b[0m`);
+        console.log(`     ${finding.description}\n`);
+      });
+    }
+
+    if (planWarnings.length > 0) {
+      console.log('  \x1b[33m⚠️  WARNINGS\x1b[0m\n');
+      planWarnings.forEach((finding, idx) => {
+        console.log(`  ${idx + 1}. \x1b[33m${finding.location}\x1b[0m`);
+        console.log(`     ${finding.description}\n`);
+      });
+    }
   }
 
   // Display UI findings (if present)
@@ -474,10 +400,10 @@ async function main() {
     const { diff } = getPullRequestDiff(args.prNumber, { repo: args.repo });
     console.log(`   ${diff.split('\n').length} lines\n`);
 
-    // Find task packet and plan
+    // Find task packet and plan using shared implementations
     console.log('📋 Gathering context...');
-    const taskPacket = findTaskPacketForBranch(pr.headRefName, repoDir);
-    const plan = findPlanForBranch(pr.headRefName, repoDir);
+    const taskPacket = findTaskPacket(pr.headRefName, repoDir);
+    const plan = findPlan(pr.headRefName, repoDir);
     console.log(`   Task packet: ${taskPacket ? '✓ found' : '✗ not found'}`);
     console.log(`   Plan: ${plan ? '✓ found' : '✗ not found'}`);
 
