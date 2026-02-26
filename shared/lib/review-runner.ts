@@ -81,13 +81,25 @@ const MAX_RETRIES = 2;
 // Configuration
 // ────────────────────────────────────────────────────────────────
 
+interface UiConfig {
+  visualVerification: boolean;
+  devServer?: string;
+}
+
+interface Config {
+  judge: JudgeConfig;
+  ui: UiConfig;
+}
+
 /**
- * Load judge config from .wavemill-config.json.
+ * Load configuration from .wavemill-config.json.
  * Falls back to defaults if not found or malformed.
  */
-function loadJudgeConfig(repoDir: string): JudgeConfig {
+function loadConfig(repoDir: string): Config {
   let configModel = DEFAULT_MODEL;
   let configProvider = DEFAULT_PROVIDER;
+  let visualVerification = true; // Default: enabled
+  let devServer: string | undefined = undefined;
 
   const configPath = join(repoDir, '.wavemill-config.json');
   if (existsSync(configPath)) {
@@ -98,6 +110,12 @@ function loadJudgeConfig(repoDir: string): JudgeConfig {
       }
       if (config.eval?.judge?.provider) {
         configProvider = config.eval.judge.provider;
+      }
+      if (config.ui?.visualVerification !== undefined) {
+        visualVerification = config.ui.visualVerification;
+      }
+      if (config.ui?.devServer) {
+        devServer = config.ui.devServer;
       }
     } catch {
       // Malformed config — use defaults
@@ -111,7 +129,10 @@ function loadJudgeConfig(repoDir: string): JudgeConfig {
     );
   }
 
-  return { model: configModel, provider: configProvider };
+  return {
+    judge: { model: configModel, provider: configProvider },
+    ui: { visualVerification, devServer },
+  };
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -363,18 +384,58 @@ export async function reviewChanges(
   const repoDir = options.repoDir ? resolve(options.repoDir) : process.cwd();
 
   // Load configuration
-  const judgeConfig = loadJudgeConfig(repoDir);
+  const config = loadConfig(repoDir);
 
-  // Gather review context
+  // Gather review context (skip design standards if explicitly requested)
   const context = gatherReviewContext(targetBranch, repoDir, {
     designStandards: !options.skipUi,
   });
+
+  // Determine if UI verification should run
+  const shouldRunUiVerification =
+    !options.skipUi &&
+    context.designContext !== null &&
+    context.metadata.hasUiChanges &&
+    config.ui.visualVerification;
+
+  if (options.verbose) {
+    console.error('=== Review Configuration ===');
+    console.error(`Target branch: ${targetBranch}`);
+    console.error(`Repository: ${repoDir}`);
+    console.error(`Judge model: ${config.judge.model}`);
+    console.error(`Design context available: ${context.designContext !== null}`);
+    console.error(`UI changes detected: ${context.metadata.hasUiChanges}`);
+    console.error(`UI verification enabled: ${config.ui.visualVerification}`);
+    console.error(`Should run UI verification: ${shouldRunUiVerification}`);
+    if (config.ui.devServer) {
+      console.error(`Dev server: ${config.ui.devServer}`);
+    }
+    console.error('');
+  }
+
+  // UI Verification (Phase 2 - Future Enhancement)
+  // Note: Screenshot capture and console checking would be implemented here
+  if (shouldRunUiVerification) {
+    if (options.verbose) {
+      console.error('UI verification requested but screenshot capture not yet implemented.');
+      console.error('Proceeding with static design context review only.');
+      console.error('');
+    }
+
+    // Future implementation:
+    // - Check for dev server availability
+    // - Launch headless browser (Playwright/Puppeteer)
+    // - Capture screenshots at breakpoints
+    // - Capture console errors/warnings
+    // - Add findings to context for LLM review
+  }
 
   // Load prompt template
   const template = loadPromptTemplate();
 
   // Determine if we should skip design context in the prompt
-  const skipDesignContext = options.skipUi || options.uiOnly === true;
+  // Skip only if user explicitly requested --skip-ui
+  const skipDesignContext = options.skipUi === true;
 
   // Fill prompt
   const prompt = fillPromptTemplate(template, context, skipDesignContext);
@@ -387,10 +448,10 @@ export async function reviewChanges(
 
   // Invoke LLM
   if (options.verbose) {
-    console.error(`Invoking ${judgeConfig.model}...`);
+    console.error(`Invoking ${config.judge.model}...`);
   }
 
-  const responseText = await invokeLLMWithRetry(prompt, judgeConfig.model);
+  const responseText = await invokeLLMWithRetry(prompt, config.judge.model);
 
   if (options.verbose) {
     console.error('=== LLM Response ===');
@@ -400,6 +461,11 @@ export async function reviewChanges(
 
   // Parse response
   const result = parseReviewResponse(responseText, context);
+
+  // Update metadata to reflect if UI verification was attempted
+  if (result.metadata && shouldRunUiVerification) {
+    result.metadata.uiVerificationRun = result.uiFindings !== undefined && result.uiFindings.length > 0;
+  }
 
   return result;
 }
