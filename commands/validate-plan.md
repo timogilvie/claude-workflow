@@ -55,6 +55,176 @@ Document results:
 - ❌ 3 tests failing in auth.test.ts
 - ⚠️ 2 linting warnings
 
+### B.5: UI Validation (Conditional)
+
+**Run this section ONLY if**:
+1. UI changes are detected in the diff (hasUiChanges = true)
+2. AND `ui.visualVerification` is enabled in config (default: true)
+
+**Check if UI validation is needed**:
+```bash
+# 1. Gather review context and check for UI changes
+npx tsx tools/gather-review-context.ts main > /tmp/review-context.json
+HAS_UI_CHANGES=$(cat /tmp/review-context.json | jq -r '.metadata.hasUiChanges')
+
+# 2. Check if visual verification is enabled
+VISUAL_ENABLED=$(cat .wavemill-config.json 2>/dev/null | jq -r '.ui.visualVerification // true')
+
+# 3. Run UI validation if both are true
+if [ "$HAS_UI_CHANGES" = "true" ] && [ "$VISUAL_ENABLED" = "true" ]; then
+  echo "✓ UI validation required - proceeding..."
+else
+  echo "ℹ️  Skipping UI validation (no UI changes or disabled in config)"
+  exit 0
+fi
+```
+
+**If UI validation is needed, perform these steps**:
+
+#### 1. Gather Design Context
+
+```bash
+# Extract design context from review context
+cat /tmp/review-context.json | jq '.designContext' > /tmp/design-context.json
+
+# Review discovered design artifacts:
+# - Tailwind config theme
+# - Component library and version
+# - Design guide content (DESIGN.md, STYLE-GUIDE.md)
+# - CSS variables (:root blocks)
+# - Design tokens
+# - Storybook configuration
+```
+
+#### 2. Capture Screenshots (requires ui.devServer)
+
+```bash
+# Get dev server URL from config
+DEV_SERVER=$(cat .wavemill-config.json 2>/dev/null | jq -r '.ui.devServer // "http://localhost:3000"')
+
+# Identify affected pages from task packet or plan
+# Look for Pages/Routes section in task packet or plan
+
+# Use frontend-testing skill to capture screenshots:
+# - Navigate to each affected page
+# - Take screenshot and save to features/<slug>/screenshots/
+# - Name files descriptively (e.g., dashboard-after.png, settings-mobile.png)
+```
+
+**Frontend-testing commands**:
+```
+Use the frontend-testing skill to:
+1. Navigate to $DEV_SERVER/<route>
+2. Wait for page load
+3. Take screenshot: features/<slug>/screenshots/<page>-after.png
+4. Repeat for each affected page
+5. Repeat for different viewports if responsive changes
+```
+
+#### 3. Check Browser Console
+
+```bash
+# Use frontend-testing skill to check console for each page:
+# 1. Navigate to page
+# 2. List console messages
+# 3. Report any errors or unexpected warnings
+```
+
+**Expected states**:
+- ✅ **Clean console** - No errors, no warnings
+- ⚠️ **Known warnings** - Only acceptable warnings listed in task packet
+
+#### 4. Compare Against Design Standards
+
+**Tailwind Config Adherence**:
+- Check if colors used match theme.colors.* from Tailwind config
+- Verify spacing follows theme.spacing.* scale
+- Confirm typography uses theme.fontFamily.*
+
+**Component Library Usage**:
+- Verify components follow library patterns (e.g., Radix UI, shadcn/ui)
+- Check for correct component imports and usage
+- Confirm no custom reimplementations of library components
+
+**Design Guide Compliance** (if DESIGN.md exists):
+- Review design guide requirements
+- Verify implementation follows documented patterns
+- Check for consistent naming, structure, and conventions
+
+**CSS Variables Consistency**:
+- Verify CSS custom properties match :root definitions
+- Check for no hardcoded colors/spacing that should use variables
+
+**Document Findings**:
+```markdown
+### Design Standards Compliance
+- **Tailwind Colors**: ✅ Using theme.colors.primary.* (compliant)
+- **Component Library**: ✅ Radix UI Accordion used correctly
+- **Design Guide**: ✅ Follows component structure from docs/DESIGN.md
+- **CSS Variables**: ✅ Uses --color-primary custom property
+- **Issues Found**: None
+
+OR
+
+- **Issues Found**:
+  - ❌ Hardcoded color #3B82F6 instead of theme.colors.primary.500
+  - ⚠️ Custom dropdown instead of Radix UI Select (justify if intentional)
+```
+
+#### 5. Document UI Validation Results
+
+Add to validation report:
+```markdown
+## UI Validation
+**Pages Tested**:
+- `/dashboard` - Screenshot: features/<slug>/screenshots/dashboard-after.png
+- `/settings` - Screenshot: features/<slug>/screenshots/settings-after.png
+
+**Console Status**:
+- ✅ Clean console on all pages (no errors, no warnings)
+
+**Design Standards**:
+- ✅ Tailwind config adherence: Using theme colors and spacing
+- ✅ Component library: Radix UI components used correctly
+- ✅ Design guide: Follows DESIGN.md patterns
+- ✅ Responsive: Tested mobile (375px), tablet (768px), desktop (1440px)
+
+**Issues**:
+- None
+
+OR
+
+**Issues**:
+- ⚠️ Console warning on /settings: "Deprecated API usage in third-party lib"
+  - Justification: Acceptable per task packet Section 7 (Console Expectations)
+- ❌ Hardcoded color found: #3B82F6 should use theme.colors.primary.500
+  - File: src/components/Button.tsx:45
+  - Fix required before PR
+```
+
+**If ui.devServer is not configured**:
+```markdown
+## UI Validation
+- ⚠️ Screenshots skipped: ui.devServer not configured in .wavemill-config.json
+- ✅ Console: Manual verification required
+- ✅ Design standards: Code review shows Tailwind theme compliance
+```
+
+**If UI validation is skipped**:
+```markdown
+## UI Validation
+- Skipped: No UI changes detected in diff
+```
+
+OR
+
+```markdown
+## UI Validation
+- Skipped: ui.visualVerification disabled in .wavemill-config.json
+```
+
+---
+
 ### C. Success Criteria Check
 For each success criterion in the plan:
 - [ ] Verify it was completed
@@ -100,6 +270,29 @@ Create `features/<feature-name>/validation-report.md`:
 See `constraints/HOK-123/manual-review.md` for constraints requiring human verification:
 - [ ] Follow existing code conventions
 - [ ] Maintain consistent naming patterns
+
+## UI Validation
+**Pages Tested**:
+- `/dashboard` - Screenshot: features/<slug>/screenshots/dashboard-after.png
+- `/settings` - Screenshot: features/<slug>/screenshots/settings-after.png
+
+**Console Status**:
+- ✅ Clean console on all pages (no errors, no warnings)
+
+**Design Standards**:
+- ✅ Tailwind config adherence: Using theme colors and spacing
+- ✅ Component library: Radix UI components used correctly
+- ✅ Design guide: Follows DESIGN.md patterns
+- ✅ Responsive: Tested mobile (375px), tablet (768px), desktop (1440px)
+
+**Issues**:
+- None
+
+*OR if skipped:*
+
+## UI Validation
+- Skipped: No UI changes detected in diff
+- *OR*: Skipped: ui.visualVerification disabled in config
 
 ## Code Review Findings
 ### Issues
