@@ -1354,7 +1354,7 @@ Read specific sections on-demand as you plan and implement:
 
 ## Your Workflow
 
-You have TWO phases. Do them in order.
+You have THREE phases. Do them in order.
 
 ### Phase 1: Planning (interactive)
 Task context is pre-seeded at: features/$slug/selected-task.json
@@ -1372,18 +1372,41 @@ Do NOT proceed to Phase 2 until the user has approved the plan.
 After plan approval:
 1. Execute the plan phase by phase
 2. Run tests/lint between phases — pause if anything fails
-3. Create a PR using GitHub CLI with a descriptive title and body:
+
+### Phase 3: Self-Review & PR
+After implementation is complete and tests/lint pass:
+
+1. Check if self-review is enabled:
+   REVIEW_ENABLED=\$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.enabled // true')
+   MAX_ITERATIONS=\$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.maxIterations // 3')
+   If review is disabled, skip to step 4.
+
+2. Run the self-review tool (up to MAX_ITERATIONS times):
+   npx tsx tools/review-changes.ts $BASE_BRANCH --verbose
+   - Exit code 0 = review passed → proceed to step 4
+   - Exit code 1 = issues found → fix blockers and re-run review
+   - Exit code 2 = error → log warning and proceed to step 4
+
+3. For each iteration where issues are found:
+   - Read the review findings carefully
+   - Fix all blockers (severity: blocker) and straightforward warnings
+   - Make targeted fixes only — do not refactor unrelated code
+   - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
+   - Re-run the review tool
+
+4. Create a PR using GitHub CLI with a descriptive title and body:
    gh pr create --title "$issue: <concise summary>" --body "<PR body>"
    The PR body MUST include:
    - A "## Summary" section with 2-4 bullet points describing what changed and why
    - A "## Changes" section listing the key files/modules modified
    - A "## Test plan" section describing how the changes were validated
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-4. Link the PR to $issue
+5. Link the PR to $issue
 
 Success criteria:
 - [ ] Implementation matches plan and issue requirements
 - [ ] Lint/tests pass
+- [ ] Self-review passed (or disabled/unavailable)
 - [ ] No regressions
 - [ ] PR created with descriptive summary linked to $issue
 
@@ -1430,6 +1453,7 @@ Success criteria:
 - [ ] Implementation matches issue requirements
 - [ ] UI is responsive and accessible (if applicable)
 - [ ] Lint/tests pass
+- [ ] Self-review passed (or disabled/unavailable)
 - [ ] No regressions in existing functionality
 - [ ] PR created with clear description and linked to $issue
 
@@ -1437,14 +1461,24 @@ Process:
 1. Inspect repo and find relevant code
 2. Make minimal, high-quality changes
 3. Run tests/lint
-4. Create a PR using GitHub CLI with a descriptive title and body:
+4. Self-review your changes before creating a PR:
+   a. Check config: REVIEW_ENABLED=\$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.enabled // true')
+      MAX_ITERATIONS=\$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.maxIterations // 3')
+      If review is disabled, skip to step 5.
+   b. Run: npx tsx tools/review-changes.ts $BASE_BRANCH --verbose
+      - Exit code 0 = passed → proceed to step 5
+      - Exit code 1 = issues found → fix blockers, commit fixes, re-run (up to MAX_ITERATIONS)
+      - Exit code 2 = error → log warning and proceed to step 5
+   c. For each iteration with issues: fix all blockers and straightforward warnings,
+      commit with "fix: Address self-review findings (iteration N)", then re-run review.
+5. Create a PR using GitHub CLI with a descriptive title and body:
    gh pr create --title "$issue: <concise summary of changes>" --body "<PR body>"
    The PR body MUST include:
    - A "## Summary" section with 2-4 bullet points describing what changed and why
    - A "## Changes" section listing the key files/modules modified
    - A "## Test plan" section describing how the changes were validated
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-5. Post back with summary of changes, commands run + results, and PR link
+6. Post back with summary of changes, commands run + results, and PR link
 INSTR_EOF
 
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model"
