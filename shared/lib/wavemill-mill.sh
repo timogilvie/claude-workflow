@@ -1319,6 +1319,12 @@ launch_task() {
         selectedAt: (now | todate)
       }' > "$feature_dir/selected-task.json"
 
+    # Copy details file to worktree for easy access
+    local details_file="/tmp/${SESSION}-${issue}-taskpacket-details.md"
+    if [[ -f "$details_file" ]]; then
+      cp "$details_file" "$feature_dir/task-packet-details.md"
+    fi
+
     local prompt_file="/tmp/${SESSION}-${issue}-plan-prompt.txt"
     cat > "$prompt_file" <<PLAN_PROMPT_EOF
 You are working on: $title ($issue)
@@ -1327,8 +1333,22 @@ Repo worktree: $wt_dir
 Branch: $branch
 Base branch: $BASE_BRANCH
 
-${packet_content:+Issue Description:
+${packet_content:+Issue Description (Brief Overview):
 $packet_content
+
+📖 Full Details: Comprehensive task packet with all 9 sections available at:
+   features/$slug/task-packet-details.md
+
+Read specific sections on-demand as you plan and implement:
+- Section 1: Complete Objective & Scope
+- Section 2: Technical Context (dependencies, architecture)
+- Section 3: Implementation Approach (step-by-step)
+- Section 4: Success Criteria (all requirements with [REQ-FX] tags)
+- Section 5: Implementation Constraints (all rules)
+- Section 6: Validation Steps (concrete test scenarios)
+- Section 7: Definition of Done
+- Section 8: Rollback Plan
+- Section 9: Proposed Labels
 }
 ---
 
@@ -1374,6 +1394,13 @@ PLAN_PROMPT_EOF
   else
     # Skip mode — pipe instructions to agent
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
+    local details_file="/tmp/${SESSION}-${issue}-taskpacket-details.md"
+
+    # Copy details file to worktree root for easy access
+    if [[ -f "$details_file" ]]; then
+      cp "$details_file" "$wt_dir/task-packet-details.md"
+    fi
+
     cat > "$instr_file" <<INSTR_EOF
 You are working on: $title ($issue)
 
@@ -1381,8 +1408,14 @@ Repo worktree: $wt_dir
 Branch: $branch
 Base branch: $BASE_BRANCH
 
-${packet_content:+Issue Description:
+${packet_content:+Issue Description (Brief Overview):
 $packet_content
+
+📖 Full Details: Read task-packet-details.md in the repo root for:
+- Complete implementation approach (Section 3)
+- All success criteria with [REQ-FX] tags (Section 4)
+- Concrete validation steps with test scenarios (Section 6)
+- Implementation constraints and rules (Section 5)
 }
 
 Goal:
