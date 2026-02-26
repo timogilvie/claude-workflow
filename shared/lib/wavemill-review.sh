@@ -4,10 +4,11 @@ set -euo pipefail
 # PR Review - Interactive selection and LLM-powered code review
 #
 # This script:
-# 1. Checks if PR number provided as argument
-# 2. If yes, directly reviews that PR
-# 3. If no, fetches open PRs and presents interactive selection
-# 4. Calls tools/review-pr.ts to perform the review
+# 1. Parses filter options (--state, --author, --branch)
+# 2. Checks if PR number provided as argument
+# 3. If yes, directly reviews that PR
+# 4. If no, fetches PRs with filters and presents interactive selection
+# 5. Calls tools/review-pr.ts to perform the review
 
 REPO_DIR="${REPO_DIR:-$PWD}"
 
@@ -36,9 +37,29 @@ NC=$'\033[0m' # No Color
 # PR FETCHING
 # ============================================================================
 
-# Fetch open PRs using gh CLI
-fetch_open_prs() {
-  gh pr list --state open --json number,title,author --limit 50 2>/dev/null || echo "[]"
+# Fetch PRs using list-prs tool with filters
+fetch_prs() {
+  local state="${1:-open}"
+  local author="${2:-}"
+  local branch="${3:-}"
+
+  # Determine list-prs tool path (use local if exists, otherwise use TOOLS_DIR)
+  local list_prs_tool="$TOOLS_DIR/list-prs.ts"
+  if [[ -f "$REPO_DIR/tools/list-prs.ts" ]]; then
+    list_prs_tool="$REPO_DIR/tools/list-prs.ts"
+  fi
+
+  local args=("$list_prs_tool" "--state" "$state")
+
+  if [[ -n "$author" ]]; then
+    args+=("--author" "$author")
+  fi
+
+  if [[ -n "$branch" ]]; then
+    args+=("--branch" "$branch")
+  fi
+
+  npx tsx "${args[@]}" 2>/dev/null || echo "[]"
 }
 
 # ============================================================================
@@ -46,7 +67,42 @@ fetch_open_prs() {
 # ============================================================================
 
 main() {
-  local pr_number="${1:-}"
+  # Default filter values
+  local state="open"
+  local author=""
+  local branch=""
+  local pr_number=""
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state)
+        state="$2"
+        shift 2
+        ;;
+      --author)
+        author="$2"
+        shift 2
+        ;;
+      --branch)
+        branch="$2"
+        shift 2
+        ;;
+      [0-9]*)
+        pr_number="$1"
+        shift
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  # Validate state value
+  if [[ "$state" != "open" ]] && [[ "$state" != "closed" ]] && [[ "$state" != "all" ]]; then
+    log_error "Invalid state: $state (must be one of: open, closed, all)"
+    exit 1
+  fi
 
   # Determine review tool path (use local if exists, otherwise use TOOLS_DIR)
   local review_tool="$TOOLS_DIR/review-pr.ts"
@@ -69,27 +125,56 @@ main() {
   log "PR Review - Select a pull request to review"
   echo ""
 
-  # Fetch open PRs
-  log "Fetching open pull requests..."
-  PRS=$(fetch_open_prs)
+  # Display active filters
+  if [[ "$state" != "open" ]] || [[ -n "$author" ]] || [[ -n "$branch" ]]; then
+    echo "${CYAN}Active filters:${NC}"
+    [[ "$state" != "open" ]] && echo "  State: $state"
+    [[ -n "$author" ]] && echo "  Author: $author"
+    [[ -n "$branch" ]] && echo "  Branch: $branch"
+    echo ""
+  fi
+
+  # Fetch PRs with filters
+  log "Fetching pull requests..."
+  PRS=$(fetch_prs "$state" "$author" "$branch")
 
   if [[ -z "$PRS" ]] || [[ "$PRS" == "[]" ]]; then
-    log "No open pull requests found."
+    log "No pull requests found matching filters."
     exit 0
   fi
 
   # Count PRs
   PR_COUNT=$(echo "$PRS" | jq 'length')
   if [[ "$PR_COUNT" -eq 0 ]]; then
-    log "No open pull requests found."
+    log "No pull requests found matching filters."
     exit 0
   fi
 
-  # Display PRs
+  # Display PRs with count
   echo ""
-  log "Open pull requests:"
+  log "Found $PR_COUNT pull request(s):"
   echo ""
-  echo "$PRS" | jq -r 'to_entries[] | "\(.key + 1). #\(.value.number) - \(.value.title) (by \(.value.author.login))"'
+
+  # Format display based on state
+  if [[ "$state" == "closed" ]] || [[ "$state" == "all" ]]; then
+    # Show dates for closed/merged PRs
+    echo "$PRS" | jq -r '
+      to_entries[] |
+      "\(.key + 1). #\(.value.number) - \(.value.title) (by \(.value.author)) [\(.value.state)] \(
+        if .value.mergedAt then "merged " + (.value.mergedAt | split("T")[0])
+        elif .value.closedAt then "closed " + (.value.closedAt | split("T")[0])
+        else ""
+        end
+      )"
+    '
+  else
+    # Standard display for open PRs
+    echo "$PRS" | jq -r '
+      to_entries[] |
+      "\(.key + 1). #\(.value.number) - \(.value.title) (by \(.value.author))"
+    '
+  fi
+
   echo ""
 
   # Prompt for selection
