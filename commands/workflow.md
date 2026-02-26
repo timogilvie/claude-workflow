@@ -170,7 +170,7 @@ Next: I'll review the implementation to catch any issues.
 I'll review the implementation and fix any major issues automatically.
 ```
 
-### 4B. Load Configuration
+### 4B. Load Configuration and Validate Prerequisites
 Read the review configuration from `.wavemill-config.json`:
 ```bash
 # Load review settings (fallback to defaults if not configured)
@@ -182,6 +182,20 @@ if [ "$REVIEW_ENABLED" != "true" ]; then
   echo "ℹ️  Self-review disabled in config - skipping to validation"
   # Proceed directly to Phase 5 (Validation)
   exit 0
+fi
+
+# Verify review tool exists
+if [ ! -f "tools/review-changes.ts" ]; then
+  echo "⚠️  Self-review tool not found at tools/review-changes.ts"
+  echo "Skipping self-review and proceeding to validation"
+  # Proceed directly to Phase 5 (Validation)
+  exit 0
+fi
+
+# Validate maxIterations is a positive integer
+if ! [[ "$MAX_ITERATIONS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "⚠️  Invalid maxIterations value: $MAX_ITERATIONS (using default: 3)"
+  MAX_ITERATIONS=3
 fi
 ```
 
@@ -197,8 +211,18 @@ REVIEW_PASSED=false
 #### 1. Run Self-Review Tool
 ```bash
 echo "🔍 Self-review iteration $ITERATION of $MAX_ITERATIONS..."
-npx tsx tools/review-changes.ts main --verbose > features/<feature-name>/review-iteration-$ITERATION.log 2>&1
+
+# Run review with optional timeout protection (300 seconds = 5 minutes)
+# Remove 'timeout' command if not available on your system
+timeout 300 npx tsx tools/review-changes.ts main --verbose > features/<feature-name>/review-iteration-$ITERATION.log 2>&1
 REVIEW_EXIT_CODE=$?
+
+# Handle timeout (exit code 124)
+if [ $REVIEW_EXIT_CODE -eq 124 ]; then
+  echo "⚠️  Self-review timed out after 5 minutes (iteration $ITERATION)"
+  echo "Treating as error - proceeding to validation"
+  REVIEW_EXIT_CODE=2
+fi
 ```
 
 #### 2. Check Review Result
