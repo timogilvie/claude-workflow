@@ -171,10 +171,12 @@ detect_project_name() {
 # ============================================================================
 
 # Check if issue description is already a detailed task packet
+# Recognizes both old (9-section) and new (header) formats
 is_task_packet() {
   local description="$1"
   # Check for common task packet markers (h2 or h3 level)
-  echo "$description" | grep -qE "(##+ (1\\.|Objective)|##+ What|##+ Technical Context|##+ Success Criteria|## Task Packet)"
+  # Now also recognizes the new "Quick Reference" header format
+  echo "$description" | grep -qE "(##+ (1\\.|Objective)|##+ What|##+ Technical Context|##+ Success Criteria|## Task Packet|Quick Reference|## Detailed Sections)"
 }
 
 # ============================================================================
@@ -322,12 +324,23 @@ write_task_packet() {
 
   # Check if already a task packet
   if is_task_packet "$current_desc"; then
+    # For existing task packets, write to main file
     echo "$current_desc" > "$out_file"
     return 0
   fi
 
   # Try to expand (with --update flag for backwards compatibility with wavemill-mill)
+  # This will create three files:
+  #   - $out_file (full content for Linear)
+  #   - ${out_file%.md}-header.md (brief header)
+  #   - ${out_file%.md}-details.md (detailed sections)
   if expand_issue_with_tool "$issue_id" "$out_file" "--update"; then
+    # Move header to main file for loading by mill
+    local header_file="${out_file%.md}-header.md"
+    if [[ -f "$header_file" ]]; then
+      mv "$header_file" "$out_file"
+      # Details file stays as ${out_file%.md}-details.md for on-demand access
+    fi
     return 0
   else
     # Fallback: just use the raw description

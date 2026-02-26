@@ -42,6 +42,40 @@ if (!process.env.LINEAR_API_KEY) {
   process.exit(1);
 }
 
+// Split task packet into header and details
+// Returns { header: string, details: string, fullContent: string }
+function splitTaskPacket(text: string): { header: string; details: string; fullContent: string } {
+  const splitMarker = '<!-- SPLIT: HEADER ABOVE, DETAILS BELOW -->';
+  const splitIndex = text.indexOf(splitMarker);
+
+  if (splitIndex === -1) {
+    // No split marker found - treat entire content as details (backward compat)
+    // Generate a simple header from the details
+    const objectiveMatch = text.match(/##\s*1\.\s*Objective[\s\S]*?(?=##\s*2\.)/i);
+    const keyFilesMatch = text.match(/###\s*Key Files[\s\S]*?(?=###|##)/i);
+
+    const simpleHeader = `# Task Packet\n\n` +
+      `## Objective\n\n${objectiveMatch ? objectiveMatch[0] : 'See details below'}\n\n` +
+      `## Key Files\n\n${keyFilesMatch ? keyFilesMatch[0] : 'See details below'}\n\n` +
+      `## Full Details\n\nComplete task packet with all sections available below.\n`;
+
+    return {
+      header: simpleHeader,
+      details: text,
+      fullContent: text
+    };
+  }
+
+  // Split at marker
+  const header = text.substring(0, splitIndex).trim();
+  const details = text.substring(splitIndex + splitMarker.length).trim();
+
+  // Full content for Linear (header + details without marker)
+  const fullContent = `${header}\n\n---\n\n${details}`;
+
+  return { header, details, fullContent };
+}
+
 // Validate that output looks like a structured task packet, not conversational text
 function isValidTaskPacket(text: string): boolean {
   // Must contain at least one of the expected section headers
@@ -456,29 +490,45 @@ Environment Variables:
     console.log('─'.repeat(80));
     console.log('\n');
 
+    // Split into header and details
+    const { header, details, fullContent } = splitTaskPacket(expandedDescription);
+    console.log(`Split task packet: header (${header.length} chars), details (${details.length} chars)\n`);
+
     // Handle output (don't let file write failure block Linear update)
     if (outputFile) {
       try {
-        await fs.writeFile(outputFile, expandedDescription, 'utf-8');
-        console.log(`✓ Expanded description saved to: ${outputFile}`);
+        // Write header file
+        const headerFile = outputFile.replace(/\.md$/, '-header.md');
+        await fs.writeFile(headerFile, header, 'utf-8');
+        console.log(`✓ Header saved to: ${headerFile}`);
+
+        // Write details file
+        const detailsFile = outputFile.replace(/\.md$/, '-details.md');
+        await fs.writeFile(detailsFile, details, 'utf-8');
+        console.log(`✓ Details saved to: ${detailsFile}`);
+
+        // Also write full content for reference
+        await fs.writeFile(outputFile, fullContent, 'utf-8');
+        console.log(`✓ Full content saved to: ${outputFile}`);
       } catch (writeError) {
-        console.warn(`⚠️  Failed to write output file: ${writeError.message}`);
+        console.warn(`⚠️  Failed to write output files: ${writeError.message}`);
       }
     } else {
-      console.log('Expanded Description:\n');
-      console.log(expandedDescription);
+      console.log('Expanded Description (Header):\n');
+      console.log(header);
       console.log('\n');
+      console.log('(Full details available in details section)\n');
     }
 
-    // Validate output before updating Linear
-    if (!isValidTaskPacket(expandedDescription)) {
+    // Validate output before updating Linear (use full content for validation)
+    if (!isValidTaskPacket(fullContent)) {
       console.error('✗ Claude output is not a valid task packet (missing expected section headers).');
-      console.error('  First 200 chars:', expandedDescription.substring(0, 200));
+      console.error('  First 200 chars:', fullContent.substring(0, 200));
       console.error('  Skipping Linear update to avoid overwriting with bad content.');
       process.exit(1);
     }
 
-    // Run quality gate validation (unless skipped)
+    // Run quality gate validation (unless skipped) - validate full content
     let validationResult: ValidationResult | null = null;
     if (!skipValidation) {
       console.log('\nRunning quality gate validation...');
@@ -486,7 +536,7 @@ Environment Variables:
       const validationConfig = loadValidationConfig();
 
       try {
-        validationResult = await validateTaskPacket(expandedDescription, repoPath, validationConfig);
+        validationResult = await validateTaskPacket(fullContent, repoPath, validationConfig);
 
         console.log(formatValidationIssues(validationResult.issues));
 
@@ -519,10 +569,10 @@ Environment Variables:
       console.log('\n⚠️  Skipping validation (--skip-validation flag)');
     }
 
-    // Update Linear if requested
+    // Update Linear if requested (with full content for backward compatibility)
     if (shouldUpdate) {
       console.log(`Updating Linear issue ${issue.identifier}...`);
-      const result = await updateIssue(issue.id, { description: expandedDescription });
+      const result = await updateIssue(issue.id, { description: fullContent });
 
       if (result.success) {
         console.log(`✓ Successfully updated: ${result.issue.url}`);

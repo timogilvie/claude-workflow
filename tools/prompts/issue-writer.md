@@ -2,7 +2,26 @@
 
 You are expanding a brief Linear issue into a comprehensive task packet that an autonomous AI agent can execute with minimal oversight.
 
-Given the issue details below, produce a detailed task specification following this exact structure. Be specific, measurable, and actionable throughout.
+## Output Format
+
+**IMPORTANT**: You must generate TWO documents in your response, separated by a clear marker:
+
+1. **HEADER** (first) - A concise overview (~50 lines) for initial context
+2. **DETAILS** (second) - The complete 9-section task packet for on-demand reading
+
+Use this exact separator between them:
+```
+<!-- SPLIT: HEADER ABOVE, DETAILS BELOW -->
+```
+
+The HEADER should be self-contained with:
+- Brief 2-3 sentence objective
+- Top 5 key files
+- Top 3 critical constraints
+- High-level success criteria (3-5 items)
+- Links to detailed sections
+
+The DETAILS section should contain the full comprehensive specification following the structure below.
 
 ---
 
@@ -621,3 +640,71 @@ Validation scenario:
 - POST /api/users with invalid JSON → 400, error: "Invalid JSON in request body"
 - GET /api/users/nonexistent → 404, error: "User not found"
 - DELETE /api/users/usr_1 with non-admin key → 403, error: "Admin access required"
+
+---
+
+# CRITICAL: Output Format
+
+Your response MUST contain two parts in this exact order:
+
+## Part 1: HEADER (First)
+
+```markdown
+# {Issue Title} - Quick Reference
+
+**Issue ID**: {ISSUE_ID}
+
+## Objective
+
+{2-3 sentence summary covering What, Why, and high-level approach}
+
+## Key Files
+
+{Top 5 files that will be modified or created - actual paths from codebase context}
+
+- `path/to/file1.ts`
+- `path/to/file2.tsx`
+- `path/to/file3.ts`
+
+## Critical Constraints
+
+{Top 3 non-negotiable rules}
+
+1. {Constraint 1}
+2. {Constraint 2}
+3. {Constraint 3}
+
+## Success Criteria (High-Level)
+
+- [ ] {Main requirement 1}
+- [ ] {Main requirement 2}
+- [ ] {Main requirement 3}
+- [ ] Tests and lint pass
+- [ ] PR created and linked
+
+## Detailed Sections
+
+Full details available on-demand in task-packet-details.md:
+
+- [Section 1: Complete Objective & Scope](#1-objective)
+- [Section 2: Technical Context](#2-technical-context)
+- [Section 3: Implementation Approach](#3-implementation-approach)
+- [Section 4: Success Criteria](#4-success-criteria)
+- [Section 5: Implementation Constraints](#5-implementation-constraints)
+- [Section 6: Validation Steps](#6-validation-steps)
+- [Section 7: Definition of Done](#7-definition-of-done)
+- [Section 8: Rollback Plan](#8-rollback-plan)
+- [Section 9: Proposed Labels](#9-proposed-labels)
+
+**Implementation Note**: Start with this overview. Read detailed sections on-demand as you implement.
+```
+
+## Part 2: SPLIT MARKER
+
+```
+<!-- SPLIT: HEADER ABOVE, DETAILS BELOW -->
+```
+
+## Part 3: DETAILS (Full 9-Section Document)
+
+Now output the complete detailed task packet with all 9 sections as specified above, starting with "## 1. Objective"
