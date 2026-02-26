@@ -364,6 +364,23 @@
         }
       },
       "additionalProperties": false
+    },
+    "constraints": {
+      "type": "object",
+      "description": "Settings for constraint validation (promoting rules from prose to code).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable constraint validation. When true (default), generated constraint rules are validated before PR creation."
+        },
+        "cleanupAfterMerge": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically delete constraint rules after PR merge. When false (default), rules persist for audit trail."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
