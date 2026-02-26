@@ -381,6 +381,32 @@
         }
       },
       "additionalProperties": false
+    },
+    "ui": {
+      "type": "object",
+      "description": "Settings for UI review and design artifact analysis.",
+      "properties": {
+        "devServer": {
+          "type": "string",
+          "description": "Dev server URL for screenshot capture (e.g. http://localhost:3000). Used by frontend-testing skill and UI review tools."
+        },
+        "visualVerification": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable screenshot capture and console checking during UI review."
+        },
+        "designStandards": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable design artifact discovery and compliance checking. When enabled, review context will include Tailwind config, component libraries, design guides, etc."
+        },
+        "creativeDirection": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable creative design review (opt-in, uses frontend-design skill to evaluate aesthetic quality and uniqueness)."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
