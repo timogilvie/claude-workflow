@@ -2,6 +2,18 @@
 
 You are expanding a brief Linear issue into a comprehensive task packet that an autonomous AI agent can execute with minimal oversight.
 
+## UI Issue Detection
+
+**IMPORTANT**: Before generating the task packet, determine if this is a UI-related issue.
+
+**A UI-related issue** is one that:
+- Mentions UI keywords: "UI", "frontend", "component", "page", "design", "styling", "responsive", "layout", "interface", "CSS", "Tailwind", "React", "Vue", "Svelte", "HTML"
+- References UI file extensions: `.tsx`, `.jsx`, `.css`, `.scss`, `.sass`, `.less`, `.html`, `.vue`, `.svelte`
+- Involves visual changes, user interface updates, or frontend work
+- Touches component libraries, design systems, or styling frameworks
+
+**If this is a UI-related issue**, you MUST include the additional UI-specific sections (Section 7) in your task packet. If not, omit Section 7 entirely and proceed directly from Section 6 to Section 8.
+
 ## Output Format
 
 **IMPORTANT**: You must generate TWO documents in your response, separated by a clear marker:
@@ -205,7 +217,89 @@ pnpm build
 
 ---
 
-## 7. Definition of Done
+## 7. UI-Specific Validation (Conditional)
+
+**IMPORTANT**: Include this section ONLY if this is a UI-related issue (see UI Issue Detection criteria above). If this is not a UI-related issue, skip this section entirely and proceed directly to Section 8 (Definition of Done).
+
+---
+
+### Pages/Routes Affected
+
+*List which URLs or routes will change. Be specific about the path and what aspect changes:*
+
+- `/route-path` - Description of what changes (e.g., "New header navigation component")
+- `/another-route` - Description of change
+- `/api/endpoint` (if frontend calls new API) - Purpose
+
+If no routes are affected (e.g., component library changes), state: "N/A - Component library changes only"
+
+---
+
+### Visual Acceptance Criteria
+
+*Describe what the UI should look like when done. Reference design artifacts if available:*
+
+- [ ] **Layout**: Specific layout requirements (e.g., "Header spans full width, 64px height")
+- [ ] **Colors**: Specific color usage (e.g., "Primary button uses theme.colors.primary.500")
+- [ ] **Spacing**: Specific spacing requirements (e.g., "8px gap between nav items, 16px padding")
+- [ ] **Typography**: Font requirements (e.g., "Headings use font-sans, 24px/32px line height")
+- [ ] **Interactive States**: Hover, focus, active states (e.g., "Hover darkens background by 10%")
+- [ ] **Accessibility**: ARIA labels, keyboard navigation, screen reader support
+
+**Design Artifacts** (if available):
+- Figma link: [URL if exists]
+- Design guide reference: `docs/DESIGN.md` section X
+- Component library: Radix UI / shadcn/ui / Material UI / etc.
+
+---
+
+### Console Expectations
+
+*Expected browser console state after implementation:*
+
+**Expected State**:
+- ✅ **Clean console** - No errors, no warnings
+- **OR**
+- ⚠️ **Known acceptable warnings** (list them with justification):
+  - `Warning: XYZ` - Reason this is acceptable (e.g., "Third-party library warning, no impact on functionality")
+
+**Console checks to perform**:
+```bash
+# Use frontend-testing skill to check console:
+# 1. Navigate to affected pages
+# 2. List console messages
+# 3. Verify no unexpected errors/warnings
+```
+
+---
+
+### Responsive Considerations
+
+*Specify behavior at different breakpoints. Reference your Tailwind config or design system:*
+
+**Breakpoints** (adjust based on your design system):
+- **Mobile** (`< 640px` or `sm`):
+  - Behavior: (e.g., "Navigation collapses to hamburger menu")
+  - Layout changes: (e.g., "Single column layout")
+  - Touch targets: (e.g., "Buttons min 44px height for touch")
+
+- **Tablet** (`640px - 1024px` or `md`):
+  - Behavior: (e.g., "Navigation shows partial items with more dropdown")
+  - Layout changes: (e.g., "Two-column grid")
+
+- **Desktop** (`> 1024px` or `lg`):
+  - Behavior: (e.g., "Full navigation visible")
+  - Layout changes: (e.g., "Three-column grid, max-width container")
+
+**Testing**:
+- [ ] Test on mobile viewport (375px width)
+- [ ] Test on tablet viewport (768px width)
+- [ ] Test on desktop viewport (1440px width)
+- [ ] Verify smooth transitions between breakpoints
+
+---
+
+## 8. Definition of Done
 
 - [ ] All success criteria met
 - [ ] All validation steps pass with specific, measurable outcomes
@@ -217,7 +311,7 @@ pnpm build
 
 ---
 
-## 8. Rollback Plan
+## 9. Rollback Plan
 
 *How to safely undo these changes if something goes wrong:*
 - Revert commit: `git revert <sha>`
@@ -226,7 +320,7 @@ pnpm build
 
 ---
 
-## 9. Proposed Labels
+## 10. Proposed Labels
 
 *Based on the analysis above, suggest labels to help the autonomous workflow identify task conflicts and parallelization opportunities:*
 
@@ -692,9 +786,10 @@ Full details available on-demand in task-packet-details.md:
 - [Section 4: Success Criteria](#4-success-criteria)
 - [Section 5: Implementation Constraints](#5-implementation-constraints)
 - [Section 6: Validation Steps](#6-validation-steps)
-- [Section 7: Definition of Done](#7-definition-of-done)
-- [Section 8: Rollback Plan](#8-rollback-plan)
-- [Section 9: Proposed Labels](#9-proposed-labels)
+- [Section 7: UI-Specific Validation](#7-ui-specific-validation-conditional) *(Conditional - UI issues only)*
+- [Section 8: Definition of Done](#8-definition-of-done)
+- [Section 9: Rollback Plan](#9-rollback-plan)
+- [Section 10: Proposed Labels](#10-proposed-labels)
 
 **Implementation Note**: Start with this overview. Read detailed sections on-demand as you implement.
 ```
@@ -705,6 +800,11 @@ Full details available on-demand in task-packet-details.md:
 <!-- SPLIT: HEADER ABOVE, DETAILS BELOW -->
 ```
 
-## Part 3: DETAILS (Full 9-Section Document)
+## Part 3: DETAILS (Full Task Packet Document)
 
-Now output the complete detailed task packet with all 9 sections as specified above, starting with "## 1. Objective"
+Now output the complete detailed task packet with all sections as specified above:
+- Sections 1-6 (always included)
+- Section 7: UI-Specific Validation (ONLY if this is a UI-related issue)
+- Sections 8-10 (always included, but renumbered if Section 7 is omitted)
+
+Start with "## 1. Objective"
