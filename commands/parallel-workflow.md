@@ -266,8 +266,36 @@ Update tracking file as phases complete:
 
 ## Phase 6: Parallel Validation & PR
 
-### 6A. Batch Validation
-When implementations complete, run validation in parallel:
+### 6A. Constraint Validation
+Before standard checks, validate task-specific constraint rules:
+
+```bash
+# For each completed implementation:
+cd "${WORKTREE_PATH}"
+
+# Extract issue ID from context
+ISSUE_ID=$(grep -m 1 "issueId" features/*/selected-task.json | grep -o '[A-Z]+-[0-9]*' || echo "")
+
+# Validate constraints if they exist
+if [ -d "constraints/$ISSUE_ID" ]; then
+  echo "🔍 Validating constraints for $ISSUE_ID..."
+  npx tsx tools/validate-constraints.ts $ISSUE_ID
+  CONSTRAINT_STATUS=$?
+
+  if [ $CONSTRAINT_STATUS -ne 0 ]; then
+    echo "❌ Constraint validation failed for $ISSUE_ID"
+    echo "   Fix violations before creating PR"
+    exit 1
+  fi
+else
+  echo "ℹ️  No constraint rules for $ISSUE_ID (optional)"
+fi
+```
+
+**Critical**: If constraints fail, DO NOT proceed to PR creation. Fix violations first.
+
+### 6B. Batch Standard Validation
+When implementations complete, run standard validation in parallel:
 
 ```bash
 # For each completed implementation:
@@ -275,7 +303,7 @@ cd "${WORKTREE_PATH}"
 npm test && npm run lint && npm run build && npm run typecheck
 ```
 
-### 6B. Batch PR Creation
+### 6C. Batch PR Creation
 Create PRs for all validated implementations:
 
 ```
