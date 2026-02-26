@@ -26,6 +26,7 @@ import {
   toInterventionRecords,
   formatForJudge,
   loadPenalties,
+  resolveOwnerRepo,
 } from '../shared/lib/intervention-detector.ts';
 import { analyzePrDifficulty } from '../shared/lib/difficulty-analyzer.ts';
 import { analyzeTaskContext } from '../shared/lib/task-context-analyzer.ts';
@@ -207,10 +208,11 @@ function gatherContext(args) {
 
     // Append review comments if any
     try {
-      const comments = execSync(
-        `gh api repos/{owner}/{repo}/pulls/${prNumber}/comments --jq '.[].body' 2>/dev/null || echo ''`,
+      const nwo = resolveOwnerRepo(repoDir);
+      const comments = nwo ? execSync(
+        `gh api repos/${nwo}/pulls/${prNumber}/comments --jq '.[].body' 2>/dev/null || echo ''`,
         { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
-      ).trim();
+      ).trim() : '';
       if (comments) {
         prReviewOutput += `\n\n## Review Comments\n\n${comments}`;
       }
