@@ -76,6 +76,45 @@ export const DEFAULT_PENALTIES: InterventionPenalties = {
 };
 
 // ────────────────────────────────────────────────────────────────
+// GitHub repo resolution
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Resolve the GitHub owner/repo string (e.g. "timogilvie/wavemill") from
+ * the git remote in the given directory.
+ *
+ * `gh api` supports `{owner}/{repo}` template placeholders, but they only
+ * resolve when gh can detect the current repo from git remotes. When the
+ * cwd is missing or the remote isn't a GitHub URL, the API call returns a
+ * 404. Resolving once up front makes errors obvious and avoids repeated
+ * template-expansion failures.
+ *
+ * Returns undefined on error so callers can degrade gracefully.
+ */
+export function resolveOwnerRepo(repoDir?: string): string | undefined {
+  const cwd = repoDir || process.cwd();
+  try {
+    const nwo = execSync(
+      `gh repo view --json nameWithOwner --jq .nameWithOwner`,
+      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 10_000 }
+    ).trim();
+    return nwo || undefined;
+  } catch {
+    // Fallback: parse git remote directly (works offline / without gh auth)
+    try {
+      const remoteUrl = execSync('git remote get-url origin', {
+        encoding: 'utf-8', cwd, timeout: 5_000,
+      }).trim();
+      const match =
+        remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/) ;
+      return match?.[1];
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
 // Config
 // ────────────────────────────────────────────────────────────────
 
@@ -109,14 +148,20 @@ export function loadPenalties(repoDir?: string): InterventionPenalties {
  * Fetch PR review comments that request changes (not approvals/comments-only).
  * Uses `gh api` to get review data.
  */
-export function detectReviewComments(prNumber: string, repoDir?: string): InterventionEvent {
+export function detectReviewComments(prNumber: string, repoDir?: string, nwo?: string): InterventionEvent {
   const cwd = repoDir || process.cwd();
+  const repo = nwo || resolveOwnerRepo(cwd);
   const event: InterventionEvent = { type: 'review_comment', count: 0, details: [], timestamps: [] };
+
+  if (!repo) {
+    console.warn('[intervention-detector] Cannot resolve GitHub repo — skipping review comment detection');
+    return event;
+  }
 
   try {
     // Fetch reviews (top-level review submissions with state)
     const reviewsRaw = execSync(
-      `gh api repos/{owner}/{repo}/pulls/${prNumber}/reviews --jq '[.[] | {author: .user.login, state: .state, body: .body, submittedAt: .submitted_at}]'`,
+      `gh api repos/${repo}/pulls/${prNumber}/reviews --jq '[.[] | {author: .user.login, state: .state, body: .body, submittedAt: .submitted_at}]'`,
       { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
     ).trim();
 
@@ -135,7 +180,7 @@ export function detectReviewComments(prNumber: string, repoDir?: string): Interv
 
     // Fetch inline review comments (code-level feedback)
     const commentsRaw = execSync(
-      `gh api repos/{owner}/{repo}/pulls/${prNumber}/comments --jq '[.[] | {author: .user.login, body: .body, path: .path, line: .line, createdAt: .created_at}]'`,
+      `gh api repos/${repo}/pulls/${prNumber}/comments --jq '[.[] | {author: .user.login, body: .body, path: .path, line: .line, createdAt: .created_at}]'`,
       { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
     ).trim();
 
@@ -162,11 +207,16 @@ export function detectReviewComments(prNumber: string, repoDir?: string): Interv
  * Returns parsed PrCommit array, or empty array on error.
  * Shared by detectPostPrCommits and detectManualEdits.
  */
-export function fetchPrCommits(prNumber: string, repoDir?: string): PrCommit[] {
+export function fetchPrCommits(prNumber: string, repoDir?: string, nwo?: string): PrCommit[] {
   const cwd = repoDir || process.cwd();
+  const repo = nwo || resolveOwnerRepo(cwd);
+  if (!repo) {
+    console.warn('[intervention-detector] Cannot resolve GitHub repo — skipping PR commit fetch');
+    return [];
+  }
   try {
     const commitsRaw = execSync(
-      `gh api repos/{owner}/{repo}/pulls/${prNumber}/commits --jq '[.[] | {sha: .sha, message: .commit.message, author: .commit.author.name, date: .commit.author.date}]'`,
+      `gh api repos/${repo}/pulls/${prNumber}/commits --jq '[.[] | {sha: .sha, message: .commit.message, author: .commit.author.name, date: .commit.author.date}]'`,
       { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
     ).trim();
     if (!commitsRaw) return [];
@@ -185,14 +235,20 @@ export function fetchPrCommits(prNumber: string, repoDir?: string): PrCommit[] {
  * Accepts pre-fetched commits to avoid duplicate API calls when used alongside
  * detectManualEdits in detectAllInterventions.
  */
-export function detectPostPrCommits(prNumber: string, repoDir?: string, prCommits?: PrCommit[]): InterventionEvent {
+export function detectPostPrCommits(prNumber: string, repoDir?: string, prCommits?: PrCommit[], nwo?: string): InterventionEvent {
   const cwd = repoDir || process.cwd();
+  const repo = nwo || resolveOwnerRepo(cwd);
   const event: InterventionEvent = { type: 'post_pr_commit', count: 0, details: [], timestamps: [] };
+
+  if (!repo) {
+    console.warn('[intervention-detector] Cannot resolve GitHub repo — skipping post-PR commit detection');
+    return event;
+  }
 
   try {
     // Get PR creation timestamp
     const prDataRaw = execSync(
-      `gh api repos/{owner}/{repo}/pulls/${prNumber} --jq '{createdAt: .created_at, head: .head.sha, commits: .commits}'`,
+      `gh api repos/${repo}/pulls/${prNumber} --jq '{createdAt: .created_at, head: .head.sha, commits: .commits}'`,
       { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
     ).trim();
 
@@ -505,14 +561,17 @@ export function detectAllInterventions(opts: DetectOptions): InterventionSummary
   const penalties = loadPenalties(opts.repoDir);
   const interventions: InterventionEvent[] = [];
 
+  // Resolve GitHub owner/repo once for all API calls
+  const nwo = opts.prNumber ? resolveOwnerRepo(opts.repoDir) : undefined;
+
   // Fetch PR commits once (shared by multiple detectors)
-  const prCommits = opts.prNumber ? fetchPrCommits(opts.prNumber, opts.repoDir) : [];
+  const prCommits = opts.prNumber ? fetchPrCommits(opts.prNumber, opts.repoDir, nwo) : [];
 
   // GitHub-based detection (requires PR number)
   let postPrEvent: InterventionEvent = { type: 'post_pr_commit', count: 0, details: [] };
   if (opts.prNumber) {
-    interventions.push(detectReviewComments(opts.prNumber, opts.repoDir));
-    postPrEvent = detectPostPrCommits(opts.prNumber, opts.repoDir, prCommits);
+    interventions.push(detectReviewComments(opts.prNumber, opts.repoDir, nwo));
+    postPrEvent = detectPostPrCommits(opts.prNumber, opts.repoDir, prCommits, nwo);
   }
 
   // Commit-based detection (requires branch info or PR number)

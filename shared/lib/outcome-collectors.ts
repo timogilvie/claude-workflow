@@ -25,6 +25,7 @@ import type {
   DeliveryOutcome,
 } from './eval-schema.ts';
 import type { InterventionSummary } from './intervention-detector.ts';
+import { resolveOwnerRepo } from './intervention-detector.ts';
 import { resolveProjectsDir } from './workflow-cost.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -280,8 +281,10 @@ export function collectReviewOutcome(
   prNumber: string,
   interventionSummary: InterventionSummary,
   repoDir?: string,
+  nwo?: string,
 ): ReviewOutcome {
   const cwd = repoDir || process.cwd();
+  const repo = nwo || resolveOwnerRepo(cwd);
   const outcome: ReviewOutcome = {
     humanReviewRequired: false,
     rounds: 0,
@@ -296,9 +299,14 @@ export function collectReviewOutcome(
     );
     outcome.humanReviewRequired = reviewCommentEvent ? reviewCommentEvent.count > 0 : false;
 
+    if (!repo) {
+      console.warn('[outcome-collectors] Cannot resolve GitHub repo — skipping review API calls');
+      return outcome;
+    }
+
     // Fetch PR reviews via GitHub API
     const reviewsRaw = execSync(
-      `gh api repos/{owner}/{repo}/pulls/${prNumber}/reviews --jq '[.[] | {state: .state, submittedAt: .submitted_at}]' 2>/dev/null || echo '[]'`,
+      `gh api repos/${repo}/pulls/${prNumber}/reviews --jq '[.[] | {state: .state, submittedAt: .submitted_at}]' 2>/dev/null || echo '[]'`,
       { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
     ).trim();
 
@@ -452,17 +460,24 @@ export function collectReworkOutcome(
 export function collectDeliveryOutcome(
   prNumber: string,
   repoDir?: string,
+  nwo?: string,
 ): DeliveryOutcome {
   const cwd = repoDir || process.cwd();
+  const repo = nwo || resolveOwnerRepo(cwd);
   const outcome: DeliveryOutcome = {
     prCreated: false,
     merged: false,
   };
 
+  if (!repo) {
+    console.warn('[outcome-collectors] Cannot resolve GitHub repo — skipping delivery outcome');
+    return outcome;
+  }
+
   try {
     // Fetch PR metadata via GitHub API
     const prDataRaw = execSync(
-      `gh api repos/{owner}/{repo}/pulls/${prNumber} --jq '{merged: .merged, mergedAt: .merged_at, createdAt: .created_at}' 2>/dev/null || echo '{}'`,
+      `gh api repos/${repo}/pulls/${prNumber} --jq '{merged: .merged, mergedAt: .merged_at, createdAt: .created_at}' 2>/dev/null || echo '{}'`,
       { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
     ).trim();
 
