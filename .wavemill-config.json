@@ -40,6 +40,10 @@
     }
   },
   "autoEval": true,
+  "review": {
+    "maxIterations": 3,
+    "enabled": true
+  },
   "router": {
     "agentMap": {
       "claude-opus-4-6": "claude",
