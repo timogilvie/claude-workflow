@@ -407,6 +407,25 @@
         }
       },
       "additionalProperties": false
+    },
+    "review": {
+      "type": "object",
+      "description": "Settings for the self-review loop in workflow commands.",
+      "properties": {
+        "maxIterations": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Maximum number of self-review iterations before escalating to human. The agent will attempt to fix issues and re-review up to this many times."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the self-review loop in workflow commands. When false, workflow proceeds directly from implementation to validation."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
