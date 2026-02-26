@@ -154,23 +154,167 @@ Update todos as phases complete:
 ### 3D. Clear Context
 After all phases complete:
 ```
-✓ All phases implemented. Clearing context for validation.
+✓ All phases implemented. Clearing context for self-review.
 
-Next: I'll validate the implementation against the plan.
+Next: I'll review the implementation to catch any issues.
 ```
 
 ---
 
-## Phase 4: Validation
-**Goal**: Verify implementation before creating PR
+## Phase 4: Self-Review Loop
+**Goal**: Automatically review and fix code changes before validation
 
 ### 4A. Inform User
+```
+🔍 Starting self-review phase...
+I'll review the implementation and fix any major issues automatically.
+```
+
+### 4B. Load Configuration
+Read the review configuration from `.wavemill-config.json`:
+```bash
+# Load review settings (fallback to defaults if not configured)
+REVIEW_ENABLED=$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.enabled // true')
+MAX_ITERATIONS=$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.maxIterations // 3')
+
+# Skip self-review if disabled
+if [ "$REVIEW_ENABLED" != "true" ]; then
+  echo "ℹ️  Self-review disabled in config - skipping to validation"
+  # Proceed directly to Phase 5 (Validation)
+  exit 0
+fi
+```
+
+### 4C. Execute Review Loop
+Initialize loop variables:
+```bash
+ITERATION=1
+REVIEW_PASSED=false
+```
+
+**For each iteration (up to MAX_ITERATIONS):**
+
+#### 1. Run Self-Review Tool
+```bash
+echo "🔍 Self-review iteration $ITERATION of $MAX_ITERATIONS..."
+npx tsx tools/review-changes.ts main --verbose > features/<feature-name>/review-iteration-$ITERATION.log 2>&1
+REVIEW_EXIT_CODE=$?
+```
+
+#### 2. Check Review Result
+**Exit code meanings**:
+- `0` = Review passed (verdict: ready)
+- `1` = Review failed (verdict: not_ready)
+- `2` = Error occurred
+
+**If exit code = 0 (passed)**:
+```bash
+REVIEW_PASSED=true
+echo "✅ Self-review passed! No blockers found."
+break  # Exit loop
+```
+
+**If exit code = 2 (error)**:
+```bash
+echo "⚠️ Self-review tool encountered an error (iteration $ITERATION)"
+echo "Review log saved to: features/<feature-name>/review-iteration-$ITERATION.log"
+# Continue to validation phase (treat as passed to avoid blocking)
+REVIEW_PASSED=true
+break
+```
+
+**If exit code = 1 (not_ready)**:
+Parse and present findings to the agent.
+
+#### 3. Parse Findings (when not_ready)
+Extract findings from the review log:
+```bash
+# Review log contains formatted findings - parse blockers and warnings
+cat features/<feature-name>/review-iteration-$ITERATION.log
+```
+
+Present findings to agent:
+```
+📋 Self-review iteration $ITERATION found issues:
+
+[Show formatted findings from log]
+
+I'll fix these issues now...
+```
+
+#### 4. Fix Issues
+**Agent instructions**:
+- Read the review findings carefully
+- Address each blocker (severity: blocker)
+- Fix warnings if straightforward
+- Make targeted fixes - avoid refactoring unrelated code
+- Commit fixes with descriptive message:
+  ```bash
+  git add -A
+  git commit -m "fix: Address self-review findings (iteration $ITERATION)
+
+  - [List key fixes made]
+
+  Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
+  ```
+
+#### 5. Check Iteration Limit
+```bash
+ITERATION=$((ITERATION + 1))
+if [ $ITERATION -gt $MAX_ITERATIONS ]; then
+  echo "⚠️ Reached maximum iterations ($MAX_ITERATIONS)"
+  break
+fi
+```
+
+### 4D. Handle Loop Exit
+
+**If review passed (REVIEW_PASSED=true)**:
+```
+✅ Self-review complete! Implementation is ready for validation.
+
+Self-review summary:
+- Iterations: $ITERATION
+- Final verdict: READY
+- Review logs: features/<feature-name>/review-iteration-*.log
+```
+
+**If max iterations reached without passing**:
+```
+⚠️ Self-review did not pass after $MAX_ITERATIONS iterations.
+
+Remaining issues found:
+[Show latest findings from review log]
+
+These issues will be surfaced in the validation phase.
+Proceeding to validation to document all findings...
+```
+
+### 4E. Context Handoff
+All review logs saved to:
+- `features/<feature-name>/review-iteration-1.log`
+- `features/<feature-name>/review-iteration-2.log`
+- `features/<feature-name>/review-iteration-N.log`
+
+### 4F. Clear Context
+```
+✓ Self-review phase complete. Clearing context for validation phase.
+
+Next: I'll run comprehensive validation against the plan.
+```
+
+---
+
+## Phase 5: Validation
+**Goal**: Verify implementation before creating PR
+
+### 5A. Inform User
 ```
 ✅ Starting validation phase...
 I'll verify the implementation meets all success criteria.
 ```
 
-### 4B. Execute Validation
+### 5B. Execute Validation
 Follow the `/validate-plan` workflow:
 1. Read plan from `features/<feature-name>/plan.md`
 2. Run all automated checks
@@ -178,7 +322,7 @@ Follow the `/validate-plan` workflow:
 4. Generate validation report
 5. Save to `features/<feature-name>/validation-report.md`
 
-### 4C. Present Validation Results
+### 5C. Present Validation Results
 ```
 📊 Validation complete: features/<feature-name>/validation-report.md
 
@@ -192,7 +336,7 @@ Ready for PR? (yes/fix-issues)
 
 **Context Handoff**: Validation report saved
 
-### 4D. Handle Issues
+### 5D. Handle Issues
 If issues found:
 - Return to Phase 3 implementation for fixes
 - Re-validate after fixes
@@ -200,15 +344,15 @@ If issues found:
 
 ---
 
-## Phase 5: PR Creation
+## Phase 6: PR Creation
 **Goal**: Create PR with comprehensive description
 
-### 5A. Inform User
+### 6A. Inform User
 ```
 🚀 Creating pull request...
 ```
 
-### 5B. Create PR
+### 6B. Create PR
 Use the **git-workflow-manager** skill to:
 1. Ensure feature branch exists: `feature/<sanitized-title>`
 2. Commit any final changes with structured message
@@ -219,10 +363,10 @@ Use the **git-workflow-manager** skill to:
    - Validation results
    - Testing checklist
 
-### 5C. Finalize Session
+### 6C. Finalize Session
 After PR is created, finalize the session using the instructions in the **Session Tracking** section. Use the PR URL and compute execution/wait times.
 
-### 5D. Present PR
+### 6D. Present PR
 ```
 ✅ Pull Request Created!
 
@@ -243,10 +387,10 @@ Next Steps:
 
 ---
 
-## Phase 6: Post-Completion Eval
+## Phase 7: Post-Completion Eval
 **Goal**: Automatically evaluate workflow quality using the LLM judge
 
-### 6A. Trigger Eval Hook
+### 7A. Trigger Eval Hook
 After PR creation, run the post-completion eval hook. This is automatic and non-blocking — if eval fails, the workflow is still complete.
 
 ```bash
@@ -255,7 +399,7 @@ npx tsx tools/run-eval-hook.ts --issue <ISSUE_ID> --pr <PR_NUMBER> --pr-url <PR_
 
 Replace `<ISSUE_ID>`, `<PR_NUMBER>`, and `<PR_URL>` with the actual values from the workflow.
 
-### 6B. Report Eval Result
+### 7B. Report Eval Result
 If eval succeeds, report the score:
 ```
 📊 Workflow Eval: <score_band> (<score>) — saved to eval store
