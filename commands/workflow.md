@@ -1,6 +1,8 @@
-Orchestrates the complete feature workflow: Task Selection → Plan Creation → Implementation → Validation → PR
+Orchestrates the complete feature workflow: Task Selection → Plan Creation → Implementation → Self-Review → Validation → PR
 
-This command provides a continuous flow while clearing context between major phases.
+This command provides a continuous flow while clearing context between major phases. After implementation, changes are automatically reviewed and fixed iteratively before final validation.
+
+Self-review is enabled by default and can be configured in `.wavemill-config.json` (review.enabled and review.maxIterations).
 
 ---
 
@@ -444,6 +446,7 @@ If eval fails or is skipped (autoEval disabled), note it briefly and continue �
 ### What Gets Saved:
 - Task details → `features/<feature-name>/selected-task.json`
 - Plan → `features/<feature-name>/plan.md`
+- Self-review logs → `features/<feature-name>/review-iteration-*.log`
 - Validation → `features/<feature-name>/validation-report.md`
 - Code → Git commits
 
@@ -484,3 +487,7 @@ If eval fails or is skipped (autoEval disabled), note it briefly and continue �
 - You'll be prompted at key decision points
 - Each phase saves progress to disk
 - Safe to interrupt and resume between phases
+- The self-review phase automatically catches common issues before validation
+- Review logs are saved for transparency and debugging
+- Configure in `.wavemill-config.json`: review.maxIterations (default: 3), review.enabled (default: true)
+- Disable self-review by setting `review.enabled: false` in config
