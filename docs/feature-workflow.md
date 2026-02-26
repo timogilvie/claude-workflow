@@ -2,7 +2,7 @@
 title: Feature Workflow
 ---
 
-Use this mode when you want explicit planning, implementation checkpoints, and reviewable outputs for each Linear issue.
+These are the tools we use for more explicit planning, implementation checkpoints, and reviewable outputs for each Linear issue. It's helpful when issues tend to have more nuance that benefits from back-and-forth with the LLM, you're exploring different potential paths, etc. 
 
 ## Recommended Path
 
