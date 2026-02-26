@@ -82,6 +82,14 @@ ${GREEN}Commands:${NC}
                ${CYAN}eval export${NC}  Export records for ML training
                             --format csv|jsonl, --redact, --output FILE
 
+  ${CYAN}review${NC}    Review a pull request with LLM analysis
+             - Lists open PRs for interactive selection
+             - Analyzes code for major issues (security, logic, requirements)
+             - Provides structured findings with verdict
+             Usage:
+               ${CYAN}wavemill review${NC}         Interactive PR selection
+               ${CYAN}wavemill review <number>${NC} Review specific PR
+
   ${CYAN}init${NC}      Initialize wavemill in current directory
              - Creates .wavemill-config.json
              - Optionally initializes project context (.wavemill/project-context.md)
@@ -119,6 +127,12 @@ ${GREEN}Examples:${NC}
 
   # Export eval records for ML training
   wavemill eval export --format csv --redact -o dataset.csv
+
+  # Review a PR interactively
+  wavemill review
+
+  # Review a specific PR
+  wavemill review 42
 
 ${GREEN}Configuration:${NC}
   Settings are loaded in this order (later wins):
@@ -367,6 +381,22 @@ run_plan() {
   exec "$plan_script" "$@"
 }
 
+run_review() {
+  local review_script="$LIB_DIR/wavemill-review.sh"
+
+  if [[ ! -f "$review_script" ]]; then
+    echo -e "${RED}Error:${NC} Review script not found at: $review_script" >&2
+    exit 1
+  fi
+
+  if [[ ! -x "$review_script" ]]; then
+    chmod +x "$review_script"
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Review...${NC}"
+  exec "$review_script" "$@"
+}
+
 # Main command dispatcher
 case "${1:-}" in
   mill)
@@ -398,6 +428,10 @@ case "${1:-}" in
     check_claude_sync
     shift
     run_plan "$@"
+    ;;
+  review)
+    shift
+    run_review "$@"
     ;;
   eval)
     shift
