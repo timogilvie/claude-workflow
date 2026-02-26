@@ -194,7 +194,7 @@ function testFilenameGeneration() {
   assert(result.rules.length === 2, 'Should generate 2 rules');
   assert(result.rules[0].filename.startsWith('01-'), 'First rule should start with 01-');
   assert(result.rules[1].filename.startsWith('10-'), 'Second rule should start with 10-');
-  assert(result.rules[0].filename.endsWith('.js'), 'Filename should end with .js');
+  assert(result.rules[0].filename.endsWith('.cjs'), 'Filename should end with .cjs');
 }
 
 function testExecutableRules() {
