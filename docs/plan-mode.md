@@ -64,4 +64,6 @@ The decomposition plan is pushed to Linear:
 ## See Also
 
 - [Feature Workflow](feature-workflow.md) — guided single-issue execution with plan → implement → validate gates
+- [Mill Mode](mill-mode.md) — autonomous parallel backlog processing
 - [Labels](LABEL-SYSTEM.md) — how labels control parallel task scheduling
+- [Troubleshooting](troubleshooting.md) — common issues and fixes
