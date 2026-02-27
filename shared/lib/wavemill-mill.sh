@@ -1627,11 +1627,14 @@ while :; do
             log "  📊 Running post-completion eval..."
             eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
             [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+            local debug_flag=""
+            [[ "${DEBUG:-}" == "1" || "${DEBUG_COST:-}" == "1" ]] && debug_flag="--debug"
             npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
               --issue "$ISSUE" --branch "$BRANCH" \
               --worktree "${WORKTREE_ROOT}/${SLUG}" \
               --workflow-type mill --repo-dir "$REPO_DIR" \
               --agent "$eval_agent" \
+              $debug_flag \
               2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
           fi
 
@@ -1713,11 +1716,14 @@ while :; do
         log "  📊 Running post-merge eval..."
         eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
         [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+        local debug_flag=""
+        [[ "${DEBUG:-}" == "1" || "${DEBUG_COST:-}" == "1" ]] && debug_flag="--debug"
         npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$ISSUE" --pr "$PR" --branch "$BRANCH" \
           --worktree "${WORKTREE_ROOT}/${SLUG}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
           --agent "$eval_agent" \
+          $debug_flag \
           2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
       fi
 

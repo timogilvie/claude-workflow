@@ -62,10 +62,25 @@ export interface SessionAdapter {
  */
 export class ClaudeSessionAdapter implements SessionAdapter {
   scan(opts: SessionScanOptions): SessionUsageResult | null {
+    const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
     const projectsDir = resolveProjectsDir(opts.worktreePath);
 
+    if (debug) {
+      console.log(`[DEBUG_COST] ClaudeSessionAdapter.scan:`);
+      console.log(`[DEBUG_COST]   worktreePath: ${opts.worktreePath}`);
+      console.log(`[DEBUG_COST]   branchName: ${opts.branchName}`);
+      console.log(`[DEBUG_COST]   projectsDir: ${projectsDir}`);
+    }
+
     if (!existsSync(projectsDir)) {
+      if (debug) {
+        console.log(`[DEBUG_COST]   ❌ Projects directory does not exist`);
+      }
       return null;
+    }
+
+    if (debug) {
+      console.log(`[DEBUG_COST]   ✓ Projects directory exists`);
     }
 
     let sessionFiles: string[];
@@ -73,17 +88,29 @@ export class ClaudeSessionAdapter implements SessionAdapter {
       sessionFiles = readdirSync(projectsDir)
         .filter((f) => f.endsWith('.jsonl'))
         .map((f) => join(projectsDir, f));
-    } catch {
+    } catch (err) {
+      if (debug) {
+        console.log(`[DEBUG_COST]   ❌ Failed to read directory: ${err}`);
+      }
       return null;
     }
 
+    if (debug) {
+      console.log(`[DEBUG_COST]   Found ${sessionFiles.length} .jsonl file(s)`);
+    }
+
     if (sessionFiles.length === 0) {
+      if (debug) {
+        console.log(`[DEBUG_COST]   ❌ No session files found`);
+      }
       return null;
     }
 
     const models: Record<string, SessionModelUsage> = {};
     let turnCount = 0;
     let sessionCount = 0;
+    let totalAssistantTurns = 0;
+    let branchMismatchCount = 0;
 
     for (const filePath of sessionFiles) {
       let sessionHadTurns = false;
@@ -103,7 +130,12 @@ export class ClaudeSessionAdapter implements SessionAdapter {
           }
 
           if (entry.type !== 'assistant') continue;
-          if (entry.gitBranch !== opts.branchName) continue;
+          totalAssistantTurns++;
+
+          if (entry.gitBranch !== opts.branchName) {
+            branchMismatchCount++;
+            continue;
+          }
 
           const message = entry.message as Record<string, unknown> | undefined;
           if (!message) continue;
@@ -138,8 +170,24 @@ export class ClaudeSessionAdapter implements SessionAdapter {
       }
     }
 
+    if (debug) {
+      console.log(`[DEBUG_COST]   Total assistant turns found: ${totalAssistantTurns}`);
+      console.log(`[DEBUG_COST]   Branch mismatches: ${branchMismatchCount}`);
+      console.log(`[DEBUG_COST]   Matching turns: ${turnCount}`);
+    }
+
     if (turnCount === 0) {
+      if (debug) {
+        console.log(`[DEBUG_COST]   ❌ No turns matched branch '${opts.branchName}'`);
+        if (totalAssistantTurns > 0) {
+          console.log(`[DEBUG_COST]   Hint: Found ${totalAssistantTurns} assistant turns but none matched the branch`);
+        }
+      }
       return null;
+    }
+
+    if (debug) {
+      console.log(`[DEBUG_COST]   ✓ Successfully scanned ${sessionCount} session(s) with ${turnCount} turn(s)`);
     }
 
     return { models, sessionCount, turnCount };
@@ -162,11 +210,39 @@ export class ClaudeSessionAdapter implements SessionAdapter {
  */
 export class CodexSessionAdapter implements SessionAdapter {
   scan(opts: SessionScanOptions): SessionUsageResult | null {
+    const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
     const sessionsRoot = join(homedir(), '.codex', 'sessions');
-    if (!existsSync(sessionsRoot)) return null;
 
-    const matchingFiles = this.discoverMatchingFiles(sessionsRoot, opts);
-    if (matchingFiles.length === 0) return null;
+    if (debug) {
+      console.log(`[DEBUG_COST] CodexSessionAdapter.scan:`);
+      console.log(`[DEBUG_COST]   worktreePath: ${opts.worktreePath}`);
+      console.log(`[DEBUG_COST]   branchName: ${opts.branchName}`);
+      console.log(`[DEBUG_COST]   sessionsRoot: ${sessionsRoot}`);
+    }
+
+    if (!existsSync(sessionsRoot)) {
+      if (debug) {
+        console.log(`[DEBUG_COST]   ❌ Sessions root does not exist`);
+      }
+      return null;
+    }
+
+    if (debug) {
+      console.log(`[DEBUG_COST]   ✓ Sessions root exists`);
+    }
+
+    const matchingFiles = this.discoverMatchingFiles(sessionsRoot, opts, debug);
+
+    if (debug) {
+      console.log(`[DEBUG_COST]   Found ${matchingFiles.length} matching session file(s)`);
+    }
+
+    if (matchingFiles.length === 0) {
+      if (debug) {
+        console.log(`[DEBUG_COST]   ❌ No session files matched worktree or branch`);
+      }
+      return null;
+    }
 
     const models: Record<string, SessionModelUsage> = {};
     let sessionCount = 0;
@@ -190,7 +266,16 @@ export class CodexSessionAdapter implements SessionAdapter {
       turnCount++;
     }
 
-    if (sessionCount === 0) return null;
+    if (sessionCount === 0) {
+      if (debug) {
+        console.log(`[DEBUG_COST]   ❌ No sessions could be parsed`);
+      }
+      return null;
+    }
+
+    if (debug) {
+      console.log(`[DEBUG_COST]   ✓ Successfully scanned ${sessionCount} session(s)`);
+    }
 
     return { models, sessionCount, turnCount };
   }
@@ -199,9 +284,13 @@ export class CodexSessionAdapter implements SessionAdapter {
    * Recursively find .jsonl files whose session_meta matches
    * the target worktree cwd or branch.
    */
-  private discoverMatchingFiles(sessionsRoot: string, opts: SessionScanOptions): string[] {
+  private discoverMatchingFiles(sessionsRoot: string, opts: SessionScanOptions, debug = false): string[] {
     const matching: string[] = [];
     const resolvedWorktree = resolve(opts.worktreePath);
+
+    if (debug) {
+      console.log(`[DEBUG_COST]   Scanning for session files matching worktree or branch...`);
+    }
 
     this.walkJsonlFiles(sessionsRoot, (filePath) => {
       try {
