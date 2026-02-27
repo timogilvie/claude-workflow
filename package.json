@@ -8,8 +8,16 @@
     "codex"
   ],
   "scripts": {
-    "test": "npm run test --workspaces --if-present",
-    "test:codex": "npm run test -w codex",
+    "test": "npm run test:shell && npm run test:unit && npm run test:smoke && npm run test:config",
+    "test:shell": "bash tests/check-shell.sh",
+    "test:unit": "npm run test:node-test && npm run test:custom",
+    "test:node-test": "node --test shared/lib/session.test.js shared/lib/session-timer.test.js shared/lib/eval.test.js shared/lib/intervention-detector.test.ts shared/lib/session-adapters.test.ts shared/lib/outcome-collectors.test.ts shared/lib/context-analyzer.test.ts shared/lib/review-runner.test.ts",
+    "test:custom": "bash tests/run-custom-tests.sh",
+    "test:smoke": "node --test tests/cli-smoke.test.ts",
+    "test:config": "bash tests/config-loading.test.sh",
+    "test:integration": "node --test shared/lib/github.test.js",
+    "test:all": "npm run test && npm run test:integration",
+    "test:codex": "npm run test -w codex --if-present",
     "codex:workflow": "npm run workflow -w codex",
     "codex:state": "npm run state -w codex"
   },
