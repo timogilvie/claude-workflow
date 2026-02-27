@@ -45,3 +45,12 @@ Every PR should include:
 - key files/modules changed
 - test plan and results
 - link to the Linear issue (for example `HOK-779`)
+
+## See Also
+
+- [Mill Mode](mill-mode.md) — autonomous parallel backlog processing
+- [Plan Mode](plan-mode.md) — decompose epics into mill-ready sub-issues
+- [Review Mode](review-mode.md) — LLM-powered code review
+- [Expand Mode](expand-mode.md) — batch expand issues into task packets
+- [Eval Mode](eval-mode.md) — evaluate LLM performance on workflows
+- [Troubleshooting](troubleshooting.md) — common issues and fixes

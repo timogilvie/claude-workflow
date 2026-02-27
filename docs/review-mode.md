@@ -165,4 +165,6 @@ Review settings live in `.wavemill-config.json`:
 
 - [Feature Workflow](feature-workflow.md) — the full workflow where self-review runs as Phase 4
 - [Mill Mode](mill-mode.md) — autonomous backlog processing (uses review in each agent's workflow)
+- [Expand Mode](expand-mode.md) — batch expand issues into task packets
+- [Eval Mode](eval-mode.md) — evaluate LLM performance on workflows
 - [Troubleshooting](troubleshooting.md) — common issues and fixes
