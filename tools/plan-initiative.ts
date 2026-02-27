@@ -19,7 +19,6 @@ import dotenv from 'dotenv';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { spawn } from 'child_process';
 import {
   getInitiatives,
   getInitiative,
@@ -29,6 +28,7 @@ import {
   createIssueRelation,
   getOrCreateProjectMilestone,
 } from '../shared/lib/linear.js';
+import { callClaude, parseJsonFromLLM } from '../shared/lib/llm-cli.js';
 
 dotenv.config({ quiet: true });
 
@@ -69,146 +69,36 @@ interface PlanOutput {
 // CLAUDE CLI INTEGRATION
 // ============================================================================
 
-function cleanOutput(text: string): string {
-  // Remove <tool_call>...</tool_call> blocks
-  let cleaned = text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
-
-  // Remove XML-style tags
-  cleaned = cleaned.replace(/<\/?(?:tool_name|parameters|prompt|command|subagent_type|pattern|file_path|include|path|output_mode|context)[^>]*>[\s\S]*?(?:<\/(?:tool_name|parameters|prompt|command|subagent_type|pattern|file_path|include|path|output_mode|context)>)?/g, '');
-
-  // Strip conversational preamble before JSON
-  const jsonStart = cleaned.search(/\{[\s\n]*"epic_summary"/);
-  if (jsonStart > 0) {
-    cleaned = cleaned.substring(jsonStart);
-  }
-
-  // Extract from markdown code fences if present
-  const fenceMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (fenceMatch) {
-    cleaned = fenceMatch[1];
-  }
-
-  // Trim trailing conversational text after the JSON closes
-  // Find the last } that closes the root object
-  let braceDepth = 0;
-  let jsonEnd = -1;
-  for (let i = 0; i < cleaned.length; i++) {
-    if (cleaned[i] === '{') braceDepth++;
-    if (cleaned[i] === '}') {
-      braceDepth--;
-      if (braceDepth === 0) {
-        jsonEnd = i + 1;
-      }
-    }
-  }
-  if (jsonEnd > 0) {
-    cleaned = cleaned.substring(0, jsonEnd);
-  }
-
-  return cleaned.trim();
-}
-
 async function decomposeWithClaude(systemPrompt: string, initiativeContext: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fullPrompt = `${systemPrompt}\n\n---\n\n${initiativeContext}`;
+  const fullPrompt = `${systemPrompt}\n\n---\n\n${initiativeContext}`;
 
-    const claude = spawn(CLAUDE_CMD, [
-      '--print',
-      '--model', PLAN_MODEL,
+  const result = await callClaude(fullPrompt, {
+    mode: 'stream',
+    model: PLAN_MODEL,
+    cliFlags: [
       '--tools', '',
       '--append-system-prompt',
       'You have NO tools available. Do NOT output <tool_call> tags, XML markup, or attempt to call any tools. Your ENTIRE response must be valid JSON matching the specified schema. No conversational text, no preamble, no markdown code fences. Start directly with the opening { brace.',
-    ], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    claude.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    claude.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    claude.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
-      } else {
-        resolve(cleanOutput(stdout));
-      }
-    });
-
-    claude.on('error', (error) => {
-      reject(new Error(`Failed to spawn Claude CLI: ${error.message}`));
-    });
-
-    claude.stdin.write(fullPrompt);
-    claude.stdin.end();
+    ],
   });
-}
 
-function cleanMarkdownOutput(text: string): string {
-  // Remove <tool_call>...</tool_call> blocks
-  let cleaned = text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
-
-  // Remove XML-style tags
-  cleaned = cleaned.replace(/<\/?(?:tool_name|parameters|prompt|command|subagent_type|pattern|file_path|include|path|output_mode|context)[^>]*>[\s\S]*?(?:<\/(?:tool_name|parameters|prompt|command|subagent_type|pattern|file_path|include|path|output_mode|context)>)?/g, '');
-
-  // Strip conversational preamble before the first markdown heading
-  const firstHeading = cleaned.search(/^##\s/m);
-  if (firstHeading > 0) {
-    cleaned = cleaned.substring(firstHeading);
-  }
-
-  // Collapse runs of 3+ blank lines into 2
-  cleaned = cleaned.replace(/\n{4,}/g, '\n\n\n');
-
-  return cleaned.trim();
+  return result.text;
 }
 
 async function runResearch(researchPrompt: string, initiativeContext: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fullPrompt = `${researchPrompt}\n\n---\n\n${initiativeContext}`;
+  const fullPrompt = `${researchPrompt}\n\n---\n\n${initiativeContext}`;
 
-    const claude = spawn(CLAUDE_CMD, [
-      '--print',
-      '--model', PLAN_MODEL,
+  const result = await callClaude(fullPrompt, {
+    mode: 'stream',
+    model: PLAN_MODEL,
+    cliFlags: [
       '--tools', '',
       '--append-system-prompt',
       'You have NO tools available. Do NOT output <tool_call> tags, XML markup, or attempt to call any tools. Your ENTIRE response must be the structured markdown research summary and nothing else. No conversational text, no preamble. Start directly with the first markdown heading.',
-    ], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    claude.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    claude.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    claude.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Claude CLI (research) exited with code ${code}: ${stderr}`));
-      } else {
-        resolve(cleanMarkdownOutput(stdout));
-      }
-    });
-
-    claude.on('error', (error) => {
-      reject(new Error(`Failed to spawn Claude CLI for research: ${error.message}`));
-    });
-
-    claude.stdin.write(fullPrompt);
-    claude.stdin.end();
+    ],
   });
+
+  return result.text;
 }
 
 function slugify(name: string): string {
@@ -433,10 +323,10 @@ async function decompose(args: string[]) {
   // 7. Parse and validate JSON
   let plan: PlanOutput;
   try {
-    plan = JSON.parse(rawOutput);
+    plan = parseJsonFromLLM<PlanOutput>(rawOutput);
   } catch (e) {
     console.error('Failed to parse Claude output as JSON.');
-    console.error('First 500 chars:', rawOutput.substring(0, 500));
+    console.error('Error:', (e as Error).message);
     process.exit(1);
   }
 

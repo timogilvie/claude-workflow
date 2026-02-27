@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, existsSync, appendFileSync } from 'fs';
-import { execSync, spawn } from 'child_process';
+import { execSync } from 'child_process';
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -23,6 +23,7 @@ import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
 import { analyzePrDifficulty } from './difficulty-analyzer.ts';
 import { analyzeTaskContext } from './task-context-analyzer.ts';
 import { analyzeRepoContext } from './repo-context-analyzer.ts';
+import { callClaude } from './llm-cli.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -402,7 +403,7 @@ async function generateContextUpdate(opts: {
 
   // Fill in template placeholders
   const timestamp = new Date().toISOString();
-  let prompt = promptTemplate
+  const prompt = promptTemplate
     .replace('{TIMESTAMP}', timestamp)
     .replace('{ISSUE_ID}', opts.issueId)
     .replace('{ISSUE_TITLE}', issueTitle)
@@ -410,49 +411,18 @@ async function generateContextUpdate(opts: {
     .replace('{ISSUE_DESCRIPTION}', opts.issueContext)
     .replace('{PR_DIFF}', opts.prDiff.substring(0, 50000)); // Limit diff size
 
-  // Use Claude CLI to generate summary
-  return new Promise((resolve, reject) => {
-    const claudeCmd = process.env.CLAUDE_CMD || 'claude';
-    const claude = spawn(claudeCmd, [
-      '--print',
+  const claudeCmd = process.env.CLAUDE_CMD || 'claude';
+  const result = await callClaude(prompt, {
+    mode: 'stream',
+    claudeCmd,
+    cliFlags: [
       '--tools', '',
       '--append-system-prompt',
       'You have NO tools available. Output ONLY the markdown summary in the exact format specified. No conversational text, no preamble, no XML tags. Start directly with the heading.',
-    ], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    claude.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    claude.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    claude.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
-      } else {
-        // Clean up any XML tags that might have leaked through
-        const cleaned = stdout
-          .replace(/<\/?[^>]+(>|$)/g, '') // Remove XML tags
-          .trim();
-        resolve(cleaned);
-      }
-    });
-
-    claude.on('error', (error) => {
-      reject(new Error(`Failed to spawn Claude CLI: ${error.message}`));
-    });
-
-    // Send prompt to Claude via stdin
-    claude.stdin.write(prompt);
-    claude.stdin.end();
+    ],
   });
+
+  return result.text;
 }
 
 /**

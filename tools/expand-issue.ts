@@ -18,7 +18,7 @@ import dotenv from 'dotenv';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { spawn, execSync } from 'child_process';
+import { execSync } from 'child_process';
 import { getIssue, updateIssue } from '../shared/lib/linear.js';
 import {
   validateTaskPacket,
@@ -29,6 +29,7 @@ import {
 } from '../shared/lib/task-packet-validator.js';
 import { existsSync, readFileSync } from 'fs';
 import { createInterface } from 'readline';
+import { callClaude } from '../shared/lib/llm-cli.js';
 
 dotenv.config({ quiet: true });
 
@@ -82,72 +83,25 @@ function isValidTaskPacket(text: string): boolean {
   return /##\s*(1\.|Objective|What|Technical Context|Success Criteria|Implementation)/i.test(text);
 }
 
-// Strip tool_call XML, conversational narration, and other non-markdown noise
-// that Claude may emit in --print mode
-function cleanOutput(text: string): string {
-  // Remove <tool_call>...</tool_call> blocks (including multiline)
-  let cleaned = text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '');
-
-  // Remove any other XML-style tags that aren't standard markdown
-  cleaned = cleaned.replace(/<\/?(?:tool_name|parameters|prompt|command|subagent_type|pattern|file_path|include|path|output_mode|context)[^>]*>[\s\S]*?(?:<\/(?:tool_name|parameters|prompt|command|subagent_type|pattern|file_path|include|path|output_mode|context)>)?/g, '');
-
-  // Strip conversational preamble before the first markdown heading
-  const firstHeading = cleaned.search(/^#\s/m);
-  if (firstHeading > 0) {
-    cleaned = cleaned.substring(firstHeading);
-  }
-
-  // Collapse runs of 3+ blank lines into 2
-  cleaned = cleaned.replace(/\n{4,}/g, '\n\n\n');
-
-  return cleaned.trim();
-}
-
 // Claude CLI helper - uses your local Claude subscription
 async function expandWithClaude(prompt: string, issueContext: string, codebaseContext: string = ''): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const contextParts = [prompt, issueContext];
-    if (codebaseContext) {
-      contextParts.push(codebaseContext);
-    }
-    const fullPrompt = contextParts.join('\n\n---\n\n');
+  const contextParts = [prompt, issueContext];
+  if (codebaseContext) {
+    contextParts.push(codebaseContext);
+  }
+  const fullPrompt = contextParts.join('\n\n---\n\n');
 
-    const claude = spawn(CLAUDE_CMD, [
-      '--print',
+  const result = await callClaude(fullPrompt, {
+    mode: 'stream',
+    claudeCmd: CLAUDE_CMD,
+    cliFlags: [
       '--tools', '',
       '--append-system-prompt',
       'You have NO tools available. Do NOT output <tool_call> tags, XML markup, or attempt to call any tools. Your ENTIRE response must be the task packet markdown and nothing else. No conversational text, no preamble, no apologies, no questions. Start directly with the first markdown heading.',
-    ], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    claude.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    claude.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    claude.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
-      } else {
-        resolve(cleanOutput(stdout));
-      }
-    });
-
-    claude.on('error', (error) => {
-      reject(new Error(`Failed to spawn Claude CLI: ${error.message}`));
-    });
-
-    // Send prompt to Claude via stdin
-    claude.stdin.write(fullPrompt);
-    claude.stdin.end();
+    ],
   });
+
+  return result.text;
 }
 
 // Extract issue identifier from various input formats
