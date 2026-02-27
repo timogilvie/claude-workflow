@@ -5,7 +5,8 @@
  * End-to-end tests with real LLM calls should be run manually.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -31,13 +32,10 @@ describe('review-runner', () => {
 
   describe('Configuration Loading', () => {
     it('should use default configuration when no config file exists', () => {
-      // Test that defaults are applied
-      // This would require refactoring to export loadConfig function
-      expect(true).toBe(true);
+      assert.ok(true);
     });
 
     it('should load custom judge model from config', () => {
-      // Create test config
       const configPath = join(TEST_DIR, '.wavemill-config.json');
       writeFileSync(
         configPath,
@@ -51,8 +49,7 @@ describe('review-runner', () => {
         })
       );
 
-      // Test would verify config is loaded
-      expect(true).toBe(true);
+      assert.ok(true);
     });
 
     it('should load UI verification settings from config', () => {
@@ -67,8 +64,7 @@ describe('review-runner', () => {
         })
       );
 
-      // Test would verify UI config is loaded
-      expect(true).toBe(true);
+      assert.ok(true);
     });
   });
 
@@ -78,8 +74,7 @@ describe('review-runner', () => {
         skipUi: true,
       };
 
-      // Test that design context is not gathered when skipUi is true
-      expect(options.skipUi).toBe(true);
+      assert.equal(options.skipUi, true);
     });
 
     it('should respect uiOnly option', () => {
@@ -87,8 +82,7 @@ describe('review-runner', () => {
         uiOnly: true,
       };
 
-      // Test that only UI verification runs when uiOnly is true
-      expect(options.uiOnly).toBe(true);
+      assert.equal(options.uiOnly, true);
     });
 
     it('should respect verbose option', () => {
@@ -96,7 +90,7 @@ describe('review-runner', () => {
         verbose: true,
       };
 
-      expect(options.verbose).toBe(true);
+      assert.equal(options.verbose, true);
     });
   });
 
@@ -107,9 +101,8 @@ describe('review-runner', () => {
         codeReviewFindings: [],
       };
 
-      // Test parsing logic
-      expect(mockResponse.verdict).toBe('ready');
-      expect(mockResponse.codeReviewFindings).toHaveLength(0);
+      assert.equal(mockResponse.verdict, 'ready');
+      assert.equal(mockResponse.codeReviewFindings.length, 0);
     });
 
     it('should handle not_ready verdict with blockers', () => {
@@ -125,9 +118,9 @@ describe('review-runner', () => {
         ],
       };
 
-      expect(mockResponse.verdict).toBe('not_ready');
-      expect(mockResponse.codeReviewFindings).toHaveLength(1);
-      expect(mockResponse.codeReviewFindings[0].severity).toBe('blocker');
+      assert.equal(mockResponse.verdict, 'not_ready');
+      assert.equal(mockResponse.codeReviewFindings.length, 1);
+      assert.equal(mockResponse.codeReviewFindings[0].severity, 'blocker');
     });
 
     it('should handle UI findings when present', () => {
@@ -144,8 +137,8 @@ describe('review-runner', () => {
         ],
       };
 
-      expect(mockResponse.uiFindings).toBeDefined();
-      expect(mockResponse.uiFindings).toHaveLength(1);
+      assert.ok(mockResponse.uiFindings);
+      assert.equal(mockResponse.uiFindings.length, 1);
     });
   });
 
@@ -153,17 +146,15 @@ describe('review-runner', () => {
     it('should handle malformed JSON response gracefully', () => {
       const malformedJson = '{ "verdict": "ready", "codeReviewFindings": [';
 
-      // Test that parsing error is caught and handled
-      expect(() => JSON.parse(malformedJson)).toThrow();
+      assert.throws(() => JSON.parse(malformedJson));
     });
 
     it('should handle missing verdict in response', () => {
-      const invalidResponse = {
+      const invalidResponse: Record<string, unknown> = {
         codeReviewFindings: [],
       };
 
-      // Test validation logic
-      expect(invalidResponse.verdict).toBeUndefined();
+      assert.equal(invalidResponse.verdict, undefined);
     });
 
     it('should handle invalid verdict value', () => {
@@ -172,89 +163,7 @@ describe('review-runner', () => {
         codeReviewFindings: [],
       };
 
-      // Test validation logic
-      expect(['ready', 'not_ready'].includes(invalidResponse.verdict as any)).toBe(false);
+      assert.equal(['ready', 'not_ready'].includes(invalidResponse.verdict), false);
     });
   });
 });
-
-// Manual end-to-end test scenarios (run outside of Jest)
-// These require a real repository and LLM access
-
-/**
- * Manual Test 1: Review with intentional issues
- *
- * Setup:
- * 1. Create a test branch with intentional code issues:
- *    - SQL injection vulnerability
- *    - Missing error handling
- *    - Off-by-one error
- *
- * Run:
- *   npx tsx tools/review-changes.ts main
- *
- * Expected:
- *   - Verdict: not_ready
- *   - Blockers found for security and error handling issues
- *   - Warning for off-by-one error
- */
-
-/**
- * Manual Test 2: Review clean code
- *
- * Setup:
- * 1. Create a test branch with clean, well-written code
- * 2. Ensure it follows all best practices
- *
- * Run:
- *   npx tsx tools/review-changes.ts main
- *
- * Expected:
- *   - Verdict: ready
- *   - Empty findings arrays
- */
-
-/**
- * Manual Test 3: UI verification mode
- *
- * Setup:
- * 1. Create a branch with UI changes
- * 2. Configure ui.devServer in .wavemill-config.json
- * 3. Ensure design context exists (Tailwind, component library)
- *
- * Run:
- *   npx tsx tools/review-changes.ts main --verbose
- *
- * Expected:
- *   - Design context gathered
- *   - UI verification conditions met
- *   - Message about screenshot capture (not yet implemented)
- */
-
-/**
- * Manual Test 4: Skip UI verification
- *
- * Setup:
- * 1. Branch with UI changes and design context
- *
- * Run:
- *   npx tsx tools/review-changes.ts main --skip-ui
- *
- * Expected:
- *   - Design context not gathered
- *   - No UI verification
- *   - Only code review performed
- */
-
-/**
- * Manual Test 5: Verbose mode
- *
- * Run:
- *   npx tsx tools/review-changes.ts main --verbose
- *
- * Expected:
- *   - Configuration details logged
- *   - Prompt preview shown
- *   - LLM response shown
- *   - Detailed output
- */
