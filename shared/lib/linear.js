@@ -2,6 +2,7 @@
 // Centralizing these helpers prevents drift between scripts.
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql';
+const REQUEST_TIMEOUT_MS = 15_000;
 
 const headers = () => ({
   Authorization: process.env.LINEAR_API_KEY || '',
@@ -9,10 +10,15 @@ const headers = () => ({
 });
 
 async function request(query, variables) {
+  if (!process.env.LINEAR_API_KEY) {
+    throw new Error('LINEAR_API_KEY is not set. Export it in your shell or add it to .env');
+  }
+
   const res = await fetch(LINEAR_ENDPOINT, {
     method: 'POST',
     headers: headers(),
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   const data = await res.json();
