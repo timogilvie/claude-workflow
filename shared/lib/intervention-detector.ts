@@ -13,6 +13,7 @@ import { execSync } from 'child_process';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { resolveProjectsDir } from './workflow-cost.ts';
+import { loadWavemillConfig } from './config.ts';
 import type {
   InterventionRecord,
   InterventionType,
@@ -123,21 +124,15 @@ export function resolveOwnerRepo(repoDir?: string): string | undefined {
  * Falls back to DEFAULT_PENALTIES for any missing keys.
  */
 export function loadPenalties(repoDir?: string): InterventionPenalties {
-  const configPath = join(repoDir || process.cwd(), '.wavemill-config.json');
-  if (!existsSync(configPath)) return { ...DEFAULT_PENALTIES };
-  try {
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    const configured = config.eval?.interventionPenalties || {};
-    return {
-      review_comment: configured.reviewComment ?? DEFAULT_PENALTIES.review_comment,
-      post_pr_commit: configured.postPrCommit ?? DEFAULT_PENALTIES.post_pr_commit,
-      manual_edit: configured.manualEdit ?? DEFAULT_PENALTIES.manual_edit,
-      test_fix: configured.testFix ?? DEFAULT_PENALTIES.test_fix,
-      session_redirect: configured.sessionRedirect ?? DEFAULT_PENALTIES.session_redirect,
-    };
-  } catch {
-    return { ...DEFAULT_PENALTIES };
-  }
+  const config = loadWavemillConfig(repoDir);
+  const configured = config.eval?.interventionPenalties || {};
+  return {
+    review_comment: configured.reviewComment ?? DEFAULT_PENALTIES.review_comment,
+    post_pr_commit: configured.postPrCommit ?? DEFAULT_PENALTIES.post_pr_commit,
+    manual_edit: configured.manualEdit ?? DEFAULT_PENALTIES.manual_edit,
+    test_fix: configured.testFix ?? DEFAULT_PENALTIES.test_fix,
+    session_redirect: configured.sessionRedirect ?? DEFAULT_PENALTIES.session_redirect,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────
