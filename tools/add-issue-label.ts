@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // @ts-nocheck
-import { getIssue, getOrCreateLabel, addLabelsToIssue } from '../shared/lib/linear.js';
+import { getIssueForLabeling, getOrCreateLabel, addLabelsToIssue } from '../shared/lib/linear.js';
 import dotenv from 'dotenv';
 
 dotenv.config({ quiet: true });
@@ -16,7 +16,7 @@ async function main() {
 
   try {
     // Get the issue to find its team ID
-    const issue = await getIssue(identifier);
+    const issue = await getIssueForLabeling(identifier);
     if (!issue) {
       console.error(`Issue not found: ${identifier}`);
       process.exit(1);

@@ -28,6 +28,15 @@ async function request(query, variables) {
   return data.data;
 }
 
+// Parse "HOK-123" into { teamKey: "HOK", number: 123 }
+function parseIdentifier(identifier) {
+  const match = identifier.match(/^([A-Z]+)-(\d+)$/);
+  if (!match) {
+    throw new Error(`Invalid issue identifier: ${identifier}. Expected format: HOK-123`);
+  }
+  return { teamKey: match[1], number: parseInt(match[2], 10) };
+}
+
 export async function getProjects() {
   const data = await request(`
     query {
@@ -118,6 +127,47 @@ export async function getBacklog(projectName) {
   return data.issues?.nodes || [];
 }
 
+// Leaner backlog query for scoring — omits parent, children, project, state.id
+export async function getBacklogForScoring(projectName) {
+  const filters = ['state: { name: { in: ["Backlog", "Todo"] } }'];
+
+  if (projectName) {
+    filters.push(`project: { name: { eq: "${projectName}" } }`);
+  }
+
+  const filterClause = filters.length ? `filter: { ${filters.join(', ')} }` : '';
+
+  const data = await request(`
+    query {
+      issues(${filterClause}, first: 50) {
+        nodes {
+          identifier
+          title
+          description
+          state { name }
+          labels { nodes { name } }
+          estimate
+          priority
+          relations {
+            nodes {
+              type
+              relatedIssue { id identifier completedAt canceledAt }
+            }
+          }
+          inverseRelations {
+            nodes {
+              type
+              issue { id identifier completedAt canceledAt }
+            }
+          }
+        }
+      }
+    }
+  `);
+
+  return data.issues?.nodes || [];
+}
+
 export async function getWorkflowStates(teamId) {
   const data = await request(`
     query {
@@ -135,20 +185,35 @@ export async function getWorkflowStates(teamId) {
 }
 
 export async function setIssueState(identifier, stateName) {
-  // First get the issue to find its team and current workflow states
-  const issue = await getIssue(identifier);
+  const { teamKey, number } = parseIdentifier(identifier);
 
-  // Get workflow states for this team
-  const states = await getWorkflowStates(issue.team.id);
+  // Single query: fetch issue id + all team workflow states in one round-trip
+  const data = await request(`
+    query {
+      issues(filter: { number: { eq: ${number} }, team: { key: { eq: "${teamKey}" } } }, first: 1) {
+        nodes {
+          id
+          team {
+            id
+            states { nodes { id name } }
+          }
+        }
+      }
+    }
+  `);
 
-  // Find the target state
+  const issue = data.issues?.nodes?.[0];
+  if (!issue) {
+    throw new Error(`Issue not found: ${identifier}`);
+  }
+
+  const states = issue.team?.states?.nodes || [];
   const targetState = states.find(s => s.name.toLowerCase() === stateName.toLowerCase());
 
   if (!targetState) {
     throw new Error(`State "${stateName}" not found. Available: ${states.map(s => s.name).join(', ')}`);
   }
 
-  // Update the issue with the new state
   return await updateIssue(issue.id, { stateId: targetState.id });
 }
 
@@ -257,15 +322,11 @@ export async function getOrCreateProjectMilestone(projectId, milestoneName) {
 }
 
 export async function getIssue(identifier) {
-  // identifier is e.g. "HOK-356" — we need to split into team key + number
-  const match = identifier.match(/^([A-Z]+)-(\d+)$/);
-  if (!match) {
-    throw new Error(`Invalid issue identifier: ${identifier}. Expected format: HOK-123`);
-  }
+  const { teamKey, number } = parseIdentifier(identifier);
 
   const data = await request(`
     query {
-      issues(filter: { number: { eq: ${match[2]} }, team: { key: { eq: "${match[1]}" } } }, first: 1) {
+      issues(filter: { number: { eq: ${number} }, team: { key: { eq: "${teamKey}" } } }, first: 1) {
         nodes {
           id
           identifier
@@ -313,6 +374,55 @@ export async function getIssue(identifier) {
   if (!issue) {
     throw new Error(`Issue not found: ${identifier}`);
   }
+  return issue;
+}
+
+// Lightweight: only id, identifier, title (for update-issue.ts log output)
+export async function getIssueBasic(identifier) {
+  const { teamKey, number } = parseIdentifier(identifier);
+  const data = await request(`
+    query {
+      issues(filter: { number: { eq: ${number} }, team: { key: { eq: "${teamKey}" } } }, first: 1) {
+        nodes { id identifier title }
+      }
+    }
+  `);
+  const issue = data.issues?.nodes?.[0];
+  if (!issue) throw new Error(`Issue not found: ${identifier}`);
+  return issue;
+}
+
+// Lightweight: only completedAt/canceledAt (for get-issue-state.ts)
+export async function getIssueCompletionState(identifier) {
+  const { teamKey, number } = parseIdentifier(identifier);
+  const data = await request(`
+    query {
+      issues(filter: { number: { eq: ${number} }, team: { key: { eq: "${teamKey}" } } }, first: 1) {
+        nodes { id completedAt canceledAt }
+      }
+    }
+  `);
+  const issue = data.issues?.nodes?.[0];
+  if (!issue) throw new Error(`Issue not found: ${identifier}`);
+  return issue;
+}
+
+// Lightweight: id + team + current labels (for add-issue-label.ts)
+export async function getIssueForLabeling(identifier) {
+  const { teamKey, number } = parseIdentifier(identifier);
+  const data = await request(`
+    query {
+      issues(filter: { number: { eq: ${number} }, team: { key: { eq: "${teamKey}" } } }, first: 1) {
+        nodes {
+          id
+          team { id }
+          labels { nodes { id name } }
+        }
+      }
+    }
+  `);
+  const issue = data.issues?.nodes?.[0];
+  if (!issue) throw new Error(`Issue not found: ${identifier}`);
   return issue;
 }
 

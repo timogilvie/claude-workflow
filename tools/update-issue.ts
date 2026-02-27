@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { getIssue, updateIssue } from '../shared/lib/linear.js';
+import { getIssueBasic, updateIssue } from '../shared/lib/linear.js';
 import dotenv from 'dotenv';
 import fs from 'fs/promises';
 
@@ -27,7 +27,7 @@ async function main() {
 
     // Fetch issue to get its internal ID
     console.log(`Fetching ${identifier}...`);
-    const issue = await getIssue(identifier);
+    const issue = await getIssueBasic(identifier);
     console.log(`Found: ${issue.identifier} - ${issue.title}`);
 
     // Update the issue
