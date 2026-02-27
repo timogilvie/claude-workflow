@@ -15,7 +15,7 @@
  */
 
 import { execSync, spawn, type SpawnOptions } from 'node:child_process';
-import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -330,8 +330,7 @@ async function executeStream(
 
     // Read prompt from temp file and send to stdin
     try {
-      const fs = require('fs');
-      const prompt = fs.readFileSync(tmpFile, 'utf-8');
+      const prompt = readFileSync(tmpFile, 'utf-8');
       llmProcess.stdin?.write(prompt);
       llmProcess.stdin?.end();
     } catch (error) {

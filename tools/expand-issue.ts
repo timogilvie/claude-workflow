@@ -18,7 +18,7 @@ import dotenv from 'dotenv';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { getIssue, updateIssue } from '../shared/lib/linear.js';
 import {
   validateTaskPacket,
