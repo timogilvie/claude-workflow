@@ -9,10 +9,7 @@
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
-import { execSync } from 'child_process';
-import { tmpdir } from 'os';
-import { writeFileSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { callClaude, parseJsonFromLLM } from './llm-cli.js';
 
 /**
  * Types of validation issues that can be detected
@@ -409,56 +406,25 @@ interface LLMReviewResponse {
  * Call Claude CLI with a prompt
  */
 async function callClaudeCLI(prompt: string, model: string): Promise<string> {
-  const tmpFile = join(tmpdir(), `task-packet-review-${Date.now()}.txt`);
-  try {
-    writeFileSync(tmpFile, prompt, 'utf-8');
+  const result = await callClaude(prompt, {
+    mode: 'sync',
+    model,
+    timeout: TIMEOUT_MS, // 30000
+    maxBuffer: 5 * 1024 * 1024,
+  });
 
-    const raw = execSync(
-      `claude -p --output-format json --model "${model}" < "${tmpFile}"`,
-      {
-        encoding: 'utf-8',
-        timeout: TIMEOUT_MS,
-        maxBuffer: 5 * 1024 * 1024,
-        shell: '/bin/bash',
-        env: { ...process.env, CLAUDECODE: '' },
-      }
-    );
-
-    let text = '';
-    try {
-      const data = JSON.parse(raw);
-      text = (data.result || '').trim();
-    } catch {
-      // If JSON parse fails, treat the entire output as text
-      text = raw.trim();
-    }
-
-    if (!text) {
-      throw new Error('Empty response from Claude CLI');
-    }
-
-    return text;
-  } finally {
-    try {
-      unlinkSync(tmpFile);
-    } catch {}
+  if (!result.text) {
+    throw new Error('Empty response from Claude CLI');
   }
+
+  return result.text;
 }
 
 /**
  * Parse LLM review response
  */
 function parseLLMReviewResponse(raw: string): LLMReviewResponse {
-  // Strip markdown code fences if present
-  let cleaned = raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
-
-  // Extract first JSON object
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    cleaned = jsonMatch[0];
-  }
-
-  const parsed = JSON.parse(cleaned);
+  const parsed = parseJsonFromLLM<LLMReviewResponse>(raw);
 
   if (!parsed.status || !['PASS', 'FAIL'].includes(parsed.status)) {
     throw new Error(`Invalid status: ${parsed.status}. Must be PASS or FAIL.`);
@@ -468,7 +434,7 @@ function parseLLMReviewResponse(raw: string): LLMReviewResponse {
     parsed.issues = [];
   }
 
-  return parsed as LLMReviewResponse;
+  return parsed;
 }
 
 /**

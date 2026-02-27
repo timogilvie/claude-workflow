@@ -12,13 +12,12 @@
  *   npx tsx tools/review-pr.ts 42 --repo timogilvie/wavemill
  */
 
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getPullRequest, getPullRequestDiff } from '../shared/lib/github.js';
 import { findTaskPacket, findPlan, gatherDesignContext } from '../shared/lib/review-context-gatherer.ts';
+import { callClaude, parseJsonFromLLM } from '../shared/lib/llm-cli.js';
 
 // ES module __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -171,46 +170,23 @@ function buildReviewPrompt(
  * Call Claude CLI with prompt.
  * Returns parsed JSON response.
  */
-function callClaude(prompt: string, model: string): ReviewResult {
-  const tmpFile = join(tmpdir(), `wavemill-review-${Date.now()}.txt`);
-
+async function callClaudeSync(prompt: string, model: string): Promise<ReviewResult> {
   try {
-    writeFileSync(tmpFile, prompt, 'utf-8');
+    const result = await callClaude(prompt, {
+      mode: 'sync',
+      model,
+      timeout: TIMEOUT_MS, // 180000
+      maxBuffer: 50 * 1024 * 1024,
+    });
 
-    const raw = execSync(
-      `claude -p --output-format json --model "${model}" < "${tmpFile}"`,
-      {
-        encoding: 'utf-8',
-        timeout: TIMEOUT_MS,
-        maxBuffer: 50 * 1024 * 1024,
-        shell: '/bin/bash',
-        env: { ...process.env, CLAUDECODE: '' },
-      }
-    );
-
-    let text = '';
-    try {
-      const data = JSON.parse(raw);
-      text = (data.result || '').trim();
-    } catch {
-      // If JSON parse fails, treat entire output as text
-      text = raw.trim();
-    }
-
-    if (!text) {
+    if (!result.text) {
       throw new Error('Empty response from Claude CLI');
     }
 
     // Parse review result from text
-    return parseReviewResult(text);
+    return parseReviewResult(result.text);
   } catch (error) {
     throw new Error(`Failed to call Claude: ${(error as Error).message}`);
-  } finally {
-    try {
-      unlinkSync(tmpFile);
-    } catch {
-      // Ignore cleanup errors
-    }
   }
 }
 
@@ -219,37 +195,14 @@ function callClaude(prompt: string, model: string): ReviewResult {
  * Handles markdown code fences and extracts JSON.
  */
 function parseReviewResult(text: string): ReviewResult {
-  // Try to extract JSON from code fence
-  const codeBlockMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-  if (codeBlockMatch) {
-    try {
-      return JSON.parse(codeBlockMatch[1]);
-    } catch (error) {
-      // Continue to fallback
-    }
+  const parsed = parseJsonFromLLM<ReviewResult>(text);
+
+  // Validate the result has required fields
+  if (!parsed.verdict || !parsed.codeReviewFindings) {
+    throw new Error('Invalid review result: missing verdict or codeReviewFindings');
   }
 
-  // Try to find the first complete JSON object
-  const jsonMatch = text.match(/(\{[\s\S]*?\n\})/);
-  if (jsonMatch) {
-    try {
-      return JSON.parse(jsonMatch[1]);
-    } catch (error) {
-      // Continue to fallback
-    }
-  }
-
-  // Fallback: strip code fences and try to parse
-  let cleaned = text
-    .replace(/^```(?:json)?\s*/m, '')
-    .replace(/\s*```\s*$/m, '')
-    .trim();
-
-  try {
-    return JSON.parse(cleaned);
-  } catch (error) {
-    throw new Error(`Failed to parse review result as JSON: ${(error as Error).message}\n\nRaw response:\n${text.substring(0, 500)}...`);
-  }
+  return parsed;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -425,7 +378,7 @@ async function main() {
     // Call Claude
     console.log(`🤖 Running review with ${model}...`);
     console.log('   (this may take 1-3 minutes for large diffs)\n');
-    const result = callClaude(prompt, model);
+    const result = await callClaudeSync(prompt, model);
 
     // Display results
     displayResults(result, args.prNumber, pr.title);

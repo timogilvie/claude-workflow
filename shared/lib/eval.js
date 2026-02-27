@@ -2,13 +2,12 @@
 // Builds on the eval-schema (HOK-697) types and rubric.
 
 import { readFile } from 'fs/promises';
-import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'fs';
-import { execSync } from 'child_process';
+import { readFileSync, existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
-import { tmpdir } from 'os';
 import { getScoreBand } from './eval-schema.ts';
+import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -108,52 +107,21 @@ function buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, i
     .replace('{{INTERVENTION_METADATA}}', finalInterventionText);
 }
 
-async function callClaude(prompt, model) {
-  // Use the claude CLI (and the user's subscription) instead of a raw API key.
-  // Write prompt to a temp file to avoid shell argument-length limits.
-  const tmpFile = join(tmpdir(), `wavemill-eval-${Date.now()}.txt`);
-  try {
-    writeFileSync(tmpFile, prompt, 'utf-8');
-    const raw = execSync(
-      `claude -p --output-format json --model "${model}" < "${tmpFile}"`,
-      { encoding: 'utf-8', timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, shell: '/bin/bash', env: { ...process.env, CLAUDECODE: '' } }
-    );
+async function callClaudeWithRetry(prompt, model) {
+  const result = await callClaude(prompt, {
+    mode: 'sync',
+    model,
+    timeout: TIMEOUT_MS, // 120000
+    maxBuffer: 10 * 1024 * 1024,
+    retry: true,
+    maxRetries: MAX_RETRIES, // 2
+  });
 
-    let text = '';
-    let usage = null;
-    let costUsd = undefined;
-    try {
-      const data = JSON.parse(raw);
-      text = (data.result || '').trim();
-      if (data.usage) {
-        const u = data.usage;
-        const inputTokens = (u.input_tokens || 0)
-          + (u.cache_creation_input_tokens || 0)
-          + (u.cache_read_input_tokens || 0);
-        const outputTokens = u.output_tokens || 0;
-        usage = {
-          inputTokens,
-          outputTokens,
-          totalTokens: inputTokens + outputTokens,
-        };
-      }
-      // Use the CLI's authoritative cost (accounts for cache pricing tiers)
-      if (typeof data.total_cost_usd === 'number') {
-        costUsd = data.total_cost_usd;
-      }
-    } catch {
-      // If JSON parse fails, treat the entire output as text (fallback)
-      text = raw.trim();
-    }
-
-    if (!text) {
-      throw new Error('Empty response from claude CLI');
-    }
-
-    return { text, usage, costUsd };
-  } finally {
-    try { unlinkSync(tmpFile); } catch {}
-  }
+  return {
+    text: result.text,
+    usage: result.usage,
+    costUsd: result.costUsd,
+  };
 }
 
 /**
@@ -196,16 +164,7 @@ function computeCost(modelId, usage, pricingTable) {
 }
 
 function parseJudgeResponse(raw) {
-  // Strip markdown code fences if present
-  let cleaned = raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
-
-  // If the response has preamble before the JSON, extract the first { ... } block
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    cleaned = jsonMatch[0];
-  }
-
-  const parsed = JSON.parse(cleaned);
+  const parsed = parseJsonFromLLM(raw);
 
   if (typeof parsed.score !== 'number' || parsed.score < 0 || parsed.score > 1) {
     throw new Error(`Invalid score: ${parsed.score}. Must be a number between 0 and 1.`);
@@ -270,62 +229,46 @@ export async function evaluateTask(input, outcomes = undefined, options = {}) {
   const template = await loadPromptTemplate();
   const prompt = buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, interventionText);
 
-  const callFn = _callFn || callClaude;
-  let lastError;
+  const callFn = _callFn || callClaudeWithRetry;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    let response;
-    try {
-      response = await callFn(prompt, model);
-    } catch (err) {
-      // Do not retry on timeout or network errors — only on parse failures
-      throw err;
-    }
+  // Call Claude (with retry built-in)
+  const response = await callFn(prompt, model);
 
-    try {
-      const { score, rationale, interventionFlags } = parseJudgeResponse(response.text);
-      const band = getScoreBand(score);
+  // Parse response
+  const { score, rationale, interventionFlags } = parseJudgeResponse(response.text);
+  const band = getScoreBand(score);
 
-      const tokenUsage = response.usage || undefined;
-      // Prefer the CLI's authoritative cost; fall back to pricing table estimate
-      const estimatedCost = response.costUsd !== undefined
-        ? response.costUsd
-        : computeCost(model, tokenUsage, pricingTable);
+  const tokenUsage = response.usage || undefined;
+  // Prefer the CLI's authoritative cost; fall back to pricing table estimate
+  const estimatedCost = response.costUsd !== undefined
+    ? response.costUsd
+    : computeCost(model, tokenUsage, pricingTable);
 
-      return {
-        id: randomUUID(),
-        schemaVersion: SCHEMA_VERSION,
-        originalPrompt: taskPrompt,
-        modelId: model,
-        modelVersion: model,
-        judgeModel: model,
-        judgeProvider: provider,
-        score,
-        scoreBand: band.label,
-        timeSeconds,
-        timestamp: new Date().toISOString(),
-        interventionRequired: interventionCount > 0,
-        interventionCount,
-        interventionDetails: hasStructuredInterventions
-          ? interventionRecords.map((i) => i.note)
-          : interventions.map((i) => i.description),
-        ...(hasStructuredInterventions && { interventions: interventionRecords }),
-        rationale,
-        ...(issueId && { issueId }),
-        ...(prUrl && { prUrl }),
-        ...(tokenUsage && { tokenUsage }),
-        ...(estimatedCost !== undefined && { estimatedCost }),
-        ...(outcomes && { outcomes }),
-        ...(routingDecision && { routingDecision }),
-        metadata: { ...metadata, interventionFlags },
-      };
-    } catch (parseErr) {
-      lastError = parseErr;
-      // Retry on parse failures
-    }
-  }
-
-  throw new Error(
-    `Failed to parse LLM judge response after ${MAX_RETRIES + 1} attempts. Last error: ${lastError.message}`
-  );
+  return {
+    id: randomUUID(),
+    schemaVersion: SCHEMA_VERSION,
+    originalPrompt: taskPrompt,
+    modelId: model,
+    modelVersion: model,
+    judgeModel: model,
+    judgeProvider: provider,
+    score,
+    scoreBand: band.label,
+    timeSeconds,
+    timestamp: new Date().toISOString(),
+    interventionRequired: interventionCount > 0,
+    interventionCount,
+    interventionDetails: hasStructuredInterventions
+      ? interventionRecords.map((i) => i.note)
+      : interventions.map((i) => i.description),
+    ...(hasStructuredInterventions && { interventions: interventionRecords }),
+    rationale,
+    ...(issueId && { issueId }),
+    ...(prUrl && { prUrl }),
+    ...(tokenUsage && { tokenUsage }),
+    ...(estimatedCost !== undefined && { estimatedCost }),
+    ...(outcomes && { outcomes }),
+    ...(routingDecision && { routingDecision }),
+    metadata: { ...metadata, interventionFlags },
+  };
 }
