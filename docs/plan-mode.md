@@ -65,5 +65,7 @@ The decomposition plan is pushed to Linear:
 
 - [Feature Workflow](feature-workflow.md) — guided single-issue execution with plan → implement → validate gates
 - [Mill Mode](mill-mode.md) — autonomous parallel backlog processing
+- [Expand Mode](expand-mode.md) — batch expand issues into task packets
+- [Eval Mode](eval-mode.md) — evaluate LLM performance on workflows
 - [Labels](LABEL-SYSTEM.md) — how labels control parallel task scheduling
 - [Troubleshooting](troubleshooting.md) — common issues and fixes
