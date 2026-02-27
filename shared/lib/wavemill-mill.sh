@@ -978,6 +978,119 @@ trap cleanup_dashboard_pane EXIT INT TERM
 
 
 # ============================================================================
+# STATE MANAGEMENT FUNCTIONS
+# ============================================================================
+# These functions manage task state in the workflow state file.
+# Defined inline to avoid sourcing dependencies (similar to logging functions).
+
+save_task_state() {
+  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-active}" agent="${7:-}"
+  local tmp
+  tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
+
+  if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" \
+     --arg agent "$agent" \
+     '.tasks[$issue] = {
+        slug: $slug,
+        branch: $branch,
+        worktree: $worktree,
+        pr: $pr,
+        status: $status,
+        agent: $agent,
+        phase: (.tasks[$issue].phase // "executing"),
+        updated: (now | todate)
+      }' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "save_task_state: failed to save $issue"
+  fi
+}
+
+remove_task_state() {
+  local issue="$1"
+  local tmp
+  tmp=$(mktemp) || { log_warn "remove_task_state: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" 'del(.tasks[$issue]) | .updated = (now | todate)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "remove_task_state: failed to remove $issue"
+  fi
+}
+
+set_task_phase() {
+  local issue="$1" phase="$2"
+  local tmp
+  tmp=$(mktemp) || { log_warn "set_task_phase: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" --arg phase "$phase" \
+     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "set_task_phase: failed to update $issue"
+  fi
+}
+
+get_task_phase() {
+  local issue="$1"
+  jq -r --arg issue "$issue" '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null
+}
+
+check_plan_approved() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
+  return 1
+}
+
+
+# ============================================================================
+# GIT/GITHUB FUNCTIONS
+# ============================================================================
+# Functions for PR detection and merge validation.
+
+find_pr_for_branch() {
+  local branch="$1"
+  gh pr list --head "$branch" --json number --jq '.[0].number // empty' 2>/dev/null || echo ""
+}
+
+validate_pr_merge() {
+  local pr="$1"
+  [[ -z "$pr" ]] && return 1
+  local state
+  state=$(gh pr view "$pr" --json state --jq '.state' 2>/dev/null || echo "")
+  [[ "$state" == "MERGED" ]] && return 0
+  return 1
+}
+
+
+# ============================================================================
+# LINEAR API FUNCTIONS
+# ============================================================================
+# Functions for updating Linear issue states.
+
+linear_set_state() {
+  local issue="$1" state="$2"
+  npx tsx "$TOOLS_DIR/update-linear-state.ts" "$issue" "$state" >/dev/null 2>&1 || {
+    log_warn "Failed to update Linear state for $issue to $state"
+    return 1
+  }
+}
+
+linear_is_completed() {
+  local issue="$1"
+  local issue_state
+  issue_state=$(npx tsx "$TOOLS_DIR/get-issue-json.ts" "$issue" 2>/dev/null | \
+    jq -r '.state.name // ""' 2>/dev/null)
+  [[ "$issue_state" == "Done" || "$issue_state" == "Completed" || "$issue_state" == "Canceled" ]]
+}
+
+
+# ============================================================================
 # BACKLOG FETCHING & CANDIDATE SCORING
 # ============================================================================
 
