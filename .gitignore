@@ -45,3 +45,6 @@ epics/*/
 .wavemill/evals/
 
 worktrees/
+
+# Python
+__pycache__/
