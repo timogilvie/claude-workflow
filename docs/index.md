@@ -21,7 +21,11 @@ Use `wavemill mill` to continuously process backlog tasks in parallel.
 
 Use `wavemill plan` to break an epic/larger body of work into chunks that LLMs can handle and add them as Linear tasks that can be milled later.
 
-### 3) Human-in-the-loop workflow
+### 3) LLM-powered code review
+
+Use `review-changes` or `review-pr` to get structured, LLM-powered code review that catches major issues — logic bugs, security concerns, plan deviations, and UI inconsistencies. Runs automatically in the feature workflow.
+
+### 4) Human-in-the-loop workflow
 
 Use workflow commands to move one feature from backlog to PR with explicit review gates.
 
