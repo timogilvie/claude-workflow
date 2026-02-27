@@ -10,10 +10,8 @@
  * @module review-runner
  */
 
-import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import {
@@ -21,6 +19,7 @@ import {
   type ReviewContext,
   type DesignContext,
 } from './review-context-gatherer.js';
+import { callClaude, parseJsonFromLLM } from './llm-cli.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -223,55 +222,6 @@ function formatDesignContext(ctx: DesignContext): string {
 // ────────────────────────────────────────────────────────────────
 
 /**
- * Invoke Claude CLI with the review prompt.
- * Returns the raw response text.
- */
-async function callClaude(prompt: string, model: string): Promise<string> {
-  // Write prompt to temp file to avoid shell argument-length limits
-  const tmpFile = join(tmpdir(), `wavemill-review-${Date.now()}.txt`);
-
-  try {
-    writeFileSync(tmpFile, prompt, 'utf-8');
-
-    const raw = execSync(
-      `claude -p --output-format json --model "${model}" < "${tmpFile}"`,
-      {
-        encoding: 'utf-8',
-        timeout: TIMEOUT_MS,
-        maxBuffer: 10 * 1024 * 1024,
-        shell: '/bin/bash',
-        env: { ...process.env, CLAUDECODE: '' },
-      }
-    );
-
-    // Parse JSON response
-    let text = '';
-    try {
-      const data = JSON.parse(raw);
-      text = (data.result || '').trim();
-    } catch {
-      // If JSON parse fails, treat entire output as text
-      text = raw.trim();
-    }
-
-    if (!text) {
-      throw new Error('Empty response from Claude CLI');
-    }
-
-    return text;
-  } finally {
-    // Clean up temp file
-    if (existsSync(tmpFile)) {
-      try {
-        unlinkSync(tmpFile);
-      } catch {
-        // Best effort cleanup
-      }
-    }
-  }
-}
-
-/**
  * Invoke LLM with retry logic.
  */
 async function invokeLLMWithRetry(
@@ -279,25 +229,16 @@ async function invokeLLMWithRetry(
   model: string,
   maxRetries: number = MAX_RETRIES
 ): Promise<string> {
-  let lastError: Error | null = null;
+  const result = await callClaude(prompt, {
+    mode: 'sync',
+    model,
+    timeout: TIMEOUT_MS, // 120000
+    maxBuffer: 10 * 1024 * 1024,
+    retry: true,
+    maxRetries,
+  });
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await callClaude(prompt, model);
-    } catch (error) {
-      lastError = error as Error;
-
-      if (attempt < maxRetries) {
-        // Exponential backoff: 2s, 4s, 8s
-        const delay = Math.pow(2, attempt + 1) * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw new Error(
-    `LLM invocation failed after ${maxRetries + 1} attempts: ${lastError?.message}`
-  );
+  return result.text;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -318,22 +259,7 @@ function parseReviewResponse(
   responseText: string,
   context: ReviewContext
 ): ReviewResult {
-  // Extract JSON from response (may have markdown code blocks)
-  let jsonText = responseText.trim();
-
-  // Remove markdown code fence if present
-  if (jsonText.startsWith('```json')) {
-    jsonText = jsonText.replace(/^```json\s*/i, '').replace(/\s*```\s*$/, '');
-  } else if (jsonText.startsWith('```')) {
-    jsonText = jsonText.replace(/^```\s*/, '').replace(/\s*```\s*$/, '');
-  }
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch (error) {
-    throw new Error(`Failed to parse LLM response as JSON: ${(error as Error).message}`);
-  }
+  const parsed = parseJsonFromLLM<any>(responseText);
 
   // Validate structure
   if (!parsed.verdict || !['ready', 'not_ready'].includes(parsed.verdict)) {
