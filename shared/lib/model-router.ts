@@ -14,6 +14,7 @@ import { resolve } from 'node:path';
 import { readEvalRecords } from './eval-persistence.ts';
 import type { EvalRecord } from './eval-schema.ts';
 import { recommendModelLLM } from './llm-router.ts';
+import { loadWavemillConfig } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -296,26 +297,19 @@ export function resolveAgent(
  * Load router config from `.wavemill-config.json`.
  */
 export function loadRouterConfig(repoDir?: string): RouterOptions {
-  const configPath = resolve(repoDir || '.', '.wavemill-config.json');
-  if (!existsSync(configPath)) return {};
-
-  try {
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    const r = config.router || {};
-    const opts: RouterOptions = {};
-    if (r.defaultModel !== undefined) opts.defaultModel = r.defaultModel;
-    if (r.minRecords !== undefined) opts.minRecords = r.minRecords;
-    if (r.minModels !== undefined) opts.minModels = r.minModels;
-    if (r.models !== undefined) opts.models = r.models;
-    if (r.agentMap !== undefined) opts.agentMap = r.agentMap;
-    if (r.defaultAgent !== undefined) opts.defaultAgent = r.defaultAgent;
-    if (r.mode !== undefined) opts.mode = r.mode;
-    if (r.llmModel !== undefined) opts.llmModel = r.llmModel;
-    if (r.llmProvider !== undefined) opts.llmProvider = r.llmProvider;
-    return opts;
-  } catch {
-    return {};
-  }
+  const config = loadWavemillConfig(repoDir);
+  const r = config.router || {};
+  const opts: RouterOptions = {};
+  if (r.defaultModel !== undefined) opts.defaultModel = r.defaultModel;
+  if (r.minRecords !== undefined) opts.minRecords = r.minRecords;
+  if (r.minModels !== undefined) opts.minModels = r.minModels;
+  if (r.models !== undefined) opts.models = r.models;
+  if (r.agentMap !== undefined) opts.agentMap = r.agentMap;
+  if (r.defaultAgent !== undefined) opts.defaultAgent = r.defaultAgent;
+  if (r.mode !== undefined) opts.mode = r.mode;
+  if (r.llmModel !== undefined) opts.llmModel = r.llmModel;
+  if (r.llmProvider !== undefined) opts.llmProvider = r.llmProvider;
+  return opts;
 }
 
 /**
@@ -323,15 +317,8 @@ export function loadRouterConfig(repoDir?: string): RouterOptions {
  * Returns true by default (opt-out, not opt-in).
  */
 export function isRouterEnabled(repoDir?: string): boolean {
-  const configPath = resolve(repoDir || '.', '.wavemill-config.json');
-  if (!existsSync(configPath)) return true;
-
-  try {
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    return config.router?.enabled !== false;
-  } catch {
-    return true;
-  }
+  const config = loadWavemillConfig(repoDir);
+  return config.router?.enabled !== false;
 }
 
 /**

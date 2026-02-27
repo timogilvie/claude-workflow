@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from '
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { EvalRecord } from './eval-schema.ts';
+import { loadWavemillConfig } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Constants
@@ -58,16 +59,9 @@ function resolveEvalsDir(dir?: string): { dir: string; fromConfig: boolean } {
   if (dir) return { dir: resolve(dir), fromConfig: false };
 
   // Try reading evalsDir from .wavemill-config.json
-  const configPath = resolve('.wavemill-config.json');
-  if (existsSync(configPath)) {
-    try {
-      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-      if (config.eval?.evalsDir) {
-        return { dir: resolve(config.eval.evalsDir), fromConfig: true };
-      }
-    } catch {
-      // Malformed config — fall through to default
-    }
+  const config = loadWavemillConfig();
+  if (config.eval?.evalsDir) {
+    return { dir: resolve(config.eval.evalsDir), fromConfig: true };
   }
 
   return { dir: resolve(DEFAULT_EVALS_DIR), fromConfig: false };
