@@ -138,6 +138,34 @@ When you see a task packet header:
 3. Section 6 (Validation Steps) contains concrete test scenarios
 4. Section 4 (Success Criteria) has all requirements with [REQ-FX] tags
 
+## Config Loading (TypeScript)
+
+TypeScript modules use `shared/lib/config.ts` for centralized config loading:
+
+```typescript
+import { loadWavemillConfig } from './config.ts';
+
+// Load and validate config (cached per repo directory)
+const config = loadWavemillConfig(repoDir);
+console.log(config.router?.enabled); // typed access
+
+// Or use typed accessors for specific sections
+import { getRouterConfig, getEvalConfig } from './config.ts';
+const routerConfig = getRouterConfig(repoDir);
+const evalConfig = getEvalConfig(repoDir);
+```
+
+**Key features:**
+- Configs are cached per-process (singleton per repoDir)
+- Validated against `wavemill-config.schema.json` at load time
+- All fields are optional (graceful degradation)
+- Use `clearConfigCache(repoDir)` to force reload in tests
+
+**Implementation:**
+- Replaces ~7 independent `readFileSync` + `JSON.parse` blocks
+- Uses Ajv for schema validation
+- Provides TypeScript types matching the schema
+
 ## Syncing with ~/.claude
 
 This repo is the source of truth. `~/.claude/` is a consumer that can optionally sync from the repo for use by Claude commands outside of wavemill.
