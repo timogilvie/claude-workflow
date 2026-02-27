@@ -902,6 +902,11 @@ set -euo pipefail
 # Import environment from env file
 source "$1"
 
+# Logging functions - defined early so they're available for all error handling
+log() { echo "$(date '+%H:%M:%S') $*"; }
+log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
+log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
+
 # Load shared agent launch adapters used by launch_task()
 if [[ ! -f "$LIB_DIR/agent-adapters.sh" ]]; then
   log_error "Missing adapter library: $LIB_DIR/agent-adapters.sh"
@@ -915,11 +920,6 @@ command -v agent_launch_interactive >/dev/null 2>&1 || { log_error "agent_launch
 
 # Ensure gh commands target the correct GitHub repo (not inherited CWD)
 cd "$REPO_DIR"
-
-# Logging
-log() { echo "$(date '+%H:%M:%S') $*"; }
-log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
-log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
 # Close dashboard pane when monitor exits so quitting control is a single action.
 _DASHBOARD_CLEANED=0
