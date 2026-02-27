@@ -277,10 +277,26 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     //    Pricing lives in the wavemill repo config, not the target repo,
     //    so resolve it from this script's location.
     if (ctx.worktreePath && branchName) {
+      const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
       console.log('Post-completion eval: computing workflow cost...');
+
+      if (debug) {
+        console.log('[DEBUG_COST] Cost computation parameters:');
+        console.log(`[DEBUG_COST]   worktreePath: ${ctx.worktreePath}`);
+        console.log(`[DEBUG_COST]   branchName: ${branchName}`);
+        console.log(`[DEBUG_COST]   repoDir: ${repoDir}`);
+        console.log(`[DEBUG_COST]   agentType: ${ctx.agentType || 'claude'}`);
+      }
+
       try {
         const wavemillConfigDir = resolve(__dirname, '../..');
         const pricingTable = loadPricingTable(wavemillConfigDir);
+
+        if (debug) {
+          const modelCount = Object.keys(pricingTable).length;
+          console.log(`[DEBUG_COST]   Loaded pricing for ${modelCount} model(s)`);
+        }
+
         const costResult = computeWorkflowCost({
           worktreePath: ctx.worktreePath,
           branchName,
@@ -288,6 +304,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
           pricingTable,
           agentType: ctx.agentType,
         });
+
         if (costResult) {
           record.workflowCost = costResult.totalCostUsd;
           record.workflowTokenUsage = costResult.models;
@@ -297,6 +314,9 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
           );
         } else {
           console.log('Post-completion eval: no session data found for workflow cost');
+          if (!debug) {
+            console.log('Post-completion eval: run with DEBUG_COST=1 for detailed diagnostics');
+          }
         }
       } catch (costErr: unknown) {
         const costMsg = costErr instanceof Error ? costErr.message : String(costErr);
