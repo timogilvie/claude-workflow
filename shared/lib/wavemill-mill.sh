@@ -962,6 +962,13 @@ source "$LIB_DIR/agent-adapters.sh"
 command -v agent_launch_autonomous >/dev/null 2>&1 || { log_error "agent_launch_autonomous is not defined"; exit 1; }
 command -v agent_launch_interactive >/dev/null 2>&1 || { log_error "agent_launch_interactive is not defined"; exit 1; }
 
+# Load shared functions (scoring, task packet detection)
+if [[ ! -f "$LIB_DIR/wavemill-common.sh" ]]; then
+  log_error "Missing common library: $LIB_DIR/wavemill-common.sh"
+  exit 1
+fi
+source "$LIB_DIR/wavemill-common.sh"
+
 # Ensure gh commands target the correct GitHub repo (not inherited CWD)
 cd "$REPO_DIR"
 
@@ -1143,12 +1150,7 @@ filter_active_issues() {
 # ============================================================================
 # TASK LAUNCH (worktree + agent + state)
 # ============================================================================
-
-is_task_packet() {
-  local description="$1"
-  echo "$description" | grep -qE "(##+ (1\.|Objective)|##+ What|##+ Technical Context|##+ Success Criteria|## Task Packet)"
-}
-
+# Note: is_task_packet() is now provided by wavemill-common.sh (sourced above)
 
 launch_task() {
   local issue="$1" slug="$2" title="$3"
