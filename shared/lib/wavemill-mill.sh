@@ -581,6 +581,7 @@ fi
 
 
 # Split candidates into unblocked and blocked
+# pick_candidates() outputs 6 fields (has_detailed_plan is stripped), so field 6 is blocked_by_count
 UNBLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 == 0 || $6 == ""')
 BLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 > 0')
 BLOCKED_COUNT=0
@@ -1106,23 +1107,8 @@ fetch_candidates() {
     return
   fi
 
-  BACKLOG_CACHE=$(echo "$backlog_json" | jq -r --argjson show_limit 30 '
-    map(select((.state.name|ascii_downcase) == "todo" or (.state.name|ascii_downcase) == "backlog"))
-    | map(. + {
-        area: ((.labels.nodes // []) | map(.name) | map(select(test("^(Area|Component|Page|Route):"))) | .[0] // ""),
-        has_detailed_plan: (.description // "" | test("##+ (1\\.|Objective|What|Technical Context|Success Criteria|Implementation)")),
-        is_foundational: ((.labels.nodes // []) | map(.name | ascii_downcase) | any(test("foundational|architecture|epic|infrastructure"))),
-        blocks_count: ((.relations.nodes // []) | map(select(.type == "blocks" and .relatedIssue.completedAt == null and .relatedIssue.canceledAt == null)) | length),
-        blocked_by_count: ((.inverseRelations.nodes // []) | map(select(.type == "blocks" and .issue.completedAt == null and .issue.canceledAt == null)) | length)
-      })
-    | map(. + {
-        score: (20 + (if .priority > 0 then (5 - .priority) * 20 else 0 end) + (if .has_detailed_plan then 30 else 0 end) + (if .is_foundational then 25 else 0 end) + (.blocks_count * 10) + (if .blocked_by_count == 0 then 15 else 0 end) - (.blocked_by_count * 20) - ((.estimate // 3) * 2))
-      })
-    | sort_by(-.score)
-    | .[0:$show_limit]
-    | .[]
-    | "\(.identifier)|\(.title|ascii_downcase|gsub("[^a-z0-9]+";"-"))|\(.title)|\(.area)|\(.score)|\(.blocked_by_count)"
-  ' 2>/dev/null)
+  # Use shared scoring function from wavemill-common.sh (eliminates duplication)
+  BACKLOG_CACHE=$(score_and_rank_issues "$backlog_json" 30)
   LAST_BACKLOG_FETCH=$now
   echo "$BACKLOG_CACHE"
 }
@@ -1803,8 +1789,9 @@ while :; do
 
       if [[ -n "$available" ]]; then
         # Split into unblocked and blocked
-        avail_unblocked=$(echo "$available" | awk -F'|' '$6 == 0 || $6 == ""')
-        avail_blocked=$(echo "$available" | awk -F'|' '$6 > 0')
+        # Field 7 is blocked_by_count (field 6 is has_detailed_plan)
+        avail_unblocked=$(echo "$available" | awk -F'|' '$7 == 0 || $7 == ""')
+        avail_blocked=$(echo "$available" | awk -F'|' '$7 > 0')
         avail_blocked_count=0
         [[ -n "$avail_blocked" ]] && avail_blocked_count=$(echo "$avail_blocked" | grep -c .)
 
