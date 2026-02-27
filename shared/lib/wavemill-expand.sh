@@ -34,14 +34,34 @@ log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
 linear_list_backlog() {
   local project_name="$1"
-  # Capture only stdout (JSON); suppress stderr (dotenv, node warnings, etc.)
-  npx tsx "$TOOLS_DIR/list-backlog-json.ts" "$project_name" 2>/dev/null
+  # Capture stdout (JSON); collect stderr so we can show it on failure
+  local stderr_file
+  stderr_file=$(mktemp)
+  if npx tsx "$TOOLS_DIR/list-backlog-json.ts" "$project_name" 2>"$stderr_file"; then
+    rm -f "$stderr_file"
+  else
+    local rc=$?
+    log_error "Backlog fetch failed. stderr:"
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return "$rc"
+  fi
 }
 
 linear_get_issue() {
   local issue_id="$1"
-  # Capture only stdout (JSON); suppress stderr (dotenv, node warnings, etc.)
-  npx tsx "$TOOLS_DIR/get-issue-json.ts" "$issue_id" 2>/dev/null
+  # Capture stdout (JSON); collect stderr so we can show it on failure
+  local stderr_file
+  stderr_file=$(mktemp)
+  if npx tsx "$TOOLS_DIR/get-issue-json.ts" "$issue_id" 2>"$stderr_file"; then
+    rm -f "$stderr_file"
+  else
+    local rc=$?
+    log_error "Issue fetch failed for $issue_id. stderr:"
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return "$rc"
+  fi
 }
 
 
