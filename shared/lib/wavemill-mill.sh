@@ -145,28 +145,17 @@ init_state_ledger() {
 
 
 save_task_state() {
-  local issue="$1"
-  local slug="$2"
-  local branch="$3"
-  local worktree="$4"
-  local pr="${5:-}"
-  local status="${6:-}"
-  local agent="${7:-}"
-
+  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local tmp
-  tmp=$(mktemp) || return 0
-  if jq --arg issue "$issue" \
-     --arg slug "$slug" \
-     --arg branch "$branch" \
-     --arg worktree "$worktree" \
-     --arg pr "$pr" \
-     --arg status "$status" \
-     --arg agent "$agent" \
+  tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)} | if $agent != "" then .tasks[$issue].agent = $agent else . end' \
      "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
   else
     rm -f "$tmp"
+    log_warn "save_task_state: failed to update $issue"
   fi
 }
 
@@ -223,12 +212,50 @@ save_next_migration_num() {
 remove_task_state() {
   local issue="$1"
   local tmp
-  tmp=$(mktemp) || return 0
+  tmp=$(mktemp) || { log_warn "remove_task_state: mktemp failed"; return 0; }
   if jq --arg issue "$issue" 'del(.tasks[$issue])' "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
   else
     rm -f "$tmp"
+    log_warn "remove_task_state: failed to remove $issue"
   fi
+}
+
+
+set_task_phase() {
+  local issue="$1" phase="$2"
+  local tmp
+  tmp=$(mktemp) || { log_warn "set_task_phase: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" --arg phase "$phase" \
+     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "set_task_phase: failed to update $issue"
+  fi
+}
+
+
+get_task_phase() {
+  local issue="$1"
+  jq -r --arg issue "$issue" '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null
+}
+
+
+check_plan_approved() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
+  return 1
+}
+
+
+check_plan_exists() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/plan.md" ]] && return 0
+  return 1
 }
 
 
@@ -279,6 +306,22 @@ linear_set_description() {
 
 
   retry npx tsx "$TOOLS_DIR/update-issue.ts" "$issue" --file "$file" >/dev/null 2>&1
+}
+
+
+linear_set_state() {
+  local issue="$1" state="$2"
+  [[ "$DRY_RUN" == "true" ]] && { log "[DRY-RUN] Would set $issue → $state"; return 0; }
+  retry npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1 || log_warn "Failed to set $issue → $state in Linear"
+}
+
+
+linear_is_completed() {
+  local issue="$1"
+  local state
+  state=$(_with_timeout "$RETRY_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-state.ts" "$issue" 2>/dev/null || echo "active")
+  [[ "$state" == "completed" ]] && return 0
+  return 1
 }
 
 
@@ -344,20 +387,20 @@ smart_select_from_candidates() {
 
 find_pr_for_branch() {
   local branch="$1"
-  retry gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty'
+  gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || true
 }
 
 
 pr_state() {
   local pr="$1"
-  retry gh pr view "$pr" --json state --jq .state
+  gh pr view "$pr" --json state --jq .state 2>/dev/null || echo ""
 }
 
 
 # Get PR details with base branch validation
 pr_details() {
   local pr="$1"
-  retry gh pr view "$pr" --json state,baseRefName,statusCheckRollup
+  gh pr view "$pr" --json state,baseRefName,statusCheckRollup 2>/dev/null || echo ""
 }
 
 
@@ -844,7 +887,7 @@ for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
   ISSUES_IN_PROGRESS+=("$ISSUE")
   linear_set_state "$ISSUE" "In Progress"
-  set_task_phase "$STATE_FILE" "$ISSUE" "$INITIAL_PHASE"
+  set_task_phase "$ISSUE" "$INITIAL_PHASE"
   log "Set $ISSUE → In Progress (phase: $INITIAL_PHASE)"
 done
 
@@ -932,152 +975,6 @@ cleanup_dashboard_pane() {
   tmux kill-pane -t "$SESSION:control.1" >/dev/null 2>&1 || true
 }
 trap cleanup_dashboard_pane EXIT INT TERM
-
-
-# ============================================================================
-# STATE & LINEAR HELPERS
-# ============================================================================
-
-save_task_state() {
-  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
-  local tmp
-  tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
-     '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)} | if $agent != "" then .tasks[$issue].agent = $agent else . end' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-  else
-    rm -f "$tmp"
-    log_warn "save_task_state: failed to update $issue"
-  fi
-}
-
-
-remove_task_state() {
-  local issue="$1"
-  local tmp
-  tmp=$(mktemp) || { log_warn "remove_task_state: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" 'del(.tasks[$issue])' "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-  else
-    rm -f "$tmp"
-    log_warn "remove_task_state: failed to remove $issue"
-  fi
-}
-
-
-linear_set_state() {
-  local issue="$1" state="$2"
-  [[ "$DRY_RUN" == "true" ]] && { log "[DRY-RUN] Would set $issue → $state"; return 0; }
-  retry npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1 || log_warn "Failed to set $issue → $state in Linear"
-}
-
-
-linear_is_completed() {
-  local issue="$1"
-  local state
-  state=$(_with_timeout "$RETRY_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-state.ts" "$issue" 2>/dev/null || echo "active")
-  [[ "$state" == "completed" ]] && return 0
-  return 1
-}
-
-
-find_pr_for_branch() {
-  local branch="$1"
-  gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || true
-}
-
-
-pr_state() {
-  local pr="$1"
-  gh pr view "$pr" --json state --jq .state 2>/dev/null || echo ""
-}
-
-
-pr_details() {
-  local pr="$1"
-  gh pr view "$pr" --json state,baseRefName,statusCheckRollup 2>/dev/null || echo ""
-}
-
-
-validate_pr_merge() {
-  local pr="$1"
-  local details="$(pr_details "$pr")"
-
-  if [[ -z "$details" ]]; then
-    log_warn "Failed to fetch PR #$pr details"
-    return 1
-  fi
-
-  local state base_branch has_checks checks
-  state=$(echo "$details" | jq -r '.state' 2>/dev/null) || return 1
-  base_branch=$(echo "$details" | jq -r '.baseRefName' 2>/dev/null) || return 1
-  has_checks=$(echo "$details" | jq '.statusCheckRollup | length > 0' 2>/dev/null)
-  checks=$(echo "$details" | jq -r '.statusCheckRollup[]?.conclusion // "PENDING"' 2>/dev/null)
-
-  if [[ "$state" != "MERGED" ]]; then return 1; fi
-  if [[ "$base_branch" != "$BASE_BRANCH" ]]; then
-    log_error "PR #$pr merged to wrong base: $base_branch (expected: $BASE_BRANCH)"
-    return 1
-  fi
-
-  if [[ "$has_checks" == "true" ]]; then
-    if echo "$checks" | grep -qE "FAILURE|CANCELLED"; then
-      log_warn "PR #$pr has failing CI checks - waiting for resolution"
-      return 1
-    fi
-    if echo "$checks" | grep -q "PENDING"; then
-      log "PR #$pr CI checks still pending - waiting..."
-      return 1
-    fi
-  fi
-
-  return 0
-}
-
-
-execute() {
-  [[ "$DRY_RUN" == "true" ]] && { echo "[DRY-RUN] $*"; return 0; }
-  "$@"
-}
-
-
-set_task_phase() {
-  local issue="$1" phase="$2"
-  local tmp
-  tmp=$(mktemp) || { log_warn "set_task_phase: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" --arg phase "$phase" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-  else
-    rm -f "$tmp"
-    log_warn "set_task_phase: failed to update $issue"
-  fi
-}
-
-
-get_task_phase() {
-  local issue="$1"
-  jq -r --arg issue "$issue" '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null
-}
-
-
-check_plan_approved() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
-  return 1
-}
-
-
-check_plan_exists() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/plan.md" ]] && return 0
-  return 1
-}
 
 
 # ============================================================================
