@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // @ts-nocheck
 // Check if a Linear issue is in a completed state
-import { getIssue } from '../shared/lib/linear.js';
+import { getIssueCompletionState } from '../shared/lib/linear.js';
 import dotenv from 'dotenv';
 
 dotenv.config({ quiet: true });
@@ -15,7 +15,7 @@ async function main() {
   }
 
   try {
-    const issue = await getIssue(identifier);
+    const issue = await getIssueCompletionState(identifier);
 
     // Check if issue is completed or canceled
     const isCompleted = !!(issue.completedAt || issue.canceledAt);
