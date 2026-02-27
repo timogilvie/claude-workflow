@@ -59,3 +59,9 @@ Then restart Claude/Codex clients.
 
 - For guided feature execution: [Feature Workflow](feature-workflow.md)
 - For autonomous backlog processing: [Mill Mode](mill-mode.md)
+
+## See Also
+
+- [Mill Mode](mill-mode.md) — autonomous parallel backlog processing
+- [Plan Mode](plan-mode.md) — decompose epics into well-scoped sub-issues
+- [Troubleshooting](troubleshooting.md) — common issues and fixes

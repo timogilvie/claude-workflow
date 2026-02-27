@@ -165,3 +165,4 @@ Review settings live in `.wavemill-config.json`:
 
 - [Feature Workflow](feature-workflow.md) — the full workflow where self-review runs as Phase 4
 - [Mill Mode](mill-mode.md) — autonomous backlog processing (uses review in each agent's workflow)
+- [Troubleshooting](troubleshooting.md) — common issues and fixes

@@ -87,3 +87,10 @@ This ensures that agent #5 knows what agents #1-4 built, leading to more consist
 - The "Recent Work" section is auto-updated (append-only)
 - Other sections (Architecture, Conventions) can be manually edited
 - Agents receive this context when expanding Linear issues
+
+## See Also
+
+- [Feature Workflow](feature-workflow.md) — guided single-issue execution with plan and validate gates
+- [Plan Mode](plan-mode.md) — decompose epics into mill-ready sub-issues
+- [Review Mode](review-mode.md) — LLM-powered code review (runs automatically in each agent's workflow)
+- [Troubleshooting](troubleshooting.md) — common issues and fixes
