@@ -1374,39 +1374,36 @@ After plan approval:
 2. Run tests/lint between phases — pause if anything fails
 
 ### Phase 3: Self-Review & PR
-After implementation is complete and tests/lint pass:
+After implementation is complete and tests/lint pass, you MUST run the self-review tool.
+This is a REQUIRED step — do not skip it or substitute your own review.
 
-1. Check if self-review is enabled:
-   REVIEW_ENABLED=\$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.enabled // true')
-   MAX_ITERATIONS=\$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.maxIterations // 3')
-   If review is disabled, skip to step 4.
+1. Run the self-review tool (up to 3 iterations):
+   npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --verbose
+   - Exit code 0 = review passed → proceed to step 3
+   - Exit code 1 = issues found → fix blockers and re-run (step 2)
+   - Exit code 2 = error → log warning and proceed to step 3
 
-2. Run the self-review tool (up to MAX_ITERATIONS times):
-   npx tsx tools/review-changes.ts $BASE_BRANCH --verbose
-   - Exit code 0 = review passed → proceed to step 4
-   - Exit code 1 = issues found → fix blockers and re-run review
-   - Exit code 2 = error → log warning and proceed to step 4
-
-3. For each iteration where issues are found:
-   - Read the review findings carefully
+2. For each iteration where issues are found:
+   - Read the review output carefully
    - Fix all blockers (severity: blocker) and straightforward warnings
    - Make targeted fixes only — do not refactor unrelated code
    - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
-   - Re-run the review tool
+   - Re-run the review tool (step 1)
 
-4. Create a PR using GitHub CLI with a descriptive title and body:
+3. Create a PR using GitHub CLI with a descriptive title and body:
    gh pr create --title "$issue: <concise summary>" --body "<PR body>"
    The PR body MUST include:
    - A "## Summary" section with 2-4 bullet points describing what changed and why
    - A "## Changes" section listing the key files/modules modified
    - A "## Test plan" section describing how the changes were validated
+   - A "## Self-review" section noting the review verdict and iterations run
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-5. Link the PR to $issue
+4. Link the PR to $issue
 
 Success criteria:
 - [ ] Implementation matches plan and issue requirements
 - [ ] Lint/tests pass
-- [ ] Self-review passed (or disabled/unavailable)
+- [ ] Self-review tool executed (npx tsx $TOOLS_DIR/review-changes.ts)
 - [ ] No regressions
 - [ ] PR created with descriptive summary linked to $issue
 
@@ -1453,7 +1450,7 @@ Success criteria:
 - [ ] Implementation matches issue requirements
 - [ ] UI is responsive and accessible (if applicable)
 - [ ] Lint/tests pass
-- [ ] Self-review passed (or disabled/unavailable)
+- [ ] Self-review tool executed (npx tsx $TOOLS_DIR/review-changes.ts)
 - [ ] No regressions in existing functionality
 - [ ] PR created with clear description and linked to $issue
 
@@ -1461,22 +1458,20 @@ Process:
 1. Inspect repo and find relevant code
 2. Make minimal, high-quality changes
 3. Run tests/lint
-4. Self-review your changes before creating a PR:
-   a. Check config: REVIEW_ENABLED=\$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.enabled // true')
-      MAX_ITERATIONS=\$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.maxIterations // 3')
-      If review is disabled, skip to step 5.
-   b. Run: npx tsx tools/review-changes.ts $BASE_BRANCH --verbose
-      - Exit code 0 = passed → proceed to step 5
-      - Exit code 1 = issues found → fix blockers, commit fixes, re-run (up to MAX_ITERATIONS)
-      - Exit code 2 = error → log warning and proceed to step 5
-   c. For each iteration with issues: fix all blockers and straightforward warnings,
-      commit with "fix: Address self-review findings (iteration N)", then re-run review.
+4. REQUIRED: Run the self-review tool before creating a PR (do not skip or substitute your own review):
+   npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --verbose
+   - Exit code 0 = passed → proceed to step 5
+   - Exit code 1 = issues found → fix blockers, commit fixes, re-run (up to 3 iterations)
+   - Exit code 2 = error → log warning and proceed to step 5
+   For each iteration with issues: fix all blockers and straightforward warnings,
+   commit with "fix: Address self-review findings (iteration N)", then re-run the tool.
 5. Create a PR using GitHub CLI with a descriptive title and body:
    gh pr create --title "$issue: <concise summary of changes>" --body "<PR body>"
    The PR body MUST include:
    - A "## Summary" section with 2-4 bullet points describing what changed and why
    - A "## Changes" section listing the key files/modules modified
    - A "## Test plan" section describing how the changes were validated
+   - A "## Self-review" section noting the review verdict and iterations run
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
 6. Post back with summary of changes, commands run + results, and PR link
 INSTR_EOF
