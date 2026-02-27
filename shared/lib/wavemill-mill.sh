@@ -76,7 +76,39 @@ confirm() {
 }
 
 
-# Retry wrapper with exponential backoff
+# Run a command with a hard wall-clock timeout (works on macOS without coreutils).
+# Usage: _with_timeout <seconds> <command> [args...]
+_with_timeout() {
+  local secs=$1
+  shift
+
+  # Prefer system timeout / gtimeout if available
+  if command -v timeout &>/dev/null; then
+    timeout "$secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout &>/dev/null; then
+    gtimeout "$secs" "$@"
+    return $?
+  fi
+
+  # Fallback: background process + watchdog (stdout/stderr flow through)
+  "$@" &
+  local pid=$!
+  ( sleep "$secs" && kill "$pid" 2>/dev/null && log_warn "Command killed after ${secs}s timeout" ) &
+  local wd=$!
+  wait "$pid" 2>/dev/null
+  local rc=$?
+  kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+  return "$rc"
+}
+
+
+# Per-attempt timeout for retried commands (seconds)
+RETRY_TIMEOUT="${RETRY_TIMEOUT:-30}"
+
+
+# Retry wrapper with exponential backoff and per-attempt timeout
 retry() {
   local max_attempts="$MAX_RETRIES"
   local delay="$RETRY_DELAY"
@@ -85,7 +117,7 @@ retry() {
 
 
   while (( attempt <= max_attempts )); do
-    "$@" && return 0
+    _with_timeout "$RETRY_TIMEOUT" "$@" && return 0
     exit_code=$?
 
 
@@ -206,27 +238,32 @@ remove_task_state() {
 
 
 linear_list_backlog() {
-  # Capture only stdout (JSON); suppress stderr (dotenv, node warnings, etc.)
-  retry npx tsx "$TOOLS_DIR/list-backlog-json.ts" "$PROJECT_NAME" 2>/dev/null
+  # Capture stdout (JSON); collect stderr so we can show it on failure
+  local stderr_file
+  stderr_file=$(mktemp)
+  if retry npx tsx "$TOOLS_DIR/list-backlog-json.ts" "$PROJECT_NAME" 2>"$stderr_file"; then
+    rm -f "$stderr_file"
+  else
+    local rc=$?
+    log_error "Backlog fetch failed. stderr:"
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return "$rc"
+  fi
 }
 linear_get_issue() {
-  # Capture only stdout (JSON); suppress stderr (dotenv, node warnings, etc.)
-  retry npx tsx "$TOOLS_DIR/get-issue-json.ts" "$1" 2>/dev/null
-}
-
-
-linear_set_state() {
-  local issue="$1"
-  local state="$2"
-
-
-  if [[ "$DRY_RUN" == "true" ]]; then
-    log "[DRY-RUN] Would set $issue → $state"
-    return 0
+  # Capture stdout (JSON); collect stderr so we can show it on failure
+  local stderr_file
+  stderr_file=$(mktemp)
+  if retry npx tsx "$TOOLS_DIR/get-issue-json.ts" "$1" 2>"$stderr_file"; then
+    rm -f "$stderr_file"
+  else
+    local rc=$?
+    log_error "Issue fetch failed for $1. stderr:"
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return "$rc"
   fi
-
-
-  retry npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1
 }
 
 
@@ -526,8 +563,15 @@ fi
 
 
 log "Fetching backlog..."
-BACKLOG="$(linear_list_backlog)"
+BACKLOG="$(linear_list_backlog)" || {
+  log_error "Failed to fetch backlog from Linear. Check your LINEAR_API_KEY and network."
+  exit 1
+}
 
+if [[ -z "$BACKLOG" ]] || [[ "$BACKLOG" == "[]" ]]; then
+  log "No backlog items returned from Linear."
+  exit 0
+fi
 
 CANDIDATES="$(pick_candidates "$BACKLOG")"
 if [[ -z "$CANDIDATES" ]]; then
@@ -925,14 +969,14 @@ remove_task_state() {
 linear_set_state() {
   local issue="$1" state="$2"
   [[ "$DRY_RUN" == "true" ]] && { log "[DRY-RUN] Would set $issue → $state"; return 0; }
-  npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1 || log_warn "Failed to set $issue → $state in Linear"
+  retry npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1 || log_warn "Failed to set $issue → $state in Linear"
 }
 
 
 linear_is_completed() {
   local issue="$1"
   local state
-  state=$(npx tsx "$TOOLS_DIR/get-issue-state.ts" "$issue" 2>/dev/null || echo "active")
+  state=$(_with_timeout "$RETRY_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-state.ts" "$issue" 2>/dev/null || echo "active")
   [[ "$state" == "completed" ]] && return 0
   return 1
 }
