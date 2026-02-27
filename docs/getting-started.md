@@ -64,4 +64,6 @@ Then restart Claude/Codex clients.
 
 - [Mill Mode](mill-mode.md) — autonomous parallel backlog processing
 - [Plan Mode](plan-mode.md) — decompose epics into well-scoped sub-issues
+- [Expand Mode](expand-mode.md) — batch expand issues into task packets
+- [Eval Mode](eval-mode.md) — evaluate LLM performance on workflows
 - [Troubleshooting](troubleshooting.md) — common issues and fixes
