@@ -20,6 +20,7 @@ import {
   type DesignContext,
 } from './review-context-gatherer.js';
 import { callClaude, parseJsonFromLLM } from './llm-cli.js';
+import { loadWavemillConfig } from './config.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -95,31 +96,12 @@ interface Config {
  * Falls back to defaults if not found or malformed.
  */
 function loadConfig(repoDir: string): Config {
-  let configModel = DEFAULT_MODEL;
-  let configProvider = DEFAULT_PROVIDER;
-  let visualVerification = true; // Default: enabled
-  let devServer: string | undefined = undefined;
+  const config = loadWavemillConfig(repoDir);
 
-  const configPath = join(repoDir, '.wavemill-config.json');
-  if (existsSync(configPath)) {
-    try {
-      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-      if (config.eval?.judge?.model) {
-        configModel = config.eval.judge.model;
-      }
-      if (config.eval?.judge?.provider) {
-        configProvider = config.eval.judge.provider;
-      }
-      if (config.ui?.visualVerification !== undefined) {
-        visualVerification = config.ui.visualVerification;
-      }
-      if (config.ui?.devServer) {
-        devServer = config.ui.devServer;
-      }
-    } catch {
-      // Malformed config — use defaults
-    }
-  }
+  const configModel = config.eval?.judge?.model || DEFAULT_MODEL;
+  const configProvider = config.eval?.judge?.provider || DEFAULT_PROVIDER;
+  const visualVerification = config.ui?.visualVerification ?? true;
+  const devServer = config.ui?.devServer;
 
   // Validate provider
   if (!SUPPORTED_PROVIDERS.includes(configProvider)) {

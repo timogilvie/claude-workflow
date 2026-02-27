@@ -24,6 +24,7 @@ import { analyzePrDifficulty } from './difficulty-analyzer.ts';
 import { analyzeTaskContext } from './task-context-analyzer.ts';
 import { analyzeRepoContext } from './repo-context-analyzer.ts';
 import { callClaude } from './llm-cli.js';
+import { loadWavemillConfig } from './config.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -43,12 +44,8 @@ export interface PostCompletionContext {
  * Resolve the evalsDir from config, falling back to the default.
  */
 function resolveEvalsDir(repoDir: string): string | undefined {
-  const configPath = join(repoDir, '.wavemill-config.json');
-  if (!existsSync(configPath)) return undefined;
-  try {
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    if (config.eval?.evalsDir) return resolve(repoDir, config.eval.evalsDir);
-  } catch { /* fall through */ }
+  const config = loadWavemillConfig(repoDir);
+  if (config.eval?.evalsDir) return resolve(repoDir, config.eval.evalsDir);
   return undefined;
 }
 

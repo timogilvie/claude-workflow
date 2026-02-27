@@ -13,6 +13,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { getSessionAdapter, type AgentType } from './session-adapters.ts';
+import { loadWavemillConfig } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -94,15 +95,9 @@ const CACHE_READ_MULTIPLIER = 0.1;
  * @returns Pricing table, or empty object if unavailable
  */
 export function loadPricingTable(repoDir?: string): PricingTable {
-  const configPath = resolve(repoDir || process.cwd(), '.wavemill-config.json');
-  if (!existsSync(configPath)) return {};
-  try {
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    if (config.eval?.pricing && typeof config.eval.pricing === 'object') {
-      return config.eval.pricing;
-    }
-  } catch {
-    // Malformed config — return empty
+  const config = loadWavemillConfig(repoDir);
+  if (config.eval?.pricing && typeof config.eval.pricing === 'object') {
+    return config.eval.pricing;
   }
   return {};
 }
