@@ -33,6 +33,8 @@ function parseArgs(argv: string[]) {
       args.worktree = argv[++i];
     } else if (argv[i] === '--agent' && argv[i + 1]) {
       args.agent = argv[++i];
+    } else if (argv[i] === '--debug') {
+      args.debug = 'true';
     } else if (argv[i] === '--help' || argv[i] === '-h') {
       args.help = 'true';
     }
@@ -56,12 +58,14 @@ Options:
   --worktree DIR         Worktree directory (for workflow cost computation from session data)
   --agent TYPE           Agent type: claude or codex (default: claude)
   --repo-dir DIR         Repository directory (default: current directory)
+  --debug                Enable detailed cost computation diagnostics (sets DEBUG_COST=1)
   --help, -h             Show this help message
 
 Notes:
   - Reads autoEval from .wavemill-config.json; skips eval if disabled
   - Always exits 0 — eval failures are logged but never fail the workflow
   - Results are appended to .wavemill/eval-store.jsonl
+  - Use --debug to troubleshoot "no session data found" issues
 `);
 }
 
@@ -71,6 +75,11 @@ async function main() {
   if (args.help) {
     showHelp();
     return;
+  }
+
+  // Enable debug mode if requested
+  if (args.debug === 'true') {
+    process.env.DEBUG_COST = '1';
   }
 
   await runPostCompletionEval({
