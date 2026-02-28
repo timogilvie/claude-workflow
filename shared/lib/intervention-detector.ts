@@ -14,6 +14,7 @@ import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { resolveProjectsDir } from './workflow-cost.ts';
 import { loadWavemillConfig } from './config.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import type {
   InterventionRecord,
   InterventionType,
@@ -95,15 +96,15 @@ export const DEFAULT_PENALTIES: InterventionPenalties = {
 export function resolveOwnerRepo(repoDir?: string): string | undefined {
   const cwd = repoDir || process.cwd();
   try {
-    const nwo = execSync(
+    const nwo = execShellCommand(
       `gh repo view --json nameWithOwner --jq .nameWithOwner`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 10_000 }
+      { encoding: 'utf-8', cwd, timeout: 10_000 }
     ).trim();
     return nwo || undefined;
   } catch {
     // Fallback: parse git remote directly (works offline / without gh auth)
     try {
-      const remoteUrl = execSync('git remote get-url origin', {
+      const remoteUrl = execShellCommand('git remote get-url origin', {
         encoding: 'utf-8', cwd, timeout: 5_000,
       }).trim();
       const match =
@@ -155,9 +156,9 @@ export function detectReviewComments(prNumber: string, repoDir?: string, nwo?: s
 
   try {
     // Fetch reviews (top-level review submissions with state)
-    const reviewsRaw = execSync(
-      `gh api repos/${repo}/pulls/${prNumber}/reviews --jq '[.[] | {author: .user.login, state: .state, body: .body, submittedAt: .submitted_at}]'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
+    const reviewsRaw = execShellCommand(
+      `gh api repos/${escapeShellArg(repo)}/pulls/${escapeShellArg(prNumber)}/reviews --jq '[.[] | {author: .user.login, state: .state, body: .body, submittedAt: .submitted_at}]'`,
+      { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
 
     if (reviewsRaw) {
@@ -174,9 +175,9 @@ export function detectReviewComments(prNumber: string, repoDir?: string, nwo?: s
     }
 
     // Fetch inline review comments (code-level feedback)
-    const commentsRaw = execSync(
-      `gh api repos/${repo}/pulls/${prNumber}/comments --jq '[.[] | {author: .user.login, body: .body, path: .path, line: .line, createdAt: .created_at}]'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
+    const commentsRaw = execShellCommand(
+      `gh api repos/${escapeShellArg(repo)}/pulls/${escapeShellArg(prNumber)}/comments --jq '[.[] | {author: .user.login, body: .body, path: .path, line: .line, createdAt: .created_at}]'`,
+      { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
 
     if (commentsRaw) {
@@ -210,9 +211,9 @@ export function fetchPrCommits(prNumber: string, repoDir?: string, nwo?: string)
     return [];
   }
   try {
-    const commitsRaw = execSync(
-      `gh api repos/${repo}/pulls/${prNumber}/commits --jq '[.[] | {sha: .sha, message: .commit.message, author: .commit.author.name, date: .commit.author.date}]'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
+    const commitsRaw = execShellCommand(
+      `gh api repos/${escapeShellArg(repo)}/pulls/${escapeShellArg(prNumber)}/commits --jq '[.[] | {sha: .sha, message: .commit.message, author: .commit.author.name, date: .commit.author.date}]'`,
+      { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
     if (!commitsRaw) return [];
     return JSON.parse(commitsRaw) as PrCommit[];
@@ -242,9 +243,9 @@ export function detectPostPrCommits(prNumber: string, repoDir?: string, prCommit
 
   try {
     // Get PR creation timestamp
-    const prDataRaw = execSync(
-      `gh api repos/${repo}/pulls/${prNumber} --jq '{createdAt: .created_at, head: .head.sha, commits: .commits}'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
+    const prDataRaw = execShellCommand(
+      `gh api repos/${escapeShellArg(repo)}/pulls/${escapeShellArg(prNumber)} --jq '{createdAt: .created_at, head: .head.sha, commits: .commits}'`,
+      { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
 
     if (!prDataRaw) return event;
@@ -329,9 +330,9 @@ export function detectManualEdits(
       }
     } else {
       // Fallback: git log (less reliable post-merge, but works without a PR)
-      const commitsRaw = execSync(
-        `git log ${baseBranch}..${branchName} --format='%H|%s|%an|%ad|%b%x00' --date=iso-strict 2>/dev/null || echo ''`,
-        { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 10_000 }
+      const commitsRaw = execShellCommand(
+        `git log ${escapeShellArg(baseBranch)}..${escapeShellArg(branchName)} --format='%H|%s|%an|%ad|%b%x00' --date=iso-strict 2>/dev/null || echo ''`,
+        { encoding: 'utf-8', cwd, timeout: 10_000 }
       ).trim();
 
       if (!commitsRaw) return event;
@@ -395,9 +396,9 @@ export function detectTestFixes(
         }
       }
     } else {
-      const commitsRaw = execSync(
-        `git log ${baseBranch}..${branchName} --format='%H|%s|%ad' --date=iso-strict 2>/dev/null || echo ''`,
-        { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 10_000 }
+      const commitsRaw = execShellCommand(
+        `git log ${escapeShellArg(baseBranch)}..${escapeShellArg(branchName)} --format='%H|%s|%ad' --date=iso-strict 2>/dev/null || echo ''`,
+        { encoding: 'utf-8', cwd, timeout: 10_000 }
       ).trim();
 
       if (!commitsRaw) return event;
