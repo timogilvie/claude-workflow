@@ -84,12 +84,9 @@ function isValidTaskPacket(text: string): boolean {
 }
 
 // Claude CLI helper - uses your local Claude subscription
-async function expandWithClaude(prompt: string, issueContext: string, codebaseContext: string = ''): Promise<string> {
-  const contextParts = [prompt, issueContext];
-  if (codebaseContext) {
-    contextParts.push(codebaseContext);
-  }
-  const fullPrompt = contextParts.join('\n\n---\n\n');
+async function expandWithClaude(promptTemplate: string, issueContext: string, codebaseContext: string = ''): Promise<string> {
+  // Fill template with context using placeholder substitution
+  const fullPrompt = fillPromptTemplate(promptTemplate, issueContext, codebaseContext);
 
   const result = await callClaude(fullPrompt, {
     mode: 'stream',
@@ -159,6 +156,23 @@ function formatIssueContext(issue: any): string {
   context += issue.description || '*(No description provided)*';
 
   return context;
+}
+
+/**
+ * Fill the prompt template with context using placeholder substitution.
+ *
+ * Substitutes:
+ * - {{ISSUE_CONTEXT}}
+ * - {{CODEBASE_CONTEXT}}
+ */
+function fillPromptTemplate(
+  template: string,
+  issueContext: string,
+  codebaseContext: string
+): string {
+  return template
+    .replace('{{ISSUE_CONTEXT}}', issueContext)
+    .replace('{{CODEBASE_CONTEXT}}', codebaseContext);
 }
 
 // Gather directory tree context (depth-limited)

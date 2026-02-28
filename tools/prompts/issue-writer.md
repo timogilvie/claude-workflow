@@ -808,3 +808,20 @@ Now output the complete detailed task packet with all sections as specified abov
 - Sections 8-10 (always included, but renumbered if Section 7 is omitted)
 
 Start with "## 1. Objective"
+
+---
+
+# Context Parameters
+
+This prompt expects the following parameters to be substituted:
+
+- **`{{ISSUE_CONTEXT}}`** (required) - Linear issue details formatted with title, description, labels, etc.
+- **`{{CODEBASE_CONTEXT}}`** (required) - Directory structure, key files, git activity, and relevant file matches
+
+---
+
+{{ISSUE_CONTEXT}}
+
+---
+
+{{CODEBASE_CONTEXT}}
