@@ -165,10 +165,34 @@ else
     fail "monitor is missing pr_state helper definition"
   fi
 
+  if echo "$HEREDOC_CONTENT" | grep -q 'linear_set_state "\$ISSUE" "In Review"'; then
+    pass "monitor sets Linear issue to In Review when PR is detected"
+  else
+    fail "monitor does not set Linear issue to In Review on PR detection"
+  fi
+
+  if echo "$HEREDOC_CONTENT" | grep -q 'linear_set_state "\$ISSUE" "Done"'; then
+    pass "monitor sets Linear issue to Done when work is completed"
+  else
+    fail "monitor does not set Linear issue to Done on completion"
+  fi
+
   if echo "$HEREDOC_CONTENT" | grep -q 'set-issue-state.ts'; then
     pass "monitor linear_set_state uses set-issue-state.ts"
   else
     fail "monitor linear_set_state is not calling set-issue-state.ts"
+  fi
+
+  if echo "$HEREDOC_CONTENT" | grep -Fq '.tasks | to_entries[]'; then
+    pass "monitor rehydrates tracked tasks from state file on startup"
+  else
+    fail "monitor does not rehydrate tracked tasks from state file"
+  fi
+
+  if echo "$HEREDOC_CONTENT" | grep -q 'done < \"\$TASKS_FILE\"'; then
+    pass "monitor overlays newly selected tasks from TASKS_FILE"
+  else
+    fail "monitor does not overlay new tasks from TASKS_FILE"
   fi
 
   if echo "$HEREDOC_CONTENT" | grep -q 'update-linear-state.ts'; then
