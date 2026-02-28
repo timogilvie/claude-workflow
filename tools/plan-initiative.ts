@@ -70,7 +70,7 @@ interface PlanOutput {
 // ============================================================================
 
 async function decomposeWithClaude(systemPrompt: string, initiativeContext: string): Promise<string> {
-  const fullPrompt = `${systemPrompt}\n\n---\n\n${initiativeContext}`;
+  const fullPrompt = fillPromptTemplate(systemPrompt, initiativeContext);
 
   const result = await callClaude(fullPrompt, {
     mode: 'stream',
@@ -86,7 +86,7 @@ async function decomposeWithClaude(systemPrompt: string, initiativeContext: stri
 }
 
 async function runResearch(researchPrompt: string, initiativeContext: string): Promise<string> {
-  const fullPrompt = `${researchPrompt}\n\n---\n\n${initiativeContext}`;
+  const fullPrompt = fillPromptTemplate(researchPrompt, initiativeContext);
 
   const result = await callClaude(fullPrompt, {
     mode: 'stream',
@@ -106,6 +106,16 @@ function slugify(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
+}
+
+/**
+ * Fill the prompt template with context using placeholder substitution.
+ *
+ * Substitutes:
+ * - {{INITIATIVE_CONTEXT}}
+ */
+function fillPromptTemplate(template: string, initiativeContext: string): string {
+  return template.replace('{{INITIATIVE_CONTEXT}}', initiativeContext);
 }
 
 // ============================================================================

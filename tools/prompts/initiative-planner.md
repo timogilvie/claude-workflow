@@ -109,3 +109,15 @@ Return ONLY valid JSON (no markdown fences, no conversational text, no preamble)
   ]
 }
 ```
+
+---
+
+# Context Parameters
+
+This prompt expects the following parameters to be substituted:
+
+- **`{{INITIATIVE_CONTEXT}}`** (required) - Initiative details including name, status, description, projects, and research summary (if available)
+
+---
+
+{{INITIATIVE_CONTEXT}}
