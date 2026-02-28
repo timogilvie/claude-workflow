@@ -940,7 +940,7 @@ ENVEOF
 MONITOR_SCRIPT="/tmp/${SESSION}-monitor.sh"
 cat > "$MONITOR_SCRIPT" <<'MONITOR_EOF'
 #!/opt/homebrew/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
 
 
 # Import environment from env file
@@ -982,6 +982,13 @@ cleanup_dashboard_pane() {
   tmux kill-pane -t "$SESSION:control.1" >/dev/null 2>&1 || true
 }
 trap cleanup_dashboard_pane EXIT INT TERM
+
+monitor_err_trap() {
+  local rc=$?
+  local line="${BASH_LINENO[0]:-$LINENO}"
+  log_error "Monitor command failed at line $line (exit $rc): $BASH_COMMAND"
+}
+trap monitor_err_trap ERR
 
 
 # ============================================================================
@@ -1063,6 +1070,11 @@ check_plan_approved() {
 find_pr_for_branch() {
   local branch="$1"
   gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || echo ""
+}
+
+pr_state() {
+  local pr="$1"
+  gh pr view "$pr" --json state --jq '.state' 2>/dev/null || echo ""
 }
 
 validate_pr_merge() {
@@ -1549,26 +1561,122 @@ QUIT_REQUESTED=false
 LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 
-while :; do
-  # ── Phase A: Monitor existing tasks ──────────────────────────────────
-  active_count=0
+monitor_issue_state() {
+  local ISSUE="$1"
+  local BRANCH SLUG PR
+  local task_status WIN WT_DIR task_branch current_phase eval_agent debug_flag
 
-  for ISSUE in "${!BRANCH_BY_ISSUE[@]}"; do
-    [[ -n "${CLEANED[$ISSUE]:-}" ]] && continue
+  BRANCH="${BRANCH_BY_ISSUE[$ISSUE]}"
+  SLUG="${SLUG_BY_ISSUE[$ISSUE]}"
+  PR="${PR_BY_ISSUE[$ISSUE]:-}"
 
-    BRANCH="${BRANCH_BY_ISSUE[$ISSUE]}"
-    SLUG="${SLUG_BY_ISSUE[$ISSUE]}"
-    PR="${PR_BY_ISSUE[$ISSUE]:-}"
+  # If already merged (requireConfirm), wait for window close then cleanup
+  task_status=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null)
+  if [[ "$task_status" == "merged" ]]; then
+    WIN="$ISSUE-$SLUG"
+    if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+      active_count=$((active_count + 1))
+      return 0
+    fi
 
-    # If already merged (requireConfirm), wait for window close then cleanup
-    task_status=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null)
-    if [[ "$task_status" == "merged" ]]; then
-      WIN="$ISSUE-$SLUG"
-      if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
-        active_count=$((active_count + 1))
-        continue
+    execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+
+    WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+    if [[ -d "$WT_DIR" ]]; then
+      execute git -C "$REPO_DIR" worktree remove "$WT_DIR" --force 2>/dev/null || true
+      log "  ✓ Removed worktree: $WT_DIR"
+    fi
+
+    task_branch="task/${SLUG}"
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+      execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+      log "  ✓ Deleted branch: $task_branch"
+    fi
+
+    remove_task_state "$ISSUE"
+    CLEANED["$ISSUE"]=1
+    log "  ✓ Complete: $ISSUE (post-review cleanup)"
+
+    # Prune worktrees after cleanup
+    execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+    return 0
+  fi
+
+  # Check if PR exists
+  if [[ -z "$PR" ]]; then
+    PR="$(find_pr_for_branch "$BRANCH")"
+    if [[ -n "$PR" ]]; then
+      PR_BY_ISSUE["$ISSUE"]="$PR"
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR"
+      linear_set_state "$ISSUE" "In Review"
+      log "✓ $ISSUE → PR #$PR (In Review)"
+    else
+      # No PR in current repo - check Linear issue state for cross-repo completion
+      if linear_is_completed "$ISSUE"; then
+        log "✓ $ISSUE → Completed externally (cross-repo or manual)"
+
+        # Post-completion eval (non-blocking: always exits 0)
+        if [[ "$AUTO_EVAL" == "true" ]]; then
+          log "  📊 Running post-completion eval..."
+          eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+          [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+          debug_flag=""
+          [[ "${DEBUG:-}" == "1" || "${DEBUG_COST:-}" == "1" ]] && debug_flag="--debug"
+          npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+            --issue "$ISSUE" --branch "$BRANCH" \
+            --worktree "${WORKTREE_ROOT}/${SLUG}" \
+            --workflow-type mill --repo-dir "$REPO_DIR" \
+            --agent "$eval_agent" \
+            $debug_flag \
+            2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
+        fi
+
+        if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
+          log "  → Window stays open for review - close it when ready"
+          linear_set_state "$ISSUE" "Done"
+          save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "completed-external"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+
+        # Clean up worktree and state
+        linear_set_state "$ISSUE" "Done"
+
+        WIN="$ISSUE-$SLUG"
+        if tmux has-session -t "$SESSION:$WIN" 2>/dev/null; then
+          execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+          log "  ✓ Closed window: $WIN"
+        fi
+
+        WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+        if [[ -d "$WT_DIR" ]]; then
+          execute git -C "$REPO_DIR" worktree remove "$WT_DIR" --force 2>/dev/null || true
+          log "  ✓ Removed worktree: $WT_DIR"
+        fi
+
+        task_branch="task/${SLUG}"
+        if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+          execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+          log "  ✓ Deleted branch: $task_branch"
+        fi
+
+        execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+        remove_task_state "$ISSUE"
+        CLEANED["$ISSUE"]=1
+        log "  ✓ Complete: $ISSUE (external completion)"
+        return 0
       fi
 
+      # Not completed externally - check if agent pane is still alive
+      WIN="$ISSUE-$SLUG"
+      if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+        # Pane still running - agent is working, keep slot active
+        active_count=$((active_count + 1))
+        return 0
+      fi
+
+      # Agent exited without creating a PR - clean up the slot
+      log "⚠ $ISSUE → Agent exited without PR - releasing slot"
       execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
 
       WT_DIR="${WORKTREE_ROOT}/${SLUG}"
@@ -1585,184 +1693,103 @@ while :; do
 
       remove_task_state "$ISSUE"
       CLEANED["$ISSUE"]=1
-      log "  ✓ Complete: $ISSUE (post-review cleanup)"
+      log "  ✓ Released: $ISSUE (no PR created)"
 
-      # Prune worktrees after cleanup
       execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
-      continue
+      return 0
+    fi
+  fi
+
+  # - Planning phase tracking
+  current_phase=$(get_task_phase "$ISSUE")
+
+  if [[ "$current_phase" == "planning" ]]; then
+    if check_plan_approved "$SLUG"; then
+      set_task_phase "$ISSUE" "executing"
+      log "✓ $ISSUE → Plan approved, now executing"
+    elif [[ -z "$PR" ]]; then
+      # Keep planning tasks active, but allow PR detection above to run first.
+      active_count=$((active_count + 1))
+      return 0
+    fi
+  fi
+
+  # Check if merged
+  if validate_pr_merge "$PR"; then
+    log "✓ $ISSUE → PR #$PR MERGED"
+
+    # Post-merge eval (non-blocking: always exits 0)
+    if [[ "$AUTO_EVAL" == "true" ]]; then
+      log "  📊 Running post-merge eval..."
+      eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+      [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+      debug_flag=""
+      [[ "${DEBUG:-}" == "1" || "${DEBUG_COST:-}" == "1" ]] && debug_flag="--debug"
+      npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+        --issue "$ISSUE" --pr "$PR" --branch "$BRANCH" \
+        --worktree "${WORKTREE_ROOT}/${SLUG}" \
+        --workflow-type mill --repo-dir "$REPO_DIR" \
+        --agent "$eval_agent" \
+        $debug_flag \
+        2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
     fi
 
-    # Check if PR exists
-    if [[ -z "$PR" ]]; then
-      PR="$(find_pr_for_branch "$BRANCH")"
-      if [[ -n "$PR" ]]; then
-        PR_BY_ISSUE["$ISSUE"]="$PR"
-        save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR"
-        linear_set_state "$ISSUE" "In Review"
-        log "✓ $ISSUE → PR #$PR (In Review)"
-      else
-        # No PR in current repo — check Linear issue state for cross-repo completion
-        if linear_is_completed "$ISSUE"; then
-          log "✓ $ISSUE → Completed externally (cross-repo or manual)"
-
-          # Post-completion eval (non-blocking: always exits 0)
-          if [[ "$AUTO_EVAL" == "true" ]]; then
-            log "  📊 Running post-completion eval..."
-            eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
-            [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
-            local debug_flag=""
-            [[ "${DEBUG:-}" == "1" || "${DEBUG_COST:-}" == "1" ]] && debug_flag="--debug"
-            npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
-              --issue "$ISSUE" --branch "$BRANCH" \
-              --worktree "${WORKTREE_ROOT}/${SLUG}" \
-              --workflow-type mill --repo-dir "$REPO_DIR" \
-              --agent "$eval_agent" \
-              $debug_flag \
-              2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
-          fi
-
-          if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-            log "  → Window stays open for review — close it when ready"
-            linear_set_state "$ISSUE" "Done"
-            save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "completed-external"
-            active_count=$((active_count + 1))
-            continue
-          fi
-
-          # Clean up worktree and state
-          linear_set_state "$ISSUE" "Done"
-
-          WIN="$ISSUE-$SLUG"
-          if tmux has-session -t "$SESSION:$WIN" 2>/dev/null; then
-            execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
-            log "  ✓ Closed window: $WIN"
-          fi
-
-          WT_DIR="${WORKTREE_ROOT}/${SLUG}"
-          if [[ -d "$WT_DIR" ]]; then
-            execute git -C "$REPO_DIR" worktree remove "$WT_DIR" --force 2>/dev/null || true
-            log "  ✓ Removed worktree: $WT_DIR"
-          fi
-
-          task_branch="task/${SLUG}"
-          if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-            execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-            log "  ✓ Deleted branch: $task_branch"
-          fi
-
-          execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
-          remove_task_state "$ISSUE"
-          CLEANED["$ISSUE"]=1
-          log "  ✓ Complete: $ISSUE (external completion)"
-          continue
-        fi
-
-        # Not completed externally — check if agent pane is still alive
-        WIN="$ISSUE-$SLUG"
-        if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
-          # Pane still running — agent is working, keep slot active
-          active_count=$((active_count + 1))
-          continue
-        fi
-
-        # Agent exited without creating a PR — clean up the slot
-        log "⚠ $ISSUE → Agent exited without PR — releasing slot"
-        execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
-
-        WT_DIR="${WORKTREE_ROOT}/${SLUG}"
-        if [[ -d "$WT_DIR" ]]; then
-          execute git -C "$REPO_DIR" worktree remove "$WT_DIR" --force 2>/dev/null || true
-          log "  ✓ Removed worktree: $WT_DIR"
-        fi
-
-        task_branch="task/${SLUG}"
-        if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-          execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-          log "  ✓ Deleted branch: $task_branch"
-        fi
-
-        remove_task_state "$ISSUE"
-        CLEANED["$ISSUE"]=1
-        log "  ✓ Released: $ISSUE (no PR created)"
-
-        execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
-        continue
-      fi
-    fi
-
-    # ── Planning phase tracking ───────────────────────────────────────
-    current_phase=$(get_task_phase "$ISSUE")
-
-    if [[ "$current_phase" == "planning" ]]; then
-      if check_plan_approved "$SLUG"; then
-        set_task_phase "$ISSUE" "executing"
-        log "✓ $ISSUE → Plan approved, now executing"
-      elif [[ -z "$PR" ]]; then
-        # Keep planning tasks active, but allow PR detection above to run first.
-        active_count=$((active_count + 1))
-        continue
-      fi
-    fi
-
-    # Check if merged
-    if validate_pr_merge "$PR"; then
-      log "✓ $ISSUE → PR #$PR MERGED"
-
-      # Post-merge eval (non-blocking: always exits 0)
-      if [[ "$AUTO_EVAL" == "true" ]]; then
-        log "  📊 Running post-merge eval..."
-        eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
-        [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
-        local debug_flag=""
-        [[ "${DEBUG:-}" == "1" || "${DEBUG_COST:-}" == "1" ]] && debug_flag="--debug"
-        npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
-          --issue "$ISSUE" --pr "$PR" --branch "$BRANCH" \
-          --worktree "${WORKTREE_ROOT}/${SLUG}" \
-          --workflow-type mill --repo-dir "$REPO_DIR" \
-          --agent "$eval_agent" \
-          $debug_flag \
-          2>&1 | while IFS= read -r line; do log "  [eval] $line"; done || true
-      fi
-
-      if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-        log "  → Window stays open for review — close it when ready"
-        linear_set_state "$ISSUE" "Done"
-        save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged"
-        active_count=$((active_count + 1))
-        continue
-      fi
-
+    if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
+      log "  → Window stays open for review - close it when ready"
       linear_set_state "$ISSUE" "Done"
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged"
+      active_count=$((active_count + 1))
+      return 0
+    fi
 
-      WIN="$ISSUE-$SLUG"
-      if tmux has-session -t "$SESSION:$WIN" 2>/dev/null; then
-        execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
-        log "  ✓ Closed window: $WIN"
-      fi
+    linear_set_state "$ISSUE" "Done"
 
-      WT_DIR="${WORKTREE_ROOT}/${SLUG}"
-      if [[ -d "$WT_DIR" ]]; then
-        execute git -C "$REPO_DIR" worktree remove "$WT_DIR" --force 2>/dev/null || true
-        log "  ✓ Removed worktree: $WT_DIR"
-      fi
+    WIN="$ISSUE-$SLUG"
+    if tmux has-session -t "$SESSION:$WIN" 2>/dev/null; then
+      execute tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+      log "  ✓ Closed window: $WIN"
+    fi
 
-      task_branch="task/${SLUG}"
-      if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-        execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-        log "  ✓ Deleted branch: $task_branch"
-      fi
+    WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+    if [[ -d "$WT_DIR" ]]; then
+      execute git -C "$REPO_DIR" worktree remove "$WT_DIR" --force 2>/dev/null || true
+      log "  ✓ Removed worktree: $WT_DIR"
+    fi
 
-      remove_task_state "$ISSUE"
-      CLEANED["$ISSUE"]=1
-      log "  ✓ Complete: $ISSUE"
+    task_branch="task/${SLUG}"
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+      execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+      log "  ✓ Deleted branch: $task_branch"
+    fi
 
-      execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+    remove_task_state "$ISSUE"
+    CLEANED["$ISSUE"]=1
+    log "  ✓ Complete: $ISSUE"
 
-    elif [[ "$(pr_state "$PR")" == "CLOSED" ]]; then
-      log_warn "$ISSUE → PR #$PR CLOSED without merge"
-      linear_set_state "$ISSUE" "Backlog"
-      CLEANED["$ISSUE"]=1
-    else
+    execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  elif [[ "$(pr_state "$PR")" == "CLOSED" ]]; then
+    log_warn "$ISSUE → PR #$PR CLOSED without merge"
+    linear_set_state "$ISSUE" "Backlog"
+    CLEANED["$ISSUE"]=1
+  else
+    active_count=$((active_count + 1))
+  fi
+
+  return 0
+}
+
+while :; do
+  # ── Phase A: Monitor existing tasks ──────────────────────────────────
+  active_count=0
+
+  for ISSUE in "${!BRANCH_BY_ISSUE[@]}"; do
+    [[ -n "${CLEANED[$ISSUE]:-}" ]] && continue
+    set +e
+    monitor_issue_state "$ISSUE"
+    issue_rc=$?
+    set -e
+    if (( issue_rc != 0 )); then
+      log_warn "$ISSUE → Monitor step failed (exit $issue_rc). Keeping slot active."
       active_count=$((active_count + 1))
     fi
   done
