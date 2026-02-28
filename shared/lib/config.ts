@@ -12,7 +12,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import Ajv, { type ValidateFunction } from 'ajv';
+import { createRequire } from 'node:module';
 
 // ────────────────────────────────────────────────────────────────
 // TypeScript Types (matching wavemill-config.schema.json)
@@ -144,14 +144,47 @@ export interface WavemillConfig {
 // Schema Validation
 // ────────────────────────────────────────────────────────────────
 
-let compiledValidator: ValidateFunction | null = null;
+interface ValidationError {
+  instancePath?: string;
+  message?: string;
+}
+
+type ValidatorFunction = ((data: unknown) => boolean) & {
+  errors?: ValidationError[] | null;
+};
+
+let compiledValidator: ValidatorFunction | null = null;
+let validatorDisabledReason: string | null = null;
+let didWarnValidatorDisabled = false;
+
+function warnValidatorDisabled(reason: string): void {
+  if (didWarnValidatorDisabled) {
+    return;
+  }
+  console.warn(
+    `Wavemill config validation skipped: ${reason}. ` +
+    'Install dependencies to restore schema validation.'
+  );
+  didWarnValidatorDisabled = true;
+}
 
 /**
  * Load and compile the JSON schema for validation.
  * Cached after first call.
  */
-function getValidator(): ValidateFunction {
-  if (compiledValidator) {
+function getValidator(): ValidatorFunction | null {
+  if (process.env.WAVEMILL_DISABLE_AJV_VALIDATION === '1') {
+    validatorDisabledReason = 'WAVEMILL_DISABLE_AJV_VALIDATION=1';
+    warnValidatorDisabled(validatorDisabledReason);
+    return null;
+  }
+
+  if (validatorDisabledReason) {
+    warnValidatorDisabled(validatorDisabledReason);
+    return null;
+  }
+
+  if (compiledValidator !== null) {
     return compiledValidator;
   }
 
@@ -169,7 +202,31 @@ function getValidator(): ValidateFunction {
   }
 
   const schema = JSON.parse(readFileSync(schemaPath, 'utf-8'));
-  const ajv = new Ajv({
+  const require = createRequire(import.meta.url);
+  let AjvCtor: {
+    new (options: { allErrors: boolean; strict: boolean }): { compile(schema: unknown): ValidatorFunction };
+  };
+
+  try {
+    const ajvModule = require('ajv');
+    AjvCtor = (ajvModule.default || ajvModule) as typeof AjvCtor;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      code === 'MODULE_NOT_FOUND' ||
+      code === 'ERR_MODULE_NOT_FOUND' ||
+      /Cannot find package 'ajv'/.test(message) ||
+      /Cannot find module 'ajv'/.test(message)
+    ) {
+      validatorDisabledReason = `ajv unavailable (${message})`;
+      warnValidatorDisabled(validatorDisabledReason);
+      return null;
+    }
+    throw err;
+  }
+
+  const ajv = new AjvCtor({
     allErrors: true,
     strict: false, // Allow unknown keywords in schema
   });
@@ -184,6 +241,9 @@ function getValidator(): ValidateFunction {
  */
 function validateConfig(config: unknown): asserts config is WavemillConfig {
   const validate = getValidator();
+  if (!validate) {
+    return;
+  }
   const valid = validate(config);
 
   if (!valid && validate.errors) {
@@ -314,6 +374,11 @@ export function clearConfigCache(repoDir?: string): void {
   } else {
     configCache.clear();
   }
+
+  // Reset validator state for deterministic tests and long-lived processes.
+  compiledValidator = null;
+  validatorDisabledReason = null;
+  didWarnValidatorDisabled = false;
 }
 
 // ────────────────────────────────────────────────────────────────
