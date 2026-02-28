@@ -158,6 +158,29 @@ else
   else
     fail "monitor find_pr_for_branch is missing --state all"
   fi
+
+  if echo "$HEREDOC_CONTENT" | grep -q 'set-issue-state.ts'; then
+    pass "monitor linear_set_state uses set-issue-state.ts"
+  else
+    fail "monitor linear_set_state is not calling set-issue-state.ts"
+  fi
+
+  if echo "$HEREDOC_CONTENT" | grep -q 'update-linear-state.ts'; then
+    fail "monitor references removed update-linear-state.ts tool"
+  else
+    pass "monitor does not reference update-linear-state.ts"
+  fi
+
+  LINEAR_SET_STATE_BLOCK=$(echo "$HEREDOC_CONTENT" | awk '
+    /^linear_set_state\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ')
+  if echo "$LINEAR_SET_STATE_BLOCK" | grep -q 'return 1'; then
+    fail "monitor linear_set_state must not return 1 (would exit under set -e)"
+  else
+    pass "monitor linear_set_state failures are non-fatal"
+  fi
 fi
 
 # ============================================================================

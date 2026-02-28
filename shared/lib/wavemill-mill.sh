@@ -1082,10 +1082,8 @@ validate_pr_merge() {
 
 linear_set_state() {
   local issue="$1" state="$2"
-  npx tsx "$TOOLS_DIR/update-linear-state.ts" "$issue" "$state" >/dev/null 2>&1 || {
+  npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1 || \
     log_warn "Failed to update Linear state for $issue to $state"
-    return 1
-  }
 }
 
 linear_is_completed() {
