@@ -213,6 +213,12 @@ check_project_context() {
   fi
 }
 
+# Run standard pre-flight checks before command execution
+run_preflight_checks() {
+  check_claude_sync
+  check_project_context
+}
+
 run_mill() {
   local mill_script="$LIB_DIR/wavemill-mill.sh"
 
@@ -408,8 +414,7 @@ run_review() {
 # Main command dispatcher
 case "${1:-}" in
   mill)
-    check_claude_sync
-    check_project_context
+    run_preflight_checks
     shift
     # Parse mill-specific flags before delegating
     while [[ $# -gt 0 ]]; do
@@ -427,17 +432,17 @@ case "${1:-}" in
     run_mill "$@"
     ;;
   expand)
-    check_claude_sync
-    check_project_context
+    run_preflight_checks
     shift
     run_expand "$@"
     ;;
   plan)
-    check_claude_sync
+    run_preflight_checks
     shift
     run_plan "$@"
     ;;
   review)
+    run_preflight_checks
     shift
     run_review "$@"
     ;;
