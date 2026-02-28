@@ -122,7 +122,7 @@ is_active() {
 # Clear screen once at startup
 clear
 FRAME=$(mktemp)
-trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT
+trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT INT TERM
 
 while true; do
   refresh_pr_cache
