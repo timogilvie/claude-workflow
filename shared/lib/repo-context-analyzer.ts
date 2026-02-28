@@ -14,6 +14,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { RepoContext, RepoVisibility, RepoSize } from './eval-schema.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Language Detection
@@ -54,12 +55,12 @@ export function detectLanguages(repoDir: string): {
 
   // Try git ls-files first (faster and respects .gitignore)
   try {
-    const output = execSync('git ls-files', {
+    const output = execShellCommand('git ls-files', {
       encoding: 'utf-8',
       cwd: repoDir,
       maxBuffer: 10 * 1024 * 1024,
     });
-    files = output.split('\n').filter((f) => f.length > 0);
+    files = output.toString().split('\n').filter((f) => f.length > 0);
   } catch {
     // Fallback: manual scan (limited to avoid performance issues)
     try {
@@ -347,12 +348,11 @@ export function computeRepoSize(repoDir: string): RepoSize {
 
   // Count files
   try {
-    const output = execSync('git ls-files | wc -l', {
+    const output = execShellCommand('git ls-files | wc -l', {
       encoding: 'utf-8',
       cwd: repoDir,
-      shell: '/bin/bash',
     });
-    fileCount = parseInt(output.trim(), 10);
+    fileCount = parseInt(output.toString().trim(), 10);
   } catch {
     // Fallback: count files manually (limited)
     const files = scanDirectory(repoDir, 0, 5000);
@@ -361,15 +361,14 @@ export function computeRepoSize(repoDir: string): RepoSize {
 
   // Count LOC (approximate - only count tracked code files)
   try {
-    const output = execSync(
+    const output = execShellCommand(
       'git ls-files | grep -E "\\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|cs|cpp|c|swift|kt)$" | xargs wc -l 2>/dev/null | tail -1',
       {
         encoding: 'utf-8',
         cwd: repoDir,
-        shell: '/bin/bash',
       }
     );
-    const match = output.match(/(\d+)/);
+    const match = output.toString().match(/(\d+)/);
     if (match) {
       loc = parseInt(match[1], 10);
     }
@@ -432,7 +431,7 @@ export function isMonorepo(repoDir: string): boolean {
 export function computeRepoId(repoDir: string): string {
   // Try to get repo name from git remote
   try {
-    const remote = execSync('git remote get-url origin', {
+    const remote = execShellCommand('git remote get-url origin', {
       encoding: 'utf-8',
       cwd: repoDir,
     }).trim();
@@ -464,7 +463,7 @@ export function computeRepoId(repoDir: string): string {
  */
 export function detectRepoVisibility(repoDir: string): RepoVisibility {
   try {
-    const remote = execSync('git remote get-url origin', {
+    const remote = execShellCommand('git remote get-url origin', {
       encoding: 'utf-8',
       cwd: repoDir,
     }).trim();

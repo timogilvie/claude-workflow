@@ -16,6 +16,7 @@
 import { execSync } from 'child_process';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import type {
   CiOutcome,
   TestsOutcome,
@@ -54,9 +55,9 @@ export function collectCiOutcome(
 
   try {
     // Fetch PR checks via gh CLI
-    const checksRaw = execSync(
-      `gh pr checks ${prNumber} --json name,state,conclusion,startedAt,completedAt 2>/dev/null || echo '[]'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
+    const checksRaw = execShellCommand(
+      `gh pr checks ${escapeShellArg(prNumber)} --json name,state,conclusion,startedAt,completedAt 2>/dev/null || echo '[]'`,
+      { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
 
     if (!checksRaw || checksRaw === '[]') {
@@ -149,9 +150,9 @@ export function collectTestsOutcome(
   try {
     // Detect test file additions via git diff
     // Look for files matching common test patterns
-    const diffRaw = execSync(
-      `git diff --name-status ${baseBranch}...${branchName} 2>/dev/null | grep -E '\\.(test|spec)\\.(js|ts|jsx|tsx)$' || echo ''`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 10_000 }
+    const diffRaw = execShellCommand(
+      `git diff --name-status ${escapeShellArg(baseBranch)}...${escapeShellArg(branchName)} 2>/dev/null | grep -E '\\.(test|spec)\\.(js|ts|jsx|tsx)$' || echo ''`,
+      { encoding: 'utf-8', cwd, timeout: 10_000 }
     ).trim();
 
     if (diffRaw) {
@@ -162,9 +163,9 @@ export function collectTestsOutcome(
 
     // Try to extract test pass rate from CI checks
     // Look for a check with "test" in the name
-    const checksRaw = execSync(
-      `gh pr checks ${prNumber} --json name,conclusion 2>/dev/null || echo '[]'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
+    const checksRaw = execShellCommand(
+      `gh pr checks ${escapeShellArg(prNumber)} --json name,conclusion 2>/dev/null || echo '[]'`,
+      { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
 
     if (checksRaw && checksRaw !== '[]') {
@@ -218,9 +219,9 @@ export function collectStaticAnalysisOutcome(
   const outcome: StaticAnalysisOutcome = {};
 
   try {
-    const checksRaw = execSync(
-      `gh pr checks ${prNumber} --json name,conclusion 2>/dev/null || echo '[]'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
+    const checksRaw = execShellCommand(
+      `gh pr checks ${escapeShellArg(prNumber)} --json name,conclusion 2>/dev/null || echo '[]'`,
+      { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
 
     if (!checksRaw || checksRaw === '[]') {
@@ -305,9 +306,9 @@ export function collectReviewOutcome(
     }
 
     // Fetch PR reviews via GitHub API
-    const reviewsRaw = execSync(
-      `gh api repos/${repo}/pulls/${prNumber}/reviews --jq '[.[] | {state: .state, submittedAt: .submitted_at}]' 2>/dev/null || echo '[]'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
+    const reviewsRaw = execShellCommand(
+      `gh api repos/${escapeShellArg(repo)}/pulls/${escapeShellArg(prNumber)}/reviews --jq '[.[] | {state: .state, submittedAt: .submitted_at}]' 2>/dev/null || echo '[]'`,
+      { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
 
     if (!reviewsRaw || reviewsRaw === '[]') {
@@ -383,9 +384,9 @@ export function collectReworkOutcome(
 
   try {
     // Count commits on the branch as iterations
-    const commitsRaw = execSync(
-      `git rev-list --count main..${branchName} 2>/dev/null || echo '0'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 10_000 }
+    const commitsRaw = execShellCommand(
+      `git rev-list --count main..${escapeShellArg(branchName)} 2>/dev/null || echo '0'`,
+      { encoding: 'utf-8', cwd, timeout: 10_000 }
     ).trim();
 
     outcome.agentIterations = parseInt(commitsRaw, 10) || 0;
@@ -476,9 +477,9 @@ export function collectDeliveryOutcome(
 
   try {
     // Fetch PR metadata via GitHub API
-    const prDataRaw = execSync(
-      `gh api repos/${repo}/pulls/${prNumber} --jq '{merged: .merged, mergedAt: .merged_at, createdAt: .created_at}' 2>/dev/null || echo '{}'`,
-      { encoding: 'utf-8', cwd, shell: '/bin/bash', timeout: 15_000 }
+    const prDataRaw = execShellCommand(
+      `gh api repos/${escapeShellArg(repo)}/pulls/${escapeShellArg(prNumber)} --jq '{merged: .merged, mergedAt: .merged_at, createdAt: .created_at}' 2>/dev/null || echo '{}'`,
+      { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
 
     if (!prDataRaw || prDataRaw === '{}') {

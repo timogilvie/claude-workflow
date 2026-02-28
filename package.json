@@ -11,7 +11,7 @@
     "test": "npm run test:shell && npm run test:unit && npm run test:smoke && npm run test:config",
     "test:shell": "bash tests/check-shell.sh",
     "test:unit": "npm run test:node-test && npm run test:custom",
-    "test:node-test": "node --test shared/lib/session.test.js shared/lib/session-timer.test.js shared/lib/eval.test.js shared/lib/intervention-detector.test.ts shared/lib/session-adapters.test.ts shared/lib/outcome-collectors.test.ts shared/lib/context-analyzer.test.ts shared/lib/review-runner.test.ts shared/lib/config.test.ts",
+    "test:node-test": "node --test shared/lib/session.test.js shared/lib/session-timer.test.js shared/lib/eval.test.js shared/lib/intervention-detector.test.ts shared/lib/session-adapters.test.ts shared/lib/outcome-collectors.test.ts shared/lib/context-analyzer.test.ts shared/lib/review-runner.test.ts shared/lib/config.test.ts shared/lib/shell-utils.test.ts",
     "test:custom": "bash tests/run-custom-tests.sh",
     "test:smoke": "node --test tests/cli-smoke.test.ts",
     "test:config": "bash tests/config-loading.test.sh",

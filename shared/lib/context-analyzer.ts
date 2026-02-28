@@ -10,6 +10,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -61,9 +62,9 @@ export function detectStateManagement(repoDir: string): string | undefined {
     // Check for React Context usage
     if (deps.react) {
       try {
-        const contextFiles = execSync(
+        const contextFiles = execShellCommand(
           'git ls-files | grep -E "\\.(tsx?|jsx?)$" | xargs grep -l "createContext\\|useContext" 2>/dev/null | head -3',
-          { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+          { encoding: 'utf-8', cwd: repoDir }
         ).trim();
 
         if (contextFiles) return 'React Context';
@@ -97,9 +98,9 @@ export function detectApiClient(repoDir: string): string | undefined {
 
     // Check for native fetch usage
     try {
-      const fetchFiles = execSync(
+      const fetchFiles = execShellCommand(
         'git ls-files | grep -E "\\.(tsx?|jsx?)$" | xargs grep -l "\\bfetch(" 2>/dev/null | head -1',
-        { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+        { encoding: 'utf-8', cwd: repoDir }
       ).trim();
 
       if (fetchFiles) return 'Native fetch';
@@ -132,9 +133,9 @@ export function detectStyling(repoDir: string): string | undefined {
 
     // Check for CSS Modules
     try {
-      const cssModules = execSync(
+      const cssModules = execShellCommand(
         'git ls-files | grep -E "\\.module\\.(css|scss|sass)$" | head -1',
-        { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+        { encoding: 'utf-8', cwd: repoDir }
       ).trim();
 
       if (cssModules) return 'CSS Modules';
@@ -144,9 +145,9 @@ export function detectStyling(repoDir: string): string | undefined {
 
     // Check for plain CSS/SCSS
     try {
-      const cssFiles = execSync(
+      const cssFiles = execShellCommand(
         'git ls-files | grep -E "\\.(css|scss|sass)$" | head -1',
-        { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+        { encoding: 'utf-8', cwd: repoDir }
       ).trim();
 
       if (cssFiles) return 'CSS/SCSS';
@@ -168,14 +169,14 @@ export function detectTestPatterns(repoDir: string): string[] {
 
   try {
     // Check for test co-location vs separate test directory
-    const testFileCount = execSync(
+    const testFileCount = execShellCommand(
       'git ls-files | grep -E "\\.(test|spec)\\.(tsx?|jsx?)$" | wc -l',
-      { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+      { encoding: 'utf-8', cwd: repoDir }
     ).trim();
 
-    const testDirCount = execSync(
+    const testDirCount = execShellCommand(
       'git ls-files | grep -E "^(test|tests|__tests__)/" | wc -l',
-      { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+      { encoding: 'utf-8', cwd: repoDir }
     ).trim();
 
     if (parseInt(testFileCount, 10) > parseInt(testDirCount, 10)) {
@@ -185,9 +186,9 @@ export function detectTestPatterns(repoDir: string): string[] {
     }
 
     // Check for snapshot testing
-    const snapshotFiles = execSync(
+    const snapshotFiles = execShellCommand(
       'git ls-files | grep -E "\\.snap$" | head -1',
-      { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+      { encoding: 'utf-8', cwd: repoDir }
     ).trim();
 
     if (snapshotFiles) {
@@ -198,9 +199,9 @@ export function detectTestPatterns(repoDir: string): string[] {
     const e2ePatterns = ['e2e', 'integration', 'playwright', 'cypress'];
     for (const pattern of e2ePatterns) {
       try {
-        const e2eFiles = execSync(
-          `git ls-files | grep -i "${pattern}" | head -1`,
-          { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+        const e2eFiles = execShellCommand(
+          `git ls-files | grep -i ${escapeShellArg(pattern)} | head -1`,
+          { encoding: 'utf-8', cwd: repoDir }
         ).trim();
 
         if (e2eFiles) {
@@ -224,9 +225,9 @@ export function detectTestPatterns(repoDir: string): string[] {
 export function detectErrorHandling(repoDir: string): string | undefined {
   try {
     // Check for error boundary usage (React)
-    const errorBoundary = execSync(
+    const errorBoundary = execShellCommand(
       'git ls-files | grep -E "\\.(tsx?|jsx?)$" | xargs grep -l "componentDidCatch\\|ErrorBoundary" 2>/dev/null | head -1',
-      { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+      { encoding: 'utf-8', cwd: repoDir }
     ).trim();
 
     if (errorBoundary) return 'React Error Boundaries';
