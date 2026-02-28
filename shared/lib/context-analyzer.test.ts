@@ -164,7 +164,7 @@ describe('context-analyzer', () => {
   });
 
   describe('extractGotchas', () => {
-    it('extracts gotchas from CLAUDE.md', { todo: 'extractGotchas returns empty for this input format' }, () => {
+    it('extracts gotchas from CLAUDE.md', () => {
       const claudeMd = `
 # Project
 
@@ -177,7 +177,10 @@ describe('context-analyzer', () => {
 
       const result = extractGotchas(testRepoDir);
 
-      assert.ok(result.length > 0);
+      assert.deepEqual(result, [
+        'Database migrations must be run manually',
+        'API rate limiting is strict (100 req/min)',
+      ]);
     });
 
     it('returns empty array when no gotchas found', () => {
