@@ -1667,6 +1667,23 @@ monitor_issue_state() {
         return 0
       fi
 
+      # Planning phase tracking (must run before pane-alive early return)
+      current_phase=$(get_task_phase "$ISSUE")
+
+      if [[ "$current_phase" == "planning" ]]; then
+        if check_plan_approved "$SLUG"; then
+          set_task_phase "$ISSUE" "executing"
+          log "✓ $ISSUE → Plan approved, now executing"
+        else
+          WIN="$ISSUE-$SLUG"
+          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            # Keep unapproved planning tasks active while agent is still running.
+            active_count=$((active_count + 1))
+            return 0
+          fi
+        fi
+      fi
+
       # Not completed externally - check if agent pane is still alive
       WIN="$ISSUE-$SLUG"
       if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
@@ -1696,20 +1713,6 @@ monitor_issue_state() {
       log "  ✓ Released: $ISSUE (no PR created)"
 
       execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
-      return 0
-    fi
-  fi
-
-  # - Planning phase tracking
-  current_phase=$(get_task_phase "$ISSUE")
-
-  if [[ "$current_phase" == "planning" ]]; then
-    if check_plan_approved "$SLUG"; then
-      set_task_phase "$ISSUE" "executing"
-      log "✓ $ISSUE → Plan approved, now executing"
-    elif [[ -z "$PR" ]]; then
-      # Keep planning tasks active, but allow PR detection above to run first.
-      active_count=$((active_count + 1))
       return 0
     fi
   fi
