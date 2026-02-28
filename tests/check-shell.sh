@@ -247,7 +247,25 @@ else
 fi
 
 # ============================================================================
-# TEST 3: Verify sourced libraries exist
+# TEST 4: Codex attention-style regression guard
+# ============================================================================
+echo ""
+echo "=== Codex Attention Style Regression Guard ==="
+
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] && grep -q 'window-status-activity-style bg=red,fg=white,bold' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "mill sets codex window activity style to red"
+else
+  fail "mill is missing codex red activity style override"
+fi
+
+if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] && grep -q 'window-status-activity-style bg=red,fg=white,bold' "$LIB_DIR/wavemill-orchestrator.sh"; then
+  pass "orchestrator sets codex window activity style to red"
+else
+  fail "orchestrator is missing codex red activity style override"
+fi
+
+# ============================================================================
+# TEST 5: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
@@ -274,7 +292,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 4: Optional ShellCheck
+# TEST 6: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""
