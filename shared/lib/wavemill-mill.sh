@@ -1333,6 +1333,12 @@ launch_task() {
   local win="$issue-$slug"
   tmux new-window -t "$SESSION" -n "$win" -c "$wt_dir"
 
+  # Codex does not reliably trigger bell flags for input-required turns.
+  # Make codex attention states red by overriding activity style per-window.
+  if [[ "$task_agent_cmd" == "codex" ]]; then
+    tmux set-window-option -t "$SESSION:$win" window-status-activity-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+  fi
+
   # Run setup command in new worktrees (e.g., npm install)
   if [[ -n "${SETUP_CMD:-}" ]] && [[ "$created_new" == "true" ]]; then
     log "  Running setup: $SETUP_CMD"

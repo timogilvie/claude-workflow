@@ -159,6 +159,12 @@ for t in "${TASKS[@]}"; do
     WIN="$ISSUE-$SLUG"
     tmux new-window -t "$SESSION" -n "$WIN" -c "$WT_DIR"
 
+    # Codex does not reliably trigger bell flags for input-required turns.
+    # Make codex attention states red by overriding activity style per-window.
+    if [[ "$TASK_AGENT_CMD" == "codex" ]]; then
+      tmux set-window-option -t "$SESSION:$WIN" window-status-activity-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+    fi
+
 
     # ── Agent launch (planning vs skip mode) ──────────────────────────────
 
