@@ -207,6 +207,19 @@ else
   else
     fail "monitor loop is missing guarded per-issue processing checks"
   fi
+
+  MONITOR_ISSUE_BLOCK=$(echo "$HEREDOC_CONTENT" | awk '
+    /^monitor_issue_state\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ')
+  PLAN_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_plan_approved "\$SLUG"' | head -n1 | cut -d: -f1 || true)
+  PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - check if agent pane is still alive' | head -n1 | cut -d: -f1 || true)
+  if [[ -n "$PLAN_CHECK_LINE" && -n "$PANE_EARLY_RETURN_LINE" ]] && (( PLAN_CHECK_LINE < PANE_EARLY_RETURN_LINE )); then
+    pass "monitor checks planning approval before no-PR pane-alive early return"
+  else
+    fail "monitor planning approval check runs too late (after pane-alive early return)"
+  fi
 fi
 
 # ============================================================================
