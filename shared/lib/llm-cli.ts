@@ -18,6 +18,7 @@ import { execSync, spawn, type SpawnOptions } from 'node:child_process';
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -257,7 +258,7 @@ function executeSync(
   const cwd = options.cwd || process.cwd();
 
   const cliCmd = getCliCommand(provider, options);
-  const command = `${cliCmd} ${cliArgs.join(' ')} < "${tmpFile}"`;
+  const command = `${escapeShellArg(cliCmd)} ${cliArgs.join(' ')} < ${escapeShellArg(tmpFile)}`;
 
   const config = getProviderConfig(provider);
   const env = {
@@ -265,11 +266,10 @@ function executeSync(
     [config.envVarName]: config.envVarValue,
   };
 
-  const raw = execSync(command, {
+  const raw = execShellCommand(command, {
     encoding: 'utf-8',
     timeout,
     maxBuffer,
-    shell: '/bin/bash',
     cwd,
     env,
   });
@@ -299,7 +299,6 @@ async function executeStream(
     const spawnOptions: SpawnOptions = {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd,
-      shell: '/bin/bash',
       env,
     };
 
