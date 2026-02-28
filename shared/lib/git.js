@@ -16,13 +16,3 @@ export const ensureCleanTree = () => {
     throw new Error('Working tree is dirty. Commit or stash changes before proceeding.');
   }
 };
-
-export const createBranch = (name, prefix = 'feature') => {
-  const branchName = sanitizeBranchName(name, prefix);
-  execSync(`git checkout -b ${branchName}`, { stdio: 'inherit' });
-  return branchName;
-};
-
-export const currentBranch = () => {
-  return execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
-};

@@ -168,22 +168,6 @@ export async function getBacklogForScoring(projectName) {
   return data.issues?.nodes || [];
 }
 
-export async function getWorkflowStates(teamId) {
-  const data = await request(`
-    query {
-      workflowStates(filter: { team: { id: { eq: "${teamId}" } } }) {
-        nodes {
-          id
-          name
-          type
-        }
-      }
-    }
-  `);
-
-  return data.workflowStates?.nodes || [];
-}
-
 export async function setIssueState(identifier, stateName) {
   const { teamKey, number } = parseIdentifier(identifier);
 
@@ -247,29 +231,6 @@ export async function createIssue(params) {
   );
 
   return data.issueCreate.issue;
-}
-
-export async function createProject(name, description, teamId) {
-  const data = await request(
-    `
-      mutation($name: String!, $description: String!, $teamIds: [String!]!) {
-        projectCreate(input: {
-          name: $name
-          description: $description
-          teamIds: $teamIds
-        }) {
-          success
-          project {
-            id
-            name
-          }
-        }
-      }
-    `,
-    { name, description, teamIds: [teamId] },
-  );
-
-  return data.projectCreate?.project;
 }
 
 export async function getOrCreateProjectMilestone(projectId, milestoneName) {
