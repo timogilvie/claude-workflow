@@ -91,59 +91,7 @@ describe('evaluateTask', () => {
     assert.equal(result.scoreBand, 'Assisted Success');
   });
 
-  it('retries on malformed JSON and succeeds on second attempt', { todo: 'retry logic changed' }, async () => {
-    let callCount = 0;
-    const callFn = mock.fn(() => {
-      callCount++;
-      const text =
-        callCount === 1
-          ? 'This is not JSON at all'
-          : JSON.stringify({
-              score: 0.75,
-              rationale: 'Good work on second parse.',
-              interventionFlags: [],
-            });
-      return Promise.resolve({ text, usage: null });
-    });
-
-    const result = await evaluateTask(
-      {
-        taskPrompt: 'Fix a bug',
-        prReviewOutput: 'Bug fixed correctly',
-      },
-      undefined,
-      { _callFn: callFn }
-    );
-
-    assert.equal(result.score, 0.75);
-    assert.equal(callCount, 2);
-  });
-
-  it('rejects scores outside 0-1 range and retries', { todo: 'retry logic changed' }, async () => {
-    let callCount = 0;
-    const callFn = mock.fn(() => {
-      callCount++;
-      const text =
-        callCount === 1
-          ? JSON.stringify({ score: 1.5, rationale: 'Too high', interventionFlags: [] })
-          : JSON.stringify({ score: 0.9, rationale: 'Valid score now.', interventionFlags: [] });
-      return Promise.resolve({ text, usage: null });
-    });
-
-    const result = await evaluateTask(
-      {
-        taskPrompt: 'Add feature',
-        prReviewOutput: 'Feature added',
-      },
-      undefined,
-      { _callFn: callFn }
-    );
-
-    assert.equal(result.score, 0.9);
-    assert.equal(callCount, 2);
-  });
-
-  it('throws after max retries exhausted', { todo: 'retry logic changed' }, async () => {
+  it('throws immediately on malformed JSON response', async () => {
     const callFn = mockCallFn('not json at all');
 
     await assert.rejects(
@@ -157,13 +105,58 @@ describe('evaluateTask', () => {
           { _callFn: callFn }
         ),
       (err) => {
-        assert.ok(err.message.includes('Failed to parse LLM judge response after 3 attempts'));
+        assert.ok(err.message.includes('Failed to parse JSON from LLM output'));
         return true;
       }
     );
 
-    // Should have been called 3 times (1 initial + 2 retries)
-    assert.equal(callFn.mock.callCount(), 3);
+    assert.equal(callFn.mock.callCount(), 1);
+  });
+
+  it('throws immediately on scores outside 0-1 range', async () => {
+    const callFn = mockCallFn(
+      JSON.stringify({ score: 1.5, rationale: 'Too high', interventionFlags: [] })
+    );
+
+    await assert.rejects(
+      () =>
+        evaluateTask(
+          {
+            taskPrompt: 'Add feature',
+            prReviewOutput: 'Feature added',
+          },
+          undefined,
+          { _callFn: callFn }
+        ),
+      (err) => {
+        assert.ok(err.message.includes('Invalid score: 1.5'));
+        return true;
+      }
+    );
+
+    assert.equal(callFn.mock.callCount(), 1);
+  });
+
+  it('propagates parse error after a single attempt', async () => {
+    const callFn = mockCallFn('This is not JSON at all');
+
+    await assert.rejects(
+      () =>
+        evaluateTask(
+          {
+            taskPrompt: 'Fix a bug',
+            prReviewOutput: 'Bug fixed correctly',
+          },
+          undefined,
+          { _callFn: callFn }
+        ),
+      (err) => {
+        assert.ok(err.message.includes('Failed to parse JSON from LLM output'));
+        return true;
+      }
+    );
+
+    assert.equal(callFn.mock.callCount(), 1);
   });
 
   it('throws immediately on CLI error (no retry)', async () => {
