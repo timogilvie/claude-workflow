@@ -1,7 +1,6 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  getCurrentRepo,
   listPullRequests,
   getPullRequest,
   getPullRequestDiff,
@@ -9,22 +8,6 @@ import {
 
 // These tests use real gh CLI commands and require authentication
 // Run: gh auth login before running tests
-
-describe('getCurrentRepo', () => {
-  it('extracts owner and name from git remote', () => {
-    const repo = getCurrentRepo();
-    assert.ok(repo.owner, 'should have owner');
-    assert.ok(repo.name, 'should have name');
-    assert.equal(typeof repo.owner, 'string');
-    assert.equal(typeof repo.name, 'string');
-  });
-
-  it('returns expected repo structure', () => {
-    const repo = getCurrentRepo();
-    assert.ok('owner' in repo);
-    assert.ok('name' in repo);
-  });
-});
 
 describe('listPullRequests', () => {
   it('lists PRs with default options (open state)', () => {
@@ -277,18 +260,5 @@ describe('Integration: Full workflow', () => {
     // Fetch PR diff
     const { diff } = getPullRequestDiff(prNumber);
     assert.ok(typeof diff === 'string', 'should get diff');
-  });
-
-  it('getCurrentRepo returns repo that matches PR URLs', () => {
-    const repo = getCurrentRepo();
-    const prs = listPullRequests({ state: 'all', limit: 1 });
-
-    if (prs.length > 0) {
-      const prUrl = prs[0].url;
-      assert.ok(
-        prUrl.includes(repo.owner) && prUrl.includes(repo.name),
-        'PR URL should contain repo owner and name'
-      );
-    }
   });
 });
