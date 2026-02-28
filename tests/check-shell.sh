@@ -75,8 +75,11 @@ else
     # Extract function definitions from agent-adapters.sh (sourced by the heredoc)
     ADAPTER_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/agent-adapters.sh" | sed 's/()//' | sort -u)
 
+    # Extract function definitions from wavemill-common.sh (also sourced by monitor)
+    COMMON_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/wavemill-common.sh" | sed 's/()//' | sort -u)
+
     # Combine all available function definitions
-    ALL_DEFINED=$(printf '%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" | sort -u)
+    ALL_DEFINED=$(printf '%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" | sort -u)
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
@@ -136,6 +139,47 @@ else
         fail "Critical function '$func' is NOT defined in monitor scope"
       fi
     done
+  fi
+fi
+
+# ============================================================================
+# TEST 3: Monitor PR-detection regression guards
+# ============================================================================
+echo ""
+echo "=== Monitor PR Detection Regression Guards ==="
+
+if [[ ! -f "$MILL_SCRIPT" ]]; then
+  fail "wavemill-mill.sh not found for monitor regression checks"
+elif [[ -z "${HEREDOC_CONTENT:-}" ]]; then
+  fail "Monitor heredoc content unavailable for regression checks"
+else
+  if echo "$HEREDOC_CONTENT" | grep -qE 'gh pr list --head "\$branch" --state all --json number'; then
+    pass "monitor find_pr_for_branch queries all PR states"
+  else
+    fail "monitor find_pr_for_branch is missing --state all"
+  fi
+
+  if echo "$HEREDOC_CONTENT" | grep -q 'set-issue-state.ts'; then
+    pass "monitor linear_set_state uses set-issue-state.ts"
+  else
+    fail "monitor linear_set_state is not calling set-issue-state.ts"
+  fi
+
+  if echo "$HEREDOC_CONTENT" | grep -q 'update-linear-state.ts'; then
+    fail "monitor references removed update-linear-state.ts tool"
+  else
+    pass "monitor does not reference update-linear-state.ts"
+  fi
+
+  LINEAR_SET_STATE_BLOCK=$(echo "$HEREDOC_CONTENT" | awk '
+    /^linear_set_state\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ')
+  if echo "$LINEAR_SET_STATE_BLOCK" | grep -q 'return 1'; then
+    fail "monitor linear_set_state must not return 1 (would exit under set -e)"
+  else
+    pass "monitor linear_set_state failures are non-fatal"
   fi
 fi
 
