@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { evaluateTask } from './eval.js';
 import { appendEvalRecord } from './eval-persistence.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import {
   detectAllInterventions,
   toInterventionMeta,
@@ -55,9 +56,9 @@ function resolveEvalsDir(repoDir: string): string | undefined {
 function fetchIssuePrompt(issueId: string, repoDir: string): string {
   const toolPath = resolve(__dirname, '../../tools/get-issue-json.ts');
   try {
-    const raw = execSync(
-      `npx tsx "${toolPath}" "${issueId}" 2>/dev/null | sed '/^\\[dotenv/d'`,
-      { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+    const raw = execShellCommand(
+      `npx tsx ${escapeShellArg(toolPath)} ${escapeShellArg(issueId)} 2>/dev/null | sed '/^\\[dotenv/d'`,
+      { encoding: 'utf-8', cwd: repoDir }
     ).trim();
     const issue = JSON.parse(raw);
     return `# ${issue.identifier}: ${issue.title}\n\n${issue.description || ''}`;
@@ -74,13 +75,13 @@ function fetchPrContext(prNumber: string, repoDir: string): { diff: string; url:
   let diff = '';
 
   try {
-    url = execSync(`gh pr view ${prNumber} --json url --jq .url 2>/dev/null`, {
-      encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash',
+    url = execShellCommand(`gh pr view ${escapeShellArg(prNumber)} --json url --jq .url 2>/dev/null`, {
+      encoding: 'utf-8', cwd: repoDir,
     }).trim();
   } catch { /* best-effort */ }
 
   try {
-    diff = execSync(`gh pr diff ${prNumber}`, {
+    diff = execShellCommand(`gh pr diff ${escapeShellArg(prNumber)}`, {
       encoding: 'utf-8', cwd: repoDir, maxBuffer: 10 * 1024 * 1024,
     });
   } catch {
@@ -130,7 +131,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     let branchName = ctx.branchName || '';
     if (!branchName) {
       try {
-        branchName = execSync('git branch --show-current', {
+        branchName = execShellCommand('git branch --show-current', {
           encoding: 'utf-8', cwd: repoDir,
         }).trim();
       } catch { /* best-effort */ }
@@ -190,9 +191,9 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
         if (ctx.issueId) {
           try {
             const toolPath = resolve(__dirname, '../../tools/get-issue-json.ts');
-            const raw = execSync(
-              `npx tsx "${toolPath}" "${ctx.issueId}" 2>/dev/null | sed '/^\\[dotenv/d'`,
-              { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+            const raw = execShellCommand(
+              `npx tsx ${escapeShellArg(toolPath)} ${escapeShellArg(ctx.issueId)} 2>/dev/null | sed '/^\\[dotenv/d'`,
+              { encoding: 'utf-8', cwd: repoDir }
             ).trim();
             issueData = JSON.parse(raw);
           } catch {

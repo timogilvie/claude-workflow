@@ -18,6 +18,7 @@ import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { evaluateTask } from '../shared/lib/eval.js';
+import { escapeShellArg, execShellCommand } from '../shared/lib/shell-utils.ts';
 import { getScoreBand } from '../shared/lib/eval-schema.ts';
 import { appendEvalRecord } from '../shared/lib/eval-persistence.ts';
 import {
@@ -146,11 +147,11 @@ function gatherContext(args) {
   // Try auto-detect from current branch PR
   if (!prNumber) {
     try {
-      branch = execSync('git branch --show-current', {
+      branch = execShellCommand('git branch --show-current', {
         encoding: 'utf-8', cwd: repoDir,
       }).trim();
-      const prJson = execSync('gh pr view --json number,url 2>/dev/null || echo "{}"', {
-        encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash',
+      const prJson = execShellCommand('gh pr view --json number,url 2>/dev/null || echo "{}"', {
+        encoding: 'utf-8', cwd: repoDir,
       }).trim();
       const prData = JSON.parse(prJson);
       if (prData.number) {
@@ -175,9 +176,9 @@ function gatherContext(args) {
   if (issueId) {
     try {
       const toolPath = path.resolve(__dirname, 'get-issue-json.ts');
-      const raw = execSync(
-        `npx tsx "${toolPath}" "${issueId}" 2>/dev/null`,
-        { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+      const raw = execShellCommand(
+        `npx tsx ${escapeShellArg(toolPath)} ${escapeShellArg(issueId)} 2>/dev/null`,
+        { encoding: 'utf-8', cwd: repoDir }
       ).trim();
       const issue = JSON.parse(raw);
       taskPrompt = `# ${issue.identifier}: ${issue.title}\n\n${issue.description || ''}`;
@@ -191,14 +192,14 @@ function gatherContext(args) {
   if (prNumber) {
     if (!prUrl) {
       try {
-        prUrl = execSync(`gh pr view ${prNumber} --json url --jq .url 2>/dev/null`, {
-          encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash',
+        prUrl = execShellCommand(`gh pr view ${escapeShellArg(prNumber)} --json url --jq .url 2>/dev/null`, {
+          encoding: 'utf-8', cwd: repoDir,
         }).trim();
       } catch { /* best-effort */ }
     }
 
     try {
-      const diff = execSync(`gh pr diff ${prNumber}`, {
+      const diff = execShellCommand(`gh pr diff ${escapeShellArg(prNumber)}`, {
         encoding: 'utf-8', cwd: repoDir, maxBuffer: 10 * 1024 * 1024,
       });
       prReviewOutput = diff;
@@ -209,9 +210,9 @@ function gatherContext(args) {
     // Append review comments if any
     try {
       const nwo = resolveOwnerRepo(repoDir);
-      const comments = nwo ? execSync(
-        `gh api repos/${nwo}/pulls/${prNumber}/comments --jq '.[].body' 2>/dev/null || echo ''`,
-        { encoding: 'utf-8', cwd: repoDir, shell: '/bin/bash' }
+      const comments = nwo ? execShellCommand(
+        `gh api repos/${escapeShellArg(nwo)}/pulls/${escapeShellArg(prNumber)}/comments --jq '.[].body' 2>/dev/null || echo ''`,
+        { encoding: 'utf-8', cwd: repoDir }
       ).trim() : '';
       if (comments) {
         prReviewOutput += `\n\n## Review Comments\n\n${comments}`;
@@ -222,7 +223,7 @@ function gatherContext(args) {
   // Ensure we have the branch name for intervention detection
   if (!branch) {
     try {
-      branch = execSync('git branch --show-current', {
+      branch = execShellCommand('git branch --show-current', {
         encoding: 'utf-8', cwd: repoDir,
       }).trim();
     } catch { /* best-effort */ }
@@ -445,9 +446,9 @@ async function main() {
         if (ctx.issueId) {
           try {
             const toolPath = path.resolve(__dirname, 'get-issue-json.ts');
-            const raw = execSync(
-              `npx tsx "${toolPath}" "${ctx.issueId}" 2>/dev/null | sed '/^\\[dotenv/d'`,
-              { encoding: 'utf-8', cwd: ctx.repoDir, shell: '/bin/bash' }
+            const raw = execShellCommand(
+              `npx tsx ${escapeShellArg(toolPath)} ${escapeShellArg(ctx.issueId)} 2>/dev/null | sed '/^\\[dotenv/d'`,
+              { encoding: 'utf-8', cwd: ctx.repoDir }
             ).trim();
             issueData = JSON.parse(raw);
           } catch {
