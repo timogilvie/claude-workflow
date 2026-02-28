@@ -976,6 +976,10 @@ trap cleanup_dashboard_pane EXIT INT TERM
 
 monitor_err_trap() {
   local rc=$?
+  # Ignore SIGINT (130) and SIGTERM (143) - these are intentional user interruptions
+  if [[ $rc -eq 130 || $rc -eq 143 ]]; then
+    return 0
+  fi
   local line="${BASH_LINENO[0]:-$LINENO}"
   log_error "Monitor command failed at line $line (exit $rc): $BASH_COMMAND"
 }
