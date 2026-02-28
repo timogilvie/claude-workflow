@@ -1062,7 +1062,7 @@ check_plan_approved() {
 
 find_pr_for_branch() {
   local branch="$1"
-  gh pr list --head "$branch" --json number --jq '.[0].number // empty' 2>/dev/null || echo ""
+  gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || echo ""
 }
 
 validate_pr_merge() {
@@ -1594,19 +1594,6 @@ while :; do
       continue
     fi
 
-    # ── Planning phase tracking ───────────────────────────────────────
-    current_phase=$(get_task_phase "$ISSUE")
-
-    if [[ "$current_phase" == "planning" ]]; then
-      if check_plan_approved "$SLUG"; then
-        set_task_phase "$ISSUE" "executing"
-        log "✓ $ISSUE → Plan approved, now executing"
-      else
-        active_count=$((active_count + 1))
-        continue
-      fi
-    fi
-
     # Check if PR exists
     if [[ -z "$PR" ]]; then
       PR="$(find_pr_for_branch "$BRANCH")"
@@ -1701,6 +1688,20 @@ while :; do
         log "  ✓ Released: $ISSUE (no PR created)"
 
         execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+        continue
+      fi
+    fi
+
+    # ── Planning phase tracking ───────────────────────────────────────
+    current_phase=$(get_task_phase "$ISSUE")
+
+    if [[ "$current_phase" == "planning" ]]; then
+      if check_plan_approved "$SLUG"; then
+        set_task_phase "$ISSUE" "executing"
+        log "✓ $ISSUE → Plan approved, now executing"
+      elif [[ -z "$PR" ]]; then
+        # Keep planning tasks active, but allow PR detection above to run first.
+        active_count=$((active_count + 1))
         continue
       fi
     fi
