@@ -92,6 +92,128 @@ npx tsx tools/init-project-context.ts
 
 Best practice: Keep the "Recent Work" log to the last 20-30 entries, archiving older history.
 
+## Subsystem Documentation (Cold Memory)
+
+The `.wavemill/context/` directory contains detailed specifications for each logical subsystem in the codebase. This implements a **three-tier memory system** inspired by "Codified Context: Infrastructure for AI Agents" (arXiv:2602.20478):
+
+- **Hot memory**: `project-context.md` - Concise constitution (always loaded)
+- **Cold memory**: `.wavemill/context/{subsystem}.md` - Detailed specs (loaded on-demand)
+- **Agent memory**: Session-specific context (per workflow)
+
+### Structure
+
+```
+.wavemill/
+├── project-context.md          # Hot memory (always loaded)
+└── context/                     # Cold memory (load on-demand)
+    ├── linear-api.md
+    ├── eval-system.md
+    ├── context-management.md
+    └── ...
+```
+
+### Subsystem Spec Format
+
+Each subsystem spec is structured for machine consumption:
+
+```markdown
+# Subsystem: {name}
+
+**Last updated:** {timestamp}
+**Files touched:** {count} files in last 30 days
+
+## Purpose
+[1-2 sentence description]
+
+## Key Files
+| File | Role | Notes |
+|------|------|-------|
+| ... | ... | ... |
+
+## Architectural Constraints
+### DO
+- [Concrete rule]
+
+### DON'T
+- [Anti-pattern]
+
+## Known Failure Modes
+| Symptom | Root Cause | Fix |
+|---------|------------|-----|
+| ... | ... | ... |
+
+## Testing Patterns
+...
+
+## Dependencies
+...
+
+## Recent Changes
+[Auto-updated after each PR]
+```
+
+### Automatic Generation
+
+Subsystems are auto-detected during `wavemill init` using heuristic analysis:
+- **Directory structure**: Top-level modules in `src/`, `shared/`, `tools/`
+- **File naming patterns**: `*-router.ts`, `*-analyzer.ts`, etc.
+- **Package dependencies**: Files importing same external packages
+- **Git activity**: Frequently co-modified files
+
+### Automatic Updates
+
+After each PR merge, the post-completion hook:
+1. Detects which subsystems were affected by the PR
+2. Updates the relevant `.wavemill/context/{subsystem}.md` files
+3. Adds entry to "Recent Changes" section
+4. Updates architectural constraints if new patterns were established
+5. Documents failure modes if bugs were fixed
+
+### Drift Detection
+
+Before expanding a Linear issue, the system checks if subsystem specs are stale:
+- Compares spec last-modified timestamp vs recent file changes
+- Warns when spec is >7 days older than most recent PR
+- Lists which PRs affected the subsystem since last update
+
+Example warning:
+```
+⚠️  DRIFT DETECTED: Some subsystem specs are stale
+
+The following subsystems have been modified since their specs were last updated:
+
+  • Linear API (linear-api)
+    Last updated: 2026-02-18 (10 days ago)
+    Files modified: 2026-02-28
+    Recent PRs: #123, #124, #125
+
+Consider refreshing these specs before relying on them for implementation.
+Run: npx tsx tools/init-project-context.ts --force
+```
+
+### Manual Refreshing
+
+To regenerate subsystem specs:
+
+```bash
+# Regenerate all subsystem specs
+npx tsx tools/init-project-context.ts --force
+
+# This will:
+# 1. Re-detect subsystems from current codebase
+# 2. Regenerate all .wavemill/context/*.md files
+# 3. Update project-context.md with new subsystem links
+```
+
+**Note**: Manual edits to subsystem specs are preserved in version control, but will be overwritten by `--force`. Consider updating via PR instead.
+
+### Best Practices
+
+1. **Trust the documentation**: Agents rely on subsystem specs - keep them current
+2. **Structured format**: Use tables and lists (not prose) for machine readability
+3. **Maintenance cost**: ~1-2 hours/week for 34 subsystem specs (per research paper)
+4. **Knowledge ratio**: Aim for ~24% (1 doc line per 4 code lines)
+
 ## Task Packet Structure (Progressive Disclosure)
 
 When Linear issues are expanded into task packets, they use a **progressive disclosure** approach to reduce context overload:

@@ -16,6 +16,8 @@ import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { analyzeRepoContext } from '../shared/lib/repo-context-analyzer.ts';
 import { analyzeCodeConventions } from '../shared/lib/context-analyzer.ts';
+import { detectSubsystems } from '../shared/lib/subsystem-detector.ts';
+import { writeSubsystemSpecs } from '../shared/lib/subsystem-spec-generator.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -286,10 +288,58 @@ async function main() {
   writeFileSync(contextPath, template, 'utf-8');
 
   console.log(`\n✓ Successfully created: ${contextPath}`);
+
+  // Generate subsystem documentation (cold memory)
+  console.log('\nDetecting subsystems...');
+  const subsystems = detectSubsystems(repoDir, {
+    minFiles: 3,
+    useGitAnalysis: true,
+    maxSubsystems: 20,
+  });
+
+  if (subsystems.length > 0) {
+    console.log(`Found ${subsystems.length} subsystem(s):`);
+    subsystems.forEach(s => console.log(`  - ${s.name} (${s.keyFiles.length} files, confidence: ${(s.confidence * 100).toFixed(0)}%)`));
+
+    // Create context directory
+    const contextDir = join(wavemillDir, 'context');
+    if (!existsSync(contextDir)) {
+      mkdirSync(contextDir, { recursive: true });
+    }
+
+    // Generate subsystem specs
+    console.log('\nGenerating subsystem specifications...');
+    writeSubsystemSpecs(subsystems, contextDir, {
+      repoDir,
+      includeGitHistory: true,
+    });
+
+    console.log(`✓ Created ${subsystems.length} subsystem spec(s) in ${contextDir}`);
+
+    // Update project-context.md to reference subsystem docs
+    const subsystemLinks = subsystems
+      .map(s => `- [${s.name}](context/${s.id}.md) - ${s.description}`)
+      .join('\n');
+
+    const subsystemSection = `\n\n## Subsystem Documentation\n\nFor detailed documentation on specific subsystems, see \`.wavemill/context/\`:\n\n${subsystemLinks}\n\n---`;
+
+    // Insert before "Recent Work" section
+    const updatedContext = readFileSync(contextPath, 'utf-8').replace(
+      /## Recent Work/,
+      subsystemSection + '\n## Recent Work'
+    );
+    writeFileSync(contextPath, updatedContext, 'utf-8');
+
+    console.log('✓ Updated project-context.md with subsystem references');
+  } else {
+    console.log('No subsystems detected (repo may be too small or unstructured)');
+  }
+
   console.log('\nNext steps:');
-  console.log('1. Review and fill in TODO sections');
-  console.log('2. Document architecture decisions and patterns');
-  console.log('3. The "Recent Work" section will be auto-updated after each PR merge');
+  console.log('1. Review and fill in TODO sections in project-context.md');
+  console.log('2. Review subsystem specs in .wavemill/context/ and add domain-specific details');
+  console.log('3. Document architecture decisions and patterns');
+  console.log('4. The "Recent Work" section will be auto-updated after each PR merge');
   console.log('\nTo use this context in issue expansion:');
   console.log('  npx tsx tools/expand-issue.ts <issue-id>');
 }
