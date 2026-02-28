@@ -25,9 +25,13 @@ Use the **document-orchestrator** skill to:
 - Save plan to `epics/<epic-name>/decomposition-plan.json`
 
 ## Phase 4: Create Sub-Issues in Linear
-Run the creation script:
+Use the current plan tool to decompose and create issues:
 ```bash
-npx tsx ~/.claude/tools/plan-workflow.ts [project-name] create
+# Interactive mode (recommended)
+wavemill plan
+
+# Or use the tool directly
+npx tsx tools/plan-initiative.ts decompose --initiative <initiative-id> [--project "Project Name"] [--research]
 ```
 
 This creates all sub-issues with:

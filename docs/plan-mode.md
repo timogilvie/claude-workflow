@@ -55,8 +55,8 @@ The decomposition plan is pushed to Linear:
 
 | File | Purpose |
 |------|---------|
-| `tools/plan-workflow.ts` | Epic selection and issue creation orchestrator |
 | `tools/plan-initiative.ts` | List and decompose initiatives |
+| `shared/lib/wavemill-plan.sh` | Plan workflow orchestrator called by `wavemill plan` |
 | `tools/prompts/initiative-planner.md` | System prompt for decomposition |
 | `tools/prompts/research-phase.md` | Research phase prompt template |
 | `shared/lib/linear.js` | Linear API helpers (create issues, milestones, relations) |
