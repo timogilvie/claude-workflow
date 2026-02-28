@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
 import {
   loadWavemillConfig,
   clearConfigCache,
@@ -28,6 +29,14 @@ import {
 
 let passed = 0;
 let failed = 0;
+const hasAjv = (() => {
+  try {
+    createRequire(import.meta.url)('ajv');
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 function test(name: string, fn: () => void | Promise<void>) {
   try {
@@ -142,10 +151,39 @@ test('invalid type in config throws validation error', () => {
     writeConfig(tmp, JSON.stringify({
       mill: { maxParallel: 'five' }
     }));
-    assert.throws(() => {
-      loadWavemillConfig(tmp);
-    }, /validation failed/);
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
   } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('loads config without schema validation when Ajv validation is disabled', () => {
+  const tmp = makeTempRepo();
+  const previous = process.env.WAVEMILL_DISABLE_AJV_VALIDATION;
+  try {
+    clearConfigCache();
+    process.env.WAVEMILL_DISABLE_AJV_VALIDATION = '1';
+    writeConfig(tmp, JSON.stringify({
+      mill: { maxParallel: 'five' }
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.equal(config.mill?.maxParallel, 'five');
+  } finally {
+    clearConfigCache();
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_DISABLE_AJV_VALIDATION;
+    } else {
+      process.env.WAVEMILL_DISABLE_AJV_VALIDATION = previous;
+    }
     cleanUp(tmp);
   }
 });
@@ -158,10 +196,16 @@ test('unknown fields are allowed (schema additionalProperties: false)', () => {
       router: { enabled: true },
       unknownField: 'should be rejected'
     }));
-    // Schema has additionalProperties: false, so this should throw
-    assert.throws(() => {
-      loadWavemillConfig(tmp);
-    }, /validation failed/);
+    if (hasAjv) {
+      // Schema has additionalProperties: false, so this should throw
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
   } finally {
     cleanUp(tmp);
   }
