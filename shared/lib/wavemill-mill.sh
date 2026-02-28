@@ -404,8 +404,9 @@ pr_details() {
 }
 
 
-# Check if PR is safe to mark as Done
-# Returns 0 if safe, 1 if not
+# Check if PR is merged and ready for cleanup
+# Returns 0 if merged, 1 if not
+# Note: Once PR is merged, CI status is irrelevant for cleanup decisions
 validate_pr_merge() {
   local pr="$1"
   local details
@@ -420,11 +421,9 @@ validate_pr_merge() {
   fi
 
 
-  local state base_branch has_checks checks
+  local state base_branch
   state=$(echo "$details" | jq -r '.state' 2>/dev/null) || return 1
   base_branch=$(echo "$details" | jq -r '.baseRefName' 2>/dev/null) || return 1
-  has_checks=$(echo "$details" | jq '.statusCheckRollup | length > 0' 2>/dev/null)
-  checks=$(echo "$details" | jq -r '.statusCheckRollup[]?.conclusion // "PENDING"' 2>/dev/null)
 
 
   # Check 1: Must be MERGED (not CLOSED)
@@ -441,21 +440,8 @@ validate_pr_merge() {
   fi
 
 
-  # Only validate CI checks if checks exist (repos without CI skip this)
-  if [[ "$has_checks" == "true" ]]; then
-    # Check 3: All CI checks must pass
-    if echo "$checks" | grep -qE "FAILURE|CANCELLED"; then
-      log_warn "PR #$pr has failing CI checks"
-      return 1
-    fi
-
-    # Check 4: CI checks must be complete (not pending)
-    if echo "$checks" | grep -q "PENDING"; then
-      log_warn "PR #$pr CI checks still pending"
-      return 1
-    fi
-  fi
-
+  # Once PR is merged, proceed with cleanup regardless of CI status.
+  # The merge has already happened; CI validation is for pre-merge safety.
   return 0
 }
 
