@@ -412,7 +412,7 @@ async function generateContextUpdate(opts: {
   const claudeCmd = process.env.CLAUDE_CMD || 'claude';
   const result = await callClaude(prompt, {
     mode: 'stream',
-    claudeCmd,
+    cliCmd: claudeCmd,
     cliFlags: [
       '--tools', '',
       '--append-system-prompt',

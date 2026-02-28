@@ -147,11 +147,12 @@ export function inferChangeKind(prDiff?: string): ChangeKind {
   let newFiles = 0;
   let modifiedFiles = 0;
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     // Look for git diff headers indicating new files
     if (line.startsWith('diff --git')) {
       // Check if next few lines indicate a new file
-      const nextLineIdx = lines.indexOf(line) + 1;
+      const nextLineIdx = i + 1;
       if (nextLineIdx < lines.length) {
         const nextLine = lines[nextLineIdx];
         // "new file mode" indicates a new file
