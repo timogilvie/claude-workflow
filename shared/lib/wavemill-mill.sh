@@ -493,10 +493,6 @@ cleanup_stale_tasks() {
   stale_issues=$(jq -r '.tasks | to_entries[] | .key' "$STATE_FILE" 2>/dev/null)
   [[ -z "$stale_issues" ]] && return 0
 
-  # Check if the tmux session from a previous run is still alive
-  local session_alive=false
-  tmux has-session -t "$SESSION" 2>/dev/null && session_alive=true
-
   local cleaned=0
   while IFS= read -r issue; do
     [[ -z "$issue" ]] && continue
@@ -537,13 +533,8 @@ cleanup_stale_tasks() {
       fi
     fi
 
-    # If no tmux session exists, orphaned tasks should be removed from state
-    # (worktree+branch preserved so user can resume manually if needed)
-    if [[ "$should_clean" == "false" ]] && [[ "$session_alive" == "false" ]]; then
-      should_clean=true
-      full_clean=false
-      reason="orphaned (no active session)"
-    fi
+    # Keep non-terminal tasks in state across restarts so the monitor can
+    # resume PR/state reconciliation after crashes.
 
     if [[ "$should_clean" == "true" ]]; then
       log "  Pruning $issue ($reason)"
@@ -1094,8 +1085,24 @@ validate_pr_merge() {
 
 linear_set_state() {
   local issue="$1" state="$2"
-  npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1 || \
-    log_warn "Failed to update Linear state for $issue to $state"
+  local stderr_file rc
+  stderr_file=$(mktemp) || { log_warn "Failed to update Linear state for $issue to $state (mktemp failed)"; return 0; }
+
+  if npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>"$stderr_file"; then
+    rm -f "$stderr_file"
+    return 0
+  fi
+
+  rc=$?
+  if [[ -s "$stderr_file" ]]; then
+    local err_line
+    err_line=$(tail -n 1 "$stderr_file")
+    log_warn "Failed to update Linear state for $issue to $state (exit $rc): $err_line"
+  else
+    log_warn "Failed to update Linear state for $issue to $state (exit $rc)"
+  fi
+  rm -f "$stderr_file"
+  return 0
 }
 
 linear_is_completed() {
@@ -1542,9 +1549,33 @@ INSTR_EOF
 # Parse initial tasks from file
 declare -A PR_BY_ISSUE BRANCH_BY_ISSUE SLUG_BY_ISSUE CLEANED
 
+# Rehydrate tracked tasks from persisted state first so restarts continue
+# monitoring prior in-flight issues.
+if [[ -f "$STATE_FILE" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    IFS='|' read -r ISSUE SLUG BRANCH PR <<<"$line"
+    [[ -z "$ISSUE" ]] && continue
+
+    if [[ -z "$SLUG" && -n "$BRANCH" ]]; then
+      SLUG="${BRANCH#task/}"
+    fi
+    if [[ -z "$BRANCH" && -n "$SLUG" ]]; then
+      BRANCH="task/${SLUG}"
+    fi
+
+    [[ -z "$SLUG" || -z "$BRANCH" ]] && continue
+    BRANCH_BY_ISSUE["$ISSUE"]="$BRANCH"
+    SLUG_BY_ISSUE["$ISSUE"]="$SLUG"
+    [[ -n "$PR" ]] && PR_BY_ISSUE["$ISSUE"]="$PR"
+  done < <(jq -r '.tasks | to_entries[] | "\(.key)|\(.value.slug // "")|\(.value.branch // "")|\(.value.pr // "")"' "$STATE_FILE" 2>/dev/null)
+fi
+
+# Overlay tasks selected in this launch.
 while IFS= read -r line; do
   [[ -z "$line" ]] && continue
   IFS='|' read -r ISSUE SLUG TITLE <<<"$line"
+  [[ -z "$ISSUE" || -z "$SLUG" ]] && continue
   BRANCH_BY_ISSUE["$ISSUE"]="task/${SLUG}"
   SLUG_BY_ISSUE["$ISSUE"]="$SLUG"
 done < "$TASKS_FILE"
