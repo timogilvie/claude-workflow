@@ -319,7 +319,7 @@ export function analyzeDirectoryStructure(repoDir: string): DirectoryStructure {
  * Extract gotchas from CLAUDE.md or README.md if they exist.
  */
 export function extractGotchas(repoDir: string): string[] {
-  const gotchas: string[] = [];
+  const gotchas = new Set<string>();
   const candidates = [join(repoDir, 'CLAUDE.md'), join(repoDir, 'README.md')];
 
   for (const filePath of candidates) {
@@ -329,18 +329,34 @@ export function extractGotchas(repoDir: string): string[] {
       const content = readFileSync(filePath, 'utf-8');
 
       // Look for sections that might contain gotchas
-      const gotchaPatterns = [
-        /(?:^|\n)##?\s*(?:Known Issues|Gotchas|Caveats|Limitations|Important Notes?)[^\n]*\n([\s\S]*?)(?=\n##?\s|\n$|$)/gim,
-        /(?:^|\n)[-*]\s*(?:⚠️|WARNING|IMPORTANT|NOTE):?\s*([^\n]+)/gim,
-      ];
+      const sectionPattern =
+        /(?:^|\n)\s*##?\s*(?:Known Issues|Gotchas|Caveats|Limitations|Important Notes?)[^\n]*\n([\s\S]*?)(?=\n\s*##?\s|$)/gi;
+      let sectionMatch;
+      while ((sectionMatch = sectionPattern.exec(content)) !== null) {
+        const sectionContent = sectionMatch[1] || '';
+        const lines = sectionContent
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
 
-      for (const pattern of gotchaPatterns) {
-        let match;
-        while ((match = pattern.exec(content)) !== null) {
-          const extracted = match[1]?.trim();
-          if (extracted && extracted.length > 10 && extracted.length < 200) {
-            gotchas.push(extracted);
+        for (const line of lines) {
+          const cleaned = line
+            .replace(/^[-*]\s+/, '')
+            .replace(/^\d+\.\s+/, '')
+            .trim();
+          if (cleaned.length >= 10 && cleaned.length <= 200) {
+            gotchas.add(cleaned);
           }
+        }
+      }
+
+      const inlineWarningPattern =
+        /(?:^|\n)\s*[-*]\s*(?:⚠️|WARNING|IMPORTANT|NOTE):?\s*([^\n]+)/gi;
+      let warningMatch;
+      while ((warningMatch = inlineWarningPattern.exec(content)) !== null) {
+        const extracted = warningMatch[1]?.trim();
+        if (extracted && extracted.length >= 10 && extracted.length <= 200) {
+          gotchas.add(extracted);
         }
       }
     } catch {
@@ -348,7 +364,7 @@ export function extractGotchas(repoDir: string): string[] {
     }
   }
 
-  return gotchas.slice(0, 5); // Limit to 5 gotchas
+  return Array.from(gotchas).slice(0, 5); // Limit to 5 gotchas
 }
 
 // ────────────────────────────────────────────────────────────────
