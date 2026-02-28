@@ -83,7 +83,7 @@ const main = async () => {
     console.log(`Branch (planned): ${state.branch}`);
     console.log(`Decomposition plan path: ${planPath}`);
     console.log('\nNext steps:');
-    console.log(`- Run plan decomposition: npx tsx ~/.claude/tools/plan-workflow.ts "${project}"`);
+    console.log(`- Run plan decomposition: wavemill plan`);
     console.log(`- Save plan to ${planPath} and mark plan complete: node codex/src/commands/workflow.js complete ${epicName} --phase plan`);
     console.log(`- Implement sub-issues per plan; complete implement/validate phases via workflow CLI.`);
   } catch (err) {
