@@ -26,6 +26,8 @@ import { analyzeTaskContext } from './task-context-analyzer.ts';
 import { analyzeRepoContext } from './repo-context-analyzer.ts';
 import { callClaude } from './llm-cli.js';
 import { loadWavemillConfig } from './config.ts';
+import { detectSubsystems } from './subsystem-detector.ts';
+import { updateAffectedSubsystems } from './subsystem-updater.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -377,9 +379,67 @@ async function updateProjectContext(
     appendContextUpdate(contextPath, summary);
 
     console.log('Project context: updated successfully');
+
+    // Update subsystem specs (cold memory)
+    await updateSubsystemSpecs(ctx, prDiff, issueContext, repoDir);
+
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`Project context: update failed — ${message}`);
+  }
+}
+
+/**
+ * Update subsystem specs after PR merge.
+ *
+ * Detects affected subsystems and updates their specifications.
+ * Non-blocking: failures log warnings but don't fail the workflow.
+ */
+async function updateSubsystemSpecs(
+  ctx: PostCompletionContext,
+  prDiff: string,
+  issueContext: string,
+  repoDir: string
+): Promise<void> {
+  const contextDir = join(repoDir, '.wavemill', 'context');
+
+  // Skip if context directory doesn't exist
+  if (!existsSync(contextDir)) {
+    console.log('Subsystem update: skipped (no subsystem specs found)');
+    return;
+  }
+
+  try {
+    // Detect subsystems
+    console.log('Subsystem update: detecting subsystems...');
+    const subsystems = detectSubsystems(repoDir, {
+      minFiles: 3,
+      useGitAnalysis: false, // Skip git analysis for speed
+      maxSubsystems: 20,
+    });
+
+    if (subsystems.length === 0) {
+      console.log('Subsystem update: no subsystems detected');
+      return;
+    }
+
+    // Extract issue title from context
+    const titleMatch = issueContext.match(/^#\s*[A-Z]+-\d+:\s*(.+)$/m);
+    const issueTitle = titleMatch ? titleMatch[1] : 'Unknown';
+
+    // Update affected subsystems
+    await updateAffectedSubsystems(subsystems, {
+      issueId: ctx.issueId || 'Unknown',
+      issueTitle,
+      prUrl: ctx.prUrl || '',
+      prDiff,
+      issueDescription: issueContext,
+      repoDir,
+    });
+
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Subsystem update: failed — ${message}`);
   }
 }
 
