@@ -10,7 +10,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { DifficultyBand, DifficultySignals, Stratum } from './eval-schema.ts';
 
@@ -212,7 +212,7 @@ export function detectTechStack(prDiff: string, repoDir?: string): string {
     try {
       const reqPath = resolve(repoDir, 'requirements.txt');
       if (existsSync(reqPath)) {
-        const reqContent = require('fs').readFileSync(reqPath, 'utf-8');
+        const reqContent = readFileSync(reqPath, 'utf-8');
         hasDjango = /django/i.test(reqContent);
       }
     } catch {
@@ -225,7 +225,7 @@ export function detectTechStack(prDiff: string, repoDir?: string): string {
     try {
       const pkgPath = resolve(repoDir, 'package.json');
       if (existsSync(pkgPath)) {
-        const pkgContent = require('fs').readFileSync(pkgPath, 'utf-8');
+        const pkgContent = readFileSync(pkgPath, 'utf-8');
         hasReact = /"react"/.test(pkgContent);
         hasVue = /"vue"/.test(pkgContent);
       }

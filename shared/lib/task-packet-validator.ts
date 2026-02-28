@@ -9,7 +9,12 @@
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 import { callClaude, parseJsonFromLLM } from './llm-cli.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 /**
  * Types of validation issues that can be detected

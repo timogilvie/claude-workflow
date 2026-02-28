@@ -158,7 +158,7 @@ function unwrapJsonEnvelope(raw: string): {
     const text = (data.result || raw).trim();
 
     // Extract usage if present
-    let usage: ClaudeCallResult['usage'] | undefined;
+    let usage: LLMCallResult['usage'] | undefined;
     if (data.usage) {
       const u = data.usage;
       const inputTokens =
