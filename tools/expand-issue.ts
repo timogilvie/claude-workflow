@@ -30,6 +30,8 @@ import {
 import { existsSync, readFileSync } from 'fs';
 import { createInterface } from 'readline';
 import { callClaude } from '../shared/lib/llm-cli.js';
+import { detectSubsystems } from '../shared/lib/subsystem-detector.ts';
+import { detectDriftForIssue, formatDriftWarning } from '../shared/lib/drift-detector.ts';
 
 dotenv.config({ quiet: true });
 
@@ -362,6 +364,45 @@ async function promptUser(question: string): Promise<boolean> {
   });
 }
 
+// Check for subsystem drift before expansion
+async function checkSubsystemDrift(repoPath: string, issueDescription: string): Promise<void> {
+  const contextDir = path.join(repoPath, '.wavemill', 'context');
+
+  // Skip if no subsystem specs exist
+  if (!existsSync(contextDir)) {
+    return;
+  }
+
+  try {
+    console.log('Checking for subsystem drift...');
+
+    // Detect subsystems
+    const subsystems = detectSubsystems(repoPath, {
+      minFiles: 3,
+      useGitAnalysis: false, // Skip git analysis for speed
+      maxSubsystems: 20,
+    });
+
+    if (subsystems.length === 0) {
+      return;
+    }
+
+    // Check for drift
+    const driftResult = detectDriftForIssue(issueDescription, subsystems, repoPath);
+
+    if (driftResult.hasDrift) {
+      console.log('');
+      console.log(formatDriftWarning(driftResult));
+      console.log('');
+    } else {
+      console.log(`✓ All ${driftResult.totalChecked} subsystem spec(s) are up to date\n`);
+    }
+  } catch (error) {
+    // Drift detection is non-blocking
+    console.warn(`⚠️  Drift detection failed: ${error.message}`);
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -436,6 +477,9 @@ Environment Variables:
 
     // Gather codebase context
     const codebaseContext = await gatherCodebaseContext(repoPath, issue.title);
+
+    // Check for subsystem drift before expansion
+    await checkSubsystemDrift(repoPath, issue.description || '');
 
     // Expand with Claude
     console.log('Expanding issue with Claude...\n');
