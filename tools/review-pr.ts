@@ -12,40 +12,19 @@
  *   npx tsx tools/review-pr.ts 42 --repo timogilvie/wavemill
  */
 
-import { readFileSync, existsSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { getPullRequest, getPullRequestDiff } from '../shared/lib/github.js';
-import { findTaskPacket, findPlan, gatherDesignContext } from '../shared/lib/review-context-gatherer.ts';
-import { callClaude, parseJsonFromLLM } from '../shared/lib/llm-cli.js';
-
-// ES module __dirname equivalent
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { findTaskPacket, findPlan, gatherDesignContext, analyzeDiffMetadata, type ReviewContext } from '../shared/lib/review-context-gatherer.ts';
+import { runReview, type ReviewResult, type ReviewFinding } from '../shared/lib/review-engine.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MODEL = 'claude-opus-4-6';
-const TIMEOUT_MS = 180_000; // 3 minutes for large diffs
+const TIMEOUT_MS = 180_000; // 3 minutes for large PR diffs
 
 // ────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────
-
-interface ReviewFinding {
-  severity: 'blocker' | 'warning';
-  location: string;
-  category: string;
-  description: string;
-}
-
-interface ReviewResult {
-  verdict: 'ready' | 'not_ready';
-  codeReviewFindings: ReviewFinding[];
-  uiFindings?: ReviewFinding[];
-}
 
 interface Args {
   prNumber: number;
@@ -88,7 +67,7 @@ Options:
   --help, -h          Show this help message
 
 Environment Variables:
-  REVIEW_MODEL    Override review model (default: ${DEFAULT_MODEL})
+  REVIEW_MODEL    Override review model (uses .wavemill-config.json if not set)
 
 Examples:
   # Review PR #42 in current repository
@@ -117,93 +96,8 @@ The review focuses on major issues:
 // Context Gathering
 // ────────────────────────────────────────────────────────────────
 
-// Note: Task packet and plan finding logic moved to shared/lib/review-context-gatherer.ts
-// We now use the shared implementations: findTaskPacket() and findPlan()
-
-// ────────────────────────────────────────────────────────────────
-// LLM Integration
-// ────────────────────────────────────────────────────────────────
-
-/**
- * Load review prompt template.
- */
-function loadReviewTemplate(): string {
-  const templatePath = join(__dirname, 'prompts', 'review.md');
-  return readFileSync(templatePath, 'utf-8');
-}
-
-/**
- * Build review prompt by substituting template parameters.
- */
-function buildReviewPrompt(
-  template: string,
-  diff: string,
-  plan: string | null,
-  taskPacket: string | null,
-  designContext: any | null
-): string {
-  let prompt = template;
-
-  // Substitute diff
-  prompt = prompt.replace('{{DIFF}}', diff);
-
-  // Substitute plan context
-  const planText = plan || 'No implementation plan available for this PR.';
-  prompt = prompt.replace('{{PLAN_CONTEXT}}', planText);
-
-  // Substitute task packet context
-  const taskPacketText = taskPacket || 'No task packet available for this PR.';
-  prompt = prompt.replace('{{TASK_PACKET_CONTEXT}}', taskPacketText);
-
-  // Substitute design context
-  if (designContext) {
-    const designText = JSON.stringify(designContext, null, 2);
-    prompt = prompt.replace('{{DESIGN_CONTEXT}}', designText);
-  } else {
-    prompt = prompt.replace('{{DESIGN_CONTEXT}}', 'null');
-  }
-
-  return prompt;
-}
-
-/**
- * Call Claude CLI with prompt.
- * Returns parsed JSON response.
- */
-async function callClaudeSync(prompt: string, model: string): Promise<ReviewResult> {
-  try {
-    const result = await callClaude(prompt, {
-      mode: 'sync',
-      model,
-      timeout: TIMEOUT_MS, // 180000
-      maxBuffer: 50 * 1024 * 1024,
-    });
-
-    if (!result.text) {
-      throw new Error('Empty response from Claude CLI');
-    }
-
-    // Parse review result from text
-    return parseReviewResult(result.text);
-  } catch (error) {
-    throw new Error(`Failed to call Claude: ${(error as Error).message}`);
-  }
-}
-
-/**
- * Parse review result from Claude's response.
- * Handles markdown code fences and extracts JSON.
- */
-function parseReviewResult(text: string): ReviewResult {
-  const parsed = parseJsonFromLLM<ReviewResult>(text);
-
-  // Validate the result has required fields
-  if (!parsed.verdict || !parsed.codeReviewFindings) {
-    throw new Error('Invalid review result: missing verdict or codeReviewFindings');
-  }
-
-  return parsed;
-}
+// Note: All review logic moved to shared/lib/review-engine.ts
+// This file now focuses on PR-specific operations: fetching from GitHub and displaying results
 
 // ────────────────────────────────────────────────────────────────
 // Output Formatting
@@ -335,7 +229,7 @@ async function main() {
   }
 
   const repoDir = process.cwd();
-  const model = process.env.REVIEW_MODEL || DEFAULT_MODEL;
+  const model = process.env.REVIEW_MODEL; // Optional override
 
   try {
     console.log(`\n🔍 Reviewing PR #${args.prNumber}...\n`);
@@ -353,32 +247,40 @@ async function main() {
     const { diff } = getPullRequestDiff(args.prNumber, { repo: args.repo });
     console.log(`   ${diff.split('\n').length} lines\n`);
 
-    // Find task packet and plan using shared implementations
+    // Gather context
     console.log('📋 Gathering context...');
     const taskPacket = findTaskPacket(pr.headRefName, repoDir);
     const plan = findPlan(pr.headRefName, repoDir);
+    const designContext = gatherDesignContext(repoDir);
     console.log(`   Task packet: ${taskPacket ? '✓ found' : '✗ not found'}`);
     console.log(`   Plan: ${plan ? '✓ found' : '✗ not found'}`);
-
-    // Gather design context
-    const designContext = gatherDesignContext(repoDir);
     console.log(`   Design context: ${designContext ? '✓ found' : '✗ not found'}`);
     console.log('');
 
-    // Load review template
-    console.log('📝 Loading review template...');
-    const template = loadReviewTemplate();
-    console.log('   ✓ Loaded\n');
+    // Analyze diff metadata
+    const { files, lineCount, hasUiChanges } = analyzeDiffMetadata(diff);
 
-    // Build prompt
-    console.log('🔨 Building review prompt...');
-    const prompt = buildReviewPrompt(template, diff, plan, taskPacket, designContext);
-    console.log('   ✓ Ready\n');
+    // Build review context
+    const context: ReviewContext = {
+      diff,
+      taskPacket,
+      plan,
+      designContext,
+      metadata: {
+        branch: pr.headRefName,
+        files,
+        lineCount,
+        hasUiChanges,
+      },
+    };
 
-    // Call Claude
-    console.log(`🤖 Running review with ${model}...`);
+    // Run review using shared engine
+    console.log('🤖 Running review...');
     console.log('   (this may take 1-3 minutes for large diffs)\n');
-    const result = await callClaudeSync(prompt, model);
+    const result = await runReview(context, repoDir, {
+      model, // Uses config if undefined
+      timeout: TIMEOUT_MS, // 180s for large PR diffs
+    });
 
     // Display results
     displayResults(result, args.prNumber, pr.title);
