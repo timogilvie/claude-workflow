@@ -124,7 +124,7 @@ else
     CRITICAL_FUNCTIONS=(
       log log_error log_warn
       save_task_state remove_task_state set_task_phase get_task_phase
-      find_pr_for_branch validate_pr_merge
+      find_pr_for_branch pr_state validate_pr_merge
       linear_set_state linear_is_completed
       check_plan_approved
       fetch_candidates filter_active_issues
@@ -159,6 +159,12 @@ else
     fail "monitor find_pr_for_branch is missing --state all"
   fi
 
+  if echo "$HEREDOC_CONTENT" | grep -qE '^pr_state\(\) \{'; then
+    pass "monitor defines pr_state helper"
+  else
+    fail "monitor is missing pr_state helper definition"
+  fi
+
   if echo "$HEREDOC_CONTENT" | grep -q 'set-issue-state.ts'; then
     pass "monitor linear_set_state uses set-issue-state.ts"
   else
@@ -180,6 +186,26 @@ else
     fail "monitor linear_set_state must not return 1 (would exit under set -e)"
   else
     pass "monitor linear_set_state failures are non-fatal"
+  fi
+
+  MONITOR_LOOP_BLOCK=$(echo "$HEREDOC_CONTENT" | awk '
+    /^while :; do$/ { in_loop=1 }
+    in_loop { print }
+    in_loop && /^done$/ { exit }
+  ')
+  if echo "$MONITOR_LOOP_BLOCK" | grep -qE '^[[:space:]]*local[[:space:]]'; then
+    fail "monitor loop contains top-level local declarations (invalid outside functions)"
+  else
+    pass "monitor loop has no top-level local declarations"
+  fi
+
+  if echo "$MONITOR_LOOP_BLOCK" | grep -q 'monitor_issue_state "$ISSUE"' \
+    && echo "$MONITOR_LOOP_BLOCK" | grep -q 'issue_rc=$?' \
+    && echo "$MONITOR_LOOP_BLOCK" | grep -q 'set +e' \
+    && echo "$MONITOR_LOOP_BLOCK" | grep -q 'set -e'; then
+    pass "monitor loop guards per-issue processing with explicit error handling"
+  else
+    fail "monitor loop is missing guarded per-issue processing checks"
   fi
 fi
 
