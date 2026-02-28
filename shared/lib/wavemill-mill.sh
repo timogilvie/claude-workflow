@@ -1380,21 +1380,10 @@ launch_task() {
 
     # Copy details file to worktree for easy access
     local details_file="/tmp/${SESSION}-${issue}-taskpacket-details.md"
+    local details_context
     if [[ -f "$details_file" ]]; then
       cp "$details_file" "$feature_dir/task-packet-details.md"
-    fi
-
-    local prompt_file="/tmp/${SESSION}-${issue}-plan-prompt.txt"
-    cat > "$prompt_file" <<PLAN_PROMPT_EOF
-You are working on: $title ($issue)
-
-Repo worktree: $wt_dir
-Branch: $branch
-Base branch: $BASE_BRANCH
-
-${packet_content:+Issue Description (Brief Overview):
-$packet_content
-
+      details_context=$(cat <<DETAILS_EOF
 📖 Full Details: Comprehensive task packet with all 9 sections available at:
    features/$slug/task-packet-details.md
 
@@ -1408,7 +1397,38 @@ Read specific sections on-demand as you plan and implement:
 - Section 7: Definition of Done
 - Section 8: Rollback Plan
 - Section 9: Proposed Labels
-}
+DETAILS_EOF
+)
+    else
+      details_context=$(cat <<'DETAILS_EOF'
+NOTE: Task packet details file was not pre-seeded in this worktree.
+Plan from `selected-task.json` plus direct codebase analysis.
+DETAILS_EOF
+)
+    fi
+
+    local issue_context
+    if [[ -n "$packet_content" ]]; then
+      issue_context=$(cat <<ISSUE_CONTEXT_EOF
+Issue Description (Brief Overview):
+$packet_content
+
+$details_context
+ISSUE_CONTEXT_EOF
+)
+    else
+      issue_context="$details_context"
+    fi
+
+    local prompt_file="/tmp/${SESSION}-${issue}-plan-prompt.txt"
+    cat > "$prompt_file" <<PLAN_PROMPT_EOF
+You are working on: $title ($issue)
+
+Repo worktree: $wt_dir
+Branch: $branch
+Base branch: $BASE_BRANCH
+
+$issue_context
 ---
 
 ## Your Workflow
@@ -1474,10 +1494,38 @@ PLAN_PROMPT_EOF
     # Skip mode — pipe instructions to agent
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     local details_file="/tmp/${SESSION}-${issue}-taskpacket-details.md"
+    local details_context
 
     # Copy details file to worktree root for easy access
     if [[ -f "$details_file" ]]; then
       cp "$details_file" "$wt_dir/task-packet-details.md"
+      details_context=$(cat <<DETAILS_EOF
+📖 Full Details: Read task-packet-details.md in the repo root for:
+- Complete implementation approach (Section 3)
+- All success criteria with [REQ-FX] tags (Section 4)
+- Concrete validation steps with test scenarios (Section 6)
+- Implementation constraints and rules (Section 5)
+DETAILS_EOF
+)
+    else
+      details_context=$(cat <<'DETAILS_EOF'
+NOTE: Task packet details file was not pre-seeded in this worktree.
+Implement from the issue description plus direct codebase analysis.
+DETAILS_EOF
+)
+    fi
+
+    local issue_context
+    if [[ -n "$packet_content" ]]; then
+      issue_context=$(cat <<ISSUE_CONTEXT_EOF
+Issue Description (Brief Overview):
+$packet_content
+
+$details_context
+ISSUE_CONTEXT_EOF
+)
+    else
+      issue_context="$details_context"
     fi
 
     cat > "$instr_file" <<INSTR_EOF
@@ -1487,15 +1535,7 @@ Repo worktree: $wt_dir
 Branch: $branch
 Base branch: $BASE_BRANCH
 
-${packet_content:+Issue Description (Brief Overview):
-$packet_content
-
-📖 Full Details: Read task-packet-details.md in the repo root for:
-- Complete implementation approach (Section 3)
-- All success criteria with [REQ-FX] tags (Section 4)
-- Concrete validation steps with test scenarios (Section 6)
-- Implementation constraints and rules (Section 5)
-}
+$issue_context
 
 Goal:
 - Implement the feature/fix described by the issue and title.
