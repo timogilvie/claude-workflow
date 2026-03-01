@@ -15,6 +15,7 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { RepoContext, RepoVisibility, RepoSize } from './eval-schema.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { parsePackageJson } from './package-json-parser.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Language Detection
@@ -151,7 +152,7 @@ const FRAMEWORK_MARKERS: Record<string, string[]> = {
 /**
  * Detect frameworks used in the repository.
  */
-export function detectFrameworks(repoDir: string): string[] {
+export function detectFrameworks(repoDir: string, packageJson?: any): string[] {
   const frameworks: Set<string> = new Set();
 
   // Check for file markers
@@ -164,22 +165,19 @@ export function detectFrameworks(repoDir: string): string[] {
     }
   }
 
-  // Check package.json for JS/TS frameworks
-  const packageJsonPath = join(repoDir, 'package.json');
-  if (existsSync(packageJsonPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  // Parse package.json if not provided
+  const pkg = packageJson ?? parsePackageJson(repoDir);
 
-      if (deps.next) frameworks.add('Next.js');
-      if (deps.react) frameworks.add('React');
-      if (deps.vue) frameworks.add('Vue');
-      if (deps['@angular/core']) frameworks.add('Angular');
-      if (deps.svelte) frameworks.add('Svelte');
-      if (deps.express) frameworks.add('Express');
-    } catch {
-      // Malformed package.json
-    }
+  // Check package.json for JS/TS frameworks
+  if (pkg.dependencies || pkg.devDependencies) {
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+    if (deps.next) frameworks.add('Next.js');
+    if (deps.react) frameworks.add('React');
+    if (deps.vue) frameworks.add('Vue');
+    if (deps['@angular/core']) frameworks.add('Angular');
+    if (deps.svelte) frameworks.add('Svelte');
+    if (deps.express) frameworks.add('Express');
   }
 
   // Check requirements.txt for Python frameworks
@@ -214,27 +212,24 @@ const BUILD_SYSTEM_MARKERS: Record<string, string> = {
   bazel: 'BUILD',
 };
 
-export function detectBuildSystem(repoDir: string): string | undefined {
+export function detectBuildSystem(repoDir: string, packageJson?: any): string | undefined {
   for (const [system, file] of Object.entries(BUILD_SYSTEM_MARKERS)) {
     if (existsSync(join(repoDir, file))) {
       return system;
     }
   }
 
-  // Check package.json scripts for build tools
-  const packageJsonPath = join(repoDir, 'package.json');
-  if (existsSync(packageJsonPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  // Parse package.json if not provided
+  const pkg = packageJson ?? parsePackageJson(repoDir);
 
-      if (deps.webpack) return 'webpack';
-      if (deps.vite) return 'vite';
-      if (deps.rollup) return 'rollup';
-      if (deps.parcel) return 'parcel';
-    } catch {
-      // Malformed package.json
-    }
+  // Check package.json scripts for build tools
+  if (pkg.dependencies || pkg.devDependencies) {
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+    if (deps.webpack) return 'webpack';
+    if (deps.vite) return 'vite';
+    if (deps.rollup) return 'rollup';
+    if (deps.parcel) return 'parcel';
   }
 
   return undefined;
@@ -278,7 +273,7 @@ const TEST_FRAMEWORK_MARKERS: Record<string, string[]> = {
   junit: ['pom.xml'],
 };
 
-export function detectTestFrameworks(repoDir: string): string[] {
+export function detectTestFrameworks(repoDir: string, packageJson?: any): string[] {
   const frameworks: Set<string> = new Set();
 
   // Check for config file markers
@@ -291,21 +286,18 @@ export function detectTestFrameworks(repoDir: string): string[] {
     }
   }
 
-  // Check package.json for JS test frameworks
-  const packageJsonPath = join(repoDir, 'package.json');
-  if (existsSync(packageJsonPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  // Parse package.json if not provided
+  const pkg = packageJson ?? parsePackageJson(repoDir);
 
-      if (deps.jest) frameworks.add('jest');
-      if (deps.vitest) frameworks.add('vitest');
-      if (deps.mocha) frameworks.add('mocha');
-      if (deps['@playwright/test']) frameworks.add('playwright');
-      if (deps.cypress) frameworks.add('cypress');
-    } catch {
-      // Malformed package.json
-    }
+  // Check package.json for JS test frameworks
+  if (pkg.dependencies || pkg.devDependencies) {
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+    if (deps.jest) frameworks.add('jest');
+    if (deps.vitest) frameworks.add('vitest');
+    if (deps.mocha) frameworks.add('mocha');
+    if (deps['@playwright/test']) frameworks.add('playwright');
+    if (deps.cypress) frameworks.add('cypress');
   }
 
   return Array.from(frameworks);
@@ -341,7 +333,7 @@ export function detectCiProvider(repoDir: string): string | undefined {
  *
  * Uses git for accuracy when possible, falls back to filesystem scan.
  */
-export function computeRepoSize(repoDir: string): RepoSize {
+export function computeRepoSize(repoDir: string, packageJson?: any): RepoSize {
   let fileCount = 0;
   let loc = 0;
   let dependencyCount = 0;
@@ -377,18 +369,13 @@ export function computeRepoSize(repoDir: string): RepoSize {
     loc = fileCount * 50; // Rough estimate
   }
 
+  // Parse package.json if not provided
+  const pkg = packageJson ?? parsePackageJson(repoDir);
+
   // Count dependencies
-  const packageJsonPath = join(repoDir, 'package.json');
-  if (existsSync(packageJsonPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-      dependencyCount =
-        Object.keys(pkg.dependencies || {}).length +
-        Object.keys(pkg.devDependencies || {}).length;
-    } catch {
-      // Malformed package.json
-    }
-  }
+  dependencyCount =
+    Object.keys(pkg.dependencies || {}).length +
+    Object.keys(pkg.devDependencies || {}).length;
 
   return { fileCount, loc, dependencyCount };
 }
@@ -397,17 +384,12 @@ export function computeRepoSize(repoDir: string): RepoSize {
 // Monorepo Detection
 // ────────────────────────────────────────────────────────────────
 
-export function isMonorepo(repoDir: string): boolean {
-  // Check for workspace markers
-  const packageJsonPath = join(repoDir, 'package.json');
-  if (existsSync(packageJsonPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-      if (pkg.workspaces) return true;
-    } catch {
-      // Malformed package.json
-    }
-  }
+export function isMonorepo(repoDir: string, packageJson?: any): boolean {
+  // Parse package.json if not provided
+  const pkg = packageJson ?? parsePackageJson(repoDir);
+
+  // Check for workspace markers in package.json
+  if (pkg.workspaces) return true;
 
   // Check for lerna
   if (existsSync(join(repoDir, 'lerna.json'))) return true;
@@ -497,14 +479,17 @@ export function detectRepoVisibility(repoDir: string): RepoVisibility {
  * This is the main entry point for repo context analysis.
  */
 export function analyzeRepoContext(repoDir: string): RepoContext {
+  // Parse package.json once for all detectors
+  const packageJson = parsePackageJson(repoDir);
+
   const { primaryLanguage, languages } = detectLanguages(repoDir);
-  const frameworks = detectFrameworks(repoDir);
-  const buildSystem = detectBuildSystem(repoDir);
+  const frameworks = detectFrameworks(repoDir, packageJson);
+  const buildSystem = detectBuildSystem(repoDir, packageJson);
   const packageManager = detectPackageManager(repoDir);
-  const testFrameworks = detectTestFrameworks(repoDir);
+  const testFrameworks = detectTestFrameworks(repoDir, packageJson);
   const ciProvider = detectCiProvider(repoDir);
-  const repoSize = computeRepoSize(repoDir);
-  const monorepo = isMonorepo(repoDir);
+  const repoSize = computeRepoSize(repoDir, packageJson);
+  const monorepo = isMonorepo(repoDir, packageJson);
   const repoId = computeRepoId(repoDir);
   const repoVisibility = detectRepoVisibility(repoDir);
 
