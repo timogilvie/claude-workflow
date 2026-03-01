@@ -465,6 +465,30 @@ async function updateSubsystemSpecs(
     const titleMatch = issueContext.match(/^#\s*[A-Z]+-\d+:\s*(.+)$/m);
     const issueTitle = titleMatch ? titleMatch[1] : 'Unknown';
 
+    // Detect affected subsystems before updating
+    const { detectAffectedSubsystems } = await import('./subsystem-mapper.ts');
+    const affectedSubsystems = detectAffectedSubsystems(prDiff, subsystems, repoDir);
+
+    // Knowledge gap detection: warn if PR has significant changes but no subsystems matched
+    if (affectedSubsystems.length === 0) {
+      const prSize = prDiff.split('\n').length;
+      if (prSize > 100) {
+        console.log('');
+        console.log('⚠️  KNOWLEDGE GAP: No subsystem specs matched this PR');
+        console.log(`   PR has ${prSize} lines of changes, but no subsystem docs were updated`);
+        console.log('   This may indicate:');
+        console.log('   - New subsystem(s) introduced in this PR');
+        console.log('   - Subsystem specs are incomplete or missing');
+        console.log('');
+        console.log('   Recommendation: Run the following to create/update subsystem docs:');
+        console.log('     wavemill context init --force');
+        console.log('');
+        console.log('   This enables "persistent downstream acceleration" for future tasks');
+        console.log('   (per Codified Context paper, Case Study 3)');
+        console.log('');
+      }
+    }
+
     // Update affected subsystems
     await updateAffectedSubsystems(subsystems, {
       issueId: ctx.issueId || 'Unknown',
