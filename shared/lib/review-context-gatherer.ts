@@ -10,6 +10,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { parsePackageJson } from './package-json-parser.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -328,6 +329,9 @@ export function gatherDesignContext(
     return null;
   }
 
+  // Parse package.json once for component library and Storybook detection
+  const packageJson = parsePackageJson(repoDir);
+
   const context: DesignContext = {};
   let foundAny = false;
 
@@ -385,38 +389,32 @@ export function gatherDesignContext(
   }
 
   // 3. Detect component library from package.json
-  const packageJsonPath = join(repoDir, 'package.json');
-  if (existsSync(packageJsonPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  if (packageJson.dependencies || packageJson.devDependencies) {
+    const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
 
-      // Check for common component libraries
-      if (deps['@radix-ui/react-primitive'] || deps['@radix-ui/react-avatar']) {
-        const version = deps['@radix-ui/react-primitive'] || deps['@radix-ui/react-avatar'];
-        context.componentLibrary = `Radix UI ${version}`;
-        foundAny = true;
-      } else if (deps['@headlessui/react'] || deps['@headlessui/vue']) {
-        const version = deps['@headlessui/react'] || deps['@headlessui/vue'];
-        context.componentLibrary = `Headless UI ${version}`;
-        foundAny = true;
-      } else if (deps['@mui/material']) {
-        context.componentLibrary = `Material UI ${deps['@mui/material']}`;
-        foundAny = true;
-      } else if (deps.antd) {
-        context.componentLibrary = `Ant Design ${deps.antd}`;
-        foundAny = true;
-      }
-
-      // Check for shadcn/ui (identified by components.json)
-      const componentsJsonPath = join(repoDir, 'components.json');
-      if (existsSync(componentsJsonPath)) {
-        context.componentLibrary = 'shadcn/ui';
-        foundAny = true;
-      }
-    } catch {
-      // Malformed package.json
+    // Check for common component libraries
+    if (deps['@radix-ui/react-primitive'] || deps['@radix-ui/react-avatar']) {
+      const version = deps['@radix-ui/react-primitive'] || deps['@radix-ui/react-avatar'];
+      context.componentLibrary = `Radix UI ${version}`;
+      foundAny = true;
+    } else if (deps['@headlessui/react'] || deps['@headlessui/vue']) {
+      const version = deps['@headlessui/react'] || deps['@headlessui/vue'];
+      context.componentLibrary = `Headless UI ${version}`;
+      foundAny = true;
+    } else if (deps['@mui/material']) {
+      context.componentLibrary = `Material UI ${deps['@mui/material']}`;
+      foundAny = true;
+    } else if (deps.antd) {
+      context.componentLibrary = `Ant Design ${deps.antd}`;
+      foundAny = true;
     }
+  }
+
+  // Check for shadcn/ui (identified by components.json)
+  const componentsJsonPath = join(repoDir, 'components.json');
+  if (existsSync(componentsJsonPath)) {
+    context.componentLibrary = 'shadcn/ui';
+    foundAny = true;
   }
 
   // 4. Scan for CSS variables in global stylesheets
@@ -473,17 +471,12 @@ export function gatherDesignContext(
   if (existsSync(storybookDir)) {
     context.storybook = true;
     foundAny = true;
-  } else if (existsSync(packageJsonPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  } else if (packageJson.dependencies || packageJson.devDependencies) {
+    const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
 
-      if (deps['@storybook/react'] || deps['@storybook/vue'] || deps.storybook) {
-        context.storybook = true;
-        foundAny = true;
-      }
-    } catch {
-      // Continue
+    if (deps['@storybook/react'] || deps['@storybook/vue'] || deps.storybook) {
+      context.storybook = true;
+      foundAny = true;
     }
   }
 

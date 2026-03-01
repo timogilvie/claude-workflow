@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { parsePackageJson } from './package-json-parser.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -44,36 +45,33 @@ export interface ConventionAnalysis {
 /**
  * Detect state management patterns by scanning for common libraries and patterns.
  */
-export function detectStateManagement(repoDir: string): string | undefined {
-  const packageJsonPath = join(repoDir, 'package.json');
-  if (!existsSync(packageJsonPath)) return undefined;
+export function detectStateManagement(repoDir: string, packageJson?: any): string | undefined {
+  // Parse package.json if not provided
+  const pkg = packageJson ?? parsePackageJson(repoDir);
 
-  try {
-    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  if (!pkg.dependencies && !pkg.devDependencies) return undefined;
 
-    if (deps.redux || deps['@reduxjs/toolkit']) return 'Redux Toolkit';
-    if (deps.zustand) return 'Zustand';
-    if (deps.jotai) return 'Jotai';
-    if (deps.recoil) return 'Recoil';
-    if (deps.mobx) return 'MobX';
-    if (deps.xstate) return 'XState';
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 
-    // Check for React Context usage
-    if (deps.react) {
-      try {
-        const contextFiles = execShellCommand(
-          'git ls-files | grep -E "\\.(tsx?|jsx?)$" | xargs grep -l "createContext\\|useContext" 2>/dev/null | head -3',
-          { encoding: 'utf-8', cwd: repoDir }
-        ).trim();
+  if (deps.redux || deps['@reduxjs/toolkit']) return 'Redux Toolkit';
+  if (deps.zustand) return 'Zustand';
+  if (deps.jotai) return 'Jotai';
+  if (deps.recoil) return 'Recoil';
+  if (deps.mobx) return 'MobX';
+  if (deps.xstate) return 'XState';
 
-        if (contextFiles) return 'React Context';
-      } catch {
-        // No context usage found
-      }
+  // Check for React Context usage
+  if (deps.react) {
+    try {
+      const contextFiles = execShellCommand(
+        'git ls-files | grep -E "\\.(tsx?|jsx?)$" | xargs grep -l "createContext\\|useContext" 2>/dev/null | head -3',
+        { encoding: 'utf-8', cwd: repoDir }
+      ).trim();
+
+      if (contextFiles) return 'React Context';
+    } catch {
+      // No context usage found
     }
-  } catch {
-    // package.json parsing failed
   }
 
   return undefined;
@@ -82,33 +80,30 @@ export function detectStateManagement(repoDir: string): string | undefined {
 /**
  * Detect API client patterns.
  */
-export function detectApiClient(repoDir: string): string | undefined {
-  const packageJsonPath = join(repoDir, 'package.json');
-  if (!existsSync(packageJsonPath)) return undefined;
+export function detectApiClient(repoDir: string, packageJson?: any): string | undefined {
+  // Parse package.json if not provided
+  const pkg = packageJson ?? parsePackageJson(repoDir);
 
+  if (!pkg.dependencies && !pkg.devDependencies) return undefined;
+
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+  if (deps.axios) return 'Axios';
+  if (deps['@tanstack/react-query'] || deps['react-query']) return 'React Query + fetch';
+  if (deps.swr) return 'SWR';
+  if (deps['apollo-client'] || deps['@apollo/client']) return 'Apollo Client (GraphQL)';
+  if (deps.urql) return 'urql (GraphQL)';
+
+  // Check for native fetch usage
   try {
-    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    const fetchFiles = execShellCommand(
+      'git ls-files | grep -E "\\.(tsx?|jsx?)$" | xargs grep -l "\\bfetch(" 2>/dev/null | head -1',
+      { encoding: 'utf-8', cwd: repoDir }
+    ).trim();
 
-    if (deps.axios) return 'Axios';
-    if (deps['@tanstack/react-query'] || deps['react-query']) return 'React Query + fetch';
-    if (deps.swr) return 'SWR';
-    if (deps['apollo-client'] || deps['@apollo/client']) return 'Apollo Client (GraphQL)';
-    if (deps.urql) return 'urql (GraphQL)';
-
-    // Check for native fetch usage
-    try {
-      const fetchFiles = execShellCommand(
-        'git ls-files | grep -E "\\.(tsx?|jsx?)$" | xargs grep -l "\\bfetch(" 2>/dev/null | head -1',
-        { encoding: 'utf-8', cwd: repoDir }
-      ).trim();
-
-      if (fetchFiles) return 'Native fetch';
-    } catch {
-      // No fetch usage
-    }
+    if (fetchFiles) return 'Native fetch';
   } catch {
-    // package.json parsing failed
+    // No fetch usage
   }
 
   return undefined;
@@ -117,12 +112,11 @@ export function detectApiClient(repoDir: string): string | undefined {
 /**
  * Detect styling approach.
  */
-export function detectStyling(repoDir: string): string | undefined {
-  const packageJsonPath = join(repoDir, 'package.json');
-  if (!existsSync(packageJsonPath)) return undefined;
+export function detectStyling(repoDir: string, packageJson?: any): string | undefined {
+  // Parse package.json if not provided
+  const pkg = packageJson ?? parsePackageJson(repoDir);
 
-  try {
-    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
+  if (pkg.dependencies || pkg.devDependencies) {
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 
     if (deps.tailwindcss) return 'Tailwind CSS';
@@ -130,32 +124,30 @@ export function detectStyling(repoDir: string): string | undefined {
     if (deps['@emotion/react'] || deps['@emotion/styled']) return 'Emotion';
     if (deps['@mui/material']) return 'Material-UI';
     if (deps['@chakra-ui/react']) return 'Chakra UI';
+  }
 
-    // Check for CSS Modules
-    try {
-      const cssModules = execShellCommand(
-        'git ls-files | grep -E "\\.module\\.(css|scss|sass)$" | head -1',
-        { encoding: 'utf-8', cwd: repoDir }
-      ).trim();
+  // Check for CSS Modules
+  try {
+    const cssModules = execShellCommand(
+      'git ls-files | grep -E "\\.module\\.(css|scss|sass)$" | head -1',
+      { encoding: 'utf-8', cwd: repoDir }
+    ).trim();
 
-      if (cssModules) return 'CSS Modules';
-    } catch {
-      // No CSS modules
-    }
-
-    // Check for plain CSS/SCSS
-    try {
-      const cssFiles = execShellCommand(
-        'git ls-files | grep -E "\\.(css|scss|sass)$" | head -1',
-        { encoding: 'utf-8', cwd: repoDir }
-      ).trim();
-
-      if (cssFiles) return 'CSS/SCSS';
-    } catch {
-      // No CSS files
-    }
+    if (cssModules) return 'CSS Modules';
   } catch {
-    // package.json parsing failed
+    // No CSS modules
+  }
+
+  // Check for plain CSS/SCSS
+  try {
+    const cssFiles = execShellCommand(
+      'git ls-files | grep -E "\\.(css|scss|sass)$" | head -1',
+      { encoding: 'utf-8', cwd: repoDir }
+    ).trim();
+
+    if (cssFiles) return 'CSS/SCSS';
+  } catch {
+    // No CSS files
   }
 
   return undefined;
@@ -222,7 +214,7 @@ export function detectTestPatterns(repoDir: string): string[] {
 /**
  * Detect error handling patterns.
  */
-export function detectErrorHandling(repoDir: string): string | undefined {
+export function detectErrorHandling(repoDir: string, packageJson?: any): string | undefined {
   try {
     // Check for error boundary usage (React)
     const errorBoundary = execShellCommand(
@@ -232,10 +224,11 @@ export function detectErrorHandling(repoDir: string): string | undefined {
 
     if (errorBoundary) return 'React Error Boundaries';
 
+    // Parse package.json if not provided
+    const pkg = packageJson ?? parsePackageJson(repoDir);
+
     // Check for Sentry
-    const packageJsonPath = join(repoDir, 'package.json');
-    if (existsSync(packageJsonPath)) {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
+    if (pkg.dependencies || pkg.devDependencies) {
       const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 
       if (deps['@sentry/react'] || deps['@sentry/node']) return 'Sentry';
@@ -376,21 +369,24 @@ export function extractGotchas(repoDir: string): string[] {
  * Analyze code conventions and patterns for project context initialization.
  */
 export function analyzeCodeConventions(repoDir: string): ConventionAnalysis {
+  // Parse package.json once for all detectors
+  const packageJson = parsePackageJson(repoDir);
+
   const patterns: CodePatterns = {};
   const structure = analyzeDirectoryStructure(repoDir);
   const gotchas = extractGotchas(repoDir);
 
   // Detect patterns
-  const stateManagement = detectStateManagement(repoDir);
+  const stateManagement = detectStateManagement(repoDir, packageJson);
   if (stateManagement) patterns.stateManagement = stateManagement;
 
-  const apiClient = detectApiClient(repoDir);
+  const apiClient = detectApiClient(repoDir, packageJson);
   if (apiClient) patterns.apiClient = apiClient;
 
-  const styling = detectStyling(repoDir);
+  const styling = detectStyling(repoDir, packageJson);
   if (styling) patterns.styling = styling;
 
-  const errorHandling = detectErrorHandling(repoDir);
+  const errorHandling = detectErrorHandling(repoDir, packageJson);
   if (errorHandling) patterns.errorHandling = errorHandling;
 
   const testPatterns = detectTestPatterns(repoDir);
