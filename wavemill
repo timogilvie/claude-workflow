@@ -102,6 +102,17 @@ ${GREEN}Commands:${NC}
              - Creates .wavemill-config.json
              - Optionally initializes project context (.wavemill/project-context.md)
 
+  ${CYAN}context${NC}   Manage subsystem documentation lifecycle
+             - init: Bootstrap subsystem specs from codebase
+             - update <subsystem>: Refresh a specific spec
+             - check: Report stale/orphaned/undocumented subsystems
+             - search <query>: Keyword search across specs
+             Examples:
+               ${CYAN}wavemill context init${NC}
+               ${CYAN}wavemill context update linear-api${NC}
+               ${CYAN}wavemill context check${NC}
+               ${CYAN}wavemill context search "error handling"${NC}
+
   ${CYAN}version${NC}   Show version information
   ${CYAN}help${NC}      Show this help message
 
@@ -411,6 +422,22 @@ run_review() {
   exec "$review_script" "$@"
 }
 
+run_context() {
+  local context_script="$LIB_DIR/wavemill-context.sh"
+
+  if [[ ! -f "$context_script" ]]; then
+    echo -e "${RED}Error:${NC} Context script not found at: $context_script" >&2
+    exit 1
+  fi
+
+  if [[ ! -x "$context_script" ]]; then
+    chmod +x "$context_script"
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Context...${NC}"
+  exec "$context_script" "$@"
+}
+
 # Main command dispatcher
 case "${1:-}" in
   mill)
@@ -445,6 +472,11 @@ case "${1:-}" in
     run_preflight_checks
     shift
     run_review "$@"
+    ;;
+  context)
+    run_preflight_checks
+    shift
+    run_context "$@"
     ;;
   eval)
     shift

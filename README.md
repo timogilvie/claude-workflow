@@ -211,6 +211,51 @@ Processing HOK-219...
     ✓ Added: Area: Dashboard
 ```
 
+### `wavemill context` - Subsystem Documentation Lifecycle
+
+Manage subsystem documentation for AI agent consumption. Implements a three-tier memory system:
+- **Hot memory**: `project-context.md` (always loaded)
+- **Cold memory**: `.wavemill/context/{subsystem}.md` (loaded on-demand)
+- **Agent memory**: Session-specific context
+
+**Subcommands:**
+
+1. **`wavemill context init`** - Bootstrap subsystem specs from codebase analysis
+2. **`wavemill context update <subsystem>`** - Refresh a specific subsystem spec
+3. **`wavemill context check`** - Drift detection (stale/orphaned/undocumented subsystems)
+4. **`wavemill context search <query>`** - Keyword search across specs
+
+**Examples:**
+```bash
+# Initialize subsystem documentation
+wavemill context init
+
+# Check for stale documentation
+wavemill context check
+
+# Update a specific subsystem
+wavemill context update linear-api
+
+# Search for "error handling"
+wavemill context search "error handling"
+```
+
+**How it works:**
+- Detects subsystems from directory structure, file patterns, and git analysis
+- Generates structured markdown specs with tables and architectural constraints
+- Auto-updates specs after PR merges (when using `wavemill mill`)
+- Keyword search returns ranked results with relevant snippets
+
+**Spec format:** Each subsystem spec includes:
+- Purpose and key files
+- Architectural constraints (DO/DON'T)
+- Known failure modes
+- Testing patterns
+- Dependencies
+- Recent changes
+
+See [CLAUDE.md](CLAUDE.md) for detailed documentation on subsystem specs and the context system.
+
 ## Under the Hood
 
 ### Wavemill Architecture
