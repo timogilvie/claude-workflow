@@ -23,6 +23,7 @@ import * as path from 'node:path';
 import { parseConstraints } from '../shared/lib/constraint-parser.js';
 import { generateRules } from '../shared/lib/rule-generator.js';
 import { saveConstraintRules, constraintRulesExist } from '../shared/lib/constraint-storage.js';
+import { toKebabCase } from '../shared/lib/string-utils.js';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -208,16 +209,6 @@ Description:
 
   Rules are generated at plan creation time and validated before PR creation.
 `);
-}
-
-/**
- * Convert string to kebab-case
- */
-function toKebabCase(str: string): string {
-  return str
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
 }
 
 main();
