@@ -9,8 +9,12 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execShellCommand } from './shell-utils.ts';
 import type { Subsystem } from './subsystem-detector.ts';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // ────────────────────────────────────────────────────────────────
 // Types
