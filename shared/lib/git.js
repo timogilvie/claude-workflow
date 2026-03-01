@@ -1,12 +1,8 @@
 import { execSync } from 'child_process';
+import { toKebabCase } from './string-utils.js';
 
 export const sanitizeBranchName = (name, prefix = 'feature') => {
-  const sanitized = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 50);
-
+  const sanitized = toKebabCase(name, 50);
   return `${prefix}/${sanitized}`;
 };
 
