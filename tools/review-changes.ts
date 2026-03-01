@@ -232,7 +232,7 @@ async function main(): Promise<void> {
 
   if (args.help) {
     showHelp();
-    process.exit(0);
+    return;
   }
 
   try {
@@ -254,21 +254,22 @@ async function main(): Promise<void> {
       verbose: args.verbose,
     });
 
-    // Format and print result
-    console.log(formatReviewResult(result, args.verbose));
+    // Format and print result, then flush stdout before setting exit code.
+    // Using process.exitCode instead of process.exit() prevents killing the
+    // process before stdout/stderr buffers are flushed (a known Node.js issue
+    // when these streams are pipes rather than TTYs on POSIX systems).
+    const output = formatReviewResult(result, args.verbose);
+    await new Promise<void>((resolve, reject) => {
+      process.stdout.write(output + '\n', (err: Error | null | undefined) => (err ? reject(err) : resolve()));
+    });
 
-    // Exit with appropriate code
-    if (result.verdict === 'ready') {
-      process.exit(0);
-    } else {
-      process.exit(1);
-    }
+    process.exitCode = result.verdict === 'ready' ? 0 : 1;
   } catch (error) {
     console.error(`Error: ${(error as Error).message}`);
     if (args.verbose && error instanceof Error && error.stack) {
       console.error(error.stack);
     }
-    process.exit(2);
+    process.exitCode = 2;
   }
 }
 
