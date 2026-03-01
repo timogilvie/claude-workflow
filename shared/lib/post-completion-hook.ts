@@ -106,6 +106,25 @@ function fetchPrContext(prNumber: string, repoDir: string): { diff: string; url:
  */
 export async function runPostCompletionEval(ctx: PostCompletionContext): Promise<void> {
   const repoDir = ctx.repoDir || process.cwd();
+  const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
+
+  // Always log that we entered this function (for debugging)
+  console.log('Post-completion eval: DEBUG_COST=' + (debug ? 'enabled' : 'disabled'));
+
+  // Log received context for diagnostics
+  if (debug) {
+    console.log('[DEBUG_COST] ========================================');
+    console.log('[DEBUG_COST] runPostCompletionEval() called with context:');
+    console.log(`[DEBUG_COST]   issueId: ${ctx.issueId || '(undefined)'}`);
+    console.log(`[DEBUG_COST]   prNumber: ${ctx.prNumber || '(undefined)'}`);
+    console.log(`[DEBUG_COST]   prUrl: ${ctx.prUrl || '(undefined)'}`);
+    console.log(`[DEBUG_COST]   workflowType: ${ctx.workflowType}`);
+    console.log(`[DEBUG_COST]   repoDir: ${repoDir}`);
+    console.log(`[DEBUG_COST]   branchName: ${ctx.branchName || '(undefined)'}`);
+    console.log(`[DEBUG_COST]   worktreePath: ${ctx.worktreePath || '(undefined)'}`);
+    console.log(`[DEBUG_COST]   agentType: ${ctx.agentType || '(undefined)'}`);
+    console.log('[DEBUG_COST] ========================================');
+  }
 
   if (!ctx.issueId && !ctx.prNumber) {
     console.warn('Post-completion eval: skipped (no issue ID or PR number provided)');
@@ -277,8 +296,16 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     // 7. Compute workflow cost from agent session data
     //    Pricing lives in the wavemill repo config, not the target repo,
     //    so resolve it from this script's location.
+    const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
+
+    if (debug) {
+      console.log('[DEBUG_COST] Pre-cost-computation check:');
+      console.log(`[DEBUG_COST]   ctx.worktreePath: ${ctx.worktreePath || '(undefined)'}`);
+      console.log(`[DEBUG_COST]   branchName: ${branchName || '(undefined)'}`);
+      console.log(`[DEBUG_COST]   Condition met: ${!!(ctx.worktreePath && branchName)}`);
+    }
+
     if (ctx.worktreePath && branchName) {
-      const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
       console.log('Post-completion eval: computing workflow cost...');
 
       if (debug) {
@@ -323,6 +350,17 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
         const costMsg = costErr instanceof Error ? costErr.message : String(costErr);
         console.warn(`Post-completion eval: workflow cost computation failed — ${costMsg}`);
       }
+    } else {
+      if (debug) {
+        console.log('[DEBUG_COST] Skipping cost computation - required parameters missing:');
+        if (!ctx.worktreePath) {
+          console.log('[DEBUG_COST]   Missing: worktreePath');
+        }
+        if (!branchName) {
+          console.log('[DEBUG_COST]   Missing: branchName');
+        }
+      }
+      console.log('Post-completion eval: skipping workflow cost (missing worktreePath or branchName)');
     }
 
     // 8. Persist via eval-persistence

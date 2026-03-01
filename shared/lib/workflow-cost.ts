@@ -147,12 +147,29 @@ export function computeWorkflowCost(opts: {
   agentType?: AgentType | string;
 }): WorkflowCostResult | null {
   const { worktreePath, branchName, repoDir, pricingTable: externalPricing, agentType } = opts;
+  const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
+
+  if (debug) {
+    console.log('[DEBUG_COST] computeWorkflowCost() called with:');
+    console.log(`[DEBUG_COST]   worktreePath: ${worktreePath}`);
+    console.log(`[DEBUG_COST]   branchName: ${branchName}`);
+    console.log(`[DEBUG_COST]   repoDir: ${repoDir || '(undefined)'}`);
+    console.log(`[DEBUG_COST]   agentType: ${agentType || '(undefined, will default to claude)'}`);
+  }
 
   // Delegate session scanning to the appropriate adapter
   const adapter = getSessionAdapter(agentType);
+
+  if (debug) {
+    console.log(`[DEBUG_COST]   Selected adapter: ${adapter.constructor.name}`);
+  }
+
   const scanResult = adapter.scan({ worktreePath, branchName });
 
   if (!scanResult || scanResult.turnCount === 0) {
+    if (debug) {
+      console.log('[DEBUG_COST]   Adapter scan returned null or zero turns');
+    }
     return null;
   }
 
