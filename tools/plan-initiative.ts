@@ -29,6 +29,7 @@ import {
   getOrCreateProjectMilestone,
 } from '../shared/lib/linear.js';
 import { callClaude, parseJsonFromLLM } from '../shared/lib/llm-cli.js';
+import { toKebabCase } from '../shared/lib/string-utils.js';
 
 dotenv.config({ quiet: true });
 
@@ -99,13 +100,6 @@ async function runResearch(researchPrompt: string, initiativeContext: string): P
   });
 
   return result.text;
-}
-
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
 }
 
 /**
@@ -311,7 +305,7 @@ async function decompose(args: string[]) {
 
     // Persist research summary
     const repoRoot = path.resolve(__dirname, '..');
-    const slug = slugify(initiative.name);
+    const slug = toKebabCase(initiative.name);
     const epicsDir = path.join(repoRoot, 'epics', slug);
     await fs.mkdir(epicsDir, { recursive: true });
     const researchPath = path.join(epicsDir, 'research-summary.md');

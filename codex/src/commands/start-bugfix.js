@@ -5,17 +5,11 @@ import readline from 'readline';
 import { join, resolve } from 'path';
 import { loadConfig } from '../config.js';
 import { getBacklog } from '../../shared/lib/linear.js';
+import { toKebabCase } from '../../shared/lib/string-utils.js';
 import { initState } from '../workflow.js';
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (prompt) => new Promise((resolvePrompt) => rl.question(prompt, resolvePrompt));
-
-const slugify = (text) =>
-  text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
 
 const ensureDir = (dir) => {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -69,7 +63,7 @@ const main = async () => {
     if (!project) throw new Error('No defaultProject in config.');
 
     const issue = await selectBacklogIssue(project);
-    const bugName = slugify(issue.title);
+    const bugName = toKebabCase(issue.title, 60);
 
     const contextPath = saveSelectedTask(bugName, issue, project);
     const planPath = `bugs/${bugName}/investigation.md`;

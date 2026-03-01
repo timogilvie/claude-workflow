@@ -9,6 +9,7 @@
 import type { Constraint } from './constraint-parser.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { toKebabCase } from './string-utils.js';
 
 export interface GeneratedRule {
   id: string;
@@ -73,11 +74,7 @@ export function generateRules(
 function generateFilename(constraint: Constraint): string {
   const prefix = constraint.id.toLowerCase().replace('constraint-', '');
   const category = constraint.category;
-  const sanitized = constraint.description
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .substring(0, 40)
-    .replace(/-+$/, '');
+  const sanitized = toKebabCase(constraint.description, 40);
 
   return `${prefix.padStart(2, '0')}-${category}-${sanitized}.cjs`;
 }
