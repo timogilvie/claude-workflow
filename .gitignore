@@ -43,6 +43,7 @@ epics/*/
 .wavemill/workflow-state.json
 .wavemill/project-context.md
 .wavemill/evals/
+.wavemill/context/
 
 worktrees/
 
