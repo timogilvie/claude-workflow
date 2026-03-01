@@ -9,9 +9,13 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { callClaude } from './llm-cli.js';
 import type { Subsystem } from './subsystem-detector.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // ────────────────────────────────────────────────────────────────
 // Types
