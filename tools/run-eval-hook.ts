@@ -14,6 +14,11 @@
 
 import { runPostCompletionEval } from '../shared/lib/post-completion-hook.ts';
 
+// Early diagnostic logging
+if (process.env.DEBUG_COST === '1' || process.argv.includes('--debug')) {
+  process.stderr.write('[DEBUG_COST] run-eval-hook.ts loaded\n');
+}
+
 function parseArgs(argv: string[]) {
   const args: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {
@@ -82,7 +87,26 @@ async function main() {
     process.env.DEBUG_COST = '1';
   }
 
-  await runPostCompletionEval({
+  // Log received CLI arguments for diagnostics
+  const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
+
+  if (debug) {
+    // Use console.error to ensure output appears before async operations
+    console.error('[DEBUG_COST] ========================================');
+    console.error('[DEBUG_COST] Eval hook invoked with CLI arguments:');
+    console.error(`[DEBUG_COST]   --issue: ${args.issue || '(not provided)'}`);
+    console.error(`[DEBUG_COST]   --pr: ${args.pr || '(not provided)'}`);
+    console.error(`[DEBUG_COST]   --pr-url: ${args.prUrl || '(not provided)'}`);
+    console.error(`[DEBUG_COST]   --workflow-type: ${args.workflowType || '(not provided)'}`);
+    console.error(`[DEBUG_COST]   --branch: ${args.branch || '(not provided)'}`);
+    console.error(`[DEBUG_COST]   --worktree: ${args.worktree || '(not provided)'}`);
+    console.error(`[DEBUG_COST]   --agent: ${args.agent || '(not provided)'}`);
+    console.error(`[DEBUG_COST]   --repo-dir: ${args.repoDir || '(not provided)'}`);
+    console.error(`[DEBUG_COST]   --debug: ${args.debug || '(not provided)'}`);
+    console.error('[DEBUG_COST] ========================================');
+  }
+
+  const context = {
     issueId: args.issue,
     prNumber: args.pr,
     prUrl: args.prUrl,
@@ -91,7 +115,22 @@ async function main() {
     branchName: args.branch,
     worktreePath: args.worktree,
     agentType: args.agent,
-  });
+  };
+
+  if (debug) {
+    console.error('[DEBUG_COST] Resolved context object:');
+    console.error(`[DEBUG_COST]   issueId: ${context.issueId || '(undefined)'}`);
+    console.error(`[DEBUG_COST]   prNumber: ${context.prNumber || '(undefined)'}`);
+    console.error(`[DEBUG_COST]   prUrl: ${context.prUrl || '(undefined)'}`);
+    console.error(`[DEBUG_COST]   workflowType: ${context.workflowType}`);
+    console.error(`[DEBUG_COST]   repoDir: ${context.repoDir || '(undefined)'}`);
+    console.error(`[DEBUG_COST]   branchName: ${context.branchName || '(undefined)'}`);
+    console.error(`[DEBUG_COST]   worktreePath: ${context.worktreePath || '(undefined)'}`);
+    console.error(`[DEBUG_COST]   agentType: ${context.agentType || '(undefined)'}`);
+    console.error('[DEBUG_COST] ========================================');
+  }
+
+  await runPostCompletionEval(context);
 }
 
 main().catch((err) => {
