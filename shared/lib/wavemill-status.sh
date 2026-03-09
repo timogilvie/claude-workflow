@@ -77,6 +77,7 @@ plan_waiting_for_review() {
 
   [[ "$task_phase" == "planning" ]] || return 1
   [[ "$agent_state" == "exited" ]] || return 1
+  [[ -z "$worktree" || -z "$slug" ]] && return 1
   [[ -f "$worktree/features/$slug/.plan-approved" ]] && return 1
   return 0
 }
