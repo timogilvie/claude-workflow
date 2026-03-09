@@ -139,10 +139,11 @@ AGENT_MAP = {
     "claude-sonnet-4-5-20250929": "claude",
     "claude-haiku-4-5-20251001": "claude",
     "gpt-5.3-codex": "codex",
+    "gpt-5.4": "codex",
 }
 
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
-AVAILABLE_MODELS = "claude-sonnet-4-5-20250929,gpt-5.3-codex"
+AVAILABLE_MODELS = "claude-sonnet-4-5-20250929,gpt-5.3-codex,gpt-5.4"
 
 
 def resolve_agent(model_id: str) -> str:

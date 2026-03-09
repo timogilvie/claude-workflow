@@ -51,7 +51,7 @@ function makeArtifact(overrides?: Partial<SelectorArtifact>): SelectorArtifact {
         task_prompt: 'Add a logout button to the header',
         repo_name: 'hokusai-site',
         task_type_hint: 'feature',
-        available_models: 'claude-sonnet-4-5-20250929,gpt-5.3-codex',
+        available_models: 'claude-sonnet-4-5-20250929,gpt-5.3-codex,gpt-5.4',
         recommended_model: 'gpt-5.3-codex',
         recommended_agent: 'codex',
         confidence: 'high',
@@ -60,7 +60,7 @@ function makeArtifact(overrides?: Partial<SelectorArtifact>): SelectorArtifact {
         reasoning: 'Greenfield component, codex is cheaper.',
       },
     ],
-    model_candidates: ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex'],
+    model_candidates: ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex', 'gpt-5.4'],
     metadata: { training_records: 70, val_score: 0.82 },
     ...overrides,
   };
@@ -196,12 +196,12 @@ test('includes current task details', () => {
   const artifact = makeArtifact();
   const prompt = buildRoutingPrompt(
     artifact, 'Fix the Prisma query', 'hokusai-site', 'bugfix',
-    ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex'],
+    ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex', 'gpt-5.4'],
   );
   assert.ok(prompt.includes('Fix the Prisma query'));
   assert.ok(prompt.includes('Repo: hokusai-site'));
   assert.ok(prompt.includes('Type: bugfix'));
-  assert.ok(prompt.includes('claude-sonnet-4-5-20250929,gpt-5.3-codex'));
+  assert.ok(prompt.includes('claude-sonnet-4-5-20250929,gpt-5.3-codex,gpt-5.4'));
 });
 
 test('truncates long task prompts at 2000 chars', () => {
@@ -390,7 +390,7 @@ test('uses models from options over artifact candidates', () => {
     mkdirSync(artifactDir, { recursive: true });
 
     const artifact = makeArtifact({
-      model_candidates: ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex'],
+      model_candidates: ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex', 'gpt-5.4'],
     });
     writeFileSync(
       join(artifactDir, 'optimized-selector.json'),
