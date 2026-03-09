@@ -15,6 +15,17 @@ import {
   type ReviewMetric,
 } from '../shared/lib/review-metrics.ts';
 import { execSync } from 'node:child_process';
+import { createReviewProgressReporter, type ReviewLogFormat } from '../shared/lib/review-progress.ts';
+
+function parseLogFormat(value: string | undefined): ReviewLogFormat {
+  if (!value || value === 'text') {
+    return 'text';
+  }
+  if (value === 'json') {
+    return 'json';
+  }
+  throw new Error(`Invalid --log-format value: ${value}. Expected "text" or "json".`);
+}
 
 function formatFindings(findings: ReviewResult['codeReviewFindings'], title: string): string {
   if (!findings || findings.length === 0) {
@@ -107,6 +118,7 @@ runTool({
   description: 'Review code changes against plan and task packet',
   options: {
     json: { type: 'boolean', description: 'Output as clean JSON (for agent/script consumption)' },
+    'log-format': { type: 'string', description: 'Progress log format on stderr: text or json' },
     verbose: { type: 'boolean', description: 'Print full review output and debug info (stderr)' },
     'skip-ui': { type: 'boolean', description: 'Skip UI verification even if design context exists' },
     'ui-only': { type: 'boolean', description: 'Run only UI verification (skip code review)' },
@@ -121,6 +133,7 @@ runTool({
     'npx tsx tools/review-changes.ts',
     'npx tsx tools/review-changes.ts develop',
     'npx tsx tools/review-changes.ts main --json',
+    'npx tsx tools/review-changes.ts main --log-format json',
     'npx tsx tools/review-changes.ts main --verbose',
     'npx tsx tools/review-changes.ts main /path/to/repo --skip-ui',
   ],
@@ -132,12 +145,15 @@ runTool({
 Output Modes:
   Default   Human-readable formatted output with colors
   --json    Clean JSON on stdout (for agents and scripts)
+  --log-format json  NDJSON progress events on stderr
   --verbose Debug info on stderr (composable with --json)`,
   async run({ args, positional }) {
     const targetBranch = positional[0] || 'main';
     const repoDir = positional[1] ? resolve(positional[1]) : process.cwd();
     const verbose = !!args.verbose;
     const jsonOutput = !!args.json;
+    const logFormat = parseLogFormat(args['log-format'] as string | undefined);
+    const reporter = createReviewProgressReporter({ format: logFormat });
 
     // Initialize metrics tracking
     let metric: ReviewMetric | undefined;
@@ -190,6 +206,12 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
               };
               console.log(JSON.stringify(errorJson, null, 2));
             }
+            await reporter.emit({
+              event: 'error',
+              level: 'error',
+              message: 'Potential working directory mismatch detected',
+              details: { currentBranch, targetBranch, repoDir, gitDir },
+            });
             console.error(errorMsg);
             process.exitCode = 2;
             return;
@@ -214,7 +236,16 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         }
       }
 
-      console.error('Running code review...');
+      await reporter.emit({
+        event: 'review_start',
+        message: 'Running code review',
+        details: {
+          targetBranch,
+          repoDir,
+          skipUi: !!args['skip-ui'],
+          uiOnly: !!args['ui-only'],
+        },
+      });
       if (verbose) {
         console.error(`  Target branch: ${targetBranch}`);
         console.error(`  Repository: ${repoDir}`);
@@ -229,6 +260,7 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         skipUi: !!args['skip-ui'],
         uiOnly: !!args['ui-only'],
         verbose,
+        reporter,
       });
 
       // Add iteration to metric
@@ -292,6 +324,11 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         };
         console.log(JSON.stringify(errorJson, null, 2));
       }
+      await reporter.emit({
+        event: 'error',
+        level: 'error',
+        message: (error as Error).message.split('\n')[0],
+      });
       console.error(`Error: ${(error as Error).message}`);
       if (verbose && error instanceof Error && error.stack) {
         console.error(error.stack);

@@ -14,7 +14,7 @@
  * @module llm-cli
  */
 
-import { execSync, spawn, type SpawnOptions } from 'node:child_process';
+import { spawn, type SpawnOptions } from 'node:child_process';
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -52,6 +52,8 @@ export interface LLMCallOptions {
   cwd?: string;
   /** Override CLI command (e.g., 'claude', 'codex', 'openai') */
   cliCmd?: string;
+  /** Lifecycle hooks for progress reporting */
+  observer?: LLMCallObserver;
 }
 
 export interface LLMCallResult {
@@ -88,6 +90,26 @@ export interface CliHealthCheck {
   };
 }
 
+export interface LLMCallObserverEvent {
+  provider: LLMProvider;
+  model?: string;
+  attempt: number;
+  maxAttempts: number;
+  elapsedMs: number;
+  error?: string;
+  delayMs?: number;
+  nextAttempt?: number;
+  willRetry?: boolean;
+}
+
+export interface LLMCallObserver {
+  onAttemptStart?: (event: LLMCallObserverEvent) => void | Promise<void>;
+  onAttemptSlow?: (event: LLMCallObserverEvent) => void | Promise<void>;
+  onAttemptComplete?: (event: LLMCallObserverEvent) => void | Promise<void>;
+  onAttemptError?: (event: LLMCallObserverEvent) => void | Promise<void>;
+  onRetry?: (event: LLMCallObserverEvent) => void | Promise<void>;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
@@ -95,7 +117,8 @@ export interface CliHealthCheck {
 const DEFAULT_TIMEOUT = 120_000; // 2 minutes
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10MB
 const DEFAULT_MAX_RETRIES = 2;
-const DEFAULT_BACKOFF_BASE = 2000; // 2 seconds
+const SLOW_CALL_WARNING_MS = 30_000;
+const SLOW_CALL_REPEAT_MS = 15_000;
 
 // ────────────────────────────────────────────────────────────────
 // Text Cleaning Utilities
@@ -392,9 +415,13 @@ async function executeStream(
   tmpFile: string,
   cliArgs: string[],
   options: LLMCallOptions,
-  provider: LLMProvider
+  provider: LLMProvider,
+  attempt: number,
+  maxAttempts: number
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const timeout = options.timeout ?? DEFAULT_TIMEOUT;
     const cwd = options.cwd || process.cwd();
     const cliCmd = getCliCommand(provider, options);
 
@@ -414,6 +441,55 @@ async function executeStream(
 
     let stdout = '';
     let stderr = '';
+    let settled = false;
+
+    const cleanup = (timeoutId?: NodeJS.Timeout, slowInterval?: NodeJS.Timeout) => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (slowInterval) {
+        clearInterval(slowInterval);
+      }
+    };
+
+    void options.observer?.onAttemptStart?.({
+      provider,
+      model: options.model,
+      attempt,
+      maxAttempts,
+      elapsedMs: 0,
+    });
+
+    const slowInterval = setInterval(() => {
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs < SLOW_CALL_WARNING_MS) {
+        return;
+      }
+
+      void options.observer?.onAttemptSlow?.({
+        provider,
+        model: options.model,
+        attempt,
+        maxAttempts,
+        elapsedMs,
+      });
+    }, SLOW_CALL_REPEAT_MS);
+
+    const timeoutId = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval);
+      llmProcess.kill('SIGTERM');
+      reject(
+        new Error(
+          `${provider} CLI timed out after ${timeout}ms\n\n` +
+          `Command: ${cliCmd} ${cliArgs.join(' ')}\n` +
+          `Working directory: ${cwd}\n`
+        )
+      );
+    }, timeout);
 
     llmProcess.stdout?.on('data', (data) => {
       stdout += data.toString();
@@ -424,14 +500,32 @@ async function executeStream(
     });
 
     llmProcess.on('close', (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval);
+      const elapsedMs = Date.now() - startedAt;
       if (code !== 0) {
         reject(new Error(`${provider} CLI exited with code ${code}: ${stderr}`));
       } else {
+        void options.observer?.onAttemptComplete?.({
+          provider,
+          model: options.model,
+          attempt,
+          maxAttempts,
+          elapsedMs,
+        });
         resolve(stdout);
       }
     });
 
     llmProcess.on('error', (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval);
       reject(new Error(`Failed to spawn ${provider} CLI: ${error.message}`));
     });
 
@@ -441,6 +535,11 @@ async function executeStream(
       llmProcess.stdin?.write(prompt);
       llmProcess.stdin?.end();
     } catch (error) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval);
       reject(new Error(`Failed to read temp file: ${(error as Error).message}`));
     }
   });
@@ -705,7 +804,9 @@ export async function callClaude(
 async function callLLMOnce(
   prompt: string,
   options: LLMCallOptions,
-  provider: LLMProvider
+  provider: LLMProvider,
+  attempt: number = 1,
+  maxAttempts: number = 1
 ): Promise<LLMCallResult> {
   const mode = options.mode || 'sync';
   const stripCalls = options.stripToolCalls ?? true;
@@ -733,9 +834,23 @@ async function callLLMOnce(
     // Execute based on mode
     let rawOutput: string;
     if (mode === 'sync') {
+      await options.observer?.onAttemptStart?.({
+        provider,
+        model: options.model,
+        attempt,
+        maxAttempts,
+        elapsedMs: 0,
+      });
       rawOutput = executeSync(tmpFile, cliArgs, options, provider);
+      await options.observer?.onAttemptComplete?.({
+        provider,
+        model: options.model,
+        attempt,
+        maxAttempts,
+        elapsedMs: 0,
+      });
     } else {
-      rawOutput = await executeStream(tmpFile, cliArgs, options, provider);
+      rawOutput = await executeStream(tmpFile, cliArgs, options, provider, attempt, maxAttempts);
     }
 
     // Unwrap JSON envelope
@@ -751,6 +866,17 @@ async function callLLMOnce(
       rawOutput,
       provider,
     };
+  } catch (error) {
+    await options.observer?.onAttemptError?.({
+      provider,
+      model: options.model,
+      attempt,
+      maxAttempts,
+      elapsedMs: 0,
+      error: (error as Error).message.split('\n')[0],
+      willRetry: false,
+    });
+    throw error;
   } finally {
     // Clean up temp file
     if (existsSync(tmpFile)) {
@@ -773,30 +899,28 @@ async function callLLMWithRetry(
   maxRetries: number
 ): Promise<LLMCallResult> {
   let lastError: Error | null = null;
+  const totalAttempts = maxRetries + 1;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      if (attempt > 0) {
-        // Log retry attempt
-        const errorPreview = lastError?.message.split('\n')[0] || 'Unknown error';
-        const delay = Math.pow(2, attempt) * 1000;
-        console.error(`\n⚠️  Retry attempt ${attempt}/${maxRetries}`);
-        console.error(`   Previous error: ${errorPreview}`);
-        console.error(`   Waiting ${delay}ms before retry...\n`);
-      }
-
-      return await callLLMOnce(prompt, options, provider);
+      return await callLLMOnce(prompt, options, provider, attempt + 1, totalAttempts);
     } catch (error) {
       lastError = error as Error;
-
-      // Log error details
-      const errorPreview = lastError.message.split('\n')[0];
-      console.error(`\n❌ Attempt ${attempt + 1}/${maxRetries + 1} failed:`);
-      console.error(`   ${errorPreview}`);
 
       if (attempt < maxRetries) {
         // Exponential backoff: 2s, 4s, 8s, ...
         const delay = Math.pow(2, attempt + 1) * 1000;
+        await options.observer?.onRetry?.({
+          provider,
+          model: options.model,
+          attempt: attempt + 1,
+          nextAttempt: attempt + 2,
+          maxAttempts: totalAttempts,
+          elapsedMs: 0,
+          delayMs: delay,
+          error: lastError.message.split('\n')[0],
+          willRetry: true,
+        });
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
