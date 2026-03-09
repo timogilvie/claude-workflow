@@ -274,6 +274,64 @@ check_plan_approved() {
 }
 
 
+set_window_attention_state() {
+  local win="$1" state="${2:-clear}"
+  if [[ "$state" == "needs-user" ]]; then
+    tmux set-window-option -t "$SESSION:$win" window-status-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+    tmux set-window-option -t "$SESSION:$win" window-status-current-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+  else
+    tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
+    tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
+  fi
+}
+
+
+codex_has_pending_approval() {
+  local worktree="$1"
+  local codex_db="$HOME/.codex/state_5.sqlite"
+  [[ -n "$worktree" ]] || return 1
+  [[ -f "$codex_db" ]] || return 1
+
+  local escaped_worktree thread_row thread_id rollout_path
+  escaped_worktree=${worktree//\'/\'\'}
+  thread_row=$(sqlite3 "$codex_db" \
+    "SELECT id || '|' || rollout_path FROM threads WHERE cwd = '$escaped_worktree' ORDER BY updated_at DESC LIMIT 1;" \
+    2>/dev/null || true)
+  [[ -n "$thread_row" ]] || return 1
+
+  thread_id="${thread_row%%|*}"
+  rollout_path="${thread_row#*|}"
+  [[ -n "$thread_id" && -f "$rollout_path" ]] || return 1
+
+  declare -A pending_calls=()
+  local event_type call_id
+  while IFS=$'\t' read -r event_type call_id; do
+    [[ -n "$call_id" ]] || continue
+    case "$event_type" in
+      pending) pending_calls["$call_id"]=1 ;;
+      resolved) unset 'pending_calls[$call_id]' ;;
+    esac
+  done < <(
+    jq -r '
+      if .type == "response_item" and .payload.type == "function_call" then
+        ((.payload.arguments? // "{}") | try fromjson catch {}) as $args |
+        if ($args.sandbox_permissions // "") == "require_escalated" then
+          "pending\t\(.payload.call_id // "")"
+        else
+          empty
+        end
+      elif .type == "response_item" and .payload.type == "function_call_output" then
+        "resolved\t\(.payload.call_id // "")"
+      else
+        empty
+      end
+    ' "$rollout_path" 2>/dev/null
+  )
+
+  (( ${#pending_calls[@]} > 0 ))
+}
+
+
 check_plan_exists() {
   local slug="$1"
   local wt="${WORKTREE_ROOT}/${slug}"
@@ -1281,6 +1339,62 @@ check_plan_approved() {
   return 1
 }
 
+set_window_attention_state() {
+  local win="$1" state="${2:-clear}"
+  if [[ "$state" == "needs-user" ]]; then
+    tmux set-window-option -t "$SESSION:$win" window-status-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+    tmux set-window-option -t "$SESSION:$win" window-status-current-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+  else
+    tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
+    tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
+  fi
+}
+
+codex_has_pending_approval() {
+  local worktree="$1"
+  local codex_db="$HOME/.codex/state_5.sqlite"
+  [[ -n "$worktree" ]] || return 1
+  [[ -f "$codex_db" ]] || return 1
+
+  local escaped_worktree thread_row thread_id rollout_path
+  escaped_worktree=${worktree//\'/\'\'}
+  thread_row=$(sqlite3 "$codex_db" \
+    "SELECT id || '|' || rollout_path FROM threads WHERE cwd = '$escaped_worktree' ORDER BY updated_at DESC LIMIT 1;" \
+    2>/dev/null || true)
+  [[ -n "$thread_row" ]] || return 1
+
+  thread_id="${thread_row%%|*}"
+  rollout_path="${thread_row#*|}"
+  [[ -n "$thread_id" && -f "$rollout_path" ]] || return 1
+
+  declare -A pending_calls=()
+  local event_type call_id
+  while IFS=$'\t' read -r event_type call_id; do
+    [[ -n "$call_id" ]] || continue
+    case "$event_type" in
+      pending) pending_calls["$call_id"]=1 ;;
+      resolved) unset 'pending_calls[$call_id]' ;;
+    esac
+  done < <(
+    jq -r '
+      if .type == "response_item" and .payload.type == "function_call" then
+        ((.payload.arguments? // "{}") | try fromjson catch {}) as $args |
+        if ($args.sandbox_permissions // "") == "require_escalated" then
+          "pending\t\(.payload.call_id // "")"
+        else
+          empty
+        end
+      elif .type == "response_item" and .payload.type == "function_call_output" then
+        "resolved\t\(.payload.call_id // "")"
+      else
+        empty
+      end
+    ' "$rollout_path" 2>/dev/null
+  )
+
+  (( ${#pending_calls[@]} > 0 ))
+}
+
 get_task_meta() {
   local issue="$1" field="$2"
   jq -r --arg issue "$issue" --arg field "$field" '.tasks[$issue][$field] // empty' "$STATE_FILE" 2>/dev/null
@@ -1790,12 +1904,7 @@ launch_task() {
   # Create tmux window
   local win="$issue-$slug"
   tmux new-window -t "$SESSION" -n "$win" -c "$wt_dir"
-
-  # Codex does not reliably trigger bell flags for input-required turns.
-  # Make codex attention states red by overriding activity style per-window.
-  if [[ "$task_agent_cmd" == "codex" ]]; then
-    tmux set-window-option -t "$SESSION:$win" window-status-activity-style bg=red,fg=white,bold >/dev/null 2>&1 || true
-  fi
+  set_window_attention_state "$win" "clear"
 
   # Run setup command in new worktrees (e.g., npm install)
   if [[ -n "${SETUP_CMD:-}" ]] && [[ "$created_new" == "true" ]]; then
@@ -2146,16 +2255,20 @@ LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
 monitor_issue_state() {
   local ISSUE="$1"
   local BRANCH SLUG PR
-  local task_status WIN WT_DIR task_branch current_phase eval_agent debug_flag
+  local task_status WIN WT_DIR task_branch current_phase eval_agent debug_flag current_agent needs_attention
 
   BRANCH="${BRANCH_BY_ISSUE[$ISSUE]}"
   SLUG="${SLUG_BY_ISSUE[$ISSUE]}"
   PR="${PR_BY_ISSUE[$ISSUE]:-}"
+  WIN="$ISSUE-$SLUG"
+  WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+  current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+  needs_attention="false"
 
   # If already merged (requireConfirm), wait for window close then cleanup
   task_status=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null)
   if [[ "$task_status" == "merged" ]]; then
-    WIN="$ISSUE-$SLUG"
+    set_window_attention_state "$WIN" "clear"
     if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
       active_count=$((active_count + 1))
       return 0
@@ -2194,6 +2307,7 @@ monitor_issue_state() {
       # No PR in current repo - check Linear issue state for cross-repo completion
       if should_update_linear_state "$ISSUE" && linear_is_completed "$(get_linear_issue_id "$ISSUE")"; then
         log "✓ $ISSUE → Completed externally (cross-repo or manual)"
+        set_window_attention_state "$WIN" "clear"
 
         # Post-completion eval (non-blocking: always exits 0)
         if [[ "$AUTO_EVAL" == "true" ]]; then
@@ -2248,19 +2362,30 @@ monitor_issue_state() {
       if [[ "$current_phase" == "planning" ]]; then
         if check_plan_approved "$SLUG"; then
           set_task_phase "$ISSUE" "executing"
+          set_window_attention_state "$WIN" "clear"
           log "✓ $ISSUE → Plan approved, now executing"
         else
-          WIN="$ISSUE-$SLUG"
           if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            set_window_attention_state "$WIN" "clear"
             # Keep unapproved planning tasks active while agent is still running.
             active_count=$((active_count + 1))
             return 0
           fi
+          needs_attention="true"
         fi
       fi
 
+      if [[ "$current_agent" == "codex" ]] && codex_has_pending_approval "$WT_DIR"; then
+        needs_attention="true"
+      fi
+
+      if [[ "$needs_attention" == "true" ]]; then
+        set_window_attention_state "$WIN" "needs-user"
+      else
+        set_window_attention_state "$WIN" "clear"
+      fi
+
       # Not completed externally - check if agent pane is still alive
-      WIN="$ISSUE-$SLUG"
       if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
         # Pane still running - agent is working, keep slot active
         active_count=$((active_count + 1))
@@ -2268,6 +2393,7 @@ monitor_issue_state() {
       fi
 
       # Agent exited without creating a PR - clean up the slot
+      set_window_attention_state "$WIN" "clear"
       log "⚠ $ISSUE → Agent exited without PR - releasing slot"
       cleanup_completed_task "$ISSUE" "$SLUG" "no PR created"
       return 0
@@ -2277,6 +2403,7 @@ monitor_issue_state() {
   # Check if merged
   if validate_pr_merge "$PR"; then
     log "✓ $ISSUE → PR #$PR MERGED"
+    set_window_attention_state "$WIN" "clear"
 
     # Post-merge eval (non-blocking: always exits 0)
     if [[ "$AUTO_EVAL" == "true" ]]; then
