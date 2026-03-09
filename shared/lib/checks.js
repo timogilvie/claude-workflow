@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execShellCommand } from './shell-utils.ts';
 
 /**
  * Runs the build check command from config.
@@ -28,7 +28,7 @@ export const runBuildCheck = (config) => {
 
   try {
     console.log(`Running build check: ${buildCommand}`);
-    execSync(buildCommand, {
+    execShellCommand(buildCommand, {
       stdio: 'inherit',
       encoding: 'utf-8'
     });

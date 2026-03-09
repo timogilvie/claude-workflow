@@ -17,8 +17,8 @@
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
 import { findRelevantSubsystems, type SubsystemSearchResult } from './subsystem-search.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -142,15 +142,18 @@ export async function getDirectoryTree(
   maxDepth: number = 3
 ): Promise<string> {
   try {
+    const safeMaxDepth = Math.max(0, Math.trunc(maxDepth));
+
     // Use find with depth limit, exclude common noise
-    const cmd = `cd "${repoPath}" && find . -type d -maxdepth ${maxDepth} \
+    const cmd = `find . -type d -maxdepth ${safeMaxDepth} \
       ! -path "*/node_modules/*" \
       ! -path "*/.git/*" \
       ! -path "*/dist/*" \
       ! -path "*/build/*" \
       | sort | head -100`;
 
-    const result = execSync(cmd, {
+    const result = execShellCommand(cmd, {
+      cwd: repoPath,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'ignore'],
     });
@@ -256,8 +259,9 @@ export function getRecentGitActivity(
   limit: number = 20
 ): string {
   try {
-    const cmd = `cd "${repoPath}" && git log --oneline --name-only -${limit}`;
-    const result = execSync(cmd, {
+    const safeLimit = Math.max(0, Math.trunc(limit));
+    const result = execShellCommand(`git log --oneline --name-only -${safeLimit}`, {
+      cwd: repoPath,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'ignore'],
     });
@@ -321,12 +325,13 @@ export async function findRelevantFiles(
 
   for (const keyword of keywords) {
     try {
-      const cmd = `cd "${repoPath}" && grep -r --include="*.{ts,js,tsx,jsx,md}" -l "${keyword}" . 2>/dev/null \
+      const cmd = `grep -r --include="*.{ts,js,tsx,jsx,md}" -l ${escapeShellArg(keyword)} . 2>/dev/null \
         | grep -v node_modules \
         | grep -v .git \
         | head -10`;
 
-      const output = execSync(cmd, {
+      const output = execShellCommand(cmd, {
+        cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'ignore'],
       });

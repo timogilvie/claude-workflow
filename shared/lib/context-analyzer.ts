@@ -7,7 +7,6 @@
  * @module context-analyzer
  */
 
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';

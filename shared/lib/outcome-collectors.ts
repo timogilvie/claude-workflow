@@ -13,7 +13,6 @@
  * @module outcome-collectors
  */
 
-import { execSync } from "node:child_process";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
