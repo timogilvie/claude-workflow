@@ -13,7 +13,6 @@
  * @module outcome-collectors
  */
 
-import { execSync } from "node:child_process";
 import { readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { errorMessage } from './error-utils.ts';

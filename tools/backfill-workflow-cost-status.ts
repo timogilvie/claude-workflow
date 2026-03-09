@@ -8,12 +8,12 @@
  */
 
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
-import { resolve, join, dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 import type { EvalRecord } from '../shared/lib/eval-schema.ts';
 import { computeWorkflowCost, loadPricingTable } from '../shared/lib/workflow-cost.ts';
+import { readJsonlFile, readTransformWrite } from '../shared/lib/jsonl-utils.ts';
 
 interface BackfillStats {
   total: number;
@@ -21,40 +21,6 @@ interface BackfillStats {
   successfulBackfill: number;
   recoveredCost: number;
   statusSet: Record<string, number>;
-}
-
-/**
- * Read eval records from a JSONL file.
- */
-function readEvalRecords(filePath: string): EvalRecord[] {
-  if (!existsSync(filePath)) {
-    throw new Error(`Eval file not found: ${filePath}`);
-  }
-
-  const content = readFileSync(filePath, 'utf-8');
-  const lines = content.split('\n').filter((line) => line.trim().length > 0);
-  const records: EvalRecord[] = [];
-
-  for (const line of lines) {
-    try {
-      records.push(JSON.parse(line) as EvalRecord);
-    } catch {
-      console.warn(`Skipping malformed line: ${line.substring(0, 50)}...`);
-    }
-  }
-
-  return records;
-}
-
-/**
- * Write eval records to a JSONL file atomically.
- */
-function writeEvalRecords(filePath: string, records: EvalRecord[]): void {
-  const tmpPath = join(dirname(filePath), `.backfill-${randomUUID()}.tmp`);
-  const content = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
-
-  writeFileSync(tmpPath, content, 'utf-8');
-  renameSync(tmpPath, filePath);
 }
 
 /**
@@ -126,6 +92,7 @@ For records WITHOUT workflowCost:
   - If recovery fails: sets status to best-guess reason (e.g., 'no_sessions')
 
 Uses atomic write (temp file + rename) to prevent data corruption.`,
+Uses shared JSONL rewrite helpers and writes a .backup file before live changes.`,
   run({ args }) {
     const repoDir = args['repo-dir'] ? resolve(args['repo-dir']) : process.cwd();
     const defaultPath = join(repoDir, '.wavemill', 'evals', 'evals.jsonl');
@@ -138,7 +105,7 @@ Uses atomic write (temp file + rename) to prevent data corruption.`,
     }
 
     // Read records
-    const records = readEvalRecords(filePath);
+    const records = readJsonlFile<EvalRecord>(filePath);
     console.log(`Loaded ${records.length} eval records\n`);
 
     // Load pricing table for cost recovery attempts
@@ -153,65 +120,69 @@ Uses atomic write (temp file + rename) to prevent data corruption.`,
       statusSet: {},
     };
 
-    const updatedRecords: EvalRecord[] = [];
-
-    for (let i = 0; i < records.length; i++) {
-      const record = records[i];
+    readTransformWrite<EvalRecord>(filePath, (record, context) => {
       const issueId = record.issueId || 'unknown';
 
-      // Skip if already has status
       if (record.workflowCostStatus) {
         stats.alreadyHadStatus++;
-        updatedRecords.push(record);
-        continue;
+        return { record, changed: false };
       }
 
-      // Case 1: Has workflowCost → set status to 'success'
       if (record.workflowCost !== undefined) {
-        record.workflowCostStatus = 'success';
         stats.successfulBackfill++;
-        stats.statusSet['success'] = (stats.statusSet['success'] || 0) + 1;
-        updatedRecords.push(record);
-        continue;
+        stats.statusSet.success = (stats.statusSet.success || 0) + 1;
+        return {
+          record: {
+            ...record,
+            workflowCostStatus: 'success',
+          },
+          changed: true,
+        };
       }
 
-      // Case 2: No workflowCost → attempt recovery
-      console.log(`[${i + 1}/${records.length}] ${issueId}: attempting cost recovery...`);
+      console.log(`[${context.index + 1}/${records.length}] ${issueId}: attempting cost recovery...`);
       const recovery = attemptCostRecovery(record, repoDir, pricingTable);
 
       if (recovery.cost !== undefined) {
-        // Recovery successful!
-        record.workflowCost = recovery.cost;
-        record.workflowTokenUsage = recovery.tokenUsage;
-        record.workflowCostStatus = 'success';
         stats.successfulBackfill++;
         stats.recoveredCost++;
-        stats.statusSet['success'] = (stats.statusSet['success'] || 0) + 1;
+        stats.statusSet.success = (stats.statusSet.success || 0) + 1;
         console.log(`  ✓ Recovered cost: $${recovery.cost.toFixed(4)}`);
-      } else {
-        // Recovery failed - set diagnostic status
-        const status = recovery.reason?.includes('No session')
-          ? 'no_sessions'
-          : recovery.reason?.includes('branch')
-            ? 'no_branch'
-            : 'no_sessions';
-
-        record.workflowCostStatus = status;
-        record.workflowCostDiagnostics = {
-          reason: recovery.reason || 'Unknown error',
-          agentType: record.agentType || 'unknown',
+        return {
+          record: {
+            ...record,
+            workflowCost: recovery.cost,
+            workflowTokenUsage: recovery.tokenUsage,
+            workflowCostStatus: 'success',
+          },
+          changed: true,
         };
-        stats.successfulBackfill++;
-        stats.statusSet[status] = (stats.statusSet[status] || 0) + 1;
-        console.log(`  ⚠ Could not recover: ${recovery.reason}`);
       }
 
-      updatedRecords.push(record);
-    }
+      const status = recovery.reason?.includes('No session')
+        ? 'no_sessions'
+        : recovery.reason?.includes('branch')
+          ? 'no_branch'
+          : 'no_sessions';
+
+      stats.successfulBackfill++;
+      stats.statusSet[status] = (stats.statusSet[status] || 0) + 1;
+      console.log(`  ⚠ Could not recover: ${recovery.reason}`);
+      return {
+        record: {
+          ...record,
+          workflowCostStatus: status,
+          workflowCostDiagnostics: {
+            reason: recovery.reason || 'Unknown error',
+            agentType: record.agentType || 'unknown',
+          },
+        },
+        changed: true,
+      };
+    }, { dryRun });
 
     // Write results
     if (!dryRun) {
-      writeEvalRecords(filePath, updatedRecords);
       console.log(`\n✓ Updated ${filePath}`);
     } else {
       console.log('\nDRY RUN: No changes written');

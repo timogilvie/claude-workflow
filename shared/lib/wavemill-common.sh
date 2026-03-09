@@ -364,7 +364,7 @@ write_task_packet() {
   local tools_dir="${TOOLS_DIR:?TOOLS_DIR must be set}"
 
   # Fetch current description (strip dotenv stdout noise before parsing JSON)
-  local issue_json=$(npx tsx "$tools_dir/get-issue-json.ts" "$issue_id" 2>/dev/null | sed '/^\[dotenv/d' || echo "{}")
+  local issue_json=$(npx tsx "$tools_dir/get-issue.ts" "$issue_id" --json 2>/dev/null | sed '/^\[dotenv/d' || echo "{}")
   local current_desc=$(echo "$issue_json" | jq -r '.description // ""')
 
   # Check if already a task packet

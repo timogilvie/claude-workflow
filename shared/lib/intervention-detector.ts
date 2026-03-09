@@ -9,7 +9,6 @@
  * @module intervention-detector
  */
 
-import { execSync } from "node:child_process";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveProjectsDir } from './workflow-cost.ts';

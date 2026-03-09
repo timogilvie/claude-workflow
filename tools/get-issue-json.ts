@@ -1,15 +1,9 @@
 #!/usr/bin/env -S npx tsx
 import '../shared/lib/env.js';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { getIssue } from '../shared/lib/linear.js';
+import { installIssueProcessTimeout, printIssue } from '../shared/lib/issue-tool.ts';
 
-// Hard process-level timeout — kills the entire process if npx/tsx startup
-// or network hangs before the per-request AbortSignal fires.
-const PROCESS_TIMEOUT_MS = 30_000;
-setTimeout(() => {
-  console.error(`Process timeout: issue fetch exceeded ${PROCESS_TIMEOUT_MS / 1000}s`);
-  process.exit(1);
-}, PROCESS_TIMEOUT_MS).unref();
+installIssueProcessTimeout();
 
 runTool({
   name: 'get-issue-json',
@@ -34,7 +28,6 @@ runTool({
       process.exit(1);
     }
 
-    const issue = await getIssue(identifier);
-    console.log(JSON.stringify(issue, null, 2));
+    await printIssue(identifier, { json: true });
   },
 });

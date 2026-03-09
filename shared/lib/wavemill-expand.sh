@@ -53,7 +53,7 @@ linear_get_issue() {
   # Capture stdout (JSON); collect stderr so we can show it on failure
   local stderr_file
   stderr_file=$(mktemp)
-  if npx tsx "$TOOLS_DIR/get-issue-json.ts" "$issue_id" 2>"$stderr_file"; then
+  if npx tsx "$TOOLS_DIR/get-issue.ts" "$issue_id" --json 2>"$stderr_file"; then
     rm -f "$stderr_file"
   else
     local rc=$?

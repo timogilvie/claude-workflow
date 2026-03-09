@@ -7,11 +7,11 @@
  * @module review-context-gatherer
  */
 
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parsePackageJson } from './package-json-parser.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -79,7 +79,7 @@ export interface GatherReviewContextOptions {
  */
 export function getCurrentBranch(repoDir: string): string {
   try {
-    return execSync('git branch --show-current', {
+    return execShellCommand('git branch --show-current', {
       encoding: 'utf-8',
       cwd: repoDir,
     }).trim();
@@ -130,7 +130,7 @@ export function getGitDiff(targetBranch: string, repoDir?: string, sinceCommit?:
   try {
     // Without sinceCommit: three-dot syntax diffs merge-base to HEAD
     // With sinceCommit: two-dot syntax diffs from exact commit to HEAD
-    return execSync(`git diff ${diffSpec}`, {
+    return execShellCommand(`git diff ${escapeShellArg(diffSpec)}`, {
       encoding: 'utf-8',
       cwd,
       maxBuffer: 50 * 1024 * 1024, // 50MB max

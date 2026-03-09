@@ -1,12 +1,13 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import { readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { computeModelCost, loadPricingTable } from '../shared/lib/workflow-cost.ts';
 import type { ModelPricing, ModelTokenUsage } from '../shared/lib/workflow-cost.ts';
 import { getEvalConfig } from '../shared/lib/config.ts';
+import { readJsonlFile, readTransformWrite } from '../shared/lib/jsonl-utils.ts';
 
 function main(DRY_RUN: boolean) {
   const repoDir = resolve('.');
@@ -22,8 +23,7 @@ function main(DRY_RUN: boolean) {
     process.exit(1);
   }
 
-  const content = readFileSync(evalsFile, 'utf-8');
-  const records = content.split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
+  const records = readJsonlFile<any>(evalsFile);
   console.log(`Found ${records.length} eval records in ${evalsFile}`);
 
 // Get PR branches from GitHub
@@ -152,54 +152,52 @@ console.log(DRY_RUN ? '\n[DRY RUN] No changes will be written.\n' : '');
 let updated = 0;
 let skipped = 0;
 let noData = 0;
-
-for (let i = 0; i < records.length; i++) {
-  const record = records[i];
+readTransformWrite<any>(evalsFile, (record, context) => {
   const issueId = record.issueId || '(no issue)';
   const prUrl = record.prUrl || '';
 
-  // Skip if already has workflow cost
   if (record.workflowCost !== undefined) {
-    console.log(`  ${i + 1}. ${issueId}: already has workflowCost ($${record.workflowCost.toFixed(4)}) — skipped`);
+    console.log(`  ${context.index + 1}. ${issueId}: already has workflowCost ($${record.workflowCost.toFixed(4)}) — skipped`);
     skipped++;
-    continue;
+    return { record, changed: false };
   }
 
-  // Get branch from PR
   const prInfo = prUrl ? getPrBranch(prUrl) : null;
   if (!prInfo) {
-    console.log(`  ${i + 1}. ${issueId}: could not determine branch from PR — skipped`);
+    console.log(`  ${context.index + 1}. ${issueId}: could not determine branch from PR — skipped`);
     noData++;
-    continue;
+    return { record, changed: false };
   }
 
-  // Scan sessions
   const costResult = scanAllProjectsForBranch(prInfo.branch);
   if (!costResult) {
-    console.log(`  ${i + 1}. ${issueId}: no session data for branch ${prInfo.branch} — skipped`);
+    console.log(`  ${context.index + 1}. ${issueId}: no session data for branch ${prInfo.branch} — skipped`);
     noData++;
-    continue;
+    return { record, changed: false };
   }
-
-  // Apply to record
-  record.workflowCost = costResult.totalCostUsd;
-  record.workflowTokenUsage = costResult.models;
 
   const modelSummary = Object.entries(costResult.models)
     .map(([m, u]) => `${m}: $${u.costUsd.toFixed(4)}`)
     .join(', ');
   console.log(
-    `  ${i + 1}. ${issueId}: $${costResult.totalCostUsd.toFixed(4)} ` +
+    `  ${context.index + 1}. ${issueId}: $${costResult.totalCostUsd.toFixed(4)} ` +
     `(${costResult.turnCount} turns, ${costResult.sessionCount} sessions) [${modelSummary}]`
   );
   updated++;
-}
+
+  return {
+    record: {
+      ...record,
+      workflowCost: costResult.totalCostUsd,
+      workflowTokenUsage: costResult.models,
+    },
+    changed: true,
+  };
+}, { dryRun: DRY_RUN });
 
   console.log(`\nSummary: ${updated} updated, ${skipped} already had data, ${noData} no session data`);
 
   if (!DRY_RUN && updated > 0) {
-    const output = records.map(r => JSON.stringify(r)).join('\n') + '\n';
-    writeFileSync(evalsFile, output, 'utf-8');
     console.log(`\nWritten ${records.length} records to ${evalsFile}`);
   } else if (DRY_RUN) {
     console.log('\n[DRY RUN] No changes written.');

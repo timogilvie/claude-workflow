@@ -27,7 +27,7 @@ source "$_ORCH_DIR/agent-adapters.sh"
 # Positional arg overrides config for session name
 SESSION="${1:-$SESSION}"
 BASE_BRANCH="${BASE_BRANCH:-$(cd "$REPO_DIR" && git symbolic-ref --short HEAD)}"
-LINEAR_TOOL="${LINEAR_TOOL:-${TOOLS_DIR:?TOOLS_DIR must be set}/get-issue-json.ts}"
+LINEAR_TOOL="${LINEAR_TOOL:-${TOOLS_DIR:?TOOLS_DIR must be set}/get-issue.ts}"
 
 
 # Validate agent command exists
