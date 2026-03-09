@@ -15,7 +15,7 @@ import {
   getGitDiff,
 } from './review-context-gatherer.ts';
 import { runReview, type ReviewResult, type ReviewFinding, type ReviewerPersona } from './review-engine.ts';
-import { checkClaudeAvailability } from './llm-cli.ts';
+import { ensureClaudeAvailable } from './llm-cli.ts';
 import type { ReviewProgressReporter } from './review-progress.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -79,57 +79,9 @@ export async function reviewChanges(
   });
 
   if (!process.env.SKIP_PREFLIGHT_CHECK) {
-    await reporter?.emit({
-      event: 'preflight_start',
-      message: 'Checking Claude CLI availability',
-    });
-
-    const healthCheck = await checkClaudeAvailability({ verbose: options.verbose });
-    if (!healthCheck.available) {
-      const errorLines = [
-        'Claude CLI is not available or not working properly.',
-        '',
-        `Error: ${healthCheck.error}`,
-        '',
-        'Diagnostics:',
-        `  - Command: ${healthCheck.command}`,
-        `  - In PATH: ${healthCheck.diagnostics?.inPath ? 'Yes' : 'No'}`,
-        `  - Executable: ${healthCheck.diagnostics?.executable ? 'Yes' : 'No'}`,
-        `  - Auth working: ${healthCheck.diagnostics?.authWorking ? 'Yes' : 'No'}`,
-      ];
-
-      if (healthCheck.version) {
-        errorLines.push(`  - Version: ${healthCheck.version}`);
-      }
-
-      errorLines.push(
-        '',
-        'Troubleshooting:',
-        '  1. Install Claude CLI: npm install -g @anthropic-ai/claude-cli',
-        '  2. Authenticate: claude login',
-        '  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001',
-        '  4. Check PATH: which claude',
-        '',
-        'To skip this check (not recommended): SKIP_PREFLIGHT_CHECK=1'
-      );
-
-      await reporter?.emit({
-        event: 'error',
-        level: 'error',
-        message: 'Claude CLI preflight failed',
-        details: { command: healthCheck.command },
-      });
-
-      throw new Error(errorLines.join('\n'));
-    }
-
-    await reporter?.emit({
-      event: 'preflight_ok',
-      message: 'Claude CLI is available',
-      details: {
-        command: healthCheck.command,
-        version: healthCheck.version,
-      },
+    await ensureClaudeAvailable({
+      verbose: options.verbose,
+      reporter,
     });
   }
 

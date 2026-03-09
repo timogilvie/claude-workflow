@@ -16,7 +16,7 @@ import {
   type ReviewContext,
   type DesignContext,
 } from './review-context-gatherer.ts';
-import { callClaude, parseJsonFromLLM, checkClaudeAvailability } from './llm-cli.ts';
+import { callClaude, parseJsonFromLLM, ensureClaudeAvailable } from './llm-cli.ts';
 import { loadWavemillConfig } from './config.ts';
 import type { ReviewProgressReporter } from './review-progress.ts';
 
@@ -834,63 +834,14 @@ export async function runReview(
       console.error('=== Pre-Flight Check ===');
     }
 
-    await options.reporter?.emit({
-      event: 'preflight_start',
-      message: 'Checking Claude CLI availability',
+    await ensureClaudeAvailable({
+      verbose: options.verbose,
+      reporter: options.reporter,
     });
-
-    const healthCheck = await checkClaudeAvailability({ verbose: options.verbose });
-
-    if (!healthCheck.available) {
-      const errorLines = [
-        'Claude CLI is not available or not working properly.',
-        '',
-        `Error: ${healthCheck.error}`,
-        '',
-        'Diagnostics:',
-        `  - Command: ${healthCheck.command}`,
-        `  - In PATH: ${healthCheck.diagnostics?.inPath ? 'Yes' : 'No'}`,
-        `  - Executable: ${healthCheck.diagnostics?.executable ? 'Yes' : 'No'}`,
-        `  - Auth working: ${healthCheck.diagnostics?.authWorking ? 'Yes' : 'No'}`,
-      ];
-
-      if (healthCheck.version) {
-        errorLines.push(`  - Version: ${healthCheck.version}`);
-      }
-
-      errorLines.push(
-        '',
-        'Troubleshooting:',
-        '  1. Install Claude CLI: npm install -g @anthropic-ai/claude-cli',
-        '  2. Authenticate: claude login',
-        '  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001',
-        '  4. Check PATH: which claude',
-        '',
-        'To skip this check (not recommended): SKIP_PREFLIGHT_CHECK=1'
-      );
-
-      await options.reporter?.emit({
-        event: 'error',
-        level: 'error',
-        message: 'Claude CLI preflight failed',
-        details: { command: healthCheck.command },
-      });
-
-      throw new Error(errorLines.join('\n'));
-    }
 
     if (options.verbose) {
       console.error('✓ Claude CLI is available and working\n');
     }
-
-    await options.reporter?.emit({
-      event: 'preflight_ok',
-      message: 'Claude CLI is available',
-      details: {
-        command: healthCheck.command,
-        version: healthCheck.version,
-      },
-    });
   }
 
   // Run each persona review in sequence

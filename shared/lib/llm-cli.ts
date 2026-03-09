@@ -110,6 +110,10 @@ export interface LLMCallObserver {
   onRetry?: (event: LLMCallObserverEvent) => void | Promise<void>;
 }
 
+interface ObservedError extends Error {
+  elapsedMs?: number;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
@@ -119,6 +123,18 @@ const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10MB
 const DEFAULT_MAX_RETRIES = 2;
 const SLOW_CALL_WARNING_MS = 30_000;
 const SLOW_CALL_REPEAT_MS = 15_000;
+
+function withElapsed(error: Error, elapsedMs: number): ObservedError {
+  const observed = error as ObservedError;
+  observed.elapsedMs = elapsedMs;
+  return observed;
+}
+
+function getElapsed(error: unknown): number {
+  return typeof (error as ObservedError)?.elapsedMs === 'number'
+    ? (error as ObservedError).elapsedMs!
+    : 0;
+}
 
 // ────────────────────────────────────────────────────────────────
 // Text Cleaning Utilities
@@ -482,12 +498,13 @@ async function executeStream(
       settled = true;
       cleanup(timeoutId, slowInterval);
       llmProcess.kill('SIGTERM');
+      const elapsedMs = Date.now() - startedAt;
       reject(
-        new Error(
+        withElapsed(new Error(
           `${provider} CLI timed out after ${timeout}ms\n\n` +
           `Command: ${cliCmd} ${cliArgs.join(' ')}\n` +
           `Working directory: ${cwd}\n`
-        )
+        ), elapsedMs)
       );
     }, timeout);
 
@@ -507,7 +524,7 @@ async function executeStream(
       cleanup(timeoutId, slowInterval);
       const elapsedMs = Date.now() - startedAt;
       if (code !== 0) {
-        reject(new Error(`${provider} CLI exited with code ${code}: ${stderr}`));
+        reject(withElapsed(new Error(`${provider} CLI exited with code ${code}: ${stderr}`), elapsedMs));
       } else {
         void options.observer?.onAttemptComplete?.({
           provider,
@@ -526,7 +543,8 @@ async function executeStream(
       }
       settled = true;
       cleanup(timeoutId, slowInterval);
-      reject(new Error(`Failed to spawn ${provider} CLI: ${error.message}`));
+      const elapsedMs = Date.now() - startedAt;
+      reject(withElapsed(new Error(`Failed to spawn ${provider} CLI: ${error.message}`), elapsedMs));
     });
 
     // Read prompt from temp file and send to stdin
@@ -540,7 +558,7 @@ async function executeStream(
       }
       settled = true;
       cleanup(timeoutId, slowInterval);
-      reject(new Error(`Failed to read temp file: ${(error as Error).message}`));
+      reject(withElapsed(new Error(`Failed to read temp file: ${(error as Error).message}`), Date.now() - startedAt));
     }
   });
 }
@@ -721,6 +739,69 @@ export async function checkClaudeAvailability(
   };
 }
 
+export async function ensureClaudeAvailable(
+  options: {
+    verbose?: boolean;
+    reporter?: { emit(event: { event: string; message: string; level?: 'info' | 'warn' | 'error'; details?: Record<string, unknown> }): Promise<void> };
+  } = {}
+): Promise<void> {
+  const reporter = options.reporter;
+
+  await reporter?.emit({
+    event: 'preflight_start',
+    message: 'Checking Claude CLI availability',
+  });
+
+  const healthCheck = await checkClaudeAvailability({ verbose: options.verbose });
+
+  if (!healthCheck.available) {
+    const errorLines = [
+      'Claude CLI is not available or not working properly.',
+      '',
+      `Error: ${healthCheck.error}`,
+      '',
+      'Diagnostics:',
+      `  - Command: ${healthCheck.command}`,
+      `  - In PATH: ${healthCheck.diagnostics?.inPath ? 'Yes' : 'No'}`,
+      `  - Executable: ${healthCheck.diagnostics?.executable ? 'Yes' : 'No'}`,
+      `  - Auth working: ${healthCheck.diagnostics?.authWorking ? 'Yes' : 'No'}`,
+    ];
+
+    if (healthCheck.version) {
+      errorLines.push(`  - Version: ${healthCheck.version}`);
+    }
+
+    errorLines.push(
+      '',
+      'Troubleshooting:',
+      '  1. Install Claude CLI: npm install -g @anthropic-ai/claude-cli',
+      '  2. Authenticate: claude login',
+      '  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001',
+      '  4. Check PATH: which claude',
+      '',
+      'To skip this check (not recommended): SKIP_PREFLIGHT_CHECK=1'
+    );
+
+    await reporter?.emit({
+      event: 'error',
+      level: 'error',
+      message: 'Claude CLI preflight failed',
+      details: { command: healthCheck.command },
+    });
+
+    throw new Error(errorLines.join('\n'));
+  }
+
+  await reporter?.emit({
+    event: 'preflight_ok',
+    message: 'Claude CLI is available',
+    details: {
+      command: healthCheck.command,
+      version: healthCheck.version,
+    },
+  });
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main API
 // ────────────────────────────────────────────────────────────────
@@ -810,6 +891,7 @@ async function callLLMOnce(
 ): Promise<LLMCallResult> {
   const mode = options.mode || 'sync';
   const stripCalls = options.stripToolCalls ?? true;
+  const startedAt = Date.now();
 
   // Create temp file for prompt
   const tmpFile = join(tmpdir(), `wavemill-${provider}-${Date.now()}.txt`);
@@ -847,7 +929,7 @@ async function callLLMOnce(
         model: options.model,
         attempt,
         maxAttempts,
-        elapsedMs: 0,
+        elapsedMs: Date.now() - startedAt,
       });
     } else {
       rawOutput = await executeStream(tmpFile, cliArgs, options, provider, attempt, maxAttempts);
@@ -867,16 +949,7 @@ async function callLLMOnce(
       provider,
     };
   } catch (error) {
-    await options.observer?.onAttemptError?.({
-      provider,
-      model: options.model,
-      attempt,
-      maxAttempts,
-      elapsedMs: 0,
-      error: (error as Error).message.split('\n')[0],
-      willRetry: false,
-    });
-    throw error;
+    throw withElapsed(error as Error, getElapsed(error) || Date.now() - startedAt);
   } finally {
     // Clean up temp file
     if (existsSync(tmpFile)) {
@@ -906,6 +979,15 @@ async function callLLMWithRetry(
       return await callLLMOnce(prompt, options, provider, attempt + 1, totalAttempts);
     } catch (error) {
       lastError = error as Error;
+      await options.observer?.onAttemptError?.({
+        provider,
+        model: options.model,
+        attempt: attempt + 1,
+        maxAttempts: totalAttempts,
+        elapsedMs: getElapsed(lastError),
+        error: lastError.message.split('\n')[0],
+        willRetry: attempt < maxRetries,
+      });
 
       if (attempt < maxRetries) {
         // Exponential backoff: 2s, 4s, 8s, ...
