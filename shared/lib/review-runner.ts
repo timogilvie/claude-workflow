@@ -9,9 +9,14 @@
 
 import { resolve } from 'node:path';
 import {
+  assertReviewableDiff,
   gatherReviewContext,
+  getCurrentBranch,
+  getGitDiff,
 } from './review-context-gatherer.ts';
 import { runReview, type ReviewResult, type ReviewFinding, type ReviewerPersona } from './review-engine.ts';
+import { checkClaudeAvailability } from './llm-cli.ts';
+import type { ReviewProgressReporter } from './review-progress.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -30,6 +35,8 @@ export interface ReviewOptions {
   verbose?: boolean;
   /** List of reviewer personas to run */
   reviewers?: ReviewerPersona[];
+  /** Progress reporter for stderr milestones */
+  reporter?: ReviewProgressReporter;
 }
 
 // Re-export types from review-engine for backward compatibility
@@ -54,10 +61,95 @@ export async function reviewChanges(
 ): Promise<ReviewResult> {
   const targetBranch = options.targetBranch || 'main';
   const repoDir = options.repoDir ? resolve(options.repoDir) : process.cwd();
+  const reporter = options.reporter;
+
+  await reporter?.emit({
+    event: 'preflight_start',
+    message: `Checking git diff against ${targetBranch}`,
+  });
+
+  const branch = getCurrentBranch(repoDir);
+  const diff = getGitDiff(targetBranch, repoDir);
+  assertReviewableDiff(diff, branch, targetBranch);
+
+  await reporter?.emit({
+    event: 'preflight_ok',
+    message: `Found committed changes against ${targetBranch}`,
+    details: { branch },
+  });
+
+  if (!process.env.SKIP_PREFLIGHT_CHECK) {
+    await reporter?.emit({
+      event: 'preflight_start',
+      message: 'Checking Claude CLI availability',
+    });
+
+    const healthCheck = await checkClaudeAvailability({ verbose: options.verbose });
+    if (!healthCheck.available) {
+      const errorLines = [
+        'Claude CLI is not available or not working properly.',
+        '',
+        `Error: ${healthCheck.error}`,
+        '',
+        'Diagnostics:',
+        `  - Command: ${healthCheck.command}`,
+        `  - In PATH: ${healthCheck.diagnostics?.inPath ? 'Yes' : 'No'}`,
+        `  - Executable: ${healthCheck.diagnostics?.executable ? 'Yes' : 'No'}`,
+        `  - Auth working: ${healthCheck.diagnostics?.authWorking ? 'Yes' : 'No'}`,
+      ];
+
+      if (healthCheck.version) {
+        errorLines.push(`  - Version: ${healthCheck.version}`);
+      }
+
+      errorLines.push(
+        '',
+        'Troubleshooting:',
+        '  1. Install Claude CLI: npm install -g @anthropic-ai/claude-cli',
+        '  2. Authenticate: claude login',
+        '  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001',
+        '  4. Check PATH: which claude',
+        '',
+        'To skip this check (not recommended): SKIP_PREFLIGHT_CHECK=1'
+      );
+
+      await reporter?.emit({
+        event: 'error',
+        level: 'error',
+        message: 'Claude CLI preflight failed',
+        details: { command: healthCheck.command },
+      });
+
+      throw new Error(errorLines.join('\n'));
+    }
+
+    await reporter?.emit({
+      event: 'preflight_ok',
+      message: 'Claude CLI is available',
+      details: {
+        command: healthCheck.command,
+        version: healthCheck.version,
+      },
+    });
+  }
+
+  await reporter?.emit({
+    event: 'context_loading',
+    message: 'Loading review context',
+  });
 
   // Gather review context (skip design standards if explicitly requested)
   const context = gatherReviewContext(targetBranch, repoDir, {
     designStandards: !options.skipUi,
+  });
+
+  await reporter?.emit({
+    event: 'context_loaded',
+    message: `Loaded review context for ${context.metadata.files.length} changed files`,
+    details: {
+      hasUiChanges: context.metadata.hasUiChanges,
+      fileCount: context.metadata.files.length,
+    },
   });
 
   // Delegate to review engine
@@ -65,5 +157,7 @@ export async function reviewChanges(
     skipUi: options.skipUi,
     verbose: options.verbose,
     reviewers: options.reviewers,
+    reporter,
+    skipClaudePreflight: true,
   });
 }

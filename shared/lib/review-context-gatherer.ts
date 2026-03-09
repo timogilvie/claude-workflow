@@ -67,7 +67,7 @@ export interface GatherReviewContextOptions {
 /**
  * Get current git branch name.
  */
-function getCurrentBranch(repoDir: string): string {
+export function getCurrentBranch(repoDir: string): string {
   try {
     return execSync('git branch --show-current', {
       encoding: 'utf-8',
@@ -553,18 +553,7 @@ export function gatherReviewContext(
   // Get git diff
   const diff = getGitDiff(targetBranch, cwd);
 
-  if (!diff.trim()) {
-    throw new Error(
-      `No changes found between current branch '${branch}' and '${targetBranch}'\n` +
-      `  Possible causes:\n` +
-      `    - You are on '${targetBranch}' with no diverging commits\n` +
-      `    - Changes have not been committed yet (only committed changes are reviewed)\n` +
-      `  Troubleshooting:\n` +
-      `    - Commit your changes first: git add -A && git commit\n` +
-      `    - Create a feature branch: git checkout -b task/my-feature\n` +
-      `    - Verify diff manually: git diff ${targetBranch}`
-    );
-  }
+  assertReviewableDiff(diff, branch, targetBranch);
 
   // Analyze diff metadata
   const { files, lineCount, hasUiChanges } = analyzeDiffMetadata(diff);
@@ -588,4 +577,25 @@ export function gatherReviewContext(
       hasUiChanges,
     },
   };
+}
+
+export function assertReviewableDiff(
+  diff: string,
+  branch: string,
+  targetBranch: string
+): void {
+  if (diff.trim()) {
+    return;
+  }
+
+  throw new Error(
+    `No changes found between current branch '${branch}' and '${targetBranch}'\n` +
+    `  Possible causes:\n` +
+    `    - You are on '${targetBranch}' with no diverging commits\n` +
+    `    - Changes have not been committed yet (only committed changes are reviewed)\n` +
+    `  Troubleshooting:\n` +
+    `    - Commit your changes first: git add -A && git commit\n` +
+    `    - Create a feature branch: git checkout -b task/my-feature\n` +
+    `    - Verify diff manually: git diff ${targetBranch}`
+  );
 }
