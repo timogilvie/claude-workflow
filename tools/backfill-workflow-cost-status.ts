@@ -11,6 +11,7 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 import type { EvalRecord } from '../shared/lib/eval-schema.ts';
 import { computeWorkflowCost, loadPricingTable } from '../shared/lib/workflow-cost.ts';
 
@@ -96,7 +97,7 @@ function attemptCostRecovery(
       return { reason: costOutcome.reason };
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return { reason: `Recovery failed: ${msg}` };
   }
 }

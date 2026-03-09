@@ -21,6 +21,7 @@
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadWavemillConfig, CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 
 // Canonical template matching the comprehensive config from wavemill init
 const CANONICAL_TEMPLATE = {
@@ -232,7 +233,7 @@ async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
       configExists = true;
       console.log(`✓ Found existing config at ${configPath}`);
     } catch (err) {
-      console.error(`✗ Failed to parse existing config: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`✗ Failed to parse existing config: ${errorMessage(err)}`);
       process.exit(1);
     }
   } else {
@@ -303,7 +304,7 @@ async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
       console.log(`   Backup: ${backupPath}`);
     }
   } catch (err) {
-    console.error(`✗ Failed to write config: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`✗ Failed to write config: ${errorMessage(err)}`);
     process.exit(1);
   }
 }
@@ -314,6 +315,6 @@ const yes = args.includes('--yes');
 const dryRun = args.includes('--dry-run');
 
 syncConfig({ yes, dryRun }).catch(err => {
-  console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`Error: ${errorMessage(err)}`);
   process.exit(1);
 });
