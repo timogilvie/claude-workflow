@@ -51,4 +51,6 @@ wavemill expand
 
 For full setup, go to [Getting Started](getting-started.md).
 
+For agent instruction ownership and prompt update points, see [Prompt Locations](prompt-locations.md).
+
 Wavemill is open source under the [MIT License](https://github.com/timogilvie/wavemill/blob/main/LICENSE).

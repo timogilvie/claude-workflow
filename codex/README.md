@@ -16,7 +16,15 @@ This directory contains Codex-ready helpers that mirror the Claude workflows whi
 
 State is stored in `.codex/state/<feature>.json` to allow context handoff across sessions without mixing with Claude state.
 
+## Prompt Locations
+
+Use `docs/prompt-locations.md` as the canonical registry for agent instruction locations that must be updated together.
+
+- `shared/lib/agent-adapters.sh` - `agent_launch_autonomous()` and `agent_launch_interactive()` define mill-mode agent launch behavior.
+- `commands/workflow.md` - Phase 4 owns self-review for the interactive `/workflow` command.
+- `commands/bugfix.md` - Bug workflow does not include self-review.
+- `commands/implement-plan.md` - Does not define self-review; `/workflow` owns it.
+
 ## Config
 
 `codex/config.json` follows `claude/config.schema.json`. Override with `CODEX_CONFIG_PATH` if needed. The config keeps Linear project names, git prefixes, and test commands in sync with the Claude stack while allowing separate runtime files.
-
