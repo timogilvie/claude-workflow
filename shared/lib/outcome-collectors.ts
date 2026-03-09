@@ -14,8 +14,11 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { errorMessage } from './error-utils.ts';
+import { fetchPrReviews, resolveOwnerRepo } from './github-utils.ts';
+import { readJsonlFile } from './jsonl-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadReviewInterventions } from './review-intervention-mapper.ts';
 import type {
@@ -27,7 +30,6 @@ import type {
   DeliveryOutcome,
 } from './eval-schema.ts';
 import type { InterventionSummary } from './intervention-detector.ts';
-import { resolveOwnerRepo } from './intervention-detector.ts';
 import { resolveProjectsDir } from './workflow-cost.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -97,7 +99,7 @@ function fetchPrChecks(prNumber: string, repoDir?: string): any[] {
     prChecksCache.set(cacheKey, checks);
     return checks;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[outcome-collectors] Failed to fetch PR checks: ${message}`);
     prChecksCache.set(cacheKey, []);
     return [];
@@ -180,7 +182,7 @@ export function collectCiOutcome(
       });
     }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[outcome-collectors] Failed to fetch CI checks: ${message}`);
   }
 
@@ -245,7 +247,7 @@ export function collectTestsOutcome(
       }
     }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[outcome-collectors] Failed to collect test outcome: ${message}`);
   }
 
@@ -312,7 +314,7 @@ export function collectStaticAnalysisOutcome(
       outcome.securityFindingsDelta = securityCheck.conclusion === 'success' ? 0 : 1;
     }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[outcome-collectors] Failed to collect static analysis outcome: ${message}`);
   }
 
@@ -367,18 +369,8 @@ export function collectReviewOutcome(
       return outcome;
     }
 
-    // Fetch PR reviews via GitHub API
-    const reviewsRaw = execShellCommand(
-      `gh api repos/${escapeShellArg(repo)}/pulls/${escapeShellArg(prNumber)}/reviews --jq '[.[] | {state: .state, submittedAt: .submitted_at}]' 2>/dev/null || echo '[]'`,
-      { encoding: 'utf-8', cwd, timeout: 15_000 }
-    ).trim();
-
-    if (!reviewsRaw || reviewsRaw === '[]') {
-      return outcome;
-    }
-
-    const reviews = JSON.parse(reviewsRaw);
-    if (!Array.isArray(reviews)) {
+    const reviews = fetchPrReviews(prNumber, cwd, repo);
+    if (reviews.length === 0) {
       return outcome;
     }
 
@@ -410,7 +402,7 @@ export function collectReviewOutcome(
     const uniqueRounds = new Set(timestamps);
     outcome.rounds = uniqueRounds.size;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[outcome-collectors] Failed to collect review outcome: ${message}`);
   }
 
@@ -430,7 +422,7 @@ export function collectReviewOutcome(
       }
     } catch (err: unknown) {
       // Non-throwing - continue without self-review data
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       console.warn(`[outcome-collectors] Failed to load self-review metrics: ${message}`);
     }
   }
@@ -485,18 +477,7 @@ export function collectReworkOutcome(
         let toolFailures = 0;
         for (const filePath of sessionFiles) {
           try {
-            const content = readFileSync(filePath, 'utf-8');
-            const lines = content.split('\n');
-
-            for (const line of lines) {
-              if (!line.trim()) continue;
-
-              let entry: Record<string, unknown>;
-              try {
-                entry = JSON.parse(line);
-              } catch {
-                continue;
-              }
+            for (const entry of readJsonlFile<Record<string, unknown>>(filePath)) {
 
               // Look for assistant messages with tool errors
               if (entry.type === 'assistant' && entry.gitBranch === branchName) {
@@ -521,7 +502,7 @@ export function collectReworkOutcome(
       }
     }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[outcome-collectors] Failed to collect rework outcome: ${message}`);
   }
 
@@ -584,7 +565,7 @@ export function collectDeliveryOutcome(
       }
     }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[outcome-collectors] Failed to collect delivery outcome: ${message}`);
   }
 

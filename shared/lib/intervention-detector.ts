@@ -11,9 +11,12 @@
 
 import { execSync } from "node:child_process";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { resolveProjectsDir } from './workflow-cost.ts';
 import { loadWavemillConfig } from './config.ts';
+import { errorMessage } from './error-utils.ts';
+import { fetchPrReviews, resolveOwnerRepo } from './github-utils.ts';
+import { readJsonlFile } from './jsonl-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadReviewInterventions } from './review-intervention-mapper.ts';
 import type {
@@ -83,45 +86,6 @@ export const DEFAULT_PENALTIES: InterventionPenalties = {
 };
 
 // ────────────────────────────────────────────────────────────────
-// GitHub repo resolution
-// ────────────────────────────────────────────────────────────────
-
-/**
- * Resolve the GitHub owner/repo string (e.g. "timogilvie/wavemill") from
- * the git remote in the given directory.
- *
- * `gh api` supports `{owner}/{repo}` template placeholders, but they only
- * resolve when gh can detect the current repo from git remotes. When the
- * cwd is missing or the remote isn't a GitHub URL, the API call returns a
- * 404. Resolving once up front makes errors obvious and avoids repeated
- * template-expansion failures.
- *
- * Returns undefined on error so callers can degrade gracefully.
- */
-export function resolveOwnerRepo(repoDir?: string): string | undefined {
-  const cwd = repoDir || process.cwd();
-  try {
-    const nwo = execShellCommand(
-      `gh repo view --json nameWithOwner --jq .nameWithOwner`,
-      { encoding: 'utf-8', cwd, timeout: 10_000 }
-    ).trim();
-    return nwo || undefined;
-  } catch {
-    // Fallback: parse git remote directly (works offline / without gh auth)
-    try {
-      const remoteUrl = execShellCommand('git remote get-url origin', {
-        encoding: 'utf-8', cwd, timeout: 5_000,
-      }).trim();
-      const match =
-        remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/) ;
-      return match?.[1];
-    } catch {
-      return undefined;
-    }
-  }
-}
-
-// ────────────────────────────────────────────────────────────────
 // Config
 // ────────────────────────────────────────────────────────────────
 
@@ -162,22 +126,14 @@ export function detectReviewComments(prNumber: string, repoDir?: string, nwo?: s
   }
 
   try {
-    // Fetch reviews (top-level review submissions with state)
-    const reviewsRaw = execShellCommand(
-      `gh api repos/${escapeShellArg(repo)}/pulls/${escapeShellArg(prNumber)}/reviews --jq '[.[] | {author: .user.login, state: .state, body: .body, submittedAt: .submitted_at}]'`,
-      { encoding: 'utf-8', cwd, timeout: 15_000 }
-    ).trim();
-
-    if (reviewsRaw) {
-      const reviews: ReviewComment[] = JSON.parse(reviewsRaw);
-      const changeRequests = reviews.filter(
-        (r) => r.state === 'CHANGES_REQUESTED' || r.state === 'COMMENTED'
-      );
-      for (const r of changeRequests) {
-        if (r.body && r.body.trim()) {
-          event.details.push(`[${r.state}] ${r.author}: ${r.body.slice(0, 200)}`);
-          event.timestamps!.push(r.submittedAt);
-        }
+    const reviews = fetchPrReviews(prNumber, cwd, repo);
+    const changeRequests = reviews.filter(
+      (review) => review.state === 'CHANGES_REQUESTED' || review.state === 'COMMENTED',
+    );
+    for (const review of changeRequests) {
+      if (review.body && review.body.trim()) {
+        event.details.push(`[${review.state}] ${review.author}: ${review.body.slice(0, 200)}`);
+        event.timestamps!.push(review.submittedAt);
       }
     }
 
@@ -198,7 +154,7 @@ export function detectReviewComments(prNumber: string, repoDir?: string, nwo?: s
 
     event.count = event.details.length;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[intervention-detector] Failed to fetch PR review comments: ${message}`);
   }
 
@@ -225,7 +181,7 @@ export function fetchPrCommits(prNumber: string, repoDir?: string, nwo?: string)
     if (!commitsRaw) return [];
     return JSON.parse(commitsRaw) as PrCommit[];
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[intervention-detector] Failed to fetch PR commits: ${message}`);
     return [];
   }
@@ -275,7 +231,7 @@ export function detectPostPrCommits(prNumber: string, repoDir?: string, prCommit
     }
     event.count = postPrCommits.length;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[intervention-detector] Failed to fetch PR commits: ${message}`);
   }
 
@@ -358,7 +314,7 @@ export function detectManualEdits(
     }
     event.count = event.details.length;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[intervention-detector] Failed to detect manual edits: ${message}`);
   }
 
@@ -423,7 +379,7 @@ export function detectTestFixes(
     }
     event.count = event.details.length;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[intervention-detector] Failed to detect test fixes: ${message}`);
   }
 
@@ -466,18 +422,7 @@ export function detectSessionRedirects(worktreePath: string, branchName: string)
 
     for (const filePath of sessionFiles) {
       try {
-        const content = readFileSync(filePath, 'utf-8');
-        const lines = content.split('\n');
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-
-          let entry: Record<string, unknown>;
-          try {
-            entry = JSON.parse(line);
-          } catch {
-            continue;
-          }
+        for (const entry of readJsonlFile<Record<string, unknown>>(filePath)) {
 
           if (entry.type !== 'user') continue;
           if (entry.gitBranch !== branchName) continue;
@@ -511,7 +456,7 @@ export function detectSessionRedirects(worktreePath: string, branchName: string)
     }
     event.count = redirections.length;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.warn(`[intervention-detector] Failed to detect session redirects: ${message}`);
   }
 
@@ -643,7 +588,7 @@ export function detectAllInterventions(
       }
     } catch (err) {
       // Non-throwing - continue without review interventions
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       console.warn(`[intervention-detector] Failed to load review interventions: ${message}`);
     }
   }

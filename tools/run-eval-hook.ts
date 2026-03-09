@@ -7,6 +7,7 @@
  * Always exits 0 so eval failures never break workflows.
  */
 
+import { errorMessage } from '../shared/lib/error-utils.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { runPostCompletionEval } from '../shared/lib/post-completion-hook.ts';
 
@@ -89,7 +90,7 @@ runTool({
     try {
       await runPostCompletionEval(context);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       console.warn(`Post-completion eval hook: unexpected error — ${message}`);
     }
   },
