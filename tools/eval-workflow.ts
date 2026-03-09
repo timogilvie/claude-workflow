@@ -1,6 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
 import '../shared/lib/env.js';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 import { runEvaluation } from '../shared/lib/eval-orchestrator.ts';
 import { formatEvalRecord } from '../shared/lib/eval-formatter.ts';
 
@@ -41,7 +42,7 @@ Requires:
         try {
           routingDecision = JSON.parse(args['routing-decision'] as string);
         } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
+          const errorMsg = errorMessage(err);
           console.error(`Warning: failed to parse routing decision JSON: ${errorMsg}`);
         }
       }
@@ -65,7 +66,7 @@ Requires:
         console.log(JSON.stringify(record, null, 2));
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = errorMessage(error);
       console.error(`Error: ${errorMsg}`);
       process.exit(1);
     }

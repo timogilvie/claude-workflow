@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { resolve } from 'node:path';
-import { gatherReviewContext } from '../shared/lib/review-context-gatherer.ts';
+import { gatherReviewContextAsync } from '../shared/lib/review-context-gatherer.ts';
 
 runTool({
   name: 'gather-review-context',
@@ -27,11 +27,11 @@ runTool({
 - Metadata (branch, files, line counts, UI changes)
 
 Outputs JSON to stdout.`,
-  run({ positional }) {
+  async run({ positional }) {
     const targetBranch = positional[0] || 'main';
     const repoDir = positional[1] ? resolve(positional[1]) : process.cwd();
 
-    const context = gatherReviewContext(targetBranch, repoDir);
+    const context = await gatherReviewContextAsync(targetBranch, repoDir);
     console.log(JSON.stringify(context, null, 2));
   },
 });

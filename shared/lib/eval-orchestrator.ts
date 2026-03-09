@@ -14,6 +14,7 @@
  */
 
 import path from 'node:path';
+import { errorMessage } from './error-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import {
   autoDetectContext,
@@ -166,54 +167,104 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     }
   }
 
-  const interventionSummary = detectAllInterventions({
-    prNumber,
-    branchName: branch,
-    baseBranch: 'main',
-    repoDir,
-    agentType,
-    issueId,
-  });
-
-  const interventionMeta = toInterventionMeta(interventionSummary);
-  const interventionRecords = toInterventionRecords(interventionSummary);
-  const penalties = loadPenalties(repoDir);
-  const interventionText = formatForJudge(interventionSummary, penalties);
-
-  const totalInterventions = interventionSummary.interventions.reduce(
-    (sum, e) => sum + e.count,
-    0
-  );
-  console.log(
-    `  Detected ${totalInterventions} intervention event(s) ` +
-      `(weighted penalty: ${interventionSummary.totalInterventionScore})`
-  );
-
-  // 4. Analyze difficulty from PR diff
-  let difficultyData = null;
-  if (prNumber && evalContext.prDiff) {
-    try {
-      console.log('\nAnalyzing PR difficulty...');
-      difficultyData = analyzePrDifficulty({
-        prDiff: evalContext.prDiff,
+  const runInterventionAnalysis = () =>
+    Promise.resolve().then(() => {
+      const interventionSummary = detectAllInterventions({
         prNumber,
+        branchName: branch,
+        baseBranch: 'main',
         repoDir,
+        agentType,
+        issueId,
       });
-      if (difficultyData) {
-        console.log(
-          `  Difficulty: ${difficultyData.difficultyBand} ` +
-            `(${difficultyData.difficultySignals.locTouched} LOC, ` +
-            `${difficultyData.difficultySignals.filesTouched} files, ` +
-            `stratum: ${difficultyData.stratum})`
-        );
-      }
-    } catch (diffErr) {
-      const errorMsg = diffErr instanceof Error ? diffErr.message : String(diffErr);
-      console.warn(`  Warning: difficulty analysis failed — ${errorMsg}`);
-    }
-  }
 
-  // 5. Analyze task context
+      const interventionMeta = toInterventionMeta(interventionSummary);
+      const interventionRecords = toInterventionRecords(interventionSummary);
+      const penalties = loadPenalties(repoDir);
+      const interventionText = formatForJudge(interventionSummary, penalties);
+
+      const totalInterventions = interventionSummary.interventions.reduce(
+        (sum, e) => sum + e.count,
+        0
+      );
+      console.log(
+        `  Detected ${totalInterventions} intervention event(s) ` +
+          `(weighted penalty: ${interventionSummary.totalInterventionScore})`
+      );
+
+      return {
+        interventionSummary,
+        interventionMeta,
+        interventionRecords,
+        interventionText,
+      };
+    });
+
+  const runDifficultyAnalysis = () =>
+    Promise.resolve().then(() => {
+      if (!(prNumber && evalContext.prDiff)) {
+        return null;
+      }
+
+      try {
+        console.log('\nAnalyzing PR difficulty...');
+        const difficultyData = analyzePrDifficulty({
+          prDiff: evalContext.prDiff,
+          prNumber,
+          repoDir,
+        });
+        if (difficultyData) {
+          console.log(
+            `  Difficulty: ${difficultyData.difficultyBand} ` +
+              `(${difficultyData.difficultySignals.locTouched} LOC, ` +
+              `${difficultyData.difficultySignals.filesTouched} files, ` +
+              `stratum: ${difficultyData.stratum})`
+          );
+        }
+        return difficultyData;
+      } catch (diffErr) {
+        const errorMsg = diffErr instanceof Error ? diffErr.message : String(diffErr);
+        console.warn(`  Warning: difficulty analysis failed — ${errorMsg}`);
+        return null;
+      }
+    });
+
+  const runRepoContextAnalysis = () =>
+    Promise.resolve().then(() => {
+      try {
+        console.log('\nAnalyzing repo context...');
+        const repoContextData = analyzeRepoContext(repoDir);
+        if (repoContextData) {
+          console.log(
+            `  Repo context: ${repoContextData.primaryLanguage} / ` +
+              `${repoContextData.repoVisibility} / ` +
+              `${repoContextData.repoSize?.fileCount || 0} files`
+          );
+        }
+        return repoContextData;
+      } catch (repoErr) {
+        const errorMsg = repoErr instanceof Error ? repoErr.message : String(repoErr);
+        console.warn(`  Warning: repo context analysis failed — ${errorMsg}`);
+        return null;
+      }
+    });
+
+  const [
+    {
+      interventionSummary,
+      interventionMeta,
+      interventionRecords,
+      interventionText,
+    },
+    difficultyData,
+    repoContextData,
+  ] = await Promise.all([
+    runInterventionAnalysis(),
+    runDifficultyAnalysis(),
+    runRepoContextAnalysis(),
+  ]);
+
+  // 4. Analyze task context after difficulty so complexity inputs stay aligned.
   let taskContextData = null;
   if (issueId || evalContext.prDiff) {
     try {
@@ -236,23 +287,6 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       const errorMsg = taskErr instanceof Error ? taskErr.message : String(taskErr);
       console.warn(`  Warning: task context analysis failed — ${errorMsg}`);
     }
-  }
-
-  // 6. Analyze repo context
-  let repoContextData = null;
-  try {
-    console.log('\nAnalyzing repo context...');
-    repoContextData = analyzeRepoContext(repoDir);
-    if (repoContextData) {
-      console.log(
-        `  Repo context: ${repoContextData.primaryLanguage} / ` +
-          `${repoContextData.repoVisibility} / ` +
-          `${repoContextData.repoSize?.fileCount || 0} files`
-      );
-    }
-  } catch (repoErr) {
-    const errorMsg = repoErr instanceof Error ? repoErr.message : String(repoErr);
-    console.warn(`  Warning: repo context analysis failed — ${errorMsg}`);
   }
 
   // 7. Collect outcome components
@@ -342,7 +376,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   try {
     appendEvalRecord(record);
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
+    const errorMsg = errorMessage(err);
     console.error(`Warning: failed to persist eval record: ${errorMsg}`);
   }
 

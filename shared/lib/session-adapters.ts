@@ -13,6 +13,7 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { readJsonlFile } from './jsonl-utils.ts';
 import { resolveProjectsDir } from './workflow-cost.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -116,18 +117,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
       let sessionHadTurns = false;
 
       try {
-        const content = readFileSync(filePath, 'utf-8');
-        const lines = content.split('\n');
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-
-          let entry: Record<string, unknown>;
-          try {
-            entry = JSON.parse(line);
-          } catch {
-            continue;
-          }
+        for (const entry of readJsonlFile<Record<string, unknown>>(filePath)) {
 
           if (entry.type !== 'assistant') continue;
           totalAssistantTurns++;
@@ -350,21 +340,10 @@ export class CodexSessionAdapter implements SessionAdapter {
    */
   private parseSessionFile(filePath: string): { modelId: string; usage: SessionModelUsage } | null {
     try {
-      const content = readFileSync(filePath, 'utf-8');
-      const lines = content.split('\n');
-
       let modelId = 'unknown';
       let lastTokenUsage: Record<string, number> | null = null;
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-
-        let entry: Record<string, unknown>;
-        try {
-          entry = JSON.parse(line);
-        } catch {
-          continue;
-        }
+      for (const entry of readJsonlFile<Record<string, unknown>>(filePath)) {
 
         // Extract model from turn_context entries
         if (entry.type === 'turn_context') {
