@@ -123,12 +123,15 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
 
     console.log(`Post-completion eval: ${formatInterventionDisplay(interventionData.totalCount)}`);
 
-    // 3. Run all analyses (non-blocking, failures logged as warnings)
-    let difficultyData: ReturnType<typeof analyzePrDifficulty> = null;
-    if (ctx.prNumber && evalContext.prDiff) {
+    // 3. Run independent analyses in parallel (non-blocking, failures logged as warnings)
+    const runDifficultyAnalysis = async (): Promise<ReturnType<typeof analyzePrDifficulty>> => {
+      if (!(ctx.prNumber && evalContext.prDiff)) {
+        return null;
+      }
+
       try {
         console.log('Post-completion eval: analyzing PR difficulty...');
-        difficultyData = analyzePrDifficulty({
+        const difficultyData = analyzePrDifficulty({
           prDiff: evalContext.prDiff,
           prNumber: ctx.prNumber,
           repoDir,
@@ -144,11 +147,39 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
             )}`
           );
         }
+        return difficultyData;
       } catch (diffErr: unknown) {
         const diffMsg = diffErr instanceof Error ? diffErr.message : String(diffErr);
         console.warn(`Post-completion eval: difficulty analysis failed — ${diffMsg}`);
+        return null;
       }
-    }
+    };
+
+    const runRepoContextAnalysis = async (): Promise<ReturnType<typeof analyzeRepoContext> | null> => {
+      try {
+        console.log('Post-completion eval: analyzing repo context...');
+        const repoContextData = analyzeRepoContext(repoDir);
+        if (repoContextData) {
+          console.log(
+            `Post-completion eval: ${formatRepoContextDisplay(
+              repoContextData.primaryLanguage,
+              repoContextData.repoVisibility,
+              repoContextData.repoSize?.fileCount || 0
+            )}`
+          );
+        }
+        return repoContextData;
+      } catch (repoErr: unknown) {
+        const repoMsg = repoErr instanceof Error ? repoErr.message : String(repoErr);
+        console.warn(`Post-completion eval: repo context analysis failed — ${repoMsg}`);
+        return null;
+      }
+    };
+
+    const [difficultyData, repoContextData] = await Promise.all([
+      runDifficultyAnalysis(),
+      runRepoContextAnalysis(),
+    ]);
 
     let taskContextData: ReturnType<typeof analyzeTaskContext> | null = null;
     if (evalContext.issueData || evalContext.prDiff) {
@@ -174,24 +205,6 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
         const taskMsg = taskErr instanceof Error ? taskErr.message : String(taskErr);
         console.warn(`Post-completion eval: task context analysis failed — ${taskMsg}`);
       }
-    }
-
-    let repoContextData: ReturnType<typeof analyzeRepoContext> | null = null;
-    try {
-      console.log('Post-completion eval: analyzing repo context...');
-      repoContextData = analyzeRepoContext(repoDir);
-      if (repoContextData) {
-        console.log(
-          `Post-completion eval: ${formatRepoContextDisplay(
-            repoContextData.primaryLanguage,
-            repoContextData.repoVisibility,
-            repoContextData.repoSize?.fileCount || 0
-          )}`
-        );
-      }
-    } catch (repoErr: unknown) {
-      const repoMsg = repoErr instanceof Error ? repoErr.message : String(repoErr);
-      console.warn(`Post-completion eval: repo context analysis failed — ${repoMsg}`);
     }
 
     // 4. Run eval judge

@@ -10,7 +10,7 @@
 import { resolve } from 'node:path';
 import {
   assertReviewableDiff,
-  gatherReviewContext,
+  gatherReviewContextAsync,
   getCurrentBranch,
   getGitDiff,
 } from './review-context-gatherer.ts';
@@ -96,7 +96,7 @@ export async function reviewChanges(
   });
 
   // Gather review context (skip design standards if explicitly requested)
-  const context = gatherReviewContext(targetBranch, repoDir, {
+  const context = await gatherReviewContextAsync(targetBranch, repoDir, {
     designStandards: !options.skipUi,
     sinceCommit: options.sinceCommit,
   });
