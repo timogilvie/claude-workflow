@@ -69,6 +69,18 @@ agent_reported_status() {
   fi
 }
 
+plan_waiting_for_review() {
+  local task_phase="$1"
+  local agent_state="$2"
+  local worktree="$3"
+  local slug="$4"
+
+  [[ "$task_phase" == "planning" ]] || return 1
+  [[ "$agent_state" == "exited" ]] || return 1
+  [[ -f "$worktree/features/$slug/.plan-approved" ]] && return 1
+  return 0
+}
+
 # ── Elapsed time from directory birth ─────────────────────────────────────
 
 elapsed() {
@@ -169,6 +181,7 @@ while true; do
       t=$(elapsed "$worktree")
 
       # Agent
+      st="done"
       if [[ "$task_status" == "merged" ]]; then
         st_str="${G}✓ merged${N}"
       else
@@ -218,6 +231,9 @@ while true; do
 
       # Show agent-reported status on a second line (if available)
       reported=$(agent_reported_status "$issue")
+      if plan_waiting_for_review "$task_phase" "$st" "$worktree" "$slug"; then
+        reported="Plan waiting for review"
+      fi
       if [[ -n "$reported" ]]; then
         printf "${D}%10s  └─ %s${N}\n" "" "$reported" >> "$FRAME"
       fi
