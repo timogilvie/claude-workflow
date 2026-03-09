@@ -1,6 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { reviewChanges, type ReviewResult } from '../shared/lib/review-runner.ts';
 import { CYAN, GREEN, YELLOW, RED, BOLD, DIM, NC } from '../shared/lib/colors.ts';
 import {
@@ -113,6 +114,40 @@ function formatReviewResult(result: ReviewResult, verbose: boolean): string {
   return lines.join('\n');
 }
 
+/**
+ * Auto-detect sinceCommit from selected-task.json in the feature/bug directory.
+ *
+ * Looks for `reviewBaseCommit` field which is recorded when the task branch
+ * is created, allowing the review to scope to only task-specific changes.
+ */
+function detectSinceCommit(branchName: string, repoDir: string, verbose: boolean): string | undefined {
+  // Extract slug from branch name (e.g., "task/my-feature" → "my-feature")
+  const match = branchName.match(/^(?:task|feature|bugfix|bug)\/(.+)$/);
+  if (!match) return undefined;
+
+  const slug = match[1];
+
+  // Check features/ and bugs/ directories
+  for (const dir of ['features', 'bugs']) {
+    const taskPath = join(repoDir, dir, slug, 'selected-task.json');
+    if (existsSync(taskPath)) {
+      try {
+        const task = JSON.parse(readFileSync(taskPath, 'utf-8'));
+        if (task.reviewBaseCommit) {
+          if (verbose) {
+            console.error(`Auto-detected sinceCommit from ${taskPath}: ${task.reviewBaseCommit.slice(0, 8)}`);
+          }
+          return task.reviewBaseCommit;
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+  }
+
+  return undefined;
+}
+
 runTool({
   name: 'review-changes',
   description: 'Review code changes against plan and task packet',
@@ -122,6 +157,7 @@ runTool({
     verbose: { type: 'boolean', description: 'Print full review output and debug info (stderr)' },
     'skip-ui': { type: 'boolean', description: 'Skip UI verification even if design context exists' },
     'ui-only': { type: 'boolean', description: 'Run only UI verification (skip code review)' },
+    'since-commit': { type: 'string', description: 'Only review changes after this commit SHA (scopes review to task-specific changes)' },
     help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
@@ -136,6 +172,7 @@ runTool({
     'npx tsx tools/review-changes.ts main --log-format json',
     'npx tsx tools/review-changes.ts main --verbose',
     'npx tsx tools/review-changes.ts main /path/to/repo --skip-ui',
+    'npx tsx tools/review-changes.ts main --since-commit abc1234',
   ],
   additionalHelp: `Exit Codes:
   0 - Review passed (verdict: ready)
@@ -236,6 +273,10 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         }
       }
 
+      // Resolve sinceCommit: explicit flag > auto-detect from selected-task.json
+      const sinceCommit = (args['since-commit'] as string | undefined)
+        || detectSinceCommit(currentBranch, repoDir, verbose);
+
       await reporter.emit({
         event: 'review_start',
         message: 'Running code review',
@@ -244,6 +285,7 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
           repoDir,
           skipUi: !!args['skip-ui'],
           uiOnly: !!args['ui-only'],
+          sinceCommit: sinceCommit || null,
         },
       });
       if (verbose) {
@@ -251,6 +293,9 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         console.error(`  Repository: ${repoDir}`);
         console.error(`  Skip UI: ${!!args['skip-ui']}`);
         console.error(`  UI only: ${!!args['ui-only']}`);
+        if (sinceCommit) {
+          console.error(`  Since commit: ${sinceCommit}`);
+        }
         console.error('');
       }
 
@@ -261,6 +306,7 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         uiOnly: !!args['ui-only'],
         verbose,
         reporter,
+        sinceCommit,
       });
 
       // Add iteration to metric

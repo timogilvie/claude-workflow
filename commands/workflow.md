@@ -222,6 +222,8 @@ Apply the canonical template with these workflow-specific values:
 
 For each iteration (up to `MAX_ITERATIONS`):
 
+The review tool auto-detects `reviewBaseCommit` from `selected-task.json` (recorded during branch creation). This scopes the review to only task-specific changes, filtering out pre-existing branch changes. You can also pass `--since-commit <SHA>` explicitly to override.
+
 1. Run the review tool and capture `REVIEW_EXIT_CODE=${PIPESTATUS[0]}`.
 2. If the command times out (`124`), convert it to exit code `2`.
 3. If exit code is `0`, mark review passed and break.

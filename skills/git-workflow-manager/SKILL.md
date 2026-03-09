@@ -58,6 +58,27 @@ Example:
 git branch --show-current
 ```
 
+**Record review baseline commit:**
+
+After creating the branch, record the current HEAD commit SHA in `selected-task.json` as `reviewBaseCommit`. This allows the self-review tool to scope its diff to only task-specific changes, filtering out any pre-existing branch changes.
+
+```bash
+# Get current HEAD commit SHA
+REVIEW_BASE=$(git rev-parse HEAD)
+
+# Add reviewBaseCommit to selected-task.json
+# For features:
+npx tsx -e "
+const fs = require('fs');
+const path = 'features/<feature-name>/selected-task.json';
+const task = JSON.parse(fs.readFileSync(path, 'utf-8'));
+task.reviewBaseCommit = '${REVIEW_BASE}';
+fs.writeFileSync(path, JSON.stringify(task, null, 2) + '\n');
+"
+```
+
+This commit SHA marks the point where task implementation begins. The review tool will automatically detect it and only review changes made after this point.
+
 ### Step 3: Commit Changes
 
 **For feature workflows:**

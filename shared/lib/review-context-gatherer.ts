@@ -58,6 +58,15 @@ export interface ReviewContext {
 export interface GatherReviewContextOptions {
   /** Enable design standards discovery (default: true) */
   designStandards?: boolean;
+  /**
+   * Commit SHA to diff from instead of the merge-base with targetBranch.
+   *
+   * When set, the diff becomes `git diff <sinceCommit>..HEAD` instead of
+   * `git diff <targetBranch>...HEAD`. This scopes the review to only
+   * changes made after a specific point (e.g., the commit where the task
+   * started), filtering out pre-existing branch changes.
+   */
+  sinceCommit?: string;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -99,36 +108,45 @@ export function getCurrentBranch(repoDir: string): string {
  * This prevents false positives in code review where unrelated files
  * from previous PRs are flagged.
  *
+ * When `sinceCommit` is provided, uses two-dot syntax (`sinceCommit..HEAD`)
+ * to scope the diff to only changes made after that specific commit. This
+ * is useful when a branch contains pre-existing changes unrelated to the
+ * current task — the review is limited to task-specific commits only.
+ *
  * @see https://git-scm.com/docs/git-diff (three-dot syntax)
  * @see shared/lib/rule-generator.ts for similar usage
  */
-export function getGitDiff(targetBranch: string, repoDir?: string): string {
+export function getGitDiff(targetBranch: string, repoDir?: string, sinceCommit?: string): string {
   const cwd = repoDir ? resolve(repoDir) : process.cwd();
 
+  // When sinceCommit is provided, diff from that commit to HEAD.
+  // This scopes the review to only changes after the task started,
+  // filtering out pre-existing branch changes.
+  const diffSpec = sinceCommit
+    ? `${sinceCommit}..HEAD`
+    : `${targetBranch}...HEAD`;
+
   try {
-    // CRITICAL: Use three-dot syntax to diff only branch-specific changes.
-    // Two-dot syntax (git diff main) includes full branch history which
-    // can flag pre-existing code from merged PRs. Three-dot syntax
-    // (git diff main...HEAD) compares merge-base to HEAD.
-    return execSync(`git diff ${targetBranch}...HEAD`, {
+    // Without sinceCommit: three-dot syntax diffs merge-base to HEAD
+    // With sinceCommit: two-dot syntax diffs from exact commit to HEAD
+    return execSync(`git diff ${diffSpec}`, {
       encoding: 'utf-8',
       cwd,
       maxBuffer: 50 * 1024 * 1024, // 50MB max
     });
   } catch (error) {
     throw new Error(
-      `Failed to get git diff against '${targetBranch}...HEAD' in ${cwd}\n` +
+      `Failed to get git diff against '${diffSpec}' in ${cwd}\n` +
       `  Error: ${(error as Error).message}\n` +
       `  Possible causes:\n` +
-      `    - Branch '${targetBranch}' does not exist\n` +
-      `    - No common ancestor between current branch and '${targetBranch}'\n` +
+      `    - ${sinceCommit ? `Commit '${sinceCommit}' does not exist` : `Branch '${targetBranch}' does not exist`}\n` +
+      `    - ${sinceCommit ? `Commit is not an ancestor of HEAD` : `No common ancestor between current branch and '${targetBranch}'`}\n` +
       `    - Diff is larger than 50MB (exceeds buffer limit)\n` +
       `    - Git is not installed or not in PATH\n` +
       `    - Repository is corrupted\n` +
       `  Troubleshooting:\n` +
-      `    - Run 'git diff ${targetBranch}...HEAD' manually to verify\n` +
-      `    - Check that target branch exists: git branch -a | grep ${targetBranch}\n` +
-      `    - Verify branches have common ancestor: git merge-base ${targetBranch} HEAD\n` +
+      `    - Run 'git diff ${diffSpec}' manually to verify\n` +
+      `    - ${sinceCommit ? `Check commit exists: git cat-file -t ${sinceCommit}` : `Check that target branch exists: git branch -a | grep ${targetBranch}`}\n` +
       `    - If diff is very large, try reviewing smaller changesets`
     );
   }
@@ -550,10 +568,10 @@ export function gatherReviewContext(
   // Get current branch
   const branch = getCurrentBranch(cwd);
 
-  // Get git diff
-  const diff = getGitDiff(targetBranch, cwd);
+  // Get git diff (scoped to sinceCommit if provided)
+  const diff = getGitDiff(targetBranch, cwd, options?.sinceCommit);
 
-  assertReviewableDiff(diff, branch, targetBranch);
+  assertReviewableDiff(diff, branch, options?.sinceCommit ? `commit ${options.sinceCommit.slice(0, 8)}` : targetBranch);
 
   // Analyze diff metadata
   const { files, lineCount, hasUiChanges } = analyzeDiffMetadata(diff);
