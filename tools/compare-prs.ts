@@ -6,17 +6,25 @@ import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/l
 import { readEvalRecords } from '../shared/lib/eval-persistence.ts';
 import { appendChallengeComparison, type ChallengeComparison } from '../shared/lib/challenge-comparison.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 function prUrlFromNumber(pr: string, repoDir: string): string {
   if (/^https?:\/\//.test(pr)) {
     return pr;
   }
-  return execSync(`gh pr view ${pr} --json url --jq .url`, {
-    cwd: repoDir,
-    encoding: 'utf-8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  }).trim();
+  try {
+    return execFileSync('gh', ['pr', 'view', pr, '--json', 'url', '--jq', '.url'], {
+      cwd: repoDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to resolve PR URL for ${pr}: ${message}`);
+  }
 }
 
 function prNumberFromValue(pr: string): string {
@@ -75,8 +83,54 @@ function validateComparisonJson(parsed: any): Omit<ChallengeComparison, 'challen
     if (!dimension || typeof dimension.primary !== 'number' || typeof dimension.challenger !== 'number') {
       throw new Error(`Invalid dimension payload for ${key}`);
     }
+    if (
+      !Number.isInteger(dimension.primary) ||
+      !Number.isInteger(dimension.challenger) ||
+      dimension.primary < 1 ||
+      dimension.primary > 10 ||
+      dimension.challenger < 1 ||
+      dimension.challenger > 10
+    ) {
+      throw new Error(
+        `Invalid ${key} scores: primary=${dimension.primary}, challenger=${dimension.challenger}. ` +
+        'Expected integers from 1 to 10.'
+      );
+    }
   }
   return { winner, rationale: rationale.trim(), dimensions };
+}
+
+function runGh(args: string[], repoDir: string): string {
+  try {
+    return execFileSync('gh', args, {
+      cwd: repoDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`gh ${args.join(' ')} failed: ${message}`);
+  }
+}
+
+function tryGh(args: string[], repoDir: string, label: string): void {
+  try {
+    runGh(args, repoDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[compare-prs] ${label} failed: ${message}`);
+  }
+}
+
+function withBodyFile<T>(body: string, fn: (filePath: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), 'challenge-compare-'));
+  const filePath = join(dir, 'body.txt');
+  writeFileSync(filePath, body, 'utf-8');
+  try {
+    return fn(filePath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 runTool({
@@ -121,6 +175,9 @@ runTool({
     const challengerEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === challengerPrUrl);
     if (!primaryEval || !challengerEval) {
       throw new Error(`Missing eval records for challenge pair ${pairId}`);
+    }
+    if (typeof primaryEval.score !== 'number' || typeof challengerEval.score !== 'number') {
+      throw new Error(`Invalid eval scores for challenge pair ${pairId}`);
     }
 
     const prompt = buildPrompt({
@@ -167,15 +224,20 @@ runTool({
     ].join('\n');
 
     if (args.comment || config.challenge?.autoMergeWinner) {
-      execSync(`gh pr comment ${primaryNumber} --body ${JSON.stringify(commentBody)}`, { cwd: repoDir, stdio: 'inherit' });
-      execSync(`gh pr comment ${challengerNumber} --body ${JSON.stringify(commentBody)}`, { cwd: repoDir, stdio: 'inherit' });
+      withBodyFile(commentBody, (bodyFile) => {
+        tryGh(['pr', 'comment', primaryNumber, '--body-file', bodyFile], repoDir, `comment primary PR ${primaryNumber}`);
+        tryGh(['pr', 'comment', challengerNumber, '--body-file', bodyFile], repoDir, `comment challenger PR ${challengerNumber}`);
+      });
     }
 
     if (args['auto-merge'] || config.challenge?.autoMergeWinner) {
       const winnerNumber = record.winner === 'primary' ? primaryNumber : challengerNumber;
       const loserNumber = record.winner === 'primary' ? challengerNumber : primaryNumber;
-      execSync(`gh pr merge ${winnerNumber} --merge --delete-branch=false`, { cwd: repoDir, stdio: 'inherit' });
-      execSync(`gh pr close ${loserNumber} --comment ${JSON.stringify(`Closing after challenge comparison. Recommended winner: ${record.winnerModel}`)}`, { cwd: repoDir, stdio: 'inherit' });
+      tryGh(['pr', 'merge', winnerNumber, '--merge', '--delete-branch=false'], repoDir, `merge winner PR ${winnerNumber}`);
+      withBodyFile(`Closing after challenge comparison. Recommended winner: ${record.winnerModel}`, (bodyFile) => {
+        tryGh(['pr', 'comment', loserNumber, '--body-file', bodyFile], repoDir, `comment loser PR ${loserNumber}`);
+      });
+      tryGh(['pr', 'close', loserNumber], repoDir, `close loser PR ${loserNumber}`);
     }
 
     console.log(JSON.stringify(record, null, 2));
