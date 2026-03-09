@@ -271,6 +271,12 @@ else
   fail "mill is missing explicit window attention helper"
 fi
 
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] && grep -q 'tmux refresh-client -S' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "mill forces tmux status refresh after attention changes"
+else
+  fail "mill is missing tmux status refresh after attention changes"
+fi
+
 if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
   && grep -qE '^codex_has_pending_approval\(\) \{' "$LIB_DIR/wavemill-mill.sh" \
   && grep -q 'sandbox_permissions.*require_escalated' "$LIB_DIR/wavemill-mill.sh" \

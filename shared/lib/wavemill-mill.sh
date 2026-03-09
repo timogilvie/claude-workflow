@@ -315,6 +315,7 @@ set_window_attention_state() {
     tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
     tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
   fi
+  tmux refresh-client -S >/dev/null 2>&1 || true
 }
 
 
@@ -1411,6 +1412,7 @@ set_window_attention_state() {
     tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
     tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
   fi
+  tmux refresh-client -S >/dev/null 2>&1 || true
 }
 
 codex_has_pending_approval() {
