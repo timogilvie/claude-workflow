@@ -166,6 +166,8 @@ Next: I'll review the implementation to catch any issues.
 ## Phase 4: Self-Review Loop
 **Goal**: Automatically review and fix code changes before validation
 
+Canonical instructions: `tools/prompts/self-review-instructions.md`
+
 ### 4A. Inform User
 ```
 🔍 Starting self-review phase...
@@ -208,89 +210,23 @@ ITERATION=1
 REVIEW_PASSED=false
 ```
 
-**For each iteration (up to MAX_ITERATIONS):**
+Apply the canonical template with these workflow-specific values:
 
-#### 1. Run Self-Review Tool
+- Review command: `npx tsx tools/review-changes.ts main --json`
+- Tool path: `tools/review-changes.ts`
+- Base branch: `main`
+- Error follow-up: `continue to validation`
+- Run in the foreground with a 300000ms Bash timeout
+- Save output to `features/<feature-name>/review-iteration-$ITERATION.json`
+- If Bash output is empty or truncated, read the saved JSON file
 
-**IMPORTANT**: Run this command in the **foreground** (do NOT use `run_in_background`).
-The Bash tool must capture stdout directly so you can read the review results.
-Use a timeout of 300000ms on the Bash tool call.
+For each iteration (up to `MAX_ITERATIONS`):
 
-**CRITICAL**: Run from your **current directory** (the worktree). Do NOT change directories or cd to the main repo.
-The tool will analyze your current working directory, which should be your feature branch worktree.
-
-```bash
-npx tsx tools/review-changes.ts main --json | tee features/<feature-name>/review-iteration-$ITERATION.json
-REVIEW_EXIT_CODE=${PIPESTATUS[0]}
-
-# Handle timeout (exit code 124)
-if [ $REVIEW_EXIT_CODE -eq 124 ]; then
-  echo "⚠️  Self-review timed out after 5 minutes (iteration $ITERATION)"
-  echo "Treating as error - proceeding to validation"
-  REVIEW_EXIT_CODE=2
-fi
-```
-
-If the Bash tool output is empty or truncated, read the JSON file as a fallback:
-```bash
-cat features/<feature-name>/review-iteration-$ITERATION.json
-```
-
-#### 2. Check Review Result
-**Exit code meanings**:
-- `0` = Review passed (verdict: ready)
-- `1` = Review failed (verdict: not_ready)
-- `2` = Error occurred
-
-**If exit code = 0 (passed)**:
-```bash
-REVIEW_PASSED=true
-echo "✅ Self-review passed! No blockers found."
-break  # Exit loop
-```
-
-**If exit code = 2 (error)**:
-```bash
-echo "⚠️ Self-review tool encountered an error (iteration $ITERATION)"
-echo "Review log saved to: features/<feature-name>/review-iteration-$ITERATION.json"
-# Continue to validation phase (treat as passed to avoid blocking)
-REVIEW_PASSED=true
-break
-```
-
-**If exit code = 1 (not_ready)**:
-Parse and present findings to the agent.
-
-#### 3. Parse Findings (when not_ready)
-The review JSON is already visible from the foreground Bash result above.
-If it was truncated, read the full file:
-```bash
-cat features/<feature-name>/review-iteration-$ITERATION.json
-```
-
-The JSON contains:
-- `verdict`: `"ready"` or `"not_ready"`
-- `codeReviewFindings`: array of findings, each with `severity`, `location`, `category`, `description`
-- `uiFindings`: optional array with same structure
-- `metadata`: branch info, files changed
-
-Focus on findings where `severity` is `"blocker"` — these must be fixed. Address `"warning"` items if straightforward.
-
-#### 4. Fix Issues
-**Agent instructions**:
-- Read the review findings carefully
-- Address each blocker (severity: blocker)
-- Fix warnings if straightforward
-- Make targeted fixes - avoid refactoring unrelated code
-- Commit fixes with descriptive message:
-  ```bash
-  git add -A
-  git commit -m "fix: Address self-review findings (iteration $ITERATION)
-
-  - [List key fixes made]
-
-  Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
-  ```
+1. Run the review tool and capture `REVIEW_EXIT_CODE=${PIPESTATUS[0]}`.
+2. If the command times out (`124`), convert it to exit code `2`.
+3. If exit code is `0`, mark review passed and break.
+4. If exit code is `2`, log the required diagnostics from the canonical template, treat the review as non-blocking, and continue to validation.
+5. If exit code is `1`, read the findings JSON, fix blocker findings and straightforward warnings, commit the fixes, then continue to the next iteration.
 
 #### 5. Check Iteration Limit
 ```bash

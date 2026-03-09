@@ -58,6 +58,37 @@ log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
 
+render_prompt_template() {
+  local template_path="$1"
+  shift
+
+  if [[ ! -f "$template_path" ]]; then
+    log_error "Prompt template not found: $template_path"
+    return 1
+  fi
+
+  local content
+  content="$(cat "$template_path")"
+
+  local pair key value
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    content="${content//\{\{$key\}\}/$value}"
+  done
+
+  printf '%s' "$content"
+}
+
+
+indent_block() {
+  local prefix="$1"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '%s%s\n' "$prefix" "$line"
+  done
+}
+
+
 # Dry-run wrapper
 execute() {
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -1135,6 +1166,35 @@ log() { echo "$(date '+%H:%M:%S') $*"; }
 log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
+render_prompt_template() {
+  local template_path="$1"
+  shift
+
+  if [[ ! -f "$template_path" ]]; then
+    log_error "Prompt template not found: $template_path"
+    return 1
+  fi
+
+  local content
+  content="$(cat "$template_path")"
+
+  local pair key value
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    content="${content//\{\{$key\}\}/$value}"
+  done
+
+  printf '%s' "$content"
+}
+
+indent_block() {
+  local prefix="$1"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '%s%s\n' "$prefix" "$line"
+  done
+}
+
 # Timeout for external API calls (Linear, GitHub) to prevent monitor freeze.
 # If an API call hangs, the entire monitoring loop blocks and the user cannot
 # type 'q' or select tasks.  This value caps individual calls.
@@ -1993,6 +2053,15 @@ _WVML_ISSUE_CTX_
       issue_context="$details_context"
     fi
 
+    local interactive_self_review
+    interactive_self_review="$(
+      render_prompt_template "$REPO_DIR/tools/prompts/self-review-instructions.md" \
+        "REVIEW_COMMAND=npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json" \
+        "REVIEW_TOOL_PATH=$TOOLS_DIR/review-changes.ts" \
+        "BASE_BRANCH=$BASE_BRANCH" \
+        "ERROR_FOLLOWUP=proceed to PR creation" | indent_block "   "
+    )"
+
     local prompt_file="/tmp/${SESSION}-${issue}-plan-prompt.txt"
     cat > "$prompt_file" <<_WVML_PLAN_PROMPT_
 You are working on: $title ($issue)
@@ -2026,44 +2095,10 @@ After plan approval:
 2. Run tests/lint between phases — pause if anything fails
 
 ### Phase 3: Self-Review & PR
-After implementation is complete and tests/lint pass, you MUST run the self-review tool.
-This is a REQUIRED step — do not skip it or substitute your own review.
+1. Follow the shared self-review instructions:
+$interactive_self_review
 
-1. Run the self-review tool (up to 3 iterations):
-   IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
-   IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
-   npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json
-   - Exit code 0 = review passed → proceed to step 3
-   - Exit code 1 = issues found → fix blockers and re-run (step 2)
-   - Exit code 2 = error → log comprehensive diagnostics and proceed to step 3
-   The output is structured JSON with verdict, codeReviewFindings, and uiFindings.
-
-   When exit code 2 occurs, you MUST log the following diagnostics to help debug the failure:
-   ```
-   ⚠️  Review tool failed with exit code 2
-
-   Diagnostics:
-   - Command: npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json
-   - Working directory: \$(pwd)
-   - Tool path: $TOOLS_DIR/review-changes.ts
-   - Tool exists: \$(ls -lh $TOOLS_DIR/review-changes.ts 2>&1 || echo "NOT FOUND")
-   - Git root: \$(git rev-parse --show-toplevel 2>&1)
-   - Current branch: \$(git rev-parse --abbrev-ref HEAD 2>&1)
-   - Base branch exists: \$(git rev-parse --verify $BASE_BRANCH 2>&1 || echo "NOT FOUND")
-   - STDERR output: [paste the actual stderr from the failed command]
-
-   Proceeding to PR creation per instructions.
-   ```
-   This diagnostic information is CRITICAL for debugging recurring tool failures.
-
-2. For each iteration where issues are found:
-   - Read the review JSON output carefully
-   - Fix all blockers (severity: blocker) and straightforward warnings
-   - Make targeted fixes only — do not refactor unrelated code
-   - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
-   - Re-run the review tool (step 1)
-
-3. Create a PR using GitHub CLI with a descriptive title and body:
+2. Create a PR using GitHub CLI with a descriptive title and body:
    gh pr create --title "$issue: <concise summary>" --body "<PR body>"
    The PR body MUST include:
    - A "## Summary" section with 2-4 bullet points describing what changed and why
@@ -2071,7 +2106,7 @@ This is a REQUIRED step — do not skip it or substitute your own review.
    - A "## Test plan" section describing how the changes were validated
    - A "## Self-review" section noting the review verdict and iterations run
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-4. Link the PR to $issue
+3. Link the PR to $issue
 
 Success criteria:
 - [ ] Implementation matches plan and issue requirements
@@ -2122,6 +2157,15 @@ _WVML_ISSUE_CTX_
       issue_context="$details_context"
     fi
 
+    local autonomous_self_review
+    autonomous_self_review="$(
+      render_prompt_template "$REPO_DIR/tools/prompts/self-review-instructions.md" \
+        "REVIEW_COMMAND=npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json" \
+        "REVIEW_TOOL_PATH=$TOOLS_DIR/review-changes.ts" \
+        "BASE_BRANCH=$BASE_BRANCH" \
+        "ERROR_FOLLOWUP=proceed to PR creation" | indent_block "   "
+    )"
+
     cat > "$instr_file" <<_WVML_INSTR_
 You are working on: $title ($issue)
 
@@ -2151,34 +2195,8 @@ Process:
 1. Inspect repo and find relevant code
 2. Make minimal, high-quality changes
 3. Run tests/lint
-4. REQUIRED: Run the self-review tool before creating a PR (do not skip or substitute your own review):
-   IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
-   IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
-   npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json
-   - Exit code 0 = passed → proceed to step 5
-   - Exit code 1 = issues found → fix blockers, commit fixes, re-run (up to 3 iterations)
-   - Exit code 2 = error → log comprehensive diagnostics and proceed to step 5
-   The output is structured JSON with verdict, codeReviewFindings (each with severity/location/category/description), and optional uiFindings.
-   For each iteration with issues: fix all findings where severity is "blocker" and straightforward "warning" items,
-   commit with "fix: Address self-review findings (iteration N)", then re-run the tool.
-
-   When exit code 2 occurs, you MUST log the following diagnostics to help debug the failure:
-   ```
-   ⚠️  Review tool failed with exit code 2
-
-   Diagnostics:
-   - Command: npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json
-   - Working directory: \$(pwd)
-   - Tool path: $TOOLS_DIR/review-changes.ts
-   - Tool exists: \$(ls -lh $TOOLS_DIR/review-changes.ts 2>&1 || echo "NOT FOUND")
-   - Git root: \$(git rev-parse --show-toplevel 2>&1)
-   - Current branch: \$(git rev-parse --abbrev-ref HEAD 2>&1)
-   - Base branch exists: \$(git rev-parse --verify $BASE_BRANCH 2>&1 || echo "NOT FOUND")
-   - STDERR output: [paste the actual stderr from the failed command]
-
-   Proceeding to PR creation per instructions.
-   ```
-   This diagnostic information is CRITICAL for debugging recurring tool failures.
+4. Follow the shared self-review instructions:
+$autonomous_self_review
 5. Create a PR using GitHub CLI with a descriptive title and body:
    gh pr create --title "$issue: <concise summary of changes>" --body "<PR body>"
    The PR body MUST include:
