@@ -1956,7 +1956,7 @@ launch_task() {
     local details_context
     if [[ -f "$details_file" ]]; then
       cp "$details_file" "$feature_dir/task-packet-details.md"
-      details_context=$(cat <<DETAILS_EOF
+      details_context=$(cat <<_WVML_DETAILS_
 📖 Full Details: Comprehensive task packet with all 9 sections available at:
    features/$slug/task-packet-details.md
 
@@ -1970,31 +1970,31 @@ Read specific sections on-demand as you plan and implement:
 - Section 7: Definition of Done
 - Section 8: Rollback Plan
 - Section 9: Proposed Labels
-DETAILS_EOF
+_WVML_DETAILS_
 )
     else
-      details_context=$(cat <<'DETAILS_EOF'
+      details_context=$(cat <<'_WVML_DETAILS_'
 NOTE: Task packet details file was not pre-seeded in this worktree.
 Plan from `selected-task.json` plus direct codebase analysis.
-DETAILS_EOF
+_WVML_DETAILS_
 )
     fi
 
     local issue_context
     if [[ -n "$packet_content" ]]; then
-      issue_context=$(cat <<ISSUE_CONTEXT_EOF
+      issue_context=$(cat <<_WVML_ISSUE_CTX_
 Issue Description (Brief Overview):
 $packet_content
 
 $details_context
-ISSUE_CONTEXT_EOF
+_WVML_ISSUE_CTX_
 )
     else
       issue_context="$details_context"
     fi
 
     local prompt_file="/tmp/${SESSION}-${issue}-plan-prompt.txt"
-    cat > "$prompt_file" <<PLAN_PROMPT_EOF
+    cat > "$prompt_file" <<_WVML_PLAN_PROMPT_
 You are working on: $title ($issue)
 
 Repo worktree: $wt_dir
@@ -2044,12 +2044,12 @@ This is a REQUIRED step — do not skip it or substitute your own review.
 
    Diagnostics:
    - Command: npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json
-   - Working directory: $(pwd)
+   - Working directory: \$(pwd)
    - Tool path: $TOOLS_DIR/review-changes.ts
-   - Tool exists: $(ls -lh $TOOLS_DIR/review-changes.ts 2>&1 || echo "NOT FOUND")
-   - Git root: $(git rev-parse --show-toplevel 2>&1)
-   - Current branch: $(git rev-parse --abbrev-ref HEAD 2>&1)
-   - Base branch exists: $(git rev-parse --verify $BASE_BRANCH 2>&1 || echo "NOT FOUND")
+   - Tool exists: \$(ls -lh $TOOLS_DIR/review-changes.ts 2>&1 || echo "NOT FOUND")
+   - Git root: \$(git rev-parse --show-toplevel 2>&1)
+   - Current branch: \$(git rev-parse --abbrev-ref HEAD 2>&1)
+   - Base branch exists: \$(git rev-parse --verify $BASE_BRANCH 2>&1 || echo "NOT FOUND")
    - STDERR output: [paste the actual stderr from the failed command]
 
    Proceeding to PR creation per instructions.
@@ -2081,7 +2081,7 @@ Success criteria:
 - [ ] PR created with descriptive summary linked to $issue
 
 Start with Phase 1 now. Read the task context and begin researching.
-PLAN_PROMPT_EOF
+_WVML_PLAN_PROMPT_
 
     agent_launch_interactive "$SESSION" "$win" "$prompt_file" "$task_agent_cmd" "$task_model"
   else
@@ -2093,36 +2093,36 @@ PLAN_PROMPT_EOF
     # Copy details file to worktree root for easy access
     if [[ -f "$details_file" ]]; then
       cp "$details_file" "$wt_dir/task-packet-details.md"
-      details_context=$(cat <<DETAILS_EOF
+      details_context=$(cat <<_WVML_DETAILS_
 📖 Full Details: Read task-packet-details.md in the repo root for:
 - Complete implementation approach (Section 3)
 - All success criteria with [REQ-FX] tags (Section 4)
 - Concrete validation steps with test scenarios (Section 6)
 - Implementation constraints and rules (Section 5)
-DETAILS_EOF
+_WVML_DETAILS_
 )
     else
-      details_context=$(cat <<'DETAILS_EOF'
+      details_context=$(cat <<'_WVML_DETAILS_'
 NOTE: Task packet details file was not pre-seeded in this worktree.
 Implement from the issue description plus direct codebase analysis.
-DETAILS_EOF
+_WVML_DETAILS_
 )
     fi
 
     local issue_context
     if [[ -n "$packet_content" ]]; then
-      issue_context=$(cat <<ISSUE_CONTEXT_EOF
+      issue_context=$(cat <<_WVML_ISSUE_CTX_
 Issue Description (Brief Overview):
 $packet_content
 
 $details_context
-ISSUE_CONTEXT_EOF
+_WVML_ISSUE_CTX_
 )
     else
       issue_context="$details_context"
     fi
 
-    cat > "$instr_file" <<INSTR_EOF
+    cat > "$instr_file" <<_WVML_INSTR_
 You are working on: $title ($issue)
 
 Repo worktree: $wt_dir
@@ -2168,12 +2168,12 @@ Process:
 
    Diagnostics:
    - Command: npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json
-   - Working directory: $(pwd)
+   - Working directory: \$(pwd)
    - Tool path: $TOOLS_DIR/review-changes.ts
-   - Tool exists: $(ls -lh $TOOLS_DIR/review-changes.ts 2>&1 || echo "NOT FOUND")
-   - Git root: $(git rev-parse --show-toplevel 2>&1)
-   - Current branch: $(git rev-parse --abbrev-ref HEAD 2>&1)
-   - Base branch exists: $(git rev-parse --verify $BASE_BRANCH 2>&1 || echo "NOT FOUND")
+   - Tool exists: \$(ls -lh $TOOLS_DIR/review-changes.ts 2>&1 || echo "NOT FOUND")
+   - Git root: \$(git rev-parse --show-toplevel 2>&1)
+   - Current branch: \$(git rev-parse --abbrev-ref HEAD 2>&1)
+   - Base branch exists: \$(git rev-parse --verify $BASE_BRANCH 2>&1 || echo "NOT FOUND")
    - STDERR output: [paste the actual stderr from the failed command]
 
    Proceeding to PR creation per instructions.
@@ -2188,7 +2188,7 @@ Process:
    - A "## Self-review" section noting the review verdict and iterations run
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
 6. Post back with summary of changes, commands run + results, and PR link
-INSTR_EOF
+_WVML_INSTR_
 
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model"
   fi
