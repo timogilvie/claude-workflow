@@ -1,186 +1,11 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-
-// ────────────────────────────────────────────────────────────────
-// Types
-// ────────────────────────────────────────────────────────────────
-
-interface SearchResult {
-  subsystemId: string;
-  subsystemName: string;
-  specPath: string;
-  score: number;
-  snippets: string[];
-  matchLocations: string[];
-}
-
-// ────────────────────────────────────────────────────────────────
-// Helper Functions
-// ────────────────────────────────────────────────────────────────
-
-/**
- * Extract subsystem name from spec content.
- */
-function extractSubsystemName(content: string): string {
-  const match = content.match(/^# Subsystem:\s*(.+)$/m);
-  return match ? match[1].trim() : 'Unknown';
-}
-
-/**
- * Extract content from a specific section.
- */
-function extractSection(content: string, sectionName: string): string {
-  const lines = content.split('\n');
-  const sectionRegex = new RegExp(`^##\\s+${sectionName}`, 'i');
-
-  let inSection = false;
-  const sectionLines: string[] = [];
-
-  for (const line of lines) {
-    if (sectionRegex.test(line)) {
-      inSection = true;
-      continue;
-    }
-    if (inSection && /^##\s+/.test(line)) {
-      break; // End of section
-    }
-    if (inSection) {
-      sectionLines.push(line);
-    }
-  }
-
-  return sectionLines.join('\n');
-}
-
-/**
- * Find all matches in content with context.
- */
-function findMatches(content: string, query: string, contextLines = 1): {
-  snippets: string[];
-  locations: string[];
-  count: number;
-} {
-  const lines = content.split('\n');
-  const queryLower = query.toLowerCase();
-  const snippets: string[] = [];
-  const locations: string[] = [];
-  let count = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.toLowerCase().includes(queryLower)) {
-      count++;
-
-      // Extract snippet with context
-      const start = Math.max(0, i - contextLines);
-      const end = Math.min(lines.length, i + contextLines + 1);
-      const snippet = lines.slice(start, end).join('\n');
-      snippets.push(snippet);
-
-      // Determine location (section)
-      const location = findSectionForLine(lines, i);
-      locations.push(location);
-    }
-  }
-
-  return { snippets, locations, count };
-}
-
-/**
- * Find which section a line belongs to.
- */
-function findSectionForLine(lines: string[], lineIndex: number): string {
-  let currentSection = 'Header';
-
-  for (let i = lineIndex; i >= 0; i--) {
-    const line = lines[i];
-    if (/^##\s+/.test(line)) {
-      currentSection = line.replace(/^##\s+/, '').trim();
-      break;
-    }
-    if (/^#\s+/.test(line)) {
-      currentSection = 'Header';
-      break;
-    }
-  }
-
-  return currentSection;
-}
-
-/**
- * Calculate relevance score for a search result.
- */
-function calculateScore(
-  subsystemName: string,
-  content: string,
-  query: string,
-  matchCount: number,
-  locations: string[]
-): number {
-  let score = 0;
-  const queryLower = query.toLowerCase();
-
-  // Name match (highest priority)
-  if (subsystemName.toLowerCase().includes(queryLower)) {
-    score += 100;
-  }
-
-  // Match count
-  score += matchCount * 10;
-
-  // Purpose section match (high priority)
-  if (locations.includes('Purpose')) {
-    score += 20;
-  }
-
-  // Architectural Constraints match
-  if (locations.includes('Architectural Constraints')) {
-    score += 15;
-  }
-
-  return score;
-}
-
-/**
- * Search a single spec file.
- */
-function searchSpec(specPath: string, query: string, sectionFilter: string | null): SearchResult | null {
-  const content = readFileSync(specPath, 'utf-8');
-  const subsystemName = extractSubsystemName(content);
-  const subsystemId = specPath.split('/').pop()?.replace('.md', '') || 'unknown';
-
-  // Filter to section if requested
-  const searchContent = sectionFilter ? extractSection(content, sectionFilter) : content;
-
-  if (!searchContent || searchContent.trim().length === 0) {
-    return null; // Section not found
-  }
-
-  // Find matches
-  const { snippets, locations, count } = findMatches(searchContent, query);
-
-  if (count === 0) {
-    return null; // No matches
-  }
-
-  // Calculate score
-  const score = calculateScore(subsystemName, content, query, count, locations);
-
-  // Limit snippets to top 3
-  const topSnippets = snippets.slice(0, 3);
-  const topLocations = locations.slice(0, 3);
-
-  return {
-    subsystemId,
-    subsystemName,
-    specPath,
-    score,
-    snippets: topSnippets,
-    matchLocations: topLocations,
-  };
-}
+import { existsSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import {
+  searchSubsystemSpecs,
+  type SpecSnippetSearchResult,
+} from '../shared/lib/subsystem-search.ts';
 
 /**
  * Format a snippet for display.
@@ -211,7 +36,7 @@ function formatSnippet(snippet: string, query: string): string {
 /**
  * Display search results.
  */
-function displayResults(results: SearchResult[], query: string): void {
+function displayResults(results: SpecSnippetSearchResult[], query: string): void {
   if (results.length === 0) {
     console.log('');
     console.log(`No matches found for "${query}"`);
@@ -255,40 +80,18 @@ async function main(
     process.exit(1);
   }
 
-  // Find all spec files
-  const specFiles = readdirSync(contextDir)
-    .filter(f => f.endsWith('.md'))
-    .map(f => join(contextDir, f));
-
+  const specFiles = readdirSync(contextDir).filter((file) => file.endsWith('.md'));
   if (specFiles.length === 0) {
     console.error('Error: No subsystem specs found in .wavemill/context/');
     console.error('Initialize first: wavemill context init');
     process.exit(1);
   }
 
-  // Search each spec
-  const results: SearchResult[] = [];
-
-  for (const specPath of specFiles) {
-    try {
-      const result = searchSpec(specPath, query, sectionFilter);
-      if (result) {
-        results.push(result);
-      }
-    } catch (error) {
-      // Skip files we can't read
-      console.error(`Warning: Could not search ${specPath}: ${error}`);
-    }
-  }
-
-  // Sort by score (descending)
-  results.sort((a, b) => b.score - a.score);
-
-  // Limit results
-  const limitedResults = results.slice(0, limit);
-
-  // Display
-  displayResults(limitedResults, query);
+  const results = searchSubsystemSpecs(query, repoDir, {
+    limit,
+    sectionFilter: sectionFilter || '',
+  });
+  displayResults(results, query);
 }
 
 runTool({
