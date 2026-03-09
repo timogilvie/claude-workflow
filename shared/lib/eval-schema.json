@@ -144,6 +144,10 @@
       "type": "string",
       "description": "Linear issue identifier (e.g. \"HOK-697\"), if the task was issue-based."
     },
+    "challengePairId": {
+      "type": "string",
+      "description": "Shared identifier linking both sides of a challenge-mode pair."
+    },
     "prUrl": {
       "type": "string",
       "format": "uri",
@@ -221,6 +225,55 @@
         "required": ["inputTokens", "cacheCreationTokens", "cacheReadTokens", "outputTokens", "costUsd"],
         "additionalProperties": false
       }
+    },
+    "workflowCostStatus": {
+      "type": "string",
+      "enum": ["success", "no_sessions", "no_branch", "adapter_error", "missing_worktree", "skipped"],
+      "description": "Status of workflow cost computation."
+    },
+    "workflowCostDiagnostics": {
+      "type": "object",
+      "description": "Diagnostic details when workflowCost is missing or skipped.",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation for the workflow cost status."
+        },
+        "worktreePath": {
+          "type": "string",
+          "description": "Worktree path used for cost lookup, if available."
+        },
+        "branchName": {
+          "type": "string",
+          "description": "Branch name used for cost lookup, if available."
+        },
+        "agentType": {
+          "type": "string",
+          "description": "Agent type used for cost lookup, if available."
+        },
+        "sessionFilesFound": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of session files discovered during scan."
+        },
+        "matchingTurns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of turns that matched the branch."
+        },
+        "totalAssistantTurns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total assistant turns inspected."
+        },
+        "branchMismatches": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of scanned turns rejected due to branch mismatch."
+        }
+      },
+      "required": ["reason"],
+      "additionalProperties": false
     },
     "pricingSnapshot": {
       "type": "object",

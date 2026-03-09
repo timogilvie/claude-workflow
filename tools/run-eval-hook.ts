@@ -21,6 +21,8 @@ runTool({
     branch: { type: 'string', description: 'Git branch name' },
     worktree: { type: 'string', description: 'Worktree directory' },
     agent: { type: 'string', description: 'Agent type: claude or codex (default: claude)' },
+    'solution-model': { type: 'string', description: 'Model that produced the solution being evaluated' },
+    'challenge-pair': { type: 'string', description: 'Shared challenge pair identifier' },
     'repo-dir': { type: 'string', description: 'Repository directory (default: current directory)' },
     debug: { type: 'boolean', description: 'Enable detailed cost computation diagnostics' },
     help: { type: 'boolean', short: 'h', description: 'Show help message' },
@@ -65,6 +67,8 @@ runTool({
       branchName: args.branch,
       worktreePath: args.worktree,
       agentType: args.agent,
+      solutionModel: args['solution-model'],
+      challengePairId: args['challenge-pair'],
     };
 
     if (debug) {
@@ -77,6 +81,8 @@ runTool({
       console.error(`[DEBUG_COST]   branchName: ${context.branchName || '(undefined)'}`);
       console.error(`[DEBUG_COST]   worktreePath: ${context.worktreePath || '(undefined)'}`);
       console.error(`[DEBUG_COST]   agentType: ${context.agentType || '(undefined)'}`);
+      console.error(`[DEBUG_COST]   solutionModel: ${context.solutionModel || '(undefined)'}`);
+      console.error(`[DEBUG_COST]   challengePairId: ${context.challengePairId || '(undefined)'}`);
       console.error('[DEBUG_COST] ========================================');
     }
 

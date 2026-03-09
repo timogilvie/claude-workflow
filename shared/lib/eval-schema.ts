@@ -630,6 +630,9 @@ export interface EvalRecord {
   /** Linear issue identifier (e.g. "HOK-697"), if the task was issue-based */
   issueId?: string;
 
+  /** Shared identifier linking both sides of a challenge-mode pair */
+  challengePairId?: string;
+
   /** Pull request URL, if the task produced a PR */
   prUrl?: string;
 

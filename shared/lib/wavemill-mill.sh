@@ -161,11 +161,19 @@ init_state_ledger() {
 
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
+  local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local tmp
   tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
   if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
      --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
-     '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, updated: (now | todate)} | if $agent != "" then .tasks[$issue].agent = $agent else . end' \
+     --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
+     --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
+     '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
+      | if $agent != "" then .tasks[$issue].agent = $agent else . end
+      | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
+      | if $challengePair != "" then .tasks[$issue].challengePairId = $challengePair else . end
+      | if $challengeRole != "" then .tasks[$issue].challengeRole = $challengeRole else . end
+      | if $challengeModel != "" then .tasks[$issue].challengeModel = $challengeModel else . end' \
      "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
   else
@@ -514,7 +522,11 @@ cleanup_on_exit() {
     log_warn "Interrupted - resetting Linear state for unfinished tasks..."
     log_warn "Worktrees and branches preserved for resumption on next run."
     for issue in "${ISSUES_IN_PROGRESS[@]}"; do
-      linear_set_state "$issue" "Backlog" 2>/dev/null || true
+      role=$(jq -r --arg issue "$issue" '.tasks[$issue].challengeRole // empty' "$STATE_FILE" 2>/dev/null)
+      linear_issue=$(jq -r --arg issue "$issue" '.tasks[$issue].linearIssueId // .tasks[$issue].challengePairId // $issue' "$STATE_FILE" 2>/dev/null)
+      if [[ "$role" != "challenger" ]]; then
+        linear_set_state "${linear_issue:-$issue}" "Backlog" 2>/dev/null || true
+      fi
       remove_task_state "$issue" 2>/dev/null || true
     done
   fi
@@ -924,14 +936,83 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
 fi
 
 
+# ── Phase 5: Challenge-mode launch planning ──────────────────────────────
+FINAL_LAUNCH_ARGS=()
+slots_used=0
+
+for t in "${TASKS[@]}"; do
+  IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+  if (( slots_used >= MAX_PARALLEL )); then
+    log "  $ISSUE: Deferring launch (no remaining slots after challenge allocation)"
+    remove_task_state "$ISSUE" 2>/dev/null || true
+    continue
+  fi
+  rec_model=""
+  rec_agent="$AGENT_CMD"
+
+  if [[ -n "${FORCE_MODEL:-}" ]]; then
+    rec_model="$FORCE_MODEL"
+    rec_agent="$(agent_resolve_from_model "$FORCE_MODEL")"
+  else
+    suggestion_file="/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
+    if [[ -f "$suggestion_file" ]]; then
+      rec_model=$(jq -r '.recommendedModel // empty' "$suggestion_file" 2>/dev/null)
+      suggestion_agent=$(jq -r '.recommendedAgent // empty' "$suggestion_file" 2>/dev/null)
+      if [[ -n "$suggestion_agent" ]]; then
+        rec_agent="$suggestion_agent"
+      fi
+    fi
+  fi
+
+  challenge_args=(--issue "$ISSUE" --slug "$SLUG" --title "$TITLE" --repo-dir "$REPO_DIR" --remaining-slots "$((MAX_PARALLEL - slots_used))")
+  [[ -n "$rec_model" ]] && challenge_args+=(--primary-model "$rec_model")
+  challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
+  challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
+  challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+
+  if [[ "$challenge_mode" == "challenge" ]]; then
+    primary_model=$(echo "$challenge_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
+    challenger_key=$(echo "$challenge_plan" | jq -r '.entries[1].key // empty' 2>/dev/null)
+    challenger_slug=$(echo "$challenge_plan" | jq -r '.entries[1].slug // empty' 2>/dev/null)
+    challenger_branch=$(echo "$challenge_plan" | jq -r '.entries[1].branch // empty' 2>/dev/null)
+    challenger_model=$(echo "$challenge_plan" | jq -r '.entries[1].model // empty' 2>/dev/null)
+    challenger_agent=$(echo "$challenge_plan" | jq -r '.entries[1].agent // empty' 2>/dev/null)
+    primary_agent=$(echo "$challenge_plan" | jq -r '.entries[0].agent // empty' 2>/dev/null)
+
+    cp "/tmp/${SESSION}-${ISSUE}-taskpacket.md" "/tmp/${SESSION}-${challenger_key}-taskpacket.md" 2>/dev/null || true
+    cp "/tmp/${SESSION}-${ISSUE}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
+    cp "/tmp/${SESSION}-${ISSUE}-taskpacket-details.md" "/tmp/${SESSION}-${challenger_key}-taskpacket-details.md" 2>/dev/null || true
+
+    save_task_state "$ISSUE" "$SLUG" "task/${SLUG}" "${WORKTREE_ROOT}/${SLUG}" "" "" "${primary_agent:-$rec_agent}" "$ISSUE" "true" "$ISSUE" "primary" "$primary_model"
+    save_task_state "$challenger_key" "$challenger_slug" "$challenger_branch" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_agent:-$AGENT_CMD}" "$ISSUE" "true" "$ISSUE" "challenger" "$challenger_model"
+
+    FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
+    FINAL_LAUNCH_ARGS+=("$challenger_key|$challenger_slug|$TITLE")
+    slots_used=$((slots_used + 2))
+    log "  $ISSUE: Challenge selected (${primary_model} vs ${challenger_model})"
+  else
+    if [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
+      log "  $ISSUE: Challenge skipped ($challenge_reason), launching single-model run"
+    fi
+    save_task_state "$ISSUE" "$SLUG" "task/${SLUG}" "${WORKTREE_ROOT}/${SLUG}" "" "" "$rec_agent" "$ISSUE" "false" "" "" "$rec_model"
+    FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
+    slots_used=$((slots_used + 1))
+  fi
+done
+
+LAUNCH_ARGS=("${FINAL_LAUNCH_ARGS[@]}")
+
+
 # User confirmed (or no confirmation needed) - now set issues to In Progress
 INITIAL_PHASE="executing"
 [[ "$PLANNING_MODE" == "interactive" ]] && INITIAL_PHASE="planning"
 
-for t in "${TASKS[@]}"; do
+for t in "${LAUNCH_ARGS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
   ISSUES_IN_PROGRESS+=("$ISSUE")
-  linear_set_state "$ISSUE" "In Progress"
+  if [[ "$ISSUE" != *"__challenger" ]]; then
+    linear_set_state "$ISSUE" "In Progress"
+  fi
   set_task_phase "$ISSUE" "$INITIAL_PHASE"
   log "Set $ISSUE → In Progress (phase: $INITIAL_PHASE)"
 done
@@ -1090,22 +1171,35 @@ trap monitor_err_trap ERR
 
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-active}" agent="${7:-}"
+  local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local tmp
   tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
 
   if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
      --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" \
-     --arg agent "$agent" \
+     --arg agent "$agent" --arg linearIssue "$linear_issue" --arg challenge "$challenge" \
+     --arg challengePair "$challenge_pair" --arg challengeRole "$challenge_role" \
+     --arg challengeModel "$challenge_model" \
      '(.tasks[$issue].agent // "") as $old_agent |
       (.tasks[$issue].phase // "executing") as $old_phase |
       (.tasks[$issue].evalCompleted // false) as $old_eval |
+      (.tasks[$issue].challenge // false) as $old_challenge |
+      (.tasks[$issue].challengePairId // "") as $old_challenge_pair |
+      (.tasks[$issue].challengeRole // "") as $old_challenge_role |
+      (.tasks[$issue].challengeModel // "") as $old_challenge_model |
+      (.tasks[$issue].linearIssueId // $issue) as $old_linear_issue |
       .tasks[$issue] = {
         slug: $slug,
         branch: $branch,
         worktree: $worktree,
         pr: $pr,
         status: $status,
+        linearIssueId: (if $linearIssue != "" then $linearIssue else $old_linear_issue end),
         agent: (if $agent != "" then $agent else $old_agent end),
+        challenge: (if $challenge != "" then ($challenge == "true") else $old_challenge end),
+        challengePairId: (if $challengePair != "" then $challengePair else $old_challenge_pair end),
+        challengeRole: (if $challengeRole != "" then $challengeRole else $old_challenge_role end),
+        challengeModel: (if $challengeModel != "" then $challengeModel else $old_challenge_model end),
         phase: $old_phase,
         evalCompleted: $old_eval,
         updated: (now | todate)
@@ -1185,6 +1279,110 @@ check_plan_approved() {
   local wt="${WORKTREE_ROOT}/${slug}"
   [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
   return 1
+}
+
+get_task_meta() {
+  local issue="$1" field="$2"
+  jq -r --arg issue "$issue" --arg field "$field" '.tasks[$issue][$field] // empty' "$STATE_FILE" 2>/dev/null
+}
+
+get_linear_issue_id() {
+  local issue="$1"
+  local linear_issue
+  linear_issue=$(get_task_meta "$issue" "linearIssueId")
+  [[ -n "$linear_issue" ]] && echo "$linear_issue" || echo "$issue"
+}
+
+should_update_linear_state() {
+  local issue="$1"
+  local role
+  role=$(get_task_meta "$issue" "challengeRole")
+  [[ "$role" != "challenger" ]]
+}
+
+is_challenge_task() {
+  local issue="$1"
+  [[ "$(get_task_meta "$issue" "challenge")" == "true" ]]
+}
+
+mark_challenge_compared() {
+  local pair_id="$1"
+  local tmp
+  tmp=$(mktemp) || { log_warn "mark_challenge_compared: mktemp failed"; return 0; }
+  if jq --arg pair "$pair_id" '
+    .tasks |= with_entries(
+      if (.value.challengePairId // "") == $pair then
+        .value.challengeCompared = true
+      else
+        .
+      end
+    )' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "mark_challenge_compared: failed for $pair_id"
+  fi
+}
+
+maybe_run_challenge_eval() {
+  local issue="$1" pr="$2" branch="$3" slug="$4"
+  local eval_completed pair_id solution_model linear_issue eval_agent
+  eval_completed=$(jq -r --arg i "$issue" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
+  [[ "$eval_completed" == "true" ]] && return 0
+
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  solution_model=$(get_task_meta "$issue" "challengeModel")
+  linear_issue=$(get_linear_issue_id "$issue")
+  eval_agent=$(jq -r --arg i "$issue" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+  [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+
+  local eval_log="/tmp/${SESSION}-eval-${issue}.log"
+  _with_timeout 180 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+    --issue "$linear_issue" --pr "$pr" --branch "$branch" \
+    --worktree "${WORKTREE_ROOT}/${slug}" \
+    --workflow-type mill --repo-dir "$REPO_DIR" \
+    --agent "$eval_agent" \
+    --solution-model "$solution_model" \
+    --challenge-pair "$pair_id" \
+    --debug \
+    >"$eval_log" 2>&1 || true
+  while IFS= read -r line; do log "  [challenge-eval] $line"; done < "$eval_log"
+  rm -f "$eval_log"
+  mark_eval_completed "$issue"
+}
+
+maybe_run_challenge_comparison() {
+  local issue="$1"
+  local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  [[ -z "$pair_id" ]] && return 0
+  primary_key="$pair_id"
+  challenger_key="${pair_id}__challenger"
+  compared=$(jq -r --arg i "$primary_key" '.tasks[$i].challengeCompared // false' "$STATE_FILE" 2>/dev/null)
+  [[ "$compared" == "true" ]] && return 0
+
+  primary_pr=$(jq -r --arg i "$primary_key" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null)
+  challenger_pr=$(jq -r --arg i "$challenger_key" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null)
+  primary_eval=$(jq -r --arg i "$primary_key" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
+  challenger_eval=$(jq -r --arg i "$challenger_key" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
+  [[ -z "$primary_pr" || -z "$challenger_pr" || "$primary_eval" != "true" || "$challenger_eval" != "true" ]] && return 0
+
+  linear_issue=$(get_linear_issue_id "$primary_key")
+  primary_model=$(get_task_meta "$primary_key" "challengeModel")
+  challenger_model=$(get_task_meta "$challenger_key" "challengeModel")
+
+  log "  ⚖ Running challenge comparison for $pair_id"
+  if _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
+    --issue "$linear_issue" --pair-id "$pair_id" \
+    --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
+    --primary-model "$primary_model" --challenger-model "$challenger_model" \
+    --repo-dir "$REPO_DIR" --comment >/tmp/${SESSION}-compare-${pair_id}.log 2>&1; then
+    while IFS= read -r line; do log "  [challenge-compare] $line"; done < "/tmp/${SESSION}-compare-${pair_id}.log"
+    mark_challenge_compared "$pair_id"
+  else
+    while IFS= read -r line; do log_warn "  [challenge-compare] $line"; done < "/tmp/${SESSION}-compare-${pair_id}.log"
+  fi
+  rm -f "/tmp/${SESSION}-compare-${pair_id}.log"
 }
 
 cleanup_completed_task() {
@@ -1341,22 +1539,37 @@ filter_active_issues() {
 # ============================================================================
 # Note: is_task_packet() is now provided by wavemill-common.sh (sourced above)
 
+LAST_LAUNCHED_SLOTS=1
+
 launch_task() {
-  local issue="$1" slug="$2" title="$3"
+  local issue="$1" slug="$2" title="$3" remaining_slots="${4:-1}"
   local branch="task/${slug}"
   local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local linear_issue="$issue"
+  local challenge_model=""
+  LAST_LAUNCHED_SLOTS=1
+
+  linear_issue=$(get_linear_issue_id "$issue")
+  challenge_model=$(get_task_meta "$issue" "challengeModel")
 
   log "Launching $issue: $title"
 
   # Fetch issue details
   local issue_json
-  issue_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-json.ts" "$issue" 2>/dev/null || echo "{}")
+  if [[ -f "/tmp/${SESSION}-${issue}-issue.json" ]]; then
+    issue_json=$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")
+  else
+    issue_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-json.ts" "$linear_issue" 2>/dev/null || echo "{}")
+    echo "$issue_json" > "/tmp/${SESSION}-${issue}-issue.json"
+  fi
   local issue_desc
   issue_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
 
   # Task packet handling
   local packet_file="/tmp/${SESSION}-${issue}-taskpacket.md"
-  if [[ "$PLANNING_MODE" == "interactive" ]]; then
+  if [[ -f "$packet_file" ]]; then
+    :
+  elif [[ "$PLANNING_MODE" == "interactive" ]]; then
     echo "$issue_desc" > "$packet_file"
   elif is_task_packet "$issue_desc"; then
     echo "$issue_desc" > "$packet_file"
@@ -1439,7 +1652,9 @@ launch_task() {
   fi
 
   # Set Linear state
-  linear_set_state "$issue" "In Progress"
+  if should_update_linear_state "$issue"; then
+    linear_set_state "$linear_issue" "In Progress"
+  fi
 
   # Track in monitor arrays
   BRANCH_BY_ISSUE["$issue"]="$branch"
@@ -1448,7 +1663,17 @@ launch_task() {
   # ── Per-task model routing ──────────────────────────────────────────
   local task_agent_cmd="$AGENT_CMD"
   local task_model=""
-  if [[ -n "${FORCE_MODEL:-}" ]]; then
+  local challenge_enabled_for_launch="false"
+  local challenge_pair=""
+  local challenge_role
+  challenge_role=$(get_task_meta "$issue" "challengeRole")
+  local should_launch_challenger="false"
+  local challenger_key="" challenger_slug="" challenger_title="$title"
+  if [[ -n "$challenge_model" ]]; then
+    task_model="$challenge_model"
+    task_agent_cmd="$(agent_resolve_from_model "$task_model")"
+    log "  Challenge: $task_agent_cmd --model $task_model"
+  elif [[ -n "${FORCE_MODEL:-}" ]]; then
     # Validate model (should have been validated earlier, but double-check)
     if ! agent_validate_model "$FORCE_MODEL" "$REPO_DIR"; then
       log_error "  Invalid FORCE_MODEL for $issue: $FORCE_MODEL"
@@ -1495,10 +1720,41 @@ launch_task() {
     task_model=""
   fi
 
+  if [[ -z "${WAVEMILL_DISABLE_CHALLENGE:-}" ]] && should_update_linear_state "$issue" && (( remaining_slots >= 2 )); then
+    local challenge_args challenge_plan challenge_mode challenge_reason
+    challenge_args=(--issue "$issue" --slug "$slug" --title "$title" --repo-dir "$REPO_DIR" --remaining-slots "$remaining_slots")
+    [[ -n "$task_model" ]] && challenge_args+=(--primary-model "$task_model")
+    challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
+    challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
+    challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+    if [[ "$challenge_mode" == "challenge" ]]; then
+      challenge_enabled_for_launch="true"
+      challenge_pair="$issue"
+      task_model=$(echo "$challenge_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
+      task_agent_cmd=$(echo "$challenge_plan" | jq -r '.entries[0].agent // empty' 2>/dev/null)
+      challenger_key=$(echo "$challenge_plan" | jq -r '.entries[1].key // empty' 2>/dev/null)
+      challenger_slug=$(echo "$challenge_plan" | jq -r '.entries[1].slug // empty' 2>/dev/null)
+      challenger_model=$(echo "$challenge_plan" | jq -r '.entries[1].model // empty' 2>/dev/null)
+      challenger_agent=$(echo "$challenge_plan" | jq -r '.entries[1].agent // empty' 2>/dev/null)
+
+      cp "$packet_file" "/tmp/${SESSION}-${challenger_key}-taskpacket.md" 2>/dev/null || true
+      cp "/tmp/${SESSION}-${issue}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
+      cp "/tmp/${SESSION}-${issue}-taskpacket-details.md" "/tmp/${SESSION}-${challenger_key}-taskpacket-details.md" 2>/dev/null || true
+
+      save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "true" "$challenge_pair" "primary" "$task_model"
+      save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model"
+      should_launch_challenger="true"
+      LAST_LAUNCHED_SLOTS=2
+      log "  Challenge selected (${task_model} vs ${challenger_model})"
+    elif [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
+      log "  Challenge skipped ($challenge_reason), launching single-model run"
+    fi
+  fi
+
   # Save to state ledger (after routing so agent is known)
   local initial_phase="executing"
   [[ "$PLANNING_MODE" == "interactive" ]] && initial_phase="planning"
-  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd"
+  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "$challenge_enabled_for_launch" "$challenge_pair" "${challenge_role:-}" "$task_model"
   set_task_phase "$issue" "$initial_phase"
 
   # Verify agent was saved correctly (helps debug future issues)
@@ -1829,6 +2085,10 @@ INSTR_EOF
   fi
 
   log "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
+
+  if [[ "$should_launch_challenger" == "true" ]]; then
+    WAVEMILL_DISABLE_CHALLENGE=1 launch_task "$challenger_key" "$challenger_slug" "$challenger_title" 0
+  fi
 }
 
 
@@ -1915,12 +2175,24 @@ monitor_issue_state() {
       PR_BY_ISSUE["$ISSUE"]="$PR"
       # Preserve agent when updating with PR number
       current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
-      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "" "$current_agent"
-      linear_set_state "$ISSUE" "In Review"
+      linear_issue=$(get_linear_issue_id "$ISSUE")
+      challenge_flag=$(get_task_meta "$ISSUE" "challenge")
+      challenge_pair=$(get_task_meta "$ISSUE" "challengePairId")
+      challenge_role=$(get_task_meta "$ISSUE" "challengeRole")
+      challenge_model=$(get_task_meta "$ISSUE" "challengeModel")
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "" "$current_agent" "$linear_issue" "$challenge_flag" "$challenge_pair" "$challenge_role" "$challenge_model"
+      if should_update_linear_state "$ISSUE"; then
+        linear_set_state "$linear_issue" "In Review"
+      fi
       log "✓ $ISSUE → PR #$PR (In Review)"
+
+      if is_challenge_task "$ISSUE"; then
+        maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
+        maybe_run_challenge_comparison "$ISSUE"
+      fi
     else
       # No PR in current repo - check Linear issue state for cross-repo completion
-      if linear_is_completed "$ISSUE"; then
+      if should_update_linear_state "$ISSUE" && linear_is_completed "$(get_linear_issue_id "$ISSUE")"; then
         log "✓ $ISSUE → Completed externally (cross-repo or manual)"
 
         # Post-completion eval (non-blocking: always exits 0)
@@ -1952,7 +2224,9 @@ monitor_issue_state() {
 
         if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
           log "  → Window stays open for review - close it when ready"
-          linear_set_state "$ISSUE" "Done"
+          if should_update_linear_state "$ISSUE"; then
+            linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
+          fi
           # Preserve agent when marking as completed-external
           current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
           save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "completed-external" "$current_agent"
@@ -1961,7 +2235,9 @@ monitor_issue_state() {
         fi
 
         # Clean up worktree and state
-        linear_set_state "$ISSUE" "Done"
+        if should_update_linear_state "$ISSUE"; then
+          linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
+        fi
         cleanup_completed_task "$ISSUE" "$SLUG" "external completion"
         return 0
       fi
@@ -2031,7 +2307,9 @@ monitor_issue_state() {
 
     if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
       log "  → Window stays open for review - close it when ready"
-      linear_set_state "$ISSUE" "Done"
+      if should_update_linear_state "$ISSUE"; then
+        linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
+      fi
       # Preserve agent when marking as merged
       current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
       save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged" "$current_agent"
@@ -2039,11 +2317,15 @@ monitor_issue_state() {
       return 0
     fi
 
-    linear_set_state "$ISSUE" "Done"
+    if should_update_linear_state "$ISSUE"; then
+      linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
+    fi
     cleanup_completed_task "$ISSUE" "$SLUG"
   elif [[ "$(pr_state "$PR")" == "CLOSED" ]]; then
     log_warn "$ISSUE → PR #$PR CLOSED without merge"
-    linear_set_state "$ISSUE" "Backlog"
+    if should_update_linear_state "$ISSUE"; then
+      linear_set_state "$(get_linear_issue_id "$ISSUE")" "Backlog"
+    fi
     CLEANED["$ISSUE"]=1
   else
     active_count=$((active_count + 1))
@@ -2192,8 +2474,8 @@ while :; do
                 continue
               fi
               IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
-              launch_task "$sel_issue" "$sel_slug" "$sel_title"
-              launched=$((launched + 1))
+              launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+              launched=$((launched + LAST_LAUNCHED_SLOTS))
             done
             # Invalidate caches after launching so next cycle re-renders
             LAST_BACKLOG_FETCH=0
@@ -2252,7 +2534,7 @@ log "Starting monitoring in tmux control window..."
 
 # Write tasks to temp file and add to env
 TASKS_FILE="/tmp/${SESSION}-tasks.txt"
-printf '%s\n' "${TASKS[@]}" > "$TASKS_FILE"
+printf '%s\n' "${LAUNCH_ARGS[@]}" > "$TASKS_FILE"
 echo "TASKS_FILE='$TASKS_FILE'" >> "$MONITOR_ENV"
 
 
