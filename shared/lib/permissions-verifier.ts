@@ -77,7 +77,7 @@ export function checkClaudeSettings(verbose: boolean): ValidationResult {
   if (!existsSync(settingsPath)) {
     result.warnings.push('Claude Code settings file not found');
     result.info.push(`Expected at: ${settingsPath}`);
-    result.info.push('Run: npx tsx tools/generate-claude-permissions.ts');
+    result.info.push('Run: npx tsx tools/generate-permissions.ts --agent claude');
     return result;
   }
 
@@ -87,7 +87,7 @@ export function checkClaudeSettings(verbose: boolean): ValidationResult {
 
     if (!autoApprove) {
       result.warnings.push('No auto-approve settings found in Claude Code');
-      result.info.push('Run: npx tsx tools/generate-claude-permissions.ts');
+      result.info.push('Run: npx tsx tools/generate-permissions.ts --agent claude');
       return result;
     }
 
@@ -112,7 +112,7 @@ export function checkCodexSettings(verbose: boolean): ValidationResult {
   if (!existsSync(settingsPath)) {
     result.warnings.push('Codex permissions file not found');
     result.info.push(`Expected at: ${settingsPath}`);
-    result.info.push('Run: npx tsx tools/generate-codex-permissions.ts');
+    result.info.push('Run: npx tsx tools/generate-permissions.ts --agent codex');
     return result;
   }
 
@@ -121,7 +121,7 @@ export function checkCodexSettings(verbose: boolean): ValidationResult {
 
     if (!settings.autoApprovePatterns) {
       result.warnings.push('No auto-approve patterns found in Codex');
-      result.info.push('Run: npx tsx tools/generate-codex-permissions.ts');
+      result.info.push('Run: npx tsx tools/generate-permissions.ts --agent codex');
       return result;
     }
 

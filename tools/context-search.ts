@@ -1,26 +1,23 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { existsSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import {
+  listContextSpecPaths,
+  resolveRepoDir,
+} from '../shared/lib/context-tool.ts';
 import {
   searchSubsystemSpecs,
   type SpecSnippetSearchResult,
 } from '../shared/lib/subsystem-search.ts';
 
-/**
- * Format a snippet for display.
- */
 function formatSnippet(snippet: string, query: string): string {
-  // Highlight query matches (simple approach: uppercase the match)
   const queryLower = query.toLowerCase();
   const lines = snippet.split('\n');
 
-  const formatted = lines.map(line => {
+  const formatted = lines.map((line) => {
     const lineLower = line.toLowerCase();
     const index = lineLower.indexOf(queryLower);
 
     if (index !== -1) {
-      // Highlight the match
       const before = line.substring(0, index);
       const match = line.substring(index, index + query.length);
       const after = line.substring(index + query.length);
@@ -33,9 +30,6 @@ function formatSnippet(snippet: string, query: string): string {
   return formatted.join('\n');
 }
 
-/**
- * Display search results.
- */
 function displayResults(results: SpecSnippetSearchResult[], query: string): void {
   if (results.length === 0) {
     console.log('');
@@ -53,11 +47,11 @@ function displayResults(results: SpecSnippetSearchResult[], query: string): void
     console.log(`   ${result.specPath}`);
     console.log('');
 
-    result.snippets.forEach((snippet, i) => {
-      const location = result.matchLocations[i];
+    result.snippets.forEach((snippet, snippetIndex) => {
+      const location = result.matchLocations[snippetIndex];
       console.log(`   [${location}]`);
       const formatted = formatSnippet(snippet, query);
-      formatted.split('\n').forEach(line => {
+      formatted.split('\n').forEach((line) => {
         console.log(`   ${line}`);
       });
       console.log('');
@@ -69,18 +63,9 @@ async function main(
   query: string,
   repoDir: string,
   limit: number,
-  sectionFilter: string | undefined
+  sectionFilter: string | undefined,
 ) {
-  const contextDir = join(repoDir, '.wavemill', 'context');
-
-  // Check if context directory exists
-  if (!existsSync(contextDir)) {
-    console.error('Error: No subsystem specs found');
-    console.error('Initialize first: wavemill context init');
-    process.exit(1);
-  }
-
-  const specFiles = readdirSync(contextDir).filter((file) => file.endsWith('.md'));
+  const specFiles = listContextSpecPaths(repoDir);
   if (specFiles.length === 0) {
     console.error('Error: No subsystem specs found in .wavemill/context/');
     console.error('Initialize first: wavemill context init');
@@ -120,8 +105,8 @@ Returns ranked results with relevant snippets.`,
       console.error('Error: Search query is required');
       process.exit(1);
     }
-    const repoPath = positional[1] || process.cwd();
-    const repoDir = resolve(repoPath);
+
+    const repoDir = resolveRepoDir(positional[1]);
     const limit = args.limit ? parseInt(args.limit, 10) : 10;
     await main(query, repoDir, limit, args.section);
   },

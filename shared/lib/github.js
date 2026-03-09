@@ -1,6 +1,8 @@
-import { execSync } from "node:child_process";
 import { ensureCleanTree } from './git.js';
 import { runBuildCheck } from './checks.js';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+
+const buildShellCommand = (args) => args.map((arg) => escapeShellArg(String(arg))).join(' ');
 
 /**
  * Lists pull requests for a GitHub repository.
@@ -58,7 +60,7 @@ export const listPullRequests = (options = {}) => {
       'number,title,state,author,headRefName,baseRefName,labels,url,createdAt,updatedAt,mergedAt,closedAt'
     );
 
-    const output = execSync(args.join(' '), { encoding: 'utf-8' }).trim();
+    const output = execShellCommand(buildShellCommand(args), { encoding: 'utf-8' }).trim();
 
     if (!output) {
       return [];
@@ -124,7 +126,7 @@ export const getPullRequest = (prNumber, options = {}) => {
       'number,title,body,state,author,headRefName,baseRefName,labels,url,createdAt,updatedAt,mergedAt,closedAt'
     );
 
-    const output = execSync(args.join(' '), { encoding: 'utf-8' }).trim();
+    const output = execShellCommand(buildShellCommand(args), { encoding: 'utf-8' }).trim();
     const pr = JSON.parse(output);
 
     // Transform to structured format
@@ -184,7 +186,7 @@ export const getPullRequestDiff = (prNumber, options = {}) => {
       args.push('--repo', repo);
     }
 
-    const diff = execSync(args.join(' '), { encoding: 'utf-8' });
+    const diff = execShellCommand(buildShellCommand(args), { encoding: 'utf-8' });
 
     return {
       prNumber: parseInt(prNumber.toString(), 10),
@@ -202,4 +204,3 @@ export const getPullRequestDiff = (prNumber, options = {}) => {
     throw new Error(`Failed to get diff for pull request #${prNumber}: ${error.message}`);
   }
 };
-

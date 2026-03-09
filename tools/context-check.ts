@@ -1,10 +1,9 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { execSync } from "node:child_process";
-import { detectSubsystems } from '../shared/lib/subsystem-detector.ts';
-import type { Subsystem } from '../shared/lib/subsystem-detector.ts';
+import { getContextDir, resolveRepoDir } from '../shared/lib/context-tool.ts';
 
 interface SubsystemStatus {
   id: string;
@@ -137,8 +136,8 @@ runTool({
   ❌ Orphaned      Referenced files no longer exist
   🆕 Undocumented  New subsystem detected, no spec yet`,
   run({ args, positional }) {
-    const repoDir = resolve(positional[0] || process.cwd());
-    const contextDir = join(repoDir, '.wavemill', 'context');
+    const repoDir = resolveRepoDir(positional[0]);
+    const contextDir = getContextDir(repoDir);
 
     if (!existsSync(contextDir)) {
       console.error('No context directory found. Run context-init first.');

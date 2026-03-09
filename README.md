@@ -106,10 +106,10 @@ When working in worktrees, you can configure auto-approval for read-only command
 2. Generate agent-specific settings:
 ```bash
 # For Claude Code
-npx tsx tools/generate-claude-permissions.ts
+npx tsx tools/generate-permissions.ts --agent claude
 
 # For Codex
-npx tsx tools/generate-codex-permissions.ts
+npx tsx tools/generate-permissions.ts --agent codex
 ```
 
 3. Apply settings to your agent (see [Worktree Auto-Approve Guide](docs/worktree-auto-approve.md))
@@ -296,7 +296,7 @@ wavemill/
 │   ├── expand-issue.ts        # Expand single issue with Claude CLI
 │   ├── add-issue-label.ts     # Add labels to Linear issues
 │   ├── list-backlog-json.ts   # Fetch backlog as JSON
-│   └── get-issue-json.ts      # Fetch single issue as JSON
+│   └── get-issue.ts           # Fetch single issue (use --json for JSON output)
 ├── commands/                   # Claude slash commands (symlinked)
 └── codex/                      # Codex commands and prompts
 ```

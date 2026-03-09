@@ -9,7 +9,6 @@
  * @module repo-context-analyzer
  */
 
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -86,11 +85,25 @@ export function detectLanguages(repoDir: string): {
     return { primaryLanguage: 'unknown' };
   }
 
-  // Convert counts to percentages
+  // Convert counts to percentages while keeping the total bounded at 100.
   const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
   const percentages: Record<string, number> = {};
-  for (const [lang, count] of Object.entries(counts)) {
-    percentages[lang] = Math.round((count / total) * 100);
+  const sortedCounts = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  let allocated = 0;
+
+  sortedCounts.forEach(([lang, count], index) => {
+    if (index === sortedCounts.length - 1) {
+      percentages[lang] = 100 - allocated;
+      return;
+    }
+
+    const pct = Math.floor((count / total) * 100);
+    percentages[lang] = pct;
+    allocated += pct;
+  });
+
+  if (sortedCounts.length === 1) {
+    percentages[sortedCounts[0][0]] = 100;
   }
 
   // Find primary language (highest percentage)

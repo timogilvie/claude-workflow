@@ -52,8 +52,8 @@ checks if they match expected agent settings.`,
     if (!configResult.valid) {
       console.log('\n❌ Validation failed');
       process.exit(1);
-    } else {
-      console.log('\n✅ Verification complete');
     }
+
+    console.log('\n✅ Verification complete');
   },
 });

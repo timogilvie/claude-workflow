@@ -12,7 +12,6 @@
  * @module subsystem-detector
  */
 
-import { execSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, dirname, basename } from 'node:path';
 import { execShellCommand } from './shell-utils.ts';

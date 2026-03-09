@@ -1,15 +1,16 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { detectSubsystems } from '../shared/lib/subsystem-detector.ts';
 import { writeSubsystemSpecs } from '../shared/lib/subsystem-spec-generator.ts';
+import { getContextDir, getWavemillDir, resolveRepoDir } from '../shared/lib/context-tool.ts';
 
 async function main(repoDir: string, isForce: boolean, isInteractive: boolean) {
   console.log(`Analyzing repository: ${repoDir}`);
 
   // Check if .wavemill directory exists
-  const wavemillDir = join(repoDir, '.wavemill');
+  const wavemillDir = getWavemillDir(repoDir);
   if (!existsSync(wavemillDir)) {
     console.error('Error: .wavemill directory not found');
     console.error('Initialize project context first: npx tsx tools/init-project-context.ts');
@@ -17,7 +18,7 @@ async function main(repoDir: string, isForce: boolean, isInteractive: boolean) {
   }
 
   // Check if context directory exists
-  const contextDir = join(wavemillDir, 'context');
+  const contextDir = getContextDir(repoDir);
   const contextExists = existsSync(contextDir);
 
   if (contextExists && !isForce) {
@@ -149,8 +150,7 @@ This is part of the three-tier memory system:
 Environment:
   Subsystem specs are auto-updated after each PR merge`,
   async run({ args, positional }) {
-    const repoPath = positional[0] || process.cwd();
-    const repoDir = resolve(repoPath);
+    const repoDir = resolveRepoDir(positional[0]);
     await main(repoDir, !!args.force, !!args.interactive);
   },
 });
