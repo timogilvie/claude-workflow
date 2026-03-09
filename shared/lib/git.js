@@ -1,5 +1,5 @@
-import { execSync } from "node:child_process";
 import { toKebabCase } from './string-utils.js';
+import { execShellCommand } from './shell-utils.ts';
 
 export const sanitizeBranchName = (name, prefix = 'feature') => {
   const sanitized = toKebabCase(name, 50);
@@ -7,7 +7,7 @@ export const sanitizeBranchName = (name, prefix = 'feature') => {
 };
 
 export const ensureCleanTree = () => {
-  const status = execSync('git status --porcelain', { encoding: 'utf-8' }).trim();
+  const status = execShellCommand('git status --porcelain', { encoding: 'utf-8' }).trim();
   if (status) {
     throw new Error('Working tree is dirty. Commit or stash changes before proceeding.');
   }
