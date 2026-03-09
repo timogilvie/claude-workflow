@@ -37,6 +37,11 @@ export interface ReviewOptions {
   reviewers?: ReviewerPersona[];
   /** Progress reporter for stderr milestones */
   reporter?: ReviewProgressReporter;
+  /**
+   * Commit SHA to scope the review from. When set, only changes after
+   * this commit are reviewed, filtering out pre-existing branch changes.
+   */
+  sinceCommit?: string;
 }
 
 // Re-export types from review-engine for backward compatibility
@@ -69,8 +74,8 @@ export async function reviewChanges(
   });
 
   const branch = getCurrentBranch(repoDir);
-  const diff = getGitDiff(targetBranch, repoDir);
-  assertReviewableDiff(diff, branch, targetBranch);
+  const diff = getGitDiff(targetBranch, repoDir, options.sinceCommit);
+  assertReviewableDiff(diff, branch, options.sinceCommit ? `commit ${options.sinceCommit.slice(0, 8)}` : targetBranch);
 
   await reporter?.emit({
     event: 'preflight_ok',
@@ -93,6 +98,7 @@ export async function reviewChanges(
   // Gather review context (skip design standards if explicitly requested)
   const context = gatherReviewContext(targetBranch, repoDir, {
     designStandards: !options.skipUi,
+    sinceCommit: options.sinceCommit,
   });
 
   await reporter?.emit({
