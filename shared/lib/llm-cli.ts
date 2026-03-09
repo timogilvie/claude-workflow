@@ -245,16 +245,29 @@ function unwrapJsonEnvelope(raw: string): {
 
 interface ProviderConfig {
   defaultCmd: string;
+  /** Env var to set (or unset if envVarValue is undefined) */
   envVarName: string;
-  envVarValue: string;
+  /** Value to set, or undefined to delete the var from the environment */
+  envVarValue: string | undefined;
   defaultArgs: string[];
+}
+
+/** Build an env object from process.env with provider-specific overrides */
+function buildProviderEnv(config: ProviderConfig): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (config.envVarValue === undefined) {
+    delete env[config.envVarName];
+  } else {
+    env[config.envVarName] = config.envVarValue;
+  }
+  return env;
 }
 
 const PROVIDER_CONFIGS: Record<LLMProvider, ProviderConfig> = {
   claude: {
     defaultCmd: 'claude',
     envVarName: 'CLAUDECODE',
-    envVarValue: '',
+    envVarValue: undefined,
     defaultArgs: ['-p', '--output-format', 'json'],
   },
   codex: {
@@ -317,10 +330,7 @@ function executeSync(
   const command = `${escapeShellArg(cliCmd)} ${cliArgs.join(' ')} < ${escapeShellArg(tmpFile)}`;
 
   const config = getProviderConfig(provider);
-  const env = {
-    ...process.env,
-    [config.envVarName]: config.envVarValue,
-  };
+  const env = buildProviderEnv(config);
 
   try {
     const raw = execShellCommand(command, {
@@ -442,10 +452,7 @@ async function executeStream(
     const cliCmd = getCliCommand(provider, options);
 
     const config = getProviderConfig(provider);
-    const env = {
-      ...process.env,
-      [config.envVarName]: config.envVarValue,
-    };
+    const env = buildProviderEnv(config);
 
     const spawnOptions: SpawnOptions = {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -666,10 +673,7 @@ export async function checkClaudeAvailability(
           encoding: 'utf-8',
           timeout: 30000,
           maxBuffer: 1024 * 1024,
-          env: {
-            ...process.env,
-            CLAUDECODE: '',
-          },
+          env: buildProviderEnv(getProviderConfig('claude')),
         }
       );
 
