@@ -57,7 +57,8 @@ log() { echo "$(date '+%H:%M:%S') $*"; }
 log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
-
+# Kept local to this script because the generated monitor script below runs as a
+# standalone shell and must carry its own copy of any helpers it calls.
 render_prompt_template() {
   local template_path="$1"
   shift
@@ -1166,6 +1167,8 @@ log() { echo "$(date '+%H:%M:%S') $*"; }
 log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
+# Duplicated intentionally from the parent script because the monitor runs as a
+# standalone generated shell script and does not inherit parent functions.
 render_prompt_template() {
   local template_path="$1"
   shift
