@@ -2028,10 +2028,60 @@ launch_task() {
     fi
   fi
 
-  # Launch agent
+  # ── Build issue context and launch agent ──────────────────────────────
+  # Prompt assembly uses shared builders in agent-adapters.sh (single
+  # source of truth shared with wavemill-orchestrator.sh).
+
+  local status_file="/tmp/${SESSION}-${issue}-status.txt"
+  local details_file="/tmp/${SESSION}-${issue}-taskpacket-details.md"
+  local details_context=""
+
+  # Copy details file to worktree and build details context string
+  if [[ -f "$details_file" ]]; then
+    if [[ "$PLANNING_MODE" == "interactive" ]]; then
+      local feature_dir="$wt_dir/features/$slug"
+      mkdir -p "$feature_dir"
+      cp "$details_file" "$feature_dir/task-packet-details.md"
+      details_context="
+📖 Full Details: Comprehensive task packet with all 9 sections available at:
+   features/$slug/task-packet-details.md
+
+Read specific sections on-demand as you plan and implement:
+- Section 1: Complete Objective & Scope
+- Section 2: Technical Context (dependencies, architecture)
+- Section 3: Implementation Approach (step-by-step)
+- Section 4: Success Criteria (all requirements with [REQ-FX] tags)
+- Section 5: Implementation Constraints (all rules)
+- Section 6: Validation Steps (concrete test scenarios)
+- Section 7: Definition of Done
+- Section 8: Rollback Plan
+- Section 9: Proposed Labels"
+    else
+      cp "$details_file" "$wt_dir/task-packet-details.md"
+      details_context="
+📖 Full Details: Read task-packet-details.md in the repo root for:
+- Complete implementation approach (Section 3)
+- All success criteria with [REQ-FX] tags (Section 4)
+- Concrete validation steps with test scenarios (Section 6)
+- Implementation constraints and rules (Section 5)"
+    fi
+  fi
+
+  local issue_context
+  if [[ -n "$packet_content" ]]; then
+    issue_context="Issue Description (Brief Overview):
+$packet_content
+$details_context"
+  elif [[ -n "$details_context" ]]; then
+    issue_context="$details_context"
+  else
+    issue_context="NOTE: Task packet details file was not pre-seeded in this worktree.
+Implement from the issue description plus direct codebase analysis."
+  fi
+
   if [[ "$PLANNING_MODE" == "interactive" ]]; then
     # Pre-seed selected-task.json
-    local feature_dir="$wt_dir/features/$slug"
+    local feature_dir="${feature_dir:-$wt_dir/features/$slug}"
     mkdir -p "$feature_dir"
     local labels_json="[]"
     labels_json=$(echo "$issue_json" | jq '[.labels.nodes[]?.name // empty]' 2>/dev/null || echo "[]")
@@ -2054,202 +2104,15 @@ launch_task() {
         selectedAt: (now | todate)
       }' > "$feature_dir/selected-task.json"
 
-    # Copy details file to worktree for easy access
-    local details_file="/tmp/${SESSION}-${issue}-taskpacket-details.md"
-    local details_context
-    if [[ -f "$details_file" ]]; then
-      cp "$details_file" "$feature_dir/task-packet-details.md"
-      details_context=$(cat <<_WVML_DETAILS_
-📖 Full Details: Comprehensive task packet with all 9 sections available at:
-   features/$slug/task-packet-details.md
-
-Read specific sections on-demand as you plan and implement:
-- Section 1: Complete Objective & Scope
-- Section 2: Technical Context (dependencies, architecture)
-- Section 3: Implementation Approach (step-by-step)
-- Section 4: Success Criteria (all requirements with [REQ-FX] tags)
-- Section 5: Implementation Constraints (all rules)
-- Section 6: Validation Steps (concrete test scenarios)
-- Section 7: Definition of Done
-- Section 8: Rollback Plan
-- Section 9: Proposed Labels
-_WVML_DETAILS_
-)
-    else
-      details_context=$(cat <<'_WVML_DETAILS_'
-NOTE: Task packet details file was not pre-seeded in this worktree.
-Plan from `selected-task.json` plus direct codebase analysis.
-_WVML_DETAILS_
-)
-    fi
-
-    local issue_context
-    if [[ -n "$packet_content" ]]; then
-      issue_context=$(cat <<_WVML_ISSUE_CTX_
-Issue Description (Brief Overview):
-$packet_content
-
-$details_context
-_WVML_ISSUE_CTX_
-)
-    else
-      issue_context="$details_context"
-    fi
-
-    local interactive_self_review
-    interactive_self_review="$(
-      render_prompt_template "$REPO_DIR/tools/prompts/self-review-instructions.md" \
-        "REVIEW_COMMAND=npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json" \
-        "REVIEW_TOOL_PATH=$TOOLS_DIR/review-changes.ts" \
-        "BASE_BRANCH=$BASE_BRANCH" \
-        "ERROR_FOLLOWUP=proceed to PR creation" | indent_block "   "
-    )"
-
     local prompt_file="/tmp/${SESSION}-${issue}-plan-prompt.txt"
-    cat > "$prompt_file" <<_WVML_PLAN_PROMPT_
-You are working on: $title ($issue)
-
-Repo worktree: $wt_dir
-Branch: $branch
-Base branch: $BASE_BRANCH
-
-$issue_context
----
-
-## Your Workflow
-
-You have THREE phases. Do them in order.
-
-### Phase 1: Planning (interactive)
-Task context is pre-seeded at: features/$slug/selected-task.json
-
-1. Read the task context
-2. Research the codebase to understand relevant code and patterns
-3. Create a detailed implementation plan with phases
-4. Save the plan to: features/$slug/plan.md
-5. Present the plan summary to the user and wait for approval
-6. After approval, create a file: features/$slug/.plan-approved
-
-Do NOT proceed to Phase 2 until the user has approved the plan.
-
-### Phase 2: Implementation
-After plan approval:
-1. Execute the plan phase by phase
-2. Run tests/lint between phases — pause if anything fails
-
-### Phase 3: Self-Review & PR
-1. Follow the shared self-review instructions:
-$interactive_self_review
-
-2. Create a PR using GitHub CLI with a descriptive title and body:
-   gh pr create --title "$issue: <concise summary>" --body "<PR body>"
-   The PR body MUST include:
-   - A "## Summary" section with 2-4 bullet points describing what changed and why
-   - A "## Changes" section listing the key files/modules modified
-   - A "## Test plan" section describing how the changes were validated
-   - A "## Self-review" section noting the review verdict and iterations run
-   Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-3. Link the PR to $issue
-
-Success criteria:
-- [ ] Implementation matches plan and issue requirements
-- [ ] Lint/tests pass
-- [ ] Self-review tool executed (npx tsx $TOOLS_DIR/review-changes.ts)
-- [ ] No regressions
-- [ ] PR created with descriptive summary linked to $issue
-
-Start with Phase 1 now. Read the task context and begin researching.
-_WVML_PLAN_PROMPT_
+    build_interactive_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+      "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" > "$prompt_file"
 
     agent_launch_interactive "$SESSION" "$win" "$prompt_file" "$task_agent_cmd" "$task_model"
   else
-    # Skip mode — pipe instructions to agent
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
-    local details_file="/tmp/${SESSION}-${issue}-taskpacket-details.md"
-    local details_context
-
-    # Copy details file to worktree root for easy access
-    if [[ -f "$details_file" ]]; then
-      cp "$details_file" "$wt_dir/task-packet-details.md"
-      details_context=$(cat <<_WVML_DETAILS_
-📖 Full Details: Read task-packet-details.md in the repo root for:
-- Complete implementation approach (Section 3)
-- All success criteria with [REQ-FX] tags (Section 4)
-- Concrete validation steps with test scenarios (Section 6)
-- Implementation constraints and rules (Section 5)
-_WVML_DETAILS_
-)
-    else
-      details_context=$(cat <<'_WVML_DETAILS_'
-NOTE: Task packet details file was not pre-seeded in this worktree.
-Implement from the issue description plus direct codebase analysis.
-_WVML_DETAILS_
-)
-    fi
-
-    local issue_context
-    if [[ -n "$packet_content" ]]; then
-      issue_context=$(cat <<_WVML_ISSUE_CTX_
-Issue Description (Brief Overview):
-$packet_content
-
-$details_context
-_WVML_ISSUE_CTX_
-)
-    else
-      issue_context="$details_context"
-    fi
-
-    local autonomous_self_review
-    autonomous_self_review="$(
-      render_prompt_template "$REPO_DIR/tools/prompts/self-review-instructions.md" \
-        "REVIEW_COMMAND=npx tsx $TOOLS_DIR/review-changes.ts $BASE_BRANCH --json" \
-        "REVIEW_TOOL_PATH=$TOOLS_DIR/review-changes.ts" \
-        "BASE_BRANCH=$BASE_BRANCH" \
-        "ERROR_FOLLOWUP=proceed to PR creation" | indent_block "   "
-    )"
-
-    cat > "$instr_file" <<_WVML_INSTR_
-You are working on: $title ($issue)
-
-Repo worktree: $wt_dir
-Branch: $branch
-Base branch: $BASE_BRANCH
-
-$issue_context
-
-Goal:
-- Implement the feature/fix described by the issue and title.
-
-IMPORTANT: You are running autonomously with NO user interaction.
-- Do NOT ask questions or request user input — make your best judgment call.
-- If a decision is ambiguous, choose the most reasonable default and document your choice in the PR description.
-- If you truly cannot proceed without clarification, note the blocker in the PR description and implement what you can.
-
-Success criteria:
-- [ ] Implementation matches issue requirements
-- [ ] UI is responsive and accessible (if applicable)
-- [ ] Lint/tests pass
-- [ ] Self-review tool executed (npx tsx $TOOLS_DIR/review-changes.ts)
-- [ ] No regressions in existing functionality
-- [ ] PR created with clear description and linked to $issue
-
-Process:
-1. Inspect repo and find relevant code
-2. Make minimal, high-quality changes
-3. Run tests/lint
-4. Follow the shared self-review instructions:
-$autonomous_self_review
-5. Create a PR using GitHub CLI with a descriptive title and body:
-   gh pr create --title "$issue: <concise summary of changes>" --body "<PR body>"
-   The PR body MUST include:
-   - A "## Summary" section with 2-4 bullet points describing what changed and why
-   - A "## Changes" section listing the key files/modules modified
-   - A "## Test plan" section describing how the changes were validated
-   - A "## Self-review" section noting the review verdict and iterations run
-   Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-6. Post back with summary of changes, commands run + results, and PR link
-_WVML_INSTR_
+    build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+      "$issue_context" "$status_file" "$TOOLS_DIR" > "$instr_file"
 
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model"
   fi

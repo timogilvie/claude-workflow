@@ -220,25 +220,60 @@ for t in "${TASKS[@]}"; do
 
 
     # ── Agent launch (planning vs skip mode) ──────────────────────────────
+    # Prompt assembly uses shared builders in agent-adapters.sh (single
+    # source of truth shared with launch_task() in the monitor loop).
+
+    STATUS_FILE="/tmp/${SESSION}-${ISSUE}-status.txt"
+    ISSUE_CONTEXT="${ISSUE_DESCRIPTION:+Issue Description:
+$ISSUE_DESCRIPTION
+}"
+
+    # Copy task-packet details file to worktree if available
+    DETAILS_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket-details.md"
+    if [[ -f "$DETAILS_FILE" ]]; then
+      if [[ "${PLANNING_MODE:-skip}" == "interactive" ]]; then
+        FEATURE_DIR="$WT_DIR/features/$SLUG"
+        mkdir -p "$FEATURE_DIR"
+        cp "$DETAILS_FILE" "$FEATURE_DIR/task-packet-details.md"
+        ISSUE_CONTEXT="${ISSUE_CONTEXT}
+📖 Full Details: Comprehensive task packet with all 9 sections available at:
+   features/$SLUG/task-packet-details.md
+
+Read specific sections on-demand as you plan and implement:
+- Section 1: Complete Objective & Scope
+- Section 2: Technical Context (dependencies, architecture)
+- Section 3: Implementation Approach (step-by-step)
+- Section 4: Success Criteria (all requirements with [REQ-FX] tags)
+- Section 5: Implementation Constraints (all rules)
+- Section 6: Validation Steps (concrete test scenarios)
+- Section 7: Definition of Done
+- Section 8: Rollback Plan
+- Section 9: Proposed Labels"
+      else
+        cp "$DETAILS_FILE" "$WT_DIR/task-packet-details.md"
+        ISSUE_CONTEXT="${ISSUE_CONTEXT}
+📖 Full Details: Read task-packet-details.md in the repo root for:
+- Complete implementation approach (Section 3)
+- All success criteria with [REQ-FX] tags (Section 4)
+- Concrete validation steps with test scenarios (Section 6)
+- Implementation constraints and rules (Section 5)"
+      fi
+    fi
 
     if [[ "${PLANNING_MODE:-skip}" == "interactive" ]]; then
       # ── Interactive planning mode ─────────────────────────────────────
-      # Launch agent interactively so the user can guide the planning
-      # phase from the tmux window before implementation begins.
 
       # Pre-seed selected-task.json for the /create-plan workflow
-      FEATURE_DIR="$WT_DIR/features/$SLUG"
+      FEATURE_DIR="${FEATURE_DIR:-$WT_DIR/features/$SLUG}"
       mkdir -p "$FEATURE_DIR"
       TASK_JSON="$FEATURE_DIR/selected-task.json"
 
-      # Build issue labels array from issue JSON (if available)
       ISSUE_JSON_FILE="/tmp/${SESSION}-${ISSUE}-issue.json"
       LABELS_JSON="[]"
       if [[ -f "$ISSUE_JSON_FILE" ]]; then
         LABELS_JSON=$(jq '[.labels.nodes[]?.name // empty]' "$ISSUE_JSON_FILE" 2>/dev/null || echo "[]")
       fi
 
-      # Write selected-task.json
       jq -n \
         --arg taskId "$ISSUE" \
         --arg title "$TITLE" \
@@ -257,147 +292,19 @@ for t in "${TASKS[@]}"; do
           selectedAt: (now | todate)
         }' > "$TASK_JSON"
 
-      # Build the planning prompt
-      PLAN_PROMPT=$(cat <<EOF_PLAN
-You are working on: $TITLE ($LINEAR_ISSUE)
-
-Repo worktree: $WT_DIR
-Branch: $BRANCH
-Base branch: $BASE_BRANCH
-
-${ISSUE_DESCRIPTION:+Issue Description:
-$ISSUE_DESCRIPTION
-}
----
-
-## Status Reporting
-Throughout your work, periodically update your status by running:
-  echo '<short description of what you are doing right now>' > /tmp/${SESSION}-${ISSUE}-status.txt
-Keep it under 50 chars. Update it at each major step (e.g. "reading codebase", "implementing auth handler", "running tests", "creating PR"). This feeds the Wavemill dashboard so the user can see your progress.
-
-## Your Workflow
-
-You have THREE phases. Do them in order.
-
-### Phase 1: Planning (interactive)
-Task context is pre-seeded at: features/$SLUG/selected-task.json
-
-1. Read the task context
-2. Research the codebase to understand relevant code and patterns
-3. Create a detailed implementation plan with phases
-4. Save the plan to: features/$SLUG/plan.md
-5. Present the plan summary to the user and wait for approval
-6. After approval, create a file: features/$SLUG/.plan-approved
-
-Do NOT proceed to Phase 2 until the user has approved the plan.
-
-### Phase 2: Implementation
-After plan approval:
-1. Execute the plan phase by phase
-2. Run tests/lint between phases — pause if anything fails
-3. Create a PR using GitHub CLI with a descriptive title and body:
-   gh pr create --title "$ISSUE: <concise summary>" --body "<PR body>"
-   The PR body MUST include:
-   - A "## Summary" section with 2-4 bullet points describing what changed and why
-   - A "## Changes" section listing the key files/modules modified
-   - A "## Test plan" section describing how the changes were validated
-   Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-4. Link the PR to $LINEAR_ISSUE
-
-Success criteria:
-- [ ] Implementation matches plan and issue requirements
-- [ ] Lint/tests pass
-- [ ] No regressions
-- [ ] PR created with descriptive summary linked to $LINEAR_ISSUE
-
-### Phase 3: Review & Respond
-After creating the PR:
-1. Present a brief summary of what was implemented and any decisions you made
-2. Remain available — the user may have questions, want changes, or need you to address CI failures
-3. If asked to make changes, push them to the same branch to update the PR
-4. Do NOT exit until the user confirms they are done
-
-Start with Phase 1 now. Read the task context and begin researching.
-EOF_PLAN
-)
-
-      # Write prompt to file and create a launcher script
       PROMPT_FILE="/tmp/${SESSION}-${ISSUE}-plan-prompt.txt"
-      echo "$PLAN_PROMPT" > "$PROMPT_FILE"
+      build_interactive_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
+        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "$SLUG" > "$PROMPT_FILE"
 
-      # Launch agent interactively via adapter
       agent_launch_interactive "$SESSION" "$WIN" "$PROMPT_FILE" "$TASK_AGENT_CMD" "$TASK_MODEL"
 
     else
-      # ── Skip mode (current autonomous behavior) ───────────────────────
-      # Pipe instructions to agent — no interactive planning phase.
+      # ── Skip mode (autonomous) ────────────────────────────────────────
 
-      INSTR=$(cat <<'EOF_INSTR'
-You are working on: TITLE_PLACEHOLDER (LINEAR_ISSUE_PLACEHOLDER)
-
-
-Repo worktree: WTDIR_PLACEHOLDER
-Branch: BRANCH_PLACEHOLDER
-Base branch: BASE_BRANCH_PLACEHOLDER
-
-
-DESCRIPTION_PLACEHOLDER
-
-Goal:
-- Implement the feature/fix described by the issue and title.
-
-IMPORTANT: You are running autonomously with NO user interaction.
-- Do NOT ask questions or request user input — make your best judgment call.
-- If a decision is ambiguous, choose the most reasonable default and document your choice in the PR description.
-- If you truly cannot proceed without clarification, note the blocker in the PR description and implement what you can.
-
-Status Reporting:
-Throughout your work, periodically update your status by running:
-  echo '<short description of what you are doing right now>' > STATUS_FILE_PLACEHOLDER
-Keep it under 50 chars. Update it at each major step (e.g. "reading codebase", "implementing auth handler", "running tests", "creating PR"). This feeds the Wavemill dashboard so the user can see your progress.
-
-
-Success criteria:
-- [ ] Implementation matches issue requirements
-- [ ] UI is responsive and accessible (if applicable)
-- [ ] Lint/tests pass
-- [ ] No regressions in existing functionality
-- [ ] PR created with clear description and linked to LINEAR_ISSUE_PLACEHOLDER
-
-
-Process:
-1. Inspect repo and find relevant code
-2. Make minimal, high-quality changes
-3. Run tests/lint
-4. Create a PR using GitHub CLI with a descriptive title and body:
-   gh pr create --title "LINEAR_ISSUE_PLACEHOLDER: <concise summary of changes>" --body "<PR body>"
-   The PR body MUST include:
-   - A "## Summary" section with 2-4 bullet points describing what changed and why
-   - A "## Changes" section listing the key files/modules modified
-   - A "## Test plan" section describing how the changes were validated
-   Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-5. Post back with summary of changes, commands run + results, and PR link
-EOF_INSTR
-)
-      # Replace placeholders
-      INSTR="${INSTR//TITLE_PLACEHOLDER/$TITLE}"
-      INSTR="${INSTR//LINEAR_ISSUE_PLACEHOLDER/$LINEAR_ISSUE}"
-      INSTR="${INSTR//WTDIR_PLACEHOLDER/$WT_DIR}"
-      INSTR="${INSTR//BRANCH_PLACEHOLDER/$BRANCH}"
-      INSTR="${INSTR//BASE_BRANCH_PLACEHOLDER/$BASE_BRANCH}"
-      INSTR="${INSTR//STATUS_FILE_PLACEHOLDER//tmp/${SESSION}-${ISSUE}-status.txt}"
-      if [[ -n "$ISSUE_DESCRIPTION" ]]; then
-        INSTR="${INSTR//DESCRIPTION_PLACEHOLDER/Issue Description:
-$ISSUE_DESCRIPTION
-}"
-      else
-        INSTR="${INSTR//DESCRIPTION_PLACEHOLDER/}"
-      fi
-      # Write instructions to temp file and use it to start agent
       INSTR_FILE="/tmp/${SESSION}-${ISSUE}-instructions.txt"
-      echo "$INSTR" > "$INSTR_FILE"
+      build_autonomous_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
+        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" > "$INSTR_FILE"
 
-      # Start agent in that window via adapter
       agent_launch_autonomous "$SESSION" "$WIN" "$INSTR_FILE" "$TASK_AGENT_CMD" "$TASK_MODEL"
     fi
 
