@@ -11,12 +11,11 @@
  * @module backfill-pricing-snapshot
  */
 
-import { writeFileSync, readdirSync, existsSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, copyFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import type { EvalRecord } from '../shared/lib/eval-schema.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
-import { readJsonlFile } from '../shared/lib/jsonl-utils.ts';
 import type { ModelPricing } from '../shared/lib/workflow-cost.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -80,10 +79,22 @@ function backfillRepo(repoDir: string, dryRun: boolean): BackfillStats {
     stats.filesProcessed++;
 
     try {
+      const content = readFileSync(filePath, 'utf-8');
+      const lines = content.split('\n').filter((line) => line.trim());
       const updatedLines: string[] = [];
       let fileModified = false;
 
-      for (const record of readJsonlFile<EvalRecord>(filePath)) {
+      for (const line of lines) {
+        let record: EvalRecord;
+
+        try {
+          record = JSON.parse(line);
+        } catch (parseErr) {
+          stats.errors.push(`Failed to parse record in ${file}: ${errorMessage(parseErr)}`);
+          updatedLines.push(line);
+          continue;
+        }
+
         const workflowTokenUsage = record.workflowTokenUsage;
 
         // Skip if already has pricingSnapshot
