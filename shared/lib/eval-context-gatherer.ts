@@ -2,7 +2,7 @@
  * Eval context gathering — fetch and format all context needed for evaluation.
  *
  * Centralizes data fetching for:
- * - Linear issue data (via get-issue-json tool)
+ * - Linear issue data (via get-issue --json)
  * - GitHub PR data (diff and URL via gh CLI)
  *
  * All functions are non-throwing: errors are caught and return null/empty
@@ -54,14 +54,14 @@ export interface GatherContextParams {
 // ────────────────────────────────────────────────────────────────
 
 /**
- * Fetch issue data from Linear via the get-issue-json tool.
+ * Fetch issue data from Linear via the get-issue tool in JSON mode.
  * Returns the parsed issue object or null on failure.
  */
 export function fetchIssueData(issueId: string, repoDir: string): any | null {
-  const toolPath = resolve(__dirname, '../../tools/get-issue-json.ts');
+  const toolPath = resolve(__dirname, '../../tools/get-issue.ts');
   try {
     const raw = execShellCommand(
-      `npx tsx ${escapeShellArg(toolPath)} ${escapeShellArg(issueId)} 2>/dev/null | sed '/^\\[dotenv/d'`,
+      `npx tsx ${escapeShellArg(toolPath)} ${escapeShellArg(issueId)} --json 2>/dev/null | sed '/^\\[dotenv/d'`,
       { encoding: 'utf-8', cwd: repoDir }
     ).trim();
     return JSON.parse(raw);

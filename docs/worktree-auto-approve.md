@@ -45,10 +45,10 @@ Run the generator for your agent(s):
 
 ```bash
 # For Claude Code
-npx tsx tools/generate-claude-permissions.ts
+npx tsx tools/generate-permissions.ts --agent claude
 
 # For Codex
-npx tsx tools/generate-codex-permissions.ts
+npx tsx tools/generate-permissions.ts --agent codex
 ```
 
 ### Step 3: Apply Settings
@@ -68,7 +68,7 @@ Follow the agent-specific instructions below to apply the generated settings.
 The generator will create a Claude Code-compatible settings file:
 
 ```bash
-npx tsx tools/generate-claude-permissions.ts
+npx tsx tools/generate-permissions.ts --agent claude
 
 # Output:
 # Generated Claude Code settings at: .wavemill/claude-permissions.json
@@ -153,7 +153,7 @@ cat ~/Library/Application\ Support/Claude\ Code/User/settings.json | jq '.claude
 
 **Solution 2**: Regenerate and reapply
 ```bash
-npx tsx tools/generate-claude-permissions.ts
+npx tsx tools/generate-permissions.ts --agent claude
 # Then reapply via UI or settings file
 ```
 
@@ -183,7 +183,7 @@ console.log(matchesPattern('git status --short', 'git status*'));
 ### Generate Settings
 
 ```bash
-npx tsx tools/generate-codex-permissions.ts
+npx tsx tools/generate-permissions.ts --agent codex
 
 # Output:
 # Generated Codex settings at: .wavemill/codex-permissions.json
@@ -330,7 +330,7 @@ cat > .wavemill-config.local.json <<EOF
 EOF
 
 # Regenerate settings
-npx tsx tools/generate-claude-permissions.ts --local
+npx tsx tools/generate-permissions.ts --agent claude
 ```
 
 ## Team Setup
@@ -358,7 +358,7 @@ git push
 2. **Team members pull and apply**:
    ```bash
    git pull
-   npx tsx tools/generate-claude-permissions.ts
+   npx tsx tools/generate-permissions.ts --agent claude
    # Apply to their agent (Claude Code or Codex)
    ```
 
@@ -376,7 +376,7 @@ This repo uses wavemill permission patterns for read-only commands.
 To enable auto-approval:
 
 1. Pull latest config: `git pull`
-2. Generate settings: `npx tsx tools/generate-claude-permissions.ts`
+2. Generate settings: `npx tsx tools/generate-permissions.ts --agent claude`
 3. Apply to Claude Code (see docs/worktree-auto-approve.md)
 4. Restart Claude Code
 
@@ -424,7 +424,7 @@ If a pattern turns out to be unsafe:
 vim .wavemill-config.json
 
 # Regenerate agent settings
-npx tsx tools/generate-claude-permissions.ts
+npx tsx tools/generate-permissions.ts --agent claude
 
 # Restart agent
 ```
