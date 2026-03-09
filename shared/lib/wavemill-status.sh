@@ -181,12 +181,12 @@ while true; do
       t=$(elapsed "$worktree")
 
       # Agent
-      st="done"
+      agent_state=""
       if [[ "$task_status" == "merged" ]]; then
         st_str="${G}✓ merged${N}"
       else
-        st=$(agent_status "$win")
-        case "$st" in
+        agent_state=$(agent_status "$win")
+        case "$agent_state" in
           running) st_str="${G}● running${N}" ;;
           exited)  st_str="${Y}○ exited${N}" ;;
           *)       st_str="${D}  done${N}"   ;;
@@ -231,7 +231,7 @@ while true; do
 
       # Show agent-reported status on a second line (if available)
       reported=$(agent_reported_status "$issue")
-      if plan_waiting_for_review "$task_phase" "$st" "$worktree" "$slug"; then
+      if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
         reported="Plan waiting for review"
       fi
       if [[ -n "$reported" ]]; then
