@@ -9,7 +9,6 @@
  * @module repo-context-analyzer
  */
 
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';

@@ -9,10 +9,10 @@
  * @module difficulty-analyzer
  */
 
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { DifficultyBand, DifficultySignals, Stratum } from './eval-schema.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -127,8 +127,8 @@ export function fetchPrStatsFromApi(
   repoDir: string,
 ): { locTouched: number; filesTouched: number } | null {
   try {
-    const raw = execSync(
-      `gh pr view ${prNumber} --json additions,deletions,changedFiles`,
+    const raw = execShellCommand(
+      `gh pr view ${escapeShellArg(prNumber)} --json additions,deletions,changedFiles`,
       { encoding: 'utf-8', cwd: repoDir, timeout: 10_000 },
     ).trim();
     const data = JSON.parse(raw);
