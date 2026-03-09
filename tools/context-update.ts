@@ -1,11 +1,11 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { callClaude } from '../shared/lib/llm-cli.ts';
-import type { Subsystem } from '../shared/lib/subsystem-detector.ts';
+import { extractKeyFiles, readContextSpec, resolveRepoDir } from '../shared/lib/context-tool.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -13,31 +13,6 @@ const __dirname = dirname(__filename);
 // ────────────────────────────────────────────────────────────────
 // Helper Functions
 // ────────────────────────────────────────────────────────────────
-
-/**
- * Extract key files from a subsystem spec.
- */
-function extractKeyFiles(specContent: string): string[] {
-  const files: string[] = [];
-  const lines = specContent.split('\n');
-
-  let inKeyFilesSection = false;
-  for (const line of lines) {
-    if (line.startsWith('## Key Files')) {
-      inKeyFilesSection = true;
-      continue;
-    }
-    if (inKeyFilesSection && line.startsWith('##')) {
-      break;
-    }
-    if (inKeyFilesSection && line.startsWith('| `')) {
-      const match = line.match(/\| `([^`]+)` \|/);
-      if (match) files.push(match[1]);
-    }
-  }
-
-  return files;
-}
 
 /**
  * Read source files for a subsystem.
@@ -196,31 +171,9 @@ async function main(subsystemId: string, repoDir: string, isNoConfirm: boolean) 
   console.log(`Updating subsystem: ${subsystemId}`);
   console.log(`Repository: ${repoDir}`);
 
-  // Check if spec exists
-  const contextDir = join(repoDir, '.wavemill', 'context');
-  const specPath = join(contextDir, `${subsystemId}.md`);
-
-  if (!existsSync(specPath)) {
-    console.error(`Error: Subsystem spec not found: ${specPath}`);
-    console.error('');
-    console.error('Available subsystems:');
-    try {
-      const files = execSync(`ls ${contextDir}/*.md 2>/dev/null || true`, { encoding: 'utf-8' })
-        .split('\n')
-        .filter(Boolean);
-      files.forEach(f => {
-        const id = f.split('/').pop()?.replace('.md', '');
-        console.error(`  - ${id}`);
-      });
-    } catch {
-      console.error('  (none found)');
-    }
-    process.exit(1);
-  }
-
   // Read current spec
   console.log('Reading current spec...');
-  const currentSpec = readFileSync(specPath, 'utf-8');
+  const { specPath, content: currentSpec } = readContextSpec(repoDir, subsystemId);
 
   // Extract key files
   const keyFiles = extractKeyFiles(currentSpec);
@@ -292,8 +245,7 @@ Preserves structure and manual edits where possible.`,
       console.error('Error: Subsystem ID is required');
       process.exit(1);
     }
-    const repoPath = positional[1] || process.cwd();
-    const repoDir = resolve(repoPath);
+    const repoDir = resolveRepoDir(positional[1]);
     await main(subsystemId, repoDir, !!args['no-confirm']);
   },
 });

@@ -436,7 +436,7 @@ linear_get_issue() {
   # Capture stdout (JSON); collect stderr so we can show it on failure
   local stderr_file
   stderr_file=$(mktemp)
-  if retry npx tsx "$TOOLS_DIR/get-issue-json.ts" "$1" 2>"$stderr_file"; then
+  if retry npx tsx "$TOOLS_DIR/get-issue.ts" "$1" --json 2>"$stderr_file"; then
     rm -f "$stderr_file"
   else
     local rc=$?
@@ -1695,7 +1695,7 @@ linear_set_state() {
 linear_is_completed() {
   local issue="$1"
   local raw_json issue_state
-  raw_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-json.ts" "$issue" 2>/dev/null || echo "{}")
+  raw_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue.ts" "$issue" --json 2>/dev/null || echo "{}")
   issue_state=$(echo "$raw_json" | jq -r '.state.name // ""' 2>/dev/null)
   [[ "$issue_state" == "Done" || "$issue_state" == "Completed" || "$issue_state" == "Canceled" ]]
 }
@@ -1776,7 +1776,7 @@ launch_task() {
   if [[ -f "/tmp/${SESSION}-${issue}-issue.json" ]]; then
     issue_json=$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")
   else
-    issue_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-json.ts" "$linear_issue" 2>/dev/null || echo "{}")
+    issue_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue.ts" "$linear_issue" --json 2>/dev/null || echo "{}")
     echo "$issue_json" > "/tmp/${SESSION}-${issue}-issue.json"
   fi
   local issue_desc

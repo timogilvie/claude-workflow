@@ -209,7 +209,7 @@ To apply these patterns to specific agents:
 See [Worktree Auto-Approve Guide](./worktree-auto-approve.md#claude-code-integration) for detailed instructions.
 
 Quick summary:
-1. Use `npx tsx tools/generate-claude-permissions.ts` to generate Claude Code settings
+1. Use `npx tsx tools/generate-permissions.ts --agent claude` to generate Claude Code settings
 2. Apply the settings to your Claude Code configuration
 3. Restart Claude Code
 
@@ -218,7 +218,7 @@ Quick summary:
 See [Worktree Auto-Approve Guide](./worktree-auto-approve.md#codex-integration) for detailed instructions.
 
 Quick summary:
-1. Use `npx tsx tools/generate-codex-permissions.ts` to generate Codex settings
+1. Use `npx tsx tools/generate-permissions.ts --agent codex` to generate Codex settings
 2. Apply the settings to your Codex configuration
 3. Restart Codex
 
@@ -256,8 +256,8 @@ To add custom patterns for your project:
 
 4. **Regenerate agent settings**:
    ```bash
-   npx tsx tools/generate-claude-permissions.ts
-   npx tsx tools/generate-codex-permissions.ts
+   npx tsx tools/generate-permissions.ts --agent claude
+   npx tsx tools/generate-permissions.ts --agent codex
    ```
 
 ## Troubleshooting
