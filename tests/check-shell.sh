@@ -294,6 +294,47 @@ else
   fail "monitor is missing explicit tab attention state wiring"
 fi
 
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
+  && grep -qE '^launch_background_post_merge_eval\(\) \{' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "mill defines detached post-merge eval helper"
+else
+  fail "mill is missing detached post-merge eval helper"
+fi
+
+MERGED_BLOCK=$(awk '
+  /log "✓ \$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
+  in_block { print }
+  in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
+' "$LIB_DIR/wavemill-mill.sh")
+if echo "$MERGED_BLOCK" | grep -q 'launch_background_post_merge_eval "\$ISSUE" "\$PR"'; then
+  pass "merged PR path launches eval asynchronously"
+else
+  fail "merged PR path does not launch detached eval"
+fi
+
+if ! echo "$MERGED_BLOCK" | grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"'; then
+  pass "merged PR path no longer runs eval inline"
+else
+  fail "merged PR path still runs eval inline"
+fi
+
+EXTERNAL_BLOCK=$(awk '
+  /log "✓ \$ISSUE → Completed externally \(cross-repo or manual\)"/ { in_block=1 }
+  in_block { print }
+  in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
+' "$LIB_DIR/wavemill-mill.sh")
+if echo "$EXTERNAL_BLOCK" | grep -q 'launch_background_post_merge_eval "\$ISSUE" ""'; then
+  pass "external completion path launches eval asynchronously"
+else
+  fail "external completion path does not launch detached eval"
+fi
+
+if ! echo "$EXTERNAL_BLOCK" | grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"'; then
+  pass "external completion path no longer runs eval inline"
+else
+  fail "external completion path still runs eval inline"
+fi
+
 if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] \
   && grep -q 'set-window-option -u -t "\$SESSION:\$WIN" window-status-style' "$LIB_DIR/wavemill-orchestrator.sh" \
   && grep -q 'set-window-option -u -t "\$SESSION:\$WIN" window-status-current-style' "$LIB_DIR/wavemill-orchestrator.sh"; then

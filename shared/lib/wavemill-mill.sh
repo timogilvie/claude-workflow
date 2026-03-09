@@ -1530,6 +1530,44 @@ maybe_run_challenge_eval() {
   mark_eval_completed "$issue"
 }
 
+launch_background_post_merge_eval() {
+  local issue="$1" pr="$2" branch="$3" slug="$4" issue_ref="$5" reason="$6"
+  local eval_agent eval_log rc
+
+  validate_agent_set "$issue"
+  eval_agent=$(jq -r --arg i "$issue" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+  [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+
+  eval_log="/tmp/${SESSION}-eval-${issue}.log"
+  : >"$eval_log"
+
+  (
+    {
+      printf 'Launching %s eval in background\n' "$reason"
+      if [[ -n "$pr" ]]; then
+        _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+          --issue "$issue_ref" --pr "$pr" --branch "$branch" \
+          --worktree "${WORKTREE_ROOT}/${slug}" \
+          --workflow-type mill --repo-dir "$REPO_DIR" \
+          --agent "$eval_agent" \
+          --debug
+      else
+        _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+          --issue "$issue_ref" --branch "$branch" \
+          --worktree "${WORKTREE_ROOT}/${slug}" \
+          --workflow-type mill --repo-dir "$REPO_DIR" \
+          --agent "$eval_agent" \
+          --debug
+      fi
+      rc=$?
+      printf 'Eval process exited with code %s\n' "$rc"
+    } >>"$eval_log" 2>&1 || true
+    mark_eval_completed "$issue"
+  ) >/dev/null 2>&1 &
+
+  log "  ↳ Eval running in background; log: $eval_log"
+}
+
 maybe_run_challenge_comparison() {
   local issue="$1"
   local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model
@@ -2337,23 +2375,7 @@ monitor_issue_state() {
           eval_completed=$(jq -r --arg i "$ISSUE" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
           if [[ "$eval_completed" == "false" ]]; then
             log "  📊 Running post-completion eval..."
-            # Validate and auto-fix agent if not set
-            validate_agent_set "$ISSUE"
-            eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
-            [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
-            # Always enable debug mode for cost diagnostics (HOK-879)
-            debug_flag="--debug"
-            local eval_log="/tmp/${SESSION}-eval-${ISSUE}.log"
-            _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
-              --issue "$ISSUE" --branch "$BRANCH" \
-              --worktree "${WORKTREE_ROOT}/${SLUG}" \
-              --workflow-type mill --repo-dir "$REPO_DIR" \
-              --agent "$eval_agent" \
-              $debug_flag \
-              >"$eval_log" 2>&1 || true
-            while IFS= read -r line; do log "  [eval] $line"; done < "$eval_log"
-            rm -f "$eval_log"
-            mark_eval_completed "$ISSUE"
+            launch_background_post_merge_eval "$ISSUE" "" "$BRANCH" "$SLUG" "$ISSUE" "post-completion"
           else
             log "  ✓ Eval already completed for $ISSUE"
           fi
@@ -2433,23 +2455,7 @@ monitor_issue_state() {
       eval_completed=$(jq -r --arg i "$ISSUE" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
       if [[ "$eval_completed" == "false" ]]; then
         log "  📊 Running post-merge eval..."
-        # Validate and auto-fix agent if not set
-        validate_agent_set "$ISSUE"
-        eval_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
-        [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
-        # Always enable debug mode for cost diagnostics (HOK-879)
-        debug_flag="--debug"
-        local eval_log="/tmp/${SESSION}-eval-${ISSUE}.log"
-        _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
-          --issue "$ISSUE" --pr "$PR" --branch "$BRANCH" \
-          --worktree "${WORKTREE_ROOT}/${SLUG}" \
-          --workflow-type mill --repo-dir "$REPO_DIR" \
-          --agent "$eval_agent" \
-          $debug_flag \
-          >"$eval_log" 2>&1 || true
-        while IFS= read -r line; do log "  [eval] $line"; done < "$eval_log"
-        rm -f "$eval_log"
-        mark_eval_completed "$ISSUE"
+        launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
       else
         log "  ✓ Eval already completed for $ISSUE"
       fi
