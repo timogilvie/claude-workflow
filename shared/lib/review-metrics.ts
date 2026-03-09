@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } fr
 import { join, dirname, resolve } from 'node:path';
 import type { ReviewResult, ReviewFinding } from './review-engine.ts';
 import { loadWavemillConfig } from './config.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -363,9 +364,8 @@ export function findIssueIdFromContext(
 
     for (const pattern of patterns) {
       try {
-        const { execSync } = require('node:child_process');
-        const files = execSync(
-          `find "${repoDir}" -path "*/${pattern}" -type f 2>/dev/null | head -1`,
+        const files = execShellCommand(
+          `find ${escapeShellArg(repoDir)} -path ${escapeShellArg(`*/${pattern}`)} -type f 2>/dev/null | head -1`,
           { encoding: 'utf-8', maxBuffer: 1024 * 1024 } // 1MB buffer
         ).trim();
 
