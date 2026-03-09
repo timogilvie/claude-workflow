@@ -78,17 +78,55 @@ Use the **document-orchestrator** skill to:
 - Implement fix to make tests pass
 - Validate fix against original bug report
 
-## Phase 5: Git & PR
+## Phase 5: Self-Review
+After implementation is complete and tests/lint pass, you MUST run the self-review tool.
+This is a REQUIRED step — do not skip it or substitute your own review.
+
+1. Run the self-review tool (up to 3 iterations):
+   IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
+   IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
+   `npx tsx tools/review-changes.ts main --json`
+   - Exit code 0 = review passed → proceed to step 3
+   - Exit code 1 = issues found → fix blockers and re-run (step 2)
+   - Exit code 2 = error → log comprehensive diagnostics and proceed to step 3
+   The output is structured JSON with `verdict`, `codeReviewFindings`, and `uiFindings`.
+
+   When exit code 2 occurs, you MUST log the following diagnostics to help debug the failure:
+   ```
+   ⚠️  Review tool failed with exit code 2
+
+   Diagnostics:
+   - Command: npx tsx tools/review-changes.ts main --json
+   - Working directory: $(pwd)
+   - Tool path: tools/review-changes.ts
+   - Tool exists: $(ls -lh tools/review-changes.ts 2>&1 || echo "NOT FOUND")
+   - Git root: $(git rev-parse --show-toplevel 2>&1)
+   - Current branch: $(git rev-parse --abbrev-ref HEAD 2>&1)
+   - Base branch exists: $(git rev-parse --verify main 2>&1 || echo "NOT FOUND")
+   - STDERR output: [paste the actual stderr from the failed command]
+
+   Proceeding to PR creation per instructions.
+   ```
+   This diagnostic information is CRITICAL for debugging recurring tool failures.
+
+2. For each iteration where issues are found:
+   - Read the review JSON output carefully
+   - Fix all blockers (severity: blocker) and straightforward warnings
+   - Make targeted fixes only — do not refactor unrelated code
+   - Commit fixes: `git commit -m "fix: Address self-review findings (iteration N)"`
+   - Re-run the review tool (step 1)
+
+## Phase 6: Git & PR
 Use the **git-workflow-manager** skill to:
 - Create bugfix branch: `bugfix/<sanitized-title>`
 - Commit with structured message (fix: prefix, root cause, solution)
 - Push branch to remote
-- Create PR with root cause, solution, and validation steps
+- Create PR with root cause, solution, validation steps, and self-review outcome
 - Provide ready-for-review checklist
 
 After PR is created, finalize the session using the Session Tracking instructions above.
 
-## Phase 6: Post-Completion Eval
+## Phase 7: Post-Completion Eval
 After PR creation, run the post-completion eval hook. This is automatic and non-blocking — if eval fails, the workflow is still complete.
 
 ```bash
