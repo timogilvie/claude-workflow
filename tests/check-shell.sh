@@ -83,7 +83,7 @@ else
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
-    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
+    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
 
     # Extract function calls from the heredoc
     # Look for word-boundary function-like names that appear as commands
@@ -96,7 +96,8 @@ else
       | grep -vE '^(err|out|dev|null|tmp|usr|bin|opt|homebrew|lib|etc|var|tmp|home)$' \
       | grep -vE '^(pipefail|euo|noglob|errexit|nounset)$' \
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
-      | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$')
+      | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
+      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at)$')
 
     # Check which called names look like they could be custom functions
     # and verify they're defined
@@ -252,16 +253,47 @@ fi
 echo ""
 echo "=== Codex Attention Style Regression Guard ==="
 
-if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] && grep -q 'window-status-activity-style bg=red,fg=white,bold' "$LIB_DIR/wavemill-mill.sh"; then
-  pass "mill sets codex window activity style to red"
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] && ! grep -q 'window-status-activity-style bg=red,fg=white,bold' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "mill no longer uses codex activity-style override"
 else
-  fail "mill is missing codex red activity style override"
+  fail "mill still uses codex activity-style override"
 fi
 
-if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] && grep -q 'window-status-activity-style bg=red,fg=white,bold' "$LIB_DIR/wavemill-orchestrator.sh"; then
-  pass "orchestrator sets codex window activity style to red"
+if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] && ! grep -q 'window-status-activity-style bg=red,fg=white,bold' "$LIB_DIR/wavemill-orchestrator.sh"; then
+  pass "orchestrator no longer uses codex activity-style override"
 else
-  fail "orchestrator is missing codex red activity style override"
+  fail "orchestrator still uses codex activity-style override"
+fi
+
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] && grep -qE '^set_window_attention_state\(\) \{' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "mill defines explicit window attention helper"
+else
+  fail "mill is missing explicit window attention helper"
+fi
+
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
+  && grep -qE '^codex_has_pending_approval\(\) \{' "$LIB_DIR/wavemill-mill.sh" \
+  && grep -q 'sandbox_permissions.*require_escalated' "$LIB_DIR/wavemill-mill.sh" \
+  && grep -q 'function_call_output' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "mill defines codex pending-approval detection from session call state"
+else
+  fail "mill is missing codex pending-approval detection"
+fi
+
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
+  && grep -q 'codex_has_pending_approval "\$WT_DIR"' "$LIB_DIR/wavemill-mill.sh" \
+  && grep -q 'set_window_attention_state "\$WIN" "needs-user"' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "monitor drives tab attention from explicit waiting states"
+else
+  fail "monitor is missing explicit tab attention state wiring"
+fi
+
+if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] \
+  && grep -q 'set-window-option -u -t "\$SESSION:\$WIN" window-status-style' "$LIB_DIR/wavemill-orchestrator.sh" \
+  && grep -q 'set-window-option -u -t "\$SESSION:\$WIN" window-status-current-style' "$LIB_DIR/wavemill-orchestrator.sh"; then
+  pass "orchestrator clears per-window attention styling at launch"
+else
+  fail "orchestrator is missing launch-time attention-style reset"
 fi
 
 # ============================================================================
