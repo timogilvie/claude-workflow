@@ -100,9 +100,16 @@ for t in "${TASKS[@]}"; do
     IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
     BRANCH="task/${SLUG}"
     WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+    LINEAR_ISSUE="$ISSUE"
+    CHALLENGE_MODEL=""
+
+    if [[ -n "${WAVEMILL_STATE_FILE:-}" ]] && [[ -f "$WAVEMILL_STATE_FILE" ]]; then
+      LINEAR_ISSUE=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].linearIssueId // .tasks[$issue].challengePairId // $issue' "$WAVEMILL_STATE_FILE" 2>/dev/null || echo "$ISSUE")
+      CHALLENGE_MODEL=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].challengeModel // empty' "$WAVEMILL_STATE_FILE" 2>/dev/null || echo "")
+    fi
 
 
-    echo "==> Setting up $ISSUE: $TITLE"
+    echo "==> Setting up $ISSUE ($LINEAR_ISSUE): $TITLE"
     cd "$REPO_DIR"
 
 
@@ -118,7 +125,7 @@ for t in "${TASKS[@]}"; do
     else
       # Fetch full issue details from Linear
       echo "Fetching issue details from Linear..."
-      ISSUE_DATA=$(npx tsx "$LINEAR_TOOL" "$ISSUE" 2>/dev/null || echo "")
+      ISSUE_DATA=$(npx tsx "$LINEAR_TOOL" "$LINEAR_ISSUE" 2>/dev/null || echo "")
       if [[ -n "$ISSUE_DATA" ]]; then
         ISSUE_DESCRIPTION=$(echo "$ISSUE_DATA" | jq -r '.description // ""' 2>/dev/null || echo "")
       fi
@@ -129,7 +136,11 @@ for t in "${TASKS[@]}"; do
     MODEL_SUGGESTION_FILE="/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
     TASK_AGENT_CMD="$AGENT_CMD"
     TASK_MODEL=""
-    if [[ -n "${FORCE_MODEL:-}" ]]; then
+    if [[ -n "$CHALLENGE_MODEL" ]]; then
+      TASK_MODEL="$CHALLENGE_MODEL"
+      TASK_AGENT_CMD="$(agent_resolve_from_model "$TASK_MODEL")"
+      echo "Challenge: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL"
+    elif [[ -n "${FORCE_MODEL:-}" ]]; then
       # Validate model before using it
       if ! agent_validate_model "$FORCE_MODEL" "$REPO_DIR"; then
         echo "ERROR: Invalid FORCE_MODEL: $FORCE_MODEL" >&2
@@ -252,7 +263,7 @@ for t in "${TASKS[@]}"; do
 
       # Build the planning prompt
       PLAN_PROMPT=$(cat <<EOF_PLAN
-You are working on: $TITLE ($ISSUE)
+You are working on: $TITLE ($LINEAR_ISSUE)
 
 Repo worktree: $WT_DIR
 Branch: $BRANCH
@@ -295,13 +306,13 @@ After plan approval:
    - A "## Changes" section listing the key files/modules modified
    - A "## Test plan" section describing how the changes were validated
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-4. Link the PR to $ISSUE
+4. Link the PR to $LINEAR_ISSUE
 
 Success criteria:
 - [ ] Implementation matches plan and issue requirements
 - [ ] Lint/tests pass
 - [ ] No regressions
-- [ ] PR created with descriptive summary linked to $ISSUE
+- [ ] PR created with descriptive summary linked to $LINEAR_ISSUE
 
 ### Phase 3: Review & Respond
 After creating the PR:
@@ -326,7 +337,7 @@ EOF_PLAN
       # Pipe instructions to agent — no interactive planning phase.
 
       INSTR=$(cat <<'EOF_INSTR'
-You are working on: TITLE_PLACEHOLDER (ISSUE_PLACEHOLDER)
+You are working on: TITLE_PLACEHOLDER (LINEAR_ISSUE_PLACEHOLDER)
 
 
 Repo worktree: WTDIR_PLACEHOLDER
@@ -355,7 +366,7 @@ Success criteria:
 - [ ] UI is responsive and accessible (if applicable)
 - [ ] Lint/tests pass
 - [ ] No regressions in existing functionality
-- [ ] PR created with clear description and linked to ISSUE_PLACEHOLDER
+- [ ] PR created with clear description and linked to LINEAR_ISSUE_PLACEHOLDER
 
 
 Process:
@@ -363,7 +374,7 @@ Process:
 2. Make minimal, high-quality changes
 3. Run tests/lint
 4. Create a PR using GitHub CLI with a descriptive title and body:
-   gh pr create --title "ISSUE_PLACEHOLDER: <concise summary of changes>" --body "<PR body>"
+   gh pr create --title "LINEAR_ISSUE_PLACEHOLDER: <concise summary of changes>" --body "<PR body>"
    The PR body MUST include:
    - A "## Summary" section with 2-4 bullet points describing what changed and why
    - A "## Changes" section listing the key files/modules modified
@@ -374,7 +385,7 @@ EOF_INSTR
 )
       # Replace placeholders
       INSTR="${INSTR//TITLE_PLACEHOLDER/$TITLE}"
-      INSTR="${INSTR//ISSUE_PLACEHOLDER/$ISSUE}"
+      INSTR="${INSTR//LINEAR_ISSUE_PLACEHOLDER/$LINEAR_ISSUE}"
       INSTR="${INSTR//WTDIR_PLACEHOLDER/$WT_DIR}"
       INSTR="${INSTR//BRANCH_PLACEHOLDER/$BRANCH}"
       INSTR="${INSTR//BASE_BRANCH_PLACEHOLDER/$BASE_BRANCH}"

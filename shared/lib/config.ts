@@ -96,6 +96,14 @@ export interface RouterConfig {
   llmProvider?: 'openai' | 'anthropic';
 }
 
+export interface ChallengeConfig {
+  enabled?: boolean;
+  rate?: number;
+  models?: string[] | null;
+  comparisonModel?: string;
+  autoMergeWinner?: boolean;
+}
+
 export interface ValidationLayerConfig {
   enabled?: boolean;
 }
@@ -152,6 +160,7 @@ export interface WavemillConfig {
   eval?: EvalConfig;
   autoEval?: boolean;
   router?: RouterConfig;
+  challenge?: ChallengeConfig;
   validation?: ValidationConfig;
   constraints?: ConstraintsConfig;
   ui?: UiConfig;
@@ -410,6 +419,14 @@ export function clearConfigCache(repoDir?: string): void {
  */
 export function getRouterConfig(repoDir?: string): RouterConfig {
   return loadWavemillConfig(repoDir).router || {};
+}
+
+/**
+ * Get the challenge config section.
+ * Returns empty object if not configured.
+ */
+export function getChallengeConfig(repoDir?: string): ChallengeConfig {
+  return loadWavemillConfig(repoDir).challenge || {};
 }
 
 /**

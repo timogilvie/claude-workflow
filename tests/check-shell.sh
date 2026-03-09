@@ -165,13 +165,13 @@ else
     fail "monitor is missing pr_state helper definition"
   fi
 
-  if echo "$HEREDOC_CONTENT" | grep -q 'linear_set_state "\$ISSUE" "In Review"'; then
+  if echo "$HEREDOC_CONTENT" | grep -q 'linear_set_state .*"In Review"' && echo "$HEREDOC_CONTENT" | grep -q 'get_linear_issue_id'; then
     pass "monitor sets Linear issue to In Review when PR is detected"
   else
     fail "monitor does not set Linear issue to In Review on PR detection"
   fi
 
-  if echo "$HEREDOC_CONTENT" | grep -q 'linear_set_state "\$ISSUE" "Done"'; then
+  if echo "$HEREDOC_CONTENT" | grep -q 'linear_set_state .*"Done"' && echo "$HEREDOC_CONTENT" | grep -q 'get_linear_issue_id'; then
     pass "monitor sets Linear issue to Done when work is completed"
   else
     fail "monitor does not set Linear issue to Done on completion"

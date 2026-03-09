@@ -270,6 +270,52 @@
       "default": true,
       "description": "When true, automatically run eval after workflow/bugfix command completion (PR creation). Eval failures are logged as warnings and never fail the workflow."
     },
+    "challenge": {
+      "type": "object",
+      "description": "Settings for challenge mode head-to-head task execution in mill.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Master toggle for challenge mode."
+        },
+        "rate": {
+          "type": "number",
+          "default": 0.10,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Probability that a selected mill task becomes a challenge task."
+        },
+        "models": {
+          "description": "Pool of models eligible for challenge. Null means use router.models.",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "comparisonModel": {
+          "type": "string",
+          "default": "claude-opus-4-6",
+          "minLength": 1,
+          "description": "Model used as the LLM judge for challenge PR comparison."
+        },
+        "autoMergeWinner": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to automatically merge the recommended winner and close the loser."
+        }
+      },
+      "additionalProperties": false
+    },
     "router": {
       "type": "object",
       "description": "Settings for the prompt-to-model router that suggests the best LLM for a task based on historical eval data.",

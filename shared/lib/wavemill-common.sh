@@ -28,6 +28,13 @@ _WAVEMILL_DEFAULTS='{
   },
   "plan": {
     "maxDisplay": 9
+  },
+  "challenge": {
+    "enabled": false,
+    "rate": 0.10,
+    "models": null,
+    "comparisonModel": "claude-opus-4-6",
+    "autoMergeWinner": false
   }
 }'
 
@@ -84,6 +91,11 @@ load_config() {
       "_CFG_PLAN_MAX_DISPLAY=\($c.plan.maxDisplay)",
       "_CFG_PLAN_RESEARCH=\($c.plan.research // false)",
       "_CFG_PLAN_MODEL=\($c.plan.model // "claude-opus-4-6" | @sh)",
+      "_CFG_CHALLENGE_ENABLED=\($c.challenge.enabled // false)",
+      "_CFG_CHALLENGE_RATE=\($c.challenge.rate // 0.10)",
+      "_CFG_CHALLENGE_MODELS=\(($c.challenge.models // null) | @json | @sh)",
+      "_CFG_CHALLENGE_COMPARISON_MODEL=\($c.challenge.comparisonModel // "claude-opus-4-6" | @sh)",
+      "_CFG_CHALLENGE_AUTO_MERGE=\($c.challenge.autoMergeWinner // false)",
       "_CFG_ROUTER_ENABLED=\($c.router.enabled // true)",
       "_CFG_ROUTER_DEFAULT_MODEL=\($c.router.defaultModel // "claude-sonnet-4-5-20250929" | @sh)",
       "_CFG_AUTO_EVAL=\($c.autoEval // true)",
@@ -139,6 +151,11 @@ load_config() {
   PLAN_MAX_DISPLAY="${PLAN_MAX_DISPLAY:-$_CFG_PLAN_MAX_DISPLAY}"
   PLAN_RESEARCH="${PLAN_RESEARCH:-$_CFG_PLAN_RESEARCH}"
   PLAN_MODEL="${PLAN_MODEL:-$_CFG_PLAN_MODEL}"
+  CHALLENGE_ENABLED="${CHALLENGE_ENABLED:-$_CFG_CHALLENGE_ENABLED}"
+  CHALLENGE_RATE="${CHALLENGE_RATE:-$_CFG_CHALLENGE_RATE}"
+  CHALLENGE_MODELS_JSON="${CHALLENGE_MODELS_JSON:-$_CFG_CHALLENGE_MODELS}"
+  CHALLENGE_COMPARISON_MODEL="${CHALLENGE_COMPARISON_MODEL:-$_CFG_CHALLENGE_COMPARISON_MODEL}"
+  CHALLENGE_AUTO_MERGE="${CHALLENGE_AUTO_MERGE:-$_CFG_CHALLENGE_AUTO_MERGE}"
   ROUTER_ENABLED="${ROUTER_ENABLED:-$_CFG_ROUTER_ENABLED}"
   ROUTER_DEFAULT_MODEL="${ROUTER_DEFAULT_MODEL:-$_CFG_ROUTER_DEFAULT_MODEL}"
   AUTO_EVAL="${AUTO_EVAL:-$_CFG_AUTO_EVAL}"
@@ -156,6 +173,8 @@ load_config() {
   export SESSION MAX_PARALLEL POLL_SECONDS BASE_BRANCH WORKTREE_ROOT
   export AGENT_CMD REQUIRE_CONFIRM PLANNING_MODE MAX_RETRIES RETRY_DELAY
   export PROJECT_NAME MAX_SELECT MAX_DISPLAY PLAN_MAX_DISPLAY PLAN_RESEARCH PLAN_MODEL
+  export CHALLENGE_ENABLED CHALLENGE_RATE CHALLENGE_MODELS_JSON
+  export CHALLENGE_COMPARISON_MODEL CHALLENGE_AUTO_MERGE
   export ROUTER_ENABLED ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD
 
   # Clean up temp variables
@@ -163,6 +182,8 @@ load_config() {
   unset _CFG_BASE_BRANCH _CFG_WORKTREE_ROOT _CFG_AGENT_CMD _CFG_REQUIRE_CONFIRM
   unset _CFG_PLANNING_MODE _CFG_MAX_RETRIES _CFG_RETRY_DELAY _CFG_MAX_SELECT _CFG_MAX_DISPLAY
   unset _CFG_PLAN_MAX_DISPLAY _CFG_PLAN_RESEARCH _CFG_PLAN_MODEL
+  unset _CFG_CHALLENGE_ENABLED _CFG_CHALLENGE_RATE _CFG_CHALLENGE_MODELS
+  unset _CFG_CHALLENGE_COMPARISON_MODEL _CFG_CHALLENGE_AUTO_MERGE
   unset _CFG_ROUTER_ENABLED _CFG_ROUTER_DEFAULT_MODEL _CFG_AUTO_EVAL _CFG_SETUP_CMD
 
   # Sentinel so downstream scripts can skip re-loading

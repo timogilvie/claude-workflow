@@ -142,6 +142,7 @@ const scenarios: { name: string; record: EvalRecord }[] = [
       rationale:
         'Agent completed the task fully autonomously. Created the logout button component, wired up session clearing logic, added redirect, and all tests pass. No human intervention was needed.',
       issueId: 'HOK-500',
+      challengePairId: 'HOK-500',
       prUrl: 'https://github.com/org/repo/pull/42',
       tokenUsage: {
         inputTokens: 1500,
@@ -888,6 +889,13 @@ test('Record with routing decision but no rationale validates', () => {
 test('Record without routing decision validates (backward compat)', () => {
   const record = scenarios[0].record as unknown as Record<string, unknown>; // Scenario 1
   assert.ok(!('routingDecision' in record), 'Scenario 1 should not have routingDecision');
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with challengePairId validates', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  assert.equal((record as any).challengePairId, 'HOK-500');
   const result = validateAgainstSchema(record);
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
