@@ -13,16 +13,9 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { getEvalConfig } from '../shared/lib/config.ts';
+import type { EvalRecord } from '../shared/lib/eval-schema.ts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-interface EvalRecord {
-  id: string;
-  issueId?: string;
-  prUrl?: string;
-  timestamp: string;
-  [key: string]: unknown;
-}
 
 interface DeduplicationResult {
   totalRecords: number;
