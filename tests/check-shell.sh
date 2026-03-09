@@ -265,7 +265,39 @@ else
 fi
 
 # ============================================================================
-# TEST 5: Verify sourced libraries exist
+# TEST 5: Dashboard planning-review status guards
+# ============================================================================
+echo ""
+echo "=== Dashboard Planning Review Guards ==="
+
+STATUS_SCRIPT="$LIB_DIR/wavemill-status.sh"
+
+if [[ ! -f "$STATUS_SCRIPT" ]]; then
+  fail "wavemill-status.sh not found for dashboard regression checks"
+else
+  if grep -qE '^plan_waiting_for_review\(\) \{' "$STATUS_SCRIPT"; then
+    pass "dashboard defines plan_waiting_for_review helper"
+  else
+    fail "dashboard is missing plan_waiting_for_review helper"
+  fi
+
+  if grep -q '\[\[ "\$task_phase" == "planning" \]\]' "$STATUS_SCRIPT" \
+    && grep -q '\[\[ "\$agent_state" == "exited" \]\]' "$STATUS_SCRIPT" \
+    && grep -q '\.plan-approved' "$STATUS_SCRIPT"; then
+    pass "dashboard review-waiting helper checks planning, exited agent, and approval marker"
+  else
+    fail "dashboard review-waiting helper is missing one or more gating conditions"
+  fi
+
+  if grep -q 'reported="Plan waiting for review"' "$STATUS_SCRIPT"; then
+    pass "dashboard overrides stale status with plan review message"
+  else
+    fail "dashboard does not override stale status with plan review message"
+  fi
+fi
+
+# ============================================================================
+# TEST 6: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
