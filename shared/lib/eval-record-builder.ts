@@ -28,6 +28,8 @@ import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } fro
 export interface EvalRecordMetadata {
   /** Agent type that ran the workflow */
   agentType?: string;
+  /** Shared challenge pair identifier */
+  challengePairId?: string;
   /** Difficulty analysis results */
   difficulty?: DifficultyAnalysis | null;
   /** Task context analysis results */
@@ -48,6 +50,12 @@ export interface EvalRecordMetadata {
  */
 export function attachAgentType(record: EvalRecord, agentType?: string): void {
   record.agentType = agentType || 'claude';
+}
+
+export function attachChallengePairId(record: EvalRecord, challengePairId?: string): void {
+  if (challengePairId) {
+    record.challengePairId = challengePairId;
+  }
 }
 
 /**
@@ -141,6 +149,7 @@ export function attachWorkflowCostMetadata(
  */
 export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadata): void {
   attachAgentType(record, metadata.agentType);
+  attachChallengePairId(record, metadata.challengePairId);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);

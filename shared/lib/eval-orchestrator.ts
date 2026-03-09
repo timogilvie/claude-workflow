@@ -68,6 +68,8 @@ export interface EvalOptions {
   routingDecision?: any;
   /** Override eval model (optional) */
   evalModel?: string;
+  /** Shared challenge pair identifier */
+  challengePairId?: string;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -110,6 +112,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     solutionModel,
     routingDecision,
     evalModel,
+    challengePairId,
   } = options;
 
   // 1. Gather context (auto-detect or explicit)
@@ -323,6 +326,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // 10. Enrich record with metadata
   enrichEvalRecord(record, {
     agentType,
+    challengePairId,
     difficulty: difficultyData,
     taskContext: taskContextData,
     repoContext: repoContextData,
