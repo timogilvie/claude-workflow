@@ -24,7 +24,7 @@ import { loadWavemillConfig, CURRENT_CONFIG_VERSION } from '../shared/lib/config
 
 // Canonical template matching the comprehensive config from wavemill init
 const CANONICAL_TEMPLATE = {
-  configVersion: '1.0.0',
+  configVersion: '1.0.1',
   linear: {
     project: '',
   },
@@ -65,6 +65,7 @@ const CANONICAL_TEMPLATE = {
       'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.30 },
       'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.80, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1.00, cacheReadCostPerMTok: 0.08 },
       'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheReadCostPerMTok: 0.44 },
+      'gpt-5.4': { inputCostPerMTok: 2.50, outputCostPerMTok: 15, cacheReadCostPerMTok: 0.25 },
     },
     interventionPenalties: {
       reviewComment: 0.05,
@@ -102,6 +103,7 @@ const CANONICAL_TEMPLATE = {
       'claude-sonnet-4-5-20250929': 'claude',
       'claude-haiku-4-5-20251001': 'claude',
       'gpt-5.3-codex': 'codex',
+      'gpt-5.4': 'codex',
     },
     mode: 'auto',
     llmModel: 'gpt-4o-mini',
