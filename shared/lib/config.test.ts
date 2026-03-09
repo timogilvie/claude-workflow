@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 import {
   loadWavemillConfig,
   clearConfigCache,
+  getChallengeConfig,
   getRouterConfig,
   getEvalConfig,
   getMillConfig,
@@ -132,11 +133,14 @@ test('valid config passes validation', () => {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
       router: { enabled: true, defaultModel: 'claude-sonnet-4-5-20250929' },
+      challenge: { enabled: true, rate: 0.25, models: ['claude-opus-4-6', 'gpt-5.3-codex'] },
       eval: { evalsDir: '.wavemill/evals' },
       mill: { maxParallel: 5 },
     }));
     const config = loadWavemillConfig(tmp);
     assert.equal(config.router?.enabled, true);
+    assert.equal(config.challenge?.enabled, true);
+    assert.equal(config.challenge?.rate, 0.25);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
     assert.equal(config.mill?.maxParallel, 5);
   } finally {
@@ -151,6 +155,27 @@ test('invalid type in config throws validation error', () => {
     // mill.maxParallel should be integer, not string
     writeConfig(tmp, JSON.stringify({
       mill: { maxParallel: 'five' }
+    }));
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid challenge rate throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { enabled: true, rate: 2 }
     }));
     if (hasAjv) {
       assert.throws(() => {
@@ -351,6 +376,29 @@ test('getRouterConfig returns router section', () => {
     const routerConfig = getRouterConfig(tmp);
     assert.equal(routerConfig.enabled, true);
     assert.equal(routerConfig.defaultModel, 'claude-sonnet-4-5-20250929');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getChallengeConfig returns challenge section', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: {
+        enabled: true,
+        rate: 0.5,
+        comparisonModel: 'claude-opus-4-6',
+        autoMergeWinner: true,
+      },
+    }));
+
+    const challengeConfig = getChallengeConfig(tmp);
+    assert.equal(challengeConfig.enabled, true);
+    assert.equal(challengeConfig.rate, 0.5);
+    assert.equal(challengeConfig.comparisonModel, 'claude-opus-4-6');
+    assert.equal(challengeConfig.autoMergeWinner, true);
   } finally {
     cleanUp(tmp);
   }

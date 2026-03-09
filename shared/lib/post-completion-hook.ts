@@ -39,6 +39,8 @@ export interface PostCompletionContext {
   branchName?: string;
   worktreePath?: string;
   agentType?: string;
+  solutionModel?: string;
+  challengePairId?: string;
 }
 
 /**
@@ -275,11 +277,17 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     // 6. Enrich record with all metadata
     enrichEvalRecord(record, {
       agentType: ctx.agentType,
+      challengePairId: ctx.challengePairId,
       difficulty: difficultyData,
       taskContext: taskContextData,
       repoContext: repoContextData,
       workflowCost: costOutcome,
     });
+
+    if (ctx.solutionModel) {
+      record.modelId = ctx.solutionModel;
+      record.modelVersion = ctx.solutionModel;
+    }
 
     // 7. Persist
     const evalsDir = resolveEvalsDir(repoDir);

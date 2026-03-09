@@ -77,6 +77,13 @@ const CANONICAL_TEMPLATE = {
     },
   },
   autoEval: true,
+  challenge: {
+    enabled: false,
+    rate: 0.10,
+    models: null,
+    comparisonModel: 'claude-opus-4-6',
+    autoMergeWinner: false,
+  },
   review: {
     maxIterations: 3,
     enabled: true,
