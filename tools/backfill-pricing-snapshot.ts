@@ -11,26 +11,17 @@
  * @module backfill-pricing-snapshot
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, copyFileSync } from 'node:fs';
+import { writeFileSync, readdirSync, existsSync, copyFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
+import type { EvalRecord } from '../shared/lib/eval-schema.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
+import { readJsonlFile } from '../shared/lib/jsonl-utils.ts';
 import type { ModelPricing } from '../shared/lib/workflow-cost.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────
-
-interface EvalRecord {
-  workflowTokenUsage?: Record<string, {
-    inputTokens: number;
-    cacheCreationTokens: number;
-    cacheReadTokens: number;
-    outputTokens: number;
-    costUsd: number;
-  }>;
-  pricingSnapshot?: Record<string, ModelPricing>;
-  [key: string]: unknown;
-}
 
 interface BackfillStats {
   filesProcessed: number;
@@ -89,39 +80,29 @@ function backfillRepo(repoDir: string, dryRun: boolean): BackfillStats {
     stats.filesProcessed++;
 
     try {
-      const content = readFileSync(filePath, 'utf-8');
-      const lines = content.split('\n').filter(l => l.trim());
       const updatedLines: string[] = [];
       let fileModified = false;
 
-      for (const line of lines) {
-        let record: EvalRecord;
-
-        try {
-          record = JSON.parse(line);
-        } catch (parseErr) {
-          stats.errors.push(`Failed to parse record in ${file}: ${parseErr}`);
-          updatedLines.push(line); // Keep original line
-          continue;
-        }
+      for (const record of readJsonlFile<EvalRecord>(filePath)) {
+        const workflowTokenUsage = record.workflowTokenUsage;
 
         // Skip if already has pricingSnapshot
         if (record.pricingSnapshot) {
           stats.recordsAlreadyHaveSnapshot++;
-          updatedLines.push(line);
+          updatedLines.push(JSON.stringify(record));
           continue;
         }
 
         // Skip if no workflowTokenUsage
-        if (!record.workflowTokenUsage) {
+        if (!workflowTokenUsage) {
           stats.recordsWithoutWorkflowUsage++;
-          updatedLines.push(line);
+          updatedLines.push(JSON.stringify(record));
           continue;
         }
 
         // Build pricing snapshot with only models that were used
         const pricingSnapshot: Record<string, ModelPricing> = {};
-        const modelsUsed = Object.keys(record.workflowTokenUsage);
+        const modelsUsed = Object.keys(workflowTokenUsage);
 
         for (const modelId of modelsUsed) {
           const pricing = pricingTable[modelId];
@@ -138,7 +119,7 @@ function backfillRepo(repoDir: string, dryRun: boolean): BackfillStats {
           fileModified = true;
         } else {
           stats.recordsSkipped++;
-          updatedLines.push(line);
+          updatedLines.push(JSON.stringify(record));
         }
       }
 
@@ -152,7 +133,7 @@ function backfillRepo(repoDir: string, dryRun: boolean): BackfillStats {
         writeFileSync(filePath, updatedLines.join('\n') + '\n', 'utf-8');
       }
     } catch (err) {
-      stats.errors.push(`Error processing ${file}: ${err}`);
+      stats.errors.push(`Error processing ${file}: ${errorMessage(err)}`);
     }
   }
 

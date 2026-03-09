@@ -14,6 +14,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadWavemillConfig, CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 
 interface VersionCheckResult {
   status: 'missing' | 'no-version' | 'outdated' | 'current' | 'newer';
@@ -54,7 +55,7 @@ function checkConfigVersion(repoDir: string = process.cwd()): VersionCheckResult
   try {
     config = loadWavemillConfig(repoDir);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return {
       status: 'missing',
       currentVersion: CURRENT_CONFIG_VERSION,
@@ -121,7 +122,7 @@ function main() {
     // Exit code: 0 if current/newer, 1 if needs upgrade, 2 on error
     process.exit(result.needsUpgrade ? 1 : 0);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
 
     if (jsonOutput) {
       console.log(JSON.stringify({

@@ -11,6 +11,7 @@
  */
 
 import { loadWavemillConfig } from './config.ts';
+import { errorMessage } from './error-utils.ts';
 import { resolveAgent } from './model-router.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -198,7 +199,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     validateModelOrThrow(modelId, repoDir);
     process.exit(0);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     console.error(message);
     process.exit(1);
   }

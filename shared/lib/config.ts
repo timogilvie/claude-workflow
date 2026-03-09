@@ -13,6 +13,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { errorMessage } from './error-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // TypeScript Types (matching wavemill-config.schema.json)
@@ -240,7 +241,7 @@ function getValidator(): ValidatorFunction | null {
     AjvCtor = (ajvModule.default || ajvModule) as typeof AjvCtor;
   } catch (err) {
     const code = (err as { code?: string }).code;
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     if (
       code === 'MODULE_NOT_FOUND' ||
       code === 'ERR_MODULE_NOT_FOUND' ||
@@ -361,7 +362,7 @@ export function loadWavemillConfig(repoDir?: string): WavemillConfig {
     const content = readFileSync(configPath, 'utf-8');
     parsed = JSON.parse(content);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     throw new Error(
       `Failed to parse .wavemill-config.json at ${configPath}: ${message}`
     );
