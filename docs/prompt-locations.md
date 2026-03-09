@@ -10,7 +10,7 @@ Use this page as the canonical registry for agent instruction locations in this 
 
 - `shared/lib/agent-adapters.sh`: `agent_launch_autonomous()` and `agent_launch_interactive()` define how mill mode launches agents in autonomous vs interactive planning flows.
 - `commands/workflow.md`: Phase 4 defines the interactive `/workflow` self-review loop.
-- `commands/bugfix.md`: bug workflow does not include a self-review phase.
+- `commands/bugfix.md`: Phase 5 defines the bugfix self-review loop.
 - `commands/implement-plan.md`: does not define self-review; that behavior is owned by `/workflow`.
 
 ## Update Rule
