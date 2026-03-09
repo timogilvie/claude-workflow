@@ -6,10 +6,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../shared/lib"
+TSX_LOADER="$(npm root -g)/tsx/dist/loader.mjs"
 
 PASS=0
 FAIL=0
 SKIP=0
+
+if [[ ! -f "$TSX_LOADER" ]]; then
+  echo "tsx loader not found at: $TSX_LOADER" >&2
+  exit 1
+fi
 
 for f in \
   constraint-parser.test.ts \
@@ -27,7 +33,7 @@ for f in \
   workflow-cost.test.ts \
 ; do
   echo -n "  $f: "
-  if npx tsx "$LIB_DIR/$f" > /dev/null 2>&1; then
+  if node --import "$TSX_LOADER" "$LIB_DIR/$f" > /dev/null 2>&1; then
     echo "PASS"
     PASS=$((PASS + 1))
   else
