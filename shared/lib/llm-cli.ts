@@ -14,7 +14,7 @@
  * @module llm-cli
  */
 
-import { execSync, spawn, type SpawnOptions } from 'node:child_process';
+import { spawn, type SpawnOptions } from 'node:child_process';
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -52,6 +52,8 @@ export interface LLMCallOptions {
   cwd?: string;
   /** Override CLI command (e.g., 'claude', 'codex', 'openai') */
   cliCmd?: string;
+  /** Lifecycle hooks for progress reporting */
+  observer?: LLMCallObserver;
 }
 
 export interface LLMCallResult {
@@ -88,6 +90,30 @@ export interface CliHealthCheck {
   };
 }
 
+export interface LLMCallObserverEvent {
+  provider: LLMProvider;
+  model?: string;
+  attempt: number;
+  maxAttempts: number;
+  elapsedMs: number;
+  error?: string;
+  delayMs?: number;
+  nextAttempt?: number;
+  willRetry?: boolean;
+}
+
+export interface LLMCallObserver {
+  onAttemptStart?: (event: LLMCallObserverEvent) => void | Promise<void>;
+  onAttemptSlow?: (event: LLMCallObserverEvent) => void | Promise<void>;
+  onAttemptComplete?: (event: LLMCallObserverEvent) => void | Promise<void>;
+  onAttemptError?: (event: LLMCallObserverEvent) => void | Promise<void>;
+  onRetry?: (event: LLMCallObserverEvent) => void | Promise<void>;
+}
+
+interface ObservedError extends Error {
+  elapsedMs?: number;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
@@ -95,7 +121,20 @@ export interface CliHealthCheck {
 const DEFAULT_TIMEOUT = 120_000; // 2 minutes
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10MB
 const DEFAULT_MAX_RETRIES = 2;
-const DEFAULT_BACKOFF_BASE = 2000; // 2 seconds
+const SLOW_CALL_WARNING_MS = 30_000;
+const SLOW_CALL_REPEAT_MS = 15_000;
+
+function withElapsed(error: Error, elapsedMs: number): ObservedError {
+  const observed = error as ObservedError;
+  observed.elapsedMs = elapsedMs;
+  return observed;
+}
+
+function getElapsed(error: unknown): number {
+  return typeof (error as ObservedError)?.elapsedMs === 'number'
+    ? (error as ObservedError).elapsedMs!
+    : 0;
+}
 
 // ────────────────────────────────────────────────────────────────
 // Text Cleaning Utilities
@@ -392,9 +431,13 @@ async function executeStream(
   tmpFile: string,
   cliArgs: string[],
   options: LLMCallOptions,
-  provider: LLMProvider
+  provider: LLMProvider,
+  attempt: number,
+  maxAttempts: number
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const timeout = options.timeout ?? DEFAULT_TIMEOUT;
     const cwd = options.cwd || process.cwd();
     const cliCmd = getCliCommand(provider, options);
 
@@ -414,6 +457,56 @@ async function executeStream(
 
     let stdout = '';
     let stderr = '';
+    let settled = false;
+
+    const cleanup = (timeoutId?: NodeJS.Timeout, slowInterval?: NodeJS.Timeout) => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (slowInterval) {
+        clearInterval(slowInterval);
+      }
+    };
+
+    void options.observer?.onAttemptStart?.({
+      provider,
+      model: options.model,
+      attempt,
+      maxAttempts,
+      elapsedMs: 0,
+    });
+
+    const slowInterval = setInterval(() => {
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs < SLOW_CALL_WARNING_MS) {
+        return;
+      }
+
+      void options.observer?.onAttemptSlow?.({
+        provider,
+        model: options.model,
+        attempt,
+        maxAttempts,
+        elapsedMs,
+      });
+    }, SLOW_CALL_REPEAT_MS);
+
+    const timeoutId = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval);
+      llmProcess.kill('SIGTERM');
+      const elapsedMs = Date.now() - startedAt;
+      reject(
+        withElapsed(new Error(
+          `${provider} CLI timed out after ${timeout}ms\n\n` +
+          `Command: ${cliCmd} ${cliArgs.join(' ')}\n` +
+          `Working directory: ${cwd}\n`
+        ), elapsedMs)
+      );
+    }, timeout);
 
     llmProcess.stdout?.on('data', (data) => {
       stdout += data.toString();
@@ -424,15 +517,34 @@ async function executeStream(
     });
 
     llmProcess.on('close', (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval);
+      const elapsedMs = Date.now() - startedAt;
       if (code !== 0) {
-        reject(new Error(`${provider} CLI exited with code ${code}: ${stderr}`));
+        reject(withElapsed(new Error(`${provider} CLI exited with code ${code}: ${stderr}`), elapsedMs));
       } else {
+        void options.observer?.onAttemptComplete?.({
+          provider,
+          model: options.model,
+          attempt,
+          maxAttempts,
+          elapsedMs,
+        });
         resolve(stdout);
       }
     });
 
     llmProcess.on('error', (error) => {
-      reject(new Error(`Failed to spawn ${provider} CLI: ${error.message}`));
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval);
+      const elapsedMs = Date.now() - startedAt;
+      reject(withElapsed(new Error(`Failed to spawn ${provider} CLI: ${error.message}`), elapsedMs));
     });
 
     // Read prompt from temp file and send to stdin
@@ -441,7 +553,12 @@ async function executeStream(
       llmProcess.stdin?.write(prompt);
       llmProcess.stdin?.end();
     } catch (error) {
-      reject(new Error(`Failed to read temp file: ${(error as Error).message}`));
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval);
+      reject(withElapsed(new Error(`Failed to read temp file: ${(error as Error).message}`), Date.now() - startedAt));
     }
   });
 }
@@ -622,6 +739,69 @@ export async function checkClaudeAvailability(
   };
 }
 
+export async function ensureClaudeAvailable(
+  options: {
+    verbose?: boolean;
+    reporter?: { emit(event: { event: string; message: string; level?: 'info' | 'warn' | 'error'; details?: Record<string, unknown> }): Promise<void> };
+  } = {}
+): Promise<void> {
+  const reporter = options.reporter;
+
+  await reporter?.emit({
+    event: 'preflight_start',
+    message: 'Checking Claude CLI availability',
+  });
+
+  const healthCheck = await checkClaudeAvailability({ verbose: options.verbose });
+
+  if (!healthCheck.available) {
+    const errorLines = [
+      'Claude CLI is not available or not working properly.',
+      '',
+      `Error: ${healthCheck.error}`,
+      '',
+      'Diagnostics:',
+      `  - Command: ${healthCheck.command}`,
+      `  - In PATH: ${healthCheck.diagnostics?.inPath ? 'Yes' : 'No'}`,
+      `  - Executable: ${healthCheck.diagnostics?.executable ? 'Yes' : 'No'}`,
+      `  - Auth working: ${healthCheck.diagnostics?.authWorking ? 'Yes' : 'No'}`,
+    ];
+
+    if (healthCheck.version) {
+      errorLines.push(`  - Version: ${healthCheck.version}`);
+    }
+
+    errorLines.push(
+      '',
+      'Troubleshooting:',
+      '  1. Install Claude CLI: npm install -g @anthropic-ai/claude-cli',
+      '  2. Authenticate: claude login',
+      '  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001',
+      '  4. Check PATH: which claude',
+      '',
+      'To skip this check (not recommended): SKIP_PREFLIGHT_CHECK=1'
+    );
+
+    await reporter?.emit({
+      event: 'error',
+      level: 'error',
+      message: 'Claude CLI preflight failed',
+      details: { command: healthCheck.command },
+    });
+
+    throw new Error(errorLines.join('\n'));
+  }
+
+  await reporter?.emit({
+    event: 'preflight_ok',
+    message: 'Claude CLI is available',
+    details: {
+      command: healthCheck.command,
+      version: healthCheck.version,
+    },
+  });
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main API
 // ────────────────────────────────────────────────────────────────
@@ -705,10 +885,13 @@ export async function callClaude(
 async function callLLMOnce(
   prompt: string,
   options: LLMCallOptions,
-  provider: LLMProvider
+  provider: LLMProvider,
+  attempt: number = 1,
+  maxAttempts: number = 1
 ): Promise<LLMCallResult> {
   const mode = options.mode || 'sync';
   const stripCalls = options.stripToolCalls ?? true;
+  const startedAt = Date.now();
 
   // Create temp file for prompt
   const tmpFile = join(tmpdir(), `wavemill-${provider}-${Date.now()}.txt`);
@@ -733,9 +916,23 @@ async function callLLMOnce(
     // Execute based on mode
     let rawOutput: string;
     if (mode === 'sync') {
+      await options.observer?.onAttemptStart?.({
+        provider,
+        model: options.model,
+        attempt,
+        maxAttempts,
+        elapsedMs: 0,
+      });
       rawOutput = executeSync(tmpFile, cliArgs, options, provider);
+      await options.observer?.onAttemptComplete?.({
+        provider,
+        model: options.model,
+        attempt,
+        maxAttempts,
+        elapsedMs: Date.now() - startedAt,
+      });
     } else {
-      rawOutput = await executeStream(tmpFile, cliArgs, options, provider);
+      rawOutput = await executeStream(tmpFile, cliArgs, options, provider, attempt, maxAttempts);
     }
 
     // Unwrap JSON envelope
@@ -751,6 +948,8 @@ async function callLLMOnce(
       rawOutput,
       provider,
     };
+  } catch (error) {
+    throw withElapsed(error as Error, getElapsed(error) || Date.now() - startedAt);
   } finally {
     // Clean up temp file
     if (existsSync(tmpFile)) {
@@ -773,30 +972,37 @@ async function callLLMWithRetry(
   maxRetries: number
 ): Promise<LLMCallResult> {
   let lastError: Error | null = null;
+  const totalAttempts = maxRetries + 1;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      if (attempt > 0) {
-        // Log retry attempt
-        const errorPreview = lastError?.message.split('\n')[0] || 'Unknown error';
-        const delay = Math.pow(2, attempt) * 1000;
-        console.error(`\n⚠️  Retry attempt ${attempt}/${maxRetries}`);
-        console.error(`   Previous error: ${errorPreview}`);
-        console.error(`   Waiting ${delay}ms before retry...\n`);
-      }
-
-      return await callLLMOnce(prompt, options, provider);
+      return await callLLMOnce(prompt, options, provider, attempt + 1, totalAttempts);
     } catch (error) {
       lastError = error as Error;
-
-      // Log error details
-      const errorPreview = lastError.message.split('\n')[0];
-      console.error(`\n❌ Attempt ${attempt + 1}/${maxRetries + 1} failed:`);
-      console.error(`   ${errorPreview}`);
+      await options.observer?.onAttemptError?.({
+        provider,
+        model: options.model,
+        attempt: attempt + 1,
+        maxAttempts: totalAttempts,
+        elapsedMs: getElapsed(lastError),
+        error: lastError.message.split('\n')[0],
+        willRetry: attempt < maxRetries,
+      });
 
       if (attempt < maxRetries) {
         // Exponential backoff: 2s, 4s, 8s, ...
         const delay = Math.pow(2, attempt + 1) * 1000;
+        await options.observer?.onRetry?.({
+          provider,
+          model: options.model,
+          attempt: attempt + 1,
+          nextAttempt: attempt + 2,
+          maxAttempts: totalAttempts,
+          elapsedMs: 0,
+          delayMs: delay,
+          error: lastError.message.split('\n')[0],
+          willRetry: true,
+        });
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }

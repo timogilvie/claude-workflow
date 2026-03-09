@@ -9,9 +9,14 @@
 
 import { resolve } from 'node:path';
 import {
+  assertReviewableDiff,
   gatherReviewContext,
+  getCurrentBranch,
+  getGitDiff,
 } from './review-context-gatherer.ts';
 import { runReview, type ReviewResult, type ReviewFinding, type ReviewerPersona } from './review-engine.ts';
+import { ensureClaudeAvailable } from './llm-cli.ts';
+import type { ReviewProgressReporter } from './review-progress.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -30,6 +35,8 @@ export interface ReviewOptions {
   verbose?: boolean;
   /** List of reviewer personas to run */
   reviewers?: ReviewerPersona[];
+  /** Progress reporter for stderr milestones */
+  reporter?: ReviewProgressReporter;
 }
 
 // Re-export types from review-engine for backward compatibility
@@ -54,10 +61,47 @@ export async function reviewChanges(
 ): Promise<ReviewResult> {
   const targetBranch = options.targetBranch || 'main';
   const repoDir = options.repoDir ? resolve(options.repoDir) : process.cwd();
+  const reporter = options.reporter;
+
+  await reporter?.emit({
+    event: 'preflight_start',
+    message: `Checking git diff against ${targetBranch}`,
+  });
+
+  const branch = getCurrentBranch(repoDir);
+  const diff = getGitDiff(targetBranch, repoDir);
+  assertReviewableDiff(diff, branch, targetBranch);
+
+  await reporter?.emit({
+    event: 'preflight_ok',
+    message: `Found committed changes against ${targetBranch}`,
+    details: { branch },
+  });
+
+  if (!process.env.SKIP_PREFLIGHT_CHECK) {
+    await ensureClaudeAvailable({
+      verbose: options.verbose,
+      reporter,
+    });
+  }
+
+  await reporter?.emit({
+    event: 'context_loading',
+    message: 'Loading review context',
+  });
 
   // Gather review context (skip design standards if explicitly requested)
   const context = gatherReviewContext(targetBranch, repoDir, {
     designStandards: !options.skipUi,
+  });
+
+  await reporter?.emit({
+    event: 'context_loaded',
+    message: `Loaded review context for ${context.metadata.files.length} changed files`,
+    details: {
+      hasUiChanges: context.metadata.hasUiChanges,
+      fileCount: context.metadata.files.length,
+    },
   });
 
   // Delegate to review engine
@@ -65,5 +109,7 @@ export async function reviewChanges(
     skipUi: options.skipUi,
     verbose: options.verbose,
     reviewers: options.reviewers,
+    reporter,
+    skipClaudePreflight: true,
   });
 }

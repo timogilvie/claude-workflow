@@ -16,8 +16,9 @@ import {
   type ReviewContext,
   type DesignContext,
 } from './review-context-gatherer.ts';
-import { callClaude, parseJsonFromLLM, checkClaudeAvailability } from './llm-cli.ts';
+import { callClaude, parseJsonFromLLM, ensureClaudeAvailable } from './llm-cli.ts';
 import { loadWavemillConfig } from './config.ts';
+import type { ReviewProgressReporter } from './review-progress.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -69,6 +70,10 @@ export interface ReviewEngineOptions {
   verbose?: boolean;
   /** List of reviewer personas to run (default: ['general']) */
   reviewers?: ReviewerPersona[];
+  /** Progress reporter for milestone/status events */
+  reporter?: ReviewProgressReporter;
+  /** Skip Claude CLI preflight when a caller already performed it */
+  skipClaudePreflight?: boolean;
 }
 
 interface JudgeConfig {
@@ -276,15 +281,94 @@ async function invokeLLMWithRetry(
   prompt: string,
   model: string,
   timeout: number,
-  maxRetries: number
+  maxRetries: number,
+  options: ReviewEngineOptions,
+  reviewer: ReviewerPersona,
+  llmAttempt: number
 ): Promise<string> {
   const result = await callClaude(prompt, {
-    mode: 'sync',
+    mode: 'stream',
     model,
     timeout,
     maxBuffer: 50 * 1024 * 1024, // 50MB for large diffs
     retry: true,
     maxRetries,
+    observer: {
+      onAttemptStart: async (event) => {
+        await options.reporter?.emit({
+          event: 'llm_call_start',
+          message: 'Calling Claude API',
+          reviewer,
+          attempt: llmAttempt,
+          maxAttempts: 2,
+          provider: event.provider,
+          model: event.model,
+          details: { transportAttempt: event.attempt, transportMaxAttempts: event.maxAttempts },
+        });
+      },
+      onAttemptSlow: async (event) => {
+        await options.reporter?.emit({
+          event: 'llm_call_slow',
+          level: 'warn',
+          message: 'Claude API call is still running',
+          reviewer,
+          attempt: llmAttempt,
+          maxAttempts: 2,
+          provider: event.provider,
+          model: event.model,
+          elapsedMs: event.elapsedMs,
+          details: { transportAttempt: event.attempt, transportMaxAttempts: event.maxAttempts },
+        });
+      },
+      onAttemptError: async (event) => {
+        await options.reporter?.emit({
+          event: 'llm_call_error',
+          level: event.willRetry ? 'warn' : 'error',
+          message: 'Claude API call failed',
+          reviewer,
+          attempt: llmAttempt,
+          maxAttempts: 2,
+          provider: event.provider,
+          model: event.model,
+          elapsedMs: event.elapsedMs,
+          details: {
+            error: event.error,
+            transportAttempt: event.attempt,
+            transportMaxAttempts: event.maxAttempts,
+          },
+        });
+      },
+      onRetry: async (event) => {
+        await options.reporter?.emit({
+          event: 'llm_call_retry',
+          level: 'warn',
+          message: `Retrying Claude API call after ${event.delayMs}ms`,
+          reviewer,
+          attempt: llmAttempt,
+          maxAttempts: 2,
+          provider: event.provider,
+          model: event.model,
+          details: {
+            previousError: event.error,
+            nextTransportAttempt: event.nextAttempt,
+            transportMaxAttempts: event.maxAttempts,
+          },
+        });
+      },
+      onAttemptComplete: async (event) => {
+        await options.reporter?.emit({
+          event: 'llm_call_complete',
+          message: 'Claude API call completed',
+          reviewer,
+          attempt: llmAttempt,
+          maxAttempts: 2,
+          provider: event.provider,
+          model: event.model,
+          elapsedMs: event.elapsedMs,
+          details: { transportAttempt: event.attempt, transportMaxAttempts: event.maxAttempts },
+        });
+      },
+    },
   });
 
   return result.text;
@@ -435,12 +519,21 @@ async function runReviewWithRetry(
   timeout: number,
   maxRetries: number,
   options: ReviewEngineOptions,
+  persona: ReviewerPersona,
   attempt: number = 1
 ): Promise<ReviewResult> {
   const maxAttempts = 2;
 
   // Invoke LLM
-  const responseText = await invokeLLMWithRetry(prompt, model, timeout, maxRetries);
+  const responseText = await invokeLLMWithRetry(
+    prompt,
+    model,
+    timeout,
+    maxRetries,
+    options,
+    persona,
+    attempt
+  );
 
   // Show raw response in verbose mode
   if (options.verbose) {
@@ -455,6 +548,14 @@ async function runReviewWithRetry(
   // Pre-validate response format
   if (!looksLikeJson(responseText)) {
     if (attempt < maxAttempts) {
+      await options.reporter?.emit({
+        event: 'response_retry',
+        level: 'warn',
+        message: 'Claude returned non-JSON output; retrying with stricter prompt',
+        reviewer: persona,
+        attempt,
+        maxAttempts,
+      });
       console.error(`⚠️  LLM returned conversational response (attempt ${attempt}/${maxAttempts})`);
       if (options.verbose) {
         console.error('Response preview:', responseText.substring(0, 200));
@@ -475,6 +576,7 @@ async function runReviewWithRetry(
         timeout,
         maxRetries,
         options,
+        persona,
         attempt + 1
       );
     } else {
@@ -496,9 +598,24 @@ async function runReviewWithRetry(
 
   // Parse response
   try {
+    await options.reporter?.emit({
+      event: 'response_parsing',
+      message: 'Parsing Claude response',
+      reviewer: persona,
+      attempt,
+      maxAttempts,
+    });
     return parseReviewResponse(responseText, context);
   } catch (error) {
     if (attempt < maxAttempts) {
+      await options.reporter?.emit({
+        event: 'response_retry',
+        level: 'warn',
+        message: 'Failed to parse Claude JSON response; retrying with stricter prompt',
+        reviewer: persona,
+        attempt,
+        maxAttempts,
+      });
       console.error(`⚠️  Failed to parse JSON (attempt ${attempt}/${maxAttempts})`);
       if (options.verbose) {
         console.error('Error:', (error as Error).message);
@@ -519,6 +636,7 @@ async function runReviewWithRetry(
         timeout,
         maxRetries,
         options,
+        persona,
         attempt + 1
       );
     }
@@ -632,6 +750,7 @@ async function runPersonaReview(
     timeout,
     maxRetries,
     options,
+    persona,
     1
   );
 
@@ -710,43 +829,15 @@ export async function runReview(
 
   // Pre-flight check: Verify Claude CLI is available
   // Skip if SKIP_PREFLIGHT_CHECK=1 is set (for testing)
-  if (!process.env.SKIP_PREFLIGHT_CHECK) {
+  if (!options.skipClaudePreflight && !process.env.SKIP_PREFLIGHT_CHECK) {
     if (options.verbose) {
       console.error('=== Pre-Flight Check ===');
     }
 
-    const healthCheck = await checkClaudeAvailability({ verbose: options.verbose });
-
-    if (!healthCheck.available) {
-      const errorLines = [
-        'Claude CLI is not available or not working properly.',
-        '',
-        `Error: ${healthCheck.error}`,
-        '',
-        'Diagnostics:',
-        `  - Command: ${healthCheck.command}`,
-        `  - In PATH: ${healthCheck.diagnostics?.inPath ? 'Yes' : 'No'}`,
-        `  - Executable: ${healthCheck.diagnostics?.executable ? 'Yes' : 'No'}`,
-        `  - Auth working: ${healthCheck.diagnostics?.authWorking ? 'Yes' : 'No'}`,
-      ];
-
-      if (healthCheck.version) {
-        errorLines.push(`  - Version: ${healthCheck.version}`);
-      }
-
-      errorLines.push(
-        '',
-        'Troubleshooting:',
-        '  1. Install Claude CLI: npm install -g @anthropic-ai/claude-cli',
-        '  2. Authenticate: claude login',
-        '  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001',
-        '  4. Check PATH: which claude',
-        '',
-        'To skip this check (not recommended): SKIP_PREFLIGHT_CHECK=1'
-      );
-
-      throw new Error(errorLines.join('\n'));
-    }
+    await ensureClaudeAvailable({
+      verbose: options.verbose,
+      reporter: options.reporter,
+    });
 
     if (options.verbose) {
       console.error('✓ Claude CLI is available and working\n');
@@ -760,6 +851,12 @@ export async function runReview(
     if (options.verbose) {
       console.error(`\n=== Running ${persona} reviewer ===`);
     }
+
+    await options.reporter?.emit({
+      event: 'reviewer_start',
+      message: `Running ${persona} reviewer`,
+      reviewer: persona,
+    });
 
     const result = await runPersonaReview(
       persona,
@@ -776,6 +873,16 @@ export async function runReview(
     if (options.verbose) {
       console.error(`${persona} reviewer complete: ${result.codeReviewFindings.length} code findings, ${result.uiFindings?.length || 0} UI findings`);
     }
+
+    await options.reporter?.emit({
+      event: 'reviewer_complete',
+      message: `${persona} reviewer finished`,
+      reviewer: persona,
+      details: {
+        codeFindings: result.codeReviewFindings.length,
+        uiFindings: result.uiFindings?.length || 0,
+      },
+    });
   }
 
   // Aggregate findings from all reviewers
@@ -813,6 +920,19 @@ export async function runReview(
     console.error(`Verdict: ${hasBlockers ? 'NOT READY' : 'READY'}`);
     console.error('');
   }
+
+  await options.reporter?.emit({
+    event: 'review_complete',
+    message: hasBlockers ? 'Review completed with blocker findings' : 'Review completed successfully',
+    details: {
+      verdict: hasBlockers ? 'not_ready' : 'ready',
+      codeFindings: deduplicatedCodeFindings.length,
+      uiFindings: deduplicatedUiFindings.length,
+      blockers:
+        deduplicatedCodeFindings.filter(f => f.severity === 'blocker').length +
+        deduplicatedUiFindings.filter(f => f.severity === 'blocker').length,
+    },
+  });
 
   return {
     verdict: hasBlockers ? 'not_ready' : 'ready',
