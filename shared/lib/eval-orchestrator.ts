@@ -14,6 +14,7 @@
  */
 
 import path from 'node:path';
+import { errorMessage } from './error-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import {
   autoDetectContext,
@@ -375,7 +376,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   try {
     appendEvalRecord(record);
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
+    const errorMsg = errorMessage(err);
     console.error(`Warning: failed to persist eval record: ${errorMsg}`);
   }
 

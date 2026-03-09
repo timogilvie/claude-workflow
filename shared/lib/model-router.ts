@@ -13,6 +13,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readEvalRecords } from './eval-persistence.ts';
 import type { EvalRecord } from './eval-schema.ts';
+import { readJsonlFile } from './jsonl-utils.ts';
 import { recommendModelLLM } from './llm-router.ts';
 import { loadWavemillConfig } from './config.ts';
 
@@ -349,20 +350,12 @@ function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
   if (!existsSync(aggregatedPath)) return perRepo;
 
   try {
-    const lines = readFileSync(aggregatedPath, 'utf-8')
-      .split('\n')
-      .filter((l) => l.trim().length > 0);
     const seen = new Set(perRepo.map((r) => r.id));
     const merged = [...perRepo];
-    for (const line of lines) {
-      try {
-        const record = JSON.parse(line) as EvalRecord;
-        if (!seen.has(record.id)) {
-          seen.add(record.id);
-          merged.push(record);
-        }
-      } catch {
-        // Skip malformed lines
+    for (const record of readJsonlFile<EvalRecord>(aggregatedPath)) {
+      if (!seen.has(record.id)) {
+        seen.add(record.id);
+        merged.push(record);
       }
     }
     return merged;

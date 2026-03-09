@@ -12,6 +12,7 @@ import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { EvalRecord } from './eval-schema.ts';
 import { loadWavemillConfig } from './config.ts';
+import { readJsonlFile } from './jsonl-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Constants
@@ -144,22 +145,9 @@ export function readEvalRecords(options?: QueryOptions): EvalRecord[] {
     return [];
   }
 
-  const content = readFileSync(filePath, 'utf-8');
-  const lines = content.split('\n').filter((line) => line.trim().length > 0);
-
-  const records: EvalRecord[] = [];
-  for (const line of lines) {
-    try {
-      const record = JSON.parse(line) as EvalRecord;
-      if (matchesFilters(record, options)) {
-        records.push(record);
-      }
-    } catch {
-      // Skip malformed lines
-    }
-  }
-
-  return records;
+  return readJsonlFile<EvalRecord>(filePath).filter((record) =>
+    matchesFilters(record, options),
+  );
 }
 
 /**
