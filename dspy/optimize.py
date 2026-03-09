@@ -132,6 +132,7 @@ def export_artifact(
         "model_candidates": [
             "claude-sonnet-4-5-20250929",
             "gpt-5.3-codex",
+            "gpt-5.4",
             "claude-opus-4-6",
             "claude-haiku-4-5-20251001",
         ],

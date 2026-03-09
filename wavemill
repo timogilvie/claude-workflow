@@ -4,7 +4,7 @@ set -euo pipefail
 # Wavemill - Autonomous AI Workflow CLI
 # Entry point for mill and expand workflows
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 SOURCE="${BASH_SOURCE[0]}"
 while [[ -L "$SOURCE" ]]; do
   DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
@@ -207,7 +207,7 @@ check_config_version() {
   echo -e "${YELLOW}Notice:${NC} $check_output"
   echo -e "  The latest config includes features like eval, review, router, and permissions."
   echo ""
-  echo -e "Upgrade config to version 1.0.0? This will preserve your existing settings."
+  echo -e "Upgrade config to version ${VERSION}? This will preserve your existing settings."
   read -p "[Y/n] " -n 1 -r
   echo
 
@@ -302,7 +302,7 @@ run_init() {
   # Create config file
   cat > "$target" <<'INIT_EOF'
 {
-  "configVersion": "1.0.0",
+  "configVersion": "1.0.1",
   "linear": {
     "project": ""
   },
@@ -342,7 +342,8 @@ run_init() {
       "claude-opus-4-6": { "inputCostPerMTok": 15, "outputCostPerMTok": 75, "cacheWriteCostPerMTok": 18.75, "cacheReadCostPerMTok": 1.50 },
       "claude-sonnet-4-5-20250929": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
       "claude-haiku-4-5-20251001": { "inputCostPerMTok": 0.80, "outputCostPerMTok": 4, "cacheWriteCostPerMTok": 1.00, "cacheReadCostPerMTok": 0.08 },
-      "gpt-5.3-codex": { "inputCostPerMTok": 1.75, "outputCostPerMTok": 14, "cacheReadCostPerMTok": 0.44 }
+      "gpt-5.3-codex": { "inputCostPerMTok": 1.75, "outputCostPerMTok": 14, "cacheReadCostPerMTok": 0.44 },
+      "gpt-5.4": { "inputCostPerMTok": 2.50, "outputCostPerMTok": 15, "cacheReadCostPerMTok": 0.25 }
     },
     "interventionPenalties": {
       "reviewComment": 0.05,
@@ -372,7 +373,8 @@ run_init() {
       "claude-opus-4-6": "claude",
       "claude-sonnet-4-5-20250929": "claude",
       "claude-haiku-4-5-20251001": "claude",
-      "gpt-5.3-codex": "codex"
+      "gpt-5.3-codex": "codex",
+      "gpt-5.4": "codex"
     },
     "mode": "auto",
     "llmModel": "gpt-4o-mini",
