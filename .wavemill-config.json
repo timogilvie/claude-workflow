@@ -19,6 +19,12 @@
     "maxSelect": 3,
     "maxDisplay": 9
   },
+  "plan": {
+    "maxDisplay": 9,
+    "research": false,
+    "model": "claude-opus-4-6",
+    "interactive": true
+  },
   "eval": {
     "aggregation": {
       "repos": [
@@ -27,27 +33,75 @@
         "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-docs",
         "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-site",
         "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-token"
-      ]
+      ],
+      "outputPath": ".wavemill/evals/aggregated-evals.jsonl"
     },
+    "evalsDir": ".wavemill/evals",
     "judge": {
       "model": "claude-sonnet-4-5-20250929",
       "provider": "anthropic"
     },
     "pricing": {
-      "claude-opus-4-6": { "inputCostPerMTok": 15, "outputCostPerMTok": 75, "cacheWriteCostPerMTok": 18.75, "cacheReadCostPerMTok": 1.50 },
-      "claude-sonnet-4-5-20250929": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
-      "claude-haiku-4-5-20251001": { "inputCostPerMTok": 0.80, "outputCostPerMTok": 4, "cacheWriteCostPerMTok": 1.00, "cacheReadCostPerMTok": 0.08 },
-      "gpt-5.3-codex": { "inputCostPerMTok": 1.75, "outputCostPerMTok": 14, "cacheReadCostPerMTok": 0.44 },
-      "gpt-5.3-codex-spark": { "inputCostPerMTok": 1.75, "outputCostPerMTok": 14, "cacheReadCostPerMTok": 0.44 },
-      "gpt-5.4": { "inputCostPerMTok": 2.50, "outputCostPerMTok": 15, "cacheReadCostPerMTok": 0.25 }
+      "claude-opus-4-6": {
+        "inputCostPerMTok": 15,
+        "outputCostPerMTok": 75,
+        "cacheWriteCostPerMTok": 18.75,
+        "cacheReadCostPerMTok": 1.5
+      },
+      "claude-sonnet-4-5-20250929": {
+        "inputCostPerMTok": 3,
+        "outputCostPerMTok": 15,
+        "cacheWriteCostPerMTok": 3.75,
+        "cacheReadCostPerMTok": 0.3
+      },
+      "claude-haiku-4-5-20251001": {
+        "inputCostPerMTok": 0.8,
+        "outputCostPerMTok": 4,
+        "cacheWriteCostPerMTok": 1,
+        "cacheReadCostPerMTok": 0.08
+      },
+      "gpt-5.3-codex": {
+        "inputCostPerMTok": 1.75,
+        "outputCostPerMTok": 14,
+        "cacheReadCostPerMTok": 0.44
+      },
+      "gpt-5.3-codex-spark": {
+        "inputCostPerMTok": 1.75,
+        "outputCostPerMTok": 14,
+        "cacheReadCostPerMTok": 0.44
+      },
+      "gpt-5.4": {
+        "inputCostPerMTok": 2.5,
+        "outputCostPerMTok": 15,
+        "cacheReadCostPerMTok": 0.25
+      }
+    },
+    "interventionPenalties": {
+      "reviewComment": 0.05,
+      "postPrCommit": 0.08,
+      "manualEdit": 0.1,
+      "testFix": 0.06,
+      "sessionRedirect": 0.12,
+      "selfReviewWarning": 0.05,
+      "selfReviewBlocker": 0.2
     }
   },
   "autoEval": true,
   "review": {
     "maxIterations": 3,
-    "enabled": true
+    "enabled": true,
+    "metricsLog": ".wavemill/review-log.json",
+    "personas": [
+      "general"
+    ]
   },
   "router": {
+    "enabled": true,
+    "defaultModel": "claude-sonnet-4-5-20250929",
+    "minRecords": 20,
+    "minModels": 2,
+    "models": [],
+    "defaultAgent": "claude",
     "agentMap": {
       "claude-opus-4-6": "claude",
       "claude-sonnet-4-5-20250929": "claude",
@@ -56,8 +110,30 @@
       "gpt-5.3-codex-spark": "codex",
       "gpt-5.4": "codex"
     },
-    "llmProvider": "openai",
-    "llmModel": "gpt-4o-mini"
+    "mode": "auto",
+    "llmModel": "gpt-4o-mini",
+    "llmProvider": "openai"
+  },
+  "validation": {
+    "enabled": true,
+    "layer1": {
+      "enabled": true
+    },
+    "layer2": {
+      "enabled": true,
+      "model": "claude-haiku-4-5-20251001",
+      "provider": "claude-cli"
+    },
+    "onFailure": "conservative"
+  },
+  "constraints": {
+    "enabled": true,
+    "cleanupAfterMerge": false
+  },
+  "ui": {
+    "visualVerification": true,
+    "designStandards": true,
+    "creativeDirection": false
   },
   "permissions": {
     "autoApprovePatterns": [
