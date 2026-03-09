@@ -18,248 +18,54 @@
  *   --dry-run  Show changes without writing
  */
 
-import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { loadWavemillConfig, CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
+import { writeFileSync, copyFileSync } from 'node:fs';
 import { errorMessage } from '../shared/lib/error-utils.ts';
+import { CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
+import { prepareConfigSync } from '../shared/lib/config-sync.ts';
 
-// Canonical template matching the comprehensive config from wavemill init
-const CANONICAL_TEMPLATE = {
-  configVersion: '1.0.1',
-  linear: {
-    project: '',
-  },
-  mill: {
-    session: 'wavemill',
-    maxParallel: 3,
-    pollSeconds: 10,
-    baseBranch: 'main',
-    worktreeRoot: '../worktrees',
-    agentCmd: 'claude',
-    requireConfirm: true,
-    planningMode: 'skip',
-    maxRetries: 3,
-    retryDelay: 2,
-  },
-  expand: {
-    maxSelect: 3,
-    maxDisplay: 9,
-  },
-  plan: {
-    maxDisplay: 9,
-    research: false,
-    model: 'claude-opus-4-6',
-    interactive: true,
-  },
-  eval: {
-    aggregation: {
-      repos: [],
-      outputPath: '.wavemill/evals/aggregated-evals.jsonl',
-    },
-    evalsDir: '.wavemill/evals',
-    judge: {
-      model: 'claude-sonnet-4-5-20250929',
-      provider: 'anthropic',
-    },
-    pricing: {
-      'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.50 },
-      'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.30 },
-      'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.80, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1.00, cacheReadCostPerMTok: 0.08 },
-      'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheReadCostPerMTok: 0.44 },
-      'gpt-5.4': { inputCostPerMTok: 2.50, outputCostPerMTok: 15, cacheReadCostPerMTok: 0.25 },
-    },
-    interventionPenalties: {
-      reviewComment: 0.05,
-      postPrCommit: 0.08,
-      manualEdit: 0.10,
-      testFix: 0.06,
-      sessionRedirect: 0.12,
-      selfReviewWarning: 0.05,
-      selfReviewBlocker: 0.20,
-    },
-  },
-  autoEval: true,
-  challenge: {
-    enabled: false,
-    rate: 0.10,
-    models: null,
-    comparisonModel: 'claude-opus-4-6',
-    autoMergeWinner: false,
-  },
-  review: {
-    maxIterations: 3,
-    enabled: true,
-    metricsLog: '.wavemill/review-log.json',
-    personas: ['general'],
-  },
-  router: {
-    enabled: true,
-    defaultModel: 'claude-sonnet-4-5-20250929',
-    minRecords: 20,
-    minModels: 2,
-    models: [],
-    defaultAgent: 'claude',
-    agentMap: {
-      'claude-opus-4-6': 'claude',
-      'claude-sonnet-4-5-20250929': 'claude',
-      'claude-haiku-4-5-20251001': 'claude',
-      'gpt-5.3-codex': 'codex',
-      'gpt-5.4': 'codex',
-    },
-    mode: 'auto',
-    llmModel: 'gpt-4o-mini',
-    llmProvider: 'openai',
-  },
-  validation: {
-    enabled: true,
-    layer1: {
-      enabled: true,
-    },
-    layer2: {
-      enabled: true,
-      model: 'claude-haiku-4-5-20251001',
-      provider: 'claude-cli',
-    },
-    onFailure: 'conservative',
-  },
-  constraints: {
-    enabled: true,
-    cleanupAfterMerge: false,
-  },
-  ui: {
-    visualVerification: true,
-    designStandards: true,
-    creativeDirection: false,
-  },
-  permissions: {
-    autoApprovePatterns: [
-      'find *',
-      'ls *',
-      'cat *',
-      'head *',
-      'tail *',
-      'wc *',
-      'git status*',
-      'git log*',
-      'git show*',
-      'git diff*',
-      'git branch --list*',
-      'git branch -l*',
-      'git worktree list*',
-      'gh pr view*',
-      'gh pr list*',
-      'gh pr status*',
-      'gh issue view*',
-      'gh issue list*',
-      'grep *',
-      'rg *',
-      'npm list*',
-      'npm ls*',
-    ],
-    worktreeMode: {
-      enabled: true,
-      autoApproveReadOnly: true,
-    },
-  },
-};
+function showHelp(): void {
+  console.log(`Sync/upgrade .wavemill-config.json to the latest version.
 
-/**
- * Deep merge two objects, preserving user values from source.
- * Arrays are replaced (not merged).
- */
-function deepMerge(target: any, source: any): any {
-  if (source === null || source === undefined) {
-    return target;
-  }
+Usage:
+  npx tsx tools/sync-config.ts [--yes] [--dry-run]
 
-  if (Array.isArray(target)) {
-    // For arrays, prefer source if non-empty, otherwise use target
-    return Array.isArray(source) && source.length > 0 ? source : target;
-  }
-
-  if (typeof target === 'object' && target !== null) {
-    const result = { ...target };
-
-    for (const key in source) {
-      if (Object.prototype.hasOwnProperty.call(source, key)) {
-        if (typeof source[key] === 'object' && !Array.isArray(source[key]) && source[key] !== null) {
-          result[key] = deepMerge(target[key] || {}, source[key]);
-        } else if (source[key] !== undefined) {
-          result[key] = source[key];
-        }
-      }
-    }
-
-    return result;
-  }
-
-  return source !== undefined ? source : target;
-}
-
-/**
- * Identify what sections/fields were added by the merge.
- */
-function identifyAdditions(before: any, after: any, path: string = ''): string[] {
-  const additions: string[] = [];
-
-  for (const key in after) {
-    const fullPath = path ? `${path}.${key}` : key;
-
-    if (!Object.prototype.hasOwnProperty.call(before, key)) {
-      additions.push(fullPath);
-    } else if (typeof after[key] === 'object' && !Array.isArray(after[key]) && after[key] !== null) {
-      additions.push(...identifyAdditions(before[key] || {}, after[key], fullPath));
-    }
-  }
-
-  return additions;
+Options:
+  --yes      Skip confirmation prompt
+  --dry-run  Show changes without writing
+  -h, --help Show this help message`);
 }
 
 async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
   const repoDir = process.cwd();
-  const configPath = resolve(repoDir, '.wavemill-config.json');
-  const backupPath = resolve(repoDir, '.wavemill-config.json.backup');
+  const {
+    additions,
+    alreadyCurrent,
+    backupPath,
+    configExists,
+    configPath,
+    currentConfig,
+    mergedConfig,
+  } = prepareConfigSync(repoDir);
 
   console.log('🔧 Wavemill Config Sync\n');
 
-  // Load current config or use empty object
-  let currentConfig: any = {};
-  let configExists = false;
-
-  if (existsSync(configPath)) {
-    try {
-      const content = readFileSync(configPath, 'utf-8');
-      currentConfig = JSON.parse(content);
-      configExists = true;
-      console.log(`✓ Found existing config at ${configPath}`);
-    } catch (err) {
-      console.error(`✗ Failed to parse existing config: ${errorMessage(err)}`);
-      process.exit(1);
-    }
+  if (configExists) {
+    console.log(`✓ Found existing config at ${configPath}`);
   } else {
     console.log(`ℹ No existing config found. Will create new one.`);
   }
-
-  // Merge with template
-  const merged = deepMerge(CANONICAL_TEMPLATE, currentConfig);
-
-  // Always update version to current
-  merged.configVersion = CURRENT_CONFIG_VERSION;
-
-  // Identify additions
-  const additions = configExists ? identifyAdditions(currentConfig, merged) : [];
 
   // Show summary
   console.log();
   if (additions.length > 0) {
     console.log(`📝 The following sections/fields will be added:\n`);
     additions.forEach(path => console.log(`   + ${path}`));
-  } else if (configExists && currentConfig.configVersion === CURRENT_CONFIG_VERSION) {
+  } else if (alreadyCurrent) {
     console.log(`✓ Config is already up to date (version ${CURRENT_CONFIG_VERSION})`);
     console.log(`  No changes needed.`);
     return;
   } else if (configExists) {
-    console.log(`✓ Updating configVersion: ${currentConfig.configVersion || '(none)'} → ${CURRENT_CONFIG_VERSION}`);
+    console.log(`✓ Updating configVersion: ${(currentConfig as { configVersion?: string }).configVersion || '(none)'} → ${CURRENT_CONFIG_VERSION}`);
   }
 
   console.log();
@@ -267,7 +73,7 @@ async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
   // Dry run mode
   if (options.dryRun) {
     console.log('📄 Merged config (dry-run, not written):\n');
-    console.log(JSON.stringify(merged, null, 2));
+    console.log(JSON.stringify(mergedConfig, null, 2));
     return;
   }
 
@@ -296,7 +102,7 @@ async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
 
   // Write merged config
   try {
-    writeFileSync(configPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
+    writeFileSync(configPath, JSON.stringify(mergedConfig, null, 2) + '\n', 'utf-8');
     console.log(`✓ Config updated to version ${CURRENT_CONFIG_VERSION}`);
     console.log(`\n✅ Sync complete!`);
 
@@ -311,6 +117,10 @@ async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
 
 // Main
 const args = process.argv.slice(2);
+if (args.includes('--help') || args.includes('-h')) {
+  showHelp();
+  process.exit(0);
+}
 const yes = args.includes('--yes');
 const dryRun = args.includes('--dry-run');
 

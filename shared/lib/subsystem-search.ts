@@ -34,6 +34,15 @@ export interface SubsystemSearchResult {
   }[];
 }
 
+export interface SpecSnippetSearchResult {
+  subsystemId: string;
+  subsystemName: string;
+  specPath: string;
+  score: number;
+  snippets: string[];
+  matchLocations: string[];
+}
+
 export interface SubsystemSearchOptions {
   /** Maximum results to return */
   limit?: number;
@@ -88,6 +97,10 @@ function extractSection(content: string, sectionName: string): string {
   }
 
   return sectionLines.join('\n').trim();
+}
+
+function getSubsystemIdFromSpecPath(specPath: string): string {
+  return specPath.split('/').pop()?.replace('.md', '') || 'unknown';
 }
 
 /**
@@ -159,6 +172,37 @@ function findKeywordMatches(
   }
 
   return { snippets, locations, count };
+}
+
+function searchSpecContent(
+  specPath: string,
+  content: string,
+  query: string,
+  sectionFilter: string | null,
+): SpecSnippetSearchResult | null {
+  const subsystemName = extractSubsystemName(content);
+  const subsystemId = getSubsystemIdFromSpecPath(specPath);
+  const searchContent = sectionFilter ? extractSection(content, sectionFilter) : content;
+
+  if (!searchContent || searchContent.trim().length === 0) {
+    return null;
+  }
+
+  const { snippets, locations, count } = findKeywordMatches(searchContent, query);
+  if (count === 0) {
+    return null;
+  }
+
+  const score = calculateScore(subsystemName, content, query, count, locations);
+
+  return {
+    subsystemId,
+    subsystemName,
+    specPath,
+    score,
+    snippets: snippets.slice(0, 3),
+    matchLocations: locations.slice(0, 3),
+  };
 }
 
 /**
@@ -303,7 +347,7 @@ export function searchSubsystems(
     try {
       const content = readFileSync(specPath, 'utf-8');
       const subsystemName = extractSubsystemName(content);
-      const subsystemId = specPath.split('/').pop()?.replace('.md', '') || 'unknown';
+      const subsystemId = getSubsystemIdFromSpecPath(specPath);
 
       // Filter to section if requested
       const searchContent = opts.sectionFilter
@@ -349,6 +393,44 @@ export function searchSubsystems(
 
   // Limit results
   return results.slice(0, opts.limit);
+}
+
+export function searchSubsystemSpecs(
+  query: string,
+  repoDir: string,
+  options: Pick<SubsystemSearchOptions, 'limit' | 'sectionFilter'> = {},
+): SpecSnippetSearchResult[] {
+  const contextDir = join(repoDir, '.wavemill', 'context');
+  const limit = options.limit ?? DEFAULT_OPTIONS.limit;
+
+  if (!existsSync(contextDir)) {
+    return [];
+  }
+
+  const specFiles = readdirSync(contextDir)
+    .filter((file) => file.endsWith('.md'))
+    .map((file) => join(contextDir, file));
+
+  if (specFiles.length === 0) {
+    return [];
+  }
+
+  const results: SpecSnippetSearchResult[] = [];
+
+  for (const specPath of specFiles) {
+    try {
+      const content = readFileSync(specPath, 'utf-8');
+      const result = searchSpecContent(specPath, content, query, options.sectionFilter || null);
+      if (result) {
+        results.push(result);
+      }
+    } catch (error) {
+      console.warn(`Warning: Could not search ${specPath}: ${error}`);
+    }
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, limit);
 }
 
 /**

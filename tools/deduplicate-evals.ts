@@ -10,115 +10,16 @@
  */
 
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { getEvalConfig } from '../shared/lib/config.ts';
-import type { EvalRecord } from '../shared/lib/eval-schema.ts';
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface DeduplicationResult {
-  totalRecords: number;
-  uniqueRecords: number;
-  duplicatesRemoved: number;
-  duplicateGroups: Map<string, EvalRecord[]>;
-}
-
-// ── Core Logic ───────────────────────────────────────────────────────────────
-
-function readEvalRecords(filePath: string): EvalRecord[] {
-  if (!existsSync(filePath)) {
-    throw new Error(`Eval file not found: ${filePath}`);
-  }
-
-  const content = readFileSync(filePath, 'utf-8');
-  const lines = content.split('\n').filter((line) => line.trim().length > 0);
-  const records: EvalRecord[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    try {
-      const record = JSON.parse(lines[i]) as EvalRecord;
-      records.push(record);
-    } catch (err) {
-      console.warn(`Warning: Failed to parse line ${i + 1}, skipping`);
-    }
-  }
-
-  return records;
-}
-
-function deduplicateRecords(records: EvalRecord[]): DeduplicationResult {
-  // Group records by issueId + prUrl
-  const groups = new Map<string, EvalRecord[]>();
-
-  for (const record of records) {
-    // Create a unique key from issueId and prUrl
-    // Handle cases where either might be missing
-    const issueId = record.issueId || 'no-issue';
-    const prUrl = record.prUrl || 'no-pr';
-    const key = `${issueId}|${prUrl}`;
-
-    if (!groups.has(key)) {
-      groups.set(key, []);
-    }
-    groups.get(key)!.push(record);
-  }
-
-  // Find duplicate groups and keep only the earliest record from each
-  const duplicateGroups = new Map<string, EvalRecord[]>();
-  const uniqueRecords: EvalRecord[] = [];
-
-  for (const [key, groupRecords] of groups) {
-    if (groupRecords.length > 1) {
-      // Sort by timestamp (earliest first)
-      groupRecords.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-      duplicateGroups.set(key, groupRecords);
-    }
-    // Keep the first (earliest) record
-    uniqueRecords.push(groupRecords[0]);
-  }
-
-  return {
-    totalRecords: records.length,
-    uniqueRecords: uniqueRecords.length,
-    duplicatesRemoved: records.length - uniqueRecords.length,
-    duplicateGroups,
-  };
-}
-
-function formatDuplicateReport(result: DeduplicationResult): string {
-  const lines: string[] = [];
-
-  lines.push('');
-  lines.push('Duplicates found for the following issue+PR combinations:');
-  lines.push('');
-
-  for (const [key, records] of result.duplicateGroups) {
-    const [issueId, prUrlRaw] = key.split('|');
-    const prUrl = prUrlRaw === 'no-pr' ? '(no PR)' : prUrlRaw;
-    const prNumber = prUrl.match(/\/pull\/(\d+)$/)?.[1] || prUrl;
-    const earliest = records[0].timestamp;
-
-    lines.push(`  ${issueId} + ${prNumber}: ${records.length} records → keeping earliest (${earliest})`);
-  }
-
-  return lines.join('\n');
-}
-
-function writeEvalRecords(filePath: string, records: EvalRecord[]): void {
-  // Sort records by timestamp for consistency
-  const sorted = [...records].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-
-  const content = sorted.map((record) => JSON.stringify(record)).join('\n') + '\n';
-  writeFileSync(filePath, content, 'utf-8');
-}
-
-function createBackup(filePath: string): string {
-  const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, 'Z');
-  const backupPath = `${filePath}.backup-${timestamp}`;
-  copyFileSync(filePath, backupPath);
-  return backupPath;
-}
+import { readEvalRecordsFromFile } from '../shared/lib/eval-persistence.ts';
+import {
+  createEvalBackup,
+  deduplicateEvalRecords,
+  formatDuplicateReport,
+  writeEvalRecordsFile,
+} from '../shared/lib/eval-deduplication.ts';
 
 // ── CLI Tool ─────────────────────────────────────────────────────────────────
 
@@ -170,12 +71,12 @@ runTool({
     }
 
     // Read all records
-    const records = readEvalRecords(evalsFile);
+    const records = readEvalRecordsFromFile(evalsFile);
     console.log(`Found ${records.length} total eval records`);
 
     // Analyze duplicates
     console.log('Analyzing duplicates...');
-    const result = deduplicateRecords(records);
+    const result = deduplicateEvalRecords(records);
 
     // Report findings
     if (result.duplicateGroups.size === 0) {
@@ -197,22 +98,12 @@ runTool({
     }
 
     // Create backup
-    const backupPath = createBackup(evalsFile);
+    const backupPath = createEvalBackup(evalsFile);
     console.log('');
     console.log(`Creating backup: ${backupPath}`);
 
     // Write deduplicated records
-    const uniqueRecords = Array.from(result.duplicateGroups.values()).map((group) => group[0]);
-    // Also include records that weren't duplicated
-    const allKeys = new Set(result.duplicateGroups.keys());
-    for (const record of records) {
-      const key = `${record.issueId || 'no-issue'}|${record.prUrl || 'no-pr'}`;
-      if (!allKeys.has(key)) {
-        uniqueRecords.push(record);
-      }
-    }
-
-    writeEvalRecords(evalsFile, uniqueRecords);
+    writeEvalRecordsFile(evalsFile, result.deduplicatedRecords);
     console.log(`Wrote deduplicated records to ${evalsFile}`);
     console.log('');
     console.log('✓ Deduplication complete');
