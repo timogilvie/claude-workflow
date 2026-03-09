@@ -9,6 +9,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { access, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parsePackageJson } from './package-json-parser.ts';
 
@@ -250,6 +251,64 @@ export function findTaskPacket(branchName: string, repoDir?: string): string | n
   return null;
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readUtf8IfExists(path: string): Promise<string | null> {
+  if (!(await pathExists(path))) {
+    return null;
+  }
+
+  try {
+    return await readFile(path, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+export async function findTaskPacketAsync(
+  branchName: string,
+  repoDir?: string
+): Promise<string | null> {
+  const cwd = repoDir ? resolve(repoDir) : process.cwd();
+  const slug = extractSlugFromBranch(branchName);
+
+  if (!slug) {
+    return null;
+  }
+
+  const featureHeaderPath = join(cwd, 'features', slug, 'task-packet-header.md');
+  const featureDetailsPath = join(cwd, 'features', slug, 'task-packet-details.md');
+  const featureHeader = await readUtf8IfExists(featureHeaderPath);
+  if (featureHeader !== null) {
+    const featureDetails = await readUtf8IfExists(featureDetailsPath);
+    return featureDetails ? `${featureHeader}\n\n---\n\n${featureDetails}` : featureHeader;
+  }
+
+  const featureLegacyPath = join(cwd, 'features', slug, 'task-packet.md');
+  const featureLegacy = await readUtf8IfExists(featureLegacyPath);
+  if (featureLegacy !== null) {
+    return featureLegacy;
+  }
+
+  const bugsHeaderPath = join(cwd, 'bugs', slug, 'task-packet-header.md');
+  const bugsDetailsPath = join(cwd, 'bugs', slug, 'task-packet-details.md');
+  const bugsHeader = await readUtf8IfExists(bugsHeaderPath);
+  if (bugsHeader !== null) {
+    const bugsDetails = await readUtf8IfExists(bugsDetailsPath);
+    return bugsDetails ? `${bugsHeader}\n\n---\n\n${bugsDetails}` : bugsHeader;
+  }
+
+  const bugsLegacyPath = join(cwd, 'bugs', slug, 'task-packet.md');
+  return readUtf8IfExists(bugsLegacyPath);
+}
+
 /**
  * Find and read plan document for the current branch.
  *
@@ -288,6 +347,27 @@ export function findPlan(branchName: string, repoDir?: string): string | null {
   }
 
   return null;
+}
+
+export async function findPlanAsync(
+  branchName: string,
+  repoDir?: string
+): Promise<string | null> {
+  const cwd = repoDir ? resolve(repoDir) : process.cwd();
+  const slug = extractSlugFromBranch(branchName);
+
+  if (!slug) {
+    return null;
+  }
+
+  const featurePlanPath = join(cwd, 'features', slug, 'plan.md');
+  const featurePlan = await readUtf8IfExists(featurePlanPath);
+  if (featurePlan !== null) {
+    return featurePlan;
+  }
+
+  const bugsPlanPath = join(cwd, 'bugs', slug, 'plan.md');
+  return readUtf8IfExists(bugsPlanPath);
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -539,6 +619,127 @@ export function gatherDesignContext(
   return foundAny ? context : null;
 }
 
+export async function gatherDesignContextAsync(
+  repoDir: string,
+  options?: { designStandards?: boolean }
+): Promise<DesignContext | null> {
+  if (options?.designStandards === false) {
+    return null;
+  }
+
+  const packageJson = parsePackageJson(repoDir);
+  const context: DesignContext = {};
+  let foundAny = false;
+
+  const designGuidePaths = [
+    'DESIGN.md',
+    'docs/DESIGN.md',
+    'STYLE-GUIDE.md',
+    'docs/STYLE-GUIDE.md',
+    'docs/style-guide.md',
+  ];
+
+  for (const path of designGuidePaths) {
+    const content = await readUtf8IfExists(join(repoDir, path));
+    if (content !== null) {
+      context.designGuide = content;
+      foundAny = true;
+      break;
+    }
+  }
+
+  const tailwindPaths = [
+    'tailwind.config.js',
+    'tailwind.config.ts',
+    'tailwind.config.mjs',
+    'tailwind.config.cjs',
+  ];
+
+  for (const path of tailwindPaths) {
+    const content = await readUtf8IfExists(join(repoDir, path));
+    if (content !== null) {
+      const themeMatch = content.match(/theme:\s*\{[\s\S]*?\n\s*\}/);
+      context.tailwindConfig = themeMatch ? themeMatch[0] : content.substring(0, 500);
+      foundAny = true;
+      break;
+    }
+  }
+
+  if (packageJson.dependencies || packageJson.devDependencies) {
+    const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+
+    if (deps['@radix-ui/react-primitive'] || deps['@radix-ui/react-avatar']) {
+      const version = deps['@radix-ui/react-primitive'] || deps['@radix-ui/react-avatar'];
+      context.componentLibrary = `Radix UI ${version}`;
+      foundAny = true;
+    } else if (deps['@headlessui/react'] || deps['@headlessui/vue']) {
+      const version = deps['@headlessui/react'] || deps['@headlessui/vue'];
+      context.componentLibrary = `Headless UI ${version}`;
+      foundAny = true;
+    } else if (deps['@mui/material']) {
+      context.componentLibrary = `Material UI ${deps['@mui/material']}`;
+      foundAny = true;
+    } else if (deps.antd) {
+      context.componentLibrary = `Ant Design ${deps.antd}`;
+      foundAny = true;
+    }
+  }
+
+  if (await pathExists(join(repoDir, 'components.json'))) {
+    context.componentLibrary = 'shadcn/ui';
+    foundAny = true;
+  }
+
+  const globalStylePaths = [
+    'styles/globals.css',
+    'app/globals.css',
+    'src/index.css',
+    'src/styles/globals.css',
+  ];
+
+  for (const path of globalStylePaths) {
+    const content = await readUtf8IfExists(join(repoDir, path));
+    if (content !== null) {
+      const rootMatch = content.match(/:root\s*\{[\s\S]*?\n\}/);
+      if (rootMatch) {
+        context.cssVariables = rootMatch[0];
+        foundAny = true;
+        break;
+      }
+    }
+  }
+
+  const tokenPaths = [
+    'tokens.json',
+    'design-tokens.json',
+    'theme.json',
+    'design/tokens.json',
+    'design/design-tokens.json',
+  ];
+
+  for (const path of tokenPaths) {
+    const content = await readUtf8IfExists(join(repoDir, path));
+    if (content !== null) {
+      context.designTokens = content;
+      foundAny = true;
+      break;
+    }
+  }
+
+  if (await pathExists(join(repoDir, '.storybook'))) {
+    context.storybook = true;
+    foundAny = true;
+  } else if (packageJson.dependencies || packageJson.devDependencies) {
+    const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+    if (deps['@storybook/react'] || deps['@storybook/vue'] || deps.storybook) {
+      context.storybook = true;
+      foundAny = true;
+    }
+  }
+
+  return foundAny ? context : null;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Entry Point
 // ────────────────────────────────────────────────────────────────
@@ -582,6 +783,42 @@ export function gatherReviewContext(
 
   // Gather design context if enabled
   const designContext = gatherDesignContext(cwd, options);
+
+  return {
+    diff,
+    taskPacket,
+    plan,
+    designContext,
+    metadata: {
+      branch,
+      files,
+      lineCount,
+      hasUiChanges,
+    },
+  };
+}
+
+export async function gatherReviewContextAsync(
+  targetBranch: string,
+  repoDir?: string,
+  options?: GatherReviewContextOptions
+): Promise<ReviewContext> {
+  const cwd = repoDir ? resolve(repoDir) : process.cwd();
+  const branch = getCurrentBranch(cwd);
+  const diff = getGitDiff(targetBranch, cwd, options?.sinceCommit);
+
+  assertReviewableDiff(
+    diff,
+    branch,
+    options?.sinceCommit ? `commit ${options.sinceCommit.slice(0, 8)}` : targetBranch
+  );
+
+  const { files, lineCount, hasUiChanges } = analyzeDiffMetadata(diff);
+  const [taskPacket, plan, designContext] = await Promise.all([
+    findTaskPacketAsync(branch, cwd),
+    findPlanAsync(branch, cwd),
+    gatherDesignContextAsync(cwd, options),
+  ]);
 
   return {
     diff,
