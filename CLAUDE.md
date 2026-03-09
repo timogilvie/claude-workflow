@@ -433,13 +433,13 @@ Default patterns are organized by category:
 
 **For Claude Code:**
 ```bash
-npx tsx tools/generate-claude-permissions.ts
+npx tsx tools/generate-permissions.ts --agent claude
 # Apply generated settings to Claude Code (see docs/worktree-auto-approve.md)
 ```
 
 **For Codex:**
 ```bash
-npx tsx tools/generate-codex-permissions.ts
+npx tsx tools/generate-permissions.ts --agent codex
 # Copy to ~/.codex/permissions.json and restart Codex
 ```
 

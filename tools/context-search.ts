@@ -1,7 +1,12 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import {
+  extractSection,
+  extractSubsystemName,
+  listContextSpecPaths,
+  resolveRepoDir,
+} from '../shared/lib/context-tool.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -19,40 +24,6 @@ interface SearchResult {
 // ────────────────────────────────────────────────────────────────
 // Helper Functions
 // ────────────────────────────────────────────────────────────────
-
-/**
- * Extract subsystem name from spec content.
- */
-function extractSubsystemName(content: string): string {
-  const match = content.match(/^# Subsystem:\s*(.+)$/m);
-  return match ? match[1].trim() : 'Unknown';
-}
-
-/**
- * Extract content from a specific section.
- */
-function extractSection(content: string, sectionName: string): string {
-  const lines = content.split('\n');
-  const sectionRegex = new RegExp(`^##\\s+${sectionName}`, 'i');
-
-  let inSection = false;
-  const sectionLines: string[] = [];
-
-  for (const line of lines) {
-    if (sectionRegex.test(line)) {
-      inSection = true;
-      continue;
-    }
-    if (inSection && /^##\s+/.test(line)) {
-      break; // End of section
-    }
-    if (inSection) {
-      sectionLines.push(line);
-    }
-  }
-
-  return sectionLines.join('\n');
-}
 
 /**
  * Find all matches in content with context.
@@ -246,19 +217,7 @@ async function main(
   limit: number,
   sectionFilter: string | undefined
 ) {
-  const contextDir = join(repoDir, '.wavemill', 'context');
-
-  // Check if context directory exists
-  if (!existsSync(contextDir)) {
-    console.error('Error: No subsystem specs found');
-    console.error('Initialize first: wavemill context init');
-    process.exit(1);
-  }
-
-  // Find all spec files
-  const specFiles = readdirSync(contextDir)
-    .filter(f => f.endsWith('.md'))
-    .map(f => join(contextDir, f));
+  const specFiles = listContextSpecPaths(repoDir);
 
   if (specFiles.length === 0) {
     console.error('Error: No subsystem specs found in .wavemill/context/');
@@ -317,8 +276,7 @@ Returns ranked results with relevant snippets.`,
       console.error('Error: Search query is required');
       process.exit(1);
     }
-    const repoPath = positional[1] || process.cwd();
-    const repoDir = resolve(repoPath);
+    const repoDir = resolveRepoDir(positional[1]);
     const limit = args.limit ? parseInt(args.limit, 10) : 10;
     await main(query, repoDir, limit, args.section);
   },
