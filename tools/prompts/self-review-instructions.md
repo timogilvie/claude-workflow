@@ -21,12 +21,12 @@ When exit code 2 occurs, you MUST log the following diagnostics to help debug th
 
 Diagnostics:
 - Command: {{REVIEW_COMMAND}}
-- Working directory: $(pwd)
+- Working directory: \$(pwd)
 - Tool path: {{REVIEW_TOOL_PATH}}
-- Tool exists: $(ls -lh {{REVIEW_TOOL_PATH}} 2>&1 || echo "NOT FOUND")
-- Git root: $(git rev-parse --show-toplevel 2>&1)
-- Current branch: $(git rev-parse --abbrev-ref HEAD 2>&1)
-- Base branch exists: $(git rev-parse --verify {{BASE_BRANCH}} 2>&1 || echo "NOT FOUND")
+- Tool exists: \$(ls -lh {{REVIEW_TOOL_PATH}} 2>&1 || echo "NOT FOUND")
+- Git root: \$(git rev-parse --show-toplevel 2>&1)
+- Current branch: \$(git rev-parse --abbrev-ref HEAD 2>&1)
+- Base branch exists: \$(git rev-parse --verify {{BASE_BRANCH}} 2>&1 || echo "NOT FOUND")
 - STDERR output: [paste the actual stderr from the failed command]
 
 Proceeding to {{ERROR_FOLLOWUP}} per instructions.
