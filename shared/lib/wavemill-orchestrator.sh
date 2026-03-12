@@ -261,9 +261,10 @@ Read specific sections on-demand as you plan and implement:
     fi
 
     if [[ "${PLANNING_MODE:-skip}" == "interactive" ]]; then
-      # ── Interactive planning mode ─────────────────────────────────────
+      # ── Interactive (multi-phase) mode ────────────────────────────────
+      # Launch in routing phase - monitor will handle phase transitions
 
-      # Pre-seed selected-task.json for the /create-plan workflow
+      # Pre-seed selected-task.json for routing and planning phases
       FEATURE_DIR="${FEATURE_DIR:-$WT_DIR/features/$SLUG}"
       mkdir -p "$FEATURE_DIR"
       TASK_JSON="$FEATURE_DIR/selected-task.json"
@@ -292,11 +293,15 @@ Read specific sections on-demand as you plan and implement:
           selectedAt: (now | todate)
         }' > "$TASK_JSON"
 
-      PROMPT_FILE="/tmp/${SESSION}-${ISSUE}-plan-prompt.txt"
-      build_interactive_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
+      # Launch routing phase with default agent (Haiku is fast/cheap)
+      PROMPT_FILE="/tmp/${SESSION}-${ISSUE}-routing-prompt.txt"
+      build_routing_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
         "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "$SLUG" > "$PROMPT_FILE"
 
-      agent_launch_interactive "$SESSION" "$WIN" "$PROMPT_FILE" "$TASK_AGENT_CMD" "$TASK_MODEL"
+      # Use Haiku for routing (fast and cheap)
+      ROUTING_AGENT="${AGENT_CMD}"
+      ROUTING_MODEL="claude-haiku-4-5-20251001"
+      agent_launch_interactive "$SESSION" "$WIN" "$PROMPT_FILE" "$ROUTING_AGENT" "$ROUTING_MODEL"
 
     else
       # ── Skip mode (autonomous) ────────────────────────────────────────
