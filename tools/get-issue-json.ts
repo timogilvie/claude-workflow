@@ -9,7 +9,6 @@ runTool({
   name: 'get-issue-json',
   description: 'Fetch a Linear issue and output as JSON',
   options: {
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'identifier',

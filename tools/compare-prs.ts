@@ -147,7 +147,6 @@ runTool({
     model: { type: 'string', description: 'Comparison judge model override' },
     comment: { type: 'boolean', description: 'Post recommendation comments on both PRs' },
     'auto-merge': { type: 'boolean', description: 'Merge winner and close loser after comparison' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   async run({ args }) {
     const repoDir = (args['repo-dir'] as string) || process.cwd();

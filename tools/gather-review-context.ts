@@ -1,13 +1,11 @@
 #!/usr/bin/env -S npx tsx
-import { runTool } from '../shared/lib/tool-runner.ts';
-import { resolve } from 'node:path';
+import { runTool, resolveRepoDir } from '../shared/lib/tool-runner.ts';
 import { gatherReviewContextAsync } from '../shared/lib/review-context-gatherer.ts';
 
 runTool({
   name: 'gather-review-context',
   description: 'Gather review context for the current branch',
   options: {
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'targetBranch repoDir',
@@ -29,7 +27,7 @@ runTool({
 Outputs JSON to stdout.`,
   async run({ positional }) {
     const targetBranch = positional[0] || 'main';
-    const repoDir = positional[1] ? resolve(positional[1]) : process.cwd();
+    const repoDir = resolveRepoDir(positional[1]);
 
     const context = await gatherReviewContextAsync(targetBranch, repoDir);
     console.log(JSON.stringify(context, null, 2));

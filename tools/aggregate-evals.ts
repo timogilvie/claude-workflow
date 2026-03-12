@@ -63,7 +63,6 @@ runTool({
   options: {
     repos: { type: 'string', multiple: true, description: 'Repository directories to aggregate from' },
     output: { type: 'string', short: 'o', description: 'Output path (default: .wavemill/evals/aggregated-evals.jsonl)' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   examples: [
     'npx tsx tools/aggregate-evals.ts',

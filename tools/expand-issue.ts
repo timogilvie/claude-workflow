@@ -55,7 +55,6 @@ runTool({
     'skip-validation': { type: 'boolean', description: 'Skip quality gate validation' },
     output: { type: 'string', description: 'Save expanded description to file' },
     'repo-path': { type: 'string', description: 'Path to target repository' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'issueId',

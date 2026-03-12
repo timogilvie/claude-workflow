@@ -14,7 +14,6 @@ runTool({
   options: {
     agent: { type: 'string', description: 'Check specific agent (claude|codex)' },
     verbose: { type: 'boolean', short: 'v', description: 'Show detailed output' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   examples: [
     'npx tsx tools/verify-permissions.ts',

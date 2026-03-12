@@ -13,7 +13,6 @@ runTool({
   description: 'Git Worktree Manager for Parallel Workflows',
   options: {
     'delete-branch': { type: 'boolean', description: 'Delete branch when removing worktree' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'command args',

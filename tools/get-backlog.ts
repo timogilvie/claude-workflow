@@ -90,7 +90,6 @@ runTool({
   name: 'get-backlog',
   description: 'Fetch and display Linear backlog (interactive or by project name)',
   options: {
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'project',

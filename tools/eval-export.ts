@@ -18,7 +18,6 @@ runTool({
     'min-score': { type: 'string', description: 'Include only records with score >= N' },
     'max-score': { type: 'string', description: 'Include only records with score <= N' },
     dir: { type: 'string', description: 'Override evals directory' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   examples: [
     'npx tsx tools/eval-export.ts',

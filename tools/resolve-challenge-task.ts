@@ -15,7 +15,6 @@ runTool({
     'primary-model': { type: 'string', description: 'Router-selected or forced primary model' },
     'remaining-slots': { type: 'string', description: 'Available mill slots before launch' },
     'repo-dir': { type: 'string', description: 'Repository directory' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   async run({ args }) {
     const repoDir = (args['repo-dir'] as string) || process.cwd();

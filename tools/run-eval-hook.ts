@@ -26,7 +26,6 @@ runTool({
     'challenge-pair': { type: 'string', description: 'Shared challenge pair identifier' },
     'repo-dir': { type: 'string', description: 'Repository directory (default: current directory)' },
     debug: { type: 'boolean', description: 'Enable detailed cost computation diagnostics' },
-    help: { type: 'boolean', short: 'h', description: 'Show help message' },
   },
   examples: [
     'npx tsx tools/run-eval-hook.ts --issue HOK-123 --pr 456 --workflow-type workflow',

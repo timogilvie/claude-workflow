@@ -77,7 +77,6 @@ runTool({
     'execution-time': { type: 'string', description: 'Execution time in milliseconds' },
     'user-wait-time': { type: 'string', description: 'User wait time in milliseconds' },
     error: { type: 'string', description: 'Error message if failed' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'subcommand args',

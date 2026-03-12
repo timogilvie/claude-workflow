@@ -10,7 +10,6 @@ runTool({
   description: 'Fetch and display a Linear issue',
   options: {
     json: { type: 'boolean', description: 'Output raw issue JSON' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'identifier',
