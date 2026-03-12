@@ -7,12 +7,12 @@
  *  1 - Config is missing, has no version, or is outdated
  *  2 - Error (invalid config, etc.)
  *
- * Usage:
- *   npx tsx tools/check-config-version.ts [--json]
+ * @module check-config-version
  */
 
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadWavemillConfig, CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 
@@ -106,37 +106,43 @@ function checkConfigVersion(repoDir: string = process.cwd()): VersionCheckResult
   };
 }
 
-function main() {
-  const args = process.argv.slice(2);
-  const jsonOutput = args.includes('--json');
+runTool({
+  name: 'check-config-version',
+  description: 'Check if the wavemill config version is up to date',
+  options: {
+    json: { type: 'boolean', description: 'Output result as JSON' },
+  },
+  examples: [
+    'npx tsx tools/check-config-version.ts',
+    'npx tsx tools/check-config-version.ts --json',
+  ],
+  run({ args }) {
+    try {
+      const result = checkConfigVersion();
 
-  try {
-    const result = checkConfigVersion();
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(result.message);
+      }
 
-    if (jsonOutput) {
-      console.log(JSON.stringify(result, null, 2));
-    } else {
-      console.log(result.message);
+      // Exit code: 0 if current/newer, 1 if needs upgrade, 2 on error
+      process.exit(result.needsUpgrade ? 1 : 0);
+    } catch (err) {
+      const message = errorMessage(err);
+
+      if (args.json) {
+        console.log(JSON.stringify({
+          status: 'error',
+          currentVersion: CURRENT_CONFIG_VERSION,
+          message,
+          needsUpgrade: false,
+        }, null, 2));
+      } else {
+        console.error(`Error: ${message}`);
+      }
+
+      process.exit(2);
     }
-
-    // Exit code: 0 if current/newer, 1 if needs upgrade, 2 on error
-    process.exit(result.needsUpgrade ? 1 : 0);
-  } catch (err) {
-    const message = errorMessage(err);
-
-    if (jsonOutput) {
-      console.log(JSON.stringify({
-        status: 'error',
-        currentVersion: CURRENT_CONFIG_VERSION,
-        message,
-        needsUpgrade: false,
-      }, null, 2));
-    } else {
-      console.error(`Error: ${message}`);
-    }
-
-    process.exit(2);
-  }
-}
-
-main();
+  },
+});

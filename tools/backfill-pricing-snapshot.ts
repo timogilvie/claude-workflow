@@ -5,14 +5,12 @@
  * Updates eval records that have workflowTokenUsage but no pricingSnapshot
  * by adding the current pricing table from .wavemill-config.json.
  *
- * Usage:
- *   npx tsx tools/backfill-pricing-snapshot.ts /path/to/repo [--dry-run]
- *
  * @module backfill-pricing-snapshot
  */
 
 import { readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import type { EvalRecord } from '../shared/lib/eval-schema.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
@@ -151,89 +149,69 @@ function printStats(repoPath: string, stats: BackfillStats, dryRun: boolean): vo
 // CLI Entry Point
 // ────────────────────────────────────────────────────────────────
 
-function main() {
-  const args = process.argv.slice(2);
+runTool({
+  name: 'backfill-pricing-snapshot',
+  description: 'Backfill pricing snapshots to existing eval records',
+  options: {
+    'dry-run': { type: 'boolean', description: 'Show what would be updated without modifying files' },
+  },
+  positional: {
+    name: 'repo-path',
+    description: 'Absolute path to repository directory',
+    required: true,
+    multiple: true,
+  },
+  examples: [
+    'npx tsx tools/backfill-pricing-snapshot.ts /Users/tim/myrepo',
+    'npx tsx tools/backfill-pricing-snapshot.ts /Users/tim/myrepo --dry-run',
+  ],
+  run({ args, positional }) {
+    const dryRun = !!args['dry-run'];
+    const repoPaths = positional.map(p => resolve(p));
 
-  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
-    console.log(`
-Usage: npx tsx tools/backfill-pricing-snapshot.ts <repo-path> [--dry-run]
+    let totalStats: BackfillStats = {
+      filesProcessed: 0,
+      recordsUpdated: 0,
+      recordsSkipped: 0,
+      recordsAlreadyHaveSnapshot: 0,
+      recordsWithoutWorkflowUsage: 0,
+      errors: [],
+    };
 
-Backfill pricing snapshots to existing eval records.
+    for (const repoPath of repoPaths) {
+      if (!existsSync(repoPath)) {
+        console.error(`Error: Repository path does not exist: ${repoPath}`);
+        continue;
+      }
 
-Arguments:
-  repo-path    Absolute path to repository directory
+      const stats = backfillRepo(repoPath, dryRun);
+      printStats(repoPath, stats, dryRun);
 
-Options:
-  --dry-run    Show what would be updated without modifying files
-  --help, -h   Show this help message
-
-Examples:
-  npx tsx tools/backfill-pricing-snapshot.ts /Users/tim/myrepo
-  npx tsx tools/backfill-pricing-snapshot.ts /Users/tim/myrepo --dry-run
-`);
-    process.exit(0);
-  }
-
-  const repoPaths: string[] = [];
-  let dryRun = false;
-
-  for (const arg of args) {
-    if (arg === '--dry-run') {
-      dryRun = true;
-    } else {
-      repoPaths.push(resolve(arg));
-    }
-  }
-
-  if (repoPaths.length === 0) {
-    console.error('Error: No repository path provided');
-    process.exit(1);
-  }
-
-  let totalStats: BackfillStats = {
-    filesProcessed: 0,
-    recordsUpdated: 0,
-    recordsSkipped: 0,
-    recordsAlreadyHaveSnapshot: 0,
-    recordsWithoutWorkflowUsage: 0,
-    errors: [],
-  };
-
-  for (const repoPath of repoPaths) {
-    if (!existsSync(repoPath)) {
-      console.error(`Error: Repository path does not exist: ${repoPath}`);
-      continue;
+      // Aggregate stats
+      totalStats.filesProcessed += stats.filesProcessed;
+      totalStats.recordsUpdated += stats.recordsUpdated;
+      totalStats.recordsSkipped += stats.recordsSkipped;
+      totalStats.recordsAlreadyHaveSnapshot += stats.recordsAlreadyHaveSnapshot;
+      totalStats.recordsWithoutWorkflowUsage += stats.recordsWithoutWorkflowUsage;
+      totalStats.errors.push(...stats.errors.map(e => `${repoPath}: ${e}`));
     }
 
-    const stats = backfillRepo(repoPath, dryRun);
-    printStats(repoPath, stats, dryRun);
+    if (repoPaths.length > 1) {
+      console.log(`\n${'═'.repeat(60)}`);
+      console.log('TOTAL SUMMARY');
+      console.log(`${'═'.repeat(60)}`);
+      console.log(`Repositories processed:         ${repoPaths.length}`);
+      console.log(`Files processed:                ${totalStats.filesProcessed}`);
+      console.log(`Records updated:                ${totalStats.recordsUpdated}`);
+      console.log(`Records skipped:                ${totalStats.recordsSkipped}`);
+      console.log(`Records already have snapshot:  ${totalStats.recordsAlreadyHaveSnapshot}`);
+      console.log(`Records without workflow usage: ${totalStats.recordsWithoutWorkflowUsage}`);
+      console.log(`Total errors:                   ${totalStats.errors.length}`);
+      console.log(`${'═'.repeat(60)}\n`);
+    }
 
-    // Aggregate stats
-    totalStats.filesProcessed += stats.filesProcessed;
-    totalStats.recordsUpdated += stats.recordsUpdated;
-    totalStats.recordsSkipped += stats.recordsSkipped;
-    totalStats.recordsAlreadyHaveSnapshot += stats.recordsAlreadyHaveSnapshot;
-    totalStats.recordsWithoutWorkflowUsage += stats.recordsWithoutWorkflowUsage;
-    totalStats.errors.push(...stats.errors.map(e => `${repoPath}: ${e}`));
-  }
-
-  if (repoPaths.length > 1) {
-    console.log(`\n${'═'.repeat(60)}`);
-    console.log('TOTAL SUMMARY');
-    console.log(`${'═'.repeat(60)}`);
-    console.log(`Repositories processed:         ${repoPaths.length}`);
-    console.log(`Files processed:                ${totalStats.filesProcessed}`);
-    console.log(`Records updated:                ${totalStats.recordsUpdated}`);
-    console.log(`Records skipped:                ${totalStats.recordsSkipped}`);
-    console.log(`Records already have snapshot:  ${totalStats.recordsAlreadyHaveSnapshot}`);
-    console.log(`Records without workflow usage: ${totalStats.recordsWithoutWorkflowUsage}`);
-    console.log(`Total errors:                   ${totalStats.errors.length}`);
-    console.log(`${'═'.repeat(60)}\n`);
-  }
-
-  if (totalStats.errors.length > 0) {
-    process.exit(1);
-  }
-}
-
-main();
+    if (totalStats.errors.length > 0) {
+      process.exit(1);
+    }
+  },
+});

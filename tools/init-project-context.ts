@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
-import { runTool } from '../shared/lib/tool-runner.ts';
+import { runTool, resolveRepoDir } from '../shared/lib/tool-runner.ts';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { analyzeRepoContext } from '../shared/lib/repo-context-analyzer.ts';
 import { analyzeCodeConventions } from '../shared/lib/context-analyzer.ts';
@@ -293,7 +293,6 @@ runTool({
   description: 'Initialize project context documentation',
   options: {
     force: { type: 'boolean', short: 'f', description: 'Overwrite existing project-context.md' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'repoPath',
@@ -307,8 +306,7 @@ runTool({
   additionalHelp: `Analyzes a codebase and generates the initial .wavemill/project-context.md file.
 This file maintains living documentation of architectural decisions, patterns, conventions, and recent work.`,
   async run({ args, positional }) {
-    const repoPath = positional[0] || process.cwd();
-    const repoDir = resolve(repoPath);
+    const repoDir = resolveRepoDir(positional[0]);
     await main(repoDir, !!args.force);
   },
 });
