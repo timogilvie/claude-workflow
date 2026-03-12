@@ -4,7 +4,7 @@ import {
   listPullRequests,
   getPullRequest,
   getPullRequestDiff,
-} from './github.js';
+} from './github.ts';
 
 // These tests use real gh CLI commands and require authentication
 // Run: gh auth login before running tests

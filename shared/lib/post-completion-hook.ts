@@ -9,7 +9,7 @@ import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
-import { evaluateTask } from './eval.js';
+import { evaluateTask } from './eval.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { execShellCommand } from './shell-utils.ts';
 import { detectAndFormatInterventions } from './intervention-detector.ts';
