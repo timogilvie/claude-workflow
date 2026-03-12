@@ -1,4 +1,4 @@
-import { getIssue } from './linear.js';
+import { getIssue } from './linear.ts';
 
 const PROCESS_TIMEOUT_MS = 30_000;
 

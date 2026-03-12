@@ -7,7 +7,7 @@
  * @module initiative-lister
  */
 
-import { getInitiatives } from './linear.js';
+import { getInitiatives } from './linear.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
