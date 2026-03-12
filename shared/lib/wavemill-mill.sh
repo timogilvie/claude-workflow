@@ -306,10 +306,26 @@ get_task_phase() {
 }
 
 
+check_routing_complete() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.routing-complete" ]] && return 0
+  return 1
+}
+
+
 check_plan_approved() {
   local slug="$1"
   local wt="${WORKTREE_ROOT}/${slug}"
   [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
+  return 1
+}
+
+
+check_coding_complete() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
   return 1
 }
 
@@ -1103,8 +1119,9 @@ LAUNCH_ARGS=("${FINAL_LAUNCH_ARGS[@]}")
 
 
 # User confirmed (or no confirmation needed) - now set issues to In Progress
-INITIAL_PHASE="executing"
-[[ "$PLANNING_MODE" == "interactive" ]] && INITIAL_PHASE="planning"
+INITIAL_PHASE="routing"
+# Legacy mode: skip routing and planning phases if autonomous
+[[ "$PLANNING_MODE" == "skip" ]] && INITIAL_PHASE="executing"
 
 for t in "${LAUNCH_ARGS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
@@ -1404,11 +1421,142 @@ validate_agent_set() {
   fi
 }
 
+check_routing_complete() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.routing-complete" ]] && return 0
+  return 1
+}
+
 check_plan_approved() {
   local slug="$1"
   local wt="${WORKTREE_ROOT}/${slug}"
   [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
   return 1
+}
+
+check_coding_complete() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
+  return 1
+}
+
+# Launch the planning phase in an existing tmux window
+launch_planning_phase() {
+  local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
+  local planner_model="$7" planner_agent="$8" plan_depth="$9"
+  local win="${issue}-${slug}"
+  local status_file="/tmp/${SESSION}-${issue}-status.txt"
+
+  # Read issue context
+  local issue_json issue_desc issue_context
+  issue_json=$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")
+  issue_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
+  issue_context="Issue Description:
+$issue_desc
+"
+
+  # Build planning prompt
+  local prompt_file="/tmp/${SESSION}-${issue}-planning-prompt.txt"
+  build_planning_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" > "$prompt_file"
+
+  # Send prompt to the same tmux window
+  log "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
+  case "$planner_agent" in
+    claude)
+      local model_flag=""
+      [[ -n "$planner_model" ]] && model_flag=" --model $planner_model"
+      tmux send-keys -t "$SESSION:$win" "claude${model_flag} \"\$(cat '$prompt_file')\"" C-m
+      ;;
+    codex)
+      local model_flag=""
+      [[ -n "$planner_model" ]] && model_flag=" --model $planner_model"
+      tmux send-keys -t "$SESSION:$win" "codex${model_flag} \"\$(cat '$prompt_file')\"" C-m
+      ;;
+    *)
+      tmux send-keys -t "$SESSION:$win" "$planner_agent \"\$(cat '$prompt_file')\"" C-m
+      ;;
+  esac
+}
+
+# Launch the coding phase in an existing tmux window
+launch_coding_phase() {
+  local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
+  local coder_model="$7" coder_agent="$8" code_depth="$9"
+  local win="${issue}-${slug}"
+  local status_file="/tmp/${SESSION}-${issue}-status.txt"
+
+  # Read issue context
+  local issue_json issue_desc issue_context
+  issue_json=$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")
+  issue_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
+  issue_context="Issue Description:
+$issue_desc
+"
+
+  # Build coding prompt
+  local prompt_file="/tmp/${SESSION}-${issue}-coding-prompt.txt"
+  build_coding_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" > "$prompt_file"
+
+  # Send prompt to the same tmux window
+  log "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
+  case "$coder_agent" in
+    claude)
+      local model_flag=""
+      [[ -n "$coder_model" ]] && model_flag=" --model $coder_model"
+      tmux send-keys -t "$SESSION:$win" "claude${model_flag} \"\$(cat '$prompt_file')\"" C-m
+      ;;
+    codex)
+      local model_flag=""
+      [[ -n "$coder_model" ]] && model_flag=" --model $coder_model"
+      tmux send-keys -t "$SESSION:$win" "codex${model_flag} \"\$(cat '$prompt_file')\"" C-m
+      ;;
+    *)
+      tmux send-keys -t "$SESSION:$win" "$coder_agent \"\$(cat '$prompt_file')\"" C-m
+      ;;
+  esac
+}
+
+# Launch the review phase in an existing tmux window
+launch_review_phase() {
+  local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
+  local reviewer_model="$7" reviewer_agent="$8" review_mode="$9"
+  local win="${issue}-${slug}"
+  local status_file="/tmp/${SESSION}-${issue}-status.txt"
+
+  # Read issue context
+  local issue_json issue_desc issue_context
+  issue_json=$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")
+  issue_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
+  issue_context="Issue Description:
+$issue_desc
+"
+
+  # Build review prompt
+  local prompt_file="/tmp/${SESSION}-${issue}-review-prompt.txt"
+  build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" > "$prompt_file"
+
+  # Send prompt to the same tmux window
+  log "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
+  case "$reviewer_agent" in
+    claude)
+      local model_flag=""
+      [[ -n "$reviewer_model" ]] && model_flag=" --model $reviewer_model"
+      tmux send-keys -t "$SESSION:$win" "claude${model_flag} \"\$(cat '$prompt_file')\"" C-m
+      ;;
+    codex)
+      local model_flag=""
+      [[ -n "$reviewer_model" ]] && model_flag=" --model $reviewer_model"
+      tmux send-keys -t "$SESSION:$win" "codex${model_flag} \"\$(cat '$prompt_file')\"" C-m
+      ;;
+    *)
+      tmux send-keys -t "$SESSION:$win" "$reviewer_agent \"\$(cat '$prompt_file')\"" C-m
+      ;;
+  esac
 }
 
 set_window_attention_state() {
@@ -2135,7 +2283,7 @@ Implement from the issue description plus direct codebase analysis."
   fi
 
   if [[ "$PLANNING_MODE" == "interactive" ]]; then
-    # Pre-seed selected-task.json
+    # Launch in routing phase - monitor will handle phase transitions
     local feature_dir="${feature_dir:-$wt_dir/features/$slug}"
     mkdir -p "$feature_dir"
     local labels_json="[]"
@@ -2159,14 +2307,14 @@ Implement from the issue description plus direct codebase analysis."
         selectedAt: (now | todate)
       }' > "$feature_dir/selected-task.json"
 
-    local prompt_file="/tmp/${SESSION}-${issue}-plan-prompt.txt"
-    build_interactive_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+    # Launch routing phase with Haiku (fast/cheap)
+    local prompt_file="/tmp/${SESSION}-${issue}-routing-prompt.txt"
+    build_routing_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
       "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" > "$prompt_file"
 
-    # Use planner model for planning phase if available, otherwise use coder model
-    local plan_agent="${planner_agent:-$task_agent_cmd}"
-    local plan_model="${planner_model:-$task_model}"
-    agent_launch_interactive "$SESSION" "$win" "$prompt_file" "$plan_agent" "$plan_model"
+    local routing_agent="${AGENT_CMD}"
+    local routing_model="claude-haiku-4-5-20251001"
+    agent_launch_interactive "$SESSION" "$win" "$prompt_file" "$routing_agent" "$routing_model"
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
@@ -2324,24 +2472,149 @@ monitor_issue_state() {
         return 0
       fi
 
-      # Planning phase tracking (must run before pane-alive early return)
+      # Multi-phase workflow tracking (must run before pane-alive early return)
       current_phase=$(get_task_phase "$ISSUE")
 
-      if [[ "$current_phase" == "planning" ]]; then
-        if check_plan_approved "$SLUG"; then
-          set_task_phase "$ISSUE" "executing"
-          set_window_attention_state "$WIN" "clear"
-          log "✓ $ISSUE → Plan approved, now executing"
-        else
+      case "$current_phase" in
+        routing)
+          if check_routing_complete "$SLUG"; then
+            # Read routing results
+            routing_file="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.routing-complete"
+            if [[ -f "$routing_file" ]]; then
+              planner_model=$(jq -r '.planner // "claude-sonnet-4-5-20250929"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-5-20250929")
+              coder_model=$(jq -r '.coder // "claude-opus-4-6"' "$routing_file" 2>/dev/null || echo "claude-opus-4-6")
+              reviewer_model=$(jq -r '.reviewer // "claude-sonnet-4-5-20250929"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-5-20250929")
+              plan_depth=$(jq -r '.planDepth // "light"' "$routing_file" 2>/dev/null || echo "light")
+              code_depth=$(jq -r '.codeDepth // "medium"' "$routing_file" 2>/dev/null || echo "medium")
+              review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
+
+              # Save routing results to state
+              current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+              linear_issue=$(get_linear_issue_id "$ISSUE")
+              save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
+
+              # Transition to planning phase
+              set_task_phase "$ISSUE" "planning"
+              planner_agent="$(agent_resolve_from_model "$planner_model")"
+
+              # Get title from state or Linear
+              title=$(jq -r --arg i "$ISSUE" '.tasks[$i].title // ""' "$STATE_FILE" 2>/dev/null)
+              if [[ -z "$title" ]]; then
+                issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+                title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+              fi
+
+              launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth"
+              set_window_attention_state "$WIN" "clear"
+              log "✓ $ISSUE → Routing complete, launching planning phase"
+              active_count=$((active_count + 1))
+              return 0
+            else
+              log_warn "$ISSUE → Routing file missing: $routing_file"
+              needs_attention="true"
+            fi
+          else
+            if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+              set_window_attention_state "$WIN" "clear"
+              # Keep routing tasks active while agent is still running
+              active_count=$((active_count + 1))
+              return 0
+            fi
+            needs_attention="true"
+          fi
+          ;;
+
+        planning)
+          if check_plan_approved "$SLUG"; then
+            # Read routing results from state
+            coder_model=$(get_task_meta "$ISSUE" "plannerModel")  # Actually stored as coder in routing
+            [[ -z "$coder_model" ]] && coder_model=$(jq -r --arg i "$ISSUE" '.tasks[$i].coder // "claude-opus-4-6"' "$STATE_FILE" 2>/dev/null || echo "claude-opus-4-6")
+            code_depth=$(get_task_meta "$ISSUE" "codeDepth")
+            [[ -z "$code_depth" ]] && code_depth="medium"
+
+            # Transition to coding phase
+            set_task_phase "$ISSUE" "coding"
+            coder_agent="$(agent_resolve_from_model "$coder_model")"
+
+            # Get title
+            title=$(jq -r --arg i "$ISSUE" '.tasks[$i].title // ""' "$STATE_FILE" 2>/dev/null)
+            if [[ -z "$title" ]]; then
+              issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+              title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+            fi
+
+            launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth"
+            set_window_attention_state "$WIN" "clear"
+            log "✓ $ISSUE → Plan approved, launching coding phase"
+            active_count=$((active_count + 1))
+            return 0
+          else
+            if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+              set_window_attention_state "$WIN" "clear"
+              # Keep unapproved planning tasks active while agent is still running
+              active_count=$((active_count + 1))
+              return 0
+            fi
+            needs_attention="true"
+          fi
+          ;;
+
+        coding)
+          if check_coding_complete "$SLUG"; then
+            # Read routing results from state
+            reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
+            [[ -z "$reviewer_model" ]] && reviewer_model="claude-sonnet-4-5-20250929"
+            review_mode=$(get_task_meta "$ISSUE" "reviewMode")
+            [[ -z "$review_mode" ]] && review_mode="static"
+
+            # Transition to review phase
+            set_task_phase "$ISSUE" "review"
+            reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+
+            # Get title
+            title=$(jq -r --arg i "$ISSUE" '.tasks[$i].title // ""' "$STATE_FILE" 2>/dev/null)
+            if [[ -z "$title" ]]; then
+              issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+              title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+            fi
+
+            launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
+            set_window_attention_state "$WIN" "clear"
+            log "✓ $ISSUE → Coding complete, launching review phase"
+            active_count=$((active_count + 1))
+            return 0
+          else
+            if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+              set_window_attention_state "$WIN" "clear"
+              # Keep coding tasks active while agent is still running
+              active_count=$((active_count + 1))
+              return 0
+            fi
+            needs_attention="true"
+          fi
+          ;;
+
+        review)
+          # Review phase is complete when PR is created (handled above)
           if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
             set_window_attention_state "$WIN" "clear"
-            # Keep unapproved planning tasks active while agent is still running.
+            # Keep review tasks active while agent is still running
             active_count=$((active_count + 1))
             return 0
           fi
+          # Agent exited but no PR - might need attention
           needs_attention="true"
-        fi
-      fi
+          ;;
+
+        executing)
+          # Legacy autonomous mode - no phase transitions
+          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+          ;;
+      esac
 
       if [[ "$current_agent" == "codex" ]] && codex_has_pending_approval "$WT_DIR"; then
         needs_attention="true"
