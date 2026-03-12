@@ -13,7 +13,8 @@ while [[ -L "$SOURCE" ]]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/shared/lib"
-export TOOLS_DIR="${TOOLS_DIR:-$SCRIPT_DIR/tools}"
+DEFAULT_TOOLS_DIR="$SCRIPT_DIR/tools"
+export TOOLS_DIR="$DEFAULT_TOOLS_DIR"
 
 # Colors for output
 CYAN=$'\033[0;36m'
@@ -86,6 +87,15 @@ ${GREEN}Commands:${NC}
                ${CYAN}--json${NC}                     Output stats as JSON
                ${CYAN}--limit${NC} N                  Number of recent reviews to show (default: 5)
 
+  ${CYAN}route${NC}     Recommend planner/coder/reviewer workflow
+             - Reads task text or a task file
+             - Chooses stage-specific models and execution depth
+             - Estimates expected success and per-stage cost
+             Usage:
+               ${CYAN}wavemill route "Create a route CLI command"${NC}
+               ${CYAN}wavemill route --file features/my-feature/selected-task.json${NC}
+               ${CYAN}wavemill route --json --file features/my-feature/selected-task.json${NC}
+
   ${CYAN}init${NC}      Initialize wavemill in current directory
              - Creates .wavemill-config.json
              - Optionally initializes project context (.wavemill/project-context.md)
@@ -140,6 +150,9 @@ ${GREEN}Examples:${NC}
 
   # Review a specific PR
   wavemill review 42
+
+  # Route a task packet to planner/coder/reviewer models
+  wavemill route --file features/my-feature/selected-task.json
 
 ${GREEN}Configuration:${NC}
   Settings are loaded in this order (later wins):
@@ -542,6 +555,25 @@ run_eval_export() {
   exec npx tsx "$export_tool" "$@"
 }
 
+run_route() {
+  local route_tool="$TOOLS_DIR/route-task.ts"
+  local tsx_loader
+  tsx_loader="$(npm root -g)/tsx/dist/loader.mjs"
+
+  if [[ ! -f "$route_tool" ]]; then
+    echo -e "${RED}Error:${NC} Route tool not found at: $route_tool" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$tsx_loader" ]]; then
+    echo -e "${RED}Error:${NC} tsx loader not found at: $tsx_loader" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Route...${NC}"
+  exec node --import "$tsx_loader" "$route_tool" "$@"
+}
+
 run_plan() {
   local plan_script="$LIB_DIR/wavemill-plan.sh"
 
@@ -633,6 +665,10 @@ case "${1:-}" in
   eval)
     shift
     run_eval "$@"
+    ;;
+  route)
+    shift
+    run_route "$@"
     ;;
   init)
     shift
