@@ -91,7 +91,7 @@ For records WITHOUT workflowCost:
   - If recovery succeeds: sets workflowCost and status to 'success'
   - If recovery fails: sets status to best-guess reason (e.g., 'no_sessions')
 
-Uses atomic write (temp file + rename) to prevent data corruption.`,
+Uses atomic write (temp file + rename) to prevent data corruption.
 Uses shared JSONL rewrite helpers and writes a .backup file before live changes.`,
   run({ args }) {
     const repoDir = args['repo-dir'] ? resolve(args['repo-dir']) : process.cwd();
