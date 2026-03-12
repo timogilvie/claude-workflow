@@ -141,6 +141,13 @@ export function appendEvalRecord(
 export function readEvalRecords(options?: QueryOptions): EvalRecord[] {
   const filePath = resolveEvalsFile(options?.dir);
 
+  return readEvalRecordsFromFile(filePath, options);
+}
+
+export function readEvalRecordsFromFile(
+  filePath: string,
+  options?: Omit<QueryOptions, 'dir'>,
+): EvalRecord[] {
   if (!existsSync(filePath)) {
     return [];
   }
