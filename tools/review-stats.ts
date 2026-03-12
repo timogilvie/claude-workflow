@@ -1,6 +1,5 @@
 #!/usr/bin/env -S npx tsx
-import { runTool } from '../shared/lib/tool-runner.ts';
-import { resolve } from 'node:path';
+import { runTool, resolveRepoDir } from '../shared/lib/tool-runner.ts';
 import { loadMetrics } from '../shared/lib/review-metrics.ts';
 import {
   computeStats,
@@ -24,7 +23,6 @@ runTool({
     issue: { type: 'string', description: 'Filter by Linear issue ID' },
     limit: { type: 'string', description: 'Number of recent reviews to show (default: 5)' },
     json: { type: 'boolean', description: 'Output as JSON' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'repoDir',
@@ -45,7 +43,7 @@ Filter Options:
   --branch PATTERN        Filter by branch name (substring)
   --issue ISSUE-ID        Filter by Linear issue ID`,
   run({ args, positional }) {
-    const repoDir = positional[0] ? resolve(positional[0]) : process.cwd();
+    const repoDir = resolveRepoDir(positional[0]);
     const limit = args.limit ? parseInt(String(args.limit), 10) : 5;
 
     // Load all metrics

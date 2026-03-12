@@ -59,11 +59,6 @@ runTool({
       description: 'Maximum number of PRs to fetch (default: 50)',
       default: '50'
     },
-    help: {
-      type: 'boolean',
-      short: 'h',
-      description: 'Show help message'
-    },
   },
   examples: [
     '# List open PRs (default)',

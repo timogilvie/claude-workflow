@@ -29,11 +29,6 @@ runTool({
       type: 'boolean',
       description: 'Disable parallel rule execution'
     },
-    help: {
-      type: 'boolean',
-      short: 'h',
-      description: 'Show help message'
-    },
   },
   positional: {
     name: 'issue-id',

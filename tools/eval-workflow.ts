@@ -16,7 +16,6 @@ runTool({
     agent: { type: 'string', description: 'Agent type (claude or codex)' },
     'solution-model': { type: 'string', description: 'Model used for solution' },
     'routing-decision': { type: 'string', description: 'Routing decision metadata (JSON)' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   examples: [
     'npx tsx tools/eval-workflow.ts',

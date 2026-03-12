@@ -226,7 +226,6 @@ runTool({
   description: 'Refresh a specific subsystem spec',
   options: {
     'no-confirm': { type: 'boolean', description: 'Skip diff confirmation (apply changes automatically)' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'subsystemId repoPath',

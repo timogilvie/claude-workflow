@@ -25,11 +25,6 @@ runTool({
       type: 'string',
       description: 'Repository directory (default: current directory)',
     },
-    help: {
-      type: 'boolean',
-      short: 'h',
-      description: 'Show help message',
-    },
   },
   positional: {
     name: 'prompt',

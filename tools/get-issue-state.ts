@@ -8,7 +8,6 @@ runTool({
   name: 'get-issue-state',
   description: 'Check if a Linear issue is completed or active',
   options: {
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'identifier',

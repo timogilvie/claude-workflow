@@ -86,7 +86,6 @@ runTool({
   name: 'init-labels',
   description: 'Initialize Linear labels for a team',
   options: {
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'teamKey',

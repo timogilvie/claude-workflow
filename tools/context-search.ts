@@ -85,7 +85,6 @@ runTool({
   options: {
     limit: { type: 'string', description: 'Max results to show (default: 10)' },
     section: { type: 'string', description: 'Search only in specific section' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'query repoPath',

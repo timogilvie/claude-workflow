@@ -8,7 +8,6 @@ runTool({
   options: {
     'dry-run': { type: 'boolean', description: 'Show proposed labels without applying them' },
     interactive: { type: 'boolean', short: 'i', description: 'Ask for confirmation before applying labels' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'issueId',

@@ -7,7 +7,6 @@ runTool({
   name: 'add-issue-label',
   description: 'Add a label to a Linear issue',
   options: {
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'identifier labelName',

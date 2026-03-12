@@ -145,7 +145,6 @@ runTool({
   options: {
     repo: { type: 'string', description: 'Review PR from different repository (OWNER/NAME)' },
     reviewers: { type: 'string', description: 'Comma-separated list of reviewers (general,security,performance,correctness,design) or "all"' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'prNumber',
