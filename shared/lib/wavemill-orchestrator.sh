@@ -303,7 +303,7 @@ Read specific sections on-demand as you plan and implement:
 
       INSTR_FILE="/tmp/${SESSION}-${ISSUE}-instructions.txt"
       build_autonomous_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
-        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" > "$INSTR_FILE"
+        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "" "" > "$INSTR_FILE"
 
       agent_launch_autonomous "$SESSION" "$WIN" "$INSTR_FILE" "$TASK_AGENT_CMD" "$TASK_MODEL"
     fi
