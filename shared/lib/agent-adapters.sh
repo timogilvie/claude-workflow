@@ -329,6 +329,407 @@ Start with Phase 1 now. Read the task context and begin researching.
 _WVML_PROMPT_
 }
 
+# Build the routing phase prompt.
+# This phase determines which models to use for planning/coding/review.
+#
+# Args (positional):
+#   $1 = title
+#   $2 = issue
+#   $3 = wt_dir
+#   $4 = branch
+#   $5 = base_branch
+#   $6 = issue_context
+#   $7 = status_file
+#   $8 = tools_dir
+#   $9 = slug
+# Prints: the complete prompt to stdout
+build_routing_prompt() {
+  local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
+  local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
+
+  cat <<_WVML_PROMPT_
+You are working on: $title ($issue)
+
+Repo worktree: $wt_dir
+Branch: $branch
+Base branch: $base_branch
+
+$issue_context
+---
+
+## Status Reporting
+Throughout your work, periodically update your status by running:
+  echo '<short description of what you are doing right now>' > $status_file
+Keep it under 50 chars. Update it at each major step.
+
+## Your Task: Workflow Routing
+
+You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
+
+1. Analyze the task requirements
+2. Determine the optimal model for each workflow phase:
+   - **Planner**: Model for creating the implementation plan
+   - **Coder**: Model for implementing the feature/fix
+   - **Reviewer**: Model for self-review and PR creation
+3. Recommend the workflow depth/mode for each phase
+
+### Steps
+
+1. Read the task context above and understand the requirements
+2. Run the routing tool to get recommendations:
+   npx tsx $tools_dir/route-task.ts --json --file features/$slug/selected-task.json --repo-dir $wt_dir
+
+3. Save the routing results to features/$slug/.routing-complete as JSON:
+   {
+     "planner": "claude-sonnet-4-5-20250929",
+     "coder": "claude-opus-4-6",
+     "reviewer": "claude-sonnet-4-5-20250929",
+     "planDepth": "light",
+     "codeDepth": "medium",
+     "reviewMode": "static"
+   }
+
+4. Report completion with a brief summary of the routing decisions
+
+### Success Criteria
+- [ ] Routing tool executed successfully
+- [ ] Results saved to features/$slug/.routing-complete
+- [ ] JSON is valid and contains all required fields
+
+### Important Notes
+- Use the routing tool's recommendations directly - don't override them
+- If the routing tool fails, use sensible defaults:
+  - planner: claude-sonnet-4-5-20250929
+  - coder: claude-opus-4-6
+  - reviewer: claude-sonnet-4-5-20250929
+  - planDepth: light
+  - codeDepth: medium
+  - reviewMode: static
+
+After completing the routing, your work is done. The next phase (planning) will be launched automatically.
+_WVML_PROMPT_
+}
+
+# Build the planning phase prompt.
+# This phase expands the task packet and creates an implementation plan.
+#
+# Args (positional):
+#   $1 = title
+#   $2 = issue
+#   $3 = wt_dir
+#   $4 = branch
+#   $5 = base_branch
+#   $6 = issue_context
+#   $7 = status_file
+#   $8 = tools_dir
+#   $9 = slug
+#   $10 = plan_depth
+# Prints: the complete prompt to stdout
+build_planning_prompt() {
+  local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
+  local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
+  local plan_depth="${10:-light}"
+
+  cat <<_WVML_PROMPT_
+You are working on: $title ($issue)
+
+Repo worktree: $wt_dir
+Branch: $branch
+Base branch: $base_branch
+
+$issue_context
+---
+
+## Status Reporting
+Throughout your work, periodically update your status by running:
+  echo '<short description of what you are doing right now>' > $status_file
+Keep it under 50 chars. Update it at each major step.
+
+## Your Task: Planning Phase
+
+You are in the **PLANNING PHASE** of a multi-phase workflow (recommended depth: $plan_depth).
+
+Task context is pre-seeded at: features/$slug/selected-task.json
+
+### Your Responsibilities
+
+1. **Expand task packet** (if needed):
+   - Check if a detailed task packet exists in the Linear issue description
+   - If not, expand it using: npx tsx $tools_dir/expand-issue.ts $issue --update
+   - This creates a comprehensive specification with requirements, constraints, and validation steps
+
+2. **Research the codebase**:
+   - Understand relevant code patterns and architecture
+   - Identify files that need to be modified
+   - Note any constraints or gotchas
+
+3. **Create implementation plan**:
+   - Break down the work into logical phases
+   - Identify dependencies and ordering constraints
+   - Consider edge cases and error handling
+   - Save the plan to: features/$slug/plan.md
+
+4. **Present plan to user**:
+   - Summarize the key points of your plan
+   - Explain your approach and any important decisions
+   - Wait for user approval
+
+5. **After approval**:
+   - Create the approval marker: features/$slug/.plan-approved
+   - Your work is done - the next phase (coding) will be launched automatically
+
+### Planning Depth: $plan_depth
+
+$(if [[ "$plan_depth" == "deep" ]]; then
+  echo "- Create a comprehensive, detailed plan with substeps"
+  echo "- Research multiple approaches and justify your choice"
+  echo "- Document all architectural decisions"
+  echo "- Include detailed test scenarios"
+else
+  echo "- Create a concise plan focused on the critical path"
+  echo "- Document key decisions and approach"
+  echo "- Include basic test coverage"
+fi)
+
+### Success Criteria
+- [ ] Task packet is complete (either existing or expanded)
+- [ ] Codebase research completed
+- [ ] Implementation plan created at features/$slug/plan.md
+- [ ] User has approved the plan
+- [ ] Approval marker created at features/$slug/.plan-approved
+
+### Important Notes
+- Do NOT implement anything in this phase - only plan
+- Do NOT run tests or make code changes
+- Focus on understanding and planning
+- If anything is unclear, ask the user for clarification before finalizing the plan
+
+After the user approves your plan, create the .plan-approved file and your work is done.
+_WVML_PROMPT_
+}
+
+# Build the coding phase prompt.
+# This phase executes the implementation plan.
+#
+# Args (positional):
+#   $1 = title
+#   $2 = issue
+#   $3 = wt_dir
+#   $4 = branch
+#   $5 = base_branch
+#   $6 = issue_context
+#   $7 = status_file
+#   $8 = tools_dir
+#   $9 = slug
+#   $10 = code_depth
+# Prints: the complete prompt to stdout
+build_coding_prompt() {
+  local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
+  local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
+  local code_depth="${10:-medium}"
+
+  cat <<_WVML_PROMPT_
+You are working on: $title ($issue)
+
+Repo worktree: $wt_dir
+Branch: $branch
+Base branch: $base_branch
+
+$issue_context
+---
+
+## Status Reporting
+Throughout your work, periodically update your status by running:
+  echo '<short description of what you are doing right now>' > $status_file
+Keep it under 50 chars. Update it at each major step.
+
+## Your Task: Coding Phase
+
+You are in the **CODING PHASE** of a multi-phase workflow (recommended depth: $code_depth).
+
+The implementation plan is ready at: features/$slug/plan.md
+
+### Your Responsibilities
+
+1. **Read the plan**:
+   - Review features/$slug/plan.md thoroughly
+   - Understand the phases and approach
+
+2. **Execute the plan**:
+   - Implement phase by phase as outlined in the plan
+   - Make minimal, high-quality changes
+   - Follow the architectural decisions from the plan
+
+3. **Run tests/lint between phases**:
+   - Pause if anything fails
+   - Fix issues before proceeding
+
+4. **Mark completion**:
+   - When implementation is complete and tests pass
+   - Create the marker: features/$slug/.coding-complete
+   - Your work is done - the next phase (review) will be launched automatically
+
+### Coding Depth: $code_depth
+
+$(if [[ "$code_depth" == "deep" ]]; then
+  echo "- Implement comprehensive error handling"
+  echo "- Add extensive test coverage"
+  echo "- Consider edge cases and performance"
+  echo "- Add detailed inline documentation"
+elif [[ "$code_depth" == "light" ]]; then
+  echo "- Focus on the happy path"
+  echo "- Basic error handling only"
+  echo "- Minimal test coverage"
+else
+  echo "- Implement core functionality with good error handling"
+  echo "- Add reasonable test coverage"
+  echo "- Handle common edge cases"
+fi)
+
+### Success Criteria
+- [ ] Implementation matches the plan
+- [ ] All tests pass
+- [ ] Linting passes
+- [ ] No regressions in existing functionality
+- [ ] Completion marker created at features/$slug/.coding-complete
+
+### Important Notes
+- Follow the plan - don't deviate without good reason
+- If you need to change the approach, document why in commit messages
+- Do NOT run self-review or create PR - that's the next phase
+- Do NOT ask questions - implement your best judgment and document decisions
+
+After implementation is complete and tests pass, create the .coding-complete file and your work is done.
+_WVML_PROMPT_
+}
+
+# Build the review phase prompt.
+# This phase runs self-review and creates the PR.
+#
+# Args (positional):
+#   $1 = title
+#   $2 = issue
+#   $3 = wt_dir
+#   $4 = branch
+#   $5 = base_branch
+#   $6 = issue_context
+#   $7 = status_file
+#   $8 = tools_dir
+#   $9 = reviewer_model (optional: recommended reviewer model)
+#   $10 = review_mode (optional: recommended review mode)
+# Prints: the complete prompt to stdout
+build_review_prompt() {
+  local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
+  local issue_context="$6" status_file="$7" tools_dir="$8"
+  local reviewer_model="${9:-}" review_mode="${10:-static}"
+
+  cat <<_WVML_PROMPT_
+You are working on: $title ($issue)
+
+Repo worktree: $wt_dir
+Branch: $branch
+Base branch: $base_branch
+
+$issue_context
+---
+
+## Status Reporting
+Throughout your work, periodically update your status by running:
+  echo '<short description of what you are doing right now>' > $status_file
+Keep it under 50 chars. Update it at each major step.
+
+## Your Task: Review & PR Creation
+
+You are in the **REVIEW PHASE** of a multi-phase workflow (mode: $review_mode).
+
+The implementation is complete. Your job is to review and create a PR.
+
+### Your Responsibilities
+
+1. **Run self-review tool** (up to 3 iterations):
+   IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
+   IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
+   npx tsx $tools_dir/review-changes.ts $base_branch --json
+   $(if [[ -n "$reviewer_model" ]]; then
+     echo "   NOTE: Workflow router recommends using $reviewer_model for review (mode: ${review_mode})"
+   fi)
+   - Exit code 0 = review passed → proceed to step 3
+   - Exit code 1 = issues found → fix blockers and re-run (step 2)
+   - Exit code 2 = error → log comprehensive diagnostics and proceed to step 3
+   The output is structured JSON with verdict, codeReviewFindings, and uiFindings.
+
+   When exit code 2 occurs, you MUST log the following diagnostics to help debug the failure:
+   \`\`\`
+   ⚠️  Review tool failed with exit code 2
+
+   Diagnostics:
+   - Command: npx tsx $tools_dir/review-changes.ts $base_branch --json
+   - Working directory: \$(pwd)
+   - Tool path: $tools_dir/review-changes.ts
+   - Tool exists: \$(ls -lh $tools_dir/review-changes.ts 2>&1 || echo "NOT FOUND")
+   - Git root: \$(git rev-parse --show-toplevel 2>&1)
+   - Current branch: \$(git rev-parse --abbrev-ref HEAD 2>&1)
+   - Base branch exists: \$(git rev-parse --verify $base_branch 2>&1 || echo "NOT FOUND")
+   - STDERR output: [paste the actual stderr from the failed command]
+
+   Proceeding to PR creation per instructions.
+   \`\`\`
+   This diagnostic information is CRITICAL for debugging recurring tool failures.
+
+2. **For each iteration where issues are found**:
+   - Read the review JSON output carefully
+   - Fix all blockers (severity: blocker) and straightforward warnings
+   - Make targeted fixes only — do not refactor unrelated code
+   - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
+   - Re-run the review tool (step 1)
+
+3. **Create a PR** using GitHub CLI with a descriptive title and body:
+   gh pr create --title "$issue: <concise summary>" --body "<PR body>"
+   The PR body MUST include:
+   - A "## Summary" section with 2-4 bullet points describing what changed and why
+   - A "## Changes" section listing the key files/modules modified
+   - A "## Test plan" section describing how the changes were validated
+   - A "## Self-review" section noting the review verdict and iterations run
+   Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
+
+4. **Link the PR to $issue**
+
+### Review Mode: $review_mode
+
+$(case "$review_mode" in
+  static)
+    echo "- Run static analysis only (fast)"
+    echo "- Fix critical issues found"
+    ;;
+  llm)
+    echo "- Run LLM-based review (comprehensive)"
+    echo "- Fix all blockers and critical warnings"
+    ;;
+  static+llm)
+    echo "- Run both static and LLM review (thorough)"
+    echo "- Fix all blockers and most warnings"
+    ;;
+  none)
+    echo "- Skip review tool, proceed directly to PR"
+    ;;
+esac)
+
+### Success Criteria
+- [ ] Self-review tool executed (unless mode is 'none')
+- [ ] Blockers fixed (if any were found)
+- [ ] PR created with descriptive summary
+- [ ] PR linked to $issue
+
+### Important Notes
+- Do not skip the review - it's a required step
+- Fix blockers before creating PR
+- Make targeted fixes only - no scope creep
+- If review tool fails with exit code 2, document the failure and proceed
+
+After creating the PR, your work is complete. Report the PR URL to the user.
+_WVML_PROMPT_
+}
+
 
 # ============================================================================
 # AGENT LAUNCH — AUTONOMOUS (SKIP) MODE
