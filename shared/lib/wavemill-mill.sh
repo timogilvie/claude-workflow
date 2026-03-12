@@ -194,14 +194,14 @@ init_state_ledger() {
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
-  local planner_model="${13:-}" reviewer_model="${14:-}" plan_depth="${15:-}" code_depth="${16:-}" review_mode="${17:-}"
+  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local tmp
   tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
   if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
      --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
      --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
      --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
-     --arg plannerModel "$planner_model" --arg reviewerModel "$reviewer_model" \
+     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
      --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
@@ -210,6 +210,7 @@ save_task_state() {
       | if $challengeRole != "" then .tasks[$issue].challengeRole = $challengeRole else . end
       | if $challengeModel != "" then .tasks[$issue].challengeModel = $challengeModel else . end
       | if $plannerModel != "" then .tasks[$issue].plannerModel = $plannerModel else . end
+      | if $coderModel != "" then .tasks[$issue].coderModel = $coderModel else . end
       | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
       | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
       | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
@@ -1421,26 +1422,10 @@ validate_agent_set() {
   fi
 }
 
-check_routing_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.routing-complete" ]] && return 0
-  return 1
-}
-
-check_plan_approved() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
-  return 1
-}
-
-check_coding_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
-  return 1
-}
+# Phase completion checks are defined above (lines 309-329)
+# - check_routing_complete()
+# - check_plan_approved()
+# - check_coding_complete()
 
 # Launch the planning phase in an existing tmux window
 launch_planning_phase() {
@@ -2481,17 +2466,28 @@ monitor_issue_state() {
             # Read routing results
             routing_file="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.routing-complete"
             if [[ -f "$routing_file" ]]; then
-              planner_model=$(jq -r '.planner // "claude-sonnet-4-5-20250929"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-5-20250929")
-              coder_model=$(jq -r '.coder // "claude-opus-4-6"' "$routing_file" 2>/dev/null || echo "claude-opus-4-6")
-              reviewer_model=$(jq -r '.reviewer // "claude-sonnet-4-5-20250929"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-5-20250929")
-              plan_depth=$(jq -r '.planDepth // "light"' "$routing_file" 2>/dev/null || echo "light")
-              code_depth=$(jq -r '.codeDepth // "medium"' "$routing_file" 2>/dev/null || echo "medium")
-              review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
+              # Validate JSON before parsing
+              if ! jq empty "$routing_file" 2>/dev/null; then
+                log_warn "$ISSUE → Routing file contains invalid JSON, using defaults"
+                planner_model="claude-sonnet-4-5-20250929"
+                coder_model="claude-opus-4-6"
+                reviewer_model="claude-sonnet-4-5-20250929"
+                plan_depth="light"
+                code_depth="medium"
+                review_mode="static"
+              else
+                planner_model=$(jq -r '.planner // "claude-sonnet-4-5-20250929"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-5-20250929")
+                coder_model=$(jq -r '.coder // "claude-opus-4-6"' "$routing_file" 2>/dev/null || echo "claude-opus-4-6")
+                reviewer_model=$(jq -r '.reviewer // "claude-sonnet-4-5-20250929"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-5-20250929")
+                plan_depth=$(jq -r '.planDepth // "light"' "$routing_file" 2>/dev/null || echo "light")
+                code_depth=$(jq -r '.codeDepth // "medium"' "$routing_file" 2>/dev/null || echo "medium")
+                review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
+              fi
 
               # Save routing results to state
               current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
               linear_issue=$(get_linear_issue_id "$ISSUE")
-              save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
+              save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
 
               # Transition to planning phase
               set_task_phase "$ISSUE" "planning"
@@ -2526,9 +2522,9 @@ monitor_issue_state() {
 
         planning)
           if check_plan_approved "$SLUG"; then
-            # Read routing results from state
-            coder_model=$(get_task_meta "$ISSUE" "plannerModel")  # Actually stored as coder in routing
-            [[ -z "$coder_model" ]] && coder_model=$(jq -r --arg i "$ISSUE" '.tasks[$i].coder // "claude-opus-4-6"' "$STATE_FILE" 2>/dev/null || echo "claude-opus-4-6")
+            # Read routing results from state (stored during routing → planning transition)
+            coder_model=$(get_task_meta "$ISSUE" "coderModel")
+            [[ -z "$coder_model" ]] && coder_model="claude-opus-4-6"
             code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
 
