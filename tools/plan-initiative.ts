@@ -118,7 +118,6 @@ runTool({
     research: { type: 'boolean', description: 'Run research phase before decomposition' },
     interactive: { type: 'boolean', description: 'Enable interactive mode (Claude can use tools, fetch URLs, ask questions)' },
     'no-interactive': { type: 'boolean', description: 'Disable interactive mode (force non-interactive)' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'subcommand',

@@ -9,7 +9,6 @@ runTool({
   description: 'Update a Linear issue description from a file',
   options: {
     file: { type: 'string', description: 'File containing the description' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'identifier',

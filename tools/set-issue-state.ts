@@ -7,7 +7,6 @@ runTool({
   name: 'set-issue-state',
   description: 'Set the state of a Linear issue',
   options: {
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'identifier stateName',

@@ -10,30 +10,14 @@
  * 5. Updates configVersion to current
  * 6. Creates backup before modifying
  *
- * Usage:
- *   npx tsx tools/sync-config.ts [--yes] [--dry-run]
- *
- * Options:
- *   --yes      Skip confirmation prompt
- *   --dry-run  Show changes without writing
+ * @module sync-config
  */
 
 import { writeFileSync, copyFileSync } from 'node:fs';
+import { runTool } from '../shared/lib/tool-runner.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 import { CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
 import { prepareConfigSync } from '../shared/lib/config-sync.ts';
-
-function showHelp(): void {
-  console.log(`Sync/upgrade .wavemill-config.json to the latest version.
-
-Usage:
-  npx tsx tools/sync-config.ts [--yes] [--dry-run]
-
-Options:
-  --yes      Skip confirmation prompt
-  --dry-run  Show changes without writing
-  -h, --help Show this help message`);
-}
 
 async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
   const repoDir = process.cwd();
@@ -115,16 +99,19 @@ async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
   }
 }
 
-// Main
-const args = process.argv.slice(2);
-if (args.includes('--help') || args.includes('-h')) {
-  showHelp();
-  process.exit(0);
-}
-const yes = args.includes('--yes');
-const dryRun = args.includes('--dry-run');
-
-syncConfig({ yes, dryRun }).catch(err => {
-  console.error(`Error: ${errorMessage(err)}`);
-  process.exit(1);
+runTool({
+  name: 'sync-config',
+  description: 'Sync/upgrade .wavemill-config.json to the latest version',
+  options: {
+    yes: { type: 'boolean', description: 'Skip confirmation prompt' },
+    'dry-run': { type: 'boolean', description: 'Show changes without writing' },
+  },
+  examples: [
+    'npx tsx tools/sync-config.ts',
+    'npx tsx tools/sync-config.ts --yes',
+    'npx tsx tools/sync-config.ts --dry-run',
+  ],
+  async run({ args }) {
+    await syncConfig({ yes: args.yes, dryRun: args['dry-run'] });
+  },
 });

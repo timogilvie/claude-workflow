@@ -128,7 +128,6 @@ runTool({
   options: {
     force: { type: 'boolean', short: 'f', description: 'Overwrite existing subsystem specs' },
     interactive: { type: 'boolean', short: 'i', description: 'Prompt for confirmation before creating specs' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'repoPath',

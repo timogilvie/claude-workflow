@@ -35,11 +35,6 @@ runTool({
       type: 'string',
       description: 'Path to evals.jsonl file (default: .wavemill/evals/evals.jsonl)',
     },
-    help: {
-      type: 'boolean',
-      short: 'h',
-      description: 'Show help message',
-    },
   },
   examples: [
     'npx tsx tools/deduplicate-evals.ts --dry-run',

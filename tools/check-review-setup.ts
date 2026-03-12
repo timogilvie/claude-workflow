@@ -9,11 +9,10 @@
  * - Network connectivity
  * - Simple test review
  *
- * Usage:
- *   npx tsx tools/check-review-setup.ts
- *   npm run check:review
+ * @module check-review-setup
  */
 
+import { runTool } from '../shared/lib/tool-runner.ts';
 import { checkClaudeAvailability } from '../shared/lib/llm-cli.ts';
 import { execShellCommand } from '../shared/lib/shell-utils.ts';
 
@@ -256,44 +255,45 @@ function printTroubleshooting(results: CheckResult[]): void {
   }
 }
 
-/**
- * Main health check
- */
-async function main(): Promise<void> {
-  console.log('🔍 Checking review tool setup...\n');
+runTool({
+  name: 'check-review-setup',
+  description: 'Health check for review tool setup',
+  options: {},
+  examples: [
+    'npx tsx tools/check-review-setup.ts',
+    'npm run check:review',
+  ],
+  async run() {
+    console.log('🔍 Checking review tool setup...\n');
 
-  const results: CheckResult[] = [];
+    const results: CheckResult[] = [];
 
-  // Run all checks
-  results.push(await checkGit());
-  results.push(await checkGitRepo());
-  results.push(await checkCLI());
-  results.push(await checkNetwork());
+    // Run all checks
+    results.push(await checkGit());
+    results.push(await checkGitRepo());
+    results.push(await checkCLI());
+    results.push(await checkNetwork());
 
-  // Print results
-  console.log();
-  results.forEach(printResult);
+    // Print results
+    console.log();
+    results.forEach(printResult);
 
-  // Print summary
-  const passed = results.filter(r => r.passed).length;
-  const total = results.length;
+    // Print summary
+    const passed = results.filter(r => r.passed).length;
+    const total = results.length;
 
-  console.log('\n' + '─'.repeat(60));
-  if (passed === total) {
-    console.log('\x1b[32m✓ All checks passed!\x1b[0m');
-    console.log('\nReview tool is ready to use.');
-    console.log('Run: npx tsx tools/review-changes.ts main');
-  } else {
-    console.log(`\x1b[31m✗ ${total - passed}/${total} checks failed\x1b[0m`);
-    printTroubleshooting(results);
-  }
-  console.log('─'.repeat(60));
+    console.log('\n' + '─'.repeat(60));
+    if (passed === total) {
+      console.log('\x1b[32m✓ All checks passed!\x1b[0m');
+      console.log('\nReview tool is ready to use.');
+      console.log('Run: npx tsx tools/review-changes.ts main');
+    } else {
+      console.log(`\x1b[31m✗ ${total - passed}/${total} checks failed\x1b[0m`);
+      printTroubleshooting(results);
+    }
+    console.log('─'.repeat(60));
 
-  // Exit with appropriate code
-  process.exitCode = passed === total ? 0 : 1;
-}
-
-main().catch((error) => {
-  console.error('\n❌ Health check failed:', error.message);
-  process.exitCode = 1;
+    // Exit with appropriate code
+    process.exitCode = passed === total ? 0 : 1;
+  },
 });

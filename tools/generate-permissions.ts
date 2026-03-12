@@ -25,11 +25,6 @@ runTool({
       type: 'boolean',
       description: 'Print to stdout instead of file',
     },
-    help: {
-      type: 'boolean',
-      short: 'h',
-      description: 'Show help message',
-    },
   },
   examples: [
     'npx tsx tools/generate-permissions.ts --agent claude',

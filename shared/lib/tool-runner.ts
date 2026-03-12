@@ -30,6 +30,7 @@
 
 import { parseArgs } from 'node:util';
 import type { ParseArgsConfig } from 'node:util';
+import { resolve } from 'node:path';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -273,6 +274,15 @@ export async function runTool<TOptions extends Record<string, OptionConfig>>(
   config: ToolConfig<TOptions>,
   argv: string[] = process.argv.slice(2)
 ): Promise<void> {
+  // Auto-inject --help/-h unless the tool already declares it
+  if (!('help' in config.options)) {
+    (config.options as Record<string, OptionConfig>).help = {
+      type: 'boolean',
+      short: 'h',
+      description: 'Show help',
+    };
+  }
+
   try {
     // Parse arguments
     const { args, positional } = parseArguments(config, argv);
@@ -331,4 +341,15 @@ export function runToolSync<TOptions extends Record<string, OptionConfig>>(
     console.error('Unexpected error:', error);
     process.exit(1);
   });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Resolve a repository directory path from a positional arg or default to cwd.
+ *
+ * Common pattern: `const repoDir = resolveRepoDir(positional[0]);`
+ */
+export function resolveRepoDir(pathOrUndefined?: string): string {
+  return resolve(pathOrUndefined || process.cwd());
 }

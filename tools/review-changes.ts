@@ -1,5 +1,5 @@
 #!/usr/bin/env -S npx tsx
-import { runTool } from '../shared/lib/tool-runner.ts';
+import { runTool, resolveRepoDir } from '../shared/lib/tool-runner.ts';
 import { resolve, join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { reviewChanges, type ReviewResult } from '../shared/lib/review-runner.ts';
@@ -158,7 +158,6 @@ runTool({
     'skip-ui': { type: 'boolean', description: 'Skip UI verification even if design context exists' },
     'ui-only': { type: 'boolean', description: 'Run only UI verification (skip code review)' },
     'since-commit': { type: 'string', description: 'Only review changes after this commit SHA (scopes review to task-specific changes)' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'targetBranch repoDir',
@@ -186,7 +185,7 @@ Output Modes:
   --verbose Debug info on stderr (composable with --json)`,
   async run({ args, positional }) {
     const targetBranch = positional[0] || 'main';
-    const repoDir = positional[1] ? resolve(positional[1]) : process.cwd();
+    const repoDir = resolveRepoDir(positional[1]);
     const verbose = !!args.verbose;
     const jsonOutput = !!args.json;
     const logFormat = parseLogFormat(args['log-format'] as string | undefined);

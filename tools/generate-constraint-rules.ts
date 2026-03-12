@@ -134,7 +134,6 @@ runTool({
     file: { type: 'string', description: 'Path to task packet or plan markdown file' },
     'task-packet': { type: 'string', description: 'Alias for --file' },
     force: { type: 'boolean', description: 'Overwrite existing constraint rules' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'issueId',

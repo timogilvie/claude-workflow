@@ -120,7 +120,6 @@ runTool({
   description: 'Drift detection for subsystem documentation',
   options: {
     json: { type: 'boolean', description: 'Output JSON format' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'repoPath',

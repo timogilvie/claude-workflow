@@ -14,7 +14,6 @@ runTool({
   name: 'list-backlog-json',
   description: 'Fetch Linear backlog and output as JSON',
   options: {
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   positional: {
     name: 'project',

@@ -209,7 +209,6 @@ runTool({
   description: 'Backfill workflow cost data into existing eval records',
   options: {
     'dry-run': { type: 'boolean', description: 'Show what would be done without making changes' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   examples: [
     'npx tsx tools/backfill-workflow-cost.ts',

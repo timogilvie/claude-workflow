@@ -13,7 +13,6 @@ runTool({
   options: {
     output: { type: 'string', description: 'Output file path' },
     stdout: { type: 'boolean', description: 'Print to stdout instead of file' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   examples: [
     '# Generate to default location',

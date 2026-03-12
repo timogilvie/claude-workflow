@@ -75,7 +75,6 @@ runTool({
     file: { type: 'string', short: 'f', description: 'Path to evals.jsonl file' },
     'repo-dir': { type: 'string', description: 'Repository directory for pricing config (default: current dir)' },
     'dry-run': { type: 'boolean', description: 'Preview changes without modifying the file' },
-    help: { type: 'boolean', short: 'h', description: 'Show help' },
   },
   examples: [
     'npx tsx tools/backfill-workflow-cost-status.ts --dry-run',
