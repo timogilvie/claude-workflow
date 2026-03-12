@@ -194,18 +194,26 @@ init_state_ledger() {
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
+  local planner_model="${13:-}" reviewer_model="${14:-}" plan_depth="${15:-}" code_depth="${16:-}" review_mode="${17:-}"
   local tmp
   tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
   if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
      --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
      --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
      --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
+     --arg plannerModel "$planner_model" --arg reviewerModel "$reviewer_model" \
+     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
       | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
       | if $challengePair != "" then .tasks[$issue].challengePairId = $challengePair else . end
       | if $challengeRole != "" then .tasks[$issue].challengeRole = $challengeRole else . end
-      | if $challengeModel != "" then .tasks[$issue].challengeModel = $challengeModel else . end' \
+      | if $challengeModel != "" then .tasks[$issue].challengeModel = $challengeModel else . end
+      | if $plannerModel != "" then .tasks[$issue].plannerModel = $plannerModel else . end
+      | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
+      | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
+      | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
+      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end' \
      "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
   else
@@ -1880,6 +1888,9 @@ launch_task() {
   # ── Per-task model routing ──────────────────────────────────────────
   local task_agent_cmd="$AGENT_CMD"
   local task_model=""
+  local planner_model="" planner_agent="" plan_depth=""
+  local reviewer_model="" reviewer_agent="" review_mode=""
+  local code_depth=""
   local challenge_enabled_for_launch="false"
   local challenge_pair=""
   local challenge_role
@@ -1899,32 +1910,64 @@ launch_task() {
     fi
     task_model="$FORCE_MODEL"
     task_agent_cmd="$(agent_resolve_from_model "$FORCE_MODEL")"
+    planner_model="$FORCE_MODEL"
+    planner_agent="$task_agent_cmd"
+    reviewer_model="$FORCE_MODEL"
+    reviewer_agent="$task_agent_cmd"
     log "  FORCE_MODEL: $task_agent_cmd --model $task_model"
   elif [[ "${AGENT_CMD_EXPLICIT:-}" != "true" ]]; then
-    local suggest_tool="$TOOLS_DIR/suggest-model.ts"
-    if [[ "${ROUTER_ENABLED:-true}" == "true" ]] && [[ -f "$suggest_tool" ]] && [[ -f "$packet_file" ]]; then
-      local suggestion
-      suggestion=$(_with_timeout "$API_TIMEOUT" npx tsx "$suggest_tool" --json --file "$packet_file" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
-      if [[ -n "$suggestion" ]]; then
-        local rec_model rec_agent rec_insufficient rec_confidence
-        rec_model=$(echo "$suggestion" | jq -r '.recommendedModel // empty' 2>/dev/null)
-        rec_agent=$(echo "$suggestion" | jq -r '.recommendedAgent // empty' 2>/dev/null)
-        rec_insufficient=$(echo "$suggestion" | jq -r '.insufficientData // false' 2>/dev/null)
-        rec_confidence=$(echo "$suggestion" | jq -r '.confidence // empty' 2>/dev/null)
+    local route_tool="$TOOLS_DIR/route-task.ts"
+    if [[ "${ROUTER_ENABLED:-true}" == "true" ]] && [[ -f "$route_tool" ]] && [[ -f "$packet_file" ]]; then
+      local route_json
+      route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$packet_file" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+      if [[ -n "$route_json" ]] && echo "$route_json" | jq -e '.planner' >/dev/null 2>&1; then
+        # Extract stage-specific models from workflow routing decision
+        planner_model=$(echo "$route_json" | jq -r '.planner // empty' 2>/dev/null)
+        task_model=$(echo "$route_json" | jq -r '.coder // empty' 2>/dev/null)
+        reviewer_model=$(echo "$route_json" | jq -r '.reviewer // empty' 2>/dev/null)
+        plan_depth=$(echo "$route_json" | jq -r '.planDepth // "light"' 2>/dev/null)
+        code_depth=$(echo "$route_json" | jq -r '.codeDepth // "medium"' 2>/dev/null)
+        review_mode=$(echo "$route_json" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
 
-        # Always use recommended agent if provided (even when data is insufficient)
-        # The router correctly maps default models to their agents
-        if [[ -n "$rec_agent" ]]; then
-          task_agent_cmd="$rec_agent"
+        # Resolve agents for each stage
+        if [[ -n "$planner_model" ]]; then
+          planner_agent="$(agent_resolve_from_model "$planner_model")"
+        fi
+        if [[ -n "$task_model" ]]; then
+          task_agent_cmd="$(agent_resolve_from_model "$task_model")"
+        fi
+        if [[ -n "$reviewer_model" ]]; then
+          reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
         fi
 
-        # Only gate model selection on data sufficiency
-        if [[ "$rec_insufficient" != "true" ]] && [[ -n "$rec_model" ]]; then
-          task_model="$rec_model"
-          log "  Router: $task_agent_cmd --model $task_model (confidence: $rec_confidence)"
-        elif [[ -n "$rec_model" ]]; then
-          # Insufficient data - using default model but still log it
-          log "  Router: $task_agent_cmd --model $rec_model (insufficient data, using default)"
+        log "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+      else
+        # Fallback to single-model routing if workflow routing failed
+        log "  Workflow routing unavailable, falling back to single-model routing"
+        local suggest_tool="$TOOLS_DIR/suggest-model.ts"
+        if [[ -f "$suggest_tool" ]]; then
+          local suggestion
+          suggestion=$(_with_timeout "$API_TIMEOUT" npx tsx "$suggest_tool" --json --file "$packet_file" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+          if [[ -n "$suggestion" ]]; then
+            local rec_model rec_agent rec_insufficient rec_confidence
+            rec_model=$(echo "$suggestion" | jq -r '.recommendedModel // empty' 2>/dev/null)
+            rec_agent=$(echo "$suggestion" | jq -r '.recommendedAgent // empty' 2>/dev/null)
+            rec_insufficient=$(echo "$suggestion" | jq -r '.insufficientData // false' 2>/dev/null)
+            rec_confidence=$(echo "$suggestion" | jq -r '.confidence // empty' 2>/dev/null)
+
+            # Always use recommended agent if provided
+            if [[ -n "$rec_agent" ]]; then
+              task_agent_cmd="$rec_agent"
+            fi
+
+            # Only gate model selection on data sufficiency
+            if [[ "$rec_insufficient" != "true" ]] && [[ -n "$rec_model" ]]; then
+              task_model="$rec_model"
+              log "  Router: $task_agent_cmd --model $task_model (confidence: $rec_confidence)"
+            elif [[ -n "$rec_model" ]]; then
+              log "  Router: $task_agent_cmd --model $rec_model (insufficient data, using default)"
+            fi
+          fi
         fi
       fi
     fi
@@ -1935,6 +1978,18 @@ launch_task() {
     log_warn "  Agent '$task_agent_cmd' not found, falling back to '$AGENT_CMD'"
     task_agent_cmd="$AGENT_CMD"
     task_model=""
+  fi
+
+  # Validate planner and reviewer agents if they were set
+  if [[ -n "$planner_agent" ]] && ! agent_validate "$planner_agent"; then
+    log_warn "  Planner agent '$planner_agent' not found, using coder agent"
+    planner_agent="$task_agent_cmd"
+    planner_model="$task_model"
+  fi
+  if [[ -n "$reviewer_agent" ]] && ! agent_validate "$reviewer_agent"; then
+    log_warn "  Reviewer agent '$reviewer_agent' not found, using coder agent"
+    reviewer_agent="$task_agent_cmd"
+    reviewer_model="$task_model"
   fi
 
   if [[ -z "${WAVEMILL_DISABLE_CHALLENGE:-}" ]] && should_update_linear_state "$issue" && (( remaining_slots >= 2 )); then
@@ -1958,8 +2013,8 @@ launch_task() {
       cp "/tmp/${SESSION}-${issue}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
       cp "/tmp/${SESSION}-${issue}-taskpacket-details.md" "/tmp/${SESSION}-${challenger_key}-taskpacket-details.md" 2>/dev/null || true
 
-      save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "true" "$challenge_pair" "primary" "$task_model"
-      save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model"
+      save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "true" "$challenge_pair" "primary" "$task_model" "$planner_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
+      save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "" "" "" "" ""
       should_launch_challenger="true"
       LAST_LAUNCHED_SLOTS=2
       log "  Challenge selected (${task_model} vs ${challenger_model})"
@@ -1971,7 +2026,7 @@ launch_task() {
   # Save to state ledger (after routing so agent is known)
   local initial_phase="executing"
   [[ "$PLANNING_MODE" == "interactive" ]] && initial_phase="planning"
-  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "$challenge_enabled_for_launch" "$challenge_pair" "${challenge_role:-}" "$task_model"
+  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "$challenge_enabled_for_launch" "$challenge_pair" "${challenge_role:-}" "$task_model" "$planner_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
   set_task_phase "$issue" "$initial_phase"
 
   # Verify agent was saved correctly (helps debug future issues)
@@ -2108,16 +2163,21 @@ Implement from the issue description plus direct codebase analysis."
     build_interactive_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
       "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" > "$prompt_file"
 
-    agent_launch_interactive "$SESSION" "$win" "$prompt_file" "$task_agent_cmd" "$task_model"
+    # Use planner model for planning phase if available, otherwise use coder model
+    local plan_agent="${planner_agent:-$task_agent_cmd}"
+    local plan_model="${planner_model:-$task_model}"
+    agent_launch_interactive "$SESSION" "$win" "$prompt_file" "$plan_agent" "$plan_model"
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" > "$instr_file"
+      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" > "$instr_file"
 
+    # Use coder model for implementation phase
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model"
   fi
 
   log "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
+  [[ -n "$planner_model" ]] && log "  ✓ Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
 
   if [[ "$should_launch_challenger" == "true" ]]; then
     WAVEMILL_DISABLE_CHALLENGE=1 launch_task "$challenger_key" "$challenger_slug" "$challenger_title" 0
