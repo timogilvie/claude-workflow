@@ -1,12 +1,16 @@
-// Shared eval module — LLM judge for scoring autonomous task execution.
-// Builds on the eval-schema (HOK-697) types and rubric.
+/**
+ * Shared eval module — LLM judge for scoring autonomous task execution.
+ *
+ * Builds on the eval-schema (HOK-697) types and rubric.
+ *
+ * @module eval
+ */
 
 import { readFile } from "node:fs/promises";
-import { readFileSync, existsSync } from "node:fs";
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
-import { getScoreBand } from './eval-schema.ts';
+import { dirname, join } from "node:path";
+import { getScoreBand, type EvalRecord, type InterventionRecord, type Outcomes, type RoutingDecision } from './eval-schema.ts';
 import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
 import { getEvalConfig } from './config.ts';
 import { loadPricingTable } from './workflow-cost.ts';
@@ -16,20 +20,116 @@ const __dirname = dirname(__filename);
 
 const DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
 const DEFAULT_PROVIDER = 'claude-cli';
-const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'];
+const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
 const SCHEMA_VERSION = '1.0.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 
+// ────────────────────────────────────────────────────────────────
+// Types
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Legacy intervention metadata (flat format).
+ */
+export interface InterventionMeta {
+  /** What the intervention was */
+  description: string;
+  /** Severity level */
+  severity?: 'minor' | 'major';
+}
+
+/**
+ * Input parameters for task evaluation.
+ */
+export interface EvalInput {
+  /** The original task description */
+  taskPrompt: string;
+  /** PR review text / diff summary */
+  prReviewOutput: string;
+  /** Optional intervention metadata (legacy format) */
+  interventions?: InterventionMeta[];
+  /** Structured intervention events (new format) */
+  interventionRecords?: InterventionRecord[];
+  /** Pre-formatted structured intervention text for the judge (overrides interventions list formatting) */
+  interventionText?: string;
+  /** Linear issue ID (e.g. HOK-698) */
+  issueId?: string;
+  /** Pull request URL */
+  prUrl?: string;
+  /** Wall-clock time for task completion */
+  timeSeconds?: number;
+  /** Routing decision metadata (HOK-775) */
+  routingDecision?: RoutingDecision;
+  /** Extra metadata to pass through */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Judge configuration.
+ */
+interface JudgeConfig {
+  model: string;
+  provider: typeof SUPPORTED_PROVIDERS[number];
+}
+
+/**
+ * Judge response structure.
+ */
+interface JudgeResponse {
+  score: number;
+  rationale: string;
+  interventionFlags: string[];
+}
+
+/**
+ * Token usage metadata.
+ */
+interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+/**
+ * LLM call result.
+ */
+interface LLMCallResult {
+  text: string;
+  usage?: TokenUsage;
+  costUsd?: number;
+}
+
+/**
+ * Pricing table entry.
+ */
+interface PricingEntry {
+  inputCostPerMTok: number;
+  outputCostPerMTok: number;
+}
+
+/**
+ * Options for evaluateTask (primarily for testing).
+ */
+export interface EvaluateTaskOptions {
+  /** Override for the LLM call function (testing) */
+  _callFn?: (prompt: string, model: string) => Promise<LLMCallResult>;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Internal Helpers
+// ────────────────────────────────────────────────────────────────
+
 /**
  * Load judge config from .wavemill-config.json.
+ *
  * Returns { model, provider } with defaults applied.
  * Validates provider against supported list.
  */
-function loadJudgeConfig() {
+function loadJudgeConfig(): JudgeConfig {
   const evalConfig = getEvalConfig();
   const configModel = evalConfig.judge?.model || DEFAULT_MODEL;
-  const configProvider = evalConfig.judge?.provider || DEFAULT_PROVIDER;
+  const configProvider = (evalConfig.judge?.provider || DEFAULT_PROVIDER) as typeof SUPPORTED_PROVIDERS[number];
 
   // Validate provider
   if (!SUPPORTED_PROVIDERS.includes(configProvider)) {
@@ -46,37 +146,23 @@ function loadJudgeConfig() {
   return { model: configModel, provider: configProvider };
 }
 
-/**
- * @typedef {Object} InterventionMeta
- * @property {string} description - What the intervention was
- * @property {string} [severity] - 'minor' | 'major'
- */
+let _promptTemplate: string | null = null;
 
-/**
- * @typedef {Object} EvalInput
- * @property {string} taskPrompt - The original task description
- * @property {string} prReviewOutput - PR review text / diff summary
- * @property {InterventionMeta[]} [interventions] - Optional intervention metadata (legacy format)
- * @property {import('./eval-schema.ts').InterventionRecord[]} [interventionRecords] - Structured intervention events (new format)
- * @property {string} [interventionText] - Pre-formatted structured intervention text for the judge (overrides interventions list formatting)
- * @property {string} [issueId] - Linear issue ID (e.g. HOK-698)
- * @property {string} [prUrl] - Pull request URL
- * @property {number} [timeSeconds] - Wall-clock time for task completion
- * @property {import('./eval-schema.ts').RoutingDecision} [routingDecision] - Routing decision metadata (HOK-775)
- * @property {Record<string, unknown>} [metadata] - Extra metadata to pass through
- */
-
-let _promptTemplate = null;
-
-async function loadPromptTemplate() {
+async function loadPromptTemplate(): Promise<string> {
   if (_promptTemplate) return _promptTemplate;
   const promptPath = join(__dirname, '../../tools/prompts/eval-judge.md');
   _promptTemplate = await readFile(promptPath, 'utf-8');
   return _promptTemplate;
 }
 
-function buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, interventionText) {
-  let finalInterventionText;
+function buildJudgePrompt(
+  template: string,
+  taskPrompt: string,
+  prReviewOutput: string,
+  interventions: InterventionMeta[],
+  interventionText?: string
+): string {
+  let finalInterventionText: string;
   if (interventionText) {
     // Use pre-formatted structured intervention text (from intervention-detector)
     finalInterventionText = interventionText;
@@ -95,14 +181,14 @@ function buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, i
     .replace('{{INTERVENTION_METADATA}}', finalInterventionText);
 }
 
-async function callClaudeWithRetry(prompt, model) {
+async function callClaudeWithRetry(prompt: string, model: string): Promise<LLMCallResult> {
   const result = await callClaude(prompt, {
     mode: 'sync',
     model,
-    timeout: TIMEOUT_MS, // 120000
+    timeout: TIMEOUT_MS,
     maxBuffer: 10 * 1024 * 1024,
     retry: true,
-    maxRetries: MAX_RETRIES, // 2
+    maxRetries: MAX_RETRIES,
   });
 
   return {
@@ -112,17 +198,16 @@ async function callClaudeWithRetry(prompt, model) {
   };
 }
 
-
 /**
  * Compute estimated cost in USD from token usage and a pricing table.
- * Returns undefined if the model is not found in the pricing table.
  *
- * @param {string} modelId
- * @param {{ inputTokens: number, outputTokens: number }} usage
- * @param {Record<string, { inputCostPerMTok: number, outputCostPerMTok: number }>} pricingTable
- * @returns {number | undefined}
+ * Returns undefined if the model is not found in the pricing table.
  */
-function computeCost(modelId, usage, pricingTable) {
+function computeCost(
+  modelId: string,
+  usage: TokenUsage | undefined,
+  pricingTable: Record<string, PricingEntry>
+): number | undefined {
   if (!usage || !pricingTable) return undefined;
 
   const pricing = pricingTable[modelId];
@@ -133,8 +218,12 @@ function computeCost(modelId, usage, pricingTable) {
   return inputCost + outputCost;
 }
 
-function parseJudgeResponse(raw) {
-  const parsed = parseJsonFromLLM(raw);
+function parseJudgeResponse(raw: string): JudgeResponse {
+  const parsed = parseJsonFromLLM(raw) as {
+    score?: number;
+    rationale?: string;
+    interventionFlags?: string[];
+  };
 
   if (typeof parsed.score !== 'number' || parsed.score < 0 || parsed.score > 1) {
     throw new Error(`Invalid score: ${parsed.score}. Must be a number between 0 and 1.`);
@@ -155,19 +244,36 @@ function parseJudgeResponse(raw) {
   };
 }
 
+// ────────────────────────────────────────────────────────────────
+// Public API
+// ────────────────────────────────────────────────────────────────
+
 /**
  * Evaluate a task execution using an LLM judge.
  *
  * Returns an EvalRecord (as defined in eval-schema.ts) populated with
  * the judge's score, rationale, and the derived score band.
  *
- * @param {EvalInput} input
- * @param {import('./eval-schema.ts').Outcomes} [outcomes] - Optional pre-collected outcome components
- * @param {Object} [options] - Optional configuration
- * @param {Function} [options._callFn] - Override for the LLM call function (testing)
- * @returns {Promise<import('./eval-schema.ts').EvalRecord>}
+ * @param input - Evaluation input parameters
+ * @param outcomes - Optional pre-collected outcome components
+ * @param options - Optional configuration (primarily for testing)
+ * @returns Promise resolving to an EvalRecord
+ *
+ * @example
+ * ```typescript
+ * const result = await evaluateTask({
+ *   taskPrompt: 'Add a loading spinner',
+ *   prReviewOutput: 'Clean diff, all tests pass',
+ *   issueId: 'HOK-123',
+ * });
+ * console.log(`Score: ${result.score}, Band: ${result.scoreBand}`);
+ * ```
  */
-export async function evaluateTask(input, outcomes = undefined, options = {}) {
+export async function evaluateTask(
+  input: EvalInput,
+  outcomes: Outcomes | undefined = undefined,
+  options: EvaluateTaskOptions = {}
+): Promise<EvalRecord> {
   const { _callFn } = options;
   const {
     taskPrompt,

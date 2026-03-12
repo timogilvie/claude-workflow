@@ -12,7 +12,7 @@
  */
 
 import * as readline from 'readline/promises';
-import { getIssue, getLabels, addLabelsToIssue, getOrCreateLabel } from './linear.js';
+import { getIssue, getLabels, addLabelsToIssue, getOrCreateLabel } from './linear.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types

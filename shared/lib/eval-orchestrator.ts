@@ -40,7 +40,7 @@ import {
   collectReworkOutcome,
   collectDeliveryOutcome,
 } from './outcome-collectors.ts';
-import { evaluateTask } from './eval.js';
+import { evaluateTask } from './eval.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import type { EvalRecord, Outcomes } from './eval-schema.ts';

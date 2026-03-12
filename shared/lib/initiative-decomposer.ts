@@ -19,7 +19,7 @@ import {
   createIssue,
   createIssueRelation,
   getOrCreateProjectMilestone,
-} from './linear.js';
+} from './linear.ts';
 import { parseJsonFromLLM } from './llm-cli.ts';
 import { toKebabCase } from './string-utils.js';
 import {
