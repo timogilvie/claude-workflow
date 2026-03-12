@@ -55,6 +55,7 @@ describe('wavemill CLI', () => {
       assert.match(out, /plan/);
       assert.match(out, /review/);
       assert.match(out, /eval/);
+      assert.match(out, /route/);
     });
 
     it('shows help with --help flag', () => {
@@ -92,6 +93,17 @@ describe('wavemill CLI', () => {
       assert.notEqual(result.status, 0);
       const output = result.stdout + result.stderr;
       assert.match(output, /tmux|required|not found/i);
+    });
+  });
+
+  describe('route command', () => {
+    it('routes inline task text', () => {
+      const out = run(['route', 'Create', 'a', 'route', 'CLI', 'command', 'with', 'JSON', 'output']);
+      assert.match(out, /Starting Wavemill Route/);
+      assert.match(out, /Planner:/);
+      assert.match(out, /Coder:/);
+      assert.match(out, /Reviewer:/);
+      assert.match(out, /Success:/);
     });
   });
 });
