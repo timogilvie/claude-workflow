@@ -124,10 +124,13 @@ agent_check_auth() {
 #   $6 = issue_context (description + details text)
 #   $7 = status_file  (path for status reporting)
 #   $8 = tools_dir    (path to wavemill tools/)
+#   $9 = reviewer_model (optional: recommended reviewer model)
+#   $10 = review_mode  (optional: recommended review mode)
 # Prints: the complete prompt to stdout
 build_autonomous_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8"
+  local reviewer_model="${9:-}" review_mode="${10:-}"
 
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
@@ -167,6 +170,9 @@ Process:
    IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
    IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
    npx tsx $tools_dir/review-changes.ts $base_branch --json
+   $(if [[ -n "$reviewer_model" ]]; then
+     echo "   NOTE: Workflow router recommends using $reviewer_model for review (mode: ${review_mode:-static})"
+   fi)
    - Exit code 0 = passed → proceed to step 5
    - Exit code 1 = issues found → fix blockers, commit fixes, re-run (up to 3 iterations)
    - Exit code 2 = error → log comprehensive diagnostics and proceed to step 5
