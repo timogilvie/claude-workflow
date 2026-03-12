@@ -30,6 +30,7 @@ for f in \
   rule-generator.test.ts \
   task-context-analyzer.test.ts \
   task-packet-validator.test.ts \
+  workflow-router.test.ts \
   workflow-cost.test.ts \
 ; do
   echo -n "  $f: "
