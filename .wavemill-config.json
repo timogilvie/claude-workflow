@@ -32,7 +32,10 @@
         "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-data-pipeline",
         "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-docs",
         "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-site",
-        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-token"
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-token",
+        "/Users/timothyogilvie/Dropbox/Hokusai/gtm-backend",
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-infrastructure",
+        "/Users/timothyogilvie/Dropbox/blue-horseshoe"
       ],
       "outputPath": ".wavemill/evals/aggregated-evals.jsonl"
     },
