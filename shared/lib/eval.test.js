@@ -291,4 +291,78 @@ describe('evaluateTask', () => {
     assert.equal(result.rationale, 'Decent execution with fenced response.');
     assert.equal(result.scoreBand, 'Assisted Success');
   });
+
+  it('includes promptArtifacts with eval-judge template metadata', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.9,
+      rationale: 'Excellent work.',
+      interventionFlags: [],
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Add authentication',
+        prReviewOutput: 'Auth implementation complete',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    // Should have promptArtifacts array
+    assert.ok(result.promptArtifacts, 'should have promptArtifacts field');
+    assert.ok(Array.isArray(result.promptArtifacts), 'promptArtifacts should be an array');
+    assert.equal(result.promptArtifacts.length, 1, 'should have one artifact (eval-judge)');
+
+    const artifact = result.promptArtifacts[0];
+    assert.equal(artifact.templateName, 'eval-judge', 'template name should be eval-judge');
+    assert.ok(artifact.templateHash, 'should have templateHash');
+    assert.equal(artifact.templateHash.length, 64, 'templateHash should be SHA-256 hex (64 chars)');
+    assert.ok(artifact.filledPromptHash, 'should have filledPromptHash');
+    assert.equal(artifact.filledPromptHash.length, 64, 'filledPromptHash should be SHA-256 hex (64 chars)');
+
+    // Template hash and filled prompt hash should be different
+    assert.notEqual(artifact.templateHash, artifact.filledPromptHash,
+      'template hash should differ from filled prompt hash');
+  });
+
+  it('promptArtifacts hashes are deterministic', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.95,
+      rationale: 'Great work.',
+      interventionFlags: [],
+    });
+
+    // Call evaluateTask twice with same inputs
+    const result1 = await evaluateTask(
+      {
+        taskPrompt: 'Same task prompt',
+        prReviewOutput: 'Same review output',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    const result2 = await evaluateTask(
+      {
+        taskPrompt: 'Same task prompt',
+        prReviewOutput: 'Same review output',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    // Template hashes should be identical (same template file)
+    assert.equal(
+      result1.promptArtifacts[0].templateHash,
+      result2.promptArtifacts[0].templateHash,
+      'template hash should be deterministic'
+    );
+
+    // Filled prompt hashes should be identical (same inputs)
+    assert.equal(
+      result1.promptArtifacts[0].filledPromptHash,
+      result2.promptArtifacts[0].filledPromptHash,
+      'filled prompt hash should be deterministic for same inputs'
+    );
+  });
 });
