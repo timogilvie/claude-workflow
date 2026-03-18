@@ -309,10 +309,56 @@ Options:
 | `.wavemill/eval-records.jsonl` | Persisted evaluation records |
 | `.wavemill-config.json` | Evaluation configuration and penalties |
 
+## Multi-Repo Aggregation
+
+### Overview
+Combine eval records from multiple repositories into a single JSONL file for cross-repo analysis and ML training using `wavemill eval aggregate`.
+
+### Quick Start
+```bash
+# Auto-discover all wavemill repos in /path/to/repos
+npx tsx tools/aggregate-evals.ts --discover /path/to/repos
+
+# Aggregate specific repos
+npx tsx tools/aggregate-evals.ts --repos ~/proj1 ~/proj2 ~/proj3
+
+# Use configured repos from .wavemill-config.json
+npx tsx tools/aggregate-evals.ts
+```
+
+### Features
+- **Auto-Discovery**: Recursively finds all `.wavemill/evals/evals.jsonl` files
+- **Hash-Based Deduplication**: Removes duplicate evaluations (same issue + PR + model)
+- **Cost Aggregation**: Summarizes workflow costs across all repos
+- **Sorting**: Orders records by timestamp for reproducibility
+- **Flexible Output**: JSONL format, one record per line
+
+### Configuration
+Add to `.wavemill-config.json`:
+```json
+{
+  "eval": {
+    "aggregation": {
+      "repos": ["/path/to/repo1", "/path/to/repo2"],
+      "outputPath": ".wavemill/evals/aggregated-evals.jsonl"
+    }
+  }
+}
+```
+
+### Use Cases
+1. **Cross-Repo Metrics** — Analyze success rates, score distributions across multiple projects
+2. **Cost Attribution** — Track total spend by project, model, and time period
+3. **ML Training** — Aggregated data for DSPy evaluation model training
+4. **Quality Trends** — Identify patterns in task difficulty and agent performance
+
+See [eval-aggregate](../commands/eval-aggregate.md) for detailed documentation.
+
 ## See Also
 
 - [Mill Mode](mill-mode.md) — autonomous parallel backlog processing (includes eval in post-completion hooks)
 - [Review Mode](review-mode.md) — LLM-powered code review (runs before eval)
 - [Feature Workflow](feature-workflow.md) — guided single-issue execution
 - [Expand Mode](expand-mode.md) — batch expand issues into task packets
+- [Eval Aggregation](../commands/eval-aggregate.md) — multi-repo eval log aggregation
 - [Troubleshooting](troubleshooting.md) — common issues and fixes
