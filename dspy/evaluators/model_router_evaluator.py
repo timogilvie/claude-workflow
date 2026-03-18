@@ -206,7 +206,7 @@ def evaluate_model_router(
 
     # Fill and call the candidate prompt
     inputs = build_router_input(example)
-    filled = candidate_prompt.format(**inputs)
+    filled = fill_template(candidate_prompt, inputs)
     output = call_llm(filled, model=model, use_api=use_api)
 
     # Parse and score
