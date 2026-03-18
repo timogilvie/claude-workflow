@@ -1422,10 +1422,27 @@ validate_agent_set() {
   fi
 }
 
-# Phase completion checks are defined above (lines 309-329)
-# - check_routing_complete()
-# - check_plan_approved()
-# - check_coding_complete()
+# Phase completion checks (must be defined inside monitor script)
+check_routing_complete() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.routing-complete" ]] && return 0
+  return 1
+}
+
+check_plan_approved() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
+  return 1
+}
+
+check_coding_complete() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
+  return 1
+}
 
 # Launch the planning phase in an existing tmux window
 launch_planning_phase() {
