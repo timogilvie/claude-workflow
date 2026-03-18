@@ -2220,6 +2220,9 @@ launch_task() {
   # Create tmux window
   local win="$issue-$slug"
   tmux new-window -t "$SESSION" -n "$win" -c "$wt_dir"
+  # Prevent window destruction if the pane shell exits (e.g. from a stray Ctrl-D).
+  # This lets _pane_is_dead_or_idle detect and respawn dead panes during phase transitions.
+  tmux set-option -t "$SESSION:$win" remain-on-exit on 2>/dev/null || true
   set_window_attention_state "$win" "clear"
 
   # Run setup command in new worktrees (e.g., npm install)
@@ -2669,6 +2672,30 @@ monitor_issue_state() {
       if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
         # Pane still running - agent is working, keep slot active
         active_count=$((active_count + 1))
+        return 0
+      fi
+
+      # Check if the pane is dead but window still exists (remain-on-exit).
+      # Respawn and re-launch the current phase instead of cleaning up.
+      if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
+        log "⚠ $ISSUE → Pane died during $current_phase phase, respawning..."
+        tmux respawn-pane -t "$SESSION:$WIN" 2>/dev/null || true
+        sleep 1
+        active_count=$((active_count + 1))
+        set_window_attention_state "$WIN" "needs-user"
+        return 0
+      fi
+
+      # Window itself is gone (shouldn't happen with remain-on-exit, but
+      # handle gracefully). Flag for attention instead of cleaning up
+      # immediately — the worktree and branch still have value.
+      if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qF "$WIN"; then
+        log "⚠ $ISSUE → Window disappeared during $current_phase phase, recreating..."
+        tmux new-window -t "$SESSION" -n "$WIN" -c "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true
+        tmux set-option -t "$SESSION:$WIN" remain-on-exit on 2>/dev/null || true
+        sleep 1
+        active_count=$((active_count + 1))
+        set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
 
