@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { getTeams, getLabels, createLabel } from '../shared/lib/linear.js';
+import { getTeams, getLabels, createLabel } from '../shared/lib/linear.ts';
 
 const LABEL_DEFINITIONS = {
   area: [

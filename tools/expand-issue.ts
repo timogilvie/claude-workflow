@@ -4,7 +4,7 @@ import '../shared/lib/env.js';
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getIssue, updateIssue } from '../shared/lib/linear.js';
+import { getIssue, updateIssue } from '../shared/lib/linear.ts';
 import {
   validateTaskPacket,
   DEFAULT_VALIDATION_CONFIG,
