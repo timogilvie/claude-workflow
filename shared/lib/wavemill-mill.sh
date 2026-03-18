@@ -1444,6 +1444,55 @@ check_coding_complete() {
   return 1
 }
 
+# Launch an agent in a tmux window, ensuring any previous agent is terminated first.
+# This is the single point of control for all phase launches — it guarantees:
+#   1. Previous agent is killed (Ctrl-C + wait for shell)
+#   2. Pane is verified ready before sending commands
+#   3. Agent is launched with the correct model (no LLM discretion)
+#
+# Args:
+#   $1 = tmux session:window target
+#   $2 = agent command (claude/codex)
+#   $3 = model ID
+#   $4 = path to prompt file
+_launch_agent_in_pane() {
+  local target="$1" agent_cmd="$2" model="$3" prompt_file="$4"
+  local session="${target%%:*}"
+  local window="${target#*:}"
+
+  # Terminate any running agent and wait for shell prompt
+  if ! agent_terminate_in_pane "$session" "$window" 15; then
+    log_warn "  Timed out waiting for previous agent to exit in $target"
+    # Force-kill and respawn as last resort
+    tmux send-keys -t "$target" C-c C-c 2>/dev/null || true
+    sleep 2
+  fi
+
+  # Verify pane is ready before sending commands
+  if ! agent_pane_is_ready "$session" "$window"; then
+    log_warn "  Pane $target not ready, waiting 5s..."
+    sleep 5
+    if ! agent_pane_is_ready "$session" "$window"; then
+      log_warn "  Pane $target still not ready, launching anyway"
+    fi
+  fi
+
+  # Launch agent with enforced model
+  local model_flag=""
+  [[ -n "$model" ]] && model_flag=" --model $model"
+  case "$agent_cmd" in
+    claude)
+      tmux send-keys -t "$target" "claude${model_flag} --dangerously-skip-permissions \"\$(cat '$prompt_file')\"" C-m
+      ;;
+    codex)
+      tmux send-keys -t "$target" "codex${model_flag} --dangerously-bypass-approvals-and-sandbox \"\$(cat '$prompt_file')\"" C-m
+      ;;
+    *)
+      tmux send-keys -t "$target" "$agent_cmd${model_flag} \"\$(cat '$prompt_file')\"" C-m
+      ;;
+  esac
+}
+
 # Launch the planning phase in an existing tmux window
 launch_planning_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
@@ -1464,23 +1513,8 @@ $issue_desc
   build_planning_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" > "$prompt_file"
 
-  # Send prompt to the same tmux window
   log "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
-  case "$planner_agent" in
-    claude)
-      local model_flag=""
-      [[ -n "$planner_model" ]] && model_flag=" --model $planner_model"
-      tmux send-keys -t "$SESSION:$win" "claude${model_flag} \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    codex)
-      local model_flag=""
-      [[ -n "$planner_model" ]] && model_flag=" --model $planner_model"
-      tmux send-keys -t "$SESSION:$win" "codex${model_flag} \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    *)
-      tmux send-keys -t "$SESSION:$win" "$planner_agent \"\$(cat '$prompt_file')\"" C-m
-      ;;
-  esac
+  _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file"
 }
 
 # Launch the coding phase in an existing tmux window
@@ -1503,23 +1537,8 @@ $issue_desc
   build_coding_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" > "$prompt_file"
 
-  # Send prompt to the same tmux window
   log "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
-  case "$coder_agent" in
-    claude)
-      local model_flag=""
-      [[ -n "$coder_model" ]] && model_flag=" --model $coder_model"
-      tmux send-keys -t "$SESSION:$win" "claude${model_flag} \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    codex)
-      local model_flag=""
-      [[ -n "$coder_model" ]] && model_flag=" --model $coder_model"
-      tmux send-keys -t "$SESSION:$win" "codex${model_flag} \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    *)
-      tmux send-keys -t "$SESSION:$win" "$coder_agent \"\$(cat '$prompt_file')\"" C-m
-      ;;
-  esac
+  _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file"
 }
 
 # Launch the review phase in an existing tmux window
@@ -1542,23 +1561,8 @@ $issue_desc
   build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" > "$prompt_file"
 
-  # Send prompt to the same tmux window
   log "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
-  case "$reviewer_agent" in
-    claude)
-      local model_flag=""
-      [[ -n "$reviewer_model" ]] && model_flag=" --model $reviewer_model"
-      tmux send-keys -t "$SESSION:$win" "claude${model_flag} \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    codex)
-      local model_flag=""
-      [[ -n "$reviewer_model" ]] && model_flag=" --model $reviewer_model"
-      tmux send-keys -t "$SESSION:$win" "codex${model_flag} \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    *)
-      tmux send-keys -t "$SESSION:$win" "$reviewer_agent \"\$(cat '$prompt_file')\"" C-m
-      ;;
-  esac
+  _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file"
 }
 
 set_window_attention_state() {
@@ -2309,14 +2313,32 @@ Implement from the issue description plus direct codebase analysis."
         selectedAt: (now | todate)
       }' > "$feature_dir/selected-task.json"
 
-    # Launch routing phase with Haiku (fast/cheap)
-    local prompt_file="/tmp/${SESSION}-${issue}-routing-prompt.txt"
-    build_routing_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" > "$prompt_file"
+    # Write routing results directly (no LLM needed — routing is deterministic)
+    # The routing tool was already called at lines above (route-task.ts).
+    # We just need to write the .routing-complete file and launch planning.
+    local routing_file="$feature_dir/.routing-complete"
+    jq -n \
+      --arg planner "${planner_model:-claude-sonnet-4-5-20250929}" \
+      --arg coder "${task_model:-claude-opus-4-6}" \
+      --arg reviewer "${reviewer_model:-claude-sonnet-4-5-20250929}" \
+      --arg planDepth "${plan_depth:-light}" \
+      --arg codeDepth "${code_depth:-medium}" \
+      --arg reviewMode "${review_mode:-static}" \
+      '{
+        planner: $planner,
+        coder: $coder,
+        reviewer: $reviewer,
+        planDepth: $planDepth,
+        codeDepth: $codeDepth,
+        reviewMode: $reviewMode
+      }' > "$routing_file"
 
-    local routing_agent="${AGENT_CMD}"
-    local routing_model="claude-haiku-4-5-20251001"
-    agent_launch_interactive "$SESSION" "$win" "$prompt_file" "$routing_agent" "$routing_model"
+    # Launch planning phase directly with the routed model (skip routing agent)
+    local resolved_planner_agent
+    resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")"
+    launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+      "${planner_model:-claude-sonnet-4-5-20250929}" "$resolved_planner_agent" "${plan_depth:-light}"
+    log "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-5-20250929}"
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
