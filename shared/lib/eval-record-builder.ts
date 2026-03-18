@@ -13,7 +13,15 @@
  * @module eval-record-builder
  */
 
-import type { EvalRecord, TaskContext, RepoContext } from './eval-schema.ts';
+import type {
+  EvalRecord,
+  TaskContext,
+  RepoContext,
+  StageOutcomes,
+  StageScore,
+  RoutingOutcome,
+  RoutingDecision,
+} from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
 
@@ -130,6 +138,75 @@ export function attachWorkflowCostMetadata(
   }
 }
 
+/**
+ * Attach stage outcomes to eval record (HOK-1004).
+ *
+ * Converts judge's stageScores (from metadata) into StageOutcomes format
+ * and builds the RoutingOutcome from routing decision + workflow results.
+ *
+ * @param record - Eval record to mutate
+ * @param stageScores - Judge's per-stage scores from metadata (optional)
+ */
+export function attachStageOutcomes(
+  record: EvalRecord,
+  stageScores?: Record<string, { score: number; rationale: string }>
+): void {
+  if (!stageScores || Object.keys(stageScores).length === 0) {
+    return;
+  }
+
+  const stageOutcomes: StageOutcomes = {};
+
+  // Convert judge stageScores to StageScore format
+  if (stageScores.expansion) {
+    stageOutcomes.expansion = {
+      score: stageScores.expansion.score,
+      rationale: stageScores.expansion.rationale,
+    };
+  }
+
+  if (stageScores.plan) {
+    stageOutcomes.plan = {
+      score: stageScores.plan.score,
+      rationale: stageScores.plan.rationale,
+    };
+  }
+
+  if (stageScores.implementation) {
+    stageOutcomes.implementation = {
+      score: stageScores.implementation.score,
+      rationale: stageScores.implementation.rationale,
+    };
+  }
+
+  if (stageScores.review) {
+    stageOutcomes.review = {
+      score: stageScores.review.score,
+      rationale: stageScores.review.rationale,
+    };
+  }
+
+  // Build RoutingOutcome from routing decision + workflow results
+  if (record.routingDecision) {
+    const rd = record.routingDecision;
+    stageOutcomes.routing = {
+      routingUsed: rd.candidates.length >= 2,
+      candidateCount: rd.candidates.length,
+      chosenModel: typeof rd.chosen === 'number'
+        ? rd.candidates[rd.chosen]?.modelId
+        : rd.chosen?.modelId,
+      scoreAchieved: record.score,
+      costUsd: record.workflowCost,
+      policyVersion: rd.decisionPolicyVersion,
+    };
+  }
+
+  // Only attach if we have at least one stage outcome
+  if (Object.keys(stageOutcomes).length > 0) {
+    record.stageOutcomes = stageOutcomes;
+  }
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
@@ -143,6 +220,7 @@ export function attachWorkflowCostMetadata(
  * - Task context analysis
  * - Repo context analysis
  * - Workflow cost computation
+ * - Stage outcomes (from judge's stageScores)
  *
  * @param record - Base eval record from evaluateTask()
  * @param metadata - All metadata to attach
@@ -154,4 +232,10 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
+
+  // Extract stageScores from record metadata (set by evaluateTask)
+  const stageScores = record.metadata?.stageScores as
+    | Record<string, { score: number; rationale: string }>
+    | undefined;
+  attachStageOutcomes(record, stageScores);
 }
