@@ -293,15 +293,77 @@ Read specific sections on-demand as you plan and implement:
           selectedAt: (now | todate)
         }' > "$TASK_JSON"
 
-      # Launch routing phase with default agent (Haiku is fast/cheap)
-      PROMPT_FILE="/tmp/${SESSION}-${ISSUE}-routing-prompt.txt"
-      build_routing_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
-        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "$SLUG" > "$PROMPT_FILE"
+      # Run workflow routing directly (no LLM needed — routing is deterministic)
+      ROUTE_TOOL="$TOOLS_DIR/route-task.ts"
+      PLANNER_MODEL="claude-sonnet-4-5-20250929"
+      CODER_MODEL="claude-opus-4-6"
+      REVIEWER_MODEL="claude-sonnet-4-5-20250929"
+      PLAN_DEPTH="light"
+      CODE_DEPTH="medium"
+      REVIEW_MODE="static"
 
-      # Use Haiku for routing (fast and cheap)
-      ROUTING_AGENT="${AGENT_CMD}"
-      ROUTING_MODEL="claude-haiku-4-5-20251001"
-      agent_launch_interactive "$SESSION" "$WIN" "$PROMPT_FILE" "$ROUTING_AGENT" "$ROUTING_MODEL"
+      if [[ -f "$ROUTE_TOOL" ]] && [[ -f "$TASK_JSON" ]]; then
+        ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$TASK_JSON" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+        if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
+          PLANNER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.planner // "claude-sonnet-4-5-20250929"' 2>/dev/null)
+          CODER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.coder // "claude-opus-4-6"' 2>/dev/null)
+          REVIEWER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.reviewer // "claude-sonnet-4-5-20250929"' 2>/dev/null)
+          PLAN_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.planDepth // "light"' 2>/dev/null)
+          CODE_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.codeDepth // "medium"' 2>/dev/null)
+          REVIEW_MODE=$(echo "$ROUTE_JSON" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
+          echo "  Workflow route: planner=$PLANNER_MODEL ($PLAN_DEPTH), coder=$CODER_MODEL ($CODE_DEPTH), reviewer=$REVIEWER_MODEL ($REVIEW_MODE)"
+        else
+          echo "  Workflow routing unavailable, using defaults"
+        fi
+      fi
+
+      # Write .routing-complete (consumed by monitor for phase transitions)
+      ROUTING_FILE="$FEATURE_DIR/.routing-complete"
+      jq -n \
+        --arg planner "$PLANNER_MODEL" \
+        --arg coder "$CODER_MODEL" \
+        --arg reviewer "$REVIEWER_MODEL" \
+        --arg planDepth "$PLAN_DEPTH" \
+        --arg codeDepth "$CODE_DEPTH" \
+        --arg reviewMode "$REVIEW_MODE" \
+        '{
+          planner: $planner,
+          coder: $coder,
+          reviewer: $reviewer,
+          planDepth: $planDepth,
+          codeDepth: $codeDepth,
+          reviewMode: $reviewMode
+        }' > "$ROUTING_FILE"
+
+      # Save routing metadata to state
+      if [[ -n "${WAVEMILL_STATE_FILE:-}" ]] && [[ -f "$WAVEMILL_STATE_FILE" ]]; then
+        _tmp=$(mktemp) || true
+        if [[ -n "${_tmp:-}" ]] && jq --arg issue "$ISSUE" \
+           --arg planner "$PLANNER_MODEL" --arg coder "$CODER_MODEL" --arg reviewer "$REVIEWER_MODEL" \
+           --arg planDepth "$PLAN_DEPTH" --arg codeDepth "$CODE_DEPTH" --arg reviewMode "$REVIEW_MODE" \
+           'if .tasks[$issue] then
+              .tasks[$issue].plannerModel = $planner |
+              .tasks[$issue].coderModel = $coder |
+              .tasks[$issue].reviewerModel = $reviewer |
+              .tasks[$issue].planDepth = $planDepth |
+              .tasks[$issue].codeDepth = $codeDepth |
+              .tasks[$issue].reviewMode = $reviewMode |
+              .tasks[$issue].phase = "planning"
+            else . end' \
+           "$WAVEMILL_STATE_FILE" > "$_tmp" 2>/dev/null; then
+          mv "$_tmp" "$WAVEMILL_STATE_FILE"
+        else
+          rm -f "${_tmp:-}"
+        fi
+      fi
+
+      # Launch planning phase directly with the routed planner model
+      PLANNER_AGENT="$(agent_resolve_from_model "$PLANNER_MODEL")"
+      PLANNING_PROMPT="/tmp/${SESSION}-${ISSUE}-planning-prompt.txt"
+      build_planning_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
+        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "$SLUG" "$PLAN_DEPTH" > "$PLANNING_PROMPT"
+      agent_launch_interactive "$SESSION" "$WIN" "$PLANNING_PROMPT" "$PLANNER_AGENT" "$PLANNER_MODEL"
+      echo "  ✓ Routing complete (direct), launched planning with $PLANNER_MODEL"
 
     else
       # ── Skip mode (autonomous) ────────────────────────────────────────

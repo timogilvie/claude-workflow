@@ -835,6 +835,105 @@ LAUNCHEOF
 }
 
 # ============================================================================
+# AGENT TERMINATION & PANE READINESS
+# ============================================================================
+
+# Terminate any running agent in a tmux pane and wait for the shell prompt.
+# Sends Ctrl-C (SIGINT), then polls until the pane shows a shell prompt.
+# This MUST be called before sending new commands to a pane that may have
+# a running agent — otherwise send-keys goes into the agent, not the shell.
+#
+# Args:
+#   $1 = tmux session name
+#   $2 = tmux window name
+#   $3 = max wait seconds (optional, default 15)
+# Returns: 0 if shell is ready, 1 if timed out
+agent_terminate_in_pane() {
+  local session="$1"
+  local window="$2"
+  local max_wait="${3:-15}"
+  local target="$session:$window"
+
+  # Send Ctrl-C to interrupt any running process
+  tmux send-keys -t "$target" C-c 2>/dev/null || true
+  sleep 0.5
+
+  # Send another Ctrl-C in case the first was caught by a handler
+  tmux send-keys -t "$target" C-c 2>/dev/null || true
+  sleep 0.5
+
+  # Wait for shell prompt to appear (pane not running a foreground process)
+  local elapsed=0
+  while (( elapsed < max_wait )); do
+    # Check if pane is dead (shell exited entirely)
+    if tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
+      # Pane is dead — respawn it so we have a shell
+      tmux respawn-pane -t "$target" 2>/dev/null || true
+      sleep 0.5
+      return 0
+    fi
+
+    # Check if there's a foreground process other than the shell
+    local pane_pid
+    pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
+    if [[ -n "$pane_pid" ]]; then
+      # Get child processes of the pane shell
+      local children
+      children=$(pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' ')
+      if [[ "$children" == "0" ]]; then
+        # No child processes — shell is at prompt
+        return 0
+      fi
+    fi
+
+    sleep 1
+    (( elapsed += 1 ))
+  done
+
+  # Last resort: send 'q' + Enter (some agents exit on 'q'), then Ctrl-C again
+  tmux send-keys -t "$target" "q" C-m 2>/dev/null || true
+  sleep 1
+  tmux send-keys -t "$target" C-c 2>/dev/null || true
+  sleep 1
+
+  # Final check
+  local pane_pid
+  pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
+  if [[ -n "$pane_pid" ]]; then
+    local children
+    children=$(pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$children" == "0" ]]; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# Check if a tmux pane is ready to receive shell commands.
+# Returns 0 if the pane's shell has no foreground child processes.
+#
+# Args:
+#   $1 = tmux session name
+#   $2 = tmux window name
+# Returns: 0 if ready, 1 if busy
+agent_pane_is_ready() {
+  local session="$1"
+  local window="$2"
+  local target="$session:$window"
+
+  local pane_pid
+  pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
+  if [[ -z "$pane_pid" ]]; then
+    return 1
+  fi
+
+  local children
+  children=$(pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' ')
+  [[ "$children" == "0" ]]
+}
+
+# ============================================================================
 # AGENT DISPLAY NAME
 # ============================================================================
 
