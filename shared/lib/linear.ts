@@ -184,10 +184,27 @@ export interface IssueCreateParams {
 
 /**
  * Input for updating an issue.
+ *
+ * Supported fields:
+ * - `stateId`: Update issue state
+ * - `labelIds`: Update issue labels (replaces existing)
+ * - `addedLabelIds`: Add labels without removing existing
+ * - `removedLabelIds`: Remove specific labels
+ * - `description`: Update issue description (plain text or markdown)
+ * - `title`: Update issue title
+ * - `priority`: Update priority (0-3)
+ * - `estimate`: Update point estimate
+ * - `assigneeId`: Update assignee
+ * - Other fields: See Linear GraphQL schema
  */
 export interface IssueUpdateInput {
   stateId?: string;
   labelIds?: string[];
+  description?: string;
+  title?: string;
+  priority?: number;
+  estimate?: number;
+  assigneeId?: string;
   [key: string]: unknown;
 }
 
@@ -650,9 +667,19 @@ export async function getIssueForLabeling(identifier: string): Promise<LinearIss
 /**
  * Update an issue.
  *
- * @param issueId - Issue ID
- * @param input - Update input
- * @returns Update result
+ * Supports all IssueUpdateInput fields including description, state, labels, etc.
+ *
+ * @param issueId - Issue ID (internal ID, not identifier like "HOK-123")
+ * @param input - Update input (see IssueUpdateInput for supported fields)
+ * @returns Update result with success flag and updated issue info
+ *
+ * @example
+ * ```typescript
+ * // Update description
+ * await updateIssue(issueId, { description: "New description" });
+ * // Update multiple fields
+ * await updateIssue(issueId, { title: "New title", priority: 2 });
+ * ```
  */
 export async function updateIssue(issueId: string, input: IssueUpdateInput): Promise<{ success: boolean; issue: LinearIssue }> {
   const data = await request(

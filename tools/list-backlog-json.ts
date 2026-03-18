@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import '../shared/lib/env.js';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { getBacklogForScoring } from '../shared/lib/linear.js';
+import { getBacklogForScoring } from '../shared/lib/linear.ts';
 
 // Hard process-level timeout
 const PROCESS_TIMEOUT_MS = 30_000;

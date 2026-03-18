@@ -2,7 +2,7 @@
 // Check if a Linear issue is in a completed state
 import '../shared/lib/env.js';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { getIssueCompletionState } from '../shared/lib/linear.js';
+import { getIssueCompletionState } from '../shared/lib/linear.ts';
 
 runTool({
   name: 'get-issue-state',
