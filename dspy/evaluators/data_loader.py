@@ -77,7 +77,7 @@ def maybe_aggregate(
     print(f"  Aggregating eval data from {discover_expanded}...")
     try:
         subprocess.run(cmd, cwd=repo_root, timeout=60, capture_output=True, text=True)
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+    except Exception as e:
         print(f"  Warning: Aggregation failed ({e}), using existing data")
 
 

@@ -71,4 +71,6 @@ def _call_api(prompt: str, model: str, timeout: int) -> str:
         max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
+    if not response.content or not hasattr(response.content[0], 'text'):
+        raise ValueError(f"Invalid API response structure: {response}")
     return response.content[0].text
