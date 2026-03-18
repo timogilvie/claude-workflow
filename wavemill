@@ -58,10 +58,12 @@ ${GREEN}Commands:${NC}
              - Invokes LLM-as-judge with structured rubric
              - Prints scored evaluation summary (0–1 scale)
              Subcommands:
-               ${CYAN}eval report${NC}  Aggregate eval statistics and trends
-                            --from, --to, --model, --limit, --json
-               ${CYAN}eval export${NC}  Export records for ML training
-                            --format csv|jsonl, --redact, --output FILE
+               ${CYAN}eval report${NC}     Aggregate eval statistics and trends
+                              --from, --to, --model, --limit, --json
+               ${CYAN}eval export${NC}     Export records for ML training
+                              --format csv|jsonl, --redact, --output FILE
+               ${CYAN}eval aggregate${NC}  Aggregate eval logs from multiple repos
+                              --discover, --repos, --output, --[no-]deduplicate-by-hash
 
   ${CYAN}review${NC}    Review a pull request with LLM analysis
              - Lists PRs for interactive selection with optional filtering
@@ -144,6 +146,9 @@ ${GREEN}Examples:${NC}
 
   # Export eval records for ML training
   wavemill eval export --format csv --redact -o dataset.csv
+
+  # Aggregate eval logs from multiple repositories
+  wavemill eval aggregate --discover ~/repos
 
   # Review a PR interactively
   wavemill review
@@ -516,6 +521,11 @@ run_eval() {
       run_eval_export "$@"
       return
       ;;
+    aggregate)
+      shift
+      run_eval_aggregate "$@"
+      return
+      ;;
   esac
 
   local eval_tool="$TOOLS_DIR/eval-workflow.ts"
@@ -553,6 +563,18 @@ run_eval_export() {
   fi
 
   exec npx tsx "$export_tool" "$@"
+}
+
+run_eval_aggregate() {
+  local aggregate_tool="$TOOLS_DIR/aggregate-evals.ts"
+
+  if [[ ! -f "$aggregate_tool" ]]; then
+    echo -e "${RED}Error:${NC} Eval aggregate tool not found at: $aggregate_tool" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Eval Aggregate...${NC}"
+  exec npx tsx "$aggregate_tool" "$@"
 }
 
 run_route() {

@@ -760,7 +760,7 @@ agent_launch_autonomous() {
   # Wrap agent command so exit status is visible and the shell survives
   case "$agent_cmd" in
     claude)
-      tmux send-keys -t "$session:$window" "cat '$instr_file' | claude${model_flag}; echo '[wavemill] Agent exited (\$?)'" C-m
+      tmux send-keys -t "$session:$window" "cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
       ;;
     codex)
       tmux send-keys -t "$session:$window" "codex exec${model_flag} --dangerously-bypass-approvals-and-sandbox - < '$instr_file'; echo '[wavemill] Agent exited (\$?)'" C-m
@@ -810,7 +810,7 @@ agent_launch_interactive() {
     claude)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-claude${model_flag} "\$(cat '$prompt_file')"
+claude${model_flag} --dangerously-skip-permissions "\$(cat '$prompt_file')"
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;

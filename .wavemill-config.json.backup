@@ -1,0 +1,91 @@
+{
+  "linear": {
+    "project": "wavemill"
+  },
+  "mill": {
+    "session": "wavemill",
+    "maxParallel": 3,
+    "pollSeconds": 10,
+    "baseBranch": "main",
+    "worktreeRoot": "worktrees",
+    "agentCmd": "codex",
+    "requireConfirm": false,
+    "planningMode": "interactive",
+    "maxRetries": 3,
+    "retryDelay": 2
+  },
+  "expand": {
+    "maxSelect": 3,
+    "maxDisplay": 9
+  },
+  "eval": {
+    "aggregation": {
+      "repos": [
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-auth-service",
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-data-pipeline",
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-docs",
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-site",
+        "/Users/timothyogilvie/Dropbox/Hokusai/hokusai-token"
+      ]
+    },
+    "judge": {
+      "model": "claude-sonnet-4-5-20250929",
+      "provider": "anthropic"
+    },
+    "pricing": {
+      "claude-opus-4-6": { "inputCostPerMTok": 15, "outputCostPerMTok": 75, "cacheWriteCostPerMTok": 18.75, "cacheReadCostPerMTok": 1.50 },
+      "claude-sonnet-4-5-20250929": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
+      "claude-haiku-4-5-20251001": { "inputCostPerMTok": 0.80, "outputCostPerMTok": 4, "cacheWriteCostPerMTok": 1.00, "cacheReadCostPerMTok": 0.08 },
+      "gpt-5.3-codex": { "inputCostPerMTok": 1.75, "outputCostPerMTok": 14, "cacheReadCostPerMTok": 0.44 },
+      "gpt-5.3-codex-spark": { "inputCostPerMTok": 1.75, "outputCostPerMTok": 14, "cacheReadCostPerMTok": 0.44 },
+      "gpt-5.4": { "inputCostPerMTok": 2.50, "outputCostPerMTok": 15, "cacheReadCostPerMTok": 0.25 }
+    }
+  },
+  "autoEval": true,
+  "review": {
+    "maxIterations": 3,
+    "enabled": true
+  },
+  "router": {
+    "agentMap": {
+      "claude-opus-4-6": "claude",
+      "claude-sonnet-4-5-20250929": "claude",
+      "claude-haiku-4-5-20251001": "claude",
+      "gpt-5.3-codex": "codex",
+      "gpt-5.3-codex-spark": "codex",
+      "gpt-5.4": "codex"
+    },
+    "llmProvider": "openai",
+    "llmModel": "gpt-4o-mini"
+  },
+  "permissions": {
+    "autoApprovePatterns": [
+      "find *",
+      "ls *",
+      "cat *",
+      "head *",
+      "tail *",
+      "wc *",
+      "git status*",
+      "git log*",
+      "git show*",
+      "git diff*",
+      "git branch --list*",
+      "git branch -l*",
+      "git worktree list*",
+      "gh pr view*",
+      "gh pr list*",
+      "gh pr status*",
+      "gh issue view*",
+      "gh issue list*",
+      "grep *",
+      "rg *",
+      "npm list*",
+      "npm ls*"
+    ],
+    "worktreeMode": {
+      "enabled": true,
+      "autoApproveReadOnly": true
+    }
+  }
+}
