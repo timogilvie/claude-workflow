@@ -127,7 +127,7 @@ else
       save_task_state remove_task_state set_task_phase get_task_phase
       find_pr_for_branch pr_state validate_pr_merge
       linear_set_state linear_is_completed
-      check_plan_approved
+      check_routing_complete check_plan_approved check_coding_complete
       fetch_candidates filter_active_issues
       launch_task is_task_packet
       cleanup_dashboard_pane
