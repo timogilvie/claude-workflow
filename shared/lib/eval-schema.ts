@@ -11,6 +11,8 @@
  * - **1.1.0**: Added `pricingSnapshot` field (HOK-858) to capture pricing
  *   table snapshot at time of evaluation, enabling cost normalization when
  *   pricing changes over time
+ * - **1.2.0**: Added `promptArtifacts` field (HOK-1003) to track prompt
+ *   template versions and hashes for GEPA training signal attribution
  *
  * @module eval-schema
  */
@@ -698,6 +700,26 @@ export interface EvalRecord {
 
   /** Routing decision metadata (required if training routing models) */
   routingDecision?: RoutingDecision;
+
+  /**
+   * Prompt artifacts used during workflow execution.
+   *
+   * Tracks which prompt template versions were used to enable attribution
+   * of performance to specific prompt artifacts. Essential for GEPA
+   * (Gradient-based Executable Prompt Adaptation) training.
+   *
+   * Each artifact captures:
+   * - Template name (e.g., "issue-writer", "eval-judge")
+   * - Template hash (SHA-256 of template file at time of use)
+   * - Filled prompt hash (SHA-256 of filled prompt sent to LLM)
+   *
+   * @since 1.2.0
+   */
+  promptArtifacts?: {
+    templateName: string;
+    templateHash: string;
+    filledPromptHash: string;
+  }[];
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;
