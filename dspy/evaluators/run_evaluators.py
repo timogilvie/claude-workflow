@@ -123,6 +123,10 @@ Examples:
     )
     args = parser.parse_args()
 
+    # Validate that --prompt-file requires --evaluator
+    if args.prompt_file and not args.evaluator:
+        parser.error("--prompt-file requires --evaluator to be specified")
+
     evals_path = Path(args.evals) if args.evals else default_evals_path()
 
     print("=" * 60)
