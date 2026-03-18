@@ -14,6 +14,7 @@ import { getScoreBand, type EvalRecord, type InterventionRecord, type Outcomes, 
 import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
 import { getEvalConfig } from './config.ts';
 import { loadPricingTable } from './workflow-cost.ts';
+import { createPromptArtifact, type PromptArtifact } from './prompt-hash.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -305,6 +306,10 @@ export async function evaluateTask(
   const template = await loadPromptTemplate();
   const prompt = buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, interventionText);
 
+  // Capture prompt artifact for GEPA training (HOK-1003)
+  const promptTemplatePath = join(__dirname, '../../tools/prompts/eval-judge.md');
+  const promptArtifact = createPromptArtifact(promptTemplatePath, prompt);
+
   const callFn = _callFn || callClaudeWithRetry;
 
   // Call Claude (with retry built-in)
@@ -345,6 +350,7 @@ export async function evaluateTask(
     ...(estimatedCost !== undefined && { estimatedCost }),
     ...(outcomes && { outcomes }),
     ...(routingDecision && { routingDecision }),
+    promptArtifacts: [promptArtifact],
     metadata: { ...metadata, interventionFlags },
   };
 }
