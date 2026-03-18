@@ -22,10 +22,10 @@ from template_utils import fill_template
 # Score band mapping for comparing predicted vs ground truth bands
 SCORE_BAND_MAP = {
     "Full Success": (0.95, 1.0),
-    "Minor Feedback": (0.8, 0.94),
-    "Assisted Success": (0.5, 0.79),
-    "Partial": (0.2, 0.49),
-    "Failure": (0.0, 0.19),
+    "Minor Feedback": (0.8, 0.95),
+    "Assisted Success": (0.5, 0.8),
+    "Partial": (0.2, 0.5),
+    "Failure": (0.0, 0.2),
 }
 
 
