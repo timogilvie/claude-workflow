@@ -504,7 +504,7 @@ fi)
 - Focus on understanding and planning
 - If anything is unclear, ask the user for clarification before finalizing the plan
 
-After the user approves your plan, create the .plan-approved file and your work is done.
+After the user approves your plan, create the .plan-approved file, then exit by running the /exit command. The next phase will be launched automatically.
 _WVML_PROMPT_
 }
 
@@ -599,7 +599,7 @@ fi)
 - Do NOT run self-review or create PR - that's the next phase
 - Do NOT ask questions - implement your best judgment and document decisions
 
-After implementation is complete and tests pass, create the .coding-complete file and your work is done.
+After implementation is complete and tests pass, create the .coding-complete file, then exit by running the /exit command. The next phase will be launched automatically.
 _WVML_PROMPT_
 }
 
@@ -726,7 +726,7 @@ esac)
 - Make targeted fixes only - no scope creep
 - If review tool fails with exit code 2, document the failure and proceed
 
-After creating the PR, your work is complete. Report the PR URL to the user.
+After creating the PR, report the PR URL to the user, then exit by running the /exit command.
 _WVML_PROMPT_
 }
 
@@ -838,8 +838,40 @@ LAUNCHEOF
 # AGENT TERMINATION & PANE READINESS
 # ============================================================================
 
+# Check if a tmux pane is dead or has an idle shell (no foreground children).
+# If the pane is dead, it is respawned so a fresh shell is available.
+#
+# Args:
+#   $1 = tmux target (session:window)
+# Returns: 0 if pane is idle/ready, 1 if busy
+_pane_is_dead_or_idle() {
+  local target="$1"
+
+  # Check if pane is dead (shell exited entirely)
+  if tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
+    tmux respawn-pane -t "$target" 2>/dev/null || true
+    sleep 0.5
+    return 0
+  fi
+
+  # Check if shell has no foreground children
+  local pane_pid
+  pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
+  if [[ -n "$pane_pid" ]]; then
+    local children
+    children=$(pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' ')
+    [[ "$children" == "0" ]] && return 0
+  fi
+
+  return 1
+}
+
 # Terminate any running agent in a tmux pane and wait for the shell prompt.
-# Sends Ctrl-C (SIGINT), then polls until the pane shows a shell prompt.
+# Uses a graduated escalation strategy:
+#   1. Ctrl-C (interrupt generation) → /exit + Ctrl-D (polite exit)
+#   2. Poll for process to exit
+#   3. Ctrl-C×2 → Ctrl-\ (SIGQUIT) → pkill children
+#
 # This MUST be called before sending new commands to a pane that may have
 # a running agent — otherwise send-keys goes into the agent, not the shell.
 #
@@ -854,60 +886,64 @@ agent_terminate_in_pane() {
   local max_wait="${3:-15}"
   local target="$session:$window"
 
-  # Send Ctrl-C to interrupt any running process
+  # Quick check — maybe nothing is running
+  if _pane_is_dead_or_idle "$target"; then
+    return 0
+  fi
+
+  # --- Phase 1: Polite exit ---
+  # Ctrl-C interrupts any in-progress generation in Claude Code
   tmux send-keys -t "$target" C-c 2>/dev/null || true
+  sleep 0.3
+
+  # /exit is the canonical way to exit Claude Code
+  tmux send-keys -t "$target" "/exit" C-m 2>/dev/null || true
   sleep 0.5
 
-  # Send another Ctrl-C in case the first was caught by a handler
-  tmux send-keys -t "$target" C-c 2>/dev/null || true
-  sleep 0.5
+  # Ctrl-D (EOF) exits Codex and most other CLIs
+  tmux send-keys -t "$target" C-d 2>/dev/null || true
+  sleep 0.3
 
-  # Wait for shell prompt to appear (pane not running a foreground process)
+  # --- Phase 2: Poll for exit ---
   local elapsed=0
   while (( elapsed < max_wait )); do
-    # Check if pane is dead (shell exited entirely)
-    if tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
-      # Pane is dead — respawn it so we have a shell
-      tmux respawn-pane -t "$target" 2>/dev/null || true
-      sleep 0.5
+    if _pane_is_dead_or_idle "$target"; then
       return 0
     fi
-
-    # Check if there's a foreground process other than the shell
-    local pane_pid
-    pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
-    if [[ -n "$pane_pid" ]]; then
-      # Get child processes of the pane shell
-      local children
-      children=$(pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' ')
-      if [[ "$children" == "0" ]]; then
-        # No child processes — shell is at prompt
-        return 0
-      fi
-    fi
-
     sleep 1
     (( elapsed += 1 ))
   done
 
-  # Last resort: send 'q' + Enter (some agents exit on 'q'), then Ctrl-C again
-  tmux send-keys -t "$target" "q" C-m 2>/dev/null || true
-  sleep 1
-  tmux send-keys -t "$target" C-c 2>/dev/null || true
+  # --- Phase 3: Escalate ---
+  # Double Ctrl-C (rapid) — some CLIs exit on repeated interrupt
+  tmux send-keys -t "$target" C-c C-c 2>/dev/null || true
   sleep 1
 
-  # Final check
+  if _pane_is_dead_or_idle "$target"; then
+    return 0
+  fi
+
+  # Ctrl-\ sends SIGQUIT to the foreground process group
+  tmux send-keys -t "$target" C-\\ 2>/dev/null || true
+  sleep 1
+
+  if _pane_is_dead_or_idle "$target"; then
+    return 0
+  fi
+
+  # Last resort: directly kill child processes of the pane shell
   local pane_pid
   pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
   if [[ -n "$pane_pid" ]]; then
-    local children
-    children=$(pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$children" == "0" ]]; then
-      return 0
+    pkill -TERM -P "$pane_pid" 2>/dev/null || true
+    sleep 1
+    if ! _pane_is_dead_or_idle "$target"; then
+      pkill -KILL -P "$pane_pid" 2>/dev/null || true
+      sleep 0.5
     fi
   fi
 
-  return 1
+  _pane_is_dead_or_idle "$target"
 }
 
 # Check if a tmux pane is ready to receive shell commands.
