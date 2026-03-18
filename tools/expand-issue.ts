@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { getIssue, updateIssue } from '../shared/lib/linear.js';
+import { getIssue, updateIssue } from '../shared/lib/linear.ts';
 import {
   validateTaskPacket,
   DEFAULT_VALIDATION_CONFIG,
