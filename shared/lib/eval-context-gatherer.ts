@@ -18,6 +18,7 @@ import path from 'node:path';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadMetrics } from './review-metrics.ts';
+import type { RoutingDecision, RoutingCandidate } from './eval-schema.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,6 +43,8 @@ export interface EvalContext {
   planContent?: string;
   /** Self-review summary (if available) */
   selfReviewSummary?: string;
+  /** Routing decision loaded from .routing-complete (if available) */
+  routingDecision?: RoutingDecision;
 }
 
 /** Input parameters for gathering context. */
@@ -242,6 +245,96 @@ export function autoDetectContext(repoDir: string): {
   }
 
   return { issueId, prNumber, branch, prUrl };
+}
+
+// ────────────────────────────────────────────────────────────────
+// Routing Decision Loading (HOK-1002)
+// ────────────────────────────────────────────────────────────────
+
+/** Raw shape of the .routing-complete file. */
+interface RoutingCompleteData {
+  planner: string;
+  coder: string;
+  reviewer: string;
+  planDepth?: string;
+  codeDepth?: string;
+  reviewMode?: string;
+}
+
+/**
+ * Convert raw routing data to the RoutingDecision schema.
+ *
+ * Builds candidates from unique models, picks the coder as the chosen model
+ * (primary executor), and includes depth/mode in the rationale.
+ */
+export function convertToRoutingDecision(data: RoutingCompleteData): RoutingDecision {
+  // Build unique candidates from all models used
+  const modelSet = new Map<string, RoutingCandidate>();
+  for (const modelId of [data.planner, data.coder, data.reviewer]) {
+    if (modelId && !modelSet.has(modelId)) {
+      modelSet.set(modelId, {
+        agentType: 'claude',
+        modelId,
+      });
+    }
+  }
+  const candidates = Array.from(modelSet.values());
+
+  // Chosen is the coder model (primary executor)
+  const chosen = candidates.find((c) => c.modelId === data.coder) || candidates[0];
+
+  // Build rationale from depth/mode settings
+  const parts: string[] = [];
+  if (data.planDepth) parts.push(`planDepth=${data.planDepth}`);
+  if (data.codeDepth) parts.push(`codeDepth=${data.codeDepth}`);
+  if (data.reviewMode) parts.push(`reviewMode=${data.reviewMode}`);
+  const decisionRationale = parts.length > 0
+    ? `Routing: planner=${data.planner}, coder=${data.coder}, reviewer=${data.reviewer}; ${parts.join(', ')}`
+    : `Routing: planner=${data.planner}, coder=${data.coder}, reviewer=${data.reviewer}`;
+
+  return {
+    candidates,
+    chosen,
+    decisionPolicyVersion: 'baseline',
+    decisionRationale,
+  };
+}
+
+/**
+ * Load routing decision from .routing-complete file in the feature directory.
+ *
+ * Returns null if the file is missing, malformed, or lacks required fields.
+ */
+export function fetchRoutingDecision(
+  repoDir: string,
+  slug: string
+): RoutingDecision | null {
+  const featureDirs = ['features', 'bugs'];
+
+  for (const dir of featureDirs) {
+    const routingPath = path.join(repoDir, dir, slug, '.routing-complete');
+    if (!existsSync(routingPath)) continue;
+
+    try {
+      const raw = readFileSync(routingPath, 'utf-8');
+      const data = JSON.parse(raw) as Record<string, unknown>;
+
+      // Validate required fields
+      if (
+        typeof data.planner !== 'string' ||
+        typeof data.coder !== 'string' ||
+        typeof data.reviewer !== 'string'
+      ) {
+        return null;
+      }
+
+      return convertToRoutingDecision(data as unknown as RoutingCompleteData);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -451,6 +544,7 @@ export function gatherStageArtifacts(
   taskPacket?: string;
   planContent?: string;
   selfReviewSummary?: string;
+  routingDecision?: RoutingDecision;
 } {
   // Derive feature slug
   const slug = deriveFeatureSlug(branch, issueId, repoDir);
@@ -462,10 +556,12 @@ export function gatherStageArtifacts(
   const taskPacket = loadTaskPacket(repoDir, slug);
   const planContent = loadPlan(repoDir, slug);
   const selfReviewSummary = loadSelfReviewSummary(repoDir, branch);
+  const routingDecision = fetchRoutingDecision(repoDir, slug) ?? undefined;
 
   return {
     taskPacket,
     planContent,
     selfReviewSummary,
+    routingDecision,
   };
 }

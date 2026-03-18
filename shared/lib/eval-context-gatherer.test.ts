@@ -3,12 +3,17 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as nodePath from 'node:path';
 import * as shellUtils from './shell-utils.ts';
 import {
   fetchIssueData,
   formatIssueAsPrompt,
   fetchPrContext,
   gatherEvalContext,
+  convertToRoutingDecision,
+  fetchRoutingDecision,
 } from './eval-context-gatherer.ts';
 
 // Mock shell-utils
@@ -227,6 +232,153 @@ describe('eval-context-gatherer', () => {
       expect(result.prDiff).toBe('(PR diff unavailable)');
       expect(result.prUrl).toBe('');
       expect(result.issueData).toBeNull();
+    });
+  });
+
+  describe('convertToRoutingDecision', () => {
+    it('should build candidates from unique models', () => {
+      const result = convertToRoutingDecision({
+        planner: 'claude-sonnet-4-5-20250929',
+        coder: 'claude-opus-4-6',
+        reviewer: 'claude-haiku-4-5-20251001',
+      });
+
+      expect(result.candidates).toHaveLength(3);
+      expect(result.candidates.map((c) => c.modelId)).toEqual([
+        'claude-sonnet-4-5-20250929',
+        'claude-opus-4-6',
+        'claude-haiku-4-5-20251001',
+      ]);
+    });
+
+    it('should deduplicate models when planner and coder are the same', () => {
+      const result = convertToRoutingDecision({
+        planner: 'claude-sonnet-4-5-20250929',
+        coder: 'claude-sonnet-4-5-20250929',
+        reviewer: 'claude-haiku-4-5-20251001',
+      });
+
+      expect(result.candidates).toHaveLength(2);
+      expect(result.candidates.map((c) => c.modelId)).toEqual([
+        'claude-sonnet-4-5-20250929',
+        'claude-haiku-4-5-20251001',
+      ]);
+    });
+
+    it('should set chosen to coder model', () => {
+      const result = convertToRoutingDecision({
+        planner: 'claude-sonnet-4-5-20250929',
+        coder: 'claude-opus-4-6',
+        reviewer: 'claude-haiku-4-5-20251001',
+      });
+
+      expect(result.chosen).toEqual({
+        agentType: 'claude',
+        modelId: 'claude-opus-4-6',
+      });
+    });
+
+    it('should set decisionPolicyVersion to baseline', () => {
+      const result = convertToRoutingDecision({
+        planner: 'model-a',
+        coder: 'model-b',
+        reviewer: 'model-c',
+      });
+
+      expect(result.decisionPolicyVersion).toBe('baseline');
+    });
+
+    it('should include depth and mode in rationale', () => {
+      const result = convertToRoutingDecision({
+        planner: 'model-a',
+        coder: 'model-b',
+        reviewer: 'model-c',
+        planDepth: 'light',
+        codeDepth: 'medium',
+        reviewMode: 'static',
+      });
+
+      expect(result.decisionRationale).toContain('planDepth=light');
+      expect(result.decisionRationale).toContain('codeDepth=medium');
+      expect(result.decisionRationale).toContain('reviewMode=static');
+    });
+
+    it('should handle missing depth/mode fields', () => {
+      const result = convertToRoutingDecision({
+        planner: 'model-a',
+        coder: 'model-b',
+        reviewer: 'model-c',
+      });
+
+      expect(result.decisionRationale).toContain('planner=model-a');
+      expect(result.decisionRationale).not.toContain('planDepth');
+    });
+  });
+
+  describe('fetchRoutingDecision', () => {
+    function makeTmpDir(): string {
+      return fs.mkdtempSync(nodePath.join(os.tmpdir(), 'eval-test-'));
+    }
+
+    it('should load valid routing file', () => {
+      const tmpDir = makeTmpDir();
+      const featureDir = nodePath.join(tmpDir, 'features', 'my-feature');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.routing-complete'),
+        JSON.stringify({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+          planDepth: 'light',
+          codeDepth: 'medium',
+          reviewMode: 'static',
+        })
+      );
+
+      const result = fetchRoutingDecision(tmpDir, 'my-feature');
+
+      expect(result).not.toBeNull();
+      expect(result!.candidates).toHaveLength(3);
+      expect(result!.decisionPolicyVersion).toBe('baseline');
+      fs.rmSync(tmpDir, { recursive: true });
+    });
+
+    it('should return null for missing file', () => {
+      const tmpDir = makeTmpDir();
+      fs.mkdirSync(nodePath.join(tmpDir, 'features', 'my-feature'), { recursive: true });
+
+      const result = fetchRoutingDecision(tmpDir, 'my-feature');
+
+      expect(result).toBeNull();
+      fs.rmSync(tmpDir, { recursive: true });
+    });
+
+    it('should return null for invalid JSON', () => {
+      const tmpDir = makeTmpDir();
+      const featureDir = nodePath.join(tmpDir, 'features', 'my-feature');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(nodePath.join(featureDir, '.routing-complete'), 'not json');
+
+      const result = fetchRoutingDecision(tmpDir, 'my-feature');
+
+      expect(result).toBeNull();
+      fs.rmSync(tmpDir, { recursive: true });
+    });
+
+    it('should return null when required fields missing', () => {
+      const tmpDir = makeTmpDir();
+      const featureDir = nodePath.join(tmpDir, 'features', 'my-feature');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.routing-complete'),
+        JSON.stringify({ planner: 'model-a' }) // missing coder and reviewer
+      );
+
+      const result = fetchRoutingDecision(tmpDir, 'my-feature');
+
+      expect(result).toBeNull();
+      fs.rmSync(tmpDir, { recursive: true });
     });
   });
 });

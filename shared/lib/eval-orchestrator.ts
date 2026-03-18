@@ -347,6 +347,9 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
 
   // 8. Invoke judge via shared evaluateTask()
   console.log('\nInvoking LLM judge...');
+  // Use explicitly provided routing decision, or fall back to auto-loaded one
+  const effectiveRoutingDecision = routingDecision ?? stageArtifacts.routingDecision;
+
   const record = await evaluateTask(
     {
       taskPrompt: evalContext.taskPrompt,
@@ -356,7 +359,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       interventionText,
       issueId: issueId || undefined,
       prUrl: prUrl || undefined,
-      routingDecision,
+      routingDecision: effectiveRoutingDecision,
       taskPacket: stageArtifacts.taskPacket,
       planContent: stageArtifacts.planContent,
       selfReviewSummary: stageArtifacts.selfReviewSummary,
