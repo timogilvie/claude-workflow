@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import '../shared/lib/env.js';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { getIssueForLabeling, getOrCreateLabel, addLabelsToIssue } from '../shared/lib/linear.js';
+import { getIssueForLabeling, getOrCreateLabel, addLabelsToIssue } from '../shared/lib/linear.ts';
 
 runTool({
   name: 'add-issue-label',

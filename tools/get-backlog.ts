@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import '../shared/lib/env.js';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { getBacklog, getProjects } from '../shared/lib/linear.js';
+import { getBacklog, getProjects } from '../shared/lib/linear.ts';
 import readline from "node:readline";
 
 const rl = readline.createInterface({
