@@ -196,6 +196,50 @@ export function formatEvalRecord(record: EvalRecord): string {
     lines.push('');
   }
 
+  // Stage Attribution (HOK-1004)
+  if (record.stageOutcomes) {
+    const so = record.stageOutcomes;
+    lines.push(`  ${BOLD}Stage Attribution:${NC}`);
+
+    if (so.expansion) {
+      const color = scoreColor(so.expansion.score);
+      lines.push(
+        `    ${BOLD}Expansion:${NC}      ${color}${so.expansion.score.toFixed(2)}${NC}  ${so.expansion.rationale}`
+      );
+    }
+
+    if (so.plan) {
+      const color = scoreColor(so.plan.score);
+      lines.push(
+        `    ${BOLD}Plan:${NC}           ${color}${so.plan.score.toFixed(2)}${NC}  ${so.plan.rationale}`
+      );
+    }
+
+    if (so.implementation) {
+      const color = scoreColor(so.implementation.score);
+      lines.push(
+        `    ${BOLD}Implementation:${NC} ${color}${so.implementation.score.toFixed(2)}${NC}  ${so.implementation.rationale}`
+      );
+    }
+
+    if (so.review) {
+      const color = scoreColor(so.review.score);
+      lines.push(
+        `    ${BOLD}Review:${NC}         ${color}${so.review.score.toFixed(2)}${NC}  ${so.review.rationale}`
+      );
+    }
+
+    if (so.routing) {
+      const r = so.routing;
+      const routingInfo = r.routingUsed
+        ? `${r.chosenModel} (${r.candidateCount} candidates, score ${r.scoreAchieved?.toFixed(2)})`
+        : 'default model';
+      lines.push(`    ${BOLD}Routing:${NC}        ${routingInfo}`);
+    }
+
+    lines.push('');
+  }
+
   lines.push(`${BOLD}${CYAN}${'═'.repeat(63)}${NC}`);
   lines.push('');
 

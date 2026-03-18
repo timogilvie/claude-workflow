@@ -65,6 +65,38 @@ The purpose of this eval is to measure **autonomous reliability**. An agent that
 
 {{INTERVENTION_METADATA}}
 
+### Expanded Task Packet (if available)
+
+{{TASK_PACKET}}
+
+### Implementation Plan (if available)
+
+{{PLAN_CONTENT}}
+
+### Self-Review Summary (if available)
+
+{{SELF_REVIEW_SUMMARY}}
+
+---
+
+## Stage Attribution
+
+In addition to the overall score, attribute quality to each workflow stage that had artifacts available. For each stage, provide a score (0.0–1.0) and a 1-2 sentence rationale explaining how that stage contributed to or detracted from the final outcome.
+
+### Stage Scoring Guidelines
+
+- **expansion** (only if Task Packet is provided): Did the task packet correctly and completely specify what needed to be built? Score 1.0 if the spec was clear and complete. Score lower if the spec was vague, missed requirements, or contained contradictions that led to implementation issues.
+
+- **plan** (only if Implementation Plan is provided): Did the plan lead the implementation in the right direction? Score 1.0 if the plan was sound and the implementation followed it successfully. Score lower if the plan missed important considerations, led to rework, or the implementation had to deviate significantly.
+
+- **implementation** (always scored): Given the spec and plan, did the code correctly implement what was asked? Score 1.0 if the code is correct, complete, and production-ready. Score lower for bugs, missing edge cases, or poor code quality — but only penalize the implementation for issues that were NOT caused by a bad spec or plan.
+
+- **review** (only if Self-Review Summary is provided): Did self-review catch real issues before human review? Score 1.0 if self-review found and fixed all significant issues. Score lower if human review or post-PR interventions uncovered problems that self-review should have caught.
+
+**Key attribution principle**: The stage scores should help identify WHERE in the pipeline quality was lost. If the overall score is 0.7, the stage scores should make it clear whether the spec was the problem (low expansion, higher implementation) or the code was the problem (high expansion, low implementation).
+
+Only include stages for which artifacts were provided. Always include `implementation`.
+
 ---
 
 ## Output Format
@@ -75,12 +107,19 @@ Respond with **only** a JSON object (no markdown fences, no preamble):
 {
   "score": <number between 0.0 and 1.0>,
   "rationale": "<2-4 sentence explanation of the score, referencing specific interventions if any>",
-  "interventionFlags": ["<flag1>", "<flag2>"]
+  "interventionFlags": ["<flag1>", "<flag2>"],
+  "stageScores": {
+    "expansion": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "plan": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "implementation": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "review": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" }
+  }
 }
 ```
 
 - `score`: A number from 0.0 to 1.0 reflecting overall execution quality
 - `rationale`: A concise, human-readable explanation justifying the score. **Must reference specific intervention events if any are present.**
 - `interventionFlags`: Array of strings describing notable interventions (empty array if none). Use the format `"type:description"` (e.g., `"review_comment:missing error handling"`, `"post_pr_commit:fixed lint errors"`)
+- `stageScores`: Object with per-stage attribution scores. Only include stages for which artifacts were provided above. Always include `implementation`.
 
 Output ONLY the JSON object. No other text.

@@ -19,6 +19,7 @@ import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import {
   autoDetectContext,
   gatherEvalContext,
+  gatherStageArtifacts,
   fetchIssueData,
   type EvalContext,
 } from './eval-context-gatherer.ts';
@@ -43,7 +44,13 @@ import {
 import { evaluateTask } from './eval.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
-import type { EvalRecord, Outcomes } from './eval-schema.ts';
+import type {
+  EvalRecord,
+  Outcomes,
+  StageOutcomes,
+  StageScore,
+  RoutingOutcome,
+} from './eval-schema.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -139,6 +146,9 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     prUrl,
     repoDir,
   });
+
+  // Gather stage artifacts for judge attribution
+  const stageArtifacts = gatherStageArtifacts(repoDir, issueId, branch);
 
   if (issueId) console.log(`  Issue: ${issueId}`);
   if (prNumber) console.log(`  PR: #${prNumber}`);
@@ -347,6 +357,9 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       issueId: issueId || undefined,
       prUrl: prUrl || undefined,
       routingDecision,
+      taskPacket: stageArtifacts.taskPacket,
+      planContent: stageArtifacts.planContent,
+      selfReviewSummary: stageArtifacts.selfReviewSummary,
       metadata: { interventionSummary },
     },
     outcomes
