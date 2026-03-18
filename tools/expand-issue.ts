@@ -4,7 +4,6 @@ import '../shared/lib/env.js';
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
 import { getIssue, updateIssue } from '../shared/lib/linear.js';
 import {
   validateTaskPacket,
@@ -20,6 +19,7 @@ import {
   expandIssueWithClaude,
   checkSubsystemDrift,
 } from '../shared/lib/issue-expander.ts';
+import { autoLabelIssue } from '../shared/lib/issue-labeler.ts';
 import { gatherCodebaseContext } from '../shared/lib/codebase-context-gatherer.ts';
 import { splitTaskPacket, isValidTaskPacket } from '../shared/lib/task-packet-utils.ts';
 import { formatValidationIssues } from '../shared/lib/validation-formatter.ts';
@@ -222,20 +222,7 @@ runTool({
           // Auto-label the issue based on expanded content
           console.log(`\nAuto-labeling issue ${issue.identifier}...`);
           try {
-            const autoLabel = spawn('npx', ['tsx', path.join(__dirname, 'auto-label-issue.ts'), issue.identifier], {
-              stdio: 'inherit'
-            });
-
-            await new Promise((resolve, reject) => {
-              autoLabel.on('close', (code) => {
-                if (code === 0) {
-                  resolve(true);
-                } else {
-                  reject(new Error(`Auto-labeling exited with code ${code}`));
-                }
-              });
-              autoLabel.on('error', reject);
-            });
+            await autoLabelIssue(issue.identifier);
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             console.warn(`⚠️  Auto-labeling failed: ${errorMsg}`);
