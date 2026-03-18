@@ -896,11 +896,18 @@ agent_terminate_in_pane() {
   tmux send-keys -t "$target" C-c 2>/dev/null || true
   sleep 0.3
 
+  if _pane_is_dead_or_idle "$target"; then return 0; fi
+
   # /exit is the canonical way to exit Claude Code
   tmux send-keys -t "$target" "/exit" C-m 2>/dev/null || true
   sleep 0.5
 
+  if _pane_is_dead_or_idle "$target"; then return 0; fi
+
   # Ctrl-D (EOF) exits Codex and most other CLIs
+  # ONLY send if a foreground process is still running — Ctrl-D on an idle
+  # shell exits the shell itself, which (without remain-on-exit) destroys
+  # the tmux window and makes the pane unrecoverable.
   tmux send-keys -t "$target" C-d 2>/dev/null || true
   sleep 0.3
 
