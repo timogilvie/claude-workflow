@@ -79,9 +79,15 @@ Deduplication:
     const currentRepo = resolve('.');
     const outputPath = resolve(args.output || config.outputPath);
 
+    // Always include the current repo in aggregation
+    const resolvedRepos = repos.map((r) => resolve(r));
+    if (!resolvedRepos.includes(currentRepo)) {
+      resolvedRepos.push(currentRepo);
+    }
+
     try {
       const result = aggregateEvals({
-        repoPaths: repos.length > 0 ? repos.map((r) => resolve(r)) : [currentRepo],
+        repoPaths: resolvedRepos,
         discoverFrom: args.discover ? resolve(args.discover) : undefined,
         outputPath,
         deduplicateByHash,
