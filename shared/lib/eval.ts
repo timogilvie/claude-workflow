@@ -22,7 +22,7 @@ const __dirname = dirname(__filename);
 const DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
-const SCHEMA_VERSION = '1.0.0';
+const SCHEMA_VERSION = '1.3.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 
@@ -62,6 +62,12 @@ export interface EvalInput {
   timeSeconds?: number;
   /** Routing decision metadata (HOK-775) */
   routingDecision?: RoutingDecision;
+  /** Expanded task packet content (if available) */
+  taskPacket?: string;
+  /** Implementation plan content (if available) */
+  planContent?: string;
+  /** Self-review summary (if available) */
+  selfReviewSummary?: string;
   /** Extra metadata to pass through */
   metadata?: Record<string, unknown>;
 }
@@ -81,6 +87,7 @@ interface JudgeResponse {
   score: number;
   rationale: string;
   interventionFlags: string[];
+  stageScores?: Record<string, { score: number; rationale: string }>;
 }
 
 /**
@@ -161,7 +168,10 @@ function buildJudgePrompt(
   taskPrompt: string,
   prReviewOutput: string,
   interventions: InterventionMeta[],
-  interventionText?: string
+  interventionText?: string,
+  taskPacket?: string,
+  planContent?: string,
+  selfReviewSummary?: string
 ): string {
   let finalInterventionText: string;
   if (interventionText) {
@@ -179,7 +189,10 @@ function buildJudgePrompt(
   return template
     .replace('{{TASK_PROMPT}}', taskPrompt)
     .replace('{{PR_REVIEW_OUTPUT}}', prReviewOutput)
-    .replace('{{INTERVENTION_METADATA}}', finalInterventionText);
+    .replace('{{INTERVENTION_METADATA}}', finalInterventionText)
+    .replace('{{TASK_PACKET}}', taskPacket || 'Not available for this workflow.')
+    .replace('{{PLAN_CONTENT}}', planContent || 'Not available for this workflow.')
+    .replace('{{SELF_REVIEW_SUMMARY}}', selfReviewSummary || 'Not available for this workflow.');
 }
 
 async function callClaudeWithRetry(prompt: string, model: string): Promise<LLMCallResult> {
@@ -224,6 +237,7 @@ function parseJudgeResponse(raw: string): JudgeResponse {
     score?: number;
     rationale?: string;
     interventionFlags?: string[];
+    stageScores?: Record<string, { score?: number; rationale?: string }>;
   };
 
   if (typeof parsed.score !== 'number' || parsed.score < 0 || parsed.score > 1) {
@@ -238,10 +252,34 @@ function parseJudgeResponse(raw: string): JudgeResponse {
     parsed.interventionFlags = [];
   }
 
+  // Parse and validate stageScores (optional)
+  let stageScores: Record<string, { score: number; rationale: string }> | undefined;
+  if (parsed.stageScores && typeof parsed.stageScores === 'object') {
+    stageScores = {};
+    for (const [stage, stageData] of Object.entries(parsed.stageScores)) {
+      if (
+        typeof stageData?.score === 'number' &&
+        stageData.score >= 0 &&
+        stageData.score <= 1 &&
+        typeof stageData?.rationale === 'string'
+      ) {
+        stageScores[stage] = {
+          score: stageData.score,
+          rationale: stageData.rationale.trim(),
+        };
+      }
+    }
+    // Only include if at least one valid stage score
+    if (Object.keys(stageScores).length === 0) {
+      stageScores = undefined;
+    }
+  }
+
   return {
     score: parsed.score,
     rationale: parsed.rationale.trim(),
     interventionFlags: parsed.interventionFlags,
+    ...(stageScores && { stageScores }),
   };
 }
 
@@ -286,6 +324,9 @@ export async function evaluateTask(
     prUrl,
     timeSeconds = 0,
     routingDecision,
+    taskPacket,
+    planContent,
+    selfReviewSummary,
     metadata = {},
   } = input;
 
@@ -304,7 +345,16 @@ export async function evaluateTask(
   const pricingTable = loadPricingTable();
 
   const template = await loadPromptTemplate();
-  const prompt = buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, interventionText);
+  const prompt = buildJudgePrompt(
+    template,
+    taskPrompt,
+    prReviewOutput,
+    interventions,
+    interventionText,
+    taskPacket,
+    planContent,
+    selfReviewSummary
+  );
 
   // Capture prompt artifact for GEPA training (HOK-1003)
   // Gracefully handle missing template file - this is metadata and should not block evals
@@ -323,7 +373,7 @@ export async function evaluateTask(
   const response = await callFn(prompt, model);
 
   // Parse response
-  const { score, rationale, interventionFlags } = parseJudgeResponse(response.text);
+  const { score, rationale, interventionFlags, stageScores } = parseJudgeResponse(response.text);
   const band = getScoreBand(score);
 
   const tokenUsage = response.usage || undefined;
@@ -358,6 +408,6 @@ export async function evaluateTask(
     ...(outcomes && { outcomes }),
     ...(routingDecision && { routingDecision }),
     ...(promptArtifacts.length > 0 && { promptArtifacts }),
-    metadata: { ...metadata, interventionFlags },
+    metadata: { ...metadata, interventionFlags, ...(stageScores && { stageScores }) },
   };
 }

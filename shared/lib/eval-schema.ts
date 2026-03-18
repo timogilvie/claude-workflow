@@ -13,6 +13,9 @@
  *   pricing changes over time
  * - **1.2.0**: Added `promptArtifacts` field (HOK-1003) to track prompt
  *   template versions and hashes for GEPA training signal attribution
+ * - **1.3.0**: Added `stageOutcomes` field (HOK-1004) to capture per-stage
+ *   quality attribution scores (expansion, plan, implementation, review) and
+ *   routing outcome metadata for GEPA training
  *
  * @module eval-schema
  */
@@ -570,6 +573,67 @@ export interface DifficultySignals {
 export type Stratum = string;
 
 // ────────────────────────────────────────────────────────────────
+// Per-Stage Outcomes (HOK-1004)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Per-stage quality attribution from the eval judge.
+ *
+ * Captures how well a specific workflow stage performed,
+ * enabling GEPA to attribute quality loss to specific prompt artifacts.
+ */
+export interface StageScore {
+  /** Quality score 0.0–1.0 for this stage */
+  score: number;
+  /** 1-2 sentence attribution rationale */
+  rationale: string;
+}
+
+/**
+ * Routing outcome — deterministic record, not judge-scored.
+ *
+ * Records the routing decision and its realized outcome for offline
+ * routing model training. The judge cannot assess counterfactual model
+ * choices, so this is captured deterministically.
+ */
+export interface RoutingOutcome {
+  /** Whether a routing decision was made (vs default model) */
+  routingUsed: boolean;
+  /** Number of candidates considered */
+  candidateCount: number;
+  /** Model that was chosen */
+  chosenModel?: string;
+  /** Score achieved by the workflow */
+  scoreAchieved?: number;
+  /** Workflow cost in USD */
+  costUsd?: number;
+  /** Policy version that made the decision */
+  policyVersion?: string;
+}
+
+/**
+ * Per-stage outcome attribution for GEPA training.
+ *
+ * Each stage gets a quality score that helps identify where in the
+ * pipeline quality was lost. For example, if the overall score is 0.7,
+ * the stage scores should clarify whether the spec was the problem
+ * (low expansion, higher implementation) or the code was the problem
+ * (high expansion, low implementation).
+ */
+export interface StageOutcomes {
+  /** Task packet / expansion quality */
+  expansion?: StageScore;
+  /** Plan quality and adherence */
+  plan?: StageScore;
+  /** Implementation quality (given spec + plan) */
+  implementation?: StageScore;
+  /** Self-review effectiveness */
+  review?: StageScore;
+  /** Routing decision record (deterministic) */
+  routing?: RoutingOutcome;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -720,6 +784,18 @@ export interface EvalRecord {
     templateHash: string;
     filledPromptHash: string;
   }[];
+
+  /**
+   * Per-stage quality attribution for GEPA training.
+   *
+   * Captures quality scores for each workflow stage (expansion, plan,
+   * implementation, review) to enable attribution of performance to
+   * specific prompt artifacts. This tells GEPA which prompt failed when
+   * a workflow scores poorly.
+   *
+   * @since 1.3.0
+   */
+  stageOutcomes?: StageOutcomes;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;
