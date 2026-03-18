@@ -307,8 +307,15 @@ export async function evaluateTask(
   const prompt = buildJudgePrompt(template, taskPrompt, prReviewOutput, interventions, interventionText);
 
   // Capture prompt artifact for GEPA training (HOK-1003)
-  const promptTemplatePath = join(__dirname, '../../tools/prompts/eval-judge.md');
-  const promptArtifact = createPromptArtifact(promptTemplatePath, prompt);
+  // Gracefully handle missing template file - this is metadata and should not block evals
+  let promptArtifacts: PromptArtifact[] = [];
+  try {
+    const promptTemplatePath = join(__dirname, '../../tools/prompts/eval-judge.md');
+    const promptArtifact = createPromptArtifact(promptTemplatePath, prompt);
+    promptArtifacts = [promptArtifact];
+  } catch (err) {
+    console.warn(`[eval] Failed to capture prompt artifact: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   const callFn = _callFn || callClaudeWithRetry;
 
@@ -350,7 +357,7 @@ export async function evaluateTask(
     ...(estimatedCost !== undefined && { estimatedCost }),
     ...(outcomes && { outcomes }),
     ...(routingDecision && { routingDecision }),
-    promptArtifacts: [promptArtifact],
+    ...(promptArtifacts.length > 0 && { promptArtifacts }),
     metadata: { ...metadata, interventionFlags },
   };
 }
