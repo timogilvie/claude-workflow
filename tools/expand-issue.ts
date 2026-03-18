@@ -23,6 +23,7 @@ import { autoLabelIssue } from '../shared/lib/issue-labeler.ts';
 import { gatherCodebaseContext } from '../shared/lib/codebase-context-gatherer.ts';
 import { splitTaskPacket, isValidTaskPacket } from '../shared/lib/task-packet-utils.ts';
 import { formatValidationIssues } from '../shared/lib/validation-formatter.ts';
+import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -98,7 +99,7 @@ runTool({
       // Load issue-writer prompt
       console.log('Loading issue-writer prompt...');
       const promptPath = path.join(__dirname, 'prompts/issue-writer.md');
-      const promptTemplate = await fs.readFile(promptPath, 'utf-8');
+      const promptTemplate = await loadPromptTemplate(promptPath);
 
       // Format issue context
       const issueContext = formatIssueContext(issue);
