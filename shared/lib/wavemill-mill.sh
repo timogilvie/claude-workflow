@@ -1463,17 +1463,21 @@ _launch_agent_in_pane() {
   # Terminate any running agent and wait for shell prompt
   if ! agent_terminate_in_pane "$session" "$window" 15; then
     log_warn "  Timed out waiting for previous agent to exit in $target"
-    # Force-kill and respawn as last resort
-    tmux send-keys -t "$target" C-c C-c 2>/dev/null || true
-    sleep 2
   fi
 
-  # Verify pane is ready before sending commands
+  # Verify pane is ready — force-kill and respawn if needed
   if ! agent_pane_is_ready "$session" "$window"; then
-    log_warn "  Pane $target not ready, waiting 5s..."
-    sleep 5
+    log_warn "  Pane $target not ready, force-killing children..."
+    local pane_pid
+    pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
+    if [[ -n "$pane_pid" ]]; then
+      pkill -KILL -P "$pane_pid" 2>/dev/null || true
+      sleep 1
+    fi
     if ! agent_pane_is_ready "$session" "$window"; then
-      log_warn "  Pane $target still not ready, launching anyway"
+      log_warn "  Pane $target STILL not ready after force-kill, respawning pane..."
+      tmux respawn-pane -k -t "$target" 2>/dev/null || true
+      sleep 1
     fi
   fi
 
