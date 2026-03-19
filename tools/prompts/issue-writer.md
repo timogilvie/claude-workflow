@@ -37,6 +37,18 @@ The DETAILS section should contain the full comprehensive specification followin
 
 ---
 
+## Quality Requirements (CRITICAL)
+
+Your task packet will be reviewed by an automated quality checker. To pass review, you MUST:
+
+1. **Be specific in all acceptance criteria** — Never use vague language like "works correctly", "handles errors gracefully", "loads properly". Every criterion must specify exact inputs, exact expected outputs, and measurable outcomes.
+2. **Include error handling for every external interaction** — For every API call, database query, file operation, or user input, specify what happens on failure (timeout, invalid input, missing data, unauthorized access).
+3. **Avoid ungrounded assumptions** — Don't reference files, services, or patterns without verifying them in the codebase context. If you reference "the existing auth middleware", specify the exact file path.
+4. **Include edge cases** — Every functional requirement needs at least 2 edge cases with specific expected behavior.
+5. **No contradictions between sections** — Scope Out must not conflict with Implementation Approach; Success Criteria must align with Validation Steps.
+
+---
+
 ## Codebase Context
 
 You have been provided with lightweight codebase context to ground your task packet in reality. Use this information to:
@@ -466,320 +478,27 @@ Suggested labels for this task:
 
 ---
 
-# APPENDIX: Validation Steps Examples
+# APPENDIX: Validation Steps — Good vs Bad
 
-This appendix provides complete worked examples showing the difference between generic (bad) and specific (good) validation steps.
-
-## Example 1: User Authentication Feature
-
-### Bad (too generic)
-
-```bash
-# Test login functionality
-pnpm test
-# Expected: tests pass
-
-# Verify users can log in
-# Manual test: try logging in
+**Bad** (vague, unverifiable):
+```
+- [ ] User can log in
+- [ ] Dashboard loads correctly
 ```
 
-**Problem**: No specific scenarios, no expected outcomes, agent can't verify if feature actually works.
-
----
-
-### Good (specific scenarios)
-
+**Good** (specific, testable):
+```
 **[REQ-F1] User can log in with valid credentials**
-
-Validation scenario:
-1. Setup: Navigate to `/login` page, ensure test user exists (email: test@example.com, password: ValidPass123)
-2. Action:
-   - Enter email "test@example.com" in email field
-   - Enter password "ValidPass123" in password field
-   - Click "Log In" button
-3. Expected result:
-   - User is redirected to `/dashboard` within 2 seconds
-   - Welcome message displays: "Welcome back, Test User"
-   - Session cookie `auth_token` is set with HttpOnly flag
-   - Previous page URL is cleared from session storage
+1. Setup: Test user exists (email: test@example.com, password: ValidPass123)
+2. Action: POST /api/login with {email, password}
+3. Expected: 200 response with {token, userId}, redirect to /dashboard
 4. Edge cases:
-   - Email in different case (TEST@example.com) → Should succeed (case-insensitive)
-   - Trailing/leading spaces in email → Should be trimmed and succeed
-   - Login immediately after signup → Should succeed without requiring email verification
-   - Login from /pricing?plan=pro → Should redirect to /pricing?plan=pro after login
-
-**[REQ-F2] User sees error with invalid credentials**
-
-Validation scenario:
-1. Setup: Navigate to `/login` page
-2. Action:
-   - Enter email "test@example.com"
-   - Enter password "WrongPassword123"
-   - Click "Log In" button
-3. Expected result:
-   - Error message appears above form: "Invalid email or password"
-   - Error message has red background (#FEE2E2) and error icon
-   - Email field value remains populated ("test@example.com")
-   - Password field is cleared
-   - No redirect occurs
-   - Focus moves to password field
-4. Edge cases:
-   - Three failed attempts within 5 minutes → Show rate limit message: "Too many attempts. Try again in 15 minutes"
-   - Invalid attempt with empty password → Show "Password is required" instead
-   - Invalid attempt with non-existent email → Show same "Invalid email or password" (don't reveal if email exists)
-
-**[REQ-F3] User can reset forgotten password**
-
-Validation scenario:
-1. Setup: Navigate to `/login` page, ensure test user exists
-2. Action:
-   - Click "Forgot password?" link
-   - Enter email "test@example.com"
-   - Click "Send reset link" button
-3. Expected result:
-   - Success message appears: "Password reset link sent to test@example.com"
-   - Email is sent to test@example.com with subject "Reset your password"
-   - Email contains link format: https://app.example.com/reset-password?token={uuid}
-   - Token expires in 1 hour
-   - User can close modal and continue to other pages
-4. Edge cases:
-   - Non-existent email → Show same success message (don't reveal if email exists)
-   - Multiple reset requests within 5 minutes → Only send one email, show success anyway
-   - Click reset link after password already changed → Show "This link has expired"
-
----
-
-### Input/Output Verification
-
-**Valid Inputs:**
-- Email: "user@example.com", Password: "ValidPass123" → Login succeeds, redirect to /dashboard
-- Email: "USER@EXAMPLE.COM", Password: "ValidPass123" → Login succeeds (case-insensitive email)
-- Email: " user@example.com ", Password: "ValidPass123" → Login succeeds (spaces trimmed)
-
-**Invalid Inputs:**
-- Email: "notanemail", Password: "anything" → Error: "Please enter a valid email address"
-- Email: "", Password: "anything" → Error: "Email is required"
-- Email: "user@example.com", Password: "" → Error: "Password is required"
-- Email: "user@nonexistent.com", Password: "anything" → Error: "Invalid email or password"
-- Email: "user@example.com", Password: "wrong" → Error: "Invalid email or password"
-
----
-
-## Example 2: Data Filtering Feature
-
-### Bad (too generic)
-
-```bash
-# Test filtering
-pnpm test
-
-# Manual test
-# - Try filtering by category
-# - Verify results are correct
+   - Case-insensitive email (TEST@example.com) → Should succeed
+   - Wrong password → 401 "Invalid email or password"
+   - 3 failed attempts → Rate limit: "Too many attempts. Try again in 15 minutes"
 ```
 
-**Problem**: Doesn't specify what "correct" means, no edge cases, can't reproduce.
-
----
-
-### Good (specific scenarios)
-
-**[REQ-F1] Users can filter items by category**
-
-Validation scenario:
-1. Setup:
-   - Database contains 100 items: 15 Electronics, 30 Clothing, 25 Books, 20 Home, 10 Sports
-   - Navigate to `/products` page
-   - Verify all 100 items are initially displayed
-2. Action:
-   - Locate filter sidebar on left
-   - Click "Electronics" checkbox in Categories section
-3. Expected result:
-   - Only 15 items with category="Electronics" are visible in main area
-   - Item count updates to show "15 items" at top of results
-   - URL updates to `/products?category=Electronics`
-   - Browser back button works to restore unfiltered view
-   - "Electronics" checkbox shows as checked
-   - Other category checkboxes remain unchecked
-4. Edge cases:
-   - Select multiple categories (Electronics + Books) → Show 40 items (union of both)
-   - Deselect all categories → Show all 100 items (no filter applied)
-   - Select category with 0 items (create test category "Empty") → Show message "No items found. Try different filters"
-   - Apply filter, then sort by price → Filter remains applied during sort
-   - Refresh page with `?category=Electronics` → Filter is applied on load
-
-**[REQ-F2] Users can filter by price range**
-
-Validation scenario:
-1. Setup:
-   - Database contains items with prices ranging from $5 to $500
-   - Navigate to `/products` page
-   - Note total item count (e.g., 100 items)
-2. Action:
-   - Locate "Price Range" slider in filter sidebar
-   - Set min to $20 and max to $100
-   - Release slider
-3. Expected result:
-   - Only items with price >= $20 AND price <= $100 are visible
-   - Item count updates (e.g., "42 items")
-   - URL updates to `/products?minPrice=20&maxPrice=100`
-   - Slider handles show current values: "$20 - $100"
-   - Price labels update below slider
-4. Edge cases:
-   - Set min = max ($50) → Show items exactly at $50
-   - Set min > max (slider crossed) → Automatically swap values
-   - Set min = $0, max = $500 (full range) → Show all items
-   - Combine with category filter → Apply both filters (AND logic)
-   - Items on exact boundaries ($20.00, $100.00) → Should be included
-
-**[REQ-F3] Filters persist across page reloads**
-
-Validation scenario:
-1. Setup:
-   - Navigate to `/products` page
-   - Apply filters: category=Electronics, minPrice=50, maxPrice=200
-   - Verify filtered results are shown (e.g., 8 items)
-2. Action:
-   - Press browser refresh button (Cmd+R or F5)
-3. Expected result:
-   - Page reloads and immediately shows same filtered results
-   - URL still contains `/products?category=Electronics&minPrice=50&maxPrice=200`
-   - Filter controls show correct state (Electronics checked, slider at 50-200)
-   - Item count matches pre-refresh count (8 items)
-4. Edge cases:
-   - Copy URL and open in new tab → Filters are applied in new tab
-   - Navigate away to `/about`, then back button → Filters are restored
-   - Bookmark filtered URL → Opening bookmark applies filters
-   - Clear browser cache and revisit URL → Filters are applied (server-side)
-
----
-
-### Input/Output Verification
-
-**Valid Inputs:**
-- Category: "Electronics" → Shows 15 items with category="Electronics"
-- Categories: ["Electronics", "Books"] → Shows 40 items (union)
-- Price range: $20-$100 → Shows items where 20 <= price <= 100
-- Combined: Category="Electronics" AND Price=$50-$150 → Shows Electronics items in that price range
-
-**Invalid Inputs:**
-- Category: "NonExistentCategory" → Shows 0 items, message "No items found"
-- Price: min=$200, max=$50 (inverted) → Automatically swap to $50-$200
-- Negative prices: min=$-10 → Clamp to $0
-- Price above max available: max=$10000 → Show all items (no items over this price)
-
----
-
-## Example 3: API Endpoint
-
-### Bad (too generic)
-
-```bash
-# Test API
-curl http://localhost:3000/api/users
-# Expected: returns users
-```
-
-**Problem**: No specific request/response format, no error cases, no status codes.
-
----
-
-### Good (specific scenarios)
-
-**[REQ-F1] GET /api/users returns paginated user list**
-
-Validation scenario:
-1. Setup:
-   - Database contains 50 users
-   - Start dev server on port 3000
-   - Obtain valid API key for testing
-2. Action:
-   ```bash
-   curl -H "Authorization: Bearer test_api_key" \
-        "http://localhost:3000/api/users?page=1&limit=10"
-   ```
-3. Expected result:
-   - HTTP status: 200 OK
-   - Response body (JSON):
-     ```json
-     {
-       "users": [
-         {"id": "usr_1", "email": "user1@example.com", "name": "User One", "createdAt": "2026-01-15T10:30:00Z"},
-         ...10 users total
-       ],
-       "pagination": {
-         "page": 1,
-         "limit": 10,
-         "total": 50,
-         "totalPages": 5
-       }
-     }
-     ```
-   - Response headers include: `Content-Type: application/json`
-   - Response time < 200ms
-4. Edge cases:
-   - Request page=2 → Returns users 11-20
-   - Request page=99 (beyond total) → Returns empty array, pagination shows page=99, total=50
-   - Request limit=100 → Clamps to max allowed (50), returns 50 users
-   - Request limit=0 → Returns 400 Bad Request, error: "limit must be between 1 and 50"
-   - Request without page param → Defaults to page=1
-   - Database has 0 users → Returns empty array, total=0
-
-**[REQ-F2] POST /api/users creates new user**
-
-Validation scenario:
-1. Setup: Start dev server, obtain admin API key
-2. Action:
-   ```bash
-   curl -X POST \
-        -H "Authorization: Bearer admin_api_key" \
-        -H "Content-Type: application/json" \
-        -d '{"email":"newuser@example.com","name":"New User","role":"member"}' \
-        http://localhost:3000/api/users
-   ```
-3. Expected result:
-   - HTTP status: 201 Created
-   - Response body:
-     ```json
-     {
-       "user": {
-         "id": "usr_51",
-         "email": "newuser@example.com",
-         "name": "New User",
-         "role": "member",
-         "createdAt": "2026-02-25T14:30:00Z"
-       }
-     }
-     ```
-   - Response headers include: `Location: /api/users/usr_51`
-   - Database contains new user with provided details
-   - Audit log entry created for user creation
-4. Edge cases:
-   - Duplicate email → 409 Conflict, error: "User with this email already exists"
-   - Missing required field (no email) → 400 Bad Request, error: "email is required"
-   - Invalid email format → 400 Bad Request, error: "Invalid email format"
-   - Name too long (>100 chars) → 400 Bad Request, error: "name must be 100 characters or less"
-   - Invalid role value → 400 Bad Request, error: "role must be one of: member, admin"
-   - Unauthorized (no API key) → 401 Unauthorized
-   - Non-admin API key → 403 Forbidden, error: "Admin access required"
-
----
-
-### Input/Output Verification
-
-**Valid Inputs:**
-- GET /api/users → 200, returns all users (paginated)
-- GET /api/users?page=2&limit=20 → 200, returns page 2 with 20 users
-- POST /api/users with valid data → 201, creates user, returns user object
-- GET /api/users/usr_1 → 200, returns specific user
-
-**Invalid Inputs:**
-- GET /api/users without auth → 401, error: "Authorization required"
-- GET /api/users?limit=notanumber → 400, error: "limit must be a number"
-- POST /api/users with duplicate email → 409, error: "User with this email already exists"
-- POST /api/users with invalid JSON → 400, error: "Invalid JSON in request body"
-- GET /api/users/nonexistent → 404, error: "User not found"
-- DELETE /api/users/usr_1 with non-admin key → 403, error: "Admin access required"
+**Key pattern**: Every validation step must specify exact inputs, exact expected outputs (status codes, messages, behavior), and at least 2 edge cases.
 
 ---
 

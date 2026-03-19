@@ -45,6 +45,16 @@ Use the `penaltyWeights` as a **floor** for score reduction — the actual penal
 - **Multiple functional bugs** or a bug requiring substantial rework: Score 0.5–0.6.
 - **Heavy intervention** (multiple manual edits, many review rounds, human had to redesign approach): Score 0.5 or below.
 
+### Calibration for Assisted Success band (0.50–0.79)
+
+Many tasks fall in the "assisted success" range — the agent completed the core task but required meaningful human guidance. Be especially careful with scoring in this range:
+
+- **interventionCount >= 2**: Score should rarely exceed 0.75. Two or more interventions indicate the agent needed repeated course corrections.
+- **interventionCount >= 3**: Score should rarely exceed 0.65. Three or more interventions suggest the agent struggled significantly with the task.
+- **manual_edit interventions**: Each manual edit should pull the score toward 0.5–0.6, as it means a human had to write code the agent should have written.
+- **When intervention details are sparse or absent**: Do NOT assume the best case. If interventionCount > 0 but details are missing, score conservatively in the lower half of the applicable range. Absence of evidence is not evidence of absence.
+- **Distinguish intervention count from severity**: 1 intervention that redesigned the entire approach is worse than 3 interventions that fixed typos. Use judgment, but when in doubt, the count provides a useful floor.
+
 ### Key principle
 
 The purpose of this eval is to measure **autonomous reliability**. An agent that completes 90% of the work but introduces a bug that breaks production is not "nearly autonomous" — the human still had to catch and fix the problem. Score accordingly. Err on the side of penalizing too harshly rather than too leniently; generous scores erode the signal quality of the eval system.
