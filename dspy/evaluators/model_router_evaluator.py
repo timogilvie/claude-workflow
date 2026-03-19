@@ -85,26 +85,47 @@ def _classify_task_type(prompt: str) -> str:
 # Default router prompt template (used when no candidate prompt file is provided)
 DEFAULT_ROUTER_PROMPT = """You are a model router for an autonomous software engineering workflow.
 
-Given a task description, recommend which AI model should handle it.
+Given a task description, recommend which AI model should handle it based on task complexity, risk, and cost considerations.
 
-Available models: {available_models}
+## Available Models
 
-Task type: {task_type}
-Repository: {repo_name}
+{{available_models}}
 
-Task prompt (truncated):
-{task_prompt}
+## Model Selection Guidelines
 
-Respond with a JSON object:
-{{
-  "recommended_model": "<model-id>",
-  "confidence": "high|medium|low",
-  "risk_flags": ["flag1", ...],
-  "cost_estimate": "low|medium|high",
-  "reasoning": "<brief explanation>"
-}}
+- **claude-sonnet-4-5-20250929**: Best default for most tasks. Fast, cost-effective, handles features, bugfixes, refactoring, and documentation well. Choose this unless the task clearly requires a more capable model.
+- **gpt-5.3-codex**: Consider for complex multi-file refactors or tasks requiring deep architectural reasoning across many files.
+- **gpt-5.4**: Reserve for the highest-complexity tasks: large-scale migrations, security-critical changes, or tasks with complex cross-cutting concerns.
 
-Respond ONLY with the JSON object, no other text."""
+## Risk Flag Guidelines
+
+Flag risks that could cause the task to fail or require human intervention:
+- "breaking-change" — Changes to public APIs, database schemas, or shared interfaces
+- "security" — Authentication, authorization, input validation, or data handling changes
+- "data-migration" — Database migrations or data transformations
+- "multi-service" — Changes spanning multiple services or repositories
+- "complex-state" — Complex state management or concurrency concerns
+- "no-tests" — Area lacks test coverage, harder to validate
+
+## Cost Estimation
+
+- "low" — Simple, isolated changes (CSS, docs, config, single-file fixes)
+- "medium" — Standard feature work, multi-file changes, typical bugfixes
+- "high" — Large features, complex refactors, infrastructure changes, migrations
+
+## Task Information
+
+Task type: {{task_type}}
+Repository: {{repo_name}}
+
+Task description:
+{{task_prompt}}
+
+## Output
+
+Respond with ONLY a valid JSON object (no markdown fences, no explanation before or after):
+
+{"recommended_model": "<exact model ID from the list above>", "confidence": "high|medium|low", "risk_flags": ["flag1"], "cost_estimate": "low|medium|high", "reasoning": "<1-2 sentence explanation>"}"""
 
 
 def build_router_input(example: EvalExample) -> dict:
@@ -117,19 +138,49 @@ def build_router_input(example: EvalExample) -> dict:
     }
 
 
+def _fix_json_string(s: str) -> str:
+    """Attempt to fix common JSON issues (single quotes, trailing commas)."""
+    # Replace single quotes with double quotes (but not inside strings)
+    # Simple heuristic: replace ' with " when it looks like a JSON delimiter
+    s = re.sub(r"'([^']*)'(\s*[:\],}])", r'"\1"\2', s)
+    s = re.sub(r"(\{|\[|,)\s*'([^']*)'", r'\1 "\2"', s)
+    # Remove trailing commas before } or ]
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+    return s
+
+
 def parse_router_output(output: str) -> dict:
-    """Parse the router's JSON response, tolerating markdown fences."""
+    """Parse the router's JSON response, tolerating markdown fences and minor issues."""
     # Strip markdown code fences if present
     cleaned = re.sub(r"^```(?:json)?\s*", "", output.strip())
     cleaned = re.sub(r"\s*```$", "", cleaned)
 
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
-        # Try to find JSON object in the output
-        match = re.search(r"\{[^{}]*\}", output, re.DOTALL)
+    # Try direct parse first
+    for candidate in [cleaned, _fix_json_string(cleaned)]:
+        try:
+            data = json.loads(candidate)
+            break
+        except json.JSONDecodeError:
+            continue
+    else:
+        # Try to find JSON object in the output (greedy to handle nested)
+        match = re.search(r"\{[\s\S]*\}", output)
         if match:
-            data = json.loads(match.group())
+            raw = match.group()
+            for candidate in [raw, _fix_json_string(raw)]:
+                try:
+                    data = json.loads(candidate)
+                    break
+                except json.JSONDecodeError:
+                    continue
+            else:
+                return {
+                    "recommended_model": "",
+                    "confidence": "",
+                    "risk_flags": [],
+                    "cost_estimate": "",
+                    "reasoning": "Failed to parse output",
+                }
         else:
             return {
                 "recommended_model": "",
