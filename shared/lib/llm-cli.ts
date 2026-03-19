@@ -18,6 +18,7 @@ import { spawn, type SpawnOptions } from 'node:child_process';
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -898,7 +899,7 @@ async function callLLMOnce(
   const startedAt = Date.now();
 
   // Create temp file for prompt
-  const tmpFile = join(tmpdir(), `wavemill-${provider}-${Date.now()}.txt`);
+  const tmpFile = join(tmpdir(), `wavemill-${provider}-${Date.now()}-${randomUUID()}.txt`);
 
   try {
     writeFileSync(tmpFile, prompt, 'utf-8');
