@@ -504,6 +504,19 @@ fi)
 - Focus on understanding and planning
 - If anything is unclear, ask the user for clarification before finalizing the plan
 
+### IMPORTANT: Handling User Feedback During This Phase
+
+You may receive text feedback from the user while you are working on this phase.
+User feedback is GUIDANCE to improve your approach — it is NOT a signal to complete the phase.
+
+When you receive user feedback:
+- DO: Read and incorporate the feedback into your ongoing work
+- DO: Adjust your approach based on the guidance
+- DO: Continue working until the phase requirements are genuinely complete
+- DO NOT: Interpret feedback as "wrap up now" or "move to next phase"
+- DO NOT: Create .plan-approved just because you received feedback
+- DO NOT: Run /exit unless the user has explicitly approved your plan
+
 After the user approves your plan, create the .plan-approved file, then exit by running the /exit command. The next phase will be launched automatically.
 _WVML_PROMPT_
 }
@@ -598,6 +611,28 @@ fi)
 - If you need to change the approach, document why in commit messages
 - Do NOT run self-review or create PR - that's the next phase
 - Do NOT ask questions - implement your best judgment and document decisions
+
+### IMPORTANT: Handling User Feedback During This Phase
+
+You may receive text feedback from the user while you are working on this phase.
+User feedback is GUIDANCE to improve your approach — it is NOT a signal to complete the phase.
+
+When you receive user feedback:
+- DO: Read and incorporate the feedback into your ongoing work
+- DO: Adjust your approach based on the guidance
+- DO: Continue working until the phase requirements are genuinely complete
+- DO NOT: Interpret feedback as "wrap up now" or "move to next phase"
+- DO NOT: Create .coding-complete just because you received feedback
+- DO NOT: Run /exit unless ALL phase requirements are met
+
+### Pre-Completion Checklist
+
+Before creating .coding-complete, verify ALL of these are true:
+- All phases from plan.md are implemented
+- All tests pass (run the test/lint commands)
+- No compilation errors
+- Changes are committed to git
+If ANY item is false, continue working. Do NOT create the marker.
 
 After implementation is complete and tests pass, create the .coding-complete file, then exit by running the /exit command. The next phase will be launched automatically.
 _WVML_PROMPT_
@@ -725,6 +760,19 @@ esac)
 - Fix blockers before creating PR
 - Make targeted fixes only - no scope creep
 - If review tool fails with exit code 2, document the failure and proceed
+
+### IMPORTANT: Handling User Feedback During This Phase
+
+You may receive text feedback from the user while you are working on this phase.
+User feedback is GUIDANCE to improve your approach — it is NOT a signal to complete the phase.
+
+When you receive user feedback:
+- DO: Read and incorporate the feedback into your ongoing work
+- DO: Adjust your approach based on the guidance
+- DO: Continue working until the review and PR creation are genuinely complete
+- DO NOT: Interpret feedback as "wrap up now"
+- DO NOT: Skip remaining review steps or rush the PR just because you received feedback
+- DO NOT: Run /exit until the PR is created and all review steps are done
 
 After creating the PR, report the PR URL to the user, then exit by running the /exit command.
 _WVML_PROMPT_
