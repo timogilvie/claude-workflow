@@ -110,7 +110,7 @@ Available in `~/.claude/commands/`:
 
 Use `docs/prompt-locations.md` as the canonical registry for agent instruction locations that must be updated together.
 
-- `shared/lib/agent-adapters.sh` - `agent_launch_autonomous()` and `agent_launch_interactive()` define mill-mode agent launch behavior.
+- `shared/lib/agent-adapters.sh` - `agent_launch_autonomous()` and `agent_launch_interactive()` define mill-mode agent launch behavior. Phase prompts (`build_planning_prompt`, `build_coding_prompt`, `build_review_prompt`) include explicit user feedback handling guidance to prevent premature phase transitions.
 - `commands/workflow.md` - Phase 4 owns self-review for the interactive `/workflow` command.
 - `commands/bugfix.md` - Bug workflow does not include self-review.
 - `commands/implement-plan.md` - Does not define self-review; `/workflow` owns it.
