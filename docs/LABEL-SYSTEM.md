@@ -41,11 +41,11 @@ Lists specific files modified, e.g. `Files: src/components/Hero.tsx, src/hooks/u
 ## How Labels Get Applied
 
 ### Automatic (default)
-When an issue is expanded with `--update`, labels are applied automatically:
+When an issue is expanded, labels are applied automatically (Linear update is the default):
 ```bash
-npx tsx tools/expand-issue.ts HOK-123 --update
+npx tsx tools/expand-issue.ts HOK-123
 ```
-This also happens inside `wavemill-mill.sh` for simple issues it detects.
+This also happens inside the planning agent when it expands issues.
 
 ### Manual
 ```bash

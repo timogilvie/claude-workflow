@@ -160,9 +160,9 @@ main() {
     # Create temp file for expanded description
     EXPANDED_FILE="/tmp/issue-expander-${ISSUE}.md"
 
-    # Expand the issue (expand_issue_with_tool will show real-time progress and update Linear)
+    # Expand the issue (always updates Linear by default)
     echo ""
-    if expand_issue_with_tool "$ISSUE" "$EXPANDED_FILE" "--update"; then
+    if expand_issue_with_tool "$ISSUE" "$EXPANDED_FILE"; then
       echo ""
       log "  ✓ Expanded and updated in Linear"
 

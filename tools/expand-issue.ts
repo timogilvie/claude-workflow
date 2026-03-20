@@ -52,7 +52,7 @@ runTool({
   name: 'expand-issue',
   description: 'Expand Linear issue into comprehensive task packet',
   options: {
-    update: { type: 'boolean', description: 'Update the Linear issue with expanded content' },
+    'no-update': { type: 'boolean', description: 'Skip updating the Linear issue (default: always update)' },
     'skip-validation': { type: 'boolean', description: 'Skip quality gate validation' },
     output: { type: 'string', description: 'Save expanded description to file' },
     'repo-path': { type: 'string', description: 'Path to target repository' },
@@ -63,7 +63,7 @@ runTool({
   },
   examples: [
     'npx tsx tools/expand-issue.ts LIN-123',
-    'npx tsx tools/expand-issue.ts LIN-123 --update',
+    'npx tsx tools/expand-issue.ts LIN-123 --no-update',
     'npx tsx tools/expand-issue.ts LIN-123 --output expanded-issue.md',
   ],
   additionalHelp: `Environment Variables:
@@ -76,7 +76,7 @@ runTool({
       process.exit(1);
     }
 
-    const shouldUpdate = !!args.update;
+    const shouldUpdate = !args['no-update'];
     const skipValidation = !!args['skip-validation'];
     const outputFile = args.output as string | null;
     const repoPath = (args['repo-path'] as string) || process.cwd();
@@ -197,7 +197,7 @@ runTool({
                 console.log('⚠️  Proceeding with update despite validation failures...');
               }
             } else {
-              console.log('\nℹ This is a dry-run. Use --update to save to Linear (with confirmation).');
+              console.log('\nℹ Dry-run mode (--no-update). Remove --no-update to save to Linear.');
               console.log('  Or use --skip-validation to bypass quality gate.');
             }
           } else {
@@ -234,7 +234,7 @@ runTool({
           process.exit(1);
         }
       } else {
-        console.log('ℹ Dry-run mode (use --update to save to Linear)');
+        console.log('ℹ Dry-run mode (--no-update). Linear was not updated.');
       }
 
     } catch (error) {

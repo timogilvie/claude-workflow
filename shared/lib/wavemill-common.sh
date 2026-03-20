@@ -320,28 +320,29 @@ score_and_rank_issues() {
 # ============================================================================
 
 # Expand issue with expand-issue.ts if available
-# Args: issue_id, output_file, [--update flag to save to Linear]
+# Args: issue_id, output_file, [--no-update to skip Linear update]
+# Note: Linear is always updated by default. Pass --no-update to opt out.
 expand_issue_with_tool() {
   local issue_id="$1"
   local out_file="$2"
-  local update_flag="${3:-}"
+  local no_update_flag="${3:-}"
   local tools_dir="${TOOLS_DIR:?TOOLS_DIR must be set}"
 
   if [[ ! -f "$tools_dir/expand-issue.ts" ]]; then
     return 1
   fi
 
-  # Build command with optional --update flag
+  # Build command — Linear update is the default, --no-update opts out
   local cmd_args=("$tools_dir/expand-issue.ts" "$issue_id" "--output" "$out_file")
-  if [[ "$update_flag" == "--update" ]]; then
-    cmd_args+=("--update")
+  if [[ "$no_update_flag" == "--no-update" ]]; then
+    cmd_args+=("--no-update")
   fi
 
   # Run with real-time output using process substitution
   local log_file="/tmp/expand-issue-${issue_id}.log"
 
   # Show command being run
-  echo "  Running: npx tsx expand-issue.ts $issue_id --output ... ${update_flag}" >&2
+  echo "  Running: npx tsx expand-issue.ts $issue_id --output ... ${no_update_flag}" >&2
 
   # Use tee to show output in real-time AND capture to log file
   if npx tsx "${cmd_args[@]}" 2>&1 | tee "$log_file"; then
@@ -374,12 +375,12 @@ write_task_packet() {
     return 0
   fi
 
-  # Try to expand (with --update flag for backwards compatibility with wavemill-mill)
+  # Try to expand (Linear update is now the default)
   # This will create three files:
   #   - $out_file (full content for Linear)
   #   - ${out_file%.md}-header.md (brief header)
   #   - ${out_file%.md}-details.md (detailed sections)
-  if expand_issue_with_tool "$issue_id" "$out_file" "--update"; then
+  if expand_issue_with_tool "$issue_id" "$out_file"; then
     # Move header to main file for loading by mill
     local header_file="${out_file%.md}-header.md"
     if [[ -f "$header_file" ]]; then
