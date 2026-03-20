@@ -455,26 +455,40 @@ Task context is pre-seeded at: features/$slug/selected-task.json
 
 1. **Expand task packet** (if needed):
    - Check if a detailed task packet exists in the Linear issue description
-   - If not, expand it using: npx tsx $tools_dir/expand-issue.ts $issue --update
+   - If not, expand it using: npx tsx $tools_dir/expand-issue.ts $issue
    - This creates a comprehensive specification with requirements, constraints, and validation steps
 
-2. **Research the codebase**:
+2. **Re-route after expansion** (if task was expanded):
+   - After expanding the task packet, re-run the router on the full specification:
+     npx tsx $tools_dir/route-task.ts --json --file features/$slug/selected-task.json --repo-dir \$(pwd)
+   - Save the result to: features/$slug/.post-expansion-route.json
+   - This captures how routing changes with richer context (compared to .initial-route.json from raw description)
+
+3. **Detect migrations** (if not already assigned):
+   - After expansion, check if the expanded task mentions database migrations, Alembic, schema changes, or table alterations
+   - If migration work is detected and no **ASSIGNED MIGRATION NUMBER** appears in the task packet:
+     - Write a marker file: touch features/$slug/.migration-detected
+     - The monitor will assign a migration number and write it to: features/$slug/.migration-number
+     - Wait briefly for the number to appear, then include it in your plan
+   - If a migration number is already assigned in the task packet, use that number
+
+4. **Research the codebase**:
    - Understand relevant code patterns and architecture
    - Identify files that need to be modified
    - Note any constraints or gotchas
 
-3. **Create implementation plan**:
+5. **Create implementation plan**:
    - Break down the work into logical phases
    - Identify dependencies and ordering constraints
    - Consider edge cases and error handling
    - Save the plan to: features/$slug/plan.md
 
-4. **Present plan to user**:
+6. **Present plan to user**:
    - Summarize the key points of your plan
    - Explain your approach and any important decisions
    - Wait for user approval
 
-5. **After approval**:
+7. **After approval**:
    - Create the approval marker: features/$slug/.plan-approved
    - Your work is done - the next phase (coding) will be launched automatically
 
@@ -493,6 +507,8 @@ fi)
 
 ### Success Criteria
 - [ ] Task packet is complete (either existing or expanded)
+- [ ] Post-expansion route saved (if task was expanded)
+- [ ] Migration detected and flagged (if applicable)
 - [ ] Codebase research completed
 - [ ] Implementation plan created at features/$slug/plan.md
 - [ ] User has approved the plan

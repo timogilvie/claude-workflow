@@ -853,7 +853,6 @@ done <<<"$SELECTED_LINES"
 
 log "Normalizing issues with task packets and launching work..."
 LAUNCH_ARGS=()
-EXPANSION_NEEDED=false
 
 
 # Pre-allocate migration numbers for parallel work
@@ -881,58 +880,22 @@ wait
 log "  ✓ All issues fetched"
 
 
-# ── Phase 2: Expand task packets in parallel ──────────────────────────────
-# When planningMode=interactive, skip expansion — the agent will research
-# the codebase itself during the interactive planning session.
-EXPAND_PIDS=()
-EXPAND_ISSUES=()
+# ── Phase 2: Write task packets (no expansion — agent expands in-pane) ────
+# If the Linear description is already a task packet, use it directly.
+# Otherwise, write the raw description — the planning agent will expand later.
+for t in "${TASKS[@]}"; do
+  IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+  PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
+  issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+  current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
 
-if [[ "$PLANNING_MODE" == "interactive" ]]; then
-  log "  Skipping task packet expansion (planningMode=interactive)"
-  # Still write raw descriptions to packet files so the orchestrator
-  # can use them for the selected-task.json context
-  for t in "${TASKS[@]}"; do
-    IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
-    PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
-    issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
-    current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
-    echo "$current_desc" > "$PACKET_FILE"
-    log "  ✓ $ISSUE raw description saved"
-  done
-else
-  for t in "${TASKS[@]}"; do
-    IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
-    PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
-    issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
-    current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
-
-    if is_task_packet "$current_desc"; then
-      log "  ✓ $ISSUE has task packet"
-      echo "$current_desc" > "$PACKET_FILE"
-    else
-      log "  ⚠ $ISSUE needs expansion - launching..."
-      EXPANSION_NEEDED=true
-      (
-        write_task_packet "$ISSUE" "$PACKET_FILE"
-      ) > "/tmp/${SESSION}-${ISSUE}-expand.log" 2>&1 &
-      EXPAND_PIDS+=("$!")
-      EXPAND_ISSUES+=("$ISSUE")
-    fi
-  done
-fi
-
-EXPANSION_FAILED=false
-if (( ${#EXPAND_PIDS[@]} > 0 )); then
-  log "Expanding ${#EXPAND_PIDS[@]} issue(s) in parallel..."
-  for i in "${!EXPAND_PIDS[@]}"; do
-    if wait "${EXPAND_PIDS[$i]}"; then
-      log "  ✓ ${EXPAND_ISSUES[$i]} expanded"
-    else
-      log_warn "  ✗ ${EXPAND_ISSUES[$i]} expansion failed (see /tmp/${SESSION}-${EXPAND_ISSUES[$i]}-expand.log)"
-      EXPANSION_FAILED=true
-    fi
-  done
-fi
+  if is_task_packet "$current_desc"; then
+    log "  ✓ $ISSUE has task packet"
+  else
+    log "  ✓ $ISSUE raw description saved (agent will expand)"
+  fi
+  echo "$current_desc" > "$PACKET_FILE"
+done
 
 
 # ── Phase 3: Migration detection + state saving ──────────────────────────
@@ -943,17 +906,13 @@ for t in "${TASKS[@]}"; do
   current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
 
   # Check if task involves database migration
-  # Detection order: 1) label match  2) keyword in expanded task packet  3) keyword in raw description
+  # Detection order: 1) label match  2) keyword in raw description
+  # Note: expanded packet keyword scan moved to planning agent (post-expansion)
   has_migration_label=$(echo "$issue_json" | jq -r '.labels.nodes[]? | select(.name | ascii_downcase | test("migration|database|schema|alembic")) | .name' 2>/dev/null | head -1)
-  packet_text=$(cat "$PACKET_FILE" 2>/dev/null || echo "")
   is_migration=false
 
   if [[ -n "$has_migration_label" ]]; then
     log "  → Migration detected (label: $has_migration_label), assigning number: $NEXT_MIGRATION_NUM"
-    is_migration=true
-  elif echo "$packet_text" | grep -qi "alembic\|migration.*file\|database.*migration\|schema.*migration\|add.*column.*table\|create.*table\|alter.*table"; then
-    log "  → Migration detected (task packet keyword match), assigning number: $NEXT_MIGRATION_NUM"
-    log "    Tip: Add 'migration' label to $ISSUE for more reliable detection"
     is_migration=true
   elif echo "$current_desc" | grep -qi "alembic\|migration.*file\|database.*migration\|schema.*migration"; then
     log "  → Migration detected (raw description keyword match), assigning number: $NEXT_MIGRATION_NUM"
@@ -994,26 +953,6 @@ for t in "${TASKS[@]}"; do
   log "  ✓ $ISSUE ready"
   LAUNCH_ARGS+=("$t")
 done
-
-
-# Warn if expansion failed
-if [[ "$EXPANSION_FAILED" == "true" ]]; then
-  echo ""
-  log_warn "Some issues failed to expand. Consider running /issue-writer on them first:"
-  log_warn "  See: skills/issue-writer/SKILL.md"
-  echo ""
-  if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-    if ! confirm "Continue anyway?"; then
-      # User declined - clean up state ledger for these issues
-      for t in "${TASKS[@]}"; do
-        IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
-        remove_task_state "$ISSUE"
-      done
-      log "Cancelled by user"
-      exit 0
-    fi
-  fi
-fi
 
 
 # ── Phase 4: Model routing suggestions ─────────────────────────────────
@@ -1948,21 +1887,17 @@ launch_task() {
   local issue_desc
   issue_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
 
-  # Task packet handling
+  # Task packet handling — write raw description (agent will expand in-pane)
   local packet_file="/tmp/${SESSION}-${issue}-taskpacket.md"
   if [[ -f "$packet_file" ]]; then
     :
-  elif [[ "$PLANNING_MODE" == "interactive" ]]; then
-    echo "$issue_desc" > "$packet_file"
-  elif is_task_packet "$issue_desc"; then
-    echo "$issue_desc" > "$packet_file"
   else
-    log "  Expanding task packet for $issue..."
-    if [[ -f "$TOOLS_DIR/expand-issue.ts" ]]; then
-      _with_timeout 120 npx tsx "$TOOLS_DIR/expand-issue.ts" "$issue" --output "$packet_file" --update >/dev/null 2>&1 || echo "$issue_desc" > "$packet_file"
+    if is_task_packet "$issue_desc"; then
+      log "  ✓ $issue has task packet"
     else
-      echo "$issue_desc" > "$packet_file"
+      log "  ✓ $issue raw description saved (agent will expand)"
     fi
+    echo "$issue_desc" > "$packet_file"
   fi
   local packet_content
   packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
@@ -1971,13 +1906,13 @@ launch_task() {
   git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" 2>/dev/null || true
 
   # ── Migration detection for dynamically launched tasks ──────────────
+  # Detection: 1) label match  2) raw description keywords
+  # Post-expansion migration detection happens in the planning agent
   local is_migration=false
   local has_migration_label
   has_migration_label=$(echo "$issue_json" | jq -r '.labels.nodes[]? | select(.name | ascii_downcase | test("migration|database|schema|alembic")) | .name' 2>/dev/null | head -1)
 
   if [[ -n "$has_migration_label" ]]; then
-    is_migration=true
-  elif echo "$packet_content" | grep -qi "alembic\|migration.*file\|database.*migration\|schema.*migration\|add.*column.*table\|create.*table\|alter.*table"; then
     is_migration=true
   elif echo "$issue_desc" | grep -qi "alembic\|migration.*file\|database.*migration\|schema.*migration"; then
     is_migration=true
@@ -2340,6 +2275,9 @@ Implement from the issue description plus direct codebase analysis."
         reviewMode: $reviewMode
       }' > "$routing_file"
 
+    # Save initial route for eval comparison (routed on raw description)
+    cp "$routing_file" "$feature_dir/.initial-route.json"
+
     # Launch planning phase directly with the routed model (skip routing agent)
     local resolved_planner_agent
     resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")"
@@ -2567,6 +2505,30 @@ monitor_issue_state() {
           ;;
 
         planning)
+          # Late migration detection: agent writes .migration-detected after expanding
+          local mig_marker="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.migration-detected"
+          local mig_num_file="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.migration-number"
+          if [[ -f "$mig_marker" ]] && [[ ! -f "$mig_num_file" ]]; then
+            # Check if reservation already exists
+            local existing_reservation
+            existing_reservation=$(jq -r --arg i "$ISSUE" '.migrationReservations[$i] // empty' "$STATE_FILE" 2>/dev/null)
+            if [[ -z "$existing_reservation" ]]; then
+              local next_num
+              next_num=$(jq -r '.nextMigrationNum // empty' "$STATE_FILE" 2>/dev/null)
+              if [[ -z "$next_num" ]]; then
+                local highest
+                highest=$(git -C "$REPO_DIR" ls-tree --name-only "origin/$BASE_BRANCH" alembic/versions/ 2>/dev/null \
+                  | grep -oE '^[0-9]+' | sort -n | tail -1)
+                next_num=$(( ${highest:-0} + 1 ))
+              fi
+              echo "$next_num" > "$mig_num_file"
+              save_migration_reservation "$ISSUE" "$next_num"
+              log "  → Late migration detected for $ISSUE, assigned number: $next_num"
+            else
+              echo "$existing_reservation" > "$mig_num_file"
+            fi
+          fi
+
           if check_plan_approved "$SLUG"; then
             # Read routing results from state (stored during routing → planning transition)
             coder_model=$(get_task_meta "$ISSUE" "coderModel")
