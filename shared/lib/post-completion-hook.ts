@@ -22,7 +22,7 @@ import { loadWavemillConfig } from './config.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
-import { gatherEvalContext } from './eval-context-gatherer.ts';
+import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, formatRepoContextDisplay, formatInterventionDisplay } from './eval-summary-printer.ts';
 
@@ -100,8 +100,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       repoDir,
     });
 
-    // 2. Detect all interventions
-    console.log('Post-completion eval: detecting interventions...');
+    // 2. Gather stage artifacts for judge attribution
     let branchName = ctx.branchName || '';
     if (!branchName) {
       try {
@@ -110,6 +109,16 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
         }).trim();
       } catch { /* best-effort */ }
     }
+
+    const stageArtifacts = gatherStageArtifacts(
+      repoDir,
+      ctx.issueId || '',
+      branchName,
+      ctx.worktreePath
+    );
+
+    // 3. Detect all interventions
+    console.log('Post-completion eval: detecting interventions...');
 
     const interventionData = detectAndFormatInterventions({
       prNumber: ctx.prNumber,
@@ -217,6 +226,10 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       issueId: ctx.issueId || undefined,
       prUrl: evalContext.prUrl || undefined,
       metadata: { workflowType: ctx.workflowType, hookTriggered: true, interventionSummary: interventionData.summary },
+      taskPacket: stageArtifacts.taskPacket,
+      planContent: stageArtifacts.planContent,
+      selfReviewSummary: stageArtifacts.selfReviewSummary,
+      routingDecision: stageArtifacts.routingDecision,
     });
 
     // 5. Compute workflow cost

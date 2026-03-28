@@ -78,6 +78,8 @@ export interface EvalOptions {
   evalModel?: string;
   /** Shared challenge pair identifier */
   challengePairId?: string;
+  /** Worktree path (optional, for artifact discovery) */
+  worktreePath?: string;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -121,6 +123,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     routingDecision,
     evalModel,
     challengePairId,
+    worktreePath,
   } = options;
 
   // 1. Gather context (auto-detect or explicit)
@@ -147,8 +150,8 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     repoDir,
   });
 
-  // Gather stage artifacts for judge attribution
-  const stageArtifacts = gatherStageArtifacts(repoDir, issueId, branch);
+  // Gather stage artifacts for judge attribution (search worktree first if provided)
+  const stageArtifacts = gatherStageArtifacts(repoDir, issueId, branch, worktreePath);
 
   if (issueId) console.log(`  Issue: ${issueId}`);
   if (prNumber) console.log(`  PR: #${prNumber}`);

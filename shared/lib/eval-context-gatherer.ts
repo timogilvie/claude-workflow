@@ -303,34 +303,40 @@ export function convertToRoutingDecision(data: RoutingCompleteData): RoutingDeci
 /**
  * Load routing decision from .routing-complete file in the feature directory.
  *
+ * Searches worktree first (if provided), then falls back to repoDir.
+ *
  * Returns null if the file is missing, malformed, or lacks required fields.
  */
 export function fetchRoutingDecision(
   repoDir: string,
-  slug: string
+  slug: string,
+  worktreePath?: string
 ): RoutingDecision | null {
   const featureDirs = ['features', 'bugs'];
+  const searchRoots = [worktreePath, repoDir].filter((p): p is string => Boolean(p));
 
-  for (const dir of featureDirs) {
-    const routingPath = path.join(repoDir, dir, slug, '.routing-complete');
-    if (!existsSync(routingPath)) continue;
+  for (const root of searchRoots) {
+    for (const dir of featureDirs) {
+      const routingPath = path.join(root, dir, slug, '.routing-complete');
+      if (!existsSync(routingPath)) continue;
 
-    try {
-      const raw = readFileSync(routingPath, 'utf-8');
-      const data = JSON.parse(raw) as Record<string, unknown>;
+      try {
+        const raw = readFileSync(routingPath, 'utf-8');
+        const data = JSON.parse(raw) as Record<string, unknown>;
 
-      // Validate required fields
-      if (
-        typeof data.planner !== 'string' ||
-        typeof data.coder !== 'string' ||
-        typeof data.reviewer !== 'string'
-      ) {
+        // Validate required fields
+        if (
+          typeof data.planner !== 'string' ||
+          typeof data.coder !== 'string' ||
+          typeof data.reviewer !== 'string'
+        ) {
+          return null;
+        }
+
+        return convertToRoutingDecision(data as unknown as RoutingCompleteData);
+      } catch {
         return null;
       }
-
-      return convertToRoutingDecision(data as unknown as RoutingCompleteData);
-    } catch {
-      return null;
     }
   }
 
@@ -403,46 +409,52 @@ function deriveFeatureSlug(
  * 1. features/<slug>/task-packet.md (full format)
  * 2. features/<slug>/task-packet-header.md + task-packet-details.md (split format)
  *
+ * Searches worktree first (if provided), then falls back to repoDir.
+ *
  * @param repoDir - Repository directory
  * @param slug - Feature slug
+ * @param worktreePath - Optional worktree path to search first
  * @returns Task packet content or undefined
  */
-function loadTaskPacket(repoDir: string, slug: string): string | undefined {
+function loadTaskPacket(repoDir: string, slug: string, worktreePath?: string): string | undefined {
   const featureDirs = ['features', 'bugs'];
+  const searchRoots = [worktreePath, repoDir].filter((p): p is string => Boolean(p));
 
-  for (const dir of featureDirs) {
-    const featureDir = path.join(repoDir, dir, slug);
-    if (!existsSync(featureDir)) continue;
+  for (const root of searchRoots) {
+    for (const dir of featureDirs) {
+      const featureDir = path.join(root, dir, slug);
+      if (!existsSync(featureDir)) continue;
 
-    // Try full format first
-    const fullPath = path.join(featureDir, 'task-packet.md');
-    if (existsSync(fullPath)) {
-      try {
-        return readFileSync(fullPath, 'utf-8');
-      } catch {
-        // Continue to next option
+      // Try full format first
+      const fullPath = path.join(featureDir, 'task-packet.md');
+      if (existsSync(fullPath)) {
+        try {
+          return readFileSync(fullPath, 'utf-8');
+        } catch {
+          // Continue to next option
+        }
       }
-    }
 
-    // Try split format (header + details)
-    const headerPath = path.join(featureDir, 'task-packet-header.md');
-    const detailsPath = path.join(featureDir, 'task-packet-details.md');
-    if (existsSync(headerPath) && existsSync(detailsPath)) {
-      try {
-        const header = readFileSync(headerPath, 'utf-8');
-        const details = readFileSync(detailsPath, 'utf-8');
-        return `${header}\n\n---\n\n${details}`;
-      } catch {
-        // Continue to next option
+      // Try split format (header + details)
+      const headerPath = path.join(featureDir, 'task-packet-header.md');
+      const detailsPath = path.join(featureDir, 'task-packet-details.md');
+      if (existsSync(headerPath) && existsSync(detailsPath)) {
+        try {
+          const header = readFileSync(headerPath, 'utf-8');
+          const details = readFileSync(detailsPath, 'utf-8');
+          return `${header}\n\n---\n\n${details}`;
+        } catch {
+          // Continue to next option
+        }
       }
-    }
 
-    // Try just header (if details missing)
-    if (existsSync(headerPath)) {
-      try {
-        return readFileSync(headerPath, 'utf-8');
-      } catch {
-        // Continue to next option
+      // Try just header (if details missing)
+      if (existsSync(headerPath)) {
+        try {
+          return readFileSync(headerPath, 'utf-8');
+        } catch {
+          // Continue to next option
+        }
       }
     }
   }
@@ -453,20 +465,26 @@ function loadTaskPacket(repoDir: string, slug: string): string | undefined {
 /**
  * Find and load plan content.
  *
+ * Searches worktree first (if provided), then falls back to repoDir.
+ *
  * @param repoDir - Repository directory
  * @param slug - Feature slug
+ * @param worktreePath - Optional worktree path to search first
  * @returns Plan content or undefined
  */
-function loadPlan(repoDir: string, slug: string): string | undefined {
+function loadPlan(repoDir: string, slug: string, worktreePath?: string): string | undefined {
   const featureDirs = ['features', 'bugs'];
+  const searchRoots = [worktreePath, repoDir].filter((p): p is string => Boolean(p));
 
-  for (const dir of featureDirs) {
-    const planPath = path.join(repoDir, dir, slug, 'plan.md');
-    if (existsSync(planPath)) {
-      try {
-        return readFileSync(planPath, 'utf-8');
-      } catch {
-        // Continue to next option
+  for (const root of searchRoots) {
+    for (const dir of featureDirs) {
+      const planPath = path.join(root, dir, slug, 'plan.md');
+      if (existsSync(planPath)) {
+        try {
+          return readFileSync(planPath, 'utf-8');
+        } catch {
+          // Continue to next option
+        }
       }
     }
   }
@@ -477,20 +495,46 @@ function loadPlan(repoDir: string, slug: string): string | undefined {
 /**
  * Format self-review summary from review metrics.
  *
+ * Loads metrics from worktree first (if provided), then repoDir, merging results.
+ *
  * @param repoDir - Repository directory
  * @param branch - Git branch name
+ * @param worktreePath - Optional worktree path to search first
  * @returns Formatted summary or undefined
  */
 function loadSelfReviewSummary(
   repoDir: string,
-  branch: string
+  branch: string,
+  worktreePath?: string
 ): string | undefined {
   try {
-    const metrics = loadMetrics(repoDir);
-    if (!metrics || metrics.length === 0) return undefined;
+    // Load metrics from both worktree and repoDir, then merge
+    const searchRoots = [worktreePath, repoDir].filter((p): p is string => Boolean(p));
+    const allMetrics: any[] = [];
+    const seenIds = new Set<string>();
+
+    for (const root of searchRoots) {
+      try {
+        const metrics = loadMetrics(root);
+        if (metrics && metrics.length > 0) {
+          // Deduplicate by metric ID
+          for (const metric of metrics) {
+            const metricId = `${metric.branch}-${metric.timestamp}`;
+            if (!seenIds.has(metricId)) {
+              seenIds.add(metricId);
+              allMetrics.push(metric);
+            }
+          }
+        }
+      } catch {
+        // Continue to next root
+      }
+    }
+
+    if (allMetrics.length === 0) return undefined;
 
     // Find the most recent review metric for this branch
-    const relevantMetrics = metrics.filter((m) => m.branch === branch);
+    const relevantMetrics = allMetrics.filter((m) => m.branch === branch);
     if (relevantMetrics.length === 0) return undefined;
 
     // Sort by timestamp descending
@@ -531,15 +575,19 @@ function loadSelfReviewSummary(
  *
  * All failures result in undefined (judge will skip that stage).
  *
+ * Searches worktree first (if provided), then falls back to repoDir.
+ *
  * @param repoDir - Repository directory
  * @param issueId - Linear issue ID
  * @param branch - Git branch name
+ * @param worktreePath - Optional worktree path to search first
  * @returns Object with optional stage artifacts
  */
 export function gatherStageArtifacts(
   repoDir: string,
   issueId: string,
-  branch: string
+  branch: string,
+  worktreePath?: string
 ): {
   taskPacket?: string;
   planContent?: string;
@@ -552,11 +600,11 @@ export function gatherStageArtifacts(
     return {}; // Can't locate feature directory
   }
 
-  // Gather artifacts
-  const taskPacket = loadTaskPacket(repoDir, slug);
-  const planContent = loadPlan(repoDir, slug);
-  const selfReviewSummary = loadSelfReviewSummary(repoDir, branch);
-  const routingDecision = fetchRoutingDecision(repoDir, slug) ?? undefined;
+  // Gather artifacts (search worktree first, then fall back to repoDir)
+  const taskPacket = loadTaskPacket(repoDir, slug, worktreePath);
+  const planContent = loadPlan(repoDir, slug, worktreePath);
+  const selfReviewSummary = loadSelfReviewSummary(repoDir, branch, worktreePath);
+  const routingDecision = fetchRoutingDecision(repoDir, slug, worktreePath) ?? undefined;
 
   return {
     taskPacket,
