@@ -1834,7 +1834,9 @@ fetch_candidates() {
   fi
 
   # Use shared scoring function from wavemill-common.sh (eliminates duplication)
-  BACKLOG_CACHE=$(score_and_rank_issues "$backlog_json" 30)
+  # Strip has_detailed_plan (field 6) to match pick_candidates() 6-field format:
+  # identifier|slug|title|area|score|blocked_by_count
+  BACKLOG_CACHE=$(score_and_rank_issues "$backlog_json" 30 | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}')
   LAST_BACKLOG_FETCH=$now
   echo "$BACKLOG_CACHE"
 }
@@ -2773,9 +2775,9 @@ while :; do
 
       if [[ -n "$available" ]]; then
         # Split into unblocked and blocked
-        # Field 7 is blocked_by_count (field 6 is has_detailed_plan)
-        avail_unblocked=$(echo "$available" | awk -F'|' '$7 == 0 || $7 == ""')
-        avail_blocked=$(echo "$available" | awk -F'|' '$7 > 0')
+        # Field 6 is blocked_by_count (has_detailed_plan stripped by fetch_candidates)
+        avail_unblocked=$(echo "$available" | awk -F'|' '$6 == 0 || $6 == ""')
+        avail_blocked=$(echo "$available" | awk -F'|' '$6 > 0')
         avail_blocked_count=0
         [[ -n "$avail_blocked" ]] && avail_blocked_count=$(echo "$avail_blocked" | grep -c .)
 
