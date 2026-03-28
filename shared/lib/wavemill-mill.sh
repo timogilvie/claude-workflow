@@ -2193,6 +2193,11 @@ launch_task() {
       local feature_dir="$wt_dir/features/$slug"
       mkdir -p "$feature_dir"
       cp "$details_file" "$feature_dir/task-packet-details.md"
+      # Also persist header for eval artifact discovery (HOK-1033)
+      local header_source="/tmp/${SESSION}-${issue}-taskpacket.md"
+      if [[ -f "$header_source" ]]; then
+        cp "$header_source" "$feature_dir/task-packet-header.md"
+      fi
       details_context="
 📖 Full Details: Comprehensive task packet with all 9 sections available at:
    features/$slug/task-packet-details.md
@@ -2209,6 +2214,11 @@ Read specific sections on-demand as you plan and implement:
 - Section 9: Proposed Labels"
     else
       cp "$details_file" "$wt_dir/task-packet-details.md"
+      # Also persist header for eval artifact discovery (HOK-1033)
+      local header_source="/tmp/${SESSION}-${issue}-taskpacket.md"
+      if [[ -f "$header_source" ]]; then
+        cp "$header_source" "$wt_dir/task-packet-header.md"
+      fi
       details_context="
 📖 Full Details: Read task-packet-details.md in the repo root for:
 - Complete implementation approach (Section 3)
