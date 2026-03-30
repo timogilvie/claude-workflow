@@ -2,32 +2,21 @@
 title: Wavemill
 ---
 
-Wavemill helps developers build software more effectively with LLMs. It connects a backlog in Linear with tools to plan and build faster. Wavemill supports using Linear as backlog planner and Claude/Codex as implementation agents but makes it easy to extend to other tools.
+**Wavemill** is a self-improving AI software development pipeline. It offers a CLI tool for autonomous AI-powered software development workflows to automatically process backlogs, expand issues, and ship features in parallel. It works across multiple models and includes eval functionality to understand which models are most effective at each type of task, routing tasks to the right model automatically.
 
-## What Wavemill Handles
+```
+Linear Backlog → Expand → Route → Build (parallel) → Eval → Learn
+                                      ↑                       |
+                                      └── routing improves ───┘
+```
 
-- Pulls prioritized tasks from Linear.
-- Expands thin issues into implementation-ready packets.
-- Runs parallel agent worktrees with conflict safeguards.
-- Tracks PR and workflow progress with validation gates.
+### How it works
 
-## Core Modes
-
-### 1) Autonomous mill mode
-
-Use `wavemill mill` to continuously process backlog tasks in parallel. 
-
-### 2) Epic planning
-
-Use `wavemill plan` to break an epic/larger body of work into chunks that LLMs can handle and add them as Linear tasks that can be milled later.
-
-### 3) LLM-powered code review
-
-Use `review-changes` or `review-pr` to get structured, LLM-powered code review that catches major issues — logic bugs, security concerns, plan deviations, and UI inconsistencies. Runs automatically in the feature workflow.
-
-### 4) Human-in-the-loop workflow
-
-Use workflow commands to move one feature from backlog to PR with explicit review gates.
+1. **`wavemill expand`** — enriches Linear issues into detailed task packets with context, constraints, and validation steps
+2. **`wavemill mill`** — continuously pulls from your backlog, launches parallel AI agents in tmux worktrees, monitors PRs, and auto-completes tasks
+3. **Eval** — scores every completed task on a 0–1 scale measuring autonomy and quality
+4. **Router** — uses eval history to pick the best model for each task type
+5. **Challenge mode** — periodically runs the same task with two models head-to-head, building the dataset that makes routing smarter over time
 
 ## Quick Command Reference
 
@@ -41,9 +30,6 @@ wavemill init
 
 # autonomous backlog loop
 wavemill mill
-
-# Expand an epic
-wavemill plan
 
 # expand backlog issues into task packets
 wavemill expand
