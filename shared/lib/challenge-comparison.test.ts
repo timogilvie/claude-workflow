@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { appendChallengeComparison, readChallengeComparisons, type ChallengeComparison } from './challenge-comparison.ts';
+import {
+  appendChallengeComparison,
+  readChallengeComparisons,
+  detectVariedDimensions,
+  classifyChallengeType,
+  type ChallengeComparison,
+  type ChallengeRoutingMeta,
+} from './challenge-comparison.ts';
 
 let passed = 0;
 let failed = 0;
@@ -62,6 +69,211 @@ test('readChallengeComparisons returns empty array when file is missing', () => 
   try {
     const records = readChallengeComparisons(tmp);
     assert.deepEqual(records, []);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+console.log('\n--- Dimension Detection Tests ---\n');
+
+function makeRouting(overrides?: Partial<ChallengeRoutingMeta>): ChallengeRoutingMeta {
+  return {
+    planner: 'claude-opus-4-6',
+    coder: 'claude-sonnet-4-5-20250929',
+    reviewer: 'claude-sonnet-4-5-20250929',
+    planDepth: 'deep',
+    codeDepth: 'medium',
+    reviewMode: 'strict',
+    ...overrides,
+  };
+}
+
+test('detectVariedDimensions returns undefined when primary routing is missing', () => {
+  const result = detectVariedDimensions(undefined, makeRouting());
+  assert.equal(result, undefined);
+});
+
+test('detectVariedDimensions returns undefined when challenger routing is missing', () => {
+  const result = detectVariedDimensions(makeRouting(), undefined);
+  assert.equal(result, undefined);
+});
+
+test('detectVariedDimensions returns all false when routings are identical', () => {
+  const routing = makeRouting();
+  const result = detectVariedDimensions(routing, routing);
+  assert.ok(result);
+  assert.equal(result.planner, false);
+  assert.equal(result.coder, false);
+  assert.equal(result.reviewer, false);
+  assert.equal(result.planDepth, false);
+  assert.equal(result.codeDepth, false);
+  assert.equal(result.reviewMode, false);
+});
+
+test('detectVariedDimensions detects single field difference (coder)', () => {
+  const primary = makeRouting();
+  const challenger = makeRouting({ coder: 'claude-haiku-4-5-20251001' });
+  const result = detectVariedDimensions(primary, challenger);
+  assert.ok(result);
+  assert.equal(result.planner, false);
+  assert.equal(result.coder, true);
+  assert.equal(result.reviewer, false);
+  assert.equal(result.planDepth, false);
+  assert.equal(result.codeDepth, false);
+  assert.equal(result.reviewMode, false);
+});
+
+test('detectVariedDimensions detects multiple field differences', () => {
+  const primary = makeRouting();
+  const challenger = makeRouting({
+    planner: 'claude-sonnet-4-5-20250929',
+    codeDepth: 'shallow',
+  });
+  const result = detectVariedDimensions(primary, challenger);
+  assert.ok(result);
+  assert.equal(result.planner, true);
+  assert.equal(result.coder, false);
+  assert.equal(result.reviewer, false);
+  assert.equal(result.planDepth, false);
+  assert.equal(result.codeDepth, true);
+  assert.equal(result.reviewMode, false);
+});
+
+test('detectVariedDimensions treats empty strings as equivalent', () => {
+  const primary = makeRouting({ reviewer: '' });
+  const challenger = makeRouting({ reviewer: '' });
+  const result = detectVariedDimensions(primary, challenger);
+  assert.ok(result);
+  assert.equal(result.reviewer, false);
+});
+
+console.log('\n--- Challenge Type Classification Tests ---\n');
+
+test('classifyChallengeType returns "coder-only" when only coder differs', () => {
+  const varied = {
+    planner: false,
+    coder: true,
+    reviewer: false,
+    planDepth: false,
+    codeDepth: false,
+    reviewMode: false,
+  };
+  const result = classifyChallengeType(varied);
+  assert.equal(result, 'coder-only');
+});
+
+test('classifyChallengeType returns "planner-only" when only planner differs', () => {
+  const varied = {
+    planner: true,
+    coder: false,
+    reviewer: false,
+    planDepth: false,
+    codeDepth: false,
+    reviewMode: false,
+  };
+  const result = classifyChallengeType(varied);
+  assert.equal(result, 'planner-only');
+});
+
+test('classifyChallengeType returns "reviewer-only" when only reviewer differs', () => {
+  const varied = {
+    planner: false,
+    coder: false,
+    reviewer: true,
+    planDepth: false,
+    codeDepth: false,
+    reviewMode: false,
+  };
+  const result = classifyChallengeType(varied);
+  assert.equal(result, 'reviewer-only');
+});
+
+test('classifyChallengeType returns "full-stack" when all dimensions differ', () => {
+  const varied = {
+    planner: true,
+    coder: true,
+    reviewer: true,
+    planDepth: true,
+    codeDepth: true,
+    reviewMode: true,
+  };
+  const result = classifyChallengeType(varied);
+  assert.equal(result, 'full-stack');
+});
+
+test('classifyChallengeType returns "multi-variable" when coder and planDepth differ', () => {
+  const varied = {
+    planner: false,
+    coder: true,
+    reviewer: false,
+    planDepth: true,
+    codeDepth: false,
+    reviewMode: false,
+  };
+  const result = classifyChallengeType(varied);
+  assert.equal(result, 'multi-variable');
+});
+
+test('classifyChallengeType returns "multi-variable" when only depth fields differ', () => {
+  const varied = {
+    planner: false,
+    coder: false,
+    reviewer: false,
+    planDepth: true,
+    codeDepth: true,
+    reviewMode: false,
+  };
+  const result = classifyChallengeType(varied);
+  assert.equal(result, 'multi-variable');
+});
+
+console.log('\n--- Routing Persistence Tests ---\n');
+
+test('record with routing metadata round-trips correctly', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-comparison-test-'));
+  try {
+    const record = makeRecord({
+      primaryRouting: makeRouting(),
+      challengerRouting: makeRouting({ coder: 'claude-haiku-4-5-20251001' }),
+      variedDimensions: {
+        planner: false,
+        coder: true,
+        reviewer: false,
+        planDepth: false,
+        codeDepth: false,
+        reviewMode: false,
+      },
+      challengeType: 'coder-only',
+      workflowInsight: 'The coder model difference led to different implementation patterns.',
+    });
+    appendChallengeComparison(record, tmp);
+    const records = readChallengeComparisons(tmp);
+    assert.equal(records.length, 1);
+    assert.ok(records[0].primaryRouting);
+    assert.equal(records[0].primaryRouting?.coder, 'claude-sonnet-4-5-20250929');
+    assert.ok(records[0].challengerRouting);
+    assert.equal(records[0].challengerRouting?.coder, 'claude-haiku-4-5-20251001');
+    assert.ok(records[0].variedDimensions);
+    assert.equal(records[0].variedDimensions?.coder, true);
+    assert.equal(records[0].challengeType, 'coder-only');
+    assert.equal(records[0].workflowInsight, 'The coder model difference led to different implementation patterns.');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('record without routing metadata (old format) parses correctly', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-comparison-test-'));
+  try {
+    const record = makeRecord(); // No routing fields
+    appendChallengeComparison(record, tmp);
+    const records = readChallengeComparisons(tmp);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].primaryRouting, undefined);
+    assert.equal(records[0].challengerRouting, undefined);
+    assert.equal(records[0].variedDimensions, undefined);
+    assert.equal(records[0].challengeType, undefined);
+    assert.equal(records[0].workflowInsight, undefined);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

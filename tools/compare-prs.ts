@@ -4,7 +4,13 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import { callClaude, parseJsonFromLLM } from '../shared/lib/llm-cli.ts';
 import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/lib/eval-context-gatherer.ts';
 import { readEvalRecords } from '../shared/lib/eval-persistence.ts';
-import { appendChallengeComparison, type ChallengeComparison, type ChallengeRoutingMeta } from '../shared/lib/challenge-comparison.ts';
+import {
+  appendChallengeComparison,
+  detectVariedDimensions,
+  classifyChallengeType,
+  type ChallengeComparison,
+  type ChallengeRoutingMeta,
+} from '../shared/lib/challenge-comparison.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -38,13 +44,49 @@ function buildPrompt(input: {
   challengerDiff: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
+  primaryRouting?: ChallengeRoutingMeta;
+  challengerRouting?: ChallengeRoutingMeta;
 }): string {
+  let workflowContext = '';
+
+  if (input.primaryRouting && input.challengerRouting) {
+    // Use detectVariedDimensions to ensure consistent normalization logic
+    const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
+    const variedFields: string[] = [];
+    if (variedDimensions) {
+      if (variedDimensions.planner) variedFields.push('planner');
+      if (variedDimensions.coder) variedFields.push('coder');
+      if (variedDimensions.reviewer) variedFields.push('reviewer');
+      if (variedDimensions.planDepth) variedFields.push('planDepth');
+      if (variedDimensions.codeDepth) variedFields.push('codeDepth');
+      if (variedDimensions.reviewMode) variedFields.push('reviewMode');
+    }
+
+    workflowContext = `
+
+## Workflow Context
+
+Primary side:
+- Planner: ${input.primaryRouting.planner} | Coder: ${input.primaryRouting.coder} | Reviewer: ${input.primaryRouting.reviewer}
+- Plan depth: ${input.primaryRouting.planDepth} | Code depth: ${input.primaryRouting.codeDepth} | Review mode: ${input.primaryRouting.reviewMode}
+
+Challenger side:
+- Planner: ${input.challengerRouting.planner} | Coder: ${input.challengerRouting.coder} | Reviewer: ${input.challengerRouting.reviewer}
+- Plan depth: ${input.challengerRouting.planDepth} | Code depth: ${input.challengerRouting.codeDepth} | Review mode: ${input.challengerRouting.reviewMode}
+
+Variables that differed: ${variedFields.join(', ') || 'none'}
+
+Consider whether routing differences (not just code differences) may have influenced the outcome.
+`;
+  }
+
   return `You are judging two pull requests for the same task.
 
 Return JSON only with this exact structure:
 {
   "winner": "primary" | "challenger",
   "rationale": "short explanation",
+  "workflowInsight": "optional observation about how routing differences may have influenced the result",
   "dimensions": {
     "correctness": { "primary": number, "challenger": number },
     "codeQuality": { "primary": number, "challenger": number },
@@ -54,6 +96,7 @@ Return JSON only with this exact structure:
 }
 
 Scores must be integers from 1 to 10.
+${workflowContext}
 
 Task context:
 ${input.issuePrompt}
@@ -68,15 +111,20 @@ Challenger diff:
 ${input.challengerDiff}`;
 }
 
-function validateComparisonJson(parsed: any): Omit<ChallengeComparison, 'challengePairId' | 'primaryModel' | 'challengerModel' | 'primaryPrUrl' | 'challengerPrUrl' | 'primaryEvalScore' | 'challengerEvalScore' | 'winnerModel' | 'timestamp'> {
+function validateComparisonJson(parsed: any): Omit<ChallengeComparison, 'challengePairId' | 'primaryModel' | 'challengerModel' | 'primaryPrUrl' | 'challengerPrUrl' | 'primaryEvalScore' | 'challengerEvalScore' | 'winnerModel' | 'timestamp' | 'primaryRouting' | 'challengerRouting' | 'variedDimensions' | 'challengeType'> {
   const winner = parsed?.winner;
   const rationale = parsed?.rationale;
   const dimensions = parsed?.dimensions;
+  const workflowInsight = parsed?.workflowInsight;
+
   if (winner !== 'primary' && winner !== 'challenger') {
     throw new Error(`Invalid winner: ${winner}`);
   }
   if (typeof rationale !== 'string' || rationale.trim().length === 0) {
     throw new Error('Comparison rationale must be a non-empty string');
+  }
+  if (workflowInsight !== undefined && typeof workflowInsight !== 'string') {
+    throw new Error('workflowInsight must be a string if provided');
   }
   for (const key of ['correctness', 'codeQuality', 'completeness', 'scopeDiscipline']) {
     const dimension = dimensions?.[key];
@@ -97,7 +145,12 @@ function validateComparisonJson(parsed: any): Omit<ChallengeComparison, 'challen
       );
     }
   }
-  return { winner, rationale: rationale.trim(), dimensions };
+
+  const result: any = { winner, rationale: rationale.trim(), dimensions };
+  if (workflowInsight && workflowInsight.trim().length > 0) {
+    result.workflowInsight = workflowInsight.trim();
+  }
+  return result;
 }
 
 function runGh(args: string[], repoDir: string): string {
@@ -131,6 +184,36 @@ function withBodyFile<T>(body: string, fn: (filePath: string) => T): T {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+function formatRoutingSummary(
+  primaryRouting?: ChallengeRoutingMeta,
+  challengerRouting?: ChallengeRoutingMeta,
+  challengeType?: string,
+): string {
+  if (!primaryRouting || !challengerRouting) {
+    return '';
+  }
+
+  const parts: string[] = [];
+
+  // Model comparison
+  parts.push(
+    `Primary used ${primaryRouting.planner || 'unknown'} (planner) + ${primaryRouting.coder} (coder)` +
+    (primaryRouting.reviewer ? ` + ${primaryRouting.reviewer} (reviewer)` : '')
+  );
+  parts.push(
+    `Challenger used ${challengerRouting.planner || 'unknown'} (planner) + ${challengerRouting.coder} (coder)` +
+    (challengerRouting.reviewer ? ` + ${challengerRouting.reviewer} (reviewer)` : '')
+  );
+
+  let summary = parts.join(' vs ');
+
+  if (challengeType) {
+    summary += `\nChallenge type: ${challengeType}`;
+  }
+
+  return summary;
 }
 
 runTool({
@@ -189,23 +272,6 @@ runTool({
       throw new Error(`Invalid eval scores for challenge pair ${pairId}`);
     }
 
-    const prompt = buildPrompt({
-      issuePrompt,
-      primaryDiff,
-      challengerDiff,
-      primaryEvalScore: primaryEval.score,
-      challengerEvalScore: challengerEval.score,
-    });
-    const response = await callClaude(prompt, {
-      mode: 'sync',
-      model: comparisonModel,
-      timeout: 180_000,
-      retry: true,
-      maxRetries: 2,
-    });
-    const verdict = validateComparisonJson(parseJsonFromLLM(response.text));
-    const winnerModel = verdict.winner === 'primary' ? primaryModel : challengerModel;
-
     // Build routing metadata if provided
     const primaryRouting: ChallengeRoutingMeta | undefined = args['primary-planner'] ? {
       planner: (args['primary-planner'] as string) || '',
@@ -225,6 +291,29 @@ runTool({
       reviewMode: (args['challenger-review-mode'] as string) || '',
     } : undefined;
 
+    const prompt = buildPrompt({
+      issuePrompt,
+      primaryDiff,
+      challengerDiff,
+      primaryEvalScore: primaryEval.score,
+      challengerEvalScore: challengerEval.score,
+      primaryRouting,
+      challengerRouting,
+    });
+    const response = await callClaude(prompt, {
+      mode: 'sync',
+      model: comparisonModel,
+      timeout: 180_000,
+      retry: true,
+      maxRetries: 2,
+    });
+    const verdict = validateComparisonJson(parseJsonFromLLM(response.text));
+    const winnerModel = verdict.winner === 'primary' ? primaryModel : challengerModel;
+
+    // Compute enrichment fields
+    const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
+    const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
+
     const record: ChallengeComparison = {
       challengePairId: pairId,
       primaryModel,
@@ -240,18 +329,31 @@ runTool({
       timestamp: new Date().toISOString(),
       primaryRouting,
       challengerRouting,
+      variedDimensions,
+      challengeType,
+      workflowInsight: verdict.workflowInsight,
     };
 
     appendChallengeComparison(record);
 
-    const commentBody = [
+    const routingSummary = formatRoutingSummary(primaryRouting, challengerRouting, challengeType);
+    const commentParts = [
       `Challenge comparison for \`${pairId}\``,
       ``,
+    ];
+
+    if (routingSummary) {
+      commentParts.push(routingSummary, '');
+    }
+
+    commentParts.push(
       `Recommended winner: ${record.winner} (${record.winnerModel})`,
       `Other PR: ${record.winner === 'primary' ? challengerPrUrl : primaryPrUrl}`,
       ``,
       record.rationale,
-    ].join('\n');
+    );
+
+    const commentBody = commentParts.join('\n');
 
     if (args.comment || config.challenge?.autoMergeWinner) {
       withBodyFile(commentBody, (bodyFile) => {
