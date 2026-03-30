@@ -23,7 +23,7 @@ import { errorMessage } from './error-utils.ts';
  * Current config format version.
  * Increment when making breaking changes to config structure.
  */
-export const CURRENT_CONFIG_VERSION = '1.0.1';
+export const CURRENT_CONFIG_VERSION = '1.1.0';
 
 export interface MillConfig {
   session?: string;
