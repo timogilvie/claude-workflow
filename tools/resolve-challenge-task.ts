@@ -85,10 +85,11 @@ runTool({
     if (taskFile) {
       try {
         const prompt = readTaskPromptFromFile(taskFile);
-        pair = pickChallengeWorkflows(pool, prompt, {
+        pair = pickChallengeWorkflows(pool, {
           pairId: issue,
           issueId: issue,
           slug,
+          prompt,
           primaryModel,
           agentMap: router.agentMap,
           defaultAgent,

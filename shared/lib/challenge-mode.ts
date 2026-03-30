@@ -1,6 +1,6 @@
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { resolveAgent } from './model-router.ts';
-import { routeWorkflow } from './workflow-router.ts';
+import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
 
@@ -155,22 +155,24 @@ export function pickChallengeModels(
 
 export function pickChallengeWorkflows(
   pool: string[],
-  prompt: string,
   opts: {
     pairId: string;
     issueId: string;
     slug: string;
+    prompt: string;
     primaryModel?: string;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
     repoDir?: string;
+    routeFn?: (prompt: string, options?: { repoDir?: string }) => WorkflowRouteDecision;
   },
 ): ChallengePairSelection | null {
   const uniquePool = uniqueNonEmpty(pool);
   const randomFn = opts.randomFn || Math.random;
   const defaultAgent = opts.defaultAgent || 'claude';
   const agentMap = opts.agentMap || {};
+  const routeFn = opts.routeFn || routeWorkflow;
 
   // First, get the base model selection (primary and challenger coders)
   let primaryModel = opts.primaryModel?.trim() || '';
@@ -192,7 +194,7 @@ export function pickChallengeWorkflows(
   }
 
   // Route the workflow once to get planner/reviewer/depths
-  const routing = routeWorkflow(prompt, { repoDir: opts.repoDir });
+  const routing = routeFn(opts.prompt, { repoDir: opts.repoDir });
 
   // Both primary and challenger use the same planner/reviewer/depths
   // but different coder models
