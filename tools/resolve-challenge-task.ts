@@ -2,8 +2,9 @@
 
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
-import { pickChallengeModels, getChallengeModelPool, canRunChallenge } from '../shared/lib/challenge-mode.ts';
+import { pickChallengeModels, pickChallengeWorkflows, getChallengeModelPool, canRunChallenge } from '../shared/lib/challenge-mode.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
+import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
 
 runTool({
   name: 'resolve-challenge-task',
@@ -15,6 +16,7 @@ runTool({
     'primary-model': { type: 'string', description: 'Router-selected or forced primary model' },
     'remaining-slots': { type: 'string', description: 'Available mill slots before launch' },
     'repo-dir': { type: 'string', description: 'Repository directory' },
+    file: { type: 'string', description: 'Task prompt file path (enables workflow routing)' },
   },
   async run({ args }) {
     const repoDir = (args['repo-dir'] as string) || process.cwd();
@@ -23,6 +25,7 @@ runTool({
     const title = args.title as string;
     const primaryModel = (args['primary-model'] as string | undefined)?.trim() || undefined;
     const remainingSlots = Number(args['remaining-slots'] || '1');
+    const promptFile = args.file as string | undefined;
 
     if (!issue || !slug || !title) {
       throw new Error('--issue, --slug, and --title are required');
@@ -77,14 +80,31 @@ runTool({
       return;
     }
 
-    const pair = pickChallengeModels(pool, {
-      pairId: issue,
-      issueId: issue,
-      slug,
-      primaryModel,
-      agentMap: router.agentMap,
-      defaultAgent,
-    });
+    // If prompt file is provided, use pickChallengeWorkflows for full routing
+    let pair;
+    if (promptFile) {
+      const prompt = readTaskPromptFromFile(promptFile);
+      pair = pickChallengeWorkflows(pool, {
+        pairId: issue,
+        issueId: issue,
+        slug,
+        prompt,
+        repoDir,
+        primaryModel,
+        agentMap: router.agentMap,
+        defaultAgent,
+      });
+    } else {
+      // Fallback to pickChallengeModels for backward compatibility
+      pair = pickChallengeModels(pool, {
+        pairId: issue,
+        issueId: issue,
+        slug,
+        primaryModel,
+        agentMap: router.agentMap,
+        defaultAgent,
+      });
+    }
 
     if (!pair) {
       console.log(JSON.stringify({ ...base, reason: 'selection_failed' }));

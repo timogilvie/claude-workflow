@@ -2,6 +2,15 @@ import { mkdirSync, existsSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+export interface ChallengeRoutingMeta {
+  planner: string;
+  coder: string;
+  reviewer: string;
+  planDepth: string;
+  codeDepth: string;
+  reviewMode: string;
+}
+
 export interface ChallengeComparison {
   challengePairId: string;
   primaryModel: string;
@@ -20,6 +29,9 @@ export interface ChallengeComparison {
     scopeDiscipline: { primary: number; challenger: number };
   };
   timestamp: string;
+  // Optional routing metadata for each side
+  primaryRouting?: ChallengeRoutingMeta;
+  challengerRouting?: ChallengeRoutingMeta;
 }
 
 const DEFAULT_EVALS_DIR = '.wavemill/evals';
