@@ -1,5 +1,5 @@
 {
-  "configVersion": "1.0.1",
+  "configVersion": "1.1.0",
   "linear": {
     "project": "wavemill"
   },
@@ -68,15 +68,15 @@
         "outputCostPerMTok": 14,
         "cacheReadCostPerMTok": 0.44
       },
-      "gpt-5.3-codex-spark": {
-        "inputCostPerMTok": 1.75,
-        "outputCostPerMTok": 14,
-        "cacheReadCostPerMTok": 0.44
-      },
       "gpt-5.4": {
         "inputCostPerMTok": 2.5,
         "outputCostPerMTok": 15,
         "cacheReadCostPerMTok": 0.25
+      },
+      "gpt-5.3-codex-spark": {
+        "inputCostPerMTok": 1.75,
+        "outputCostPerMTok": 14,
+        "cacheReadCostPerMTok": 0.44
       }
     },
     "interventionPenalties": {
@@ -90,6 +90,19 @@
     }
   },
   "autoEval": true,
+  "challenge": {
+    "enabled": true,
+    "rate": 0.1,
+    "models": [
+      "claude-sonnet-4-5-20250929",
+      "claude-opus-4-6",
+      "claude-haiku-4-5-20251001",
+      "gpt-5.3-codex",
+      "gpt-5.4"
+    ],
+    "comparisonModel": "claude-opus-4-6",
+    "autoMergeWinner": false
+  },
   "review": {
     "maxIterations": 3,
     "enabled": true,
@@ -110,8 +123,8 @@
       "claude-sonnet-4-5-20250929": "claude",
       "claude-haiku-4-5-20251001": "claude",
       "gpt-5.3-codex": "codex",
-      "gpt-5.3-codex-spark": "codex",
-      "gpt-5.4": "codex"
+      "gpt-5.4": "codex",
+      "gpt-5.3-codex-spark": "codex"
     },
     "mode": "auto",
     "llmModel": "gpt-4o-mini",
