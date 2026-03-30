@@ -7,6 +7,7 @@ import {
   deriveChallengerKey,
   getChallengeModelPool,
   pickChallengeModels,
+  pickChallengeWorkflows,
 } from './challenge-mode.ts';
 
 let passed = 0;
@@ -111,6 +112,101 @@ test('pickChallengeModels returns null when fewer than two distinct models exist
     issueId: 'HOK-970',
     slug: 'challenge-mode',
   });
+  assert.equal(pair, null);
+});
+
+test('pickChallengeModels populates routing fields with empty strings', () => {
+  const pair = pickChallengeModels(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-972',
+      issueId: 'HOK-972',
+      slug: 'test-routing-fields',
+      primaryModel: 'claude-opus-4-6',
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.primary.planner, '');
+  assert.equal(pair!.primary.reviewer, '');
+  assert.equal(pair!.primary.planDepth, '');
+  assert.equal(pair!.primary.codeDepth, '');
+  assert.equal(pair!.primary.reviewMode, '');
+  assert.equal(pair!.challenger.planner, '');
+  assert.equal(pair!.challenger.reviewer, '');
+  assert.equal(pair!.challenger.planDepth, '');
+  assert.equal(pair!.challenger.codeDepth, '');
+  assert.equal(pair!.challenger.reviewMode, '');
+});
+
+test('pickChallengeWorkflows populates routing fields for both sides', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.3-codex'],
+    'Implement user authentication with OAuth2',
+    {
+      pairId: 'HOK-973',
+      issueId: 'HOK-973',
+      slug: 'oauth-auth',
+      primaryModel: 'claude-opus-4-6',
+      agentMap: { 'gpt-5.3-codex': 'codex' },
+      defaultAgent: 'claude',
+      randomFn: () => 0.9,
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.primary.model, 'claude-opus-4-6');
+  assert.notEqual(pair!.challenger.model, pair!.primary.model);
+
+  // Both sides should have routing fields populated
+  assert.ok(pair!.primary.planner, 'Primary planner should be set');
+  assert.ok(pair!.primary.reviewer, 'Primary reviewer should be set');
+  assert.ok(pair!.primary.planDepth, 'Primary planDepth should be set');
+  assert.ok(pair!.primary.codeDepth, 'Primary codeDepth should be set');
+  assert.ok(pair!.primary.reviewMode, 'Primary reviewMode should be set');
+
+  assert.ok(pair!.challenger.planner, 'Challenger planner should be set');
+  assert.ok(pair!.challenger.reviewer, 'Challenger reviewer should be set');
+  assert.ok(pair!.challenger.planDepth, 'Challenger planDepth should be set');
+  assert.ok(pair!.challenger.codeDepth, 'Challenger codeDepth should be set');
+  assert.ok(pair!.challenger.reviewMode, 'Challenger reviewMode should be set');
+});
+
+test('pickChallengeWorkflows uses same routing for both sides', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'],
+    'Fix authentication bug in OAuth flow',
+    {
+      pairId: 'HOK-974',
+      issueId: 'HOK-974',
+      slug: 'fix-oauth-bug',
+      primaryModel: 'claude-opus-4-6',
+      randomFn: () => 0,
+    },
+  );
+
+  assert.ok(pair);
+  // Both sides should have the same planner/reviewer/depths
+  assert.equal(pair!.primary.planner, pair!.challenger.planner);
+  assert.equal(pair!.primary.reviewer, pair!.challenger.reviewer);
+  assert.equal(pair!.primary.planDepth, pair!.challenger.planDepth);
+  assert.equal(pair!.primary.codeDepth, pair!.challenger.codeDepth);
+  assert.equal(pair!.primary.reviewMode, pair!.challenger.reviewMode);
+
+  // But different coders
+  assert.notEqual(pair!.primary.model, pair!.challenger.model);
+});
+
+test('pickChallengeWorkflows returns null when fewer than two distinct models exist', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6'],
+    'Add new feature',
+    {
+      pairId: 'HOK-975',
+      issueId: 'HOK-975',
+      slug: 'new-feature',
+    },
+  );
   assert.equal(pair, null);
 });
 

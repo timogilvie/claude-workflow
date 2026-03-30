@@ -4,7 +4,7 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import { callClaude, parseJsonFromLLM } from '../shared/lib/llm-cli.ts';
 import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/lib/eval-context-gatherer.ts';
 import { readEvalRecords } from '../shared/lib/eval-persistence.ts';
-import { appendChallengeComparison, type ChallengeComparison } from '../shared/lib/challenge-comparison.ts';
+import { appendChallengeComparison, type ChallengeComparison, type ChallengeRoutingMeta } from '../shared/lib/challenge-comparison.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -143,6 +143,16 @@ runTool({
     'challenger-pr': { type: 'string', description: 'Challenger PR number or URL' },
     'primary-model': { type: 'string', description: 'Primary solution model' },
     'challenger-model': { type: 'string', description: 'Challenger solution model' },
+    'primary-planner': { type: 'string', description: 'Primary planner model' },
+    'primary-reviewer': { type: 'string', description: 'Primary reviewer model' },
+    'primary-plan-depth': { type: 'string', description: 'Primary plan depth' },
+    'primary-code-depth': { type: 'string', description: 'Primary code depth' },
+    'primary-review-mode': { type: 'string', description: 'Primary review mode' },
+    'challenger-planner': { type: 'string', description: 'Challenger planner model' },
+    'challenger-reviewer': { type: 'string', description: 'Challenger reviewer model' },
+    'challenger-plan-depth': { type: 'string', description: 'Challenger plan depth' },
+    'challenger-code-depth': { type: 'string', description: 'Challenger code depth' },
+    'challenger-review-mode': { type: 'string', description: 'Challenger review mode' },
     'repo-dir': { type: 'string', description: 'Repository directory' },
     model: { type: 'string', description: 'Comparison judge model override' },
     comment: { type: 'boolean', description: 'Post recommendation comments on both PRs' },
@@ -196,6 +206,25 @@ runTool({
     const verdict = validateComparisonJson(parseJsonFromLLM(response.text));
     const winnerModel = verdict.winner === 'primary' ? primaryModel : challengerModel;
 
+    // Build routing metadata if provided
+    const primaryRouting: ChallengeRoutingMeta | undefined = args['primary-planner'] ? {
+      planner: (args['primary-planner'] as string) || '',
+      coder: primaryModel,
+      reviewer: (args['primary-reviewer'] as string) || '',
+      planDepth: (args['primary-plan-depth'] as string) || '',
+      codeDepth: (args['primary-code-depth'] as string) || '',
+      reviewMode: (args['primary-review-mode'] as string) || '',
+    } : undefined;
+
+    const challengerRouting: ChallengeRoutingMeta | undefined = args['challenger-planner'] ? {
+      planner: (args['challenger-planner'] as string) || '',
+      coder: challengerModel,
+      reviewer: (args['challenger-reviewer'] as string) || '',
+      planDepth: (args['challenger-plan-depth'] as string) || '',
+      codeDepth: (args['challenger-code-depth'] as string) || '',
+      reviewMode: (args['challenger-review-mode'] as string) || '',
+    } : undefined;
+
     const record: ChallengeComparison = {
       challengePairId: pairId,
       primaryModel,
@@ -209,6 +238,8 @@ runTool({
       rationale: verdict.rationale,
       dimensions: verdict.dimensions,
       timestamp: new Date().toISOString(),
+      primaryRouting,
+      challengerRouting,
     };
 
     appendChallengeComparison(record);
