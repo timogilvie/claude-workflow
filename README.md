@@ -1,28 +1,29 @@
-# Wavemill - Autonomous AI Workflow Tools
+# Wavemill
 
-**Wavemill** is a CLI tool for autonomous AI-powered software development workflows. It combines Claude/Codex AI agents with Linear project management to automatically process backlogs, expand issues, and ship features in parallel.
+**Wavemill** is a self-improving AI software development pipeline. It offers a CLI tool for autonomous AI-powered software development workflows to automatically process backlogs, expand issues, and ship features in parallel. It works across multiple models and includes eval functionality to understand which models are most effective at each type of task, routing tasks to the right model automatically.
 
-This repo also includes traditional LLM workflow helpers for Claude and Codex: backlog triage, planning, bugfixes, and doc generation via slash commands.
+```
+Linear Backlog → Expand → Route → Build (parallel) → Eval → Learn
+                                      ↑                       |
+                                      └── routing improves ───┘
+```
 
-## Website Docs
+### How it works
 
-Text-first website/docs content for `wavemill.org` lives in `docs/`.
-
-- Local entrypoint: `docs/index.md`
-- Getting started: `docs/getting-started.md`
-- Feature workflow: `docs/feature-workflow.md`
-- Autonomous mode: `docs/mill-mode.md`
-- Deployment and DNS: `docs/deploy.md`
+1. **`wavemill expand`** — enriches Linear issues into detailed task packets with context, constraints, and validation steps
+2. **`wavemill mill`** — continuously pulls from your backlog, launches parallel AI agents in tmux worktrees, monitors PRs, and auto-completes tasks
+3. **Eval** — scores every completed task on a 0–1 scale measuring autonomy and quality
+4. **Router** — uses eval history to pick the best model for each task type
+5. **Challenge mode** — periodically runs the same task with two models head-to-head, building the dataset that makes routing smarter over time
 
 ## Requirements
 
 - **Node.js** >= 18
 - **npm**
 - **Linear API key** (`LINEAR_API_KEY` env var)
-- **tmux** (for wavemill mill: `brew install tmux`)
+- **tmux** (for `wavemill mill`: `brew install tmux`)
 - **jq** (for JSON processing: `brew install jq`)
-- Optional: **GitHub CLI** (`gh`) for repo automation
-- Claude desktop app (for Claude commands) or Codex CLI (for Codex slash commands)
+- Optional: **GitHub CLI** (`gh`) for PR automation
 
 ## Quick Start
 
@@ -78,49 +79,9 @@ Settings are loaded in layers (later wins):
 
 See `wavemill-config.schema.json` for the full schema.
 
-### Permission Configuration (Reduce Confirmation Prompts)
+### Permissions
 
-When working in worktrees, you can configure auto-approval for read-only commands to reduce friction:
-
-**Quick setup:**
-
-1. Add to `.wavemill-config.json`:
-```json
-{
-  "permissions": {
-    "autoApprovePatterns": [
-      "git status*",
-      "gh pr view*",
-      "find *",
-      "ls *",
-      "cat *"
-    ],
-    "worktreeMode": {
-      "enabled": true,
-      "autoApproveReadOnly": true
-    }
-  }
-}
-```
-
-2. Generate agent-specific settings:
-```bash
-# For Claude Code
-npx tsx tools/generate-permissions.ts --agent claude
-
-# For Codex
-npx tsx tools/generate-permissions.ts --agent codex
-```
-
-3. Apply settings to your agent (see [Worktree Auto-Approve Guide](docs/worktree-auto-approve.md))
-
-**Benefits:**
-- Read-only commands (`git status`, `gh pr view`, `find`, etc.) auto-approve
-- Speeds up autonomous workflows
-- Maintains safety - destructive commands still require confirmation
-- Works with both Claude Code and Codex
-
-**Full documentation:** [docs/permissions.md](docs/permissions.md)
+Auto-approve read-only commands in worktrees to reduce friction during autonomous workflows. See [docs/permissions.md](docs/permissions.md) for setup.
 
 ## Wavemill Commands
 
@@ -261,6 +222,66 @@ wavemill context search "error handling"
 
 See [CLAUDE.md](CLAUDE.md) for detailed documentation on subsystem specs and the context system.
 
+## Eval
+
+Every completed task is automatically scored by an LLM judge on a 0–1 scale:
+
+| Band | Score | Meaning |
+|------|-------|---------|
+| Full Success | 1.0 | Merged autonomously, no human intervention |
+| Minor Feedback | 0.8–0.9 | Needed small review comments |
+| Assisted Success | 0.5–0.7 | Required meaningful human guidance |
+| Partial | 0.2–0.4 | Significant rework needed |
+| Failure | 0.0–0.1 | Did not produce a usable result |
+
+The eval gathers PR diffs, CI results, review comments, and detects interventions (manual commits, force pushes, multiple review rounds). Records are stored in `.wavemill/evals/evals.jsonl` and feed directly into routing.
+
+```bash
+# Eval is automatic in mill mode. To run manually:
+wavemill eval
+```
+
+See [docs/eval-mode.md](docs/eval-mode.md) for details.
+
+## Model Routing
+
+The router picks the best model for each task based on historical eval performance. It classifies tasks by type (bugfix, feature, refactor, etc.), analyzes complexity, and checks which models perform best on similar work.
+
+**Routing modes:**
+- **heuristic** — regex-based task classification + historical averages
+- **llm** — DSPy-optimized model selection with few-shot examples
+- **auto** (default) — tries LLM routing, falls back to heuristic
+
+Configure in `.wavemill-config.json`:
+```json
+{
+  "router": {
+    "enabled": true,
+    "mode": "auto",
+    "models": ["claude-sonnet-4-6", "claude-opus-4-6", "o3"],
+    "defaultModel": "claude-sonnet-4-6"
+  }
+}
+```
+
+## Challenge Mode
+
+Challenge mode runs the same task with two different models in parallel to generate head-to-head comparison data. This builds the dataset that makes routing increasingly accurate.
+
+On each mill cycle, a configurable percentage of tasks (default: 10%) are selected for challenge. The router picks a primary model and a random challenger. Both produce independent PRs, both get eval'd, and a comparison record captures which model won and why.
+
+```json
+{
+  "challenge": {
+    "enabled": true,
+    "rate": 0.10,
+    "autoMergeWinner": false
+  }
+}
+```
+
+This is the self-improving loop: challenge generates comparison data → eval scores both → router learns which models excel at which task types → future tasks get better model assignments.
+
 ## Under the Hood
 
 ### Wavemill Architecture
@@ -300,6 +321,14 @@ wavemill/
 ├── commands/                   # Claude slash commands (symlinked)
 └── codex/                      # Codex commands and prompts
 ```
+
+## Documentation
+
+- [Getting started](docs/getting-started.md)
+- [Feature workflow](docs/feature-workflow.md)
+- [Autonomous mode (mill)](docs/mill-mode.md)
+- [Eval system](docs/eval-mode.md)
+- [Permissions](docs/permissions.md)
 
 ## Troubleshooting
 
