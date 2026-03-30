@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { WorkflowRouteDecision } from './workflow-router.ts';
 import {
   canRunChallenge,
   chooseDistinctChallengerModel,
@@ -7,6 +8,7 @@ import {
   deriveChallengerKey,
   getChallengeModelPool,
   pickChallengeModels,
+  pickChallengeWorkflows,
 } from './challenge-mode.ts';
 
 let passed = 0;
@@ -111,6 +113,119 @@ test('pickChallengeModels returns null when fewer than two distinct models exist
     issueId: 'HOK-970',
     slug: 'challenge-mode',
   });
+  assert.equal(pair, null);
+});
+
+test('pickChallengeModels populates routing fields with empty strings', () => {
+  const pair = pickChallengeModels(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-972',
+      issueId: 'HOK-972',
+      slug: 'test-routing-fields',
+      primaryModel: 'claude-opus-4-6',
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.primary.planner, '');
+  assert.equal(pair!.primary.reviewer, '');
+  assert.equal(pair!.primary.planDepth, '');
+  assert.equal(pair!.primary.codeDepth, '');
+  assert.equal(pair!.primary.reviewMode, '');
+  assert.equal(pair!.challenger.planner, '');
+  assert.equal(pair!.challenger.reviewer, '');
+  assert.equal(pair!.challenger.planDepth, '');
+  assert.equal(pair!.challenger.codeDepth, '');
+  assert.equal(pair!.challenger.reviewMode, '');
+});
+
+const mockRouteFn = (): WorkflowRouteDecision => ({
+  planner: 'claude-opus-4-6',
+  coder: 'claude-opus-4-6',
+  reviewer: 'claude-sonnet-4-5-20250929',
+  planDepth: 'deep',
+  codeDepth: 'medium',
+  reviewRecommended: 'llm',
+  expectedSuccess: 0.85,
+  expectedCostPlan: 100,
+  expectedCostCode: 200,
+  expectedCostReview: 50,
+  reasoning: [],
+  signals: {},
+});
+
+test('pickChallengeWorkflows populates routing fields for both sides', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.3-codex'],
+    {
+      pairId: 'HOK-973',
+      issueId: 'HOK-973',
+      slug: 'oauth-auth',
+      prompt: 'Implement user authentication with OAuth2',
+      primaryModel: 'claude-opus-4-6',
+      agentMap: { 'gpt-5.3-codex': 'codex' },
+      defaultAgent: 'claude',
+      randomFn: () => 0.9,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.primary.model, 'claude-opus-4-6');
+  assert.notEqual(pair!.challenger.model, pair!.primary.model);
+
+  // Both sides should have routing fields populated from mock
+  assert.equal(pair!.primary.planner, 'claude-opus-4-6');
+  assert.equal(pair!.primary.reviewer, 'claude-sonnet-4-5-20250929');
+  assert.equal(pair!.primary.planDepth, 'deep');
+  assert.equal(pair!.primary.codeDepth, 'medium');
+  assert.equal(pair!.primary.reviewMode, 'llm');
+
+  assert.equal(pair!.challenger.planner, 'claude-opus-4-6');
+  assert.equal(pair!.challenger.reviewer, 'claude-sonnet-4-5-20250929');
+  assert.equal(pair!.challenger.planDepth, 'deep');
+  assert.equal(pair!.challenger.codeDepth, 'medium');
+  assert.equal(pair!.challenger.reviewMode, 'llm');
+});
+
+test('pickChallengeWorkflows uses same routing for both sides', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-974',
+      issueId: 'HOK-974',
+      slug: 'fix-oauth-bug',
+      prompt: 'Fix authentication bug in OAuth flow',
+      primaryModel: 'claude-opus-4-6',
+      randomFn: () => 0,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(pair);
+  // Both sides should have the same planner/reviewer/depths
+  assert.equal(pair!.primary.planner, pair!.challenger.planner);
+  assert.equal(pair!.primary.reviewer, pair!.challenger.reviewer);
+  assert.equal(pair!.primary.planDepth, pair!.challenger.planDepth);
+  assert.equal(pair!.primary.codeDepth, pair!.challenger.codeDepth);
+  assert.equal(pair!.primary.reviewMode, pair!.challenger.reviewMode);
+
+  // But different coders
+  assert.notEqual(pair!.primary.model, pair!.challenger.model);
+});
+
+test('pickChallengeWorkflows returns null when fewer than two distinct models exist', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6'],
+    {
+      pairId: 'HOK-975',
+      issueId: 'HOK-975',
+      slug: 'new-feature',
+      prompt: 'Add new feature',
+      routeFn: mockRouteFn,
+    },
+  );
   assert.equal(pair, null);
 });
 

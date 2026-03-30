@@ -2,8 +2,9 @@
 
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
-import { pickChallengeModels, getChallengeModelPool, canRunChallenge } from '../shared/lib/challenge-mode.ts';
+import { pickChallengeModels, pickChallengeWorkflows, getChallengeModelPool, canRunChallenge } from '../shared/lib/challenge-mode.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
+import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
 
 runTool({
   name: 'resolve-challenge-task',
@@ -15,6 +16,7 @@ runTool({
     'primary-model': { type: 'string', description: 'Router-selected or forced primary model' },
     'remaining-slots': { type: 'string', description: 'Available mill slots before launch' },
     'repo-dir': { type: 'string', description: 'Repository directory' },
+    file: { type: 'string', description: 'Task packet file path (for routing)' },
   },
   async run({ args }) {
     const repoDir = (args['repo-dir'] as string) || process.cwd();
@@ -23,6 +25,7 @@ runTool({
     const title = args.title as string;
     const primaryModel = (args['primary-model'] as string | undefined)?.trim() || undefined;
     const remainingSlots = Number(args['remaining-slots'] || '1');
+    const taskFile = args.file as string | undefined;
 
     if (!issue || !slug || !title) {
       throw new Error('--issue, --slug, and --title are required');
@@ -77,14 +80,44 @@ runTool({
       return;
     }
 
-    const pair = pickChallengeModels(pool, {
-      pairId: issue,
-      issueId: issue,
-      slug,
-      primaryModel,
-      agentMap: router.agentMap,
-      defaultAgent,
-    });
+    // If task file provided, use workflow routing for both sides
+    let pair;
+    if (taskFile) {
+      try {
+        const prompt = readTaskPromptFromFile(taskFile);
+        pair = pickChallengeWorkflows(pool, {
+          pairId: issue,
+          issueId: issue,
+          slug,
+          prompt,
+          primaryModel,
+          agentMap: router.agentMap,
+          defaultAgent,
+          repoDir,
+        });
+      } catch (error) {
+        // Fall back to model-only selection if task file is unreadable
+        console.error(`Warning: Failed to read task file for routing: ${error}`);
+        pair = pickChallengeModels(pool, {
+          pairId: issue,
+          issueId: issue,
+          slug,
+          primaryModel,
+          agentMap: router.agentMap,
+          defaultAgent,
+        });
+      }
+    } else {
+      // No task file provided - use model-only selection (backward compatibility)
+      pair = pickChallengeModels(pool, {
+        pairId: issue,
+        issueId: issue,
+        slug,
+        primaryModel,
+        agentMap: router.agentMap,
+        defaultAgent,
+      });
+    }
 
     if (!pair) {
       console.log(JSON.stringify({ ...base, reason: 'selection_failed' }));
