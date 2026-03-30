@@ -1693,11 +1693,28 @@ maybe_run_challenge_comparison() {
   primary_model=$(get_task_meta "$primary_key" "challengeModel")
   challenger_model=$(get_task_meta "$challenger_key" "challengeModel")
 
+  # Read routing metadata for both sides
+  primary_planner=$(get_task_meta "$primary_key" "plannerModel")
+  primary_reviewer=$(get_task_meta "$primary_key" "reviewerModel")
+  primary_plan_depth=$(get_task_meta "$primary_key" "planDepth")
+  primary_code_depth=$(get_task_meta "$primary_key" "codeDepth")
+  primary_review_mode=$(get_task_meta "$primary_key" "reviewMode")
+
+  challenger_planner=$(get_task_meta "$challenger_key" "plannerModel")
+  challenger_reviewer=$(get_task_meta "$challenger_key" "reviewerModel")
+  challenger_plan_depth=$(get_task_meta "$challenger_key" "planDepth")
+  challenger_code_depth=$(get_task_meta "$challenger_key" "codeDepth")
+  challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
+
   log "  ⚖ Running challenge comparison for $pair_id"
   if _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
     --primary-model "$primary_model" --challenger-model "$challenger_model" \
+    --primary-planner "$primary_planner" --primary-reviewer "$primary_reviewer" \
+    --primary-plan-depth "$primary_plan_depth" --primary-code-depth "$primary_code_depth" --primary-review-mode "$primary_review_mode" \
+    --challenger-planner "$challenger_planner" --challenger-reviewer "$challenger_reviewer" \
+    --challenger-plan-depth "$challenger_plan_depth" --challenger-code-depth "$challenger_code_depth" --challenger-review-mode "$challenger_review_mode" \
     --repo-dir "$REPO_DIR" --comment >/tmp/${SESSION}-compare-${pair_id}.log 2>&1; then
     while IFS= read -r line; do log "  [challenge-compare] $line"; done < "/tmp/${SESSION}-compare-${pair_id}.log"
     mark_challenge_compared "$pair_id"
@@ -1995,7 +2012,15 @@ launch_task() {
   if [[ -n "$challenge_model" ]]; then
     task_model="$challenge_model"
     task_agent_cmd="$(agent_resolve_from_model "$task_model")"
-    log "  Challenge: $task_agent_cmd --model $task_model"
+    # Read stored routing for this challenge entry
+    planner_model=$(get_task_meta "$issue" "plannerModel")
+    reviewer_model=$(get_task_meta "$issue" "reviewerModel")
+    plan_depth=$(get_task_meta "$issue" "planDepth")
+    code_depth=$(get_task_meta "$issue" "codeDepth")
+    review_mode=$(get_task_meta "$issue" "reviewMode")
+    planner_agent="$(agent_resolve_from_model "${planner_model:-$task_model}")"
+    reviewer_agent="$(agent_resolve_from_model "${reviewer_model:-$task_model}")"
+    log "  Challenge: $task_agent_cmd --model $task_model (planner=$planner_model, reviewer=$reviewer_model)"
   elif [[ -n "${FORCE_MODEL:-}" ]]; then
     # Validate model (should have been validated earlier, but double-check)
     if ! agent_validate_model "$FORCE_MODEL" "$REPO_DIR"; then
@@ -2091,6 +2116,7 @@ launch_task() {
     local challenge_args challenge_plan challenge_mode challenge_reason
     challenge_args=(--issue "$issue" --slug "$slug" --title "$title" --repo-dir "$REPO_DIR" --remaining-slots "$remaining_slots")
     [[ -n "$task_model" ]] && challenge_args+=(--primary-model "$task_model")
+    [[ -n "$packet_file" ]] && challenge_args+=(--file "$packet_file")
     challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
     challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
     challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
@@ -2099,17 +2125,33 @@ launch_task() {
       challenge_pair="$issue"
       task_model=$(echo "$challenge_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
       task_agent_cmd=$(echo "$challenge_plan" | jq -r '.entries[0].agent // empty' 2>/dev/null)
+
+      # Extract primary routing fields
+      planner_model=$(echo "$challenge_plan" | jq -r '.entries[0].planner // empty' 2>/dev/null)
+      reviewer_model=$(echo "$challenge_plan" | jq -r '.entries[0].reviewer // empty' 2>/dev/null)
+      plan_depth=$(echo "$challenge_plan" | jq -r '.entries[0].planDepth // "light"' 2>/dev/null)
+      code_depth=$(echo "$challenge_plan" | jq -r '.entries[0].codeDepth // "medium"' 2>/dev/null)
+      review_mode=$(echo "$challenge_plan" | jq -r '.entries[0].reviewMode // "static"' 2>/dev/null)
+
+      # Extract challenger info
       challenger_key=$(echo "$challenge_plan" | jq -r '.entries[1].key // empty' 2>/dev/null)
       challenger_slug=$(echo "$challenge_plan" | jq -r '.entries[1].slug // empty' 2>/dev/null)
       challenger_model=$(echo "$challenge_plan" | jq -r '.entries[1].model // empty' 2>/dev/null)
       challenger_agent=$(echo "$challenge_plan" | jq -r '.entries[1].agent // empty' 2>/dev/null)
+
+      # Extract challenger routing fields
+      challenger_planner=$(echo "$challenge_plan" | jq -r '.entries[1].planner // empty' 2>/dev/null)
+      challenger_reviewer=$(echo "$challenge_plan" | jq -r '.entries[1].reviewer // empty' 2>/dev/null)
+      challenger_plan_depth=$(echo "$challenge_plan" | jq -r '.entries[1].planDepth // "light"' 2>/dev/null)
+      challenger_code_depth=$(echo "$challenge_plan" | jq -r '.entries[1].codeDepth // "medium"' 2>/dev/null)
+      challenger_review_mode=$(echo "$challenge_plan" | jq -r '.entries[1].reviewMode // "static"' 2>/dev/null)
 
       cp "$packet_file" "/tmp/${SESSION}-${challenger_key}-taskpacket.md" 2>/dev/null || true
       cp "/tmp/${SESSION}-${issue}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
       cp "/tmp/${SESSION}-${issue}-taskpacket-details.md" "/tmp/${SESSION}-${challenger_key}-taskpacket-details.md" 2>/dev/null || true
 
       save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "true" "$challenge_pair" "primary" "$task_model" "$planner_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
-      save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "" "" "" "" ""
+      save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode"
       should_launch_challenger="true"
       LAST_LAUNCHED_SLOTS=2
       log "  Challenge selected (${task_model} vs ${challenger_model})"
