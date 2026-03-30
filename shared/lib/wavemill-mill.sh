@@ -2762,6 +2762,11 @@ monitor_issue_state() {
     fi
     CLEANED["$ISSUE"]=1
   else
+    # PR open but not merged — re-check challenge comparison in case
+    # the other side's eval completed since we first detected this PR
+    if is_challenge_task "$ISSUE"; then
+      maybe_run_challenge_comparison "$ISSUE"
+    fi
     active_count=$((active_count + 1))
   fi
 
