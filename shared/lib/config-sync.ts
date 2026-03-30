@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { CURRENT_CONFIG_VERSION, loadWavemillConfig, type WavemillConfig } from './config.ts';
 
 export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
-  configVersion: '1.0.1',
+  configVersion: '1.1.0',
   linear: {
     project: '',
   },
@@ -58,9 +58,15 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
   },
   autoEval: true,
   challenge: {
-    enabled: false,
+    enabled: true,
     rate: 0.1,
-    models: null,
+    models: [
+      'claude-sonnet-4-5-20250929',
+      'claude-opus-4-6',
+      'claude-haiku-4-5-20251001',
+      'gpt-5.3-codex',
+      'gpt-5.4',
+    ],
     comparisonModel: 'claude-opus-4-6',
     autoMergeWinner: false,
   },

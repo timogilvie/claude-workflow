@@ -320,7 +320,7 @@ run_init() {
   # Create config file
   cat > "$target" <<'INIT_EOF'
 {
-  "configVersion": "1.0.1",
+  "configVersion": "1.1.0",
   "linear": {
     "project": ""
   },
@@ -379,6 +379,19 @@ run_init() {
     "enabled": true,
     "metricsLog": ".wavemill/review-log.json",
     "personas": ["general"]
+  },
+  "challenge": {
+    "enabled": true,
+    "rate": 0.10,
+    "models": [
+      "claude-sonnet-4-5-20250929",
+      "claude-opus-4-6",
+      "claude-haiku-4-5-20251001",
+      "gpt-5.3-codex",
+      "gpt-5.4"
+    ],
+    "comparisonModel": "claude-opus-4-6",
+    "autoMergeWinner": false
   },
   "router": {
     "enabled": true,
