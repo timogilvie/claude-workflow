@@ -50,13 +50,17 @@ function buildPrompt(input: {
   let workflowContext = '';
 
   if (input.primaryRouting && input.challengerRouting) {
+    // Use detectVariedDimensions to ensure consistent normalization logic
+    const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
     const variedFields: string[] = [];
-    if (input.primaryRouting.planner !== input.challengerRouting.planner) variedFields.push('planner');
-    if (input.primaryRouting.coder !== input.challengerRouting.coder) variedFields.push('coder');
-    if (input.primaryRouting.reviewer !== input.challengerRouting.reviewer) variedFields.push('reviewer');
-    if (input.primaryRouting.planDepth !== input.challengerRouting.planDepth) variedFields.push('planDepth');
-    if (input.primaryRouting.codeDepth !== input.challengerRouting.codeDepth) variedFields.push('codeDepth');
-    if (input.primaryRouting.reviewMode !== input.challengerRouting.reviewMode) variedFields.push('reviewMode');
+    if (variedDimensions) {
+      if (variedDimensions.planner) variedFields.push('planner');
+      if (variedDimensions.coder) variedFields.push('coder');
+      if (variedDimensions.reviewer) variedFields.push('reviewer');
+      if (variedDimensions.planDepth) variedFields.push('planDepth');
+      if (variedDimensions.codeDepth) variedFields.push('codeDepth');
+      if (variedDimensions.reviewMode) variedFields.push('reviewMode');
+    }
 
     workflowContext = `
 

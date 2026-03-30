@@ -135,7 +135,9 @@ function computeAggregations(joined: JoinedChallengeRecord[]): AggregatedStats {
 
     // Win rates by challenge type
     if (challengeType) {
-      incrementModelStat(stats.winRatesByChallengeType, challengeType, true);
+      const stats_ct = stats.winRatesByChallengeType.get(challengeType) || { wins: 0, total: 0, winRate: 0 };
+      stats_ct.total++;
+      stats.winRatesByChallengeType.set(challengeType, stats_ct);
     }
 
     // Win rates by depth combination
@@ -295,11 +297,17 @@ runTool({
 
     if (args.from) {
       const fromDate = new Date(args.from as string);
+      if (isNaN(fromDate.getTime())) {
+        throw new Error(`Invalid date format for --from: ${args.from}`);
+      }
       filtered = filtered.filter((c) => new Date(c.timestamp) >= fromDate);
     }
 
     if (args.to) {
       const toDate = new Date(args.to as string);
+      if (isNaN(toDate.getTime())) {
+        throw new Error(`Invalid date format for --to: ${args.to}`);
+      }
       filtered = filtered.filter((c) => new Date(c.timestamp) <= toDate);
     }
 
