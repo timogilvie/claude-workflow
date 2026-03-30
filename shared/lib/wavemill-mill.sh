@@ -1718,6 +1718,30 @@ maybe_run_challenge_comparison() {
     --repo-dir "$REPO_DIR" --comment >/tmp/${SESSION}-compare-${pair_id}.log 2>&1; then
     while IFS= read -r line; do log "  [challenge-compare] $line"; done < "/tmp/${SESSION}-compare-${pair_id}.log"
     mark_challenge_compared "$pair_id"
+
+    # Clean up the losing side's window and worktree
+    local winner loser_key loser_slug loser_pr
+    winner=$(tail -1 "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" 2>/dev/null \
+      | jq -r --arg pid "$pair_id" 'select(.challengePairId == $pid) | .winner // empty' 2>/dev/null)
+    if [[ "$winner" == "primary" ]]; then
+      loser_key="$challenger_key"
+    elif [[ "$winner" == "challenger" ]]; then
+      loser_key="$primary_key"
+    fi
+    if [[ -n "${loser_key:-}" ]]; then
+      loser_slug=$(get_task_meta "$loser_key" "slug")
+      loser_pr=$(get_task_meta "$loser_key" "pr")
+      if [[ -n "$loser_slug" ]]; then
+        log "  ⚖ Cleaning up losing side: $loser_key"
+        # Close PR if not already closed/merged
+        if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
+          gh pr close "$loser_pr" \
+            --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
+          log "  ✓ Closed losing PR #$loser_pr"
+        fi
+        cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
+      fi
+    fi
   else
     while IFS= read -r line; do log_warn "  [challenge-compare] $line"; done < "/tmp/${SESSION}-compare-${pair_id}.log"
   fi
