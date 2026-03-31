@@ -31,6 +31,24 @@ function getInteractiveSetting(args: any, repoRoot: string): boolean {
   return planConfig.interactive ?? true; // Default: true
 }
 
+/**
+ * Get timeout setting from env var and config.
+ * Priority: PLAN_TIMEOUT env var > config file > undefined (smart default)
+ */
+function getTimeoutSetting(repoRoot: string): number | undefined {
+  // Check env var first
+  if (process.env.PLAN_TIMEOUT) {
+    const parsed = parseInt(process.env.PLAN_TIMEOUT);
+    if (!isNaN(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  // Check config file (getPlanConfig handles errors gracefully)
+  const planConfig = getPlanConfig(repoRoot);
+  return planConfig.timeout; // Default: undefined (smart default in plan-decomposer)
+}
+
 if (!process.env.LINEAR_API_KEY) {
   console.error('Error: LINEAR_API_KEY not found in environment');
   process.exit(1);
@@ -64,6 +82,9 @@ async function handleDecompose(args: any): Promise<void> {
 
   // Determine interactive mode setting
   const interactive = getInteractiveSetting(args, repoRoot);
+
+  // Determine timeout setting
+  const timeout = getTimeoutSetting(repoRoot);
 
   if (interactive) {
     console.log('ℹ️  Running in interactive mode (Claude can use tools)');
@@ -100,6 +121,7 @@ async function handleDecompose(args: any): Promise<void> {
     model: PLAN_MODEL,
     repoRoot,
     interactive,
+    timeout,
   });
 }
 

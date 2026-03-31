@@ -58,6 +58,12 @@ export interface DecomposeOptions {
    * Default: false (backward compatible)
    */
   interactive?: boolean;
+  /**
+   * Timeout in milliseconds for Claude calls.
+   * Applies to both research and decomposition phases.
+   * Default: set by plan-decomposer based on interactive mode.
+   */
+  timeout?: number;
 }
 
 /**
@@ -199,6 +205,7 @@ export async function decomposeInitiative(
       initiativeContext: context,
       model,
       interactive: options.interactive,
+      timeout: options.timeout,
     });
 
     console.log(researchSummary);
@@ -226,6 +233,7 @@ export async function decomposeInitiative(
     initiativeContext: context,
     model,
     interactive: options.interactive,
+    timeout: options.timeout,
   });
   console.log('─'.repeat(80));
   console.log('');

@@ -39,6 +39,14 @@ export interface LLMCallOptions {
   model?: string;
   /** Timeout in milliseconds (default: 120000 = 2 minutes) */
   timeout?: number;
+  /**
+   * Activity-based timeout in milliseconds.
+   * When set, the timeout resets whenever stdout/stderr receives data.
+   * The `timeout` option becomes a hard wall-clock cap.
+   * Use this to tolerate gaps between output while still catching stuck processes.
+   * Example: activityTimeout=120_000, timeout=600_000 tolerates 2-min gaps but caps at 10 min total.
+   */
+  activityTimeout?: number;
   /** Max buffer size for stdout/stderr in bytes (default: 10MB) */
   maxBuffer?: number;
   /** Enable retry with exponential backoff (default: false) */
@@ -466,13 +474,21 @@ async function executeStream(
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let lastActivityAt = startedAt; // Track last output activity for diagnostics
 
-    const cleanup = (timeoutId?: NodeJS.Timeout, slowInterval?: NodeJS.Timeout) => {
+    const cleanup = (
+      timeoutId?: NodeJS.Timeout,
+      slowInterval?: NodeJS.Timeout,
+      activityTimeoutId?: NodeJS.Timeout
+    ) => {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
       if (slowInterval) {
         clearInterval(slowInterval);
+      }
+      if (activityTimeoutId) {
+        clearTimeout(activityTimeoutId);
       }
     };
 
@@ -499,29 +515,83 @@ async function executeStream(
       });
     }, SLOW_CALL_REPEAT_MS);
 
+    // Hard timeout (wall-clock cap)
     const timeoutId = setTimeout(() => {
       if (settled) {
         return;
       }
       settled = true;
-      cleanup(timeoutId, slowInterval);
+      cleanup(timeoutId, slowInterval, activityTimeoutId);
       llmProcess.kill('SIGTERM');
       const elapsedMs = Date.now() - startedAt;
+      const timeSinceLastActivity = Date.now() - lastActivityAt;
+      const stdoutBytes = Buffer.byteLength(stdout, 'utf-8');
+      const wasIdle = timeSinceLastActivity > 30_000; // >30s since last output
+
       reject(
         withElapsed(new Error(
-          `${provider} CLI timed out after ${timeout}ms\n\n` +
+          `${provider} CLI timed out after ${timeout}ms (hard wall-clock cap)\n\n` +
           `Command: ${cliCmd} ${cliArgs.join(' ')}\n` +
-          `Working directory: ${cwd}\n`
+          `Working directory: ${cwd}\n` +
+          `Elapsed: ${elapsedMs}ms\n` +
+          `Stdout collected: ${stdoutBytes} bytes\n` +
+          `Last activity: ${timeSinceLastActivity}ms ago\n` +
+          `Process state: ${wasIdle ? 'IDLE (no output for >30s)' : 'ACTIVE (recently producing output)'}\n`
         ), elapsedMs)
       );
     }, timeout);
 
+    // Activity-based timeout (resets on each output)
+    let activityTimeoutId: NodeJS.Timeout | undefined;
+    const activityTimeout = options.activityTimeout;
+
+    const resetActivityTimeout = () => {
+      if (!activityTimeout) {
+        return;
+      }
+      if (activityTimeoutId) {
+        clearTimeout(activityTimeoutId);
+      }
+      activityTimeoutId = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup(timeoutId, slowInterval, activityTimeoutId);
+        llmProcess.kill('SIGTERM');
+        const elapsedMs = Date.now() - startedAt;
+        const timeSinceLastActivity = Date.now() - lastActivityAt;
+        const stdoutBytes = Buffer.byteLength(stdout, 'utf-8');
+
+        reject(
+          withElapsed(new Error(
+            `${provider} CLI timed out due to inactivity (no output for ${activityTimeout}ms)\n\n` +
+            `Command: ${cliCmd} ${cliArgs.join(' ')}\n` +
+            `Working directory: ${cwd}\n` +
+            `Elapsed: ${elapsedMs}ms\n` +
+            `Stdout collected: ${stdoutBytes} bytes\n` +
+            `Last activity: ${timeSinceLastActivity}ms ago\n` +
+            `Hard timeout cap: ${timeout}ms\n`
+          ), elapsedMs)
+        );
+      }, activityTimeout);
+    };
+
+    // Start activity timeout if configured
+    if (activityTimeout) {
+      resetActivityTimeout();
+    }
+
     llmProcess.stdout?.on('data', (data) => {
       stdout += data.toString();
+      lastActivityAt = Date.now(); // Track activity for diagnostics
+      resetActivityTimeout(); // Reset activity timeout on output
     });
 
     llmProcess.stderr?.on('data', (data) => {
       stderr += data.toString();
+      lastActivityAt = Date.now(); // Track activity for diagnostics
+      resetActivityTimeout(); // Reset activity timeout on output
     });
 
     llmProcess.on('close', (code) => {
@@ -529,7 +599,7 @@ async function executeStream(
         return;
       }
       settled = true;
-      cleanup(timeoutId, slowInterval);
+      cleanup(timeoutId, slowInterval, activityTimeoutId);
       const elapsedMs = Date.now() - startedAt;
       if (code !== 0) {
         reject(withElapsed(new Error(`${provider} CLI exited with code ${code}: ${stderr}`), elapsedMs));
@@ -550,7 +620,7 @@ async function executeStream(
         return;
       }
       settled = true;
-      cleanup(timeoutId, slowInterval);
+      cleanup(timeoutId, slowInterval, activityTimeoutId);
       const elapsedMs = Date.now() - startedAt;
       reject(withElapsed(new Error(`Failed to spawn ${provider} CLI: ${error.message}`), elapsedMs));
     });
@@ -565,7 +635,7 @@ async function executeStream(
         return;
       }
       settled = true;
-      cleanup(timeoutId, slowInterval);
+      cleanup(timeoutId, slowInterval, activityTimeoutId);
       reject(withElapsed(new Error(`Failed to read temp file: ${(error as Error).message}`), Date.now() - startedAt));
     }
   });
