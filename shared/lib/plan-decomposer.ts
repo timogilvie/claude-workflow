@@ -160,6 +160,11 @@ export interface DecomposeOptions {
    * Default: false (backward compatible)
    */
   interactive?: boolean;
+  /**
+   * Timeout in milliseconds for the Claude call.
+   * Default: 600_000 (10 min) for interactive mode, 120_000 (2 min) for non-interactive.
+   */
+  timeout?: number;
 }
 
 /**
@@ -215,6 +220,9 @@ export async function decomposeWithClaude(
 
   const isInteractive = opts.interactive ?? false;
 
+  // Smart timeout: 10 min for interactive (allows tool use), 2 min for non-interactive
+  const timeout = opts.timeout ?? (isInteractive ? 600_000 : 120_000);
+
   // Build CLI flags based on mode
   const cliFlags: string[] = [];
 
@@ -230,6 +238,7 @@ export async function decomposeWithClaude(
     mode: 'stream',
     model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-6',
     cliFlags,
+    timeout,
   });
 
   return result.text;
@@ -252,6 +261,11 @@ export interface ResearchOptions {
    * Default: false (backward compatible)
    */
   interactive?: boolean;
+  /**
+   * Timeout in milliseconds for the Claude call.
+   * Default: 600_000 (10 min) for interactive mode, 120_000 (2 min) for non-interactive.
+   */
+  timeout?: number;
 }
 
 /**
@@ -311,6 +325,9 @@ export async function runResearch(
 
   const isInteractive = opts.interactive ?? false;
 
+  // Smart timeout: 10 min for interactive (allows tool use), 2 min for non-interactive
+  const timeout = opts.timeout ?? (isInteractive ? 600_000 : 120_000);
+
   // Build CLI flags based on mode
   const cliFlags: string[] = [];
 
@@ -326,6 +343,7 @@ export async function runResearch(
     mode: 'stream',
     model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-6',
     cliFlags,
+    timeout,
   });
 
   return result.text;
