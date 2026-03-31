@@ -92,7 +92,7 @@
   "autoEval": true,
   "challenge": {
     "enabled": true,
-    "rate": 0.1,
+    "rate": 0.3,
     "models": [
       "claude-sonnet-4-5-20250929",
       "claude-opus-4-6",
