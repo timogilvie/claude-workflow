@@ -49,6 +49,7 @@ export interface PlanConfig {
   research?: boolean;
   model?: string;
   interactive?: boolean;
+  timeout?: number;
 }
 
 export interface JudgeConfig {
