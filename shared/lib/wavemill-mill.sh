@@ -1716,13 +1716,63 @@ maybe_run_challenge_comparison() {
     --challenger-planner "$challenger_planner" --challenger-reviewer "$challenger_reviewer" \
     --challenger-plan-depth "$challenger_plan_depth" --challenger-code-depth "$challenger_code_depth" --challenger-review-mode "$challenger_review_mode" \
     --repo-dir "$REPO_DIR" --comment >/tmp/${SESSION}-compare-${pair_id}.log 2>&1; then
-    while IFS= read -r line; do log "  [challenge-compare] $line"; done < "/tmp/${SESSION}-compare-${pair_id}.log"
     mark_challenge_compared "$pair_id"
 
-    # Clean up the losing side's window and worktree
-    local winner loser_key loser_slug loser_pr
-    winner=$(tail -1 "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" 2>/dev/null \
-      | jq -r --arg pid "$pair_id" 'select(.challengePairId == $pid) | .winner // empty' 2>/dev/null)
+    # Read comparison result from challenge records
+    local compare_json winner winner_model rationale
+    local cor_p cor_c qual_p qual_c comp_p comp_c scope_p scope_c
+    local primary_eval_score challenger_eval_score
+    compare_json=$(tail -1 "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" 2>/dev/null)
+    winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
+    winner_model=$(echo "$compare_json" | jq -r '.winnerModel // empty' 2>/dev/null)
+    rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
+    primary_eval_score=$(echo "$compare_json" | jq -r '.primaryEvalScore // "—"' 2>/dev/null)
+    challenger_eval_score=$(echo "$compare_json" | jq -r '.challengerEvalScore // "—"' 2>/dev/null)
+    cor_p=$(echo "$compare_json" | jq -r '.dimensions.correctness.primary // "—"' 2>/dev/null)
+    cor_c=$(echo "$compare_json" | jq -r '.dimensions.correctness.challenger // "—"' 2>/dev/null)
+    qual_p=$(echo "$compare_json" | jq -r '.dimensions.codeQuality.primary // "—"' 2>/dev/null)
+    qual_c=$(echo "$compare_json" | jq -r '.dimensions.codeQuality.challenger // "—"' 2>/dev/null)
+    comp_p=$(echo "$compare_json" | jq -r '.dimensions.completeness.primary // "—"' 2>/dev/null)
+    comp_c=$(echo "$compare_json" | jq -r '.dimensions.completeness.challenger // "—"' 2>/dev/null)
+    scope_p=$(echo "$compare_json" | jq -r '.dimensions.scopeDiscipline.primary // "—"' 2>/dev/null)
+    scope_c=$(echo "$compare_json" | jq -r '.dimensions.scopeDiscipline.challenger // "—"' 2>/dev/null)
+
+    # Shorten model names for display (strip date suffix)
+    local disp_primary disp_challenger disp_winner
+    disp_primary=$(echo "$primary_model" | sed 's/-[0-9]\{8\}$//')
+    disp_challenger=$(echo "$challenger_model" | sed 's/-[0-9]\{8\}$//')
+    disp_winner=$(echo "$winner_model" | sed 's/-[0-9]\{8\}$//')
+
+    # Display formatted comparison summary
+    log ""
+    log "  ┌────────────────────────────────────────────────────────────┐"
+    log "  │  ⚖  Challenge Comparison: $pair_id"
+    log "  ├────────────────────────────────────────────────────────────┤"
+    log "  │                    Primary            Challenger           │"
+    log "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
+    log "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
+    log "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
+    log "  ├────────────────────────────────────────────────────────────┤"
+    log "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
+    log "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
+    log "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
+    log "  │  Scope           $(printf '%-20s' "$scope_p") $(printf '%-19s' "$scope_c")│"
+    log "  ├────────────────────────────────────────────────────────────┤"
+    if [[ "$winner" == "primary" ]]; then
+      log "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
+    else
+      log "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
+    fi
+    log "  │                                                            │"
+    # Word-wrap rationale to ~56 chars per line
+    echo "$rationale" | fold -s -w 56 | while IFS= read -r rline; do
+      log "  │  $(printf '%-58s' "$rline")│"
+    done
+    log "  └────────────────────────────────────────────────────────────┘"
+    log ""
+
+    # Determine loser for cleanup
+    local loser_key loser_slug loser_pr
     if [[ "$winner" == "primary" ]]; then
       loser_key="$challenger_key"
     elif [[ "$winner" == "challenger" ]]; then
@@ -1732,14 +1782,18 @@ maybe_run_challenge_comparison() {
       loser_slug=$(get_task_meta "$loser_key" "slug")
       loser_pr=$(get_task_meta "$loser_key" "pr")
       if [[ -n "$loser_slug" ]]; then
-        log "  ⚖ Cleaning up losing side: $loser_key"
-        # Close PR if not already closed/merged
-        if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
-          gh pr close "$loser_pr" \
-            --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
-          log "  ✓ Closed losing PR #$loser_pr"
+        if [[ "${_CFG_CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
+          log "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
+          # Close PR if not already closed/merged
+          if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
+            gh pr close "$loser_pr" \
+              --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
+            log "  ✓ Closed losing PR #$loser_pr"
+          fi
+          cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
+        else
+          log "  ⚖ Both PRs remain open for manual review (autoMergeWinner=false)"
         fi
-        cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
       fi
     fi
   else
@@ -2187,7 +2241,14 @@ launch_task() {
   # Save to state ledger (after routing so agent is known)
   local initial_phase="executing"
   [[ "$PLANNING_MODE" == "interactive" ]] && initial_phase="planning"
-  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "$challenge_enabled_for_launch" "$challenge_pair" "${challenge_role:-}" "$task_model" "$planner_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
+  # If this task was already marked as a challenge participant (e.g. challenger
+  # launched via recursive call with WAVEMILL_DISABLE_CHALLENGE=1), preserve
+  # the existing challenge flag rather than overwriting with "false".
+  local effective_challenge="$challenge_enabled_for_launch"
+  if [[ "$effective_challenge" != "true" && -n "$challenge_role" ]]; then
+    effective_challenge="true"
+  fi
+  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "$effective_challenge" "$challenge_pair" "${challenge_role:-}" "$task_model" "$planner_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
   set_task_phase "$issue" "$initial_phase"
 
   # Verify agent was saved correctly (helps debug future issues)
@@ -2476,7 +2537,12 @@ monitor_issue_state() {
       if should_update_linear_state "$ISSUE"; then
         linear_set_state "$linear_issue" "In Review"
       fi
+      # Fetch PR details for user-visible summary
+      pr_details=$(_with_timeout "$API_TIMEOUT" gh pr view "$PR" --json title,url --jq '"  " + .title + "\n  " + .url' 2>/dev/null || echo "")
       log "✓ $ISSUE → PR #$PR (In Review)"
+      if [[ -n "$pr_details" ]]; then
+        log "$pr_details"
+      fi
 
       if is_challenge_task "$ISSUE"; then
         maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
@@ -2786,9 +2852,11 @@ monitor_issue_state() {
     fi
     CLEANED["$ISSUE"]=1
   else
-    # PR open but not merged — re-check challenge comparison in case
-    # the other side's eval completed since we first detected this PR
+    # PR open but not merged — re-check challenge eval and comparison
+    # in case the eval was missed on initial PR detection (e.g. challenge
+    # flag was incorrect when PR was first found)
     if is_challenge_task "$ISSUE"; then
+      maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
       maybe_run_challenge_comparison "$ISSUE"
     fi
     active_count=$((active_count + 1))
