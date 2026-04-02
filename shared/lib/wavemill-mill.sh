@@ -667,11 +667,13 @@ cleanup_stale_tasks() {
     [[ -z "$issue" ]] && continue
     local task_json
     task_json=$(jq -r --arg i "$issue" '.tasks[$i]' "$STATE_FILE")
-    local slug branch worktree pr
+    local slug branch worktree pr linear_issue eval_completed
     slug=$(echo "$task_json" | jq -r '.slug')
     branch=$(echo "$task_json" | jq -r '.branch')
     worktree=$(echo "$task_json" | jq -r '.worktree')
     pr=$(echo "$task_json" | jq -r '.pr // empty')
+    linear_issue=$(echo "$task_json" | jq -r '.linearIssueId // empty')
+    eval_completed=$(echo "$task_json" | jq -r '.evalCompleted // false')
 
     local should_clean=false
     local full_clean=false  # true = also remove worktree+branch
@@ -699,6 +701,11 @@ cleanup_stale_tasks() {
         should_clean=true
         full_clean=true
         reason="PR #$pr closed"
+        # Run failure eval before cleanup so closed PRs are scored
+        if [[ "$AUTO_EVAL" == "true" && "$eval_completed" == "false" ]]; then
+          log "  📊 Running failure eval for closed PR #$pr..."
+          launch_background_post_merge_eval "$issue" "$pr" "$branch" "$slug" "${linear_issue:-$issue}" "pr-closed"
+        fi
       fi
     fi
 
