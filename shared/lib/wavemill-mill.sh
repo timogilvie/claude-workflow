@@ -735,11 +735,8 @@ cleanup_stale_tasks() {
   fi
 }
 
-stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
-if (( stale_count > 0 )); then
-  log "Found $stale_count task(s) in state file from previous run. Checking..."
-  cleanup_stale_tasks
-fi
+# Stale task cleanup is deferred until after all functions are defined
+# (cleanup_stale_tasks depends on launch_background_post_merge_eval)
 
 
 # Display configuration
@@ -2486,6 +2483,13 @@ while IFS= read -r line; do
   SLUG_BY_ISSUE["$ISSUE"]="$SLUG"
 done < "$TASKS_FILE"
 
+
+# Prune stale tasks from previous runs (deferred to here so all functions are defined)
+stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
+if (( stale_count > 0 )); then
+  log "Found $stale_count task(s) in state file from previous run. Checking..."
+  cleanup_stale_tasks
+fi
 
 log "Monitoring tasks and managing work queue..."
 [[ "$PLANNING_MODE" == "interactive" ]] && log "  Planning mode: interactive (watching for plan approval)"
