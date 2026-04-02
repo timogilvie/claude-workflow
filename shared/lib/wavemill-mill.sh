@@ -2512,9 +2512,9 @@ monitor_issue_state() {
   current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
   needs_attention="false"
 
-  # If already merged (requireConfirm), wait for window close then cleanup
+  # If already merged or completed-external (requireConfirm), wait for window close then cleanup
   task_status=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null)
-  if [[ "$task_status" == "merged" ]]; then
+  if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
     set_window_attention_state "$WIN" "clear"
     if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
       active_count=$((active_count + 1))
@@ -2989,8 +2989,11 @@ while :; do
             if (( active_count == 0 )); then
               log "Quitting."
               exit 0
+            elif [[ "$QUIT_REQUESTED" == "true" ]]; then
+              log "Force quitting ($active_count task(s) still active)."
+              exit 0
             else
-              log "Will quit after $active_count active task(s) finish."
+              log "Will quit after $active_count active task(s) finish. Press q again to force quit."
               QUIT_REQUESTED=true
             fi
           elif [[ -n "$REPLY" ]]; then
