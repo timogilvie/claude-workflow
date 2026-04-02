@@ -704,7 +704,31 @@ cleanup_stale_tasks() {
         # Run failure eval before cleanup so closed PRs are scored
         if [[ "$AUTO_EVAL" == "true" && "$eval_completed" == "false" ]]; then
           log "  📊 Running failure eval for closed PR #$pr..."
-          launch_background_post_merge_eval "$issue" "$pr" "$branch" "$slug" "${linear_issue:-$issue}" "pr-closed"
+          local eval_log="/tmp/${SESSION}-eval-${issue}.log"
+          : >"$eval_log"
+          (
+            {
+              printf 'Launching pr-closed eval in background\n'
+              _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+                --issue "${linear_issue:-$issue}" --pr "$pr" --branch "$branch" \
+                --worktree "${WORKTREE_ROOT}/${slug}" \
+                --workflow-type mill --repo-dir "$REPO_DIR" \
+                --agent "$AGENT_CMD" \
+                --debug
+              printf 'Eval process exited with code %s\n' "$?"
+            } >>"$eval_log" 2>&1 || true
+            # Mark eval completed in state (harmless if task already removed)
+            local tmp
+            tmp=$(mktemp) || true
+            if [[ -n "${tmp:-}" ]] && jq --arg issue "$issue" \
+               '.tasks[$issue].evalCompleted = true | .tasks[$issue].updated = (now | todate)' \
+               "$STATE_FILE" > "$tmp" 2>/dev/null; then
+              mv "$tmp" "$STATE_FILE"
+            else
+              rm -f "${tmp:-}"
+            fi
+          ) >/dev/null 2>&1 &
+          log "  ↳ Eval running in background; log: $eval_log"
         fi
       fi
     fi
@@ -735,8 +759,11 @@ cleanup_stale_tasks() {
   fi
 }
 
-# Stale task cleanup is deferred until after all functions are defined
-# (cleanup_stale_tasks depends on launch_background_post_merge_eval)
+stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
+if (( stale_count > 0 )); then
+  log "Found $stale_count task(s) in state file from previous run. Checking..."
+  cleanup_stale_tasks
+fi
 
 
 # Display configuration
@@ -2483,13 +2510,6 @@ while IFS= read -r line; do
   SLUG_BY_ISSUE["$ISSUE"]="$SLUG"
 done < "$TASKS_FILE"
 
-
-# Prune stale tasks from previous runs (deferred to here so all functions are defined)
-stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
-if (( stale_count > 0 )); then
-  log "Found $stale_count task(s) in state file from previous run. Checking..."
-  cleanup_stale_tasks
-fi
 
 log "Monitoring tasks and managing work queue..."
 [[ "$PLANNING_MODE" == "interactive" ]] && log "  Planning mode: interactive (watching for plan approval)"
