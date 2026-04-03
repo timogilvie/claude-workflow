@@ -1052,7 +1052,7 @@ for t in "${TASKS[@]}"; do
 
   # Challengers are free overhead (don't consume a slot), so always pass
   # remaining-slots >= 2 as long as the primary slot is available.
-  local _rs=$((MAX_PARALLEL - slots_used))
+  _rs=$((MAX_PARALLEL - slots_used))
   (( _rs < 2 )) && _rs=2
   challenge_args=(--issue "$ISSUE" --slug "$SLUG" --title "$TITLE" --repo-dir "$REPO_DIR" --remaining-slots "$_rs")
   [[ -n "$rec_model" ]] && challenge_args+=(--primary-model "$rec_model")
