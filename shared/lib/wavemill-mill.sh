@@ -1273,6 +1273,22 @@ cleanup_dashboard_pane() {
 }
 trap cleanup_dashboard_pane EXIT INT TERM
 
+# Kill entire tmux session for single-step quit.
+quit_and_kill_session() {
+  local message="${1:-Quitting.}"
+  log "$message"
+
+  # If running inside tmux, kill the entire session for single-step quit
+  if [[ -n "${TMUX:-}" ]]; then
+    # Use exec to replace current process with tmux kill-session
+    # This prevents "session destroyed" message and provides clean exit
+    exec tmux kill-session -t "$SESSION"
+  else
+    # Not in tmux (e.g., testing or direct execution) - exit normally
+    exit 0
+  fi
+}
+
 monitor_err_trap() {
   local rc=$?
   # Ignore SIGINT (130) and SIGTERM (143) - these are intentional user interruptions
@@ -2928,9 +2944,8 @@ while :; do
   # ── Phase B: Check for stop signal ──────────────────────────────────
   if [[ -f "$STATE_DIR/.stop-loop" ]]; then
     if (( active_count == 0 )); then
-      log "Stop signal detected and all tasks complete. Exiting."
       rm -f "$STATE_DIR/.stop-loop"
-      exit 0
+      quit_and_kill_session "Stop signal detected and all tasks complete. Exiting."
     fi
     log "Stop signal detected. Finishing $active_count active task(s)..."
     sleep "$POLL_SECONDS"
@@ -2939,8 +2954,7 @@ while :; do
 
   if [[ "$QUIT_REQUESTED" == "true" ]]; then
     if (( active_count == 0 )); then
-      log "All tasks complete. Exiting."
-      exit 0
+      quit_and_kill_session "All tasks complete. Exiting."
     fi
     # Still have active tasks — keep monitoring but don't offer new ones
     sleep "$POLL_SECONDS"
@@ -3025,11 +3039,9 @@ while :; do
 
           if [[ "$REPLY" =~ ^[Qq] ]]; then
             if (( active_count == 0 )); then
-              log "Quitting."
-              exit 0
+              quit_and_kill_session "Quitting."
             elif [[ "$QUIT_REQUESTED" == "true" ]]; then
-              log "Force quitting ($active_count task(s) still active)."
-              exit 0
+              quit_and_kill_session "Force quitting ($active_count task(s) still active)."
             else
               log "Will quit after $active_count active task(s) finish. Press q again to force quit."
               QUIT_REQUESTED=true
@@ -3073,7 +3085,7 @@ while :; do
             LAST_WAITING_MSG="$waiting_msg"
           fi
           if read -t "$POLL_SECONDS" -r REPLY; then
-            [[ "$REPLY" =~ ^[Qq] ]] && exit 0
+            [[ "$REPLY" =~ ^[Qq] ]] && quit_and_kill_session
           fi
         else
           sleep "$POLL_SECONDS"
@@ -3090,7 +3102,7 @@ while :; do
         # Invalidate cache so we re-fetch next cycle
         LAST_BACKLOG_FETCH=0
         if read -t "$POLL_SECONDS" -r REPLY; then
-          [[ "$REPLY" =~ ^[Qq] ]] && exit 0
+          [[ "$REPLY" =~ ^[Qq] ]] && quit_and_kill_session
         fi
       else
         sleep "$POLL_SECONDS"
