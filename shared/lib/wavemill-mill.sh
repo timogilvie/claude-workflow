@@ -1050,7 +1050,11 @@ for t in "${TASKS[@]}"; do
     fi
   fi
 
-  challenge_args=(--issue "$ISSUE" --slug "$SLUG" --title "$TITLE" --repo-dir "$REPO_DIR" --remaining-slots "$((MAX_PARALLEL - slots_used))")
+  # Challengers are free overhead (don't consume a slot), so always pass
+  # remaining-slots >= 2 as long as the primary slot is available.
+  local _rs=$((MAX_PARALLEL - slots_used))
+  (( _rs < 2 )) && _rs=2
+  challenge_args=(--issue "$ISSUE" --slug "$SLUG" --title "$TITLE" --repo-dir "$REPO_DIR" --remaining-slots "$_rs")
   [[ -n "$rec_model" ]] && challenge_args+=(--primary-model "$rec_model")
   challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
   challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
@@ -1074,8 +1078,8 @@ for t in "${TASKS[@]}"; do
 
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
     FINAL_LAUNCH_ARGS+=("$challenger_key|$challenger_slug|$TITLE")
-    slots_used=$((slots_used + 2))
-    log "  $ISSUE: Challenge selected (${primary_model} vs ${challenger_model})"
+    slots_used=$((slots_used + 1))  # Challenger is free overhead
+    log "  $ISSUE: Challenge selected (${primary_model} vs ${challenger_model}) [challenger is extra pane]"
   else
     if [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
       log "  $ISSUE: Challenge skipped ($challenge_reason), launching single-model run"
@@ -2221,9 +2225,12 @@ launch_task() {
     reviewer_model="$task_model"
   fi
 
-  if [[ -z "${WAVEMILL_DISABLE_CHALLENGE:-}" ]] && should_update_linear_state "$issue" && (( remaining_slots >= 2 )); then
+  if [[ -z "${WAVEMILL_DISABLE_CHALLENGE:-}" ]] && should_update_linear_state "$issue" && (( remaining_slots >= 1 )); then
     local challenge_args challenge_plan challenge_mode challenge_reason
-    challenge_args=(--issue "$issue" --slug "$slug" --title "$title" --repo-dir "$REPO_DIR" --remaining-slots "$remaining_slots")
+    # Challengers are free overhead — always pass remaining-slots >= 2
+    local _dyn_rs=$remaining_slots
+    (( _dyn_rs < 2 )) && _dyn_rs=2
+    challenge_args=(--issue "$issue" --slug "$slug" --title "$title" --repo-dir "$REPO_DIR" --remaining-slots "$_dyn_rs")
     [[ -n "$task_model" ]] && challenge_args+=(--primary-model "$task_model")
     [[ -n "$packet_file" ]] && challenge_args+=(--file "$packet_file")
     challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
@@ -2262,8 +2269,8 @@ launch_task() {
       save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "true" "$challenge_pair" "primary" "$task_model" "$planner_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
       save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode"
       should_launch_challenger="true"
-      LAST_LAUNCHED_SLOTS=2
-      log "  Challenge selected (${task_model} vs ${challenger_model})"
+      LAST_LAUNCHED_SLOTS=1  # Challenger is free overhead, doesn't consume a slot
+      log "  Challenge selected (${task_model} vs ${challenger_model}) [challenger is extra pane]"
     elif [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
       log "  Challenge skipped ($challenge_reason), launching single-model run"
     fi
@@ -2899,6 +2906,7 @@ monitor_issue_state() {
 while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
   active_count=0
+  active_challenger_count=0
 
   for ISSUE in "${!BRANCH_BY_ISSUE[@]}"; do
     [[ -n "${CLEANED[$ISSUE]:-}" ]] && continue
@@ -2909,6 +2917,12 @@ while :; do
     if (( issue_rc != 0 )); then
       log_warn "$ISSUE → Monitor step failed (exit $issue_rc). Keeping slot active."
       active_count=$((active_count + 1))
+    fi
+    # Track active challengers separately (they are free overhead for slot counting)
+    local _cr
+    _cr=$(jq -r --arg i "$ISSUE" '.tasks[$i].challengeRole // ""' "$STATE_FILE" 2>/dev/null || echo "")
+    if [[ "$_cr" == "challenger" ]] && [[ -z "${CLEANED[$ISSUE]:-}" ]]; then
+      active_challenger_count=$((active_challenger_count + 1))
     fi
   done
 
@@ -2935,7 +2949,8 @@ while :; do
   fi
 
   # ── Phase C: Offer new tasks if slots available ─────────────────────
-  free_slots=$((MAX_PARALLEL - active_count))
+  # Challengers are free overhead — don't count them against MAX_PARALLEL
+  free_slots=$((MAX_PARALLEL - (active_count - active_challenger_count)))
 
   if (( free_slots > 0 )); then
     candidates=$(fetch_candidates)
