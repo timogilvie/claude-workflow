@@ -23,8 +23,8 @@
       "properties": {
         "session": {
           "type": "string",
-          "default": "wavemill",
-          "description": "Tmux session name."
+          "default": "",
+          "description": "Tmux session name. Empty string (default) auto-generates 'wavemill-{repo_basename}' for repo-specific sessions."
         },
         "maxParallel": {
           "type": "integer",

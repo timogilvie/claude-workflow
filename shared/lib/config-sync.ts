@@ -8,7 +8,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     project: '',
   },
   mill: {
-    session: 'wavemill',
+    session: '',
     maxParallel: 7,
     pollSeconds: 10,
     baseBranch: 'main',
