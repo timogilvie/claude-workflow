@@ -1434,6 +1434,17 @@ check_coding_complete() {
   return 1
 }
 
+# Ensure a tmux window exists, creating it if missing (e.g. after monitor restart).
+_ensure_window_exists() {
+  local session="$1" win="$2" wt_dir="$3"
+  if ! tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
+    log_warn "  Window $win missing, recreating..."
+    tmux new-window -t "$session" -n "$win" -c "$wt_dir" 2>/dev/null || true
+    tmux set-option -t "$session:$win" remain-on-exit on 2>/dev/null || true
+    sleep 1
+  fi
+}
+
 # Launch an agent in a tmux window, ensuring any previous agent is terminated first.
 # This is the single point of control for all phase launches — it guarantees:
 #   1. Previous agent is killed (Ctrl-C + wait for shell)
@@ -1493,6 +1504,7 @@ launch_planning_phase() {
   local planner_model="$7" planner_agent="$8" plan_depth="$9"
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
+  _ensure_window_exists "$SESSION" "$win" "$wt_dir"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -1517,6 +1529,7 @@ launch_coding_phase() {
   local coder_model="$7" coder_agent="$8" code_depth="$9"
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
+  _ensure_window_exists "$SESSION" "$win" "$wt_dir"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -1541,6 +1554,7 @@ launch_review_phase() {
   local reviewer_model="$7" reviewer_agent="$8" review_mode="$9"
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
+  _ensure_window_exists "$SESSION" "$win" "$wt_dir"
 
   # Read issue context
   local issue_json issue_desc issue_context
