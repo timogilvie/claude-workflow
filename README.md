@@ -93,7 +93,7 @@ Fully autonomous task execution system that continuously processes your Linear b
 1. Fetches prioritized tasks from Linear backlog (auto-detects project from `.wavemill-config.json`)
 2. Ranks tasks using intelligent priority scoring (considers: Linear priority, task packet completeness, foundational work, dependencies, estimates)
 3. Auto-expands issues without detailed descriptions (using Claude + issue-writer prompt)
-4. Launches parallel agent workers in tmux windows (default: 3 concurrent tasks)
+4. Launches parallel agent workers in tmux windows (default: 7 concurrent tasks)
 5. Monitors PR creation and merge status
 6. Auto-cleans completed tasks (closes tmux windows, removes worktrees, updates Linear to "Done")
 7. Prompts for next batch with 10s auto-continue
@@ -120,7 +120,7 @@ MAX_PARALLEL=5 wavemill mill
 - **Project context learning** - Automatically maintains `.wavemill/project-context.md` with architectural decisions, patterns, and lessons learned from each completed task
 
 **Environment variables:**
-- `MAX_PARALLEL` - Number of parallel tasks (default: 3)
+- `MAX_PARALLEL` - Number of parallel tasks (default: 7)
 - `SESSION` - Tmux session name (default: wavemill)
 - `AGENT_CMD` - Agent to use (default: claude, can be: codex)
 - `WORKTREE_ROOT` - Worktree location (default: ../worktrees)

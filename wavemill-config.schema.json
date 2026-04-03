@@ -28,7 +28,7 @@
         },
         "maxParallel": {
           "type": "integer",
-          "default": 3,
+          "default": 7,
           "minimum": 1,
           "description": "Number of parallel agent workers."
         },

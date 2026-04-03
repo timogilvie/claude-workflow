@@ -11,7 +11,7 @@ _WAVEMILL_DEFAULTS='{
   "linear": { "project": "" },
   "mill": {
     "session": "",
-    "maxParallel": 3,
+    "maxParallel": 7,
     "pollSeconds": 10,
     "baseBranch": "main",
     "worktreeRoot": "worktrees",

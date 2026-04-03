@@ -65,7 +65,7 @@ eval "$(
 )"
 
 check_matches "default SESSION" '^wavemill-' "$D_SESSION"
-check "default MAX_PARALLEL" "3" "$D_MAX_PARALLEL"
+check "default MAX_PARALLEL" "7" "$D_MAX_PARALLEL"
 check "default BASE_BRANCH" "main" "$D_BASE_BRANCH"
 check "default AGENT_CMD" "claude" "$D_AGENT_CMD"
 check "default REQUIRE_CONFIRM" "true" "$D_REQUIRE_CONFIRM"
@@ -189,7 +189,7 @@ eval "$(
 rm -rf "$EMPTY_TMP"
 
 check_matches "defaults with no config files" '^wavemill-' "$M_SESSION"
-check "defaults with no config files (parallel)" "3" "$M_MAX_PARALLEL"
+check "defaults with no config files (parallel)" "7" "$M_MAX_PARALLEL"
 
 # ============================================================================
 # Results
