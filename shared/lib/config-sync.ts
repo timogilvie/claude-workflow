@@ -3,13 +3,13 @@ import { resolve } from 'node:path';
 import { CURRENT_CONFIG_VERSION, loadWavemillConfig, type WavemillConfig } from './config.ts';
 
 export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
-  configVersion: '1.1.0',
+  configVersion: '1.2.0',
   linear: {
     project: '',
   },
   mill: {
     session: 'wavemill',
-    maxParallel: 3,
+    maxParallel: 7,
     pollSeconds: 10,
     baseBranch: 'main',
     worktreeRoot: '../worktrees',

@@ -120,7 +120,7 @@ ${GREEN}Examples:${NC}
   # Initialize config in your repo
   wavemill init
 
-  # Start continuous loop (default: 3 parallel tasks)
+  # Start continuous loop (default: 7 parallel tasks)
   wavemill mill
 
   # Start mill with a specific agent
@@ -326,7 +326,7 @@ run_init() {
   },
   "mill": {
     "session": "wavemill",
-    "maxParallel": 3,
+    "maxParallel": 7,
     "pollSeconds": 10,
     "baseBranch": "main",
     "worktreeRoot": "../worktrees",
