@@ -2919,7 +2919,6 @@ while :; do
       active_count=$((active_count + 1))
     fi
     # Track active challengers separately (they are free overhead for slot counting)
-    local _cr
     _cr=$(jq -r --arg i "$ISSUE" '.tasks[$i].challengeRole // ""' "$STATE_FILE" 2>/dev/null || echo "")
     if [[ "$_cr" == "challenger" ]] && [[ -z "${CLEANED[$ISSUE]:-}" ]]; then
       active_challenger_count=$((active_challenger_count + 1))
