@@ -13,6 +13,7 @@
 
 import * as readline from 'readline/promises';
 import { getIssue, getLabels, addLabelsToIssue, getOrCreateLabel } from './linear.ts';
+import { errorMessage } from './error-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -234,7 +235,7 @@ export async function autoLabelIssue(
         labelMap.set(componentLabel, newLabel.id);
         createdLabels.push(componentLabel);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         console.warn(`   ⚠️  Failed to create label ${componentLabel}: ${message}`);
       }
     }

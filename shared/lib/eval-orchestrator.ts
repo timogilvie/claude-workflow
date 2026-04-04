@@ -236,7 +236,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
         }
         return difficultyData;
       } catch (diffErr) {
-        const errorMsg = diffErr instanceof Error ? diffErr.message : String(diffErr);
+        const errorMsg = errorMessage(diffErr);
         console.warn(`  Warning: difficulty analysis failed — ${errorMsg}`);
         return null;
       }
@@ -256,7 +256,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
         }
         return repoContextData;
       } catch (repoErr) {
-        const errorMsg = repoErr instanceof Error ? repoErr.message : String(repoErr);
+        const errorMsg = errorMessage(repoErr);
         console.warn(`  Warning: repo context analysis failed — ${errorMsg}`);
         return null;
       }
@@ -297,7 +297,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
         );
       }
     } catch (taskErr) {
-      const errorMsg = taskErr instanceof Error ? taskErr.message : String(taskErr);
+      const errorMsg = errorMessage(taskErr);
       console.warn(`  Warning: task context analysis failed — ${errorMsg}`);
     }
   }

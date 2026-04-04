@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { callClaude } from './llm-cli.ts';
 import type { Subsystem } from './subsystem-detector.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
+import { errorMessage } from './error-utils.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -72,7 +73,7 @@ export async function updateAffectedSubsystems(
     if (result.status === 'fulfilled') {
       console.log(`Subsystem update: ✓ Updated ${affected[i].name}`);
     } else {
-      const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      const message = errorMessage(result.reason);
       console.warn(`Subsystem update: ⚠ Failed to update ${affected[i].name}: ${message}`);
     }
   }

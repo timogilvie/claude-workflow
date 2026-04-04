@@ -22,6 +22,7 @@ import {
 } from './linear.ts';
 import { parseJsonFromLLM } from './llm-cli.ts';
 import { toKebabCase } from './string-utils.js';
+import { errorMessage } from './error-utils.ts';
 import {
   decomposeWithClaude,
   runResearch,
@@ -323,7 +324,7 @@ export async function decomposeInitiative(
       );
       console.log(`  ✓ Milestone: ${milestone.name}`);
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = errorMessage(error);
       console.warn(`  ⚠ Could not create milestone: ${errorMsg}`);
     }
 
