@@ -10,10 +10,11 @@
  * @module eval-aggregator
  */
 
-import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, basename, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { EvalRecord } from './eval-schema.ts';
+import { readJsonlFile } from './jsonl-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Auto-Discovery
@@ -104,29 +105,22 @@ export function readEvalsFromRepo(repoDir: string, options: ReadOptions = {}): E
   const evalsFile = join(repoDir, '.wavemill', 'evals', 'evals.jsonl');
   if (!existsSync(evalsFile)) return [];
 
-  const records: EvalRecord[] = [];
   const repoName = basename(repoDir);
 
   try {
-    const content = readFileSync(evalsFile, 'utf-8');
-    const lines = content.split('\n').filter((line) => line.trim().length > 0);
+    const records = readJsonlFile<EvalRecord>(evalsFile);
 
-    for (const line of lines) {
-      try {
-        const record = JSON.parse(line) as EvalRecord;
-        if (options.addSourceRepo) {
-          (record as any).sourceRepo = repoName;
-        }
-        records.push(record);
-      } catch {
-        // Skip malformed lines
+    if (options.addSourceRepo) {
+      for (const record of records) {
+        (record as EvalRecord & { sourceRepo?: string }).sourceRepo = repoName;
       }
     }
+
+    return records;
   } catch {
     // File read error - return empty array
+    return [];
   }
-
-  return records;
 }
 
 /**
