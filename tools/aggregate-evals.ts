@@ -2,6 +2,7 @@
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { resolve } from 'node:path';
 import { getEvalConfig } from '../shared/lib/config.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 import {
   discoverWavemillDirs,
   aggregateEvals,
@@ -98,7 +99,7 @@ Deduplication:
       console.log(formatAggregationReport(result));
       console.log(`\nOutput: ${outputPath}`);
     } catch (error) {
-      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`Error: ${errorMessage(error)}`);
       process.exit(1);
     }
   },

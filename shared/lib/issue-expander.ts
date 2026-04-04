@@ -17,6 +17,7 @@ import { callClaude } from './llm-cli.ts';
 import { fillPromptTemplate } from './prompt-utils.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { detectDriftForIssue, formatDriftWarning } from './drift-detector.ts';
+import { errorMessage } from './error-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Public API
@@ -222,7 +223,7 @@ export async function checkSubsystemDrift(
     }
   } catch (error) {
     // Drift detection is non-blocking
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     console.warn(`⚠️  Drift detection failed: ${message}`);
   }
 }

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { listInitiatives } from '../shared/lib/initiative-lister.ts';
 import { decomposeInitiative } from '../shared/lib/initiative-decomposer.ts';
 import { getPlanConfig } from '../shared/lib/config.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -195,7 +196,7 @@ Environment Variables:
           process.exit(1);
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = errorMessage(error);
       console.error('Error:', errorMsg);
       process.exit(1);
     }

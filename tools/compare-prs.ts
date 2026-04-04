@@ -12,6 +12,7 @@ import {
   type ChallengeRoutingMeta,
 } from '../shared/lib/challenge-comparison.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,7 +29,7 @@ function prUrlFromNumber(pr: string, repoDir: string): string {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     throw new Error(`Failed to resolve PR URL for ${pr}: ${message}`);
   }
 }
@@ -161,7 +162,7 @@ function runGh(args: string[], repoDir: string): string {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     throw new Error(`gh ${args.join(' ')} failed: ${message}`);
   }
 }
@@ -170,7 +171,7 @@ function tryGh(args: string[], repoDir: string, label: string): void {
   try {
     runGh(args, repoDir);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     console.warn(`[compare-prs] ${label} failed: ${message}`);
   }
 }

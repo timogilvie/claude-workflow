@@ -29,6 +29,7 @@ import {
   type PlanOutput,
   type PlanIssue,
 } from './plan-decomposer.ts';
+import { errorMessage } from './error-utils.ts';
 import { validatePlanOutput } from './plan-validator.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -323,7 +324,7 @@ export async function decomposeInitiative(
       );
       console.log(`  ✓ Milestone: ${milestone.name}`);
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = errorMessage(error);
       console.warn(`  ⚠ Could not create milestone: ${errorMsg}`);
     }
 

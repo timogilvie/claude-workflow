@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { getScoreBand, type EvalRecord, type InterventionRecord, type Outcomes, type RoutingDecision } from './eval-schema.ts';
 import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
 import { getEvalConfig } from './config.ts';
+import { errorMessage } from './error-utils.ts';
 import { loadPricingTable } from './workflow-cost.ts';
 import { createPromptArtifact, type PromptArtifact } from './prompt-hash.ts';
 
@@ -364,7 +365,7 @@ export async function evaluateTask(
     const promptArtifact = createPromptArtifact(promptTemplatePath, prompt);
     promptArtifacts = [promptArtifact];
   } catch (err) {
-    console.warn(`[eval] Failed to capture prompt artifact: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[eval] Failed to capture prompt artifact: ${errorMessage(err)}`);
   }
 
   const callFn = _callFn || callClaudeWithRetry;

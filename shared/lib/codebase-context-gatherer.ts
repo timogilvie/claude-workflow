@@ -17,6 +17,7 @@
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { errorMessage } from './error-utils.ts';
 import { findRelevantSubsystems, type SubsystemSearchResult } from './subsystem-search.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
@@ -400,7 +401,7 @@ export async function gatherSubsystemContext(
     console.log(`✓ Found ${subsystems.length} relevant subsystem spec(s)\n`);
     return formatSubsystemContext(subsystems);
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     console.warn(`⚠️  Subsystem search failed: ${message}`);
     return '';
   }

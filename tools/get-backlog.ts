@@ -1,6 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import '../shared/lib/env.js';
 import { runTool } from '../shared/lib/tool-runner.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 import { getBacklog, getProjects } from '../shared/lib/linear.ts';
 import readline from "node:readline";
 
@@ -40,7 +41,7 @@ async function selectProject(): Promise<string | null> {
       return null;
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     console.error('Error in selectProject:', message);
     return null;
   }
