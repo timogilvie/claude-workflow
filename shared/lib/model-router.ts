@@ -16,6 +16,7 @@ import type { EvalRecord } from './eval-schema.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { recommendModelLLM } from './llm-router.ts';
 import { loadWavemillConfig } from './config.ts';
+import { resolveFromMainRepo } from './git-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -333,14 +334,17 @@ function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
 
   // Try loading aggregated cross-repo data
   const repoDir = opts.repoDir || '.';
-  const configPath = resolve(repoDir, '.wavemill-config.json');
-  let aggregatedPath = resolve(repoDir, '.wavemill/evals/aggregated-evals.jsonl');
 
+  // Use worktree-aware resolution for aggregated data path
+  let aggregatedPath = resolveFromMainRepo('.wavemill/evals/aggregated-evals.jsonl', repoDir);
+
+  // Check if config overrides the aggregated path
+  const configPath = resolveFromMainRepo('.wavemill-config.json', repoDir);
   try {
     if (existsSync(configPath)) {
       const config = JSON.parse(readFileSync(configPath, 'utf-8'));
       if (config.eval?.aggregation?.outputPath) {
-        aggregatedPath = resolve(repoDir, config.eval.aggregation.outputPath);
+        aggregatedPath = resolveFromMainRepo(config.eval.aggregation.outputPath, repoDir);
       }
     }
   } catch {
