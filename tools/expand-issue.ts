@@ -23,6 +23,7 @@ import { gatherCodebaseContext } from '../shared/lib/codebase-context-gatherer.t
 import { splitTaskPacket, isValidTaskPacket } from '../shared/lib/task-packet-utils.ts';
 import { formatValidationIssues } from '../shared/lib/validation-formatter.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -145,7 +146,7 @@ runTool({
           await fs.writeFile(outputFile, fullContent, 'utf-8');
           console.log(`✓ Full content saved to: ${outputFile}`);
         } catch (writeError) {
-          const errorMsg = writeError instanceof Error ? writeError.message : String(writeError);
+          const errorMsg = errorMessage(writeError);
           console.warn(`⚠️  Failed to write output files: ${errorMsg}`);
         }
       } else {
@@ -203,7 +204,7 @@ runTool({
             console.log('\n✓ Validation PASSED');
           }
         } catch (validationError) {
-          const errorMsg = validationError instanceof Error ? validationError.message : String(validationError);
+          const errorMsg = errorMessage(validationError);
           console.warn(`\n⚠️  Validation failed with error: ${errorMsg}`);
           console.warn('   Proceeding without validation...');
         }
@@ -224,7 +225,7 @@ runTool({
           try {
             await autoLabelIssue(issue.identifier);
           } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : String(error);
+            const errorMsg = errorMessage(error);
             console.warn(`⚠️  Auto-labeling failed: ${errorMsg}`);
             console.warn('   Issue was updated but labels were not applied');
           }
@@ -237,7 +238,7 @@ runTool({
       }
 
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = errorMessage(error);
       console.error('Error:', errorMsg);
       process.exit(1);
     }

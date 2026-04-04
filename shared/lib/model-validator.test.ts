@@ -4,6 +4,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { errorMessage } from './error-utils.ts';
 import {
   getKnownModels,
   isValidModel,
@@ -113,7 +114,7 @@ describe('model-validator', () => {
         validateModelOrThrow('chatgpt-5.3', '.');
         assert.fail('Should have thrown');
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         assert.ok(
           message.includes('Did you mean:'),
           'Error message should include suggestions'
@@ -130,7 +131,7 @@ describe('model-validator', () => {
         validateModelOrThrow('invalid', '.');
         assert.fail('Should have thrown');
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         assert.ok(
           message.includes('Codex models:'),
           'Error should list Codex models'
