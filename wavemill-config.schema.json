@@ -23,7 +23,7 @@
       "properties": {
         "session": {
           "type": "string",
-          "default": "wavemill",
+          "default": "",
           "description": "Tmux session name."
         },
         "maxParallel": {
