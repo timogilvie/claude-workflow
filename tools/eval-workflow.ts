@@ -1,6 +1,5 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
-import '../shared/lib/env.js';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 import { runEvaluation } from '../shared/lib/eval-orchestrator.ts';
 import { formatEvalRecord } from '../shared/lib/eval-formatter.ts';
