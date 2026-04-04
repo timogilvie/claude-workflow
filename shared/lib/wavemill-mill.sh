@@ -2212,11 +2212,12 @@ launch_task() {
           local suggestion
           suggestion=$(_with_timeout "$API_TIMEOUT" npx tsx "$suggest_tool" --json --file "$packet_file" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
           if [[ -n "$suggestion" ]]; then
-            local rec_model rec_agent rec_insufficient rec_confidence
+            local rec_model rec_agent rec_insufficient rec_confidence rec_reasoning
             rec_model=$(echo "$suggestion" | jq -r '.recommendedModel // empty' 2>/dev/null)
             rec_agent=$(echo "$suggestion" | jq -r '.recommendedAgent // empty' 2>/dev/null)
             rec_insufficient=$(echo "$suggestion" | jq -r '.insufficientData // false' 2>/dev/null)
             rec_confidence=$(echo "$suggestion" | jq -r '.confidence // empty' 2>/dev/null)
+            rec_reasoning=$(echo "$suggestion" | jq -r '.reasoning // empty' 2>/dev/null)
 
             # Always use recommended agent if provided
             if [[ -n "$rec_agent" ]]; then
@@ -2228,7 +2229,7 @@ launch_task() {
               task_model="$rec_model"
               log "  Router: $task_agent_cmd --model $task_model (confidence: $rec_confidence)"
             elif [[ -n "$rec_model" ]]; then
-              log "  Router: $task_agent_cmd --model $rec_model (insufficient data, using default)"
+              log "  Router: $task_agent_cmd --model $rec_model - $rec_reasoning"
             fi
           fi
         fi

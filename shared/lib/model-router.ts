@@ -16,6 +16,7 @@ import type { EvalRecord } from './eval-schema.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { recommendModelLLM } from './llm-router.ts';
 import { loadWavemillConfig } from './config.ts';
+import { aggregateEvals } from './eval-aggregator.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -322,17 +323,81 @@ export function isRouterEnabled(repoDir?: string): boolean {
   return config.router?.enabled !== false;
 }
 
+// Track whether we've already attempted auto-aggregation (singleton pattern)
+const autoAggregationAttempted = new Set<string>();
+
+/**
+ * Ensure aggregated eval data exists by auto-aggregating if needed.
+ *
+ * Checks if the aggregated file exists, and if not, attempts to create it
+ * by aggregating data from configured source repos.
+ *
+ * @param repoDir - Repository directory
+ * @returns true if aggregation was performed, false otherwise
+ */
+function ensureAggregatedData(repoDir: string): boolean {
+  // Only attempt aggregation once per repo directory per process
+  if (autoAggregationAttempted.has(repoDir)) {
+    return false;
+  }
+  autoAggregationAttempted.add(repoDir);
+
+  try {
+    const config = loadWavemillConfig(repoDir);
+    const aggregationConfig = config.eval?.aggregation;
+
+    // Check if aggregation is configured
+    if (!aggregationConfig?.repos || aggregationConfig.repos.length === 0) {
+      return false;
+    }
+
+    // Determine aggregated file path
+    const aggregatedPath = resolve(
+      repoDir,
+      aggregationConfig.outputPath || '.wavemill/evals/aggregated-evals.jsonl'
+    );
+
+    // If file already exists, no need to aggregate
+    if (existsSync(aggregatedPath)) {
+      return false;
+    }
+
+    // Run aggregation silently
+    aggregateEvals({
+      repoPaths: aggregationConfig.repos.map((r) => resolve(repoDir, r)),
+      outputPath: aggregatedPath,
+      deduplicateByHash: true,
+      addSourceRepo: true,
+    });
+
+    console.error(`Auto-aggregated eval data from ${aggregationConfig.repos.length} repo(s)`);
+    return true;
+  } catch (error) {
+    // Gracefully handle aggregation failures - don't block router
+    console.error(`WARN: Auto-aggregation failed: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
 /**
  * Load eval records from per-repo file and optionally merge with the
  * aggregated cross-repo file. Deduplicates by record `id`.
+ *
+ * Automatically triggers aggregation if the aggregated file is missing
+ * but source repos are configured.
  */
 function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
+  const repoDir = opts.repoDir || '.';
+
+  // Auto-aggregate if needed
+  ensureAggregatedData(repoDir);
+
   const perRepo = readEvalRecords(
     opts.evalsDir ? { dir: opts.evalsDir } : undefined,
   );
+  console.error(`Router: Loaded ${perRepo.length} records from per-repo file`);
 
   // Try loading aggregated cross-repo data
-  const repoDir = opts.repoDir || '.';
   const configPath = resolve(repoDir, '.wavemill-config.json');
   let aggregatedPath = resolve(repoDir, '.wavemill/evals/aggregated-evals.jsonl');
 
@@ -347,19 +412,29 @@ function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
     // Ignore config read errors
   }
 
-  if (!existsSync(aggregatedPath)) return perRepo;
+  if (!existsSync(aggregatedPath)) {
+    console.error(`Router: Aggregated file not found at ${aggregatedPath}`);
+    return perRepo;
+  }
 
   try {
     const seen = new Set(perRepo.map((r) => r.id));
     const merged = [...perRepo];
+    let aggregatedCount = 0;
     for (const record of readJsonlFile<EvalRecord>(aggregatedPath)) {
       if (!seen.has(record.id)) {
         seen.add(record.id);
         merged.push(record);
+        aggregatedCount++;
       }
     }
+    console.error(
+      `Router: Loaded ${aggregatedCount} additional records from aggregated file ` +
+      `(${merged.length} total after merge)`
+    );
     return merged;
-  } catch {
+  } catch (error) {
+    console.error(`Router: Failed to read aggregated file: ${error instanceof Error ? error.message : String(error)}`);
     return perRepo;
   }
 }
@@ -380,6 +455,12 @@ function recommendModelHeuristic(
 
   // Count distinct models
   const distinctModels = new Set(records.map((r) => r.modelId));
+
+  // Log data sufficiency check details
+  console.error(
+    `Router data check: ${records.length} records (need ${opts.minRecords}), ` +
+    `${distinctModels.size} model(s) (need ${opts.minModels})`
+  );
 
   // Check data sufficiency
   if (records.length < opts.minRecords || distinctModels.size < opts.minModels) {
@@ -486,6 +567,10 @@ export function recommendModel(
   const opts = { ...DEFAULT_ROUTER_OPTIONS, ...options };
   const characteristics = analyzePrompt(prompt);
   const mode = opts.mode || 'auto';
+
+  // Ensure aggregated data exists (runs once per repo dir)
+  const repoDir = opts.repoDir || '.';
+  ensureAggregatedData(repoDir);
 
   // Try LLM routing when mode is 'llm' or 'auto'
   if (mode === 'llm' || mode === 'auto') {
