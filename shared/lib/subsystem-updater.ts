@@ -62,14 +62,18 @@ export async function updateAffectedSubsystems(
   console.log(`Subsystem update: ${affected.length} subsystem(s) affected:`);
   affected.forEach(s => console.log(`  - ${s.name}`));
 
-  // Update each affected subsystem
-  for (const subsystem of affected) {
-    try {
-      await updateSubsystemSpec(subsystem, context);
-      console.log(`Subsystem update: ✓ Updated ${subsystem.name}`);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`Subsystem update: ⚠ Failed to update ${subsystem.name}: ${message}`);
+  // Update affected subsystems in parallel
+  const results = await Promise.allSettled(
+    affected.map(subsystem => updateSubsystemSpec(subsystem, context))
+  );
+
+  for (let i = 0; i < affected.length; i++) {
+    const result = results[i];
+    if (result.status === 'fulfilled') {
+      console.log(`Subsystem update: ✓ Updated ${affected[i].name}`);
+    } else {
+      const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      console.warn(`Subsystem update: ⚠ Failed to update ${affected[i].name}: ${message}`);
     }
   }
 }
@@ -92,7 +96,8 @@ export async function updateSubsystemSpec(
     return;
   }
 
-  const currentSpec = readFileSync(specPath, 'utf-8');
+  const rawSpec = readFileSync(specPath, 'utf-8');
+  const currentSpec = truncateSpec(rawSpec, 15_000);
 
   // Filter diff to subsystem files only
   const filteredDiff = filterDiffToSubsystem(prDiff, subsystem);
@@ -143,7 +148,12 @@ async function generateSubsystemUpdate(opts: {
   const claudeCmd = process.env.CLAUDE_CMD || 'claude';
   const result = await callClaude(prompt, {
     mode: 'stream',
-    claudeCmd,
+    cliCmd: claudeCmd,
+    model: 'claude-haiku-4-5-20251001',
+    timeout: 300_000,
+    activityTimeout: 60_000,
+    retry: true,
+    maxRetries: 1,
     cliFlags: [
       '--tools', '',
       '--append-system-prompt',
@@ -152,6 +162,36 @@ async function generateSubsystemUpdate(opts: {
   });
 
   return result.text;
+}
+
+/**
+ * Truncate a subsystem spec to fit within a size limit.
+ *
+ * Preserves the header (up to "## Key Files") and the "## Recent Changes"
+ * section at the end, truncating the middle body if needed.
+ */
+function truncateSpec(spec: string, maxBytes: number): string {
+  if (Buffer.byteLength(spec, 'utf-8') <= maxBytes) {
+    return spec;
+  }
+
+  // Find the "## Recent Changes" section to preserve it
+  const recentIdx = spec.lastIndexOf('## Recent Changes');
+  if (recentIdx === -1) {
+    // No recent changes section — just hard truncate
+    return spec.substring(0, maxBytes) + '\n\n[...truncated...]\n';
+  }
+
+  const tail = spec.substring(recentIdx);
+  const tailBytes = Buffer.byteLength(tail, 'utf-8');
+  const headBudget = maxBytes - tailBytes - 30; // 30 bytes for truncation marker
+
+  if (headBudget < 500) {
+    // Tail alone is too large — just hard truncate
+    return spec.substring(0, maxBytes) + '\n\n[...truncated...]\n';
+  }
+
+  return spec.substring(0, headBudget) + '\n\n[...truncated...]\n\n' + tail;
 }
 
 /**
