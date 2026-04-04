@@ -24,7 +24,7 @@ function testFileExistence() {
 
   const taskPacket = `
 ## Key Files
-- \`shared/lib/linear.js\` - Linear API client
+- \`shared/lib/linear.ts\` - Linear API client
 - \`tools/expand-issue.ts\` - Issue expansion tool
 - \`nonexistent/file.ts\` - This doesn't exist
   `;
