@@ -16,6 +16,7 @@ import { join, dirname, resolve } from 'node:path';
 import type { ReviewResult, ReviewFinding } from './review-engine.ts';
 import { loadWavemillConfig } from './config.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { readJsonlFile } from './jsonl-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -314,23 +315,7 @@ export function loadMetrics(
       return [];
     }
 
-    const content = readFileSync(logPath, 'utf-8');
-    const lines = content.split('\n').filter((line) => line.trim().length > 0);
-
-    const metrics: ReviewMetric[] = [];
-    for (const line of lines) {
-      try {
-        const metric = JSON.parse(line) as ReviewMetric;
-        metrics.push(metric);
-      } catch (err) {
-        // Skip malformed lines
-        if (verbose) {
-          console.warn(`Warning: Skipping malformed review metric line: ${line.slice(0, 50)}...`);
-        }
-      }
-    }
-
-    return metrics;
+    return readJsonlFile<ReviewMetric>(logPath);
   } catch (error) {
     // Return empty array on any error - metrics loading should not crash the tool
     if (verbose) {

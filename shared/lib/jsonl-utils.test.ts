@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readJsonlFile, readTransformWrite } from './jsonl-utils.ts';
+import { appendJsonlRecord, readJsonlFile, readTransformWrite } from './jsonl-utils.ts';
 
 let tempDirs: string[] = [];
 
@@ -25,6 +25,20 @@ function makeTempFile(contents: string): string {
 describe('readJsonlFile', () => {
   it('skips malformed and blank lines', () => {
     const filePath = makeTempFile('{"a":1}\nnot json\n\n{"a":2}\n');
+    assert.deepEqual(readJsonlFile<{ a: number }>(filePath), [{ a: 1 }, { a: 2 }]);
+  });
+});
+
+describe('appendJsonlRecord', () => {
+  it('creates parent directories and appends new records', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jsonl-utils-append-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'nested', 'records.jsonl');
+
+    appendJsonlRecord(filePath, { a: 1 });
+    appendJsonlRecord(filePath, { a: 2 });
+
+    assert.equal(readFileSync(filePath, 'utf-8'), '{"a":1}\n{"a":2}\n');
     assert.deepEqual(readJsonlFile<{ a: number }>(filePath), [{ a: 1 }, { a: 2 }]);
   });
 });
