@@ -1,6 +1,6 @@
-import { mkdirSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
 
 export interface ChallengeRoutingMeta {
   planner: string;
@@ -109,14 +109,7 @@ export function classifyChallengeType(varied: VariedDimensions): ChallengeType {
 }
 
 export function appendChallengeComparison(record: ChallengeComparison, dir?: string): void {
-  const filePath = resolveRecordsFile(dir);
-  const outDir = dirname(filePath);
-  mkdirSync(outDir, { recursive: true });
-
-  const tmpPath = join(outDir, `.challenge-records-${randomUUID()}.tmp`);
-  const existing = existsSync(filePath) ? readFileSync(filePath, 'utf-8') : '';
-  writeFileSync(tmpPath, `${existing}${JSON.stringify(record)}\n`, 'utf-8');
-  renameSync(tmpPath, filePath);
+  appendJsonlRecord(resolveRecordsFile(dir), record);
 }
 
 export function readChallengeComparisons(dir?: string): ChallengeComparison[] {
@@ -125,14 +118,5 @@ export function readChallengeComparisons(dir?: string): ChallengeComparison[] {
     return [];
   }
 
-  return readFileSync(filePath, 'utf-8')
-    .split('\n')
-    .filter((line) => line.trim().length > 0)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as ChallengeComparison];
-      } catch {
-        return [];
-      }
-    });
+  return readJsonlFile<ChallengeComparison>(filePath);
 }

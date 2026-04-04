@@ -1,5 +1,4 @@
 #!/usr/bin/env -S npx tsx
-import '../shared/lib/env.js';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { getIssueBasic, updateIssue } from '../shared/lib/linear.ts';
 import fs from "node:fs/promises";

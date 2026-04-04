@@ -7,12 +7,11 @@
  * @module eval-persistence
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type { EvalRecord } from './eval-schema.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
-import { readJsonlFile } from './jsonl-utils.ts';
+import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Constants
@@ -88,25 +87,7 @@ export function appendEvalRecord(
 ): void {
   const { dir: evalsDir, fromConfig } = resolveEvalsDir(options?.dir);
   if (fromConfig) assertSafePath(evalsDir);
-
-  // Ensure directory exists
-  mkdirSync(evalsDir, { recursive: true });
-
-  const filePath = join(evalsDir, EVALS_FILENAME);
-  const line = JSON.stringify(record) + '\n';
-
-  // Atomic append: write to temp file then append to target.
-  // For append operations, we read existing content, add our line, and
-  // write the combined result atomically via temp file + rename.
-  const tmpPath = join(evalsDir, `.evals-${randomUUID()}.tmp`);
-
-  let existing = '';
-  if (existsSync(filePath)) {
-    existing = readFileSync(filePath, 'utf-8');
-  }
-
-  writeFileSync(tmpPath, existing + line, 'utf-8');
-  renameSync(tmpPath, filePath);
+  appendJsonlRecord(join(evalsDir, EVALS_FILENAME), record);
 }
 
 /**

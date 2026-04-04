@@ -20,13 +20,11 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
 import { hashString } from './prompt-hash.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
+import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -101,51 +99,13 @@ function hashExistsInRegistry(
   }
 
   try {
-    const content = readFileSync(registryPath, 'utf-8');
-    const lines = content.trim().split('\n').filter(Boolean);
-
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line) as PromptRegistryEntry;
-        if (entry.templateHash === hash) {
-          return true;
-        }
-      } catch {
-        // Skip malformed lines
-        continue;
-      }
-    }
-
-    return false;
+    return readJsonlFile<PromptRegistryEntry>(registryPath).some(
+      (entry) => entry.templateHash === hash,
+    );
   } catch {
     // If we can't read the file, assume hash doesn't exist
     return false;
   }
-}
-
-/**
- * Append an entry to the registry using atomic write pattern.
- *
- * Uses temp file + rename to ensure the registry isn't corrupted if
- * the write is interrupted.
- */
-function appendToRegistry(
-  entry: PromptRegistryEntry,
-  registryPath: string,
-): void {
-  const evalsDir = resolve(registryPath, '..');
-  const line = JSON.stringify(entry) + '\n';
-
-  // Atomic append: read existing, add line, write via temp file + rename
-  const tmpPath = join(evalsDir, `.prompt-registry-${randomUUID()}.tmp`);
-
-  let existing = '';
-  if (existsSync(registryPath)) {
-    existing = readFileSync(registryPath, 'utf-8');
-  }
-
-  writeFileSync(tmpPath, existing + line, 'utf-8');
-  renameSync(tmpPath, registryPath);
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -204,7 +164,7 @@ export function logPromptUsage(
     }
 
     // Append to registry
-    appendToRegistry(entry, registryPath);
+    appendJsonlRecord(registryPath, entry);
   } catch (err) {
     // Graceful degradation: registry is metadata, shouldn't break workflows
     console.warn(`[prompt-registry] Failed to log template usage: ${err}`);
