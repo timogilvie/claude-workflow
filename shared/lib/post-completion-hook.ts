@@ -481,6 +481,11 @@ async function generateContextUpdate(opts: {
   const result = await callClaude(prompt, {
     mode: 'stream',
     cliCmd: claudeCmd,
+    model: 'claude-haiku-4-5-20251001',
+    timeout: 300_000,
+    activityTimeout: 60_000,
+    retry: true,
+    maxRetries: 1,
     cliFlags: [
       '--tools', '',
       '--append-system-prompt',
