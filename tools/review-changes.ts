@@ -1,9 +1,6 @@
 #!/usr/bin/env -S npx tsx
 import { runTool, resolveRepoDir } from '../shared/lib/tool-runner.ts';
-import { resolve, join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
-import { reviewChanges, type ReviewResult } from '../shared/lib/review-runner.ts';
-import { CYAN, GREEN, YELLOW, RED, BOLD, DIM, NC } from '../shared/lib/colors.ts';
+import { reviewChanges } from '../shared/lib/review-runner.ts';
 import {
   initReviewMetric,
   addIteration,
@@ -16,137 +13,8 @@ import {
   type ReviewMetric,
 } from '../shared/lib/review-metrics.ts';
 import { execSync } from 'node:child_process';
-import { createReviewProgressReporter, type ReviewLogFormat } from '../shared/lib/review-progress.ts';
-
-function parseLogFormat(value: string | undefined): ReviewLogFormat {
-  if (!value || value === 'text') {
-    return 'text';
-  }
-  if (value === 'json') {
-    return 'json';
-  }
-  throw new Error(`Invalid --log-format value: ${value}. Expected "text" or "json".`);
-}
-
-function formatFindings(findings: ReviewResult['codeReviewFindings'], title: string): string {
-  if (!findings || findings.length === 0) {
-    return `${title}: None`;
-  }
-
-  const blockers = findings.filter((f) => f.severity === 'blocker');
-  const warnings = findings.filter((f) => f.severity === 'warning');
-
-  const lines: string[] = [];
-  lines.push(`${BOLD}${title}${NC}`);
-
-  if (blockers.length > 0) {
-    lines.push(`  ${RED}${BOLD}Blockers: ${blockers.length}${NC}`);
-    blockers.forEach((f, i) => {
-      lines.push(`    ${RED}${i + 1}.${NC} ${BOLD}[${f.category}]${NC} ${DIM}${f.location}${NC}`);
-      lines.push(`       ${f.description}`);
-    });
-  }
-
-  if (warnings.length > 0) {
-    lines.push(`  ${YELLOW}${BOLD}Warnings: ${warnings.length}${NC}`);
-    warnings.forEach((f, i) => {
-      lines.push(`    ${YELLOW}${i + 1}.${NC} ${BOLD}[${f.category}]${NC} ${DIM}${f.location}${NC}`);
-      lines.push(`       ${f.description}`);
-    });
-  }
-
-  return lines.join('\n');
-}
-
-/**
- * Format review result for terminal output.
- */
-function formatReviewResult(result: ReviewResult, verbose: boolean): string {
-  const lines: string[] = [];
-
-  // Header
-  lines.push('');
-  lines.push(`${BOLD}${CYAN}${'═'.repeat(63)}${NC}`);
-  lines.push(`${BOLD}${CYAN}  CODE REVIEW RESULTS${NC}`);
-  lines.push(`${BOLD}${CYAN}${'═'.repeat(63)}${NC}`);
-  lines.push('');
-
-  // Verdict
-  const verdictColor = result.verdict === 'ready' ? GREEN : RED;
-  const verdictText = result.verdict === 'ready' ? 'READY ✓' : 'NOT READY ✗';
-  lines.push(`  ${BOLD}Verdict:${NC} ${verdictColor}${BOLD}${verdictText}${NC}`);
-  lines.push('');
-
-  // Metadata
-  if (result.metadata) {
-    lines.push(`  ${DIM}Branch:${NC}  ${result.metadata.branch}`);
-    lines.push(`  ${DIM}Files:${NC}   ${result.metadata.files.length} changed`);
-    if (result.metadata.hasUiChanges) {
-      lines.push(`  ${DIM}UI:${NC}      Changes detected`);
-    }
-    if (result.metadata.designContextAvailable) {
-      const uiStatus = result.metadata.uiVerificationRun ? 'verified' : 'skipped';
-      lines.push(`  ${DIM}Design:${NC}  Context available (${uiStatus})`);
-    }
-    lines.push('');
-  }
-
-  // Code review findings
-  lines.push(formatFindings(result.codeReviewFindings, 'Code Review'));
-  lines.push('');
-
-  // UI findings (if present)
-  if (result.uiFindings && result.uiFindings.length > 0) {
-    lines.push(formatFindings(result.uiFindings, 'UI Review'));
-    lines.push('');
-  }
-
-  // Verbose mode: show full JSON
-  if (verbose) {
-    lines.push(`${BOLD}Full Result (JSON):${NC}`);
-    lines.push(JSON.stringify(result, null, 2));
-    lines.push('');
-  }
-
-  lines.push(`${BOLD}${CYAN}${'═'.repeat(63)}${NC}`);
-  lines.push('');
-
-  return lines.join('\n');
-}
-
-/**
- * Auto-detect sinceCommit from selected-task.json in the feature/bug directory.
- *
- * Looks for `reviewBaseCommit` field which is recorded when the task branch
- * is created, allowing the review to scope to only task-specific changes.
- */
-function detectSinceCommit(branchName: string, repoDir: string, verbose: boolean): string | undefined {
-  // Extract slug from branch name (e.g., "task/my-feature" → "my-feature")
-  const match = branchName.match(/^(?:task|feature|bugfix|bug)\/(.+)$/);
-  if (!match) return undefined;
-
-  const slug = match[1];
-
-  // Check features/ and bugs/ directories
-  for (const dir of ['features', 'bugs']) {
-    const taskPath = join(repoDir, dir, slug, 'selected-task.json');
-    if (existsSync(taskPath)) {
-      try {
-        const task = JSON.parse(readFileSync(taskPath, 'utf-8'));
-        if (task.reviewBaseCommit) {
-          if (verbose) {
-            console.error(`Auto-detected sinceCommit from ${taskPath}: ${task.reviewBaseCommit.slice(0, 8)}`);
-          }
-          return task.reviewBaseCommit;
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    }
-  }
-
-  return undefined;
-}
+import { createReviewProgressReporter } from '../shared/lib/review-progress.ts';
+import { detectSinceCommit, formatReviewResult, parseLogFormat } from '../shared/lib/review-formatter.ts';
 
 runTool({
   name: 'review-changes',

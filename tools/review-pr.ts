@@ -2,142 +2,11 @@
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { getPullRequest, getPullRequestDiff } from '../shared/lib/github.js';
 import { findTaskPacket, findPlan, gatherDesignContext, analyzeDiffMetadata, type ReviewContext } from '../shared/lib/review-context-gatherer.ts';
-import { runReview, type ReviewResult, type ReviewFinding, type ReviewerPersona } from '../shared/lib/review-engine.ts';
-import { CYAN, GREEN, YELLOW, RED, BOLD, DIM, NC } from '../shared/lib/colors.ts';
+import { runReview, type ReviewerPersona } from '../shared/lib/review-engine.ts';
+import { displayPrReviewResults } from '../shared/lib/review-formatter.ts';
 
 const TIMEOUT_MS = 180_000; // 3 minutes for large PR diffs
 // This file now focuses on PR-specific operations: fetching from GitHub and displaying results
-
-// ────────────────────────────────────────────────────────────────
-// Output Formatting
-// ────────────────────────────────────────────────────────────────
-
-/**
- * Format persona attribution for a finding.
- */
-function formatPersonaAttribution(finding: ReviewFinding): string {
-  if (!finding.reviewers || finding.reviewers.length === 0) {
-    return '';
-  }
-
-  if (finding.reviewers.length === 1) {
-    return ` ${DIM}[${finding.reviewers[0]}]${NC}`;
-  }
-
-  // Multiple reviewers - show them
-  return ` ${DIM}[${finding.reviewers.join(', ')}]${NC}`;
-}
-
-/**
- * Display formatted review results in terminal.
- */
-function displayResults(result: ReviewResult, prNumber: number, prTitle: string): void {
-  console.log('\n' + '='.repeat(80));
-  console.log(`PR #${prNumber}: ${prTitle}`);
-  console.log('='.repeat(80) + '\n');
-
-  // Display verdict
-  if (result.verdict === 'ready') {
-    console.log(`✅ ${GREEN}READY TO MERGE${NC} - No blocking issues found\n`);
-  } else {
-    console.log(`❌ ${RED}NOT READY${NC} - Blocking issues must be addressed\n`);
-  }
-
-  // Separate plan compliance findings from other code findings
-  const planComplianceFindings = result.codeReviewFindings.filter(f => f.category === 'plan_compliance');
-  const otherCodeFindings = result.codeReviewFindings.filter(f => f.category !== 'plan_compliance');
-
-  // Count findings by severity
-  const codeBlockers = otherCodeFindings.filter(f => f.severity === 'blocker');
-  const codeWarnings = otherCodeFindings.filter(f => f.severity === 'warning');
-  const planBlockers = planComplianceFindings.filter(f => f.severity === 'blocker');
-  const planWarnings = planComplianceFindings.filter(f => f.severity === 'warning');
-  const uiBlockers = result.uiFindings?.filter(f => f.severity === 'blocker') || [];
-  const uiWarnings = result.uiFindings?.filter(f => f.severity === 'warning') || [];
-
-  const totalBlockers = codeBlockers.length + planBlockers.length + uiBlockers.length;
-  const totalWarnings = codeWarnings.length + planWarnings.length + uiWarnings.length;
-
-  // Display summary
-  console.log(`📊 ${BOLD}Summary${NC}`);
-  console.log(`   Blockers: ${totalBlockers}`);
-  console.log(`   Warnings: ${totalWarnings}`);
-  console.log('');
-
-  // Display code review findings (excluding plan compliance)
-  if (otherCodeFindings.length > 0) {
-    console.log(`💻 ${BOLD}Code Review Findings${NC}\n`);
-
-    if (codeBlockers.length > 0) {
-      console.log(`  ${RED}🚫 BLOCKERS${NC}\n`);
-      codeBlockers.forEach((finding, idx) => {
-        const personaStr = formatPersonaAttribution(finding);
-        console.log(`  ${idx + 1}. ${RED}${finding.location}${NC} [${finding.category}]${personaStr}`);
-        console.log(`     ${finding.description}\n`);
-      });
-    }
-
-    if (codeWarnings.length > 0) {
-      console.log(`  ${YELLOW}⚠️  WARNINGS${NC}\n`);
-      codeWarnings.forEach((finding, idx) => {
-        const personaStr = formatPersonaAttribution(finding);
-        console.log(`  ${idx + 1}. ${YELLOW}${finding.location}${NC} [${finding.category}]${personaStr}`);
-        console.log(`     ${finding.description}\n`);
-      });
-    }
-  } else {
-    console.log(`💻 ${BOLD}Code Review${NC}`);
-    console.log(`   ${GREEN}✓${NC} No issues found\n`);
-  }
-
-  // Display plan compliance findings (if present)
-  if (planComplianceFindings.length > 0) {
-    console.log(`📋 ${BOLD}Plan Compliance${NC}\n`);
-
-    if (planBlockers.length > 0) {
-      console.log(`  ${RED}🚫 BLOCKERS${NC}\n`);
-      planBlockers.forEach((finding, idx) => {
-        const personaStr = formatPersonaAttribution(finding);
-        console.log(`  ${idx + 1}. ${RED}${finding.location}${NC}${personaStr}`);
-        console.log(`     ${finding.description}\n`);
-      });
-    }
-
-    if (planWarnings.length > 0) {
-      console.log(`  ${YELLOW}⚠️  WARNINGS${NC}\n`);
-      planWarnings.forEach((finding, idx) => {
-        const personaStr = formatPersonaAttribution(finding);
-        console.log(`  ${idx + 1}. ${YELLOW}${finding.location}${NC}${personaStr}`);
-        console.log(`     ${finding.description}\n`);
-      });
-    }
-  }
-
-  // Display UI findings (if present)
-  if (result.uiFindings && result.uiFindings.length > 0) {
-    console.log(`🎨 ${BOLD}UI Review Findings${NC}\n`);
-
-    if (uiBlockers.length > 0) {
-      console.log(`  ${RED}🚫 BLOCKERS${NC}\n`);
-      uiBlockers.forEach((finding, idx) => {
-        const personaStr = formatPersonaAttribution(finding);
-        console.log(`  ${idx + 1}. ${RED}${finding.location}${NC} [${finding.category}]${personaStr}`);
-        console.log(`     ${finding.description}\n`);
-      });
-    }
-
-    if (uiWarnings.length > 0) {
-      console.log(`  ${YELLOW}⚠️  WARNINGS${NC}\n`);
-      uiWarnings.forEach((finding, idx) => {
-        const personaStr = formatPersonaAttribution(finding);
-        console.log(`  ${idx + 1}. ${YELLOW}${finding.location}${NC} [${finding.category}]${personaStr}`);
-        console.log(`     ${finding.description}\n`);
-      });
-    }
-  }
-
-  console.log('='.repeat(80) + '\n');
-}
 
 runTool({
   name: 'review-pr',
@@ -252,7 +121,7 @@ The review focuses on major issues:
         reviewers,
       });
 
-      displayResults(result, prNumber, pr.title);
+      displayPrReviewResults(result, prNumber, pr.title);
       process.exit(result.verdict === 'ready' ? 0 : 1);
     } catch (error) {
       console.error(`\n❌ Error: ${(error as Error).message}\n`);
