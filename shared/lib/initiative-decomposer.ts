@@ -21,7 +21,7 @@ import {
   getOrCreateProjectMilestone,
 } from './linear.ts';
 import { parseJsonFromLLM } from './llm-cli.ts';
-import { toKebabCase } from './string-utils.js';
+import { toKebabCase } from './string-utils.ts';
 import { errorMessage } from './error-utils.ts';
 import {
   decomposeWithClaude,

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createTimer } from './session-timer.js';
+import { createTimer } from './session-timer.ts';
 
 describe('createTimer', () => {
   it('returns 0 before start', () => {

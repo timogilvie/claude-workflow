@@ -6,34 +6,50 @@ import { existsSync } from "node:fs";
 import { randomUUID } from 'crypto';
 import { join } from "node:path";
 
-/**
- * @typedef {'feature' | 'bugfix' | 'plan' | 'validate-plan' | 'implement-plan'} WorkflowType
- * @typedef {'running' | 'completed' | 'failed' | 'cancelled'} SessionStatus
- *
- * @typedef {Object} SessionMetadata
- * @property {string} sessionId
- * @property {WorkflowType} workflowType
- * @property {string} [issueId]
- * @property {string} prompt
- * @property {string} model
- * @property {string} [modelVersion]
- * @property {string} startedAt
- * @property {string} [completedAt]
- * @property {number} [executionTimeMs]
- * @property {number} [userWaitTimeMs]
- * @property {string} [prIdentifier]
- * @property {SessionStatus} status
- * @property {string} [error]
- */
+export type WorkflowType = 'feature' | 'bugfix' | 'plan' | 'validate-plan' | 'implement-plan';
+export type SessionStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface SessionMetadata {
+  schemaVersion?: string;
+  sessionId: string;
+  workflowType: WorkflowType;
+  issueId?: string;
+  prompt: string;
+  model: string;
+  modelVersion?: string;
+  startedAt: string;
+  completedAt?: string;
+  executionTimeMs?: number;
+  userWaitTimeMs?: number;
+  prIdentifier?: string;
+  status: SessionStatus;
+  error?: string;
+}
+
+interface CreateSessionOpts {
+  workflowType: WorkflowType;
+  prompt: string;
+  model: string;
+  modelVersion?: string;
+  issueId?: string;
+  repoDir?: string;
+}
+
+interface CompleteSessionOpts {
+  executionTimeMs?: number;
+  userWaitTimeMs?: number;
+  status: SessionStatus;
+  prIdentifier?: string;
+  error?: string;
+  repoDir?: string;
+}
 
 const SCHEMA_VERSION = '1.0.0';
 
 /**
  * Resolve the sessions directory, creating it if needed.
- * @param {string} [repoDir]
- * @returns {Promise<string>}
  */
-async function sessionsDir(repoDir) {
+async function sessionsDir(repoDir?: string): Promise<string> {
   const dir = join(repoDir || process.cwd(), '.wavemill', 'sessions');
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
@@ -43,10 +59,8 @@ async function sessionsDir(repoDir) {
 
 /**
  * Write a session to disk (both latest.json and archive).
- * @param {string} dir
- * @param {SessionMetadata} session
  */
-async function persist(dir, session) {
+async function persist(dir: string, session: SessionMetadata): Promise<void> {
   const json = JSON.stringify(session, null, 2);
   await Promise.all([
     writeFile(join(dir, 'latest.json'), json, 'utf-8'),
@@ -57,19 +71,12 @@ async function persist(dir, session) {
 /**
  * Create a new session and persist it with status 'running'.
  *
- * @param {Object} opts
- * @param {WorkflowType} opts.workflowType
- * @param {string} opts.prompt
- * @param {string} opts.model
- * @param {string} [opts.modelVersion]
- * @param {string} [opts.issueId]
- * @param {string} [opts.repoDir]
- * @returns {Promise<string|null>} sessionId, or null on failure
+ * @returns sessionId, or null on failure
  */
-export async function createSession(opts) {
+export async function createSession(opts: CreateSessionOpts): Promise<string | null> {
   try {
     const dir = await sessionsDir(opts?.repoDir);
-    const session = {
+    const session: SessionMetadata = {
       schemaVersion: SCHEMA_VERSION,
       sessionId: randomUUID(),
       workflowType: opts.workflowType,
@@ -83,52 +90,37 @@ export async function createSession(opts) {
     await persist(dir, session);
     return session.sessionId;
   } catch (err) {
-    console.warn(`[session] Failed to create session: ${err.message}`);
+    console.warn(`[session] Failed to create session: ${(err as Error).message}`);
     return null;
   }
 }
 
 /**
  * Merge updates into an existing session file.
- *
- * @param {string} sessionId
- * @param {Partial<SessionMetadata>} updates
- * @param {string} [repoDir]
- * @returns {Promise<boolean>}
  */
-export async function updateSession(sessionId, updates, repoDir) {
+export async function updateSession(sessionId: string, updates: Partial<SessionMetadata>, repoDir?: string): Promise<boolean> {
   try {
     const dir = await sessionsDir(repoDir);
     const filePath = join(dir, `${sessionId}.json`);
-    const existing = JSON.parse(await readFile(filePath, 'utf-8'));
+    const existing: SessionMetadata = JSON.parse(await readFile(filePath, 'utf-8'));
     const merged = { ...existing, ...updates };
     await persist(dir, merged);
     return true;
   } catch (err) {
-    console.warn(`[session] Failed to update session ${sessionId}: ${err.message}`);
+    console.warn(`[session] Failed to update session ${sessionId}: ${(err as Error).message}`);
     return false;
   }
 }
 
 /**
  * Finalize a session with completion details.
- *
- * @param {string} sessionId
- * @param {Object} opts
- * @param {number} [opts.executionTimeMs]
- * @param {number} [opts.userWaitTimeMs]
- * @param {SessionStatus} opts.status
- * @param {string} [opts.prIdentifier]
- * @param {string} [opts.error]
- * @param {string} [opts.repoDir]
- * @returns {Promise<boolean>}
  */
-export async function completeSession(sessionId, opts) {
+export async function completeSession(sessionId: string, opts: CompleteSessionOpts): Promise<boolean> {
   try {
     const dir = await sessionsDir(opts?.repoDir);
     const filePath = join(dir, `${sessionId}.json`);
-    const existing = JSON.parse(await readFile(filePath, 'utf-8'));
-    const merged = {
+    const existing: SessionMetadata = JSON.parse(await readFile(filePath, 'utf-8'));
+    const merged: SessionMetadata = {
       ...existing,
       completedAt: new Date().toISOString(),
       status: opts.status || 'completed',
@@ -140,42 +132,35 @@ export async function completeSession(sessionId, opts) {
     await persist(dir, merged);
     return true;
   } catch (err) {
-    console.warn(`[session] Failed to complete session ${sessionId}: ${err.message}`);
+    console.warn(`[session] Failed to complete session ${sessionId}: ${(err as Error).message}`);
     return false;
   }
 }
 
 /**
  * Read the most recent session from latest.json.
- *
- * @param {string} [repoDir]
- * @returns {Promise<SessionMetadata|null>}
  */
-export async function getLatestSession(repoDir) {
+export async function getLatestSession(repoDir?: string): Promise<SessionMetadata | null> {
   try {
     const dir = await sessionsDir(repoDir);
     const filePath = join(dir, 'latest.json');
     return JSON.parse(await readFile(filePath, 'utf-8'));
   } catch (err) {
-    console.warn(`[session] Failed to read latest session: ${err.message}`);
+    console.warn(`[session] Failed to read latest session: ${(err as Error).message}`);
     return null;
   }
 }
 
 /**
  * Read a specific session by ID.
- *
- * @param {string} sessionId
- * @param {string} [repoDir]
- * @returns {Promise<SessionMetadata|null>}
  */
-export async function getSession(sessionId, repoDir) {
+export async function getSession(sessionId: string, repoDir?: string): Promise<SessionMetadata | null> {
   try {
     const dir = await sessionsDir(repoDir);
     const filePath = join(dir, `${sessionId}.json`);
     return JSON.parse(await readFile(filePath, 'utf-8'));
   } catch (err) {
-    console.warn(`[session] Failed to read session ${sessionId}: ${err.message}`);
+    console.warn(`[session] Failed to read session ${sessionId}: ${(err as Error).message}`);
     return null;
   }
 }
