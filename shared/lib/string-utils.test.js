@@ -1,5 +1,5 @@
 import assert from 'assert';
-import { toKebabCase } from './string-utils.js';
+import { toKebabCase } from './string-utils.ts';
 
 // Basic conversion
 assert.strictEqual(toKebabCase('Hello World'), 'hello-world');

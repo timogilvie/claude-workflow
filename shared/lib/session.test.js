@@ -10,7 +10,7 @@ import {
   completeSession,
   getLatestSession,
   getSession,
-} from './session.js';
+} from './session.ts';
 
 let tempDir;
 
