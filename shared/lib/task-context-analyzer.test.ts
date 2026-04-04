@@ -3,6 +3,7 @@
  */
 
 import { strict as assert } from 'node:assert';
+import { errorMessage } from './error-utils.ts';
 import {
   inferTaskType,
   inferChangeKind,
@@ -28,7 +29,7 @@ function test(description: string, fn: () => void) {
     console.log(`  PASS  ${description}`);
   } catch (error) {
     console.error(`  FAIL  ${description}`);
-    console.error(`    ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`    ${errorMessage(error)}`);
     process.exit(1);
   }
 }

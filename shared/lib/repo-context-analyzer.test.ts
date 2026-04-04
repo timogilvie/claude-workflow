@@ -6,6 +6,7 @@
 
 import { strict as assert } from 'node:assert';
 import { resolve } from 'node:path';
+import { errorMessage } from './error-utils.ts';
 import {
   detectLanguages,
   detectFrameworks,
@@ -34,7 +35,7 @@ function test(description: string, fn: () => void) {
     console.log(`  PASS  ${description}`);
   } catch (error) {
     console.error(`  FAIL  ${description}`);
-    console.error(`    ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`    ${errorMessage(error)}`);
     process.exit(1);
   }
 }

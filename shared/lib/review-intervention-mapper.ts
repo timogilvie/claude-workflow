@@ -11,6 +11,7 @@
 
 import { loadMetrics, type ReviewMetric } from './review-metrics.ts';
 import type { InterventionRecord } from './eval-schema.ts';
+import { errorMessage } from './error-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -210,7 +211,7 @@ export function loadReviewInterventions(opts: {
   } catch (error) {
     // Non-throwing - return empty result on any error
     if (verbose) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       console.error(`[review-intervention-mapper] Failed to load review interventions: ${message}`);
     }
     return emptyResult;

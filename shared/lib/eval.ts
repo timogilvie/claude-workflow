@@ -15,6 +15,7 @@ import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
 import { getEvalConfig } from './config.ts';
 import { loadPricingTable } from './workflow-cost.ts';
 import { createPromptArtifact, type PromptArtifact } from './prompt-hash.ts';
+import { errorMessage } from './error-utils.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -364,7 +365,7 @@ export async function evaluateTask(
     const promptArtifact = createPromptArtifact(promptTemplatePath, prompt);
     promptArtifacts = [promptArtifact];
   } catch (err) {
-    console.warn(`[eval] Failed to capture prompt artifact: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[eval] Failed to capture prompt artifact: ${errorMessage(err)}`);
   }
 
   const callFn = _callFn || callClaudeWithRetry;

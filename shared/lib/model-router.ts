@@ -9,7 +9,7 @@
  * @module model-router
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readEvalRecords } from './eval-persistence.ts';
 import type { EvalRecord } from './eval-schema.ts';
@@ -18,6 +18,7 @@ import { recommendModelLLM } from './llm-router.ts';
 import { loadWavemillConfig } from './config.ts';
 import { aggregateEvals } from './eval-aggregator.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
+import { errorMessage } from './error-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -375,7 +376,7 @@ function ensureAggregatedData(repoDir: string): boolean {
     return true;
   } catch (error) {
     // Gracefully handle aggregation failures - don't block router
-    console.error(`WARN: Auto-aggregation failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`WARN: Auto-aggregation failed: ${errorMessage(error)}`);
     return false;
   }
 }
@@ -403,16 +404,9 @@ function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
   let aggregatedPath = resolveFromMainRepo('.wavemill/evals/aggregated-evals.jsonl', repoDir);
 
   // Check if config overrides the aggregated path
-  const configPath = resolveFromMainRepo('.wavemill-config.json', repoDir);
-  try {
-    if (existsSync(configPath)) {
-      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-      if (config.eval?.aggregation?.outputPath) {
-        aggregatedPath = resolveFromMainRepo(config.eval.aggregation.outputPath, repoDir);
-      }
-    }
-  } catch {
-    // Ignore config read errors
+  const config = loadWavemillConfig(repoDir);
+  if (config.eval?.aggregation?.outputPath) {
+    aggregatedPath = resolveFromMainRepo(config.eval.aggregation.outputPath, repoDir);
   }
 
   if (!existsSync(aggregatedPath)) {
@@ -437,7 +431,7 @@ function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
     );
     return merged;
   } catch (error) {
-    console.error(`Router: Failed to read aggregated file: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`Router: Failed to read aggregated file: ${errorMessage(error)}`);
     return perRepo;
   }
 }

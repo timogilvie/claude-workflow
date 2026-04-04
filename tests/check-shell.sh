@@ -154,6 +154,11 @@ if [[ ! -f "$MILL_SCRIPT" ]]; then
 elif [[ -z "${HEREDOC_CONTENT:-}" ]]; then
   fail "Monitor heredoc content unavailable for regression checks"
 else
+  # NOTE: Use here-strings (<<<) instead of echo pipes for grepping HEREDOC_CONTENT.
+  # The heredoc is ~84KB; with `echo ... | grep -q`, grep exits on first match and
+  # closes the pipe while echo is still writing, causing SIGPIPE (exit 141).
+  # With `set -euo pipefail`, this makes the pipeline fail even though the pattern matched.
+
   if grep -qE 'gh pr list --head "\$branch" --state all --json number' <<< "$HEREDOC_CONTENT"; then
     pass "monitor find_pr_for_branch queries all PR states"
   else

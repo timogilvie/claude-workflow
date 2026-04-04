@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { evaluateTask } from './eval.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
+import { resolveEvalsDir } from './evals-paths.ts';
 import { execShellCommand } from './shell-utils.ts';
 import { detectAndFormatInterventions } from './intervention-detector.ts';
 import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
@@ -18,13 +19,13 @@ import { analyzePrDifficulty } from './difficulty-analyzer.ts';
 import { analyzeTaskContext } from './task-context-analyzer.ts';
 import { analyzeRepoContext } from './repo-context-analyzer.ts';
 import { callClaude } from './llm-cli.ts';
-import { loadWavemillConfig } from './config.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, formatRepoContextDisplay, formatInterventionDisplay } from './eval-summary-printer.ts';
+import { errorMessage } from './error-utils.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -40,15 +41,6 @@ export interface PostCompletionContext {
   agentType?: string;
   solutionModel?: string;
   challengePairId?: string;
-}
-
-/**
- * Resolve the evalsDir from config, falling back to the default.
- */
-function resolveEvalsDir(repoDir: string): string | undefined {
-  const config = loadWavemillConfig(repoDir);
-  if (config.eval?.evalsDir) return resolve(repoDir, config.eval.evalsDir);
-  return undefined;
 }
 
 /**
@@ -157,7 +149,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
         }
         return difficultyData;
       } catch (diffErr: unknown) {
-        const diffMsg = diffErr instanceof Error ? diffErr.message : String(diffErr);
+        const diffMsg = errorMessage(diffErr);
         console.warn(`Post-completion eval: difficulty analysis failed — ${diffMsg}`);
         return null;
       }
@@ -178,7 +170,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
         }
         return repoContextData;
       } catch (repoErr: unknown) {
-        const repoMsg = repoErr instanceof Error ? repoErr.message : String(repoErr);
+        const repoMsg = errorMessage(repoErr);
         console.warn(`Post-completion eval: repo context analysis failed — ${repoMsg}`);
         return null;
       }
@@ -210,7 +202,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
           );
         }
       } catch (taskErr: unknown) {
-        const taskMsg = taskErr instanceof Error ? taskErr.message : String(taskErr);
+        const taskMsg = errorMessage(taskErr);
         console.warn(`Post-completion eval: task context analysis failed — ${taskMsg}`);
       }
     }
@@ -274,7 +266,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
           }
         }
       } catch (costErr: unknown) {
-        const costMsg = costErr instanceof Error ? costErr.message : String(costErr);
+        const costMsg = errorMessage(costErr);
         console.warn(`Post-completion eval: workflow cost computation failed — ${costMsg}`);
       }
     } else {
@@ -315,8 +307,8 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     }
 
     // 7. Persist
-    const evalsDir = resolveEvalsDir(repoDir);
-    appendEvalRecord(record, evalsDir ? { dir: evalsDir } : undefined);
+    const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
+    appendEvalRecord(record, { dir: evalsDir });
 
     // 8. Update project context
     await updateProjectContext(ctx, evalContext.prDiff, evalContext.taskPrompt);
@@ -324,7 +316,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     // 9. Print summary
     printEvalSummary(record);
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     console.warn(`Post-completion eval: failed (workflow unaffected) — ${message}`);
   }
 }
@@ -369,7 +361,7 @@ async function updateProjectContext(
     await updateSubsystemSpecs(ctx, prDiff, issueContext, repoDir);
 
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     console.warn(`Project context: update failed — ${message}`);
   }
 }
@@ -446,7 +438,7 @@ async function updateSubsystemSpecs(
     });
 
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     console.warn(`Subsystem update: failed — ${message}`);
   }
 }
