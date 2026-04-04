@@ -17,6 +17,7 @@ import { writeFileSync, copyFileSync } from 'node:fs';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 import { CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
+import { confirm } from '../shared/lib/cli-prompt.ts';
 import { prepareConfigSync } from '../shared/lib/config-sync.ts';
 
 async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
@@ -63,16 +64,8 @@ async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
 
   // Confirm
   if (!options.yes && configExists) {
-    const readline = await import('node:readline/promises');
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
-    const answer = await rl.question('Apply these changes? [Y/n] ');
-    rl.close();
-
-    if (answer.toLowerCase() === 'n') {
+    const approved = await confirm('Apply these changes?', { defaultYes: true });
+    if (!approved) {
       console.log('Cancelled.');
       return;
     }

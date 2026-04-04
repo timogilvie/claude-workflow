@@ -83,7 +83,7 @@ else
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
-    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
+    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
 
     # Extract function calls from the heredoc
     # Look for word-boundary function-like names that appear as commands
@@ -154,49 +154,49 @@ if [[ ! -f "$MILL_SCRIPT" ]]; then
 elif [[ -z "${HEREDOC_CONTENT:-}" ]]; then
   fail "Monitor heredoc content unavailable for regression checks"
 else
-  if echo "$HEREDOC_CONTENT" | grep -qE 'gh pr list --head "\$branch" --state all --json number'; then
+  if grep -qE 'gh pr list --head "\$branch" --state all --json number' <<< "$HEREDOC_CONTENT"; then
     pass "monitor find_pr_for_branch queries all PR states"
   else
     fail "monitor find_pr_for_branch is missing --state all"
   fi
 
-  if echo "$HEREDOC_CONTENT" | grep -qE '^pr_state\(\) \{'; then
+  if grep -qE '^pr_state\(\) \{' <<< "$HEREDOC_CONTENT"; then
     pass "monitor defines pr_state helper"
   else
     fail "monitor is missing pr_state helper definition"
   fi
 
-  if echo "$HEREDOC_CONTENT" | grep -q 'linear_set_state .*"In Review"' && echo "$HEREDOC_CONTENT" | grep -q 'get_linear_issue_id'; then
+  if grep -q 'linear_set_state .*"In Review"' <<< "$HEREDOC_CONTENT" && grep -q 'get_linear_issue_id' <<< "$HEREDOC_CONTENT"; then
     pass "monitor sets Linear issue to In Review when PR is detected"
   else
     fail "monitor does not set Linear issue to In Review on PR detection"
   fi
 
-  if echo "$HEREDOC_CONTENT" | grep -q 'linear_set_state .*"Done"' && echo "$HEREDOC_CONTENT" | grep -q 'get_linear_issue_id'; then
+  if grep -q 'linear_set_state .*"Done"' <<< "$HEREDOC_CONTENT" && grep -q 'get_linear_issue_id' <<< "$HEREDOC_CONTENT"; then
     pass "monitor sets Linear issue to Done when work is completed"
   else
     fail "monitor does not set Linear issue to Done on completion"
   fi
 
-  if echo "$HEREDOC_CONTENT" | grep -q 'set-issue-state.ts'; then
+  if grep -q 'set-issue-state.ts' <<< "$HEREDOC_CONTENT"; then
     pass "monitor linear_set_state uses set-issue-state.ts"
   else
     fail "monitor linear_set_state is not calling set-issue-state.ts"
   fi
 
-  if echo "$HEREDOC_CONTENT" | grep -Fq '.tasks | to_entries[]'; then
+  if grep -Fq '.tasks | to_entries[]' <<< "$HEREDOC_CONTENT"; then
     pass "monitor rehydrates tracked tasks from state file on startup"
   else
     fail "monitor does not rehydrate tracked tasks from state file"
   fi
 
-  if echo "$HEREDOC_CONTENT" | grep -q 'done < \"\$TASKS_FILE\"'; then
+  if grep -q 'done < \"\$TASKS_FILE\"' <<< "$HEREDOC_CONTENT"; then
     pass "monitor overlays newly selected tasks from TASKS_FILE"
   else
     fail "monitor does not overlay new tasks from TASKS_FILE"
   fi
 
-  if echo "$HEREDOC_CONTENT" | grep -q 'update-linear-state.ts'; then
+  if grep -q 'update-linear-state.ts' <<< "$HEREDOC_CONTENT"; then
     fail "monitor references removed update-linear-state.ts tool"
   else
     pass "monitor does not reference update-linear-state.ts"

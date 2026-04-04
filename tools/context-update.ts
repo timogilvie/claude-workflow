@@ -5,6 +5,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { callClaude } from '../shared/lib/llm-cli.ts';
+import { confirm } from '../shared/lib/cli-prompt.ts';
 import { extractKeyFiles, readContextSpec, resolveRepoDir } from '../shared/lib/context-tool.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -152,21 +153,6 @@ function showDiff(current: string, updated: string): void {
   console.log('');
 }
 
-/**
- * Prompt user for confirmation.
- */
-async function confirm(message: string): Promise<boolean> {
-  console.log(message);
-  process.stdout.write('Apply this update? [y/N] ');
-
-  return new Promise((resolve) => {
-    process.stdin.once('data', (data) => {
-      const response = data.toString().trim().toLowerCase();
-      resolve(response === 'y' || response === 'yes');
-    });
-  });
-}
-
 async function main(subsystemId: string, repoDir: string, isNoConfirm: boolean) {
   console.log(`Updating subsystem: ${subsystemId}`);
   console.log(`Repository: ${repoDir}`);
@@ -206,7 +192,7 @@ async function main(subsystemId: string, repoDir: string, isNoConfirm: boolean) 
     showDiff(currentSpec, updatedSpec);
 
     // Prompt for confirmation
-    const approved = await confirm('Review the diff above.');
+    const approved = await confirm('Apply this update?');
     if (!approved) {
       console.log('Update cancelled.');
       process.exit(0);
