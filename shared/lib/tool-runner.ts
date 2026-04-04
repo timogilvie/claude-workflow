@@ -28,6 +28,7 @@
  * @module tool-runner
  */
 
+import './env.js';
 import { parseArgs } from 'node:util';
 import type { ParseArgsConfig } from 'node:util';
 import { resolve } from 'node:path';

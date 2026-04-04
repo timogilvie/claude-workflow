@@ -1,5 +1,4 @@
 #!/usr/bin/env -S npx tsx
-import '../shared/lib/env.js';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { installIssueProcessTimeout, printIssue } from '../shared/lib/issue-tool.ts';
 
