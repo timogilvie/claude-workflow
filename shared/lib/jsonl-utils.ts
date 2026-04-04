@@ -1,4 +1,13 @@
-import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
 
 export interface JsonlTransformOptions {
   dryRun?: boolean;
@@ -42,6 +51,16 @@ export function readJsonlFile<T>(path: string): T[] {
   }
 
   return records;
+}
+
+export function appendJsonlRecord<T>(path: string, record: T): void {
+  mkdirSync(dirname(path), { recursive: true });
+
+  const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
+  const tmpPath = join(dirname(path), `.jsonl-tmp-${randomUUID()}.tmp`);
+
+  writeFileSync(tmpPath, `${existing}${JSON.stringify(record)}\n`, 'utf-8');
+  renameSync(tmpPath, path);
 }
 
 export function readTransformWrite<T>(
