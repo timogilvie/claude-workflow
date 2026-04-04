@@ -192,6 +192,7 @@ async function main(subsystemId: string, repoDir: string, isNoConfirm: boolean) 
     showDiff(currentSpec, updatedSpec);
 
     // Prompt for confirmation
+    console.log('\nReview the diff above.');
     const approved = await confirm('Apply this update?');
     if (!approved) {
       console.log('Update cancelled.');

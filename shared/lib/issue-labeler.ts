@@ -304,7 +304,6 @@ export async function autoLabelIssue(
 
   // Interactive confirmation
   if (interactive && newLabelIds.length > 0) {
-    console.log('\n❓ Apply these labels?');
     const approved = await confirm('Apply these labels?', { defaultYes: true });
     if (!approved) {
       console.log('❌ Labels not applied');
