@@ -26,7 +26,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
 import { hashString } from './prompt-hash.ts';
-import { loadWavemillConfig } from './config.ts';
+import { resolveEvalsDir } from './evals-paths.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -61,32 +61,15 @@ export interface RegistryOptions {
 // Constants
 // ────────────────────────────────────────────────────────────────
 
-const DEFAULT_EVALS_DIR = '.wavemill/evals';
 const REGISTRY_FILENAME = 'prompt-registry.jsonl';
 
 // ────────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────────
 
-/**
- * Resolve the evals directory, reading from `.wavemill-config.json` if
- * no explicit `dir` is provided.
- */
-function resolveEvalsDir(dir?: string): string {
-  if (dir) return resolve(dir);
-
-  // Try reading evalsDir from .wavemill-config.json
-  const config = loadWavemillConfig();
-  if (config.eval?.evalsDir) {
-    return resolve(config.eval.evalsDir);
-  }
-
-  return resolve(DEFAULT_EVALS_DIR);
-}
-
 /** Resolve the full path to the registry JSONL file. */
 function resolveRegistryFile(dir?: string): string {
-  return join(resolveEvalsDir(dir), REGISTRY_FILENAME);
+  return join(resolveEvalsDir(dir).dir, REGISTRY_FILENAME);
 }
 
 /**
@@ -195,7 +178,7 @@ export function logPromptUsage(
   options?: RegistryOptions,
 ): void {
   try {
-    const evalsDir = resolveEvalsDir(options?.dir);
+    const evalsDir = resolveEvalsDir(options?.dir).dir;
     const registryPath = resolveRegistryFile(options?.dir);
 
     // Ensure directory exists
