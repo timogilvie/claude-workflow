@@ -9,6 +9,8 @@ import {
   toInterventionMeta,
   formatForJudge,
   detectSessionRedirects,
+  isWorkflowAutomationMessage,
+  isWavemillManagedBranch,
   deduplicatePostPrAndManualEdits,
   detectManualEdits,
   detectTestFixes,
@@ -401,6 +403,167 @@ describe('intervention-detector', () => {
         assert.equal(event.count, 0);
       } finally {
         cleanup();
+      }
+    });
+  });
+
+  describe('isWorkflowAutomationMessage', () => {
+    it('filters phase transition context injections', () => {
+      assert.equal(isWorkflowAutomationMessage('You are working on: My Feature (HOK-100)\n\nRepo worktree: /path'), true);
+    });
+
+    it('filters review phase prompt injections', () => {
+      assert.equal(isWorkflowAutomationMessage('# Code Review - JSON Output Required\n\n**CRITICAL INSTRUCTION**...'), true);
+    });
+
+    it('filters Claude Code system XML wrappers', () => {
+      assert.equal(isWorkflowAutomationMessage('<local-command-caveat>Caveat: The messages below...</local-command-caveat>'), true);
+      assert.equal(isWorkflowAutomationMessage('<local-command-stdout>Bye!</local-command-stdout>'), true);
+      assert.equal(isWorkflowAutomationMessage('<command-name>/exit</command-name>\n<command-message>exit</command-message>'), true);
+    });
+
+    it('filters slash command error responses', () => {
+      assert.equal(isWorkflowAutomationMessage('Unknown skill: exit'), true);
+    });
+
+    it('filters single-word permission responses', () => {
+      assert.equal(isWorkflowAutomationMessage('approved'), true);
+      assert.equal(isWorkflowAutomationMessage('yes'), true);
+      assert.equal(isWorkflowAutomationMessage('test'), true);
+    });
+
+    it('does NOT filter genuine human redirections', () => {
+      assert.equal(isWorkflowAutomationMessage('No, I want to change the title not the H1'), false);
+      assert.equal(isWorkflowAutomationMessage('Actually change the meta title'), false);
+      assert.equal(isWorkflowAutomationMessage('Also update the favicon while you are at it'), false);
+      assert.equal(isWorkflowAutomationMessage('Stop. Use a different approach for the database migration.'), false);
+    });
+  });
+
+  describe('detectSessionRedirects with workflow automation filtering', () => {
+    it('filters out workflow automation messages from redirect count', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const branch = 'task/my-feature';
+        const lines = [
+          // Initial task prompt (always skipped)
+          userEntry({ branch, content: 'You are working on: My Feature (HOK-100)' }),
+          assistantEntry({ branch }),
+          // Workflow automation messages (should be filtered)
+          userEntry({ branch, content: 'approved' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: '<local-command-caveat>Caveat: The messages below...</local-command-caveat>' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: '<command-name>/exit</command-name>\n<command-message>exit</command-message>' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: '<local-command-stdout>Bye!</local-command-stdout>' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: '# Code Review - JSON Output Required\n\n**CRITICAL INSTRUCTION**...' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'You are working on: My Feature (HOK-100)\n\nRepo worktree: /path' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'Unknown skill: exit' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'test' }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, branch);
+        assert.equal(event.count, 0, `Expected 0 redirects but got ${event.count}: ${JSON.stringify(event.details)}`);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('still detects genuine human redirections among automation messages', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const branch = 'task/my-feature';
+        const lines = [
+          userEntry({ branch, content: 'You are working on: My Feature (HOK-100)' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'approved' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'No, use a different approach for the database migration' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: '<local-command-stdout>Done</local-command-stdout>' }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, branch);
+        assert.equal(event.count, 1);
+        assert.ok(event.details[0].includes('different approach'));
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  describe('isWavemillManagedBranch', () => {
+    it('returns true when features/<slug>/selected-task.json exists', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-branch-'));
+      try {
+        const taskDir = join(tmpDir, 'features', 'my-feature');
+        mkdirSync(taskDir, { recursive: true });
+        writeFileSync(join(taskDir, 'selected-task.json'), '{}');
+        assert.equal(isWavemillManagedBranch('task/my-feature', tmpDir), true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns true when features/<slug>/.coding-complete exists', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-branch-'));
+      try {
+        const taskDir = join(tmpDir, 'features', 'my-feature');
+        mkdirSync(taskDir, { recursive: true });
+        writeFileSync(join(taskDir, '.coding-complete'), '');
+        assert.equal(isWavemillManagedBranch('task/my-feature', tmpDir), true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns false for non-task branches', () => {
+      assert.equal(isWavemillManagedBranch('main'), false);
+      assert.equal(isWavemillManagedBranch('develop'), false);
+    });
+
+    it('returns false when no task metadata exists', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-branch-'));
+      try {
+        assert.equal(isWavemillManagedBranch('task/no-such-task', tmpDir), false);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('detectManualEdits skips wavemill-managed branches', () => {
+    it('returns zero manual edits for wavemill-managed branches even without co-author tags', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-managed-'));
+      try {
+        const taskDir = join(tmpDir, 'features', 'extract-business-logic');
+        mkdirSync(taskDir, { recursive: true });
+        writeFileSync(join(taskDir, '.coding-complete'), '');
+
+        const prCommits: PrCommit[] = [
+          {
+            sha: '3512d7c000000000000',
+            message: 'refactor: extract shared tool business logic',
+            author: 'timogilvie',
+            date: '2026-04-04T10:00:00Z',
+          },
+        ];
+
+        const event = detectManualEdits(
+          'task/extract-business-logic', 'main', tmpDir, '177', prCommits
+        );
+        assert.equal(event.count, 0, 'Should not flag agent commits on wavemill-managed branch');
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });

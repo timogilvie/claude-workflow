@@ -260,11 +260,43 @@ function isAgentCommit(subject: string, author: string, body: string): boolean {
 }
 
 /**
+ * Check whether a branch is managed by a wavemill workflow by looking for
+ * task metadata files (selected-task.json or .coding-complete) in the
+ * corresponding features/ or bugs/ directory.
+ *
+ * When a branch is wavemill-managed, all commits are presumed to be
+ * agent-authored unless they contain explicit human markers (e.g., "manual",
+ * "human", "by hand"). This prevents false positives when agents commit
+ * under the user's git identity without co-author tags.
+ */
+export function isWavemillManagedBranch(branchName: string, repoDir?: string): boolean {
+  const cwd = repoDir || process.cwd();
+  const match = branchName.match(/^(?:task|feature|bugfix|bug)\/(.+)$/);
+  if (!match) return false;
+
+  const slug = match[1];
+  for (const dir of ['features', 'bugs']) {
+    const taskDir = join(cwd, dir, slug);
+    if (
+      existsSync(join(taskDir, 'selected-task.json')) ||
+      existsSync(join(taskDir, '.coding-complete'))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Detect manual file edits — commits not attributed to the agent.
  *
  * When a prNumber is provided, uses GitHub API to get the exact set of PR
  * commits (avoids false positives from `git log main..branch` which can
  * include commits from other merged PRs post-squash-merge).
+ *
+ * For wavemill-managed branches (detected via task metadata files), all
+ * commits are presumed agent-authored. This handles the case where agents
+ * commit under the user's git identity without co-author tags.
  *
  * Falls back to `git log` when no PR number is available.
  */
@@ -277,6 +309,12 @@ export function detectManualEdits(
 ): InterventionEvent {
   const cwd = repoDir || process.cwd();
   const event: InterventionEvent = { type: 'manual_edit', count: 0, details: [], timestamps: [] };
+
+  // If this is a wavemill-managed branch, all commits are presumed agent-authored.
+  // Agents may commit under the user's git identity without co-author tags.
+  if (isWavemillManagedBranch(branchName, repoDir)) {
+    return event;
+  }
 
   try {
     if (prNumber) {
@@ -390,12 +428,49 @@ export function detectTestFixes(
 // ────────────────────────────────────────────────────────────────
 
 /**
+ * Patterns that identify messages injected by the wavemill workflow orchestration
+ * or Claude Code system internals, NOT actual human redirections.
+ *
+ * These messages appear as `type: 'user'` with string content in session JSONL
+ * because they are sent programmatically to the agent, but they are not human
+ * interventions.
+ */
+const WORKFLOW_AUTOMATION_PATTERNS: RegExp[] = [
+  // Phase transition context injections from agent-adapters.sh
+  /^You are working on:/,
+  // Review phase prompt injections
+  /^#\s+Code Review/,
+  // Claude Code system XML wrappers
+  /^<local-command-caveat>/,
+  /^<local-command-stdout>/,
+  /^<command-name>/,
+  // Slash command responses
+  /^Unknown skill:/,
+  // Single-word permission/approval responses from Claude Code internals
+  /^(approved|yes|no|confirmed|denied|test)$/i,
+  // Exit/quit commands issued by the workflow
+  /^<command-name>\/?exit<\/command-name>/,
+  // User-prompt-submit-hook outputs
+  /^<user-prompt-submit-hook>/,
+];
+
+/**
+ * Check whether a user message is actually an automated workflow message
+ * rather than a genuine human redirection.
+ */
+export function isWorkflowAutomationMessage(content: string): boolean {
+  const trimmed = content.trim();
+  return WORKFLOW_AUTOMATION_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+/**
  * Detect user redirections from Claude session JSONL data.
  *
  * Reads session files from `~/.claude/projects/<encoded-worktree>/`.
  * Real user messages have `message.content` as a string (not an array of
  * tool_result blocks). The first string-content user message is the automated
- * task prompt injected by wavemill — all subsequent ones are user redirections.
+ * task prompt injected by wavemill — all subsequent ones are checked against
+ * workflow automation patterns before being classified as human redirections.
  */
 export function detectSessionRedirects(worktreePath: string, branchName: string): InterventionEvent {
   const event: InterventionEvent = { type: 'session_redirect', count: 0, details: [], timestamps: [] };
@@ -446,8 +521,12 @@ export function detectSessionRedirects(worktreePath: string, branchName: string)
       }
     }
 
-    // Skip the first string-content user message (automated task prompt from wavemill)
-    const redirections = userMessages.slice(1);
+    // Skip the first string-content user message (automated task prompt from wavemill).
+    // Then filter out workflow automation messages from the remainder.
+    const candidates = userMessages.slice(1);
+    const redirections = candidates.filter(
+      (msg) => !isWorkflowAutomationMessage(msg.content)
+    );
 
     for (const msg of redirections) {
       event.details.push(msg.content.slice(0, 200));
