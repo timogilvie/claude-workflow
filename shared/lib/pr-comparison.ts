@@ -7,6 +7,7 @@ import {
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
+import { errorMessage } from './error-utils.ts';
 
 export type ValidatedComparisonResult = Omit<
   ChallengeComparison,
@@ -39,8 +40,7 @@ export function prUrlFromNumber(pr: string, repoDir: string): string {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to resolve PR URL for ${pr}: ${message}`);
+    throw new Error(`Failed to resolve PR URL for ${pr}: ${errorMessage(error)}`);
   }
 }
 
@@ -183,8 +183,7 @@ export function runGh(args: string[], repoDir: string): string {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`gh ${args.join(' ')} failed: ${message}`);
+    throw new Error(`gh ${args.join(' ')} failed: ${errorMessage(error)}`);
   }
 }
 
@@ -195,8 +194,7 @@ export function tryGh(args: string[], repoDir: string, label: string): void {
   try {
     runGh(args, repoDir);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[compare-prs] ${label} failed: ${message}`);
+    console.warn(`[compare-prs] ${label} failed: ${errorMessage(error)}`);
   }
 }
 

@@ -18,6 +18,7 @@ import { recommendModelLLM } from './llm-router.ts';
 import { loadWavemillConfig } from './config.ts';
 import { aggregateEvals } from './eval-aggregator.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
+import { errorMessage } from './error-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -375,7 +376,7 @@ function ensureAggregatedData(repoDir: string): boolean {
     return true;
   } catch (error) {
     // Gracefully handle aggregation failures - don't block router
-    console.error(`WARN: Auto-aggregation failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`WARN: Auto-aggregation failed: ${errorMessage(error)}`);
     return false;
   }
 }
@@ -430,7 +431,7 @@ function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
     );
     return merged;
   } catch (error) {
-    console.error(`Router: Failed to read aggregated file: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`Router: Failed to read aggregated file: ${errorMessage(error)}`);
     return perRepo;
   }
 }
