@@ -11,7 +11,7 @@ import {
   type ValidationResult,
 } from '../shared/lib/task-packet-validator.ts';
 import { getValidationConfig } from '../shared/lib/config.ts';
-import { createInterface } from "node:readline";
+import { confirm } from '../shared/lib/cli-prompt.ts';
 import {
   parseIssueInput,
   formatIssueContext,
@@ -31,21 +31,6 @@ const __dirname = path.dirname(__filename);
 if (!process.env.LINEAR_API_KEY) {
   console.error('Error: LINEAR_API_KEY not found in environment');
   process.exit(1);
-}
-
-// Ask user for confirmation
-async function promptUser(question: string): Promise<boolean> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.toLowerCase().startsWith('y'));
-    });
-  });
 }
 
 runTool({
@@ -188,7 +173,7 @@ runTool({
             if (shouldUpdate) {
               // Ask user whether to proceed
               console.log('\nThe task packet has quality issues that may cause problems for autonomous agents.');
-              const proceed = await promptUser('Do you want to update Linear anyway? (y/N): ');
+              const proceed = await confirm('Do you want to update Linear anyway?');
 
               if (!proceed) {
                 console.log('✗ Cancelled. Fix the issues and try again.');

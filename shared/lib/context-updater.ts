@@ -3,6 +3,7 @@ import { execSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { callClaude } from './llm-cli.ts';
+import { confirm } from './cli-prompt.ts';
 import { extractKeyFiles, readContextSpec } from './context-tool.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -146,17 +147,12 @@ export function showSpecDiff(current: string, updated: string): void {
 
 /**
  * Prompt the user to confirm a context update.
+ *
+ * @deprecated Use confirm() from cli-prompt.ts directly
  */
 export async function confirmAction(message: string): Promise<boolean> {
   console.log(message);
-  process.stdout.write('Apply this update? [y/N] ');
-
-  return new Promise((resolve) => {
-    process.stdin.once('data', (data) => {
-      const response = data.toString().trim().toLowerCase();
-      resolve(response === 'y' || response === 'yes');
-    });
-  });
+  return confirm('Apply this update?');
 }
 
 /**

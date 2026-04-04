@@ -2,6 +2,7 @@
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pressEnterToContinue } from '../shared/lib/cli-prompt.ts';
 import { detectSubsystems } from '../shared/lib/subsystem-detector.ts';
 import { writeSubsystemSpecs } from '../shared/lib/subsystem-spec-generator.ts';
 import { getContextDir, getWavemillDir, resolveRepoDir } from '../shared/lib/context-tool.ts';
@@ -68,12 +69,7 @@ async function main(repoDir: string, isForce: boolean, isInteractive: boolean) {
   // Interactive confirmation
   if (isInteractive) {
     console.log('Proceed with creating subsystem specs?');
-    console.log('Press Enter to continue, Ctrl+C to cancel...');
-
-    // Wait for user input
-    await new Promise<void>((resolve) => {
-      process.stdin.once('data', () => resolve());
-    });
+    await pressEnterToContinue('Press Enter to continue, Ctrl+C to cancel...');
   }
 
   // Generate subsystem specs
