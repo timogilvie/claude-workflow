@@ -28,7 +28,7 @@ export interface EvalAnalysisParams {
 }
 
 export interface EvalAnalysisResult {
-  difficultyData: ReturnType<typeof analyzePrDifficulty>;
+  difficultyData: ReturnType<typeof analyzePrDifficulty> | null;
   repoContextData: ReturnType<typeof analyzeRepoContext> | null;
   taskContextData: ReturnType<typeof analyzeTaskContext> | null;
 }
