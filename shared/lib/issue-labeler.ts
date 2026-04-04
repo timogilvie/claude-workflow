@@ -11,7 +11,7 @@
  * @module issue-labeler
  */
 
-import * as readline from 'readline/promises';
+import { confirm } from './cli-prompt.ts';
 import { getIssue, getLabels, addLabelsToIssue, getOrCreateLabel } from './linear.ts';
 import { errorMessage } from './error-utils.ts';
 
@@ -305,16 +305,8 @@ export async function autoLabelIssue(
 
   // Interactive confirmation
   if (interactive && newLabelIds.length > 0) {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
-    console.log('\n❓ Apply these labels?');
-    const answer = await rl.question('   [Y/n] ');
-    rl.close();
-
-    if (answer.toLowerCase() === 'n') {
+    const approved = await confirm('Apply these labels?', { defaultYes: true });
+    if (!approved) {
       console.log('❌ Labels not applied');
       return;
     }

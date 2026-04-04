@@ -1,19 +1,8 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { getBacklog, getProjects } from '../shared/lib/linear.ts';
+import { prompt } from '../shared/lib/cli-prompt.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
-import readline from "node:readline";
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
-
-const question = (prompt: string): Promise<string> => {
-  return new Promise((resolve) => {
-    rl.question(prompt, resolve);
-  });
-};
 
 async function selectProject(): Promise<string | null> {
   try {
@@ -30,7 +19,7 @@ async function selectProject(): Promise<string | null> {
       console.log(`${index + 1}. ${project.name}${project.description ? ` - ${project.description}` : ''}`);
     });
 
-    const selection = await question('\nSelect a project by number: ');
+    const selection = await prompt('\nSelect a project by number: ');
     const index = parseInt(selection) - 1;
 
     if (index >= 0 && index < projects.length) {
@@ -111,13 +100,9 @@ runTool({
         if (selectedProject) {
           await displayBacklog(selectedProject);
         }
-        rl.close();
       }
     } catch (error) {
       console.error('Error:', error);
-      if (!projectName) {
-        rl.close();
-      }
       process.exit(1);
     }
   },
