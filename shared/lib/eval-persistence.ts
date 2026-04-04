@@ -10,15 +10,13 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { EvalRecord } from './eval-schema.ts';
-import { loadWavemillConfig } from './config.ts';
+import { resolveEvalsDir } from './evals-paths.ts';
 import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
-import { resolveFromMainRepo } from './git-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
 
-const DEFAULT_EVALS_DIR = '.wavemill/evals';
 const EVALS_FILENAME = 'evals.jsonl';
 
 // ────────────────────────────────────────────────────────────────
@@ -48,31 +46,6 @@ export interface QueryOptions extends PersistenceOptions {
 // ────────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────────
-
-/**
- * Resolve the evals directory, reading from `.wavemill-config.json` if
- * no explicit `dir` is provided.
- *
- * Returns `{ dir, fromConfig }` — `fromConfig` is true when the path
- * came from `.wavemill-config.json` (needs path-traversal validation).
- *
- * When running in a git worktree, automatically resolves paths from the
- * main repository to ensure eval data is accessible.
- */
-function resolveEvalsDir(dir?: string): { dir: string; fromConfig: boolean } {
-  if (dir) return { dir: resolve(dir), fromConfig: false };
-
-  // Try reading evalsDir from .wavemill-config.json
-  const config = loadWavemillConfig();
-  if (config.eval?.evalsDir) {
-    // If in worktree, resolve from main repo; otherwise use normal resolve
-    const configDir = resolveFromMainRepo(config.eval.evalsDir);
-    return { dir: configDir, fromConfig: true };
-  }
-
-  // Use worktree-aware resolution for default path
-  return { dir: resolveFromMainRepo(DEFAULT_EVALS_DIR), fromConfig: false };
-}
 
 /** Resolve the full path to the evals JSONL file. */
 function resolveEvalsFile(dir?: string): string {

@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { evaluateTask } from './eval.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
+import { resolveEvalsDir } from './evals-paths.ts';
 import { execShellCommand } from './shell-utils.ts';
 import { detectAndFormatInterventions } from './intervention-detector.ts';
 import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
@@ -18,7 +19,6 @@ import { analyzePrDifficulty } from './difficulty-analyzer.ts';
 import { analyzeTaskContext } from './task-context-analyzer.ts';
 import { analyzeRepoContext } from './repo-context-analyzer.ts';
 import { callClaude } from './llm-cli.ts';
-import { loadWavemillConfig } from './config.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
@@ -41,15 +41,6 @@ export interface PostCompletionContext {
   agentType?: string;
   solutionModel?: string;
   challengePairId?: string;
-}
-
-/**
- * Resolve the evalsDir from config, falling back to the default.
- */
-function resolveEvalsDir(repoDir: string): string | undefined {
-  const config = loadWavemillConfig(repoDir);
-  if (config.eval?.evalsDir) return resolve(repoDir, config.eval.evalsDir);
-  return undefined;
 }
 
 /**
@@ -316,8 +307,8 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     }
 
     // 7. Persist
-    const evalsDir = resolveEvalsDir(repoDir);
-    appendEvalRecord(record, evalsDir ? { dir: evalsDir } : undefined);
+    const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
+    appendEvalRecord(record, { dir: evalsDir });
 
     // 8. Update project context
     await updateProjectContext(ctx, evalContext.prDiff, evalContext.taskPrompt);
