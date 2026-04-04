@@ -31,7 +31,8 @@
 import './env.js';
 import { parseArgs } from 'node:util';
 import type { ParseArgsConfig } from 'node:util';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -353,4 +354,36 @@ export function runToolSync<TOptions extends Record<string, OptionConfig>>(
  */
 export function resolveRepoDir(pathOrUndefined?: string): string {
   return resolve(pathOrUndefined || process.cwd());
+}
+
+/**
+ * Get the directory name for a tool file (ESM equivalent of __dirname).
+ *
+ * @param importMetaUrl - The caller's import.meta.url
+ * @returns Directory path of the calling module
+ *
+ * @example
+ * ```typescript
+ * const dir = getToolDirname(import.meta.url);
+ * const configPath = path.join(dir, 'config.json');
+ * ```
+ */
+export function getToolDirname(importMetaUrl: string): string {
+  return dirname(fileURLToPath(importMetaUrl));
+}
+
+/**
+ * Resolve a path to a file in the tools/prompts/ directory.
+ *
+ * @param importMetaUrl - The caller's import.meta.url
+ * @param promptName - Name of the prompt file (e.g., 'issue-writer.md')
+ * @returns Absolute path to the prompt file
+ *
+ * @example
+ * ```typescript
+ * const promptPath = resolvePromptPath(import.meta.url, 'issue-writer.md');
+ * ```
+ */
+export function resolvePromptPath(importMetaUrl: string, promptName: string): string {
+  return join(getToolDirname(importMetaUrl), 'prompts', promptName);
 }
