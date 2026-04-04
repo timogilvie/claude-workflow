@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { parseConstraints } from '../shared/lib/constraint-parser.ts';
 import { generateRules } from '../shared/lib/rule-generator.ts';
 import { saveConstraintRules, constraintRulesExist } from '../shared/lib/constraint-storage.ts';
-import { toKebabCase } from '../shared/lib/string-utils.js';
+import { toKebabCase } from '../shared/lib/string-utils.ts';
 
 async function generateConstraintRules(issueId: string, taskPacketPath: string | null, force: boolean) {
   if (!issueId) {

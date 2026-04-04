@@ -7,7 +7,7 @@ import {
   completeSession,
   getLatestSession,
   getSession,
-} from '../shared/lib/session.js';
+} from '../shared/lib/session.ts';
 
 async function handleStart(args: any): Promise<void> {
   const sessionId = await createSession({

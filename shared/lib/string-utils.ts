@@ -1,10 +1,10 @@
 /**
  * Convert string to kebab-case (lowercase with hyphens)
- * @param {string} str - String to convert
- * @param {number} [maxLength] - Optional max length (truncates before trimming trailing dashes)
- * @returns {string} Kebab-cased string
+ * @param str - String to convert
+ * @param maxLength - Optional max length (truncates before trimming trailing dashes)
+ * @returns Kebab-cased string
  */
-export const toKebabCase = (str, maxLength) => {
+export const toKebabCase = (str: string, maxLength?: number): string => {
   let result = str
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
