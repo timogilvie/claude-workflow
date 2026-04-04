@@ -4,7 +4,7 @@
  * @module git
  */
 
-import { toKebabCase } from './string-utils.js';
+import { toKebabCase } from './string-utils.ts';
 import { execShellCommand } from './shell-utils.ts';
 
 /**

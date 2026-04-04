@@ -9,7 +9,7 @@
 import type { Constraint } from './constraint-parser.ts';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { toKebabCase } from './string-utils.js';
+import { toKebabCase } from './string-utils.ts';
 
 export interface GeneratedRule {
   id: string;

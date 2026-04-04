@@ -6,7 +6,7 @@ import { join, resolve } from 'path';
 import { loadConfig } from '../config.js';
 import { getBacklog } from '../../shared/lib/linear.js';
 import { sanitizeBranchName } from '../../shared/lib/git.js';
-import { toKebabCase } from '../../shared/lib/string-utils.js';
+import { toKebabCase } from '../../shared/lib/string-utils.ts';
 import { initState } from '../workflow.js';
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
