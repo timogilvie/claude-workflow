@@ -178,8 +178,8 @@ function truncateSpec(spec: string, maxBytes: number): string {
   // Find the "## Recent Changes" section to preserve it
   const recentIdx = spec.lastIndexOf('## Recent Changes');
   if (recentIdx === -1) {
-    // No recent changes section — just hard truncate
-    return spec.substring(0, maxBytes) + '\n\n[...truncated...]\n';
+    // No recent changes section — just hard truncate using byte-aware truncation
+    return safeByteSlice(spec, maxBytes) + '\n\n[...truncated...]\n';
   }
 
   const tail = spec.substring(recentIdx);
@@ -187,11 +187,38 @@ function truncateSpec(spec: string, maxBytes: number): string {
   const headBudget = maxBytes - tailBytes - 30; // 30 bytes for truncation marker
 
   if (headBudget < 500) {
-    // Tail alone is too large — just hard truncate
-    return spec.substring(0, maxBytes) + '\n\n[...truncated...]\n';
+    // Tail alone is too large — just hard truncate using byte-aware truncation
+    return safeByteSlice(spec, maxBytes) + '\n\n[...truncated...]\n';
   }
 
-  return spec.substring(0, headBudget) + '\n\n[...truncated...]\n\n' + tail;
+  // Use byte-aware truncation for the head portion
+  const head = safeByteSlice(spec, headBudget);
+  return head + '\n\n[...truncated...]\n\n' + tail;
+}
+
+/**
+ * Safely slice a string at a byte boundary without cutting multi-byte UTF-8 characters.
+ */
+function safeByteSlice(str: string, maxBytes: number): string {
+  const buf = Buffer.from(str, 'utf-8');
+  if (buf.length <= maxBytes) {
+    return str;
+  }
+
+  // Slice at byte boundary
+  const sliced = buf.subarray(0, maxBytes);
+
+  // Convert back to string, which will replace any incomplete UTF-8 sequence with replacement char
+  // Then find the last valid character boundary by looking for the last complete character
+  let result = sliced.toString('utf-8');
+
+  // If the last character is a replacement character (�), remove it and any trailing incomplete chars
+  // This happens when we cut in the middle of a multi-byte sequence
+  while (result.length > 0 && result.charCodeAt(result.length - 1) === 0xFFFD) {
+    result = result.substring(0, result.length - 1);
+  }
+
+  return result;
 }
 
 /**
