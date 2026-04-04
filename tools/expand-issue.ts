@@ -1,8 +1,6 @@
 #!/usr/bin/env -S npx tsx
-import { runTool } from '../shared/lib/tool-runner.ts';
+import { runTool, resolvePromptPath } from '../shared/lib/tool-runner.ts';
 import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { getIssue, updateIssue } from '../shared/lib/linear.ts';
 import {
   validateTaskPacket,
@@ -24,9 +22,6 @@ import { splitTaskPacket, isValidTaskPacket } from '../shared/lib/task-packet-ut
 import { formatValidationIssues } from '../shared/lib/validation-formatter.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 if (!process.env.LINEAR_API_KEY) {
   console.error('Error: LINEAR_API_KEY not found in environment');
@@ -83,7 +78,7 @@ runTool({
 
       // Load issue-writer prompt
       console.log('Loading issue-writer prompt...');
-      const promptPath = path.join(__dirname, 'prompts/issue-writer.md');
+      const promptPath = resolvePromptPath(import.meta.url, 'issue-writer.md');
       const promptTemplate = await loadPromptTemplate(promptPath);
 
       // Format issue context

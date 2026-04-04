@@ -1,15 +1,11 @@
 #!/usr/bin/env -S npx tsx
-import { runTool } from '../shared/lib/tool-runner.ts';
+import { runTool, getToolDirname, resolvePromptPath } from '../shared/lib/tool-runner.ts';
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { listInitiatives } from '../shared/lib/initiative-lister.ts';
 import { decomposeInitiative } from '../shared/lib/initiative-decomposer.ts';
 import { getPlanConfig } from '../shared/lib/config.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const PLAN_MODEL = process.env.PLAN_MODEL || 'claude-opus-4-6';
 
@@ -78,7 +74,7 @@ async function handleDecompose(args: any): Promise<void> {
   const projectName = args.project as string | undefined;
   const dryRun = !!args['dry-run'];
   const runResearch = !!args.research;
-  const repoRoot = path.resolve(__dirname, '..');
+  const repoRoot = path.resolve(getToolDirname(import.meta.url), '..');
 
   // Determine interactive mode setting
   const interactive = getInteractiveSetting(args, repoRoot);
@@ -94,13 +90,13 @@ async function handleDecompose(args: any): Promise<void> {
   console.log('');
 
   // Load system prompt
-  const promptPath = path.join(__dirname, 'prompts/initiative-planner.md');
+  const promptPath = resolvePromptPath(import.meta.url, 'initiative-planner.md');
   const systemPrompt = await fs.readFile(promptPath, 'utf-8');
 
   // Load research prompt if needed
   let researchPrompt: string | undefined;
   if (runResearch) {
-    const researchPath = path.join(__dirname, 'prompts/research-phase.md');
+    const researchPath = resolvePromptPath(import.meta.url, 'research-phase.md');
     researchPrompt = await fs.readFile(researchPath, 'utf-8');
   }
 
