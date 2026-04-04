@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { resolveProjectsDir } from './workflow-cost.ts';
 import { loadWavemillConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
-import { fetchPrReviews, resolveOwnerRepo } from './github-utils.ts';
+import { fetchPrReviews, resolveOwnerRepo } from './github.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadReviewInterventions } from './review-intervention-mapper.ts';
