@@ -15,6 +15,7 @@
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { checkClaudeAvailability } from '../shared/lib/llm-cli.ts';
 import { execShellCommand } from '../shared/lib/shell-utils.ts';
+import { GREEN, RED, NC } from '../shared/lib/colors.ts';
 
 interface CheckResult {
   name: string;
@@ -192,8 +193,8 @@ async function checkGitRepo(): Promise<CheckResult> {
  */
 function printResult(result: CheckResult): void {
   const status = result.passed ? '✓' : '✗';
-  const color = result.passed ? '\x1b[32m' : '\x1b[31m'; // green or red
-  const reset = '\x1b[0m';
+  const color = result.passed ? GREEN : RED;
+  const reset = NC;
 
   console.log(`${color}${status}${reset} ${result.name}: ${result.message}`);
 
@@ -284,11 +285,11 @@ runTool({
 
     console.log('\n' + '─'.repeat(60));
     if (passed === total) {
-      console.log('\x1b[32m✓ All checks passed!\x1b[0m');
+      console.log(`${GREEN}✓ All checks passed!${NC}`);
       console.log('\nReview tool is ready to use.');
       console.log('Run: npx tsx tools/review-changes.ts main');
     } else {
-      console.log(`\x1b[31m✗ ${total - passed}/${total} checks failed\x1b[0m`);
+      console.log(`${RED}✗ ${total - passed}/${total} checks failed${NC}`);
       printTroubleshooting(results);
     }
     console.log('─'.repeat(60));
