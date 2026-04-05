@@ -28,11 +28,14 @@
  * @module tool-runner
  */
 
-import './env.js';
+import dotenv from 'dotenv';
 import { parseArgs } from 'node:util';
 import type { ParseArgsConfig } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Load environment variables once (replaces former ./env.js side-effect import)
+dotenv.config({ quiet: true });
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
