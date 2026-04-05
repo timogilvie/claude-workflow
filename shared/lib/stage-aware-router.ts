@@ -254,7 +254,7 @@ function stageScoreFromRecord(
   if (typeof primary === 'number') {
     return clamp(primary, 0, 1);
   }
-  return clamp(record.score, 0, 1);
+  return clamp(typeof record.score === 'number' ? record.score : 0, 0, 1);
 }
 
 function stageModelFromRecord(
