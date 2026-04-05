@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-04-05T14:03:21.381764+00:00",
+  "teacher_model": "claude-sonnet-4-5-20250929",
+  "evals_path": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/aggregated-evals.jsonl",
+  "results": {
+    "planner": {
+      "stage": "planner",
+      "baseline_score": 84.07,
+      "optimized_score": 96.39,
+      "improvement": 12.320000000000007,
+      "n_train": 274,
+      "n_val": 72,
+      "artifact": "artifacts/optimized-planner.json"
+    }
+  }
+}

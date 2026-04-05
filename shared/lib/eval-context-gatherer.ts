@@ -583,6 +583,29 @@ function loadSelfReviewSummary(
  * @param worktreePath - Optional worktree path to search first
  * @returns Object with optional stage artifacts
  */
+/**
+ * Load an artifact from the eval archive directory.
+ *
+ * Archive artifacts are created by wavemill-mill.sh's archive_stage_artifacts()
+ * before worktree cleanup, so they persist even after the worktree is removed.
+ *
+ * @param repoDir - Repository directory
+ * @param issueId - Linear issue ID
+ * @param filename - Artifact filename (e.g., 'plan.md', 'task-packet.md')
+ * @returns File content or undefined
+ */
+function loadFromArchive(repoDir: string, issueId: string, filename: string): string | undefined {
+  const archivePath = path.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId, filename);
+  if (existsSync(archivePath)) {
+    try {
+      return readFileSync(archivePath, 'utf-8');
+    } catch {
+      // Continue
+    }
+  }
+  return undefined;
+}
+
 export function gatherStageArtifacts(
   repoDir: string,
   issueId: string,
@@ -597,14 +620,24 @@ export function gatherStageArtifacts(
   // Derive feature slug
   const slug = deriveFeatureSlug(branch, issueId, repoDir);
   if (!slug) {
-    return {}; // Can't locate feature directory
+    // Even without a slug, try the archive dir (keyed by issueId)
+    return {
+      taskPacket: loadFromArchive(repoDir, issueId, 'task-packet.md'),
+      planContent: loadFromArchive(repoDir, issueId, 'plan.md'),
+      selfReviewSummary: undefined,
+      routingDecision: undefined,
+    };
   }
 
   // Gather artifacts (search worktree first, then fall back to repoDir)
-  const taskPacket = loadTaskPacket(repoDir, slug, worktreePath);
-  const planContent = loadPlan(repoDir, slug, worktreePath);
+  const taskPacket = loadTaskPacket(repoDir, slug, worktreePath)
+    ?? loadFromArchive(repoDir, issueId, 'task-packet.md');
+  const planContent = loadPlan(repoDir, slug, worktreePath)
+    ?? loadFromArchive(repoDir, issueId, 'plan.md');
   const selfReviewSummary = loadSelfReviewSummary(repoDir, branch, worktreePath);
-  const routingDecision = fetchRoutingDecision(repoDir, slug, worktreePath) ?? undefined;
+  const routingDecision = fetchRoutingDecision(repoDir, slug, worktreePath)
+    ?? loadRoutingDecisionFromArchive(repoDir, issueId)
+    ?? undefined;
 
   return {
     taskPacket,
@@ -612,4 +645,19 @@ export function gatherStageArtifacts(
     selfReviewSummary,
     routingDecision,
   };
+}
+
+/**
+ * Load routing decision from the archive directory.
+ */
+function loadRoutingDecisionFromArchive(repoDir: string, issueId: string): RoutingDecision | null {
+  const content = loadFromArchive(repoDir, issueId, 'routing-complete.json');
+  if (content) {
+    try {
+      return JSON.parse(content) as RoutingDecision;
+    } catch {
+      // Invalid JSON
+    }
+  }
+  return null;
 }

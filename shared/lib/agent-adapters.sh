@@ -430,6 +430,33 @@ build_planning_prompt() {
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
   local plan_depth="${10:-light}"
 
+  # Build depth-specific guidance
+  local depth_guidance
+  if [[ "$plan_depth" == "deep" ]]; then
+    depth_guidance="- Create a comprehensive, detailed plan with substeps
+- Research multiple approaches and justify your choice
+- Document all architectural decisions
+- Include detailed test scenarios"
+  else
+    depth_guidance="- Create a concise plan focused on the critical path
+- Document key decisions and approach
+- Include basic test coverage"
+  fi
+
+  # Load template and fill placeholders
+  local template_file="$tools_dir/prompts/planning-phase.md"
+  local template_content
+  if [[ -f "$template_file" ]]; then
+    template_content=$(cat "$template_file")
+    template_content="${template_content//\{\{PLAN_DEPTH\}\}/$plan_depth}"
+    template_content="${template_content//\{\{SLUG\}\}/$slug}"
+    template_content="${template_content//\{\{TOOLS_DIR\}\}/$tools_dir}"
+    template_content="${template_content//\{\{ISSUE\}\}/$issue}"
+    template_content="${template_content//\{\{DEPTH_GUIDANCE\}\}/$depth_guidance}"
+  else
+    template_content="[ERROR: Planning template not found at $template_file]"
+  fi
+
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
 
@@ -445,80 +472,7 @@ Throughout your work, periodically update your status by running:
   echo '<short description of what you are doing right now>' > $status_file
 Keep it under 50 chars. Update it at each major step.
 
-## Your Task: Planning Phase
-
-You are in the **PLANNING PHASE** of a multi-phase workflow (recommended depth: $plan_depth).
-
-Task context is pre-seeded at: features/$slug/selected-task.json
-
-### Your Responsibilities
-
-1. **Expand task packet** (if needed):
-   - Check if a detailed task packet exists in the Linear issue description
-   - If not, expand it using: npx tsx $tools_dir/expand-issue.ts $issue
-   - This creates a comprehensive specification with requirements, constraints, and validation steps
-
-2. **Re-route after expansion** (if task was expanded):
-   - After expanding the task packet, re-run the router on the full specification:
-     npx tsx $tools_dir/route-task.ts --json --file features/$slug/selected-task.json --repo-dir \$(pwd)
-   - Save the result to: features/$slug/.post-expansion-route.json
-   - This captures how routing changes with richer context (compared to .initial-route.json from raw description)
-
-3. **Detect migrations** (if not already assigned):
-   - After expansion, check if the expanded task mentions database migrations, Alembic, schema changes, or table alterations
-   - If migration work is detected and no **ASSIGNED MIGRATION NUMBER** appears in the task packet:
-     - Write a marker file: touch features/$slug/.migration-detected
-     - The monitor will assign a migration number and write it to: features/$slug/.migration-number
-     - Wait briefly for the number to appear, then include it in your plan
-   - If a migration number is already assigned in the task packet, use that number
-
-4. **Research the codebase**:
-   - Understand relevant code patterns and architecture
-   - Identify files that need to be modified
-   - Note any constraints or gotchas
-
-5. **Create implementation plan**:
-   - Break down the work into logical phases
-   - Identify dependencies and ordering constraints
-   - Consider edge cases and error handling
-   - Save the plan to: features/$slug/plan.md
-
-6. **Present plan to user**:
-   - Summarize the key points of your plan
-   - Explain your approach and any important decisions
-   - Wait for user approval
-
-7. **After approval**:
-   - Create the approval marker: features/$slug/.plan-approved
-   - Your work is done - the next phase (coding) will be launched automatically
-
-### Planning Depth: $plan_depth
-
-$(if [[ "$plan_depth" == "deep" ]]; then
-  echo "- Create a comprehensive, detailed plan with substeps"
-  echo "- Research multiple approaches and justify your choice"
-  echo "- Document all architectural decisions"
-  echo "- Include detailed test scenarios"
-else
-  echo "- Create a concise plan focused on the critical path"
-  echo "- Document key decisions and approach"
-  echo "- Include basic test coverage"
-fi)
-
-### Success Criteria
-- [ ] Task packet is complete (either existing or expanded)
-- [ ] Post-expansion route saved (if task was expanded)
-- [ ] Migration detected and flagged (if applicable)
-- [ ] Codebase research completed
-- [ ] Implementation plan created at features/$slug/plan.md
-- [ ] User has approved the plan
-- [ ] Approval marker created at features/$slug/.plan-approved
-
-### Important Notes
-- Do NOT implement anything in this phase - only plan
-- Do NOT run tests or make code changes
-- Focus on understanding and planning
-- If anything is unclear, ask the user for clarification before finalizing the plan
+$template_content
 
 ### IMPORTANT: Handling User Feedback During This Phase
 
@@ -557,6 +511,35 @@ build_coding_prompt() {
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
   local code_depth="${10:-medium}"
 
+  # Build depth-specific guidance
+  local depth_guidance
+  if [[ "$code_depth" == "deep" ]]; then
+    depth_guidance="- Implement comprehensive error handling
+- Add extensive test coverage
+- Consider edge cases and performance
+- Add detailed inline documentation"
+  elif [[ "$code_depth" == "light" ]]; then
+    depth_guidance="- Focus on the happy path
+- Basic error handling only
+- Minimal test coverage"
+  else
+    depth_guidance="- Implement core functionality with good error handling
+- Add reasonable test coverage
+- Handle common edge cases"
+  fi
+
+  # Load template and fill placeholders
+  local template_file="$tools_dir/prompts/coding-phase.md"
+  local template_content
+  if [[ -f "$template_file" ]]; then
+    template_content=$(cat "$template_file")
+    template_content="${template_content//\{\{CODE_DEPTH\}\}/$code_depth}"
+    template_content="${template_content//\{\{SLUG\}\}/$slug}"
+    template_content="${template_content//\{\{DEPTH_GUIDANCE\}\}/$depth_guidance}"
+  else
+    template_content="[ERROR: Coding template not found at $template_file]"
+  fi
+
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
 
@@ -572,61 +555,7 @@ Throughout your work, periodically update your status by running:
   echo '<short description of what you are doing right now>' > $status_file
 Keep it under 50 chars. Update it at each major step.
 
-## Your Task: Coding Phase
-
-You are in the **CODING PHASE** of a multi-phase workflow (recommended depth: $code_depth).
-
-The implementation plan is ready at: features/$slug/plan.md
-
-### Your Responsibilities
-
-1. **Read the plan**:
-   - Review features/$slug/plan.md thoroughly
-   - Understand the phases and approach
-
-2. **Execute the plan**:
-   - Implement phase by phase as outlined in the plan
-   - Make minimal, high-quality changes
-   - Follow the architectural decisions from the plan
-
-3. **Run tests/lint between phases**:
-   - Pause if anything fails
-   - Fix issues before proceeding
-
-4. **Mark completion**:
-   - When implementation is complete and tests pass
-   - Create the marker: features/$slug/.coding-complete
-   - Your work is done - the next phase (review) will be launched automatically
-
-### Coding Depth: $code_depth
-
-$(if [[ "$code_depth" == "deep" ]]; then
-  echo "- Implement comprehensive error handling"
-  echo "- Add extensive test coverage"
-  echo "- Consider edge cases and performance"
-  echo "- Add detailed inline documentation"
-elif [[ "$code_depth" == "light" ]]; then
-  echo "- Focus on the happy path"
-  echo "- Basic error handling only"
-  echo "- Minimal test coverage"
-else
-  echo "- Implement core functionality with good error handling"
-  echo "- Add reasonable test coverage"
-  echo "- Handle common edge cases"
-fi)
-
-### Success Criteria
-- [ ] Implementation matches the plan
-- [ ] All tests pass
-- [ ] Linting passes
-- [ ] No regressions in existing functionality
-- [ ] Completion marker created at features/$slug/.coding-complete
-
-### Important Notes
-- Follow the plan - don't deviate without good reason
-- If you need to change the approach, document why in commit messages
-- Do NOT run self-review or create PR - that's the next phase
-- Do NOT ask questions - implement your best judgment and document decisions
+$template_content
 
 ### IMPORTANT: Handling User Feedback During This Phase
 
@@ -674,6 +603,47 @@ build_review_prompt() {
   local issue_context="$6" status_file="$7" tools_dir="$8"
   local reviewer_model="${9:-}" review_mode="${10:-static}"
 
+  # Build reviewer note
+  local reviewer_note=""
+  if [[ -n "$reviewer_model" ]]; then
+    reviewer_note="NOTE: Workflow router recommends using $reviewer_model for review (mode: ${review_mode})"
+  fi
+
+  # Build mode-specific guidance
+  local mode_guidance
+  case "$review_mode" in
+    static)
+      mode_guidance="- Run static analysis only (fast)
+- Fix critical issues found"
+      ;;
+    llm)
+      mode_guidance="- Run LLM-based review (comprehensive)
+- Fix all blockers and critical warnings"
+      ;;
+    static+llm)
+      mode_guidance="- Run both static and LLM review (thorough)
+- Fix all blockers and most warnings"
+      ;;
+    none)
+      mode_guidance="- Skip review tool, proceed directly to PR"
+      ;;
+  esac
+
+  # Load template and fill placeholders
+  local template_file="$tools_dir/prompts/review-phase.md"
+  local template_content
+  if [[ -f "$template_file" ]]; then
+    template_content=$(cat "$template_file")
+    template_content="${template_content//\{\{REVIEW_MODE\}\}/$review_mode}"
+    template_content="${template_content//\{\{TOOLS_DIR\}\}/$tools_dir}"
+    template_content="${template_content//\{\{BASE_BRANCH\}\}/$base_branch}"
+    template_content="${template_content//\{\{ISSUE\}\}/$issue}"
+    template_content="${template_content//\{\{REVIEWER_NOTE\}\}/$reviewer_note}"
+    template_content="${template_content//\{\{MODE_GUIDANCE\}\}/$mode_guidance}"
+  else
+    template_content="[ERROR: Review template not found at $template_file]"
+  fi
+
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
 
@@ -689,93 +659,7 @@ Throughout your work, periodically update your status by running:
   echo '<short description of what you are doing right now>' > $status_file
 Keep it under 50 chars. Update it at each major step.
 
-## Your Task: Review & PR Creation
-
-You are in the **REVIEW PHASE** of a multi-phase workflow (mode: $review_mode).
-
-The implementation is complete. Your job is to review and create a PR.
-
-### Your Responsibilities
-
-1. **Run self-review tool** (up to 3 iterations):
-   IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
-   IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
-   npx tsx $tools_dir/review-changes.ts $base_branch --json
-   $(if [[ -n "$reviewer_model" ]]; then
-     echo "   NOTE: Workflow router recommends using $reviewer_model for review (mode: ${review_mode})"
-   fi)
-   - Exit code 0 = review passed → proceed to step 3
-   - Exit code 1 = issues found → fix blockers and re-run (step 2)
-   - Exit code 2 = error → log comprehensive diagnostics and proceed to step 3
-   The output is structured JSON with verdict, codeReviewFindings, and uiFindings.
-
-   When exit code 2 occurs, you MUST log the following diagnostics to help debug the failure:
-   \`\`\`
-   ⚠️  Review tool failed with exit code 2
-
-   Diagnostics:
-   - Command: npx tsx $tools_dir/review-changes.ts $base_branch --json
-   - Working directory: \$(pwd)
-   - Tool path: $tools_dir/review-changes.ts
-   - Tool exists: \$(ls -lh $tools_dir/review-changes.ts 2>&1 || echo "NOT FOUND")
-   - Git root: \$(git rev-parse --show-toplevel 2>&1)
-   - Current branch: \$(git rev-parse --abbrev-ref HEAD 2>&1)
-   - Base branch exists: \$(git rev-parse --verify $base_branch 2>&1 || echo "NOT FOUND")
-   - STDERR output: [paste the actual stderr from the failed command]
-
-   Proceeding to PR creation per instructions.
-   \`\`\`
-   This diagnostic information is CRITICAL for debugging recurring tool failures.
-
-2. **For each iteration where issues are found**:
-   - Read the review JSON output carefully
-   - Fix all blockers (severity: blocker) and straightforward warnings
-   - Make targeted fixes only — do not refactor unrelated code
-   - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
-   - Re-run the review tool (step 1)
-
-3. **Create a PR** using GitHub CLI with a descriptive title and body:
-   gh pr create --title "$issue: <concise summary>" --body "<PR body>"
-   The PR body MUST include:
-   - A "## Summary" section with 2-4 bullet points describing what changed and why
-   - A "## Changes" section listing the key files/modules modified
-   - A "## Test plan" section describing how the changes were validated
-   - A "## Self-review" section noting the review verdict and iterations run
-   Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-
-4. **Link the PR to $issue**
-
-### Review Mode: $review_mode
-
-$(case "$review_mode" in
-  static)
-    echo "- Run static analysis only (fast)"
-    echo "- Fix critical issues found"
-    ;;
-  llm)
-    echo "- Run LLM-based review (comprehensive)"
-    echo "- Fix all blockers and critical warnings"
-    ;;
-  static+llm)
-    echo "- Run both static and LLM review (thorough)"
-    echo "- Fix all blockers and most warnings"
-    ;;
-  none)
-    echo "- Skip review tool, proceed directly to PR"
-    ;;
-esac)
-
-### Success Criteria
-- [ ] Self-review tool executed (unless mode is 'none')
-- [ ] Blockers fixed (if any were found)
-- [ ] PR created with descriptive summary
-- [ ] PR linked to $issue
-
-### Important Notes
-- Do not skip the review - it's a required step
-- Fix blockers before creating PR
-- Make targeted fixes only - no scope creep
-- If review tool fails with exit code 2, document the failure and proceed
+$template_content
 
 ### IMPORTANT: Handling User Feedback During This Phase
 

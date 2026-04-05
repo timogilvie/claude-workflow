@@ -1,0 +1,74 @@
+{
+  "version": "1.0.0",
+  "created_at": "2026-04-04T17:39:32.598332+00:00",
+  "optimizer": "MIPROv2",
+  "teacher_model": "claude-sonnet-4-5-20250929",
+  "runtime_model": "claude-haiku-4-5-20251001",
+  "system_prompt": "Route a software engineering task to the best AI agent and model by analyzing risk patterns, repository context, and task boundaries.\n\nPrioritize reliability over cost for tasks involving: database schema changes, external API integrations, test infrastructure modifications, security-critical code, self-referential tooling improvements, or financial data handling. These risk patterns warrant high-capability models (Claude) regardless of perceived simplicity.\n\nConsider task characteristics: Does it modify existing runtime code or create new isolated features? Does it cross integration boundaries or touch shared infrastructure? What is the blast radius if the implementation contains bugs?\n\nExamine repository context and historical patterns. For repositories like 'wavemill' (meta-tooling), prefer Claude due to self-referential complexity. For well-scoped, isolated features with clear interfaces, cheaper models may suffice.\n\nWhen confidence is uncertain, default to Claude\u2014failed tasks cost more in debugging time than model costs. Only route to cheaper models when the task is genuinely low-risk: pure documentation, simple UI components, or well-defined adapters with comprehensive tests.\n\nAlways identify specific risk flags in your reasoning. Be conservative: routing 90% of tasks to Claude is acceptable if those tasks involve integration points, schema changes, or production runtime modifications.",
+  "few_shot_examples": [
+    {
+      "task_prompt": "# HOK-946: Place Bets via Kalshi API\n\nReuse the existing order placement in [kalshi_client.py](<vscode-webview://1mvd4fq083s9ao11f8g4tcgnp60qunv600telahksvrdqrtfv9p2/src/exchange/kalshi_client.py>):\n\n* The `create_order()` method is sport-agnostic \u2014 it just needs a market ticker, side, price, and size\n* Place limit orders at the desired price (or market orders for simplicity)\n* Log all bets as `BetRecord` entries with `sport=\"nba\"`",
+      "repo_name": "blue-horseshoe",
+      "task_type_hint": "unknown",
+      "available_models": "claude-sonnet-4-5-20250929,gpt-5.3-codex,gpt-5.4",
+      "recommended_model": "claude-sonnet-4-5-20250929",
+      "recommended_agent": "claude",
+      "confidence": "medium",
+      "risk_flags": [],
+      "cost_estimate": "low",
+      "reasoning": "Default routing to claude."
+    },
+    {
+      "task_prompt": "# HOK-965: Add support for gpt5.4\n\ngpt-5.4 is now available in Codex. Update wavemill to support assigning this as the core model. Add an entry to the pricing config for this model.  Do the same for gpt-5.3-codex-spark",
+      "repo_name": "wavemill",
+      "task_type_hint": "feature",
+      "available_models": "claude-sonnet-4-5-20250929,gpt-5.3-codex,gpt-5.4",
+      "recommended_model": "claude-sonnet-4-5-20250929",
+      "recommended_agent": "claude",
+      "confidence": "low",
+      "risk_flags": [],
+      "cost_estimate": "low",
+      "reasoning": "Default routing to claude."
+    },
+    {
+      "task_prompt": "# HOK-719: Add balance to user profile\n\n# HOK-719: Add Balance to User Profile \u2014 Task Packet\n\n## 1\\. Objective\n\n### What\n\nAdd a dollar-denominated balance field to the user profile that tracks funds available for paying API fees, and provide a UI for users to view their current balance.\n\n### Why\n\nUsers need a prepaid balance mechanism to pay for API usage fees. This is a foundational requirement for the billing/usage system \u2014 without a visible balance, users can't understand their spending capacity or know when to add funds.\n\n### Scope In\n\n* Add a `balance` field to the user database schema (Prisma)\n* Expose balance via the user profile API\n* Display balance in the user dashboard/profile UI\n* Display balance in the navigation (e.g., header user menu) for quick visibility\n\n### Scope Out\n\n* Adding funds / top-up flow (separate task)\n* Deducting balance on API usage (separate task \u2014 usage fee router)\n* Stripe or payment gateway integration\n* Balance history / transaction ledger\n* Low-balance notifications or alerts\n* Admin tools for adjusting balances\n\n---\n\n## 2\\. Technical Context\n\n### Repository\n\n`hokusai-site` (this repo)\n\n### Key Files\n\n*Files that will be created or modified:*\n\n* `packages/web/prisma/schema.prisma` \u2014 Add balance field to User model\n* `packages/web/prisma/migrations/*/migration.sql` \u2014 Generated migration\n* `packages/web/src/app/api/user/profile/route.ts` (or equivalent profile endpoint) \u2014 Include balance in response\n* `packages/web/src/app/(protected)/dashboard/page.tsx` (or equivalent) \u2014 Display balance\n* `packages/web/src/components/` \u2014 Balance display component(s)\n* `packages/web/src/components/ui/` \u2014 Any shared UI elements for currency formatting\n\n### Dependencies\n\n* PostgreSQL database (via Prisma)\n* Existing auth/session system for identifying current user\n* Existing user profile API endpoint\n* Existing dashboard/profile page layout\n\n### Architecture Notes\n\n* Follow existing Prisma schema conventions for the User model\n* Use `Decimal` type in",
+      "repo_name": "hokusai-site",
+      "task_type_hint": "test",
+      "available_models": "claude-sonnet-4-5-20250929,gpt-5.3-codex,gpt-5.4",
+      "recommended_model": "claude-sonnet-4-5-20250929",
+      "recommended_agent": "claude",
+      "confidence": "high",
+      "risk_flags": [
+        "schema-migration"
+      ],
+      "cost_estimate": "medium",
+      "reasoning": "Risk flags [schema-migration] suggest using claude."
+    },
+    {
+      "task_prompt": "# HOK-869: Remove dead exports\n\n**Remove dead exports** - never imported outside their definition file:\n\n* `getCurrentRepo()`, `openPullRequest()` in [github.js](<vscode-webview://1mvd4fq083s9ao11f8g4tcgnp60qunv600telahksvrdqrtfv9p2/shared/lib/github.js>)\n* `getWorkflowStates()`, `createProject()` in [linear.js](<vscode-webview://1mvd4fq083s9ao11f8g4tcgnp60qunv600telahksvrdqrtfv9p2/shared/lib/linear.js>)\n* `createBranch()`, `currentBranch()` in [git.js](<vscode-webview://1mvd4fq083s9ao11f8g4tcgnp60qunv600telahksvrdqrtfv9p2/shared/lib/git.js>)",
+      "repo_name": "wavemill",
+      "task_type_hint": "unknown",
+      "available_models": "claude-sonnet-4-5-20250929,gpt-5.3-codex,gpt-5.4",
+      "recommended_model": "claude-sonnet-4-5-20250929",
+      "recommended_agent": "claude",
+      "confidence": "high",
+      "risk_flags": [],
+      "cost_estimate": "medium",
+      "reasoning": "High-confidence routing to claude based on historical success."
+    }
+  ],
+  "model_candidates": [
+    "claude-sonnet-4-5-20250929",
+    "gpt-5.3-codex",
+    "gpt-5.4",
+    "claude-opus-4-6",
+    "claude-haiku-4-5-20251001"
+  ],
+  "metadata": {
+    "training_records": 276,
+    "validation_records": 70,
+    "val_score": 65.79,
+    "data_source": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/aggregated-evals.jsonl",
+    "data_hash": "sha256:00ad4686abb72b39"
+  }
+}
