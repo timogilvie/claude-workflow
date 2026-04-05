@@ -10,7 +10,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execShellCommand } from './shell-utils.ts';
 import type { PromptCharacteristics, TaskType, ModelRecommendation } from './model-router.ts';
 import { resolveAgent } from './model-router.ts';
 
@@ -190,13 +190,13 @@ function callOpenAI(prompt: string, model: string): string {
     `process.stdout.write(data.choices[0].message.content);`,
   ].join('\n');
 
-  const raw = execSync('node --input-type=module', {
+  const raw = execShellCommand('node --input-type=module', {
     input: script,
     encoding: 'utf-8',
     timeout: TIMEOUT_MS + 5000,
     maxBuffer: 1024 * 1024,
     env: { ...process.env, _ROUTER_KEY: apiKey, _ROUTER_MODEL: model, _ROUTER_PROMPT: prompt },
-  });
+  }) as string;
 
   return raw.trim();
 }
