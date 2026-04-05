@@ -15,9 +15,7 @@ import { resolveEvalsDir } from './evals-paths.ts';
 import { execShellCommand } from './shell-utils.ts';
 import { detectAndFormatInterventions } from './intervention-detector.ts';
 import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
-import { analyzePrDifficulty } from './difficulty-analyzer.ts';
-import { analyzeTaskContext } from './task-context-analyzer.ts';
-import { analyzeRepoContext } from './repo-context-analyzer.ts';
+import { runEvalAnalysis } from './eval-analysis.ts';
 import { callClaude } from './llm-cli.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { updateAffectedSubsystems } from './subsystem-updater.ts';
@@ -124,88 +122,18 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     console.log(`Post-completion eval: ${formatInterventionDisplay(interventionData.totalCount)}`);
 
     // 3. Run independent analyses in parallel (non-blocking, failures logged as warnings)
-    const runDifficultyAnalysis = async (): Promise<ReturnType<typeof analyzePrDifficulty>> => {
-      if (!(ctx.prNumber && evalContext.prDiff)) {
-        return null;
-      }
-
-      try {
-        console.log('Post-completion eval: analyzing PR difficulty...');
-        const difficultyData = analyzePrDifficulty({
-          prDiff: evalContext.prDiff,
-          prNumber: ctx.prNumber,
-          repoDir,
-        });
-        if (difficultyData) {
-          console.log(
-            `Post-completion eval: ${formatDifficultyDisplay(
-              difficultyData.difficultyBand,
-              difficultyData.difficultySignals.locTouched,
-              difficultyData.difficultySignals.filesTouched,
-              difficultyData.stratum,
-              difficultyData.difficultySignals.diffUncertain
-            )}`
-          );
-        }
-        return difficultyData;
-      } catch (diffErr: unknown) {
-        const diffMsg = errorMessage(diffErr);
-        console.warn(`Post-completion eval: difficulty analysis failed — ${diffMsg}`);
-        return null;
-      }
-    };
-
-    const runRepoContextAnalysis = async (): Promise<ReturnType<typeof analyzeRepoContext> | null> => {
-      try {
-        console.log('Post-completion eval: analyzing repo context...');
-        const repoContextData = analyzeRepoContext(repoDir);
-        if (repoContextData) {
-          console.log(
-            `Post-completion eval: ${formatRepoContextDisplay(
-              repoContextData.primaryLanguage,
-              repoContextData.repoVisibility,
-              repoContextData.repoSize?.fileCount || 0
-            )}`
-          );
-        }
-        return repoContextData;
-      } catch (repoErr: unknown) {
-        const repoMsg = errorMessage(repoErr);
-        console.warn(`Post-completion eval: repo context analysis failed — ${repoMsg}`);
-        return null;
-      }
-    };
-
-    const [difficultyData, repoContextData] = await Promise.all([
-      runDifficultyAnalysis(),
-      runRepoContextAnalysis(),
-    ]);
-
-    let taskContextData: ReturnType<typeof analyzeTaskContext> | null = null;
-    if (evalContext.issueData || evalContext.prDiff) {
-      try {
-        console.log('Post-completion eval: analyzing task context...');
-        taskContextData = analyzeTaskContext({
-          issue: evalContext.issueData,
-          prDiff: evalContext.prDiff,
-          locTouched: difficultyData?.difficultySignals.locTouched,
-          filesTouched: difficultyData?.difficultySignals.filesTouched,
-        });
-
-        if (taskContextData) {
-          console.log(
-            `Post-completion eval: ${formatTaskContextDisplay(
-              taskContextData.taskType,
-              taskContextData.changeKind,
-              taskContextData.complexity
-            )}`
-          );
-        }
-      } catch (taskErr: unknown) {
-        const taskMsg = errorMessage(taskErr);
-        console.warn(`Post-completion eval: task context analysis failed — ${taskMsg}`);
-      }
-    }
+    const { difficultyData, repoContextData, taskContextData } = await runEvalAnalysis({
+      prDiff: evalContext.prDiff,
+      prNumber: ctx.prNumber,
+      repoDir,
+      issueData: evalContext.issueData,
+      logPrefix: 'Post-completion eval: ',
+      formatters: {
+        difficulty: formatDifficultyDisplay,
+        repoContext: formatRepoContextDisplay,
+        taskContext: formatTaskContextDisplay,
+      },
+    });
 
     // 4. Run eval judge
     console.log('Post-completion eval: invoking LLM judge...');
