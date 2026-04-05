@@ -1,7 +1,7 @@
-import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { sanitizeBranchName } from './git.ts';
+import { execShellCommand } from './shell-utils.ts';
 
 export function getWorktreeBase(): string {
   return process.env.WORKTREE_BASE || path.join(process.env.HOME!, 'worktrees');
@@ -13,24 +13,31 @@ export function getWorktreePath(branchName: string, baseDir: string = getWorktre
   return path.join(baseDir, sanitized);
 }
 
-function run(cmd: string, options: { cwd?: string; silent?: boolean } = {}): string {
+/** Run a shell command silently, returning trimmed output or empty string on error. */
+function runSilent(cmd: string, options: { cwd?: string } = {}): string {
   try {
-    const result = execSync(cmd, {
+    const result = execShellCommand(cmd, {
       cwd: options.cwd,
       encoding: 'utf-8',
-      stdio: options.silent ? 'pipe' : 'inherit',
+      stdio: 'pipe',
     });
     return typeof result === 'string' ? result.trim() : '';
-  } catch (error: any) {
-    if (options.silent) {
-      return '';
-    }
-    throw error;
+  } catch {
+    return '';
   }
 }
 
+/** Run a shell command with inherited stdio, throwing on error. */
+function runInherit(cmd: string, options: { cwd?: string } = {}): void {
+  execShellCommand(cmd, {
+    cwd: options.cwd,
+    encoding: 'utf-8',
+    stdio: 'inherit',
+  });
+}
+
 export function getMainBranch(): string {
-  const branches = run('git branch -l main master', { silent: true });
+  const branches = runSilent('git branch -l main master');
   if (branches.includes('main')) {
     return 'main';
   }
@@ -58,19 +65,19 @@ export function createWorktree(branchName: string, baseBranch?: string): void {
   }
 
   console.log(`Fetching latest ${mainBranch} from origin...`);
-  run(`git fetch origin ${mainBranch}`, { silent: true });
+  runSilent(`git fetch origin ${mainBranch}`);
 
-  const existingBranches = run('git branch --list', { silent: true });
+  const existingBranches = runSilent('git branch --list');
   if (existingBranches.includes(fullBranchName)) {
     console.log(`Branch ${fullBranchName} exists, resetting to ${remoteRef}`);
-    run(`git branch -f ${fullBranchName} ${remoteRef}`);
+    runInherit(`git branch -f ${fullBranchName} ${remoteRef}`);
   } else {
     console.log(`Creating branch: ${fullBranchName} from ${remoteRef}`);
-    run(`git branch ${fullBranchName} ${remoteRef}`);
+    runInherit(`git branch ${fullBranchName} ${remoteRef}`);
   }
 
   console.log(`Creating worktree at: ${worktreePath}`);
-  run(`git worktree add "${worktreePath}" ${fullBranchName}`);
+  runInherit(`git worktree add "${worktreePath}" ${fullBranchName}`);
 
   const featureDir = path.join(worktreePath, 'features', sanitized);
   fs.mkdirSync(featureDir, { recursive: true });
@@ -83,11 +90,11 @@ export function createWorktree(branchName: string, baseBranch?: string): void {
 
 export function listWorktrees(): void {
   console.log('Git Worktrees:\n');
-  run('git worktree list');
+  runInherit('git worktree list');
 }
 
 export function getWorktreeStatus(): void {
-  const output = run('git worktree list --porcelain', { silent: true });
+  const output = runSilent('git worktree list --porcelain');
   const worktrees = output.split('\n\n').filter(Boolean);
 
   console.log('Worktree Status:\n');
@@ -102,7 +109,7 @@ export function getWorktreeStatus(): void {
       continue;
     }
 
-    const status = run('git status --porcelain', { cwd: worktreePath, silent: true });
+    const status = runSilent('git status --porcelain', { cwd: worktreePath });
     const changes = status.split('\n').filter(Boolean).length;
 
     const sessionFile = path.join(worktreePath, '.parallel-workflow', 'session.json');
@@ -130,7 +137,7 @@ export function removeWorktree(branchName: string, deleteBranch = false): void {
     return;
   }
 
-  const status = run('git status --porcelain', { cwd: worktreePath, silent: true });
+  const status = runSilent('git status --porcelain', { cwd: worktreePath });
   if (status) {
     console.log('⚠️  Worktree has uncommitted changes:');
     console.log(status);
@@ -139,11 +146,11 @@ export function removeWorktree(branchName: string, deleteBranch = false): void {
   }
 
   console.log(`Removing worktree: ${worktreePath}`);
-  run(`git worktree remove "${worktreePath}"`);
+  runInherit(`git worktree remove "${worktreePath}"`);
 
   if (deleteBranch) {
     console.log(`Deleting branch: ${fullBranchName}`);
-    run(`git branch -d ${fullBranchName}`, { silent: true });
+    runSilent(`git branch -d ${fullBranchName}`);
   }
 
   console.log('✅ Worktree removed');
@@ -151,6 +158,6 @@ export function removeWorktree(branchName: string, deleteBranch = false): void {
 
 export function pruneWorktrees(): void {
   console.log('Pruning stale worktrees...');
-  run('git worktree prune');
+  runInherit('git worktree prune');
   console.log('✅ Stale worktrees pruned');
 }

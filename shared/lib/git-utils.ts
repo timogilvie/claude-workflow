@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execShellCommand } from './shell-utils.ts';
 import * as path from 'path';
 
 /**
@@ -19,7 +19,7 @@ export function resolveMainRepo(repoDir?: string): string | null {
     const cwd = repoDir || process.cwd();
 
     // Get the git common directory
-    const gitCommonDir = execSync('git rev-parse --git-common-dir', {
+    const gitCommonDir = execShellCommand('git rev-parse --git-common-dir', {
       cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'ignore'], // Suppress stderr
