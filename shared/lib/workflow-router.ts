@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
+import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
 
 export type PlanDepth = 'light' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -34,6 +35,12 @@ export interface WorkflowRouteDecision {
     fileTypes: string[];
     riskScore: number;
   };
+}
+
+export interface RouteWorkflowOptions {
+  repoDir?: string;
+  modelsAvailable?: string[];
+  maxCostUsd?: number;
 }
 
 const DEFAULT_MODEL_POOL = [
@@ -199,7 +206,7 @@ export function readTaskPromptFromFile(filePath: string): string {
   return content.trim();
 }
 
-export function routeWorkflow(prompt: string, options?: { repoDir?: string }): WorkflowRouteDecision {
+export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): WorkflowRouteDecision {
   const repoDir = options?.repoDir;
   const pool = getModelPool(repoDir);
   const characteristics = analyzePrompt(prompt);
@@ -279,6 +286,44 @@ export function routeWorkflow(prompt: string, options?: { repoDir?: string }): W
   };
 }
 
+export function routeWorkflowStageAware(
+  prompt: string,
+  options?: RouteWorkflowOptions,
+): StageAwareDecision {
+  const repoDir = options?.repoDir;
+  const characteristics = analyzePrompt(prompt);
+  const riskScore = computeRiskScore(prompt, characteristics);
+  const stageAwareDecision = routeStageAware(prompt, {
+    repoDir,
+    modelsAvailable: options?.modelsAvailable,
+    maxCostUsd: options?.maxCostUsd,
+  });
+
+  if (!stageAwareDecision) {
+    const fallback = routeWorkflow(prompt, options);
+    return {
+      ...fallback,
+      routingMode: 'heuristic-fallback',
+      neighborCount: 0,
+      neighborSimilarityRange: [0, 0],
+      expectedCost: Number(
+        (fallback.expectedCostPlan + fallback.expectedCostCode + fallback.expectedCostReview).toFixed(2)
+      ),
+    };
+  }
+
+  return {
+    ...stageAwareDecision,
+    signals: {
+      taskType: characteristics.taskType,
+      promptLength: characteristics.length,
+      complexityScore: characteristics.complexityScore,
+      fileTypes: characteristics.fileTypes,
+      riskScore,
+    },
+  };
+}
+
 export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?: string): string {
   const routerConfig = loadRouterConfig(repoDir);
   const defaultAgent = routerConfig.defaultAgent || 'claude';
@@ -288,11 +333,19 @@ export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?
   const coderAgent = resolveAgent(decision.coder, agentMap, defaultAgent);
   const reviewerAgent = resolveAgent(decision.reviewer, agentMap, defaultAgent);
 
-  return [
+  const lines = [
     `Planner:  ${decision.planner} (${plannerAgent})  depth=${decision.planDepth}  cost=$${decision.expectedCostPlan.toFixed(2)}`,
     `Coder:    ${decision.coder} (${coderAgent})  depth=${decision.codeDepth}  cost=$${decision.expectedCostCode.toFixed(2)}`,
     `Reviewer: ${decision.reviewer} (${reviewerAgent})  mode=${decision.reviewRecommended}  cost=$${decision.expectedCostReview.toFixed(2)}`,
     `Success:  ${(decision.expectedSuccess * 100).toFixed(0)}%  task=${decision.signals.taskType}  risk=${decision.signals.riskScore}`,
     `Signals:  ${decision.reasoning[0]} ${decision.reasoning[1]}`,
-  ].join('\n');
+  ];
+
+  if ('routingMode' in decision) {
+    lines.push(
+      `Router:   ${decision.routingMode}  neighbors=${decision.neighborCount}  similarity=${decision.neighborSimilarityRange[0].toFixed(2)}-${decision.neighborSimilarityRange[1].toFixed(2)}`
+    );
+  }
+
+  return lines.join('\n');
 }
