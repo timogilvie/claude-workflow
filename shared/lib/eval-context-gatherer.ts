@@ -252,7 +252,7 @@ export function autoDetectContext(repoDir: string): {
 // ────────────────────────────────────────────────────────────────
 
 /** Raw shape of the .routing-complete file. */
-interface RoutingCompleteData {
+export interface RoutingCompleteData {
   planner: string;
   coder: string;
   reviewer: string;
@@ -334,6 +334,56 @@ export function fetchRoutingDecision(
         }
 
         return convertToRoutingDecision(data as unknown as RoutingCompleteData);
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Fetch raw routing decision data from .routing-complete file.
+ *
+ * Unlike fetchRoutingDecision, this returns the raw data structure
+ * without converting to RoutingDecision schema. Used by task descriptor
+ * builder to extract per-stage model assignments.
+ *
+ * @param repoDir - Repository root directory
+ * @param slug - Feature slug (e.g., "my-feature")
+ * @param worktreePath - Optional worktree path to search first
+ * @returns Raw routing data or null if not found
+ */
+export function fetchRoutingCompleteRaw(
+  repoDir: string,
+  slug: string,
+  worktreePath?: string,
+): RoutingCompleteData | null {
+  const featureDirs = ['features', 'bugs'];
+  const searchRoots = [worktreePath, repoDir].filter(
+    (p): p is string => Boolean(p),
+  );
+
+  for (const root of searchRoots) {
+    for (const dir of featureDirs) {
+      const routingPath = path.join(root, dir, slug, '.routing-complete');
+      if (!existsSync(routingPath)) continue;
+
+      try {
+        const raw = readFileSync(routingPath, 'utf-8');
+        const data = JSON.parse(raw) as Record<string, unknown>;
+
+        // Validate required fields
+        if (
+          typeof data.planner !== 'string' ||
+          typeof data.coder !== 'string' ||
+          typeof data.reviewer !== 'string'
+        ) {
+          return null;
+        }
+
+        return data as RoutingCompleteData;
       } catch {
         return null;
       }

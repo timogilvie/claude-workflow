@@ -21,6 +21,7 @@ import type {
   StageScore,
   RoutingOutcome,
   RoutingDecision,
+  TaskDescriptor,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
@@ -46,6 +47,8 @@ export interface EvalRecordMetadata {
   repoContext?: RepoContext | null;
   /** Workflow cost computation results */
   workflowCost?: WorkflowCostOutcome | null;
+  /** Task descriptor for router training */
+  taskDescriptor?: TaskDescriptor | null;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -207,6 +210,24 @@ export function attachStageOutcomes(
   }
 }
 
+/**
+ * Attach task descriptor to eval record (HOK-1120).
+ *
+ * Adds the taskDescriptor field if a valid descriptor is provided.
+ * The descriptor consolidates generalizable task features for router training.
+ *
+ * @param record - Eval record to mutate
+ * @param descriptor - Task descriptor from buildTaskDescriptor (optional)
+ */
+export function attachTaskDescriptor(
+  record: EvalRecord,
+  descriptor: TaskDescriptor | null,
+): void {
+  if (descriptor) {
+    record.taskDescriptor = descriptor;
+  }
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
@@ -221,6 +242,7 @@ export function attachStageOutcomes(
  * - Repo context analysis
  * - Workflow cost computation
  * - Stage outcomes (from judge's stageScores)
+ * - Task descriptor (from buildTaskDescriptor)
  *
  * @param record - Base eval record from evaluateTask()
  * @param metadata - All metadata to attach
@@ -232,6 +254,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
+  attachTaskDescriptor(record, metadata.taskDescriptor || null);
 
   // Extract stageScores from record metadata (set by evaluateTask)
   const stageScores = record.metadata?.stageScores as
