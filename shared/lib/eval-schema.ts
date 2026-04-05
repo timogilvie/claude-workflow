@@ -16,6 +16,9 @@
  * - **1.3.0**: Added `stageOutcomes` field (HOK-1004) to capture per-stage
  *   quality attribution scores (expansion, plan, implementation, review) and
  *   routing outcome metadata for GEPA training
+ * - **1.4.0**: Added `taskDescriptor` field (HOK-1120) to capture generalizable
+ *   task features for router training, including heuristic signals, learned
+ *   signals, constraints, per-stage model assignments, and outcomes
  *
  * @module eval-schema
  */
@@ -634,6 +637,142 @@ export interface StageOutcomes {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Task Descriptor (HOK-1120)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Heuristic signals derived from task prompt and PR diff.
+ *
+ * These are objective, deterministic features that can be computed
+ * without LLM calls or domain expertise. All features are privacy-safe
+ * (no repo names, issue IDs, or code snippets).
+ */
+export interface HeuristicSignals {
+  /** Type of task being performed */
+  task_type: TaskType;
+  /** Programming languages used (from file extensions) */
+  languages: string[];
+  /** Frameworks detected in the codebase */
+  framework_tags: string[];
+  /** Number of files modified in the PR */
+  files_touched: number;
+  /** Repository size in lines of code */
+  repo_size_loc: number;
+  /** Approximate token count of task description */
+  description_tokens: number;
+  /** Whether the task creates new code (vs modifying existing) */
+  is_greenfield: boolean;
+  /** Whether the task involves a database migration */
+  has_migration: boolean;
+  /** Whether the task has UI components */
+  has_ui: boolean;
+  /** Whether the task adds or modifies tests */
+  has_tests: boolean;
+  /** Whether the task spans multiple services */
+  cross_service: boolean;
+}
+
+/**
+ * Learned signals that require classification or embedding.
+ *
+ * These features may be derived from LLM classifiers, embeddings,
+ * or trained models. They capture higher-level semantics beyond
+ * what heuristics can detect.
+ */
+export interface LearnedSignals {
+  /** Complexity score 1-5 (mapped from xs/s/m/l/xl bands) */
+  complexity: number;
+  /** Domain classification for the task */
+  domain: string;
+  /** Risk flags detected in the task */
+  risk_flags: string[];
+  /** Optional vector store reference for nearest-neighbor lookup */
+  embedding_id?: string;
+}
+
+/**
+ * Constraints and objectives for task execution.
+ *
+ * Captures resource limits and optimization goals that guide
+ * routing decisions.
+ */
+export interface DescriptorConstraints {
+  /** Maximum cost budget in USD */
+  max_cost_usd?: number;
+  /** Maximum time budget in minutes */
+  max_time_minutes?: number;
+  /** Models available for routing consideration */
+  models_available: string[];
+  /** Routing objective (maximize success, minimize cost, or balanced) */
+  objective: 'max_success' | 'min_cost' | 'balanced';
+}
+
+/**
+ * Per-stage execution details for a workflow stage.
+ *
+ * Records which model was used and the resulting quality, cost, and time.
+ * Used for offline routing model training.
+ */
+export interface StageDescriptor {
+  /** Model identifier used for this stage */
+  model: string;
+  /** Quality score 0-1 for this stage (null pre-eval) */
+  score?: number;
+  /** Cost in USD for this stage */
+  cost_usd?: number;
+  /** Time spent on this stage in minutes */
+  time_minutes?: number;
+}
+
+/**
+ * Overall task outcome summary.
+ *
+ * Aggregates quality, cost, time, and intervention metrics for the
+ * complete workflow. Used as training labels for routing models.
+ */
+export interface DescriptorOutcome {
+  /** Overall quality score 0-1 */
+  overall_score: number;
+  /** Total workflow cost in USD */
+  total_cost_usd?: number;
+  /** Total workflow time in minutes */
+  total_time_minutes?: number;
+  /** Number of human interventions required */
+  interventions: number;
+  /** Types of interventions that occurred */
+  intervention_types: string[];
+}
+
+/**
+ * Task descriptor for router training and prediction.
+ *
+ * Consolidates all generalizable task features into a single,
+ * privacy-safe, router-friendly structure. Contains no repo names,
+ * issue IDs, or proprietary code snippets.
+ *
+ * This descriptor serves dual purposes:
+ * 1. Router input (pre-eval): signals + constraints → predict model assignment
+ * 2. Training label (post-eval): signals + stages + outcome → learn routing policy
+ *
+ * @since 1.4.0
+ */
+export interface TaskDescriptor {
+  /** Schema version for forward compatibility */
+  schema_version: '1.0';
+  /** Heuristic and learned feature signals */
+  signals: {
+    heuristic: HeuristicSignals;
+    learned: LearnedSignals;
+  };
+  /** Constraints and routing objectives */
+  constraints: DescriptorConstraints;
+  /** Per-stage model assignments and outcomes */
+  stages: Record<string, StageDescriptor>;
+  /** Overall outcome (null when used as router input pre-eval) */
+  outcome?: DescriptorOutcome;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -796,6 +935,18 @@ export interface EvalRecord {
    * @since 1.3.0
    */
   stageOutcomes?: StageOutcomes;
+
+  /**
+   * Task descriptor for router training.
+   *
+   * Consolidates generalizable task features (heuristic signals, learned
+   * signals, constraints, per-stage outcomes) into a single privacy-safe
+   * structure suitable for training routing models. Contains no repo names,
+   * issue IDs, or proprietary code snippets.
+   *
+   * @since 1.4.0
+   */
+  taskDescriptor?: TaskDescriptor;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;

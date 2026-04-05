@@ -21,6 +21,7 @@ import {
   gatherEvalContext,
   gatherStageArtifacts,
   fetchIssueData,
+  fetchRoutingCompleteRaw,
   type EvalContext,
 } from './eval-context-gatherer.ts';
 import {
@@ -42,6 +43,7 @@ import {
 import { evaluateTask } from './eval.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
+import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import type {
   EvalRecord,
   Outcomes,
@@ -304,6 +306,41 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     record.outcomes.success = (record.score as number) >= 0.5;
   }
 
+  // 9b. Build task descriptor for router training (HOK-1120)
+  let taskDescriptor = null;
+  try {
+    // Derive feature slug from branch or issue ID
+    const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
+
+    // Fetch raw routing data
+    const routingComplete = slug
+      ? fetchRoutingCompleteRaw(repoDir, slug, worktreePath)
+      : null;
+
+    // Build descriptor from all gathered context
+    taskDescriptor = buildTaskDescriptor({
+      originalPrompt: evalContext.originalPrompt,
+      prDiff: evalContext.prDiff,
+      taskContext: taskContextData || undefined,
+      repoContext: repoContextData || undefined,
+      difficultySignals: difficultyData?.difficultySignals || undefined,
+      routingDecision: effectiveRoutingDecision || undefined,
+      routingComplete: routingComplete || undefined,
+      stageOutcomes: record.stageOutcomes || undefined,
+      workflowCost: record.workflowCost || undefined,
+      workflowTokenUsage: record.workflowTokenUsage || undefined,
+      score: record.score || undefined,
+      timeSeconds: record.timeSeconds || undefined,
+      interventionCount: record.interventionCount || undefined,
+      interventions: interventionRecords || undefined,
+      modelsAvailable: ['claude-sonnet-4-5-20250929', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
+      objective: 'balanced',
+    });
+  } catch (err) {
+    const errorMsg = errorMessage(err);
+    console.warn(`Warning: failed to build task descriptor: ${errorMsg}`);
+  }
+
   // 10. Enrich record with metadata
   enrichEvalRecord(record, {
     agentType,
@@ -311,6 +348,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     difficulty: difficultyData,
     taskContext: taskContextData,
     repoContext: repoContextData,
+    taskDescriptor,
   });
 
   // 11. Set solution model if provided

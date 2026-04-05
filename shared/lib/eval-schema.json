@@ -758,6 +758,227 @@
       "required": ["success", "review", "rework", "delivery"],
       "additionalProperties": false
     },
+    "taskDescriptor": {
+      "type": "object",
+      "description": "Task descriptor for router training (HOK-1120). Consolidates generalizable task features into a privacy-safe structure.",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "enum": ["1.0"],
+          "description": "Schema version for forward compatibility."
+        },
+        "signals": {
+          "type": "object",
+          "description": "Heuristic and learned feature signals.",
+          "properties": {
+            "heuristic": {
+              "type": "object",
+              "description": "Heuristic signals derived from task prompt and PR diff.",
+              "properties": {
+                "task_type": {
+                  "type": "string",
+                  "enum": ["bugfix", "feature", "refactor", "chore", "docs", "test", "infra"],
+                  "description": "Type of task being performed."
+                },
+                "languages": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Programming languages used (from file extensions)."
+                },
+                "framework_tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Frameworks detected in the codebase."
+                },
+                "files_touched": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Number of files modified in the PR."
+                },
+                "repo_size_loc": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Repository size in lines of code."
+                },
+                "description_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Approximate token count of task description."
+                },
+                "is_greenfield": {
+                  "type": "boolean",
+                  "description": "Whether the task creates new code (vs modifying existing)."
+                },
+                "has_migration": {
+                  "type": "boolean",
+                  "description": "Whether the task involves a database migration."
+                },
+                "has_ui": {
+                  "type": "boolean",
+                  "description": "Whether the task has UI components."
+                },
+                "has_tests": {
+                  "type": "boolean",
+                  "description": "Whether the task adds or modifies tests."
+                },
+                "cross_service": {
+                  "type": "boolean",
+                  "description": "Whether the task spans multiple services."
+                }
+              },
+              "required": [
+                "task_type",
+                "languages",
+                "framework_tags",
+                "files_touched",
+                "repo_size_loc",
+                "description_tokens",
+                "is_greenfield",
+                "has_migration",
+                "has_ui",
+                "has_tests",
+                "cross_service"
+              ],
+              "additionalProperties": false
+            },
+            "learned": {
+              "type": "object",
+              "description": "Learned signals that require classification or embedding.",
+              "properties": {
+                "complexity": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5,
+                  "description": "Complexity score 1-5 (mapped from xs/s/m/l/xl bands)."
+                },
+                "domain": {
+                  "type": "string",
+                  "description": "Domain classification for the task."
+                },
+                "risk_flags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Risk flags detected in the task."
+                },
+                "embedding_id": {
+                  "type": "string",
+                  "description": "Optional vector store reference for nearest-neighbor lookup."
+                }
+              },
+              "required": ["complexity", "domain", "risk_flags"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["heuristic", "learned"],
+          "additionalProperties": false
+        },
+        "constraints": {
+          "type": "object",
+          "description": "Constraints and objectives for task execution.",
+          "properties": {
+            "max_cost_usd": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Maximum cost budget in USD."
+            },
+            "max_time_minutes": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Maximum time budget in minutes."
+            },
+            "models_available": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Models available for routing consideration."
+            },
+            "objective": {
+              "type": "string",
+              "enum": ["max_success", "min_cost", "balanced"],
+              "description": "Routing objective (maximize success, minimize cost, or balanced)."
+            }
+          },
+          "required": ["models_available", "objective"],
+          "additionalProperties": false
+        },
+        "stages": {
+          "type": "object",
+          "description": "Per-stage execution details.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "description": "Model identifier used for this stage."
+              },
+              "score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Quality score 0-1 for this stage (null pre-eval)."
+              },
+              "cost_usd": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Cost in USD for this stage."
+              },
+              "time_minutes": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Time spent on this stage in minutes."
+              }
+            },
+            "required": ["model"],
+            "additionalProperties": false
+          }
+        },
+        "outcome": {
+          "type": "object",
+          "description": "Overall task outcome summary (null when used as router input pre-eval).",
+          "properties": {
+            "overall_score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Overall quality score 0-1."
+            },
+            "total_cost_usd": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Total workflow cost in USD."
+            },
+            "total_time_minutes": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Total workflow time in minutes."
+            },
+            "interventions": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of human interventions required."
+            },
+            "intervention_types": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Types of interventions that occurred."
+            }
+          },
+          "required": ["overall_score", "interventions", "intervention_types"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["schema_version", "signals", "constraints", "stages"],
+      "additionalProperties": false
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
