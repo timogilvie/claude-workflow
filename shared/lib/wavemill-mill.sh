@@ -2733,8 +2733,22 @@ monitor_issue_state() {
             # Read routing results
             routing_file="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.routing-complete"
             if [[ -f "$routing_file" ]]; then
-              # Validate JSON before parsing
-              if ! jq empty "$routing_file" 2>/dev/null; then
+              # FORCE_MODEL overrides routing file for all stage models
+              if [[ -n "${FORCE_MODEL:-}" ]]; then
+                planner_model="$FORCE_MODEL"
+                coder_model="$FORCE_MODEL"
+                reviewer_model="$FORCE_MODEL"
+                # Still read depth/mode from routing file if available
+                if jq empty "$routing_file" 2>/dev/null; then
+                  plan_depth=$(jq -r '.planDepth // "light"' "$routing_file" 2>/dev/null || echo "light")
+                  code_depth=$(jq -r '.codeDepth // "medium"' "$routing_file" 2>/dev/null || echo "medium")
+                  review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
+                else
+                  plan_depth="light"
+                  code_depth="medium"
+                  review_mode="static"
+                fi
+              elif ! jq empty "$routing_file" 2>/dev/null; then
                 log_warn "$ISSUE → Routing file contains invalid JSON, using defaults"
                 planner_model="claude-sonnet-4-5-20250929"
                 coder_model="claude-opus-4-6"
@@ -2813,12 +2827,16 @@ monitor_issue_state() {
           fi
 
           if check_plan_approved "$SLUG"; then
-            # Read routing results from state (stored during routing → planning transition)
-            coder_model=$(get_task_meta "$ISSUE" "coderModel")
-            # For challenge tasks, the challenge model MUST override the routed coder
-            challenge_coder=$(get_task_meta "$ISSUE" "challengeModel")
-            if [[ -n "$challenge_coder" ]]; then
-              coder_model="$challenge_coder"
+            # FORCE_MODEL takes priority, then challenge, then state, then default
+            if [[ -n "${FORCE_MODEL:-}" ]]; then
+              coder_model="$FORCE_MODEL"
+            else
+              coder_model=$(get_task_meta "$ISSUE" "coderModel")
+              # For challenge tasks, the challenge model MUST override the routed coder
+              challenge_coder=$(get_task_meta "$ISSUE" "challengeModel")
+              if [[ -n "$challenge_coder" ]]; then
+                coder_model="$challenge_coder"
+              fi
             fi
             [[ -z "$coder_model" ]] && coder_model="claude-opus-4-6"
             code_depth=$(get_task_meta "$ISSUE" "codeDepth")
@@ -2853,8 +2871,12 @@ monitor_issue_state() {
 
         coding)
           if check_coding_complete "$SLUG"; then
-            # Read routing results from state
-            reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
+            # FORCE_MODEL takes priority, then state, then default
+            if [[ -n "${FORCE_MODEL:-}" ]]; then
+              reviewer_model="$FORCE_MODEL"
+            else
+              reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
+            fi
             [[ -z "$reviewer_model" ]] && reviewer_model="claude-sonnet-4-5-20250929"
             review_mode=$(get_task_meta "$ISSUE" "reviewMode")
             [[ -z "$review_mode" ]] && review_mode="static"

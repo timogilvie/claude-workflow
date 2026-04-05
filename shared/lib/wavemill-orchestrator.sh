@@ -295,32 +295,50 @@ Read specific sections on-demand as you plan and implement:
 
       # Run workflow routing directly (no LLM needed — routing is deterministic)
       ROUTE_TOOL="$TOOLS_DIR/route-task.ts"
-      PLANNER_MODEL="claude-sonnet-4-5-20250929"
-      CODER_MODEL="claude-opus-4-6"
-      REVIEWER_MODEL="claude-sonnet-4-5-20250929"
       PLAN_DEPTH="light"
       CODE_DEPTH="medium"
       REVIEW_MODE="static"
 
-      if [[ -f "$ROUTE_TOOL" ]] && [[ -f "$TASK_JSON" ]]; then
-        ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$TASK_JSON" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
-        if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
-          PLANNER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.planner // "claude-sonnet-4-5-20250929"' 2>/dev/null)
-          CODER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.coder // "claude-opus-4-6"' 2>/dev/null)
-          REVIEWER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.reviewer // "claude-sonnet-4-5-20250929"' 2>/dev/null)
-          PLAN_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.planDepth // "light"' 2>/dev/null)
-          CODE_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.codeDepth // "medium"' 2>/dev/null)
-          REVIEW_MODE=$(echo "$ROUTE_JSON" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
-          echo "  Workflow route: planner=$PLANNER_MODEL ($PLAN_DEPTH), coder=$CODER_MODEL ($CODE_DEPTH), reviewer=$REVIEWER_MODEL ($REVIEW_MODE)"
-        else
-          echo "  Workflow routing unavailable, using defaults"
-        fi
-      fi
-
-      # If this is a challenge task, the challenge model IS the coder
-      if [[ -n "$CHALLENGE_MODEL" ]]; then
+      if [[ -n "${FORCE_MODEL:-}" ]]; then
+        # FORCE_MODEL overrides all stage models — skip the router entirely
+        PLANNER_MODEL="$FORCE_MODEL"
+        CODER_MODEL="$FORCE_MODEL"
+        REVIEWER_MODEL="$FORCE_MODEL"
+        echo "  FORCE_MODEL override: planner=$PLANNER_MODEL, coder=$CODER_MODEL, reviewer=$REVIEWER_MODEL"
+      elif [[ -n "$CHALLENGE_MODEL" ]]; then
+        # Challenge mode: challenge model is the coder, router picks the rest
+        PLANNER_MODEL="claude-sonnet-4-5-20250929"
         CODER_MODEL="$CHALLENGE_MODEL"
+        REVIEWER_MODEL="claude-sonnet-4-5-20250929"
+        if [[ -f "$ROUTE_TOOL" ]] && [[ -f "$TASK_JSON" ]]; then
+          ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$TASK_JSON" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+          if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
+            PLANNER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.planner // "claude-sonnet-4-5-20250929"' 2>/dev/null)
+            REVIEWER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.reviewer // "claude-sonnet-4-5-20250929"' 2>/dev/null)
+            PLAN_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.planDepth // "light"' 2>/dev/null)
+            CODE_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.codeDepth // "medium"' 2>/dev/null)
+            REVIEW_MODE=$(echo "$ROUTE_JSON" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
+          fi
+        fi
         echo "  Challenge override: coder=$CODER_MODEL (from challengeModel)"
+      else
+        PLANNER_MODEL="claude-sonnet-4-5-20250929"
+        CODER_MODEL="claude-opus-4-6"
+        REVIEWER_MODEL="claude-sonnet-4-5-20250929"
+        if [[ -f "$ROUTE_TOOL" ]] && [[ -f "$TASK_JSON" ]]; then
+          ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$TASK_JSON" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+          if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
+            PLANNER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.planner // "claude-sonnet-4-5-20250929"' 2>/dev/null)
+            CODER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.coder // "claude-opus-4-6"' 2>/dev/null)
+            REVIEWER_MODEL=$(echo "$ROUTE_JSON" | jq -r '.reviewer // "claude-sonnet-4-5-20250929"' 2>/dev/null)
+            PLAN_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.planDepth // "light"' 2>/dev/null)
+            CODE_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.codeDepth // "medium"' 2>/dev/null)
+            REVIEW_MODE=$(echo "$ROUTE_JSON" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
+            echo "  Workflow route: planner=$PLANNER_MODEL ($PLAN_DEPTH), coder=$CODER_MODEL ($CODE_DEPTH), reviewer=$REVIEWER_MODEL ($REVIEW_MODE)"
+          else
+            echo "  Workflow routing unavailable, using defaults"
+          fi
+        fi
       fi
 
       # Write .routing-complete (consumed by monitor for phase transitions)
