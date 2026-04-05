@@ -20,15 +20,13 @@ runTool({
     const [identifier, labelName] = positional;
 
     if (!identifier || !labelName) {
-      console.error('Error: Both issue identifier and label name are required');
-      process.exit(1);
+      throw new Error('Both issue identifier and label name are required');
     }
 
     // Get the issue to find its team ID
     const issue = await getIssueForLabeling(identifier);
     if (!issue) {
-      console.error(`Issue not found: ${identifier}`);
-      process.exit(1);
+      throw new Error(`Issue not found: ${identifier}`);
     }
 
     const teamId = issue.team.id;
@@ -36,8 +34,7 @@ runTool({
     // Get or create the label
     const label = await getOrCreateLabel(labelName, teamId);
     if (!label) {
-      console.error(`Failed to get or create label: ${labelName}`);
-      process.exit(1);
+      throw new Error(`Failed to get or create label: ${labelName}`);
     }
 
     // Get current label IDs
@@ -46,7 +43,7 @@ runTool({
     // Check if label is already added
     if (currentLabelIds.includes(label.id)) {
       console.log(`Label "${labelName}" already exists on ${identifier}`);
-      process.exit(0);
+      return;
     }
 
     // Add the new label to the existing ones
@@ -56,8 +53,7 @@ runTool({
     if (result.success) {
       console.log(`✓ Added label "${labelName}" to ${identifier}`);
     } else {
-      console.error(`Failed to add label to ${identifier}`);
-      process.exit(1);
+      throw new Error(`Failed to add label to ${identifier}`);
     }
   },
 });

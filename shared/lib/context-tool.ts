@@ -16,9 +16,7 @@ export function getContextDir(repoDir: string): string {
 export function requireContextDir(repoDir: string): string {
   const contextDir = getContextDir(repoDir);
   if (!existsSync(contextDir)) {
-    console.error('Error: No subsystem specs found');
-    console.error('Initialize first: wavemill context init');
-    process.exit(1);
+    throw new Error('No subsystem specs found. Initialize first: wavemill context init');
   }
   return contextDir;
 }
@@ -34,17 +32,15 @@ export function readContextSpec(repoDir: string, subsystemId: string): { context
   const contextDir = getContextDir(repoDir);
   const specPath = join(contextDir, `${subsystemId}.md`);
   if (!existsSync(specPath)) {
-    console.error(`Error: Subsystem spec not found: ${specPath}`);
-    console.error('');
-    console.error('Available subsystems:');
-    if (existsSync(contextDir)) {
-      readdirSync(contextDir)
-        .filter((file) => file.endsWith('.md'))
-        .forEach((file) => console.error(`  - ${file.replace('.md', '')}`));
-    } else {
-      console.error('  (none found)');
-    }
-    process.exit(1);
+    const available = existsSync(contextDir)
+      ? readdirSync(contextDir)
+          .filter((file) => file.endsWith('.md'))
+          .map((file) => file.replace('.md', ''))
+      : [];
+    const list = available.length > 0
+      ? `Available subsystems: ${available.join(', ')}`
+      : 'No subsystems found';
+    throw new Error(`Subsystem spec not found: ${specPath}. ${list}`);
   }
 
   return {

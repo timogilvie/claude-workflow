@@ -99,8 +99,7 @@ Deduplication:
       console.log(formatAggregationReport(result));
       console.log(`\nOutput: ${outputPath}`);
     } catch (error) {
-      console.error(`Error: ${errorMessage(error)}`);
-      process.exit(1);
+      throw new Error(errorMessage(error));
     }
   },
 });

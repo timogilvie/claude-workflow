@@ -139,8 +139,7 @@ runTool({
     const contextDir = getContextDir(repoDir);
 
     if (!existsSync(contextDir)) {
-      console.error('No context directory found. Run context-init first.');
-      process.exit(1);
+      throw new Error('No context directory found. Run context-init first.');
     }
 
     const specFiles = readdirSync(contextDir).filter(f => f.endsWith('.md'));

@@ -6,21 +6,20 @@ import { parseConstraints } from '../shared/lib/constraint-parser.ts';
 import { generateRules } from '../shared/lib/rule-generator.ts';
 import { saveConstraintRules, constraintRulesExist } from '../shared/lib/constraint-storage.ts';
 import { toKebabCase } from '../shared/lib/string-utils.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 
 async function generateConstraintRules(issueId: string, taskPacketPath: string | null, force: boolean) {
   if (!issueId) {
-    console.error('❌ Error: Issue ID is required');
-    process.exit(1);
-  }
-    process.exit(1);
+    throw new Error('Issue ID is required');
   }
 
   // Check if rules already exist
   if (constraintRulesExist(issueId) && !force) {
-    console.error(`❌ Error: Constraint rules already exist for ${issueId}`);
-    console.error(`   Location: constraints/${issueId}/\n`);
-    console.error('Use --force to overwrite existing rules\n');
-    process.exit(1);
+    throw new Error(
+      `Constraint rules already exist for ${issueId}\n` +
+      `   Location: constraints/${issueId}/\n` +
+      `Use --force to overwrite existing rules`
+    );
   }
 
   // Determine task packet path
@@ -55,11 +54,12 @@ async function generateConstraintRules(issueId: string, taskPacketPath: string |
     }
 
     if (!taskPacketPath) {
-      console.error(`❌ Error: Could not find task packet for ${issueId}`);
-      console.error('   Searched locations:');
-      possiblePaths.forEach(p => console.error(`     - ${p}`));
-      console.error('\nSpecify path explicitly with --file option\n');
-      process.exit(1);
+      const searched = possiblePaths.map(p => `     - ${p}`).join('\n');
+      throw new Error(
+        `Could not find task packet for ${issueId}\n` +
+        `   Searched locations:\n${searched}\n` +
+        `\nSpecify path explicitly with --file option`
+      );
     }
   }
 
@@ -76,9 +76,8 @@ async function generateConstraintRules(issueId: string, taskPacketPath: string |
       // Not JSON, use as-is
       taskPacketContent = content;
     }
-  } catch (error: any) {
-    console.error(`❌ Error reading task packet: ${error.message}\n`);
-    process.exit(1);
+  } catch (error) {
+    throw new Error(`Error reading task packet: ${errorMessage(error)}`);
   }
 
   // Parse constraints
@@ -91,9 +90,10 @@ async function generateConstraintRules(issueId: string, taskPacketPath: string |
   }
 
   if (parseResult.constraints.length === 0) {
-    console.error(`\n❌ Error: No constraints found in task packet`);
-    console.error('   Make sure the task packet includes an "Implementation Constraints" section\n');
-    process.exit(1);
+    throw new Error(
+      `No constraints found in task packet\n` +
+      `   Make sure the task packet includes an "Implementation Constraints" section`
+    );
   }
 
   console.log(`\n✓ Found ${parseResult.constraints.length} constraints:`);

@@ -24,8 +24,7 @@ runTool({
 checks if they match expected agent settings.`,
   run({ args }) {
     if (args.agent && args.agent !== 'claude' && args.agent !== 'codex') {
-      console.error(`Invalid agent: ${args.agent}. Must be 'claude' or 'codex'`);
-      process.exit(1);
+      throw new Error(`Invalid agent: ${args.agent}. Must be 'claude' or 'codex'`);
     }
 
     const repoDir = process.cwd();
@@ -49,8 +48,7 @@ checks if they match expected agent settings.`,
     }
 
     if (!configResult.valid) {
-      console.log('\n❌ Validation failed');
-      process.exit(1);
+      throw new Error('Validation failed');
     }
 
     console.log('\n✅ Verification complete');

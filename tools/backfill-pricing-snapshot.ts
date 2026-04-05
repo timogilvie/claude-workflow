@@ -211,7 +211,7 @@ runTool({
     }
 
     if (totalStats.errors.length > 0) {
-      process.exit(1);
+      throw new Error(`Backfill completed with ${totalStats.errors.length} error(s)`);
     }
   },
 });

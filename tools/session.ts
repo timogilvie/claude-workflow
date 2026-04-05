@@ -116,8 +116,7 @@ All operations are non-intrusive — failures print warnings but exit 0.`,
           await handleGet(sessionId, args);
           break;
         default:
-          console.warn(`[session] Unknown subcommand: ${subcommand || '(none)'}`);
-          process.exit(1);
+          throw new Error(`Unknown subcommand: ${subcommand || '(none)'}`);
       }
     } catch (err) {
       const message = errorMessage(err);

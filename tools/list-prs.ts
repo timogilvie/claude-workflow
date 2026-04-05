@@ -86,15 +86,13 @@ runTool({
     // Validate state
     const state = args.state || 'open';
     if (!['open', 'closed', 'all'].includes(state)) {
-      console.error(`Error: Invalid state "${state}". Must be one of: open, closed, all`);
-      process.exit(1);
+      throw new Error(`Invalid state "${state}". Must be one of: open, closed, all`);
     }
 
     // Validate and parse limit
     const limit = parseInt(args.limit || '50', 10);
     if (isNaN(limit) || limit < 1) {
-      console.error(`Error: Invalid limit "${args.limit}". Must be a positive number.`);
-      process.exit(1);
+      throw new Error(`Invalid limit "${args.limit}". Must be a positive number.`);
     }
 
     // Fetch PRs from GitHub

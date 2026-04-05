@@ -1,5 +1,6 @@
 #!/usr/bin/env -S npx tsx
 import { runTool } from '../shared/lib/tool-runner.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 import { getPullRequest, getPullRequestDiff } from '../shared/lib/github.js';
 import { findTaskPacket, findPlan, gatherDesignContext, analyzeDiffMetadata, type ReviewContext } from '../shared/lib/review-context-gatherer.ts';
 import { runReview, type ReviewResult, type ReviewFinding, type ReviewerPersona } from '../shared/lib/review-engine.ts';
@@ -175,8 +176,7 @@ The review focuses on major issues:
   async run({ args, positional }) {
     const prNumber = positional[0] ? parseInt(positional[0], 10) : 0;
     if (!prNumber) {
-      console.error('Error: PR number is required');
-      process.exit(1);
+      throw new Error('PR number is required');
     }
 
     const repoDir = process.cwd();
@@ -194,9 +194,7 @@ The review focuses on major issues:
       const invalid = parsed.filter(p => !valid.includes(p));
 
       if (invalid.length > 0) {
-        console.error(`Error: Invalid reviewer personas: ${invalid.join(', ')}`);
-        console.error(`Valid options: ${valid.join(', ')}`);
-        process.exit(1);
+        throw new Error(`Invalid reviewer personas: ${invalid.join(', ')}\nValid options: ${valid.join(', ')}`);
       }
 
       reviewers = parsed;
@@ -253,10 +251,10 @@ The review focuses on major issues:
       });
 
       displayResults(result, prNumber, pr.title);
-      process.exit(result.verdict === 'ready' ? 0 : 1);
+      process.exitCode = result.verdict === 'ready' ? 0 : 1;
+      return;
     } catch (error) {
-      console.error(`\n❌ Error: ${(error as Error).message}\n`);
-      process.exit(1);
+      throw new Error(`Review failed: ${errorMessage(error)}`);
     }
   },
 });

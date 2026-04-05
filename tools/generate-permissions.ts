@@ -35,8 +35,7 @@ runTool({
   run({ args }) {
     const agent = args.agent as PermissionAgent | undefined;
     if (agent !== 'claude' && agent !== 'codex') {
-      console.error('Error: --agent must be "claude" or "codex"');
-      process.exit(1);
+      throw new Error('--agent must be "claude" or "codex"');
     }
 
     const repoDir = process.cwd();

@@ -87,8 +87,7 @@ async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
       console.log(`   Backup: ${backupPath}`);
     }
   } catch (err) {
-    console.error(`✗ Failed to write config: ${errorMessage(err)}`);
-    process.exit(1);
+    throw new Error(`Failed to write config: ${errorMessage(err)}`);
   }
 }
 

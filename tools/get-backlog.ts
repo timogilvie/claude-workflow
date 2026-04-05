@@ -91,19 +91,14 @@ runTool({
   async run({ positional }) {
     const projectName = positional[0];
 
-    try {
-      if (projectName) {
-        console.log(`Fetching backlog for project: ${projectName}`);
-        await displayBacklog(projectName);
-      } else {
-        const selectedProject = await selectProject();
-        if (selectedProject) {
-          await displayBacklog(selectedProject);
-        }
+    if (projectName) {
+      console.log(`Fetching backlog for project: ${projectName}`);
+      await displayBacklog(projectName);
+    } else {
+      const selectedProject = await selectProject();
+      if (selectedProject) {
+        await displayBacklog(selectedProject);
       }
-    } catch (error) {
-      console.error('Error:', error);
-      process.exit(1);
     }
   },
 });

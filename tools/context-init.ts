@@ -13,9 +13,7 @@ async function main(repoDir: string, isForce: boolean, isInteractive: boolean) {
   // Check if .wavemill directory exists
   const wavemillDir = getWavemillDir(repoDir);
   if (!existsSync(wavemillDir)) {
-    console.error('Error: .wavemill directory not found');
-    console.error('Initialize project context first: npx tsx tools/init-project-context.ts');
-    process.exit(1);
+    throw new Error('.wavemill directory not found\nInitialize project context first: npx tsx tools/init-project-context.ts');
   }
 
   // Check if context directory exists
@@ -36,7 +34,8 @@ async function main(repoDir: string, isForce: boolean, isInteractive: boolean) {
       console.log('');
       console.log('To check for stale documentation:');
       console.log('  wavemill context check');
-      process.exit(2); // Exit code 2 = already initialized
+      process.exitCode = 2; // Exit code 2 = already initialized
+      return;
     }
   }
 
@@ -56,7 +55,7 @@ async function main(repoDir: string, isForce: boolean, isInteractive: boolean) {
 
   if (subsystems.length === 0) {
     console.log('No subsystems detected (repo may be too small or unstructured)');
-    process.exit(0);
+    return;
   }
 
   console.log(`Found ${subsystems.length} subsystem(s):`);

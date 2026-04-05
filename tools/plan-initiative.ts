@@ -5,7 +5,6 @@ import path from "node:path";
 import { listInitiatives } from '../shared/lib/initiative-lister.ts';
 import { decomposeInitiative } from '../shared/lib/initiative-decomposer.ts';
 import { getPlanConfig } from '../shared/lib/config.ts';
-import { errorMessage } from '../shared/lib/error-utils.ts';
 
 const PLAN_MODEL = process.env.PLAN_MODEL || 'claude-opus-4-6';
 
@@ -45,16 +44,15 @@ function getTimeoutSetting(repoRoot: string): number | undefined {
   return planConfig.timeout; // Default: undefined (smart default in plan-decomposer)
 }
 
-if (!process.env.LINEAR_API_KEY) {
-  console.error('Error: LINEAR_API_KEY not found in environment');
-  process.exit(1);
-}
-
 // ============================================================================
 // SUB-COMMANDS
 // ============================================================================
 
 async function handleList(args: any): Promise<void> {
+  if (!process.env.LINEAR_API_KEY) {
+    throw new Error('LINEAR_API_KEY not found in environment');
+  }
+
   const projectName = args.project as string | undefined;
   const maxDisplay = args['max-display'] ? parseInt(args['max-display'] as string) : 9;
 
@@ -65,10 +63,13 @@ async function handleList(args: any): Promise<void> {
 }
 
 async function handleDecompose(args: any): Promise<void> {
+  if (!process.env.LINEAR_API_KEY) {
+    throw new Error('LINEAR_API_KEY not found in environment');
+  }
+
   const initiativeId = args.initiative as string;
   if (!initiativeId) {
-    console.error('Error: --initiative <id> is required');
-    process.exit(1);
+    throw new Error('--initiative <id> is required');
   }
 
   const projectName = args.project as string | undefined;
@@ -104,9 +105,7 @@ async function handleDecompose(args: any): Promise<void> {
     // For dry-run, we need to handle decomposition differently
     // because decomposeInitiative always creates issues
     // TODO: Could refactor decomposeInitiative to support dry-run mode
-    console.log('Dry-run mode not yet supported with new architecture.');
-    console.log('Use decompose without --dry-run to create issues in Linear.');
-    process.exit(1);
+    throw new Error('Dry-run mode not yet supported with new architecture. Use decompose without --dry-run to create issues in Linear.');
   }
 
   await decomposeInitiative({
@@ -174,26 +173,18 @@ Environment Variables:
     const subCommand = positional[0];
 
     if (!subCommand) {
-      console.error('Error: Subcommand required (list or decompose)');
-      process.exit(1);
+      throw new Error('Subcommand required (list or decompose)');
     }
 
-    try {
-      switch (subCommand) {
-        case 'list':
-          await handleList(args);
-          break;
-        case 'decompose':
-          await handleDecompose(args);
-          break;
-        default:
-          console.error(`Unknown sub-command: ${subCommand}`);
-          process.exit(1);
-      }
-    } catch (error) {
-      const errorMsg = errorMessage(error);
-      console.error('Error:', errorMsg);
-      process.exit(1);
+    switch (subCommand) {
+      case 'list':
+        await handleList(args);
+        break;
+      case 'decompose':
+        await handleDecompose(args);
+        break;
+      default:
+        throw new Error(`Unknown sub-command: ${subCommand}`);
     }
   },
 });
