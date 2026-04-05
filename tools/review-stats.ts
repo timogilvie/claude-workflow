@@ -56,8 +56,7 @@ Filter Options:
     if (args.outcome) {
       const outcome = String(args.outcome);
       if (!['resolved', 'escalated', 'error'].includes(outcome)) {
-        console.error(`Error: Invalid outcome '${outcome}'. Must be one of: resolved, escalated, error`);
-        process.exit(1);
+        throw new Error(`Invalid outcome '${outcome}'. Must be one of: resolved, escalated, error`);
       }
       filterOptions.outcome = outcome as 'resolved' | 'escalated' | 'error';
     }

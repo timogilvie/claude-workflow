@@ -61,8 +61,7 @@ runTool({
     console.log('');
 
     if (!existsSync(evalsFile)) {
-      console.error(`Error: Eval file not found at ${evalsFile}`);
-      process.exit(1);
+      throw new Error(`Eval file not found at ${evalsFile}`);
     }
 
     // Read all records
@@ -77,7 +76,7 @@ runTool({
     if (result.duplicateGroups.size === 0) {
       console.log('');
       console.log('✓ No duplicates found - file is already deduplicated');
-      process.exit(0);
+      return;
     }
 
     console.log(formatDuplicateReport(result));
@@ -89,7 +88,7 @@ runTool({
       console.log('');
       console.log('Dry run mode - no changes made');
       console.log('Run without --dry-run to apply changes');
-      process.exit(0);
+      return;
     }
 
     // Create backup

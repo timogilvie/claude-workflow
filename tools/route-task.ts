@@ -47,15 +47,12 @@ runTool({
       try {
         prompt = readTaskPromptFromFile(args.file);
       } catch (err) {
-        console.error(`Error reading file: ${(err as Error).message}`);
-        process.exit(1);
+        throw new Error(`Failed to read file: ${err instanceof Error ? err.message : String(err)}`);
       }
     } else if (positional.length > 0) {
       prompt = positional.join(' ');
     } else {
-      console.error('Error: Provide a task prompt as argument or via --file');
-      console.error('Run with --help for usage information.');
-      process.exit(1);
+      throw new Error('Provide a task prompt as argument or via --file. Run with --help for usage information.');
     }
 
     const repoDir = args['repo-dir'] || process.cwd();

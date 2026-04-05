@@ -38,8 +38,7 @@ Load into pandas:
     const format = (args.format || 'jsonl') as ExportFormat;
 
     if (format !== 'csv' && format !== 'jsonl') {
-      console.error(`Error: unsupported format "${format}". Use "csv" or "jsonl".`);
-      process.exit(1);
+      throw new Error(`unsupported format "${format}". Use "csv" or "jsonl".`);
     }
 
     const records = readEvalRecords({
@@ -53,7 +52,7 @@ Load into pandas:
 
     if (records.length === 0) {
       console.error('No eval records found matching the given filters.');
-      process.exit(0);
+      return;
     }
 
     const output = exportEvalDataset({

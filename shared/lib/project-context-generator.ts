@@ -216,9 +216,7 @@ export async function generateProjectContext(opts: { repoDir: string; force: boo
 
   const contextPath = join(wavemillDir, 'project-context.md');
   if (existsSync(contextPath) && !force) {
-    console.error('Error: project-context.md already exists');
-    console.error('Use --force to overwrite');
-    process.exit(1);
+    throw new Error('project-context.md already exists. Use --force to overwrite');
   }
 
   console.log('Analyzing repository structure...');

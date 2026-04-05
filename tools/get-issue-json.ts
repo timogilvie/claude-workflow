@@ -22,8 +22,7 @@ runTool({
     const identifier = positional[0];
 
     if (!identifier) {
-      console.error('Error: Issue identifier is required');
-      process.exit(1);
+      throw new Error('Issue identifier is required');
     }
 
     await printIssue(identifier, { json: true });

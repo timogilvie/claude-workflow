@@ -64,9 +64,7 @@ Requires:
         console.log(JSON.stringify(record, null, 2));
       }
     } catch (error) {
-      const errorMsg = errorMessage(error);
-      console.error(`Error: ${errorMsg}`);
-      process.exit(1);
+      throw new Error(errorMessage(error));
     }
   },
 });
