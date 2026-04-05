@@ -293,11 +293,18 @@ export function routeWorkflowStageAware(
   const repoDir = options?.repoDir;
   const characteristics = analyzePrompt(prompt);
   const riskScore = computeRiskScore(prompt, characteristics);
-  const stageAwareDecision = routeStageAware(prompt, {
-    repoDir,
-    modelsAvailable: options?.modelsAvailable,
-    maxCostUsd: options?.maxCostUsd,
-  });
+
+  let stageAwareDecision;
+  try {
+    stageAwareDecision = routeStageAware(prompt, {
+      repoDir,
+      modelsAvailable: options?.modelsAvailable,
+      maxCostUsd: options?.maxCostUsd,
+    });
+  } catch (error) {
+    console.warn('[workflow-router] Stage-aware routing failed, falling back to heuristic:', error);
+    stageAwareDecision = null;
+  }
 
   if (!stageAwareDecision) {
     const fallback = routeWorkflow(prompt, options);
