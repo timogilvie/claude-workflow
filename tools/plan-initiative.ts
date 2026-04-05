@@ -44,15 +44,15 @@ function getTimeoutSetting(repoRoot: string): number | undefined {
   return planConfig.timeout; // Default: undefined (smart default in plan-decomposer)
 }
 
-if (!process.env.LINEAR_API_KEY) {
-  throw new Error('LINEAR_API_KEY not found in environment');
-}
-
 // ============================================================================
 // SUB-COMMANDS
 // ============================================================================
 
 async function handleList(args: any): Promise<void> {
+  if (!process.env.LINEAR_API_KEY) {
+    throw new Error('LINEAR_API_KEY not found in environment');
+  }
+
   const projectName = args.project as string | undefined;
   const maxDisplay = args['max-display'] ? parseInt(args['max-display'] as string) : 9;
 
@@ -63,6 +63,10 @@ async function handleList(args: any): Promise<void> {
 }
 
 async function handleDecompose(args: any): Promise<void> {
+  if (!process.env.LINEAR_API_KEY) {
+    throw new Error('LINEAR_API_KEY not found in environment');
+  }
+
   const initiativeId = args.initiative as string;
   if (!initiativeId) {
     throw new Error('--initiative <id> is required');

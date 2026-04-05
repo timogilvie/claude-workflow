@@ -23,10 +23,6 @@ import { formatValidationIssues } from '../shared/lib/validation-formatter.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 
-if (!process.env.LINEAR_API_KEY) {
-  throw new Error('LINEAR_API_KEY not found in environment');
-}
-
 runTool({
   name: 'expand-issue',
   description: 'Expand Linear issue into comprehensive task packet',
@@ -52,6 +48,10 @@ runTool({
     const issueInput = positional[0];
     if (!issueInput) {
       throw new Error('Issue ID is required');
+    }
+
+    if (!process.env.LINEAR_API_KEY) {
+      throw new Error('LINEAR_API_KEY not found in environment');
     }
 
     const shouldUpdate = !args['no-update'];
