@@ -1,0 +1,65 @@
+## Your Task: Planning Phase
+
+You are in the **PLANNING PHASE** of a multi-phase workflow (recommended depth: {{PLAN_DEPTH}}).
+
+Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
+
+### Your Responsibilities
+
+1. **Expand task packet** (if needed):
+   - Check if a detailed task packet exists in the Linear issue description
+   - If not, expand it using: npx tsx {{TOOLS_DIR}}/expand-issue.ts {{ISSUE}}
+   - This creates a comprehensive specification with requirements, constraints, and validation steps
+
+2. **Re-route after expansion** (if task was expanded):
+   - After expanding the task packet, re-run the router on the full specification:
+     npx tsx {{TOOLS_DIR}}/route-task.ts --json --file features/{{SLUG}}/selected-task.json --repo-dir $(pwd)
+   - Save the result to: features/{{SLUG}}/.post-expansion-route.json
+   - This captures how routing changes with richer context (compared to .initial-route.json from raw description)
+
+3. **Detect migrations** (if not already assigned):
+   - After expansion, check if the expanded task mentions database migrations, Alembic, schema changes, or table alterations
+   - If migration work is detected and no **ASSIGNED MIGRATION NUMBER** appears in the task packet:
+     - Write a marker file: touch features/{{SLUG}}/.migration-detected
+     - The monitor will assign a migration number and write it to: features/{{SLUG}}/.migration-number
+     - Wait briefly for the number to appear, then include it in your plan
+   - If a migration number is already assigned in the task packet, use that number
+
+4. **Research the codebase**:
+   - Understand relevant code patterns and architecture
+   - Identify files that need to be modified
+   - Note any constraints or gotchas
+
+5. **Create implementation plan**:
+   - Break down the work into logical phases
+   - Identify dependencies and ordering constraints
+   - Consider edge cases and error handling
+   - Save the plan to: features/{{SLUG}}/plan.md
+
+6. **Present plan to user**:
+   - Summarize the key points of your plan
+   - Explain your approach and any important decisions
+   - Wait for user approval
+
+7. **After approval**:
+   - Create the approval marker: features/{{SLUG}}/.plan-approved
+   - Your work is done - the next phase (coding) will be launched automatically
+
+### Planning Depth: {{PLAN_DEPTH}}
+
+{{DEPTH_GUIDANCE}}
+
+### Success Criteria
+- [ ] Task packet is complete (either existing or expanded)
+- [ ] Post-expansion route saved (if task was expanded)
+- [ ] Migration detected and flagged (if applicable)
+- [ ] Codebase research completed
+- [ ] Implementation plan created at features/{{SLUG}}/plan.md
+- [ ] User has approved the plan
+- [ ] Approval marker created at features/{{SLUG}}/.plan-approved
+
+### Important Notes
+- Do NOT implement anything in this phase - only plan
+- Do NOT run tests or make code changes
+- Focus on understanding and planning
+- If anything is unclear, ask the user for clarification before finalizing the plan

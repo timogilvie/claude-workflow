@@ -91,21 +91,27 @@ The purpose of this eval is to measure **autonomous reliability**. An agent that
 
 ## Stage Attribution
 
-In addition to the overall score, attribute quality to each workflow stage that had artifacts available. For each stage, provide a score (0.0–1.0) and a 1-2 sentence rationale explaining how that stage contributed to or detracted from the final outcome.
+In addition to the overall score, attribute quality to **all four workflow stages**. For each stage, provide a score (0.0–1.0) and a 1-2 sentence rationale explaining how that stage contributed to or detracted from the final outcome.
+
+**IMPORTANT**: Always score ALL four stages (expansion, plan, implementation, review). When stage artifacts are not available, infer the stage quality from the PR diff, commit history, intervention patterns, and overall outcome. These inferred scores are essential for model routing optimization.
 
 ### Stage Scoring Guidelines
 
-- **expansion** (only if Task Packet is provided): Did the task packet correctly and completely specify what needed to be built? Score 1.0 if the spec was clear and complete. Score lower if the spec was vague, missed requirements, or contained contradictions that led to implementation issues.
+- **expansion** (always scored): Did the task specification correctly and completely describe what needed to be built?
+  - *When Task Packet is provided*: Score based on spec clarity, completeness, and whether it led the agent in the right direction.
+  - *When Task Packet is NOT provided*: Infer from the PR diff and outcome. Did the agent build the right thing? If the implementation matches the original task prompt well, the expansion/specification was adequate (score 0.7–0.9). If the agent missed requirements or built the wrong thing, the specification was likely unclear (score 0.3–0.6).
 
-- **plan** (only if Implementation Plan is provided): Did the plan lead the implementation in the right direction? Score 1.0 if the plan was sound and the implementation followed it successfully. Score lower if the plan missed important considerations, led to rework, or the implementation had to deviate significantly.
+- **plan** (always scored): Did the planning/approach lead the implementation in the right direction?
+  - *When Implementation Plan is provided*: Score based on whether the plan was sound and the implementation followed it successfully.
+  - *When Implementation Plan is NOT provided*: Infer from the PR diff and commit history. Was the approach well-structured (logical file changes, good decomposition)? Or are there signs of rework, wrong-direction commits, or thrashing? A clean, well-organized diff with no rework suggests good planning (score 0.7–0.9). Multiple reverts or approach changes suggest poor planning (score 0.3–0.6). For single-shot autonomous workflows with no plan artifact, score based on whether the agent chose a reasonable approach.
 
 - **implementation** (always scored): Given the spec and plan, did the code correctly implement what was asked? Score 1.0 if the code is correct, complete, and production-ready. Score lower for bugs, missing edge cases, or poor code quality — but only penalize the implementation for issues that were NOT caused by a bad spec or plan.
 
-- **review** (only if Self-Review Summary is provided): Did self-review catch real issues before human review? Score 1.0 if self-review found and fixed all significant issues. Score lower if human review or post-PR interventions uncovered problems that self-review should have caught.
+- **review** (always scored): Did the review process catch issues before human review?
+  - *When Self-Review Summary is provided*: Score based on whether self-review found and fixed significant issues before human review.
+  - *When Self-Review Summary is NOT provided*: Infer from post-PR intervention patterns. No post-PR commits and no review comments = review was effective or unnecessary (score 0.8–0.95). Post-PR commits fixing bugs = review missed issues (score 0.3–0.6). Review comments that led to fixes = review process worked but agent's self-review didn't catch them (score 0.5–0.7). For workflows where no review was run, score based on whether one would have helped — if the PR was clean, score 0.7–0.8 (review wasn't needed); if post-merge issues arose, score 0.3–0.5 (review should have been run).
 
-**Key attribution principle**: The stage scores should help identify WHERE in the pipeline quality was lost. If the overall score is 0.7, the stage scores should make it clear whether the spec was the problem (low expansion, higher implementation) or the code was the problem (high expansion, low implementation).
-
-Only include stages for which artifacts were provided. Always include `implementation`.
+**Key attribution principle**: The stage scores should help identify WHERE in the pipeline quality was lost. If the overall score is 0.7, the stage scores should make it clear whether the spec was the problem (low expansion, higher implementation) or the code was the problem (high expansion, low implementation). Stage scores must sum to a coherent story — they should explain the overall score, not just repeat it.
 
 ---
 
@@ -130,6 +136,6 @@ Respond with **only** a JSON object (no markdown fences, no preamble):
 - `score`: A number from 0.0 to 1.0 reflecting overall execution quality
 - `rationale`: A concise, human-readable explanation justifying the score. **Must reference specific intervention events if any are present.**
 - `interventionFlags`: Array of strings describing notable interventions (empty array if none). Use the format `"type:description"` (e.g., `"review_comment:missing error handling"`, `"post_pr_commit:fixed lint errors"`)
-- `stageScores`: Object with per-stage attribution scores. Only include stages for which artifacts were provided above. Always include `implementation`.
+- `stageScores`: Object with per-stage attribution scores. **Always include all four stages** (expansion, plan, implementation, review). When artifacts are not available for a stage, infer quality from the PR diff, intervention patterns, and overall outcome.
 
 Output ONLY the JSON object. No other text.

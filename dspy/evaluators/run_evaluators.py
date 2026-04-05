@@ -28,14 +28,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from data_loader import default_evals_path, load_eval_examples, stratified_split
+from coder_evaluator import run_evaluation as run_coder
 from eval_judge_evaluator import run_evaluation as run_eval_judge
 from issue_writer_evaluator import run_evaluation as run_issue_writer
 from model_router_evaluator import run_evaluation as run_model_router
+from planner_evaluator import run_evaluation as run_planner
+from reviewer_evaluator import run_evaluation as run_reviewer
 
 EVALUATORS = {
     "issue-writer": run_issue_writer,
     "eval-judge": run_eval_judge,
     "model-router": run_model_router,
+    "planner": run_planner,
+    "coder": run_coder,
+    "reviewer": run_reviewer,
 }
 
 
@@ -139,7 +145,16 @@ Examples:
     print()
 
     if args.dry_run:
-        print("Dry run complete. No LLM calls made.")
+        # Show per-evaluator dry-run stats
+        evaluators_to_show = {args.evaluator: EVALUATORS[args.evaluator]} if args.evaluator else EVALUATORS
+        for name, run_fn in evaluators_to_show.items():
+            print(f"\n{'─' * 40}")
+            print(f"  {name}:")
+            try:
+                run_fn(evals_path=str(evals_path), skip_aggregate=True, dry_run=True)
+            except Exception as e:
+                print(f"    Error: {e}")
+        print("\nDry run complete. No LLM calls made.")
         return
 
     # Determine which evaluators to run

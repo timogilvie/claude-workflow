@@ -1879,10 +1879,68 @@ maybe_run_challenge_comparison() {
   rm -f "/tmp/${SESSION}-compare-${pair_id}.log"
 }
 
+# Archive stage artifacts from worktree before cleanup.
+# Copies plan.md, task-packet.md, and routing decision to a durable location
+# so post-merge eval can still access them after the worktree is removed.
+#
+# Args: $1 = issue ID, $2 = slug
+archive_stage_artifacts() {
+  local issue="$1" slug="$2"
+  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local archive_dir="${REPO_DIR}/.wavemill/evals/artifacts/${issue}"
+
+  [[ -d "$wt_dir" ]] || return 0
+
+  # Create archive dir
+  mkdir -p "$archive_dir" 2>/dev/null || return 0
+
+  # Search both features/ and bugs/ dirs in the worktree
+  local feature_dir=""
+  for dir in features bugs; do
+    if [[ -d "$wt_dir/$dir/$slug" ]]; then
+      feature_dir="$wt_dir/$dir/$slug"
+      break
+    fi
+  done
+
+  if [[ -n "$feature_dir" ]]; then
+    # Plan
+    [[ -f "$feature_dir/plan.md" ]] && \
+      cp "$feature_dir/plan.md" "$archive_dir/plan.md" 2>/dev/null || true
+
+    # Task packet (full or split format)
+    if [[ -f "$feature_dir/task-packet.md" ]]; then
+      cp "$feature_dir/task-packet.md" "$archive_dir/task-packet.md" 2>/dev/null || true
+    elif [[ -f "$feature_dir/task-packet-header.md" ]]; then
+      cp "$feature_dir/task-packet-header.md" "$archive_dir/task-packet-header.md" 2>/dev/null || true
+      [[ -f "$feature_dir/task-packet-details.md" ]] && \
+        cp "$feature_dir/task-packet-details.md" "$archive_dir/task-packet-details.md" 2>/dev/null || true
+    fi
+
+    # Routing decision
+    [[ -f "$feature_dir/.routing-complete" ]] && \
+      cp "$feature_dir/.routing-complete" "$archive_dir/routing-complete.json" 2>/dev/null || true
+
+    # Post-expansion route
+    [[ -f "$feature_dir/.post-expansion-route.json" ]] && \
+      cp "$feature_dir/.post-expansion-route.json" "$archive_dir/post-expansion-route.json" 2>/dev/null || true
+  fi
+
+  # Count archived files for logging
+  local count
+  count=$(find "$archive_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$count" -gt 0 ]]; then
+    log "  ✓ Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
+  fi
+}
+
 cleanup_completed_task() {
   local issue="$1"
   local slug="$2"
   local completion_reason="${3:-}"
+
+  # Archive stage artifacts before removing worktree (for eval judge attribution)
+  archive_stage_artifacts "$issue" "$slug"
 
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
