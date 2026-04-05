@@ -317,6 +317,12 @@ Read specific sections on-demand as you plan and implement:
         fi
       fi
 
+      # If this is a challenge task, the challenge model IS the coder
+      if [[ -n "$CHALLENGE_MODEL" ]]; then
+        CODER_MODEL="$CHALLENGE_MODEL"
+        echo "  Challenge override: coder=$CODER_MODEL (from challengeModel)"
+      fi
+
       # Write .routing-complete (consumed by monitor for phase transitions)
       ROUTING_FILE="$FEATURE_DIR/.routing-complete"
       jq -n \

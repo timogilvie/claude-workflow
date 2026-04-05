@@ -1326,6 +1326,12 @@ save_task_state() {
       (.tasks[$issue].challengeRole // "") as $old_challenge_role |
       (.tasks[$issue].challengeModel // "") as $old_challenge_model |
       (.tasks[$issue].linearIssueId // $issue) as $old_linear_issue |
+      (.tasks[$issue].coderModel // "") as $old_coderModel |
+      (.tasks[$issue].plannerModel // "") as $old_plannerModel |
+      (.tasks[$issue].reviewerModel // "") as $old_reviewerModel |
+      (.tasks[$issue].planDepth // "") as $old_planDepth |
+      (.tasks[$issue].codeDepth // "") as $old_codeDepth |
+      (.tasks[$issue].reviewMode // "") as $old_reviewMode |
       .tasks[$issue] = {
         slug: $slug,
         branch: $branch,
@@ -1338,6 +1344,12 @@ save_task_state() {
         challengePairId: (if $challengePair != "" then $challengePair else $old_challenge_pair end),
         challengeRole: (if $challengeRole != "" then $challengeRole else $old_challenge_role end),
         challengeModel: (if $challengeModel != "" then $challengeModel else $old_challenge_model end),
+        coderModel: $old_coderModel,
+        plannerModel: $old_plannerModel,
+        reviewerModel: $old_reviewerModel,
+        planDepth: $old_planDepth,
+        codeDepth: $old_codeDepth,
+        reviewMode: $old_reviewMode,
         phase: $old_phase,
         evalCompleted: $old_eval,
         updated: (now | todate)
@@ -2745,6 +2757,11 @@ monitor_issue_state() {
           if check_plan_approved "$SLUG"; then
             # Read routing results from state (stored during routing → planning transition)
             coder_model=$(get_task_meta "$ISSUE" "coderModel")
+            # For challenge tasks, the challenge model MUST override the routed coder
+            challenge_coder=$(get_task_meta "$ISSUE" "challengeModel")
+            if [[ -n "$challenge_coder" ]]; then
+              coder_model="$challenge_coder"
+            fi
             [[ -z "$coder_model" ]] && coder_model="claude-opus-4-6"
             code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
