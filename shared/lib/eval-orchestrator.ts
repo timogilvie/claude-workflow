@@ -30,9 +30,7 @@ import {
   formatForJudge,
   loadPenalties,
 } from './intervention-detector.ts';
-import { analyzePrDifficulty } from './difficulty-analyzer.ts';
-import { analyzeTaskContext } from './task-context-analyzer.ts';
-import { analyzeRepoContext } from './repo-context-analyzer.ts';
+import { runEvalAnalysis } from './eval-analysis.ts';
 import {
   collectCiOutcome,
   collectTestsOutcome,
@@ -213,55 +211,6 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       };
     });
 
-  const runDifficultyAnalysis = () =>
-    Promise.resolve().then(() => {
-      if (!(prNumber && evalContext.prDiff)) {
-        return null;
-      }
-
-      try {
-        console.log('\nAnalyzing PR difficulty...');
-        const difficultyData = analyzePrDifficulty({
-          prDiff: evalContext.prDiff,
-          prNumber,
-          repoDir,
-        });
-        if (difficultyData) {
-          console.log(
-            `  Difficulty: ${difficultyData.difficultyBand} ` +
-              `(${difficultyData.difficultySignals.locTouched} LOC, ` +
-              `${difficultyData.difficultySignals.filesTouched} files, ` +
-              `stratum: ${difficultyData.stratum})`
-          );
-        }
-        return difficultyData;
-      } catch (diffErr) {
-        const errorMsg = errorMessage(diffErr);
-        console.warn(`  Warning: difficulty analysis failed — ${errorMsg}`);
-        return null;
-      }
-    });
-
-  const runRepoContextAnalysis = () =>
-    Promise.resolve().then(() => {
-      try {
-        console.log('\nAnalyzing repo context...');
-        const repoContextData = analyzeRepoContext(repoDir);
-        if (repoContextData) {
-          console.log(
-            `  Repo context: ${repoContextData.primaryLanguage} / ` +
-              `${repoContextData.repoVisibility} / ` +
-              `${repoContextData.repoSize?.fileCount || 0} files`
-          );
-        }
-        return repoContextData;
-      } catch (repoErr) {
-        const errorMsg = errorMessage(repoErr);
-        console.warn(`  Warning: repo context analysis failed — ${errorMsg}`);
-        return null;
-      }
-    });
-
   const [
     {
       interventionSummary,
@@ -269,38 +218,17 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       interventionRecords,
       interventionText,
     },
-    difficultyData,
-    repoContextData,
+    { difficultyData, repoContextData, taskContextData },
   ] = await Promise.all([
     runInterventionAnalysis(),
-    runDifficultyAnalysis(),
-    runRepoContextAnalysis(),
+    runEvalAnalysis({
+      prDiff: evalContext.prDiff,
+      prNumber,
+      repoDir,
+      issueData: evalContext.issueData,
+      logPrefix: '\n',
+    }),
   ]);
-
-  // 4. Analyze task context after difficulty so complexity inputs stay aligned.
-  let taskContextData = null;
-  if (issueId || evalContext.prDiff) {
-    try {
-      console.log('\nAnalyzing task context...');
-
-      taskContextData = analyzeTaskContext({
-        issue: evalContext.issueData,
-        prDiff: evalContext.prDiff,
-        locTouched: difficultyData?.difficultySignals.locTouched,
-        filesTouched: difficultyData?.difficultySignals.filesTouched,
-      });
-
-      if (taskContextData) {
-        console.log(
-          `  Task context: ${taskContextData.taskType} / ` +
-            `${taskContextData.changeKind} / complexity ${taskContextData.complexity}`
-        );
-      }
-    } catch (taskErr) {
-      const errorMsg = errorMessage(taskErr);
-      console.warn(`  Warning: task context analysis failed — ${errorMsg}`);
-    }
-  }
 
   // 7. Collect outcome components
   console.log('\nCollecting outcome components...');
