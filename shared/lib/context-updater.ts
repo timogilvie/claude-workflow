@@ -175,8 +175,7 @@ export async function updateSubsystemSpec(opts: {
   console.log(`Found ${keyFiles.length} key file(s) in spec`);
 
   if (keyFiles.length === 0) {
-    console.error('Error: No key files found in spec');
-    process.exit(1);
+    throw new Error('No key files found in spec');
   }
 
   console.log('Reading source files...');
@@ -199,7 +198,7 @@ export async function updateSubsystemSpec(opts: {
     const approved = await confirmAction('Review the diff above.');
     if (!approved) {
       console.log('Update cancelled.');
-      process.exit(0);
+      return;
     }
   }
 

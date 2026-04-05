@@ -14,6 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { runTool } from '../shared/lib/tool-runner.ts';
+import { errorMessage } from '../shared/lib/error-utils.ts';
 import {
   recommendModel,
   loadRouterConfig,
@@ -133,15 +134,12 @@ runTool({
           prompt = content;
         }
       } catch (err) {
-        console.error(`Error reading file: ${(err as Error).message}`);
-        process.exit(1);
+        throw new Error(`Failed to read file: ${errorMessage(err)}`);
       }
     } else if (positional.length > 0) {
       prompt = positional.join(' ');
     } else {
-      console.error('Error: Provide a prompt as argument or via --file');
-      console.error('Run with --help for usage information.');
-      process.exit(1);
+      throw new Error('Provide a prompt as argument or via --file\nRun with --help for usage information.');
     }
 
     const repoDir = args['repo-dir'] || process.cwd();
@@ -153,7 +151,7 @@ runTool({
       } else {
         console.log('Model router is disabled in config (router.enabled: false)');
       }
-      process.exit(0);
+      return;
     }
 
     // Load config and get recommendation

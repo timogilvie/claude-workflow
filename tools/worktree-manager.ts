@@ -43,8 +43,7 @@ Environment:
     switch (command) {
       case 'create':
         if (!commandArgs[0]) {
-          console.error('Error: branch-name is required for create command');
-          process.exit(1);
+          throw new Error('branch-name is required for create command');
         }
         createWorktree(commandArgs[0], commandArgs[1]);
         break;
@@ -59,8 +58,7 @@ Environment:
 
       case 'remove':
         if (!commandArgs[0]) {
-          console.error('Error: branch-name is required for remove command');
-          process.exit(1);
+          throw new Error('branch-name is required for remove command');
         }
         removeWorktree(commandArgs[0], !!args['delete-branch']);
         break;
@@ -70,9 +68,7 @@ Environment:
         break;
 
       default:
-        console.error(`Error: Unknown command "${command}"`);
-        console.error('Valid commands: create, list, status, remove, prune');
-        process.exit(1);
+        throw new Error(`Unknown command "${command}"\nValid commands: create, list, status, remove, prune`);
     }
   },
 });

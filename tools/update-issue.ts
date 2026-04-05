@@ -22,16 +22,14 @@ runTool({
     const filePath = args.file;
 
     if (!filePath) {
-      console.error('Error: --file is required');
-      process.exit(1);
+      throw new Error('--file is required');
     }
 
     // Read description from file
     const description = await fs.readFile(filePath, 'utf-8');
 
     if (!description.trim()) {
-      console.error('Error: file is empty');
-      process.exit(1);
+      throw new Error('file is empty');
     }
 
     // Fetch issue to get its internal ID
@@ -46,8 +44,7 @@ runTool({
     if (result.success) {
       console.log(`Updated: ${result.issue.url}`);
     } else {
-      console.error('Update failed');
-      process.exit(1);
+      throw new Error('Update failed');
     }
   },
 });

@@ -21,18 +21,12 @@ runTool({
   async run({ args, positional }) {
     const identifier = positional[0];
     if (!identifier) {
-      console.error('Error: Issue ID is required');
-      process.exit(1);
+      throw new Error('Issue ID is required');
     }
 
-    try {
-      await autoLabelIssue(identifier, {
-        dryRun: !!args['dry-run'],
-        interactive: !!args.interactive,
-      });
-    } catch (error) {
-      console.error('❌ Error:', (error as Error).message);
-      process.exit(1);
-    }
+    await autoLabelIssue(identifier, {
+      dryRun: !!args['dry-run'],
+      interactive: !!args.interactive,
+    });
   },
 });

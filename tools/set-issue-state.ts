@@ -20,8 +20,7 @@ runTool({
     const [identifier, stateName] = positional;
 
     if (!identifier || !stateName) {
-      console.error('Error: Both identifier and state name are required');
-      process.exit(1);
+      throw new Error('Both identifier and state name are required');
     }
 
     const result = await setIssueState(identifier, stateName);
@@ -30,8 +29,7 @@ runTool({
       console.log(`✓ ${identifier} → ${stateName}`);
       console.log(`  ${result.issue.url}`);
     } else {
-      console.error('Failed to update issue state');
-      process.exit(1);
+      throw new Error('Failed to update issue state');
     }
   },
 });

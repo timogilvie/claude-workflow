@@ -60,19 +60,12 @@ Exit Codes:
     const parallel = !args['no-parallel'];
 
     if (!issueId) {
-      console.error('❌ Error: Issue ID is required\n');
-      console.error('Provide as argument or use --issue-id flag');
-      console.error('Run with --help for usage information');
-      process.exit(1);
+      throw new Error('Issue ID is required\nProvide as argument or use --issue-id flag\nRun with --help for usage information');
     }
 
     // Check if constraints exist
     if (!constraintRulesExist(issueId)) {
-      console.error(`❌ Error: No constraint rules found for issue ${issueId}`);
-      console.error(`   Expected location: constraints/${issueId}/\n`);
-      console.error('Did you generate the rules? Run:');
-      console.error(`   npx tsx tools/generate-constraint-rules.ts ${issueId}\n`);
-      process.exit(1);
+      throw new Error(`No constraint rules found for issue ${issueId}\n   Expected location: constraints/${issueId}/\n\nDid you generate the rules? Run:\n   npx tsx tools/generate-constraint-rules.ts ${issueId}`);
     }
 
     // Validate constraints
@@ -86,12 +79,10 @@ Exit Codes:
 
     // Exit with appropriate code
     if (!result.passed) {
-      process.exit(1);
+      throw new Error('One or more constraints failed');
     }
 
-    // Exit with warning if manual review required but auto-checks passed
-    if (result.manualReviewRequired) {
-      process.exit(0); // Don't fail on manual review, just notify
-    }
+    // If manual review required but auto-checks passed, exit 0 (success)
+    return;
   },
 });

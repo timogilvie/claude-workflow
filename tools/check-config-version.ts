@@ -127,7 +127,8 @@ runTool({
       }
 
       // Exit code: 0 if current/newer, 1 if needs upgrade, 2 on error
-      process.exit(result.needsUpgrade ? 1 : 0);
+      process.exitCode = result.needsUpgrade ? 1 : 0;
+      return;
     } catch (err) {
       const message = errorMessage(err);
 
@@ -142,7 +143,8 @@ runTool({
         console.error(`Error: ${message}`);
       }
 
-      process.exit(2);
+      process.exitCode = 2;
+      return;
     }
   },
 });

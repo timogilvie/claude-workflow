@@ -23,8 +23,7 @@ Preserves structure and manual edits where possible.`,
   async run({ args, positional }) {
     const subsystemId = positional[0];
     if (!subsystemId) {
-      console.error('Error: Subsystem ID is required');
-      process.exit(1);
+      throw new Error('Subsystem ID is required');
     }
     const repoDir = resolveRepoDir(positional[1]);
     await updateSubsystemSpec({

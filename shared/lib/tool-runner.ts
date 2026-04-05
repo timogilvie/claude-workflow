@@ -33,6 +33,7 @@ import { parseArgs } from 'node:util';
 import type { ParseArgsConfig } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { errorMessage } from './error-utils.ts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -310,22 +311,18 @@ export async function runTool<TOptions extends Record<string, OptionConfig>>(
       rawArgv: argv,
     });
   } catch (error) {
-    // Handle parsing errors
-    if (error instanceof Error) {
-      if (error.message.includes('Unknown option')) {
-        console.error(`Error: ${error.message}`);
-        console.error('');
-        console.error('Run with --help to see available options');
-        process.exit(1);
-      }
+    const msg = errorMessage(error);
 
-      // Other errors
-      console.error(`Error: ${error.message}`);
+    // Handle parsing errors
+    if (msg.includes('Unknown option')) {
+      console.error(`Error: ${msg}`);
+      console.error('');
+      console.error('Run with --help to see available options');
       process.exit(1);
     }
 
-    // Unknown error type
-    console.error('Error:', error);
+    // All other errors (including those thrown from run() handlers)
+    console.error(`Error: ${msg}`);
     process.exit(1);
   }
 }

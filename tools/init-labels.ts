@@ -45,8 +45,7 @@ async function initializeLabels(teamKey?: string) {
   if (teamKey) {
     const found = teams.find((t) => t.key === teamKey);
     if (!found) {
-      console.error(`❌ Team "${teamKey}" not found`);
-      process.exit(1);
+      throw new Error(`Team "${teamKey}" not found`);
     }
     targetTeam = found;
   }

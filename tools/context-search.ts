@@ -67,9 +67,7 @@ async function main(
 ) {
   const specFiles = listContextSpecPaths(repoDir);
   if (specFiles.length === 0) {
-    console.error('Error: No subsystem specs found in .wavemill/context/');
-    console.error('Initialize first: wavemill context init');
-    process.exit(1);
+    throw new Error('No subsystem specs found in .wavemill/context/\nInitialize first: wavemill context init');
   }
 
   const results = searchSubsystemSpecs(query, repoDir, {
@@ -101,8 +99,7 @@ Returns ranked results with relevant snippets.`,
   async run({ args, positional }) {
     const query = positional[0];
     if (!query) {
-      console.error('Error: Search query is required');
-      process.exit(1);
+      throw new Error('Search query is required');
     }
 
     const repoDir = resolveRepoDir(positional[1]);

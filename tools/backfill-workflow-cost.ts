@@ -19,8 +19,7 @@ function main(DRY_RUN: boolean) {
 
   const evalsFile = join(evalsDir, 'evals.jsonl');
   if (!existsSync(evalsFile)) {
-    console.error(`Evals file not found: ${evalsFile}`);
-    process.exit(1);
+    throw new Error(`Evals file not found: ${evalsFile}`);
   }
 
   const records = readJsonlFile<any>(evalsFile);
