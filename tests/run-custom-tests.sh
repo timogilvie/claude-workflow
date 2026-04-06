@@ -29,7 +29,9 @@ for f in \
   review-context-gatherer.test.ts \
   rule-generator.test.ts \
   stage-aware-router.test.ts \
+  task-descriptor-backfill.test.ts \
   task-context-analyzer.test.ts \
+  post-completion-hook.test.ts \
   task-packet-validator.test.ts \
   workflow-router.test.ts \
   workflow-cost.test.ts \

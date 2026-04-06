@@ -21,9 +21,14 @@ import { detectSubsystems } from './subsystem-detector.ts';
 import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
-import { enrichEvalRecord } from './eval-record-builder.ts';
+import { fetchRoutingCompleteRaw } from './eval-context-gatherer.ts';
+import { attachStageOutcomes, enrichEvalRecord } from './eval-record-builder.ts';
+import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, formatRepoContextDisplay, formatInterventionDisplay } from './eval-summary-printer.ts';
 import { errorMessage } from './error-utils.ts';
+import type { EvalRecord, InterventionRecord, RoutingDecision, TaskContext, RepoContext } from './eval-schema.ts';
+import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
+import type { WorkflowCostOutcome } from './workflow-cost.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -39,6 +44,86 @@ export interface PostCompletionContext {
   agentType?: string;
   solutionModel?: string;
   challengePairId?: string;
+}
+
+interface PostCompletionEnrichmentInput {
+  repoDir: string;
+  issueId?: string;
+  branchName?: string;
+  worktreePath?: string;
+  agentType?: string;
+  challengePairId?: string;
+  originalPrompt: string;
+  prDiff: string;
+  record: EvalRecord;
+  difficultyData: DifficultyAnalysis | null;
+  taskContextData: TaskContext | null;
+  repoContextData: RepoContext | null;
+  costOutcome: WorkflowCostOutcome | null;
+  interventionRecords: InterventionRecord[];
+  routingDecision?: RoutingDecision;
+}
+
+export function buildTaskDescriptorForPostCompletion(
+  input: Omit<PostCompletionEnrichmentInput, 'agentType' | 'challengePairId'>,
+) {
+  attachStageOutcomes(
+    input.record,
+    input.record.metadata?.stageScores as Record<string, { score: number; rationale: string }> | undefined,
+  );
+
+  const slug = input.branchName?.replace(/^(task|bug)\//, '') || input.issueId?.toLowerCase() || '';
+  const routingComplete = slug
+    ? fetchRoutingCompleteRaw(input.repoDir, slug, input.worktreePath)
+    : null;
+  const workflowCost = input.costOutcome?.status === 'success'
+    ? input.costOutcome.totalCostUsd
+    : input.record.workflowCost;
+  const workflowTokenUsage = input.costOutcome?.status === 'success'
+    ? input.costOutcome.models
+    : input.record.workflowTokenUsage;
+
+  return buildTaskDescriptor({
+    originalPrompt: input.originalPrompt,
+    prDiff: input.prDiff,
+    taskContext: input.taskContextData || undefined,
+    repoContext: input.repoContextData || undefined,
+    difficultySignals: input.difficultyData?.difficultySignals || undefined,
+    routingDecision: input.routingDecision || undefined,
+    routingComplete: routingComplete || undefined,
+    stageOutcomes: input.record.stageOutcomes || undefined,
+    workflowCost: workflowCost || undefined,
+    workflowTokenUsage: workflowTokenUsage || undefined,
+    score: input.record.score || undefined,
+    timeSeconds: input.record.timeSeconds || undefined,
+    interventionCount: input.record.interventionCount || undefined,
+    interventions: input.interventionRecords || undefined,
+    modelsAvailable: ['claude-sonnet-4-5-20250929', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
+    objective: 'balanced',
+  });
+}
+
+export function enrichPostCompletionRecord(
+  record: EvalRecord,
+  input: PostCompletionEnrichmentInput,
+): void {
+  let taskDescriptor = null;
+  try {
+    taskDescriptor = buildTaskDescriptorForPostCompletion(input);
+  } catch (err) {
+    const errorMsg = errorMessage(err);
+    console.warn(`Post-completion eval: failed to build task descriptor — ${errorMsg}`);
+  }
+
+  enrichEvalRecord(record, {
+    agentType: input.agentType,
+    challengePairId: input.challengePairId,
+    difficulty: input.difficultyData,
+    taskContext: input.taskContextData,
+    repoContext: input.repoContextData,
+    workflowCost: input.costOutcome,
+    taskDescriptor,
+  });
 }
 
 /**
@@ -220,13 +305,22 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     }
 
     // 6. Enrich record with all metadata
-    enrichEvalRecord(record, {
+    enrichPostCompletionRecord(record, {
+      repoDir,
+      issueId: ctx.issueId,
+      branchName,
+      worktreePath: ctx.worktreePath,
       agentType: ctx.agentType,
       challengePairId: ctx.challengePairId,
-      difficulty: difficultyData,
-      taskContext: taskContextData,
-      repoContext: repoContextData,
-      workflowCost: costOutcome,
+      originalPrompt: evalContext.taskPrompt,
+      prDiff: evalContext.prDiff,
+      record,
+      difficultyData,
+      taskContextData,
+      repoContextData,
+      costOutcome,
+      interventionRecords: interventionData.records,
+      routingDecision: stageArtifacts.routingDecision,
     });
 
     if (ctx.solutionModel) {
