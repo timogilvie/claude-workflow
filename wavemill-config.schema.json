@@ -408,7 +408,7 @@
           "type": "string",
           "enum": ["heuristic", "llm", "auto", "stage-aware"],
           "default": "auto",
-          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses historical nearest-neighbor routing, and 'auto' prefers stage-aware then falls back."
+          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, and 'auto' prefers stage-aware then falls back."
         },
         "llmModel": {
           "type": "string",
@@ -430,7 +430,7 @@
         "backfilledEvalsPath": {
           "type": "string",
           "default": ".wavemill/evals/aggregated-evals.backfilled.jsonl",
-          "description": "Preferred path to the backfilled aggregated eval dataset used by the stage-aware router."
+          "description": "Preferred supplemental backfilled eval dataset for the stage-aware router when local eval history is sparse."
         },
         "stageBlendWeight": {
           "type": "number",

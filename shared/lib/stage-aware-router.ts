@@ -67,6 +67,12 @@ interface CombinationDecision {
   expectedSuccess: number;
 }
 
+interface HistoricalEvalSource {
+  path: string;
+  kind: 'local' | 'backfilled' | 'aggregated';
+  priority: number;
+}
+
 const TASK_TYPE_DIMENSIONS = ['bugfix', 'feature', 'refactor', 'chore', 'docs', 'test', 'infra'] as const;
 const LANGUAGE_DIMENSIONS = ['ts', 'js', 'py', 'go', 'rs', 'sh', 'sql', 'other'] as const;
 const DOMAIN_DIMENSIONS = ['frontend', 'backend', 'data-pipeline', 'infrastructure', 'devtools', 'full-stack'] as const;
@@ -212,26 +218,100 @@ export function findKNearest(
     .slice(0, Math.min(k, records.length));
 }
 
-function getHistoricalPaths(repoDir: string, options: StageAwareOptions): string[] {
+function getHistoricalSources(repoDir: string, options: StageAwareOptions): HistoricalEvalSource[] {
   return [
-    resolveFromMainRepo(options.backfilledEvalsPath || DEFAULT_BACKFILLED_EVALS_PATH, repoDir),
-    resolveFromMainRepo(options.aggregatedEvalsPath || DEFAULT_AGGREGATED_EVALS_PATH, repoDir),
-    resolve(repoDir, '.wavemill/evals/evals.jsonl'),
+    {
+      path: resolve(repoDir, '.wavemill/evals/evals.jsonl'),
+      kind: 'local',
+      priority: 3,
+    },
+    {
+      path: resolveFromMainRepo(options.backfilledEvalsPath || DEFAULT_BACKFILLED_EVALS_PATH, repoDir),
+      kind: 'backfilled',
+      priority: 2,
+    },
+    {
+      path: resolveFromMainRepo(options.aggregatedEvalsPath || DEFAULT_AGGREGATED_EVALS_PATH, repoDir),
+      kind: 'aggregated',
+      priority: 1,
+    },
   ];
 }
 
+function historicalRecordKey(record: EvalRecord): string {
+  if (typeof record.id === 'string' && record.id.length > 0) {
+    return `id:${record.id}`;
+  }
+
+  return [
+    record.issueId || 'no-issue',
+    record.prUrl || 'no-pr',
+    record.timestamp || 'no-timestamp',
+    record.modelId || 'no-model',
+    record.originalPrompt || 'no-prompt',
+  ].join('|');
+}
+
+function countRecordSignals(record: EvalRecord): number {
+  return Number(isTaskDescriptor(record.taskDescriptor))
+    + Number(Boolean(record.stageOutcomes))
+    + Number(Boolean(record.metadata?.stageScores))
+    + Number(Boolean(record.workflowTokenUsage))
+    + Number(typeof record.workflowCost === 'number')
+    + Number(typeof record.score === 'number');
+}
+
+function shouldReplaceHistoricalRecord(
+  current: { record: EvalRecord; source: HistoricalEvalSource },
+  candidate: { record: EvalRecord; source: HistoricalEvalSource },
+): boolean {
+  const candidateSignals = countRecordSignals(candidate.record);
+  const currentSignals = countRecordSignals(current.record);
+
+  if (candidateSignals !== currentSignals) {
+    return candidateSignals > currentSignals;
+  }
+
+  if (candidate.source.priority !== current.source.priority) {
+    return candidate.source.priority > current.source.priority;
+  }
+
+  return candidate.record.timestamp > current.record.timestamp;
+}
+
+/**
+ * Load and merge eval records from multiple sources (local, backfilled, aggregated).
+ *
+ * This function implements the core feedback loop: it merges records from all sources,
+ * preferring richer/newer records when duplicates exist. Local records (highest priority)
+ * win over aggregated data, ensuring newly completed work influences routing immediately.
+ *
+ * Deduplication uses historical record keys (repo+task+workflow), and replacement logic
+ * prefers records with more signals, then higher-priority sources, then newer timestamps.
+ */
 export function loadStageAwareEvalRecords(options: StageAwareOptions = {}): EvalRecord[] {
   const repoDir = options.repoDir || process.cwd();
-  for (const candidatePath of getHistoricalPaths(repoDir, options)) {
-    if (!existsSync(candidatePath)) {
+  const recordsByKey = new Map<string, { record: EvalRecord; source: HistoricalEvalSource }>();
+
+  // Iterate through ALL sources and merge records (not first-wins)
+  for (const source of getHistoricalSources(repoDir, options)) {
+    if (!existsSync(source.path)) {
       continue;
     }
-    const records = readJsonlFile<EvalRecord>(candidatePath);
-    if (records.length > 0) {
-      return records;
+
+    const records = readJsonlFile<EvalRecord>(source.path);
+    for (const record of records) {
+      const key = historicalRecordKey(record);
+      const existing = recordsByKey.get(key);
+
+      // Use priority-based replacement to prefer richer/newer records
+      if (!existing || shouldReplaceHistoricalRecord(existing, { record, source })) {
+        recordsByKey.set(key, { record, source });
+      }
     }
   }
-  return [];
+
+  return [...recordsByKey.values()].map(({ record }) => record);
 }
 
 function stageScoreFromRecord(
