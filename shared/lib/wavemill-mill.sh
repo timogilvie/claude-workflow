@@ -3080,7 +3080,7 @@ monitor_issue_state() {
     if should_cleanup_closed_pr "$ISSUE"; then
       log "  ↳ Auto-cleaning closed challenger pane/worktree"
       set_window_attention_state "$WIN" "clear"
-      cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"
+      cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
     else
       CLEANED["$ISSUE"]=1
     fi
