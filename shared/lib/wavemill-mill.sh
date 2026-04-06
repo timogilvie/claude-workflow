@@ -1504,45 +1504,16 @@ _ensure_window_exists() {
 #   $3 = model ID
 #   $4 = path to prompt file
 _launch_agent_in_pane() {
-  local target="$1" agent_cmd="$2" model="$3" prompt_file="$4"
+  local target="$1" agent_cmd="$2" model="$3" prompt_file="$4" slug="${5:-}"
   local session="${target%%:*}"
   local window="${target#*:}"
-
-  # Terminate any running agent and wait for shell prompt
-  if ! agent_terminate_in_pane "$session" "$window" 15; then
-    log_warn "  Timed out waiting for previous agent to exit in $target"
+  local agent_flags=""
+  local abort_check_cmd=""
+  [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
+  if [[ -n "$slug" ]]; then
+    abort_check_cmd="check_workflow_aborted '$slug'"
   fi
-
-  # Verify pane is ready — force-kill and respawn if needed
-  if ! agent_pane_is_ready "$session" "$window"; then
-    log_warn "  Pane $target not ready, force-killing children..."
-    local pane_pid
-    pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
-    if [[ -n "$pane_pid" ]]; then
-      pkill -KILL -P "$pane_pid" 2>/dev/null || true
-      sleep 1
-    fi
-    if ! agent_pane_is_ready "$session" "$window"; then
-      log_warn "  Pane $target STILL not ready after force-kill, respawning pane..."
-      tmux respawn-pane -k -t "$target" 2>/dev/null || true
-      sleep 1
-    fi
-  fi
-
-  # Launch agent with enforced model
-  local model_flag=""
-  [[ -n "$model" ]] && model_flag=" --model $model"
-  case "$agent_cmd" in
-    claude)
-      tmux send-keys -t "$target" "claude${model_flag} --dangerously-skip-permissions \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    codex)
-      tmux send-keys -t "$target" "codex${model_flag} --dangerously-bypass-approvals-and-sandbox \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    *)
-      tmux send-keys -t "$target" "$agent_cmd${model_flag} \"\$(cat '$prompt_file')\"" C-m
-      ;;
-  esac
+  agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd"
 }
 
 # Launch the planning phase in an existing tmux window
@@ -1567,7 +1538,8 @@ $issue_desc
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" > "$prompt_file"
 
   log "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
-  _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file"
+  _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug"
+  return $?
 }
 
 # Launch the coding phase in an existing tmux window
@@ -1592,7 +1564,8 @@ $issue_desc
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" > "$prompt_file"
 
   log "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
-  _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file"
+  _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug"
+  return $?
 }
 
 # Launch the review phase in an existing tmux window
@@ -1617,7 +1590,8 @@ $issue_desc
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" > "$prompt_file"
 
   log "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
-  _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file"
+  _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug"
+  return $?
 }
 
 set_window_attention_state() {
@@ -2831,6 +2805,13 @@ monitor_issue_state() {
               fi
 
               launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth"
+              local launch_rc=$?
+              if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+                log "⛔ $ISSUE → Workflow aborted during planning launch"
+                set_task_phase "$ISSUE" "aborted"
+                set_window_attention_state "$WIN" "needs-user"
+                return 0
+              fi
               set_window_attention_state "$WIN" "clear"
               log "✓ $ISSUE → Routing complete, launching planning phase"
               active_count=$((active_count + 1))
@@ -2910,6 +2891,13 @@ monitor_issue_state() {
             fi
 
             launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth"
+            local launch_rc=$?
+            if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+              log "⛔ $ISSUE → Workflow aborted during coding launch"
+              set_task_phase "$ISSUE" "aborted"
+              set_window_attention_state "$WIN" "needs-user"
+              return 0
+            fi
             set_window_attention_state "$WIN" "clear"
             log "✓ $ISSUE → Plan approved, launching coding phase"
             active_count=$((active_count + 1))
@@ -2956,6 +2944,13 @@ monitor_issue_state() {
             fi
 
             launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
+            local launch_rc=$?
+            if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+              log "⛔ $ISSUE → Workflow aborted during review launch"
+              set_task_phase "$ISSUE" "aborted"
+              set_window_attention_state "$WIN" "needs-user"
+              return 0
+            fi
             set_window_attention_state "$WIN" "clear"
             log "✓ $ISSUE → Coding complete, launching review phase"
             active_count=$((active_count + 1))
