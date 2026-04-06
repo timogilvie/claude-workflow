@@ -1439,27 +1439,6 @@ check_routing_complete() {
   return 1
 }
 
-check_plan_approved() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
-  return 1
-}
-
-check_coding_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
-  return 1
-}
-
-check_workflow_aborted() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
-  return 1
-}
-
 # Ensure a tmux window exists, creating it if missing (e.g. after monitor restart).
 _ensure_window_exists() {
   local session="$1" win="$2" wt_dir="$3"
