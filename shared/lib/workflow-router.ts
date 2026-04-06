@@ -337,12 +337,13 @@ function loadStageEvalCounts(repoDir?: string): Record<string, number> {
     const records = readJsonlFile<EvalRecord>(evalsPath);
     const counts = { planning: 0, coding: 0, review: 0 };
     for (const record of records) {
-      // Count eval records by stage from descriptor
-      if (record.descriptor?.stage) {
-        const stage = record.descriptor.stage.toLowerCase();
-        if (stage.includes('plan')) counts.planning += 1;
-        else if (stage.includes('code')) counts.coding += 1;
-        else if (stage.includes('review')) counts.review += 1;
+      // Count eval records by stage from taskDescriptor
+      if (record.taskDescriptor?.stages) {
+        // Stages is a Record<string, StageDescriptor> with keys like 'planner', 'coder', 'reviewer'
+        const stages = Object.keys(record.taskDescriptor.stages);
+        if (stages.includes('planner')) counts.planning += 1;
+        if (stages.includes('coder')) counts.coding += 1;
+        if (stages.includes('reviewer')) counts.review += 1;
       }
     }
     return counts;
