@@ -1220,6 +1220,13 @@ check_coding_complete() {
   return 1
 }
 
+check_workflow_aborted() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
+  return 1
+}
+
 # Timeout for external API calls (Linear, GitHub) to prevent monitor freeze.
 # If an API call hangs, the entire monitoring loop blocks and the user cannot
 # type 'q' or select tasks.  This value caps individual calls.
@@ -1687,6 +1694,13 @@ should_update_linear_state() {
   local role
   role=$(get_task_meta "$issue" "challengeRole")
   [[ "$role" != "challenger" ]]
+}
+
+should_cleanup_closed_pr() {
+  local issue="$1"
+  local role
+  role=$(get_task_meta "$issue" "challengeRole")
+  [[ "$role" == "challenger" && "${_CFG_CHALLENGE_AUTO_MERGE:-false}" != "true" ]]
 }
 
 is_challenge_task() {
@@ -3084,7 +3098,13 @@ monitor_issue_state() {
     if should_update_linear_state "$ISSUE"; then
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Backlog"
     fi
-    CLEANED["$ISSUE"]=1
+    if should_cleanup_closed_pr "$ISSUE"; then
+      log "  ↳ Auto-cleaning closed challenger pane/worktree"
+      set_window_attention_state "$WIN" "clear"
+      cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
+    else
+      CLEANED["$ISSUE"]=1
+    fi
   else
     # PR open but not merged — re-check challenge eval and comparison
     # in case the eval was missed on initial PR detection (e.g. challenge
