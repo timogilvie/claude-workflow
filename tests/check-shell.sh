@@ -449,13 +449,58 @@ else
   fail "review template is missing abort marker guidance"
 fi
 
-if grep -q 'create features/\$slug/.workflow-aborted and exit via /exit' "$LIB_DIR/agent-adapters.sh" \
-  && grep -q 'Create the phase completion marker if the user wants to stop' "$LIB_DIR/agent-adapters.sh" \
-  && grep -q 'workflow-aborted and exit via /exit' "$LIB_DIR/agent-adapters.sh" \
-  && grep -q 'Create additional completion output if the user wants to stop' "$LIB_DIR/agent-adapters.sh"; then
-  pass "prompt builders include abort handling guidance"
+if ! grep -q '/exit command' "$REPO_DIR/tools/prompts/planning-phase.md" \
+  && ! grep -q '/exit command' "$REPO_DIR/tools/prompts/coding-phase.md" \
+  && ! grep -q '/exit command' "$REPO_DIR/tools/prompts/review-phase.md"; then
+  pass "shared phase templates no longer hardcode /exit"
 else
-  fail "prompt builders are missing abort handling guidance"
+  fail "shared phase templates still hardcode /exit"
+fi
+
+PROMPT_RENDER_DIR=$(mktemp -d)
+trap 'rm -rf "$PROMPT_RENDER_DIR"' EXIT
+
+source "$LIB_DIR/agent-adapters.sh"
+
+build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "medium" "codex" > "$PROMPT_RENDER_DIR/planning-codex.txt"
+build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "medium" "claude" > "$PROMPT_RENDER_DIR/planning-claude.txt"
+build_coding_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "medium" "codex" > "$PROMPT_RENDER_DIR/coding-codex.txt"
+build_coding_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "medium" "claude" > "$PROMPT_RENDER_DIR/coding-claude.txt"
+build_review_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "claude-sonnet" "static" "codex" > "$PROMPT_RENDER_DIR/review-codex.txt"
+build_review_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "claude-sonnet" "static" "claude" > "$PROMPT_RENDER_DIR/review-claude.txt"
+
+if grep -q '/exit' "$PROMPT_RENDER_DIR/planning-codex.txt" \
+  || grep -q '/exit' "$PROMPT_RENDER_DIR/coding-codex.txt" \
+  || grep -q '/exit' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  fail "codex-facing prompts still mention /exit"
+else
+  pass "codex-facing prompts omit /exit"
+fi
+
+if grep -q '/exit' "$PROMPT_RENDER_DIR/planning-claude.txt" \
+  && grep -q '/exit' "$PROMPT_RENDER_DIR/coding-claude.txt" \
+  && grep -q '/exit' "$PROMPT_RENDER_DIR/review-claude.txt"; then
+  pass "claude-facing prompts retain /exit guidance"
+else
+  fail "claude-facing prompts lost /exit guidance"
 fi
 
 # ============================================================================
