@@ -264,6 +264,34 @@ else
   else
     fail "monitor is missing aborted-state handling or pane-exit abort fallback"
   fi
+
+  CLOSED_BLOCK=$(echo "$MONITOR_ISSUE_BLOCK" | awk '
+    /elif \[\[ "\$\(pr_state "\$PR"\)" == "CLOSED" \]\]; then/ { in_block=1 }
+    in_block { print }
+    in_block && /^[[:space:]]*else$/ { exit }
+  ')
+
+  if echo "$CLOSED_BLOCK" | grep -q 'log_warn "\$ISSUE → PR #\$PR CLOSED without merge"'; then
+    pass "closed PR path preserves warning log"
+  else
+    fail "closed PR path is missing warning log"
+  fi
+
+  if grep -Fq 'should_cleanup_closed_pr() {' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq 'role=$(get_task_meta "$issue" "challengeRole")' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq '[[ "$role" == "challenger" && "${_CFG_CHALLENGE_AUTO_MERGE:-false}" != "true" ]]' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor defines closed-PR cleanup helper for manual-review challengers"
+  else
+    fail "monitor is missing closed-PR cleanup helper for manual-review challengers"
+  fi
+
+  if echo "$CLOSED_BLOCK" | grep -q 'if should_cleanup_closed_pr "\$ISSUE"; then' \
+    && echo "$CLOSED_BLOCK" | grep -q 'cleanup_completed_task "\$ISSUE" "\$SLUG" "closed without merge"' \
+    && echo "$CLOSED_BLOCK" | grep -q 'Auto-cleaning closed challenger pane/worktree'; then
+    pass "closed challenger PRs trigger automatic pane/worktree cleanup"
+  else
+    fail "closed challenger PRs do not trigger automatic cleanup"
+  fi
 fi
 
 # ============================================================================
