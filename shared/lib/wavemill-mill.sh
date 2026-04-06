@@ -1220,6 +1220,13 @@ check_coding_complete() {
   return 1
 }
 
+check_workflow_aborted() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
+  return 1
+}
+
 # Timeout for external API calls (Linear, GitHub) to prevent monitor freeze.
 # If an API call hangs, the entire monitoring loop blocks and the user cannot
 # type 'q' or select tasks.  This value caps individual calls.
@@ -1479,42 +1486,9 @@ _launch_agent_in_pane() {
   local target="$1" agent_cmd="$2" model="$3" prompt_file="$4"
   local session="${target%%:*}"
   local window="${target#*:}"
-
-  # Terminate any running agent and wait for shell prompt
-  if ! agent_terminate_in_pane "$session" "$window" 15; then
-    log_warn "  Timed out waiting for previous agent to exit in $target"
-  fi
-
-  # Verify pane is ready — force-kill and respawn if needed
-  if ! agent_pane_is_ready "$session" "$window"; then
-    log_warn "  Pane $target not ready, force-killing children..."
-    local pane_pid
-    pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
-    if [[ -n "$pane_pid" ]]; then
-      pkill -KILL -P "$pane_pid" 2>/dev/null || true
-      sleep 1
-    fi
-    if ! agent_pane_is_ready "$session" "$window"; then
-      log_warn "  Pane $target STILL not ready after force-kill, respawning pane..."
-      tmux respawn-pane -k -t "$target" 2>/dev/null || true
-      sleep 1
-    fi
-  fi
-
-  # Launch agent with enforced model
-  local model_flag=""
-  [[ -n "$model" ]] && model_flag=" --model $model"
-  case "$agent_cmd" in
-    claude)
-      tmux send-keys -t "$target" "claude${model_flag} --dangerously-skip-permissions \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    codex)
-      tmux send-keys -t "$target" "codex${model_flag} --dangerously-bypass-approvals-and-sandbox \"\$(cat '$prompt_file')\"" C-m
-      ;;
-    *)
-      tmux send-keys -t "$target" "$agent_cmd${model_flag} \"\$(cat '$prompt_file')\"" C-m
-      ;;
-  esac
+  local agent_flags=""
+  [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
+  agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags"
 }
 
 # Launch the planning phase in an existing tmux window

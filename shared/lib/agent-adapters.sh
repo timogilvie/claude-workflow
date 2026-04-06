@@ -759,11 +759,18 @@ agent_launch_interactive() {
   local prompt_file="$3"
   local agent_cmd="$4"
   local model="${5:-}"
+  local agent_flags="${6:-}"
 
   local model_flag=""
   if [[ -n "$model" ]]; then
     model_flag=" --model $model"
   fi
+
+  if [[ -n "$agent_flags" ]]; then
+    agent_flags=" $agent_flags"
+  fi
+
+  agent_prepare_pane_for_launch "$session" "$window"
 
   local launcher="/tmp/${session}-$(basename "$prompt_file" .txt)-launcher.sh"
 
@@ -772,21 +779,21 @@ agent_launch_interactive() {
     claude)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-claude${model_flag} --dangerously-skip-permissions "\$(cat '$prompt_file')"
+claude${model_flag}${agent_flags} --dangerously-skip-permissions "\$(cat '$prompt_file')"
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;
     codex)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-codex${model_flag} "\$(cat '$prompt_file')"
+codex${model_flag}${agent_flags} "\$(cat '$prompt_file')"
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;
     *)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-$agent_cmd "\$(cat '$prompt_file')"
+$agent_cmd${model_flag}${agent_flags} "\$(cat '$prompt_file')"
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;
@@ -800,6 +807,40 @@ LAUNCHEOF
 # AGENT TERMINATION & PANE READINESS
 # ============================================================================
 
+_agent_log_debug() {
+  [[ "${DEBUG_AGENT:-}" == "1" ]] || return 0
+  echo "$(date '+%H:%M:%S') DEBUG: $*" >&2
+}
+
+_agent_log_warn() {
+  echo "$(date '+%H:%M:%S') WARN: $*" >&2
+}
+
+_pane_current_command() {
+  local target="$1"
+  tmux display-message -t "$target" -p '#{pane_current_command}' 2>/dev/null || true
+}
+
+_pane_child_count() {
+  local target="$1"
+  local pane_pid
+  pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
+  if [[ -z "$pane_pid" ]]; then
+    echo ""
+    return 1
+  fi
+
+  pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' '
+}
+
+_pane_command_is_shell() {
+  local cmd="$1"
+  case "$cmd" in
+    bash|zsh|sh|fish|dash|ksh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Check if a tmux pane is dead or has an idle shell (no foreground children).
 # If the pane is dead, it is respawned so a fresh shell is available.
 #
@@ -811,19 +852,21 @@ _pane_is_dead_or_idle() {
 
   # Check if pane is dead (shell exited entirely)
   if tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
+    _agent_log_debug "Pane $target is dead, respawning"
     tmux respawn-pane -t "$target" 2>/dev/null || true
     sleep 0.5
     return 0
   fi
 
-  # Check if shell has no foreground children
-  local pane_pid
-  pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
-  if [[ -n "$pane_pid" ]]; then
-    local children
-    children=$(pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' ')
-    [[ "$children" == "0" ]] && return 0
+  local current_command
+  current_command=$(_pane_current_command "$target")
+  if _pane_command_is_shell "$current_command"; then
+    return 0
   fi
+
+  local children
+  children=$(_pane_child_count "$target")
+  [[ "$children" == "0" ]] && return 0
 
   return 1
 }
@@ -927,15 +970,97 @@ agent_pane_is_ready() {
   local window="$2"
   local target="$session:$window"
 
+  if tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
+    _agent_log_debug "Pane $target is dead during readiness check, respawning"
+    tmux respawn-pane -t "$target" 2>/dev/null || true
+    sleep 0.5
+  fi
+
   local pane_pid
   pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
   if [[ -z "$pane_pid" ]]; then
     return 1
   fi
 
+  local current_command
+  current_command=$(_pane_current_command "$target")
+  if _pane_command_is_shell "$current_command"; then
+    return 0
+  fi
+
   local children
-  children=$(pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' ')
+  children=$(_pane_child_count "$target")
   [[ "$children" == "0" ]]
+}
+
+agent_wait_for_pane_ready() {
+  local session="$1"
+  local window="$2"
+  local max_wait="${3:-3}"
+  local poll_interval="${4:-0.2}"
+  local target="$session:$window"
+
+  local attempts
+  attempts=$(awk "BEGIN { v = $max_wait / $poll_interval; if (v < 1) v = 1; printf \"%d\", (v == int(v) ? v : int(v) + 1) }")
+
+  local attempt=1
+  while (( attempt <= attempts )); do
+    if agent_pane_is_ready "$session" "$window"; then
+      if (( attempt > 1 )); then
+        _agent_log_debug "Pane $target became ready after $attempt attempts"
+      fi
+      return 0
+    fi
+
+    local current_command children
+    current_command=$(_pane_current_command "$target")
+    children=$(_pane_child_count "$target")
+    _agent_log_debug "Pane $target not ready (attempt $attempt/$attempts, current_command=${current_command:-unknown}, children=${children:-unknown})"
+    sleep "$poll_interval"
+    (( attempt += 1 ))
+  done
+
+  return 1
+}
+
+agent_prepare_pane_for_launch() {
+  local session="$1"
+  local window="$2"
+  local terminate_wait="${3:-15}"
+  local ready_wait="${4:-3}"
+  local target="$session:$window"
+
+  if ! agent_terminate_in_pane "$session" "$window" "$terminate_wait"; then
+    _agent_log_warn "  Timed out waiting for previous agent to exit in $target"
+  fi
+
+  if agent_wait_for_pane_ready "$session" "$window" "$ready_wait"; then
+    return 0
+  fi
+
+  _agent_log_warn "  Pane $target not ready, force-killing children..."
+  local pane_pid
+  pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
+  if [[ -n "$pane_pid" ]]; then
+    pkill -TERM -P "$pane_pid" 2>/dev/null || true
+    sleep 0.5
+    if ! agent_wait_for_pane_ready "$session" "$window" 1; then
+      pkill -KILL -P "$pane_pid" 2>/dev/null || true
+      sleep 0.5
+    fi
+  fi
+
+  if agent_wait_for_pane_ready "$session" "$window" 1.5; then
+    return 0
+  fi
+
+  _agent_log_warn "  Pane $target STILL not ready after force-kill, respawning pane..."
+  tmux respawn-pane -k -t "$target" 2>/dev/null || true
+  sleep 0.5
+
+  if ! agent_wait_for_pane_ready "$session" "$window" 2; then
+    _agent_log_warn "  Pane $target still not ready after respawn; launching anyway"
+  fi
 }
 
 # ============================================================================
