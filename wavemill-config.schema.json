@@ -369,9 +369,9 @@
         },
         "mode": {
           "type": "string",
-          "enum": ["heuristic", "llm", "auto"],
+          "enum": ["heuristic", "llm", "auto", "stage-aware"],
           "default": "auto",
-          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized Haiku selector, 'auto' tries LLM first then falls back to heuristic."
+          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses historical nearest-neighbor routing, and 'auto' prefers stage-aware then falls back."
         },
         "llmModel": {
           "type": "string",
@@ -383,6 +383,24 @@
           "enum": ["openai", "anthropic"],
           "default": "openai",
           "description": "API provider for LLM routing calls. OpenAI recommended (gpt-4o-mini is fast and cheap)."
+        },
+        "kNeighbors": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "description": "Number of nearest historical tasks to consider for stage-aware routing."
+        },
+        "backfilledEvalsPath": {
+          "type": "string",
+          "default": ".wavemill/evals/aggregated-evals.backfilled.jsonl",
+          "description": "Preferred path to the backfilled aggregated eval dataset used by the stage-aware router."
+        },
+        "stageBlendWeight": {
+          "type": "number",
+          "default": 0.3,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Regularization weight blending stage-specific scores with overall eval score during stage-aware routing."
         }
       }
     },

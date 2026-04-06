@@ -251,8 +251,8 @@ export interface RouterOptions {
   agentMap?: Record<string, string>;
   /** Fallback agent when no agentMap match (default: 'claude') */
   defaultAgent?: string;
-  /** Routing mode: 'heuristic' (regex), 'llm' (DSPy artifact), 'auto' (try LLM, fall back) */
-  mode?: 'heuristic' | 'llm' | 'auto';
+  /** Routing mode: 'heuristic' (regex), 'llm' (DSPy artifact), 'stage-aware' (historical KNN), 'auto' (best available) */
+  mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware';
   /** Repository directory (for finding artifacts and config) */
   repoDir?: string;
   /** Repository name (for LLM routing context) */
@@ -261,6 +261,12 @@ export interface RouterOptions {
   llmModel?: string;
   /** Provider for the LLM router (default: 'openai') */
   llmProvider?: 'openai' | 'anthropic';
+  /** Number of nearest neighbors used by the stage-aware router */
+  kNeighbors?: number;
+  /** Preferred backfilled aggregated eval dataset path */
+  backfilledEvalsPath?: string;
+  /** Regularization weight blending stage scores with overall eval score */
+  stageBlendWeight?: number;
 }
 
 const DEFAULT_ROUTER_OPTIONS = {
@@ -276,6 +282,9 @@ const DEFAULT_ROUTER_OPTIONS = {
   repoName: '',
   llmModel: '',
   llmProvider: 'openai' as const,
+  kNeighbors: 10,
+  backfilledEvalsPath: '.wavemill/evals/aggregated-evals.backfilled.jsonl',
+  stageBlendWeight: 0.3,
 } satisfies Required<RouterOptions>;
 
 /**
@@ -313,6 +322,9 @@ export function loadRouterConfig(repoDir?: string): RouterOptions {
   if (r.mode !== undefined) opts.mode = r.mode;
   if (r.llmModel !== undefined) opts.llmModel = r.llmModel;
   if (r.llmProvider !== undefined) opts.llmProvider = r.llmProvider;
+  if (r.kNeighbors !== undefined) opts.kNeighbors = r.kNeighbors;
+  if (r.backfilledEvalsPath !== undefined) opts.backfilledEvalsPath = r.backfilledEvalsPath;
+  if (r.stageBlendWeight !== undefined) opts.stageBlendWeight = r.stageBlendWeight;
   return opts;
 }
 

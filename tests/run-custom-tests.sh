@@ -28,6 +28,7 @@ for f in \
   repo-context-analyzer.test.ts \
   review-context-gatherer.test.ts \
   rule-generator.test.ts \
+  stage-aware-router.test.ts \
   task-context-analyzer.test.ts \
   task-packet-validator.test.ts \
   workflow-router.test.ts \
