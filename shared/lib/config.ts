@@ -109,6 +109,14 @@ export interface ChallengeConfig {
   autoMergeWinner?: boolean;
 }
 
+export interface ChallengeSchedulerConfig {
+  enabled?: boolean;
+  confidenceThreshold?: number;
+  newModelChallengeCount?: number;
+  minEvalRecordsPerStage?: number;
+  maxConcurrentChallenges?: number;
+}
+
 export interface ValidationLayerConfig {
   enabled?: boolean;
 }
@@ -166,6 +174,7 @@ export interface WavemillConfig {
   autoEval?: boolean;
   router?: RouterConfig;
   challenge?: ChallengeConfig;
+  challengeScheduler?: ChallengeSchedulerConfig;
   validation?: ValidationConfig;
   constraints?: ConstraintsConfig;
   ui?: UiConfig;
@@ -432,6 +441,14 @@ export function getRouterConfig(repoDir?: string): RouterConfig {
  */
 export function getChallengeConfig(repoDir?: string): ChallengeConfig {
   return loadWavemillConfig(repoDir).challenge || {};
+}
+
+/**
+ * Get the challenge scheduler config section.
+ * Returns empty object if not configured.
+ */
+export function getChallengeSchedulerConfig(repoDir?: string): ChallengeSchedulerConfig {
+  return loadWavemillConfig(repoDir).challengeScheduler || {};
 }
 
 /**
