@@ -13,7 +13,7 @@
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { callClaude } from './llm-cli.ts';
+import { callClaude, type LLMCallOptions } from './llm-cli.ts';
 import { fillPromptTemplate } from './prompt-utils.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { detectDriftForIssue, formatDriftWarning } from './drift-detector.ts';
@@ -118,6 +118,21 @@ export function formatIssueContext(issue: any): string {
   return context;
 }
 
+const ISSUE_EXPANDER_CLI_FLAGS = [
+  '--tools',
+  '',
+  '--append-system-prompt',
+  'You have NO tools available. Do NOT output <tool_call> tags, XML markup, or attempt to call any tools. Your ENTIRE response must be the task packet markdown and nothing else. No conversational text, no preamble, no apologies, no questions. Start directly with the first markdown heading.',
+];
+
+export function buildIssueExpansionCallOptions(cliCmd?: string): LLMCallOptions {
+  return {
+    mode: 'stream',
+    cliCmd: cliCmd || process.env.CLAUDE_CMD || 'claude',
+    cliFlags: ISSUE_EXPANDER_CLI_FLAGS,
+  };
+}
+
 /**
  * Expand issue with Claude LLM.
  *
@@ -151,16 +166,7 @@ export async function expandIssueWithClaude(
     CODEBASE_CONTEXT: codebaseContext,
   });
 
-  const result = await callClaude(fullPrompt, {
-    mode: 'stream',
-    claudeCmd: claudeCmd || process.env.CLAUDE_CMD || 'claude',
-    cliFlags: [
-      '--tools',
-      '',
-      '--append-system-prompt',
-      'You have NO tools available. Do NOT output <tool_call> tags, XML markup, or attempt to call any tools. Your ENTIRE response must be the task packet markdown and nothing else. No conversational text, no preamble, no apologies, no questions. Start directly with the first markdown heading.',
-    ],
-  });
+  const result = await callClaude(fullPrompt, buildIssueExpansionCallOptions(claudeCmd));
 
   return result.text;
 }

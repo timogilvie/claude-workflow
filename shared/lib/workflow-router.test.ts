@@ -126,6 +126,17 @@ test('reads selected-task style json files', () => {
   }
 });
 
+test('reads markdown task-packet files without JSON parsing', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const filePath = join(repoDir, 'task-packet.md');
+    writeFileSync(filePath, '# Task Packet\n\n## 1. Objective\n\nRoute against this content.\n');
+    assert.equal(readTaskPromptFromFile(filePath), '# Task Packet\n\n## 1. Objective\n\nRoute against this content.');
+  } finally {
+    cleanup();
+  }
+});
+
 test('summary output includes stage lines and success', () => {
   const { repoDir, cleanup } = makeRepo();
   try {

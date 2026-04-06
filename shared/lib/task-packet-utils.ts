@@ -10,6 +10,9 @@
  * @module task-packet-utils
  */
 
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 // ────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────
@@ -24,6 +27,12 @@ export interface TaskPacketParts {
   details: string;
   /** Complete content (header + details) for backward compatibility */
   fullContent: string;
+}
+
+export interface TaskPacketArtifactPaths {
+  full: string;
+  header: string;
+  details: string;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -127,4 +136,36 @@ export function isValidTaskPacket(text: string): boolean {
  */
 export function isTaskPacketFile(filePath: string): boolean {
   return /task-packet.*\.md$/.test(filePath);
+}
+
+/**
+ * Derive the conventional task-packet artifact paths from the full packet path.
+ */
+export function getTaskPacketArtifactPaths(outputFile: string): TaskPacketArtifactPaths {
+  const parsed = path.parse(outputFile);
+  const ext = parsed.ext || '.md';
+  const basePath = path.join(parsed.dir, parsed.name);
+
+  return {
+    full: outputFile,
+    header: `${basePath}-header${ext}`,
+    details: `${basePath}-details${ext}`,
+  };
+}
+
+/**
+ * Persist task packet artifacts and ensure the parent directory exists.
+ */
+export async function writeTaskPacketArtifacts(
+  outputFile: string,
+  parts: TaskPacketParts
+): Promise<TaskPacketArtifactPaths> {
+  const paths = getTaskPacketArtifactPaths(outputFile);
+
+  await fs.mkdir(path.dirname(paths.full), { recursive: true });
+  await fs.writeFile(paths.header, parts.header, 'utf-8');
+  await fs.writeFile(paths.details, parts.details, 'utf-8');
+  await fs.writeFile(paths.full, parts.fullContent, 'utf-8');
+
+  return paths;
 }

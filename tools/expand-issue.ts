@@ -1,6 +1,5 @@
 #!/usr/bin/env -S npx tsx
 import { runTool, resolvePromptPath } from '../shared/lib/tool-runner.ts';
-import fs from "node:fs/promises";
 import { getIssue, updateIssue } from '../shared/lib/linear.ts';
 import {
   validateTaskPacket,
@@ -18,7 +17,7 @@ import {
 } from '../shared/lib/issue-expander.ts';
 import { autoLabelIssue } from '../shared/lib/issue-labeler.ts';
 import { gatherCodebaseContext } from '../shared/lib/codebase-context-gatherer.ts';
-import { splitTaskPacket, isValidTaskPacket } from '../shared/lib/task-packet-utils.ts';
+import { splitTaskPacket, isValidTaskPacket, writeTaskPacketArtifacts } from '../shared/lib/task-packet-utils.ts';
 import { formatValidationIssues } from '../shared/lib/validation-formatter.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
@@ -108,19 +107,14 @@ runTool({
     // Handle output (don't let file write failure block Linear update)
     if (outputFile) {
       try {
-        // Write header file
-        const headerFile = outputFile.replace(/\.md$/, '-header.md');
-        await fs.writeFile(headerFile, header, 'utf-8');
-        console.log(`✓ Header saved to: ${headerFile}`);
-
-        // Write details file
-        const detailsFile = outputFile.replace(/\.md$/, '-details.md');
-        await fs.writeFile(detailsFile, details, 'utf-8');
-        console.log(`✓ Details saved to: ${detailsFile}`);
-
-        // Also write full content for reference
-        await fs.writeFile(outputFile, fullContent, 'utf-8');
-        console.log(`✓ Full content saved to: ${outputFile}`);
+        const artifactPaths = await writeTaskPacketArtifacts(outputFile, {
+          header,
+          details,
+          fullContent,
+        });
+        console.log(`✓ Header saved to: ${artifactPaths.header}`);
+        console.log(`✓ Details saved to: ${artifactPaths.details}`);
+        console.log(`✓ Full content saved to: ${artifactPaths.full}`);
       } catch (writeError) {
         const errorMsg = errorMessage(writeError);
         console.warn(`⚠️  Failed to write output files: ${errorMsg}`);
