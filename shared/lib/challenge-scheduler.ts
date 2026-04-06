@@ -11,7 +11,7 @@
  * @module challenge-scheduler
  */
 
-import type { StageAwareDecision } from './workflow-router.ts';
+import type { StageAwareDecision } from './stage-aware-router.ts';
 
 /**
  * Challenge recommendation returned by the scheduler.
