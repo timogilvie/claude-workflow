@@ -93,9 +93,12 @@ export interface RouterConfig {
   models?: string[];
   defaultAgent?: string;
   agentMap?: Record<string, string>;
-  mode?: 'heuristic' | 'llm' | 'auto';
+  mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware';
   llmModel?: string;
   llmProvider?: 'openai' | 'anthropic';
+  kNeighbors?: number;
+  backfilledEvalsPath?: string;
+  stageBlendWeight?: number;
 }
 
 export interface ChallengeConfig {

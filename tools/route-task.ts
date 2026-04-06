@@ -7,7 +7,7 @@
  */
 
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { routeWorkflow, readTaskPromptFromFile, summarizeWorkflowRoute } from '../shared/lib/workflow-router.ts';
+import { routeWorkflow, routeWorkflowStageAware, readTaskPromptFromFile, summarizeWorkflowRoute } from '../shared/lib/workflow-router.ts';
 
 runTool({
   name: 'route-task',
@@ -24,6 +24,10 @@ runTool({
     'repo-dir': {
       type: 'string',
       description: 'Repository directory (default: current directory)',
+    },
+    mode: {
+      type: 'string',
+      description: 'Routing mode: auto, stage-aware, or heuristic',
     },
   },
   positional: {
@@ -56,7 +60,10 @@ runTool({
     }
 
     const repoDir = args['repo-dir'] || process.cwd();
-    const decision = routeWorkflow(prompt, { repoDir });
+    const mode = args.mode || 'auto';
+    const decision = mode === 'heuristic'
+      ? routeWorkflow(prompt, { repoDir })
+      : routeWorkflowStageAware(prompt, { repoDir });
 
     if (args.json) {
       console.log(JSON.stringify(decision, null, 2));
