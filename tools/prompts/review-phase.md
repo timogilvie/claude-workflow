@@ -67,3 +67,11 @@ The implementation is complete. Your job is to review and create a PR.
 - Fix blockers before creating PR
 - Make targeted fixes only - no scope creep
 - If review tool fails with exit code 2, document the failure and proceed
+
+### Handling User Abort Requests
+
+If the user asks you to stop work, close the issue, abort, or otherwise discontinue this workflow:
+- Create the abort marker: touch features/{{SLUG}}/.workflow-aborted
+- Do NOT create additional completion output or a PR
+- Inform the user that the workflow is being stopped
+- Exit cleanly by running the /exit command

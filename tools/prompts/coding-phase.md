@@ -40,3 +40,11 @@ The implementation plan is ready at: features/{{SLUG}}/plan.md
 - If you need to change the approach, document why in commit messages
 - Do NOT run self-review or create PR - that's the next phase
 - Do NOT ask questions - implement your best judgment and document decisions
+
+### Handling User Abort Requests
+
+If the user asks you to stop work, close the issue, abort, or otherwise discontinue this workflow:
+- Create the abort marker: touch features/{{SLUG}}/.workflow-aborted
+- Do NOT create the phase completion marker (.coding-complete)
+- Inform the user that the workflow is being stopped
+- Exit cleanly by running the /exit command
