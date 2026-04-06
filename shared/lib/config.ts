@@ -85,6 +85,14 @@ export interface EvalConfig {
   interventionPenalties?: InterventionPenaltiesConfig;
 }
 
+export interface ChallengeSchedulerConfig {
+  enabled?: boolean;
+  confidenceThreshold?: number;
+  newModelChallengeCount?: number;
+  minEvalRecordsPerStage?: number;
+  maxConcurrentChallenges?: number;
+}
+
 export interface RouterConfig {
   enabled?: boolean;
   defaultModel?: string;
@@ -99,6 +107,7 @@ export interface RouterConfig {
   kNeighbors?: number;
   backfilledEvalsPath?: string;
   stageBlendWeight?: number;
+  challengeScheduler?: ChallengeSchedulerConfig;
 }
 
 export interface ChallengeConfig {
@@ -424,6 +433,22 @@ export function clearConfigCache(repoDir?: string): void {
  */
 export function getRouterConfig(repoDir?: string): RouterConfig {
   return loadWavemillConfig(repoDir).router || {};
+}
+
+/**
+ * Get the challenge scheduler config section with defaults.
+ * Returns a config with all fields set (using defaults if not specified).
+ */
+export function getChallengeSchedulerConfig(repoDir?: string): ChallengeSchedulerConfig & { enabled: boolean; confidenceThreshold: number; newModelChallengeCount: number; minEvalRecordsPerStage: number; maxConcurrentChallenges: number } {
+  const config = loadWavemillConfig(repoDir);
+  const base = config.router?.challengeScheduler || {};
+  return {
+    enabled: base.enabled ?? false,
+    confidenceThreshold: base.confidenceThreshold ?? 0.7,
+    newModelChallengeCount: base.newModelChallengeCount ?? 5,
+    minEvalRecordsPerStage: base.minEvalRecordsPerStage ?? 10,
+    maxConcurrentChallenges: base.maxConcurrentChallenges ?? 2,
+  };
 }
 
 /**

@@ -401,6 +401,43 @@
           "minimum": 0,
           "maximum": 1,
           "description": "Regularization weight blending stage-specific scores with overall eval score during stage-aware routing."
+        },
+        "challengeScheduler": {
+          "type": "object",
+          "description": "Challenge scheduling policy for systematic model exploration.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable challenge scheduling policy. When true, router may suggest challenges instead of direct routing."
+            },
+            "confidenceThreshold": {
+              "type": "number",
+              "default": 0.7,
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Minimum confidence threshold. Routes below this trigger challenge suggestions."
+            },
+            "newModelChallengeCount": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 0,
+              "description": "New models with fewer than this many evals trigger challenges."
+            },
+            "minEvalRecordsPerStage": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 0,
+              "description": "Stages with fewer than this many evals trigger exploration challenges."
+            },
+            "maxConcurrentChallenges": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 1,
+              "description": "Maximum number of concurrent challenge tasks (future use)."
+            }
+          },
+          "additionalProperties": false
         }
       }
     },

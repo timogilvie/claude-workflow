@@ -38,6 +38,7 @@ export interface StageAwareDecision extends WorkflowRouteDecision {
   neighborCount: number;
   neighborSimilarityRange: [number, number];
   expectedCost: number;
+  challengeRecommendation?: unknown; // ChallengeRecommendation type (optional, set by workflow-router)
 }
 
 export interface ScoredNeighbor {

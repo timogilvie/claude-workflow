@@ -7,10 +7,15 @@
  * @module workflow-router
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
+import { evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
+import { getChallengeSchedulerConfig } from './config.ts';
+import { readJsonlFile } from './jsonl-utils.ts';
+import type { EvalRecord } from './eval-schema.ts';
 
 export type PlanDepth = 'light' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -286,6 +291,66 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   };
 }
 
+/**
+ * Load eval summary (model ID -> count of evals).
+ * Reads from aggregated evals file and counts by model.
+ */
+function loadEvalSummary(repoDir?: string): Record<string, number> {
+  const config = loadRouterConfig(repoDir);
+  const evalsPath = resolve(
+    repoDir || '.',
+    config.backfilledEvalsPath || '.wavemill/evals/aggregated-evals.backfilled.jsonl',
+  );
+
+  if (!existsSync(evalsPath)) {
+    return {};
+  }
+
+  try {
+    const records = readJsonlFile<EvalRecord>(evalsPath);
+    const summary: Record<string, number> = {};
+    for (const record of records) {
+      summary[record.modelId] = (summary[record.modelId] ?? 0) + 1;
+    }
+    return summary;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Load stage eval counts (stage -> count of evals).
+ * Reads from aggregated evals file and counts by stage.
+ */
+function loadStageEvalCounts(repoDir?: string): Record<string, number> {
+  const config = loadRouterConfig(repoDir);
+  const evalsPath = resolve(
+    repoDir || '.',
+    config.backfilledEvalsPath || '.wavemill/evals/aggregated-evals.backfilled.jsonl',
+  );
+
+  if (!existsSync(evalsPath)) {
+    return { planning: 0, coding: 0, review: 0 };
+  }
+
+  try {
+    const records = readJsonlFile<EvalRecord>(evalsPath);
+    const counts = { planning: 0, coding: 0, review: 0 };
+    for (const record of records) {
+      // Count eval records by stage from descriptor
+      if (record.descriptor?.stage) {
+        const stage = record.descriptor.stage.toLowerCase();
+        if (stage.includes('plan')) counts.planning += 1;
+        else if (stage.includes('code')) counts.coding += 1;
+        else if (stage.includes('review')) counts.review += 1;
+      }
+    }
+    return counts;
+  } catch {
+    return { planning: 0, coding: 0, review: 0 };
+  }
+}
+
 export function routeWorkflowStageAware(
   prompt: string,
   options?: RouteWorkflowOptions,
@@ -319,7 +384,22 @@ export function routeWorkflowStageAware(
     };
   }
 
-  return {
+  // Evaluate challenge recommendation if enabled
+  let challengeRecommendation: ChallengeRecommendation | undefined;
+  const challengerConfig = getChallengeSchedulerConfig(repoDir);
+  if (challengerConfig.enabled && stageAwareDecision.expectedSuccess !== undefined) {
+    const evalSummary = loadEvalSummary(repoDir);
+    const stageEvalCounts = loadStageEvalCounts(repoDir);
+
+    challengeRecommendation = evaluateChallenge({
+      routingDecision: stageAwareDecision,
+      evalSummary,
+      stageEvalCounts,
+      config: challengerConfig,
+    });
+  }
+
+  const decision = {
     ...stageAwareDecision,
     signals: {
       taskType: characteristics.taskType,
@@ -329,6 +409,12 @@ export function routeWorkflowStageAware(
       riskScore,
     },
   };
+
+  if (challengeRecommendation) {
+    decision.challengeRecommendation = challengeRecommendation;
+  }
+
+  return decision;
 }
 
 export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?: string): string {
