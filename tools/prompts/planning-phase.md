@@ -67,3 +67,23 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
 - Do NOT run tests or make code changes
 - Focus on understanding and planning
 - If anything is unclear, ask the user for clarification before finalizing the plan
+
+### Early Termination
+
+If the user explicitly requests to close, cancel, or abort this issue (e.g., "this is already fixed", "close this issue", "don't proceed"), you should:
+
+1. Acknowledge the user's request
+2. Create an abort marker file:
+   ```bash
+   echo "User requested termination: [brief reason]" > features/{{SLUG}}/.workflow-abort
+   ```
+3. Exit the agent using the `/exit` command
+4. Do NOT proceed with implementation or create phase completion markers
+
+The workflow will terminate cleanly and the Linear issue will be updated to "Done".
+
+**Common abort triggers**:
+- "Already fixed" / "This is done"
+- "Close this issue" / "Cancel this"
+- "Don't proceed" / "Stop working on this"
+- "Not needed anymore" / "Duplicate work"

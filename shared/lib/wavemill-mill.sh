@@ -1446,6 +1446,20 @@ check_coding_complete() {
   return 1
 }
 
+check_workflow_abort() {
+  local slug="$1"
+  local abort_marker="${WORKTREE_ROOT}/${slug}/features/${slug}/.workflow-abort"
+  [[ -f "$abort_marker" ]]
+}
+
+get_abort_reason() {
+  local slug="$1"
+  local abort_marker="${WORKTREE_ROOT}/${slug}/features/${slug}/.workflow-abort"
+  if [[ -f "$abort_marker" ]]; then
+    cat "$abort_marker" 2>/dev/null || echo "(no reason provided)"
+  fi
+}
+
 # Ensure a tmux window exists, creating it if missing (e.g. after monitor restart).
 _ensure_window_exists() {
   local session="$1" win="$2" wt_dir="$3"
@@ -2770,6 +2784,26 @@ monitor_issue_state() {
               linear_issue=$(get_linear_issue_id "$ISSUE")
               save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
 
+              # Check for workflow abort before transitioning
+              if check_workflow_abort "$SLUG"; then
+                local reason
+                reason=$(get_abort_reason "$SLUG")
+                log "⚠️  $ISSUE → Workflow aborted: $reason"
+
+                # Update Linear issue state (best-effort)
+                linear_issue=$(get_linear_issue_id "$ISSUE")
+                if [[ -n "$linear_issue" ]]; then
+                  npx tsx "$TOOLS_DIR/set-issue-state.ts" "$linear_issue" "Done" 2>/dev/null || \
+                    log_warn "Failed to update Linear issue state for $linear_issue"
+                fi
+
+                # Mark task as completed in state file
+                set_task_state "$ISSUE" "aborted" "" "" ""
+
+                # Clean up and return (don't transition to next phase)
+                return 0
+              fi
+
               # Transition to planning phase
               set_task_phase "$ISSUE" "planning"
               planner_agent="$(agent_resolve_from_model "$planner_model")"
@@ -2827,6 +2861,26 @@ monitor_issue_state() {
           fi
 
           if check_plan_approved "$SLUG"; then
+            # Check for workflow abort before transitioning
+            if check_workflow_abort "$SLUG"; then
+              local reason
+              reason=$(get_abort_reason "$SLUG")
+              log "⚠️  $ISSUE → Workflow aborted: $reason"
+
+              # Update Linear issue state (best-effort)
+              linear_issue=$(get_linear_issue_id "$ISSUE")
+              if [[ -n "$linear_issue" ]]; then
+                npx tsx "$TOOLS_DIR/set-issue-state.ts" "$linear_issue" "Done" 2>/dev/null || \
+                  log_warn "Failed to update Linear issue state for $linear_issue"
+              fi
+
+              # Mark task as completed in state file
+              set_task_state "$ISSUE" "aborted" "" "" ""
+
+              # Clean up and return (don't transition to next phase)
+              return 0
+            fi
+
             # FORCE_MODEL takes priority, then challenge, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
               coder_model="$FORCE_MODEL"
@@ -2871,6 +2925,26 @@ monitor_issue_state() {
 
         coding)
           if check_coding_complete "$SLUG"; then
+            # Check for workflow abort before transitioning
+            if check_workflow_abort "$SLUG"; then
+              local reason
+              reason=$(get_abort_reason "$SLUG")
+              log "⚠️  $ISSUE → Workflow aborted: $reason"
+
+              # Update Linear issue state (best-effort)
+              linear_issue=$(get_linear_issue_id "$ISSUE")
+              if [[ -n "$linear_issue" ]]; then
+                npx tsx "$TOOLS_DIR/set-issue-state.ts" "$linear_issue" "Done" 2>/dev/null || \
+                  log_warn "Failed to update Linear issue state for $linear_issue"
+              fi
+
+              # Mark task as completed in state file
+              set_task_state "$ISSUE" "aborted" "" "" ""
+
+              # Clean up and return (don't transition to next phase)
+              return 0
+            fi
+
             # FORCE_MODEL takes priority, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
               reviewer_model="$FORCE_MODEL"

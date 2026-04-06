@@ -67,3 +67,23 @@ The implementation is complete. Your job is to review and create a PR.
 - Fix blockers before creating PR
 - Make targeted fixes only - no scope creep
 - If review tool fails with exit code 2, document the failure and proceed
+
+### Early Termination
+
+If the user explicitly requests to close, cancel, or abort this issue (e.g., "this is already fixed", "close this issue", "don't proceed"), you should:
+
+1. Acknowledge the user's request
+2. Create an abort marker file:
+   ```bash
+   echo "User requested termination: [brief reason]" > features/{{SLUG}}/.workflow-abort
+   ```
+3. Exit the agent using the `/exit` command
+4. Do NOT proceed with implementation or create phase completion markers
+
+The workflow will terminate cleanly and the Linear issue will be updated to "Done".
+
+**Common abort triggers**:
+- "Already fixed" / "This is done"
+- "Close this issue" / "Cancel this"
+- "Don't proceed" / "Stop working on this"
+- "Not needed anymore" / "Duplicate work"
