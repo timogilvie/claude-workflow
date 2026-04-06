@@ -321,6 +321,43 @@
       },
       "additionalProperties": false
     },
+    "challengeScheduler": {
+      "type": "object",
+      "description": "Challenge scheduling policy for exploration-driven model testing.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable advisory challenge recommendations during routing."
+        },
+        "confidenceThreshold": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Suggest a challenge when routing confidence falls below this threshold."
+        },
+        "newModelChallengeCount": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1,
+          "description": "Treat models with fewer than this many eval records as new."
+        },
+        "minEvalRecordsPerStage": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "description": "Suggest a challenge when a workflow stage has fewer records than this threshold."
+        },
+        "maxConcurrentChallenges": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 1,
+          "description": "Advisory limit for how many challenges the orchestrator should run in parallel."
+        }
+      },
+      "additionalProperties": false
+    },
     "router": {
       "type": "object",
       "description": "Settings for the prompt-to-model router that suggests the best LLM for a task based on historical eval data.",
