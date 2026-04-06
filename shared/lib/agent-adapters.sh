@@ -112,6 +112,54 @@ agent_check_auth() {
 # Single source of truth for agent prompts. Used by both
 # wavemill-orchestrator.sh (initial batch) and launch_task() (monitor loop).
 
+agent_exit_followup_text() {
+  local agent_cmd="${1:-claude}"
+
+  if [[ "$agent_cmd" == "codex" ]]; then
+    echo "Stop there. Workflow orchestration will close the session."
+  else
+    echo "Exit cleanly by running the /exit command."
+  fi
+}
+
+agent_abort_feedback_text() {
+  local agent_cmd="${1:-claude}" marker_path="$2"
+
+  if [[ "$agent_cmd" == "codex" ]]; then
+    echo "create $marker_path and stop there. Workflow orchestration will close the session."
+  else
+    echo "create $marker_path and exit via /exit"
+  fi
+}
+
+agent_exit_guard_text() {
+  local agent_cmd="${1:-claude}" condition_text="$2"
+
+  if [[ "$agent_cmd" == "codex" ]]; then
+    echo "attempt any manual exit command. Stop after the required marker or output is created, and only once $condition_text."
+  else
+    echo "run /exit unless $condition_text"
+  fi
+}
+
+agent_completion_text() {
+  local agent_cmd="${1:-claude}" suffix="${2:-}"
+
+  if [[ "$agent_cmd" == "codex" ]]; then
+    if [[ -n "$suffix" ]]; then
+      echo "stop there. Workflow orchestration will close the session automatically. $suffix"
+    else
+      echo "stop there. Workflow orchestration will close the session automatically."
+    fi
+  else
+    if [[ -n "$suffix" ]]; then
+      echo "exit by running the /exit command. $suffix"
+    else
+      echo "exit by running the /exit command."
+    fi
+  fi
+}
+
 # Build the autonomous (skip-mode) prompt.
 # All variables are passed explicitly so there's no implicit coupling.
 #
@@ -130,7 +178,9 @@ agent_check_auth() {
 build_autonomous_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8"
-  local reviewer_model="${9:-}" review_mode="${10:-}"
+  local reviewer_model="${9:-}" review_mode="${10:-}" agent_cmd="${11:-claude}"
+  local abort_exit_instruction
+  abort_exit_instruction="$(agent_exit_followup_text "$agent_cmd")"
 
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
@@ -171,7 +221,7 @@ Process:
    - Create the abort marker: touch "$wt_dir/features/$(basename "$wt_dir")/.workflow-aborted"
    - Do NOT create additional completion markers or a PR
    - Report that the workflow is stopping
-   - Exit cleanly via /exit
+   - $abort_exit_instruction
 4. REQUIRED: Run the self-review tool before creating a PR (do not skip or substitute your own review):
    IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
    IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
@@ -434,7 +484,11 @@ _WVML_PROMPT_
 build_planning_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
-  local plan_depth="${10:-light}"
+  local plan_depth="${10:-light}" agent_cmd="${11:-claude}"
+  local abort_feedback_instruction exit_guard_text approved_completion_text
+  abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "features/$slug/.workflow-aborted")"
+  exit_guard_text="$(agent_exit_guard_text "$agent_cmd" "the user has explicitly approved your plan")"
+  approved_completion_text="$(agent_completion_text "$agent_cmd" "The next phase will be launched automatically.")"
 
   # Build depth-specific guidance
   local depth_guidance
@@ -489,13 +543,13 @@ When you receive user feedback:
 - DO: Read and incorporate the feedback into your ongoing work
 - DO: Adjust your approach based on the guidance
 - DO: Continue working until the phase requirements are genuinely complete
-- DO: If the user asks to stop, abort, close the issue, or discontinue work, create features/$slug/.workflow-aborted and exit via /exit
+- DO: If the user asks to stop, abort, close the issue, or discontinue work, $abort_feedback_instruction
 - DO NOT: Interpret feedback as "wrap up now" or "move to next phase"
 - DO NOT: Create the phase completion marker if the user wants to stop
 - DO NOT: Create .plan-approved just because you received feedback
-- DO NOT: Run /exit unless the user has explicitly approved your plan
+- DO NOT: $exit_guard_text
 
-After the user approves your plan, create the .plan-approved file, then exit by running the /exit command. The next phase will be launched automatically.
+After the user approves your plan, create the .plan-approved file, then $approved_completion_text
 _WVML_PROMPT_
 }
 
@@ -517,7 +571,11 @@ _WVML_PROMPT_
 build_coding_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
-  local code_depth="${10:-medium}"
+  local code_depth="${10:-medium}" agent_cmd="${11:-claude}"
+  local abort_feedback_instruction exit_guard_text coding_completion_text
+  abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "features/$slug/.workflow-aborted")"
+  exit_guard_text="$(agent_exit_guard_text "$agent_cmd" "ALL phase requirements are met")"
+  coding_completion_text="$(agent_completion_text "$agent_cmd" "The next phase will be launched automatically.")"
 
   # Build depth-specific guidance
   local depth_guidance
@@ -574,11 +632,11 @@ When you receive user feedback:
 - DO: Read and incorporate the feedback into your ongoing work
 - DO: Adjust your approach based on the guidance
 - DO: Continue working until the phase requirements are genuinely complete
-- DO: If the user asks to stop, abort, close the issue, or discontinue work, create features/$slug/.workflow-aborted and exit via /exit
+- DO: If the user asks to stop, abort, close the issue, or discontinue work, $abort_feedback_instruction
 - DO NOT: Interpret feedback as "wrap up now" or "move to next phase"
 - DO NOT: Create the phase completion marker if the user wants to stop
 - DO NOT: Create .coding-complete just because you received feedback
-- DO NOT: Run /exit unless ALL phase requirements are met
+- DO NOT: $exit_guard_text
 
 ### Pre-Completion Checklist
 
@@ -589,7 +647,7 @@ Before creating .coding-complete, verify ALL of these are true:
 - Changes are committed to git
 If ANY item is false, continue working. Do NOT create the marker.
 
-After implementation is complete and tests pass, create the .coding-complete file, then exit by running the /exit command. The next phase will be launched automatically.
+After implementation is complete and tests pass, create the .coding-complete file, then $coding_completion_text
 _WVML_PROMPT_
 }
 
@@ -612,7 +670,11 @@ _WVML_PROMPT_
 build_review_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
-  local reviewer_model="${10:-}" review_mode="${11:-static}"
+  local reviewer_model="${10:-}" review_mode="${11:-static}" agent_cmd="${12:-claude}"
+  local abort_feedback_instruction exit_guard_text review_completion_text
+  abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "$wt_dir/features/$(basename "$wt_dir")/.workflow-aborted")"
+  exit_guard_text="$(agent_exit_guard_text "$agent_cmd" "the PR is created and all review steps are done")"
+  review_completion_text="$(agent_completion_text "$agent_cmd")"
 
   # Build reviewer note
   local reviewer_note=""
@@ -682,13 +744,13 @@ When you receive user feedback:
 - DO: Read and incorporate the feedback into your ongoing work
 - DO: Adjust your approach based on the guidance
 - DO: Continue working until the review and PR creation are genuinely complete
-- DO: If the user asks to stop, abort, close the issue, or discontinue work, create $wt_dir/features/$(basename "$wt_dir")/.workflow-aborted and exit via /exit
+- DO: If the user asks to stop, abort, close the issue, or discontinue work, $abort_feedback_instruction
 - DO NOT: Interpret feedback as "wrap up now"
 - DO NOT: Create additional completion output if the user wants to stop
 - DO NOT: Skip remaining review steps or rush the PR just because you received feedback
-- DO NOT: Run /exit until the PR is created and all review steps are done
+- DO NOT: $exit_guard_text
 
-After creating the PR, report the PR URL to the user, then exit by running the /exit command.
+After creating the PR, report the PR URL to the user, then $review_completion_text
 _WVML_PROMPT_
 }
 

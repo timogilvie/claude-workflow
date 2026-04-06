@@ -385,7 +385,7 @@ Read specific sections on-demand as you plan and implement:
       PLANNER_AGENT="$(agent_resolve_from_model "$PLANNER_MODEL")"
       PLANNING_PROMPT="/tmp/${SESSION}-${ISSUE}-planning-prompt.txt"
       build_planning_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
-        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "$SLUG" "$PLAN_DEPTH" > "$PLANNING_PROMPT"
+        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "$SLUG" "$PLAN_DEPTH" "$PLANNER_AGENT" > "$PLANNING_PROMPT"
       agent_launch_interactive "$SESSION" "$WIN" "$PLANNING_PROMPT" "$PLANNER_AGENT" "$PLANNER_MODEL"
       echo "  ✓ Routing complete (direct), launched planning with $PLANNER_MODEL"
 
@@ -394,7 +394,7 @@ Read specific sections on-demand as you plan and implement:
 
       INSTR_FILE="/tmp/${SESSION}-${ISSUE}-instructions.txt"
       build_autonomous_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
-        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "" "" > "$INSTR_FILE"
+        "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "" "" "$TASK_AGENT_CMD" > "$INSTR_FILE"
 
       agent_launch_autonomous "$SESSION" "$WIN" "$INSTR_FILE" "$TASK_AGENT_CMD" "$TASK_MODEL"
     fi

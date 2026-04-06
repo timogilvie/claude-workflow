@@ -1535,7 +1535,7 @@ $issue_desc
   # Build planning prompt
   local prompt_file="/tmp/${SESSION}-${issue}-planning-prompt.txt"
   build_planning_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$prompt_file"
 
   log "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
   _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug"
@@ -1561,7 +1561,7 @@ $issue_desc
   # Build coding prompt
   local prompt_file="/tmp/${SESSION}-${issue}-coding-prompt.txt"
   build_coding_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" > "$prompt_file"
 
   log "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
   _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug"
@@ -1587,7 +1587,7 @@ $issue_desc
   # Build review prompt
   local prompt_file="/tmp/${SESSION}-${issue}-review-prompt.txt"
   build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" > "$prompt_file"
 
   log "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug"
