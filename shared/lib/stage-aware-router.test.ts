@@ -10,6 +10,7 @@ import type { EvalRecord, TaskDescriptor } from './eval-schema.ts';
 import {
   cosineSimilarity,
   findKNearest,
+  loadStageAwareEvalRecords,
   rankModelsPerStage,
   routeStageAware,
   vectorizeDescriptor,
@@ -104,18 +105,31 @@ function makeEvalRecord(id: string, modelId: string, stageScores: {
   } as EvalRecord;
 }
 
-function makeRepoWithStageAwareData(records: EvalRecord[], configOverrides: Record<string, unknown> = {}) {
+function writeJsonl(repoDir: string, relativePath: string, records: EvalRecord[]) {
+  writeFileSync(
+    join(repoDir, relativePath),
+    records.length > 0 ? `${records.map((record) => JSON.stringify(record)).join('\n')}\n` : '',
+  );
+}
+
+function makeRepoWithStageAwareData(
+  recordsOrSources: EvalRecord[] | {
+    local?: EvalRecord[];
+    backfilled?: EvalRecord[];
+    aggregated?: EvalRecord[];
+  },
+  configOverrides: Record<string, unknown> = {},
+) {
   const repoDir = mkdtempSync(join(tmpdir(), 'stage-aware-router-test-'));
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
 
-  writeFileSync(
-    join(repoDir, '.wavemill', 'evals', 'aggregated-evals.backfilled.jsonl'),
-    `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
-  );
-  writeFileSync(
-    join(repoDir, '.wavemill', 'evals', 'evals.jsonl'),
-    `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
-  );
+  const sources = Array.isArray(recordsOrSources)
+    ? { local: recordsOrSources, backfilled: recordsOrSources, aggregated: [] }
+    : recordsOrSources;
+
+  writeJsonl(repoDir, '.wavemill/evals/aggregated-evals.backfilled.jsonl', sources.backfilled || []);
+  writeJsonl(repoDir, '.wavemill/evals/aggregated-evals.jsonl', sources.aggregated || []);
+  writeJsonl(repoDir, '.wavemill/evals/evals.jsonl', sources.local || []);
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     router: {
       enabled: true,
@@ -238,6 +252,36 @@ test('routeStageAware returns a stage-aware decision from backfilled evals', () 
   }
 });
 
+test('loadStageAwareEvalRecords merges sources and prefers richer local duplicates', () => {
+  const duplicateAggregate = makeEvalRecord('dup', 'claude-opus-4-6', { plan: 0.4, implementation: 0.4, review: 0.4 }, {
+    taskDescriptor: undefined,
+    metadata: undefined,
+    workflowTokenUsage: undefined,
+  });
+  const duplicateLocal = makeEvalRecord('dup', 'gpt-5.3-codex', { plan: 0.9, implementation: 0.95, review: 0.92 }, {
+    workflowTokenUsage: {
+      'gpt-5.3-codex': { inputTokens: 10, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 3.25 },
+    },
+  });
+  const uniqueBackfilled = makeEvalRecord('unique', 'claude-haiku-4-5-20251001', { plan: 0.7, implementation: 0.72, review: 0.91 });
+  const { repoDir, cleanup } = makeRepoWithStageAwareData({
+    local: [duplicateLocal],
+    backfilled: [uniqueBackfilled],
+    aggregated: [duplicateAggregate],
+  });
+
+  try {
+    const records = loadStageAwareEvalRecords({ repoDir });
+    assert.equal(records.length, 2);
+    const deduped = records.find((record) => record.id === 'dup');
+    assert.equal(deduped?.modelId, 'gpt-5.3-codex');
+    assert.ok(deduped?.workflowTokenUsage);
+    assert.ok(records.some((record) => record.id === 'unique'));
+  } finally {
+    cleanup();
+  }
+});
+
 test('routeWorkflowStageAware falls back to heuristic when data is insufficient', () => {
   const records = [
     makeEvalRecord('1', 'claude-sonnet-4-5-20250929', { plan: 0.9, implementation: 0.9, review: 0.9 }),
@@ -258,6 +302,79 @@ test('routeWorkflowStageAware falls back to heuristic when data is insufficient'
     assert.equal(decision.neighborCount, 0);
     const summary = summarizeWorkflowRoute(decision, repoDir);
     assert.match(summary, /Router:\s+heuristic-fallback/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('routeStageAware uses fresh local evals even when aggregate history exists', () => {
+  const aggregated = [
+    makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.97, implementation: 0.61, review: 0.96 }),
+    makeEvalRecord('2', 'claude-opus-4-6', { plan: 0.95, implementation: 0.62, review: 0.95 }),
+    makeEvalRecord('3', 'claude-opus-4-6', { plan: 0.94, implementation: 0.63, review: 0.94 }),
+  ];
+  const local = [
+    makeEvalRecord('4', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.98, review: 0.68 }),
+    makeEvalRecord('5', 'gpt-5.3-codex', { plan: 0.69, implementation: 0.97, review: 0.67 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData({ local, backfilled: aggregated });
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests and review.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 5,
+    });
+    assert.ok(decision);
+    assert.equal(decision?.coder, 'gpt-5.3-codex');
+    assert.equal(decision?.planner, 'claude-opus-4-6');
+  } finally {
+    cleanup();
+  }
+});
+
+test('routeStageAware does not overweight duplicate records across sources', () => {
+  const opus = makeEvalRecord('opus-1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.82, review: 0.93 });
+  const codex = makeEvalRecord('codex-1', 'gpt-5.3-codex', { plan: 0.74, implementation: 0.97, review: 0.7 });
+  const haiku = makeEvalRecord('haiku-1', 'claude-haiku-4-5-20251001', { plan: 0.68, implementation: 0.62, review: 0.95 });
+  const { repoDir, cleanup } = makeRepoWithStageAwareData({
+    local: [codex],
+    backfilled: [opus, codex, haiku],
+  });
+
+  try {
+    const records = loadStageAwareEvalRecords({ repoDir });
+    assert.equal(records.length, 3);
+    assert.equal(records.filter((record) => record.id === 'codex-1').length, 1);
+
+    const decision = routeStageAware('Build a backend feature with tests and review.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 5,
+    });
+    assert.ok(decision);
+    assert.equal(decision?.coder, 'gpt-5.3-codex');
+    assert.equal(decision?.neighborCount, 3);
+  } finally {
+    cleanup();
+  }
+});
+
+test('routeStageAware still uses aggregate history when local evals are empty', () => {
+  const backfilled = [
+    makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
+    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData({ local: [], backfilled });
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir });
+    assert.ok(decision);
+    assert.equal(decision?.routingMode, 'stage-aware');
+    assert.equal(decision?.neighborCount, 3);
   } finally {
     cleanup();
   }

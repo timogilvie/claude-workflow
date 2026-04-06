@@ -234,7 +234,7 @@ Every completed task is automatically scored by an LLM judge on a 0–1 scale:
 | Partial | 0.2–0.4 | Significant rework needed |
 | Failure | 0.0–0.1 | Did not produce a usable result |
 
-The eval gathers PR diffs, CI results, review comments, and detects interventions (manual commits, force pushes, multiple review rounds). Records are stored in `.wavemill/evals/evals.jsonl` and feed directly into routing.
+The eval gathers PR diffs, CI results, review comments, and detects interventions (manual commits, force pushes, multiple review rounds). Records are stored in `.wavemill/evals/evals.jsonl` and feed directly into routing. In `stage-aware` mode, fresh local evals are merged with aggregated/backfilled history so the next similar task can benefit immediately, while historical artifacts still cover cold starts.
 
 ```bash
 # Eval is automatic in mill mode. To run manually:
@@ -250,6 +250,7 @@ The router picks the best model for each task based on historical eval performan
 **Routing modes:**
 - **heuristic** — regex-based task classification + historical averages
 - **llm** — DSPy-optimized model selection with few-shot examples
+- **stage-aware** — nearest-neighbor routing over live local evals plus aggregated/backfilled history
 - **auto** (default) — tries LLM routing, falls back to heuristic
 
 Configure in `.wavemill-config.json`:
