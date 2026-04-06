@@ -67,3 +67,11 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
 - Do NOT run tests or make code changes
 - Focus on understanding and planning
 - If anything is unclear, ask the user for clarification before finalizing the plan
+
+### Handling User Abort Requests
+
+If the user asks you to stop work, close the issue, abort, or otherwise discontinue this workflow:
+- Create the abort marker: touch features/{{SLUG}}/.workflow-aborted
+- Do NOT create the phase completion marker (.plan-approved)
+- Inform the user that the workflow is being stopped
+- Exit cleanly by running the /exit command

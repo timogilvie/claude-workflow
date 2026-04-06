@@ -330,6 +330,13 @@ check_coding_complete() {
   return 1
 }
 
+check_workflow_aborted() {
+  local slug="$1"
+  local wt="${WORKTREE_ROOT}/${slug}"
+  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
+  return 1
+}
+
 
 set_window_attention_state() {
   local win="$1" state="${2:-clear}"
@@ -1432,20 +1439,6 @@ check_routing_complete() {
   return 1
 }
 
-check_plan_approved() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
-  return 1
-}
-
-check_coding_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
-  return 1
-}
-
 # Ensure a tmux window exists, creating it if missing (e.g. after monitor restart).
 _ensure_window_exists() {
   local session="$1" win="$2" wt_dir="$3"
@@ -1579,7 +1572,7 @@ $issue_desc
   # Build review prompt
   local prompt_file="/tmp/${SESSION}-${issue}-review-prompt.txt"
   build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" > "$prompt_file"
 
   log "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file"
@@ -2729,6 +2722,13 @@ monitor_issue_state() {
 
       case "$current_phase" in
         routing)
+          if check_workflow_aborted "$SLUG"; then
+            log "⛔ $ISSUE → Workflow aborted by user during routing phase"
+            set_task_phase "$ISSUE" "aborted"
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+
           if check_routing_complete "$SLUG"; then
             # Read routing results
             routing_file="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.routing-complete"
@@ -2802,6 +2802,13 @@ monitor_issue_state() {
           ;;
 
         planning)
+          if check_workflow_aborted "$SLUG"; then
+            log "⛔ $ISSUE → Workflow aborted by user during planning phase"
+            set_task_phase "$ISSUE" "aborted"
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+
           # Late migration detection: agent writes .migration-detected after expanding
           local mig_marker="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.migration-detected"
           local mig_num_file="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.migration-number"
@@ -2870,6 +2877,13 @@ monitor_issue_state() {
           ;;
 
         coding)
+          if check_workflow_aborted "$SLUG"; then
+            log "⛔ $ISSUE → Workflow aborted by user during coding phase"
+            set_task_phase "$ISSUE" "aborted"
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+
           if check_coding_complete "$SLUG"; then
             # FORCE_MODEL takes priority, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
@@ -2909,6 +2923,13 @@ monitor_issue_state() {
           ;;
 
         review)
+          if check_workflow_aborted "$SLUG"; then
+            log "⛔ $ISSUE → Workflow aborted by user during review phase"
+            set_task_phase "$ISSUE" "aborted"
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+
           # Review phase is complete when PR is created (handled above)
           if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
             set_window_attention_state "$WIN" "clear"
@@ -2918,6 +2939,11 @@ monitor_issue_state() {
           fi
           # Agent exited but no PR - might need attention
           needs_attention="true"
+          ;;
+
+        aborted)
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
           ;;
 
         executing)
@@ -2950,6 +2976,13 @@ monitor_issue_state() {
       # Check if the pane is dead but window still exists (remain-on-exit).
       # Respawn and re-launch the current phase instead of cleaning up.
       if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
+        if check_workflow_aborted "$SLUG"; then
+          log "⛔ $ISSUE → Workflow aborted (pane exited)"
+          set_task_phase "$ISSUE" "aborted"
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+        fi
+
         log "⚠ $ISSUE → Pane died during $current_phase phase, respawning..."
         tmux respawn-pane -t "$SESSION:$WIN" 2>/dev/null || true
         sleep 1

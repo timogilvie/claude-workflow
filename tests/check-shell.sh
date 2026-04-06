@@ -127,7 +127,7 @@ else
       save_task_state remove_task_state set_task_phase get_task_phase
       find_pr_for_branch pr_state validate_pr_merge
       linear_set_state linear_is_completed
-      check_routing_complete check_plan_approved check_coding_complete
+      check_routing_complete check_plan_approved check_coding_complete check_workflow_aborted
       fetch_candidates filter_active_issues
       launch_task is_task_packet
       cleanup_dashboard_pane
@@ -244,11 +244,25 @@ else
     in_fn && /^\}/ { exit }
   ')
   PLAN_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_plan_approved "\$SLUG"' | head -n1 | cut -d: -f1 || true)
+  ABORT_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_workflow_aborted "\$SLUG"' | head -n1 | cut -d: -f1 || true)
   PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - check if agent pane is still alive' | head -n1 | cut -d: -f1 || true)
   if [[ -n "$PLAN_CHECK_LINE" && -n "$PANE_EARLY_RETURN_LINE" ]] && (( PLAN_CHECK_LINE < PANE_EARLY_RETURN_LINE )); then
     pass "monitor checks planning approval before no-PR pane-alive early return"
   else
     fail "monitor planning approval check runs too late (after pane-alive early return)"
+  fi
+
+  if [[ -n "$ABORT_CHECK_LINE" && -n "$PLAN_CHECK_LINE" ]] && (( ABORT_CHECK_LINE < PLAN_CHECK_LINE )); then
+    pass "monitor checks workflow abort before phase completion markers"
+  else
+    fail "monitor abort check does not take precedence over completion markers"
+  fi
+
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -qE '^[[:space:]]*aborted\)$' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Workflow aborted (pane exited)'; then
+    pass "monitor handles aborted state and pane-exit abort fallback"
+  else
+    fail "monitor is missing aborted-state handling or pane-exit abort fallback"
   fi
 fi
 
@@ -381,7 +395,43 @@ else
 fi
 
 # ============================================================================
-# TEST 6: Verify sourced libraries exist
+# TEST 7: Abort prompt guidance regression guards
+# ============================================================================
+echo ""
+echo "=== Abort Prompt Guidance Guards ==="
+
+if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/planning-phase.md" \
+  && grep -q 'Do NOT create the phase completion marker (.plan-approved)' "$REPO_DIR/tools/prompts/planning-phase.md"; then
+  pass "planning template documents abort marker flow"
+else
+  fail "planning template is missing abort marker guidance"
+fi
+
+if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/coding-phase.md" \
+  && grep -q 'Do NOT create the phase completion marker (.coding-complete)' "$REPO_DIR/tools/prompts/coding-phase.md"; then
+  pass "coding template documents abort marker flow"
+else
+  fail "coding template is missing abort marker guidance"
+fi
+
+if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q 'Do NOT create additional completion output or a PR' "$REPO_DIR/tools/prompts/review-phase.md"; then
+  pass "review template documents abort marker flow"
+else
+  fail "review template is missing abort marker guidance"
+fi
+
+if grep -q 'create features/\$slug/.workflow-aborted and exit via /exit' "$LIB_DIR/agent-adapters.sh" \
+  && grep -q 'Create the phase completion marker if the user wants to stop' "$LIB_DIR/agent-adapters.sh" \
+  && grep -q 'workflow-aborted and exit via /exit' "$LIB_DIR/agent-adapters.sh" \
+  && grep -q 'Create additional completion output if the user wants to stop' "$LIB_DIR/agent-adapters.sh"; then
+  pass "prompt builders include abort handling guidance"
+else
+  fail "prompt builders are missing abort handling guidance"
+fi
+
+# ============================================================================
+# TEST 8: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
@@ -408,7 +458,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 6: Optional ShellCheck
+# TEST 9: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""

@@ -148,6 +148,7 @@ IMPORTANT: You are running autonomously with NO user interaction.
 - Do NOT ask questions or request user input — make your best judgment call.
 - If a decision is ambiguous, choose the most reasonable default and document your choice in the PR description.
 - If you truly cannot proceed without clarification, note the blocker in the PR description and implement what you can.
+- If workflow automation explicitly tells you to stop, abort, close the issue, or discontinue work, do not proceed to later steps.
 
 Status Reporting:
 Throughout your work, periodically update your status by running:
@@ -166,6 +167,11 @@ Process:
 1. Inspect repo and find relevant code
 2. Make minimal, high-quality changes
 3. Run tests/lint
+   If workflow automation explicitly tells you to stop, abort, close the issue, or discontinue work:
+   - Create the abort marker: touch "$wt_dir/features/$(basename "$wt_dir")/.workflow-aborted"
+   - Do NOT create additional completion markers or a PR
+   - Report that the workflow is stopping
+   - Exit cleanly via /exit
 4. REQUIRED: Run the self-review tool before creating a PR (do not skip or substitute your own review):
    IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
    IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
@@ -483,7 +489,9 @@ When you receive user feedback:
 - DO: Read and incorporate the feedback into your ongoing work
 - DO: Adjust your approach based on the guidance
 - DO: Continue working until the phase requirements are genuinely complete
+- DO: If the user asks to stop, abort, close the issue, or discontinue work, create features/$slug/.workflow-aborted and exit via /exit
 - DO NOT: Interpret feedback as "wrap up now" or "move to next phase"
+- DO NOT: Create the phase completion marker if the user wants to stop
 - DO NOT: Create .plan-approved just because you received feedback
 - DO NOT: Run /exit unless the user has explicitly approved your plan
 
@@ -566,7 +574,9 @@ When you receive user feedback:
 - DO: Read and incorporate the feedback into your ongoing work
 - DO: Adjust your approach based on the guidance
 - DO: Continue working until the phase requirements are genuinely complete
+- DO: If the user asks to stop, abort, close the issue, or discontinue work, create features/$slug/.workflow-aborted and exit via /exit
 - DO NOT: Interpret feedback as "wrap up now" or "move to next phase"
+- DO NOT: Create the phase completion marker if the user wants to stop
 - DO NOT: Create .coding-complete just because you received feedback
 - DO NOT: Run /exit unless ALL phase requirements are met
 
@@ -595,13 +605,14 @@ _WVML_PROMPT_
 #   $6 = issue_context
 #   $7 = status_file
 #   $8 = tools_dir
-#   $9 = reviewer_model (optional: recommended reviewer model)
-#   $10 = review_mode (optional: recommended review mode)
+#   $9 = slug
+#   $10 = reviewer_model (optional: recommended reviewer model)
+#   $11 = review_mode (optional: recommended review mode)
 # Prints: the complete prompt to stdout
 build_review_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
-  local issue_context="$6" status_file="$7" tools_dir="$8"
-  local reviewer_model="${9:-}" review_mode="${10:-static}"
+  local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
+  local reviewer_model="${10:-}" review_mode="${11:-static}"
 
   # Build reviewer note
   local reviewer_note=""
@@ -638,6 +649,7 @@ build_review_prompt() {
     template_content="${template_content//\{\{TOOLS_DIR\}\}/$tools_dir}"
     template_content="${template_content//\{\{BASE_BRANCH\}\}/$base_branch}"
     template_content="${template_content//\{\{ISSUE\}\}/$issue}"
+    template_content="${template_content//\{\{SLUG\}\}/$slug}"
     template_content="${template_content//\{\{REVIEWER_NOTE\}\}/$reviewer_note}"
     template_content="${template_content//\{\{MODE_GUIDANCE\}\}/$mode_guidance}"
   else
@@ -670,7 +682,9 @@ When you receive user feedback:
 - DO: Read and incorporate the feedback into your ongoing work
 - DO: Adjust your approach based on the guidance
 - DO: Continue working until the review and PR creation are genuinely complete
+- DO: If the user asks to stop, abort, close the issue, or discontinue work, create $wt_dir/features/$(basename "$wt_dir")/.workflow-aborted and exit via /exit
 - DO NOT: Interpret feedback as "wrap up now"
+- DO NOT: Create additional completion output if the user wants to stop
 - DO NOT: Skip remaining review steps or rush the PR just because you received feedback
 - DO NOT: Run /exit until the PR is created and all review steps are done
 
