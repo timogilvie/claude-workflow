@@ -760,6 +760,7 @@ agent_launch_interactive() {
   local agent_cmd="$4"
   local model="${5:-}"
   local agent_flags="${6:-}"
+  local abort_check_cmd="${7:-}"
 
   local model_flag=""
   if [[ -n "$model" ]]; then
@@ -770,7 +771,11 @@ agent_launch_interactive() {
     agent_flags=" $agent_flags"
   fi
 
-  agent_prepare_pane_for_launch "$session" "$window"
+  agent_prepare_pane_for_launch "$session" "$window" 15 3 "$abort_check_cmd"
+  local prepare_rc=$?
+  if [[ "$prepare_rc" -ne 0 ]]; then
+    return "$prepare_rc"
+  fi
 
   local launcher="/tmp/${session}-$(basename "$prompt_file" .txt)-launcher.sh"
 
@@ -998,6 +1003,7 @@ agent_wait_for_pane_ready() {
   local window="$2"
   local max_wait="${3:-3}"
   local poll_interval="${4:-0.2}"
+  local abort_check_cmd="${5:-}"
   local target="$session:$window"
 
   local attempts
@@ -1005,6 +1011,11 @@ agent_wait_for_pane_ready() {
 
   local attempt=1
   while (( attempt <= attempts )); do
+    if [[ -n "$abort_check_cmd" ]] && eval "$abort_check_cmd"; then
+      _agent_log_warn "  Pane $target readiness wait interrupted by workflow abort"
+      return 2
+    fi
+
     if agent_pane_is_ready "$session" "$window"; then
       if (( attempt > 1 )); then
         _agent_log_debug "Pane $target became ready after $attempt attempts"
@@ -1028,14 +1039,19 @@ agent_prepare_pane_for_launch() {
   local window="$2"
   local terminate_wait="${3:-15}"
   local ready_wait="${4:-3}"
+  local abort_check_cmd="${5:-}"
   local target="$session:$window"
 
   if ! agent_terminate_in_pane "$session" "$window" "$terminate_wait"; then
     _agent_log_warn "  Timed out waiting for previous agent to exit in $target"
   fi
 
-  if agent_wait_for_pane_ready "$session" "$window" "$ready_wait"; then
+  agent_wait_for_pane_ready "$session" "$window" "$ready_wait" 0.2 "$abort_check_cmd"
+  local ready_rc=$?
+  if [[ "$ready_rc" -eq 0 ]]; then
     return 0
+  elif [[ "$ready_rc" -eq 2 ]]; then
+    return 2
   fi
 
   _agent_log_warn "  Pane $target not ready, force-killing children..."
@@ -1044,21 +1060,33 @@ agent_prepare_pane_for_launch() {
   if [[ -n "$pane_pid" ]]; then
     pkill -TERM -P "$pane_pid" 2>/dev/null || true
     sleep 0.5
-    if ! agent_wait_for_pane_ready "$session" "$window" 1; then
+    agent_wait_for_pane_ready "$session" "$window" 1 0.2 "$abort_check_cmd"
+    ready_rc=$?
+    if [[ "$ready_rc" -eq 2 ]]; then
+      return 2
+    elif [[ "$ready_rc" -ne 0 ]]; then
       pkill -KILL -P "$pane_pid" 2>/dev/null || true
       sleep 0.5
     fi
   fi
 
-  if agent_wait_for_pane_ready "$session" "$window" 1.5; then
+  agent_wait_for_pane_ready "$session" "$window" 1.5 0.2 "$abort_check_cmd"
+  ready_rc=$?
+  if [[ "$ready_rc" -eq 0 ]]; then
     return 0
+  elif [[ "$ready_rc" -eq 2 ]]; then
+    return 2
   fi
 
   _agent_log_warn "  Pane $target STILL not ready after force-kill, respawning pane..."
   tmux respawn-pane -k -t "$target" 2>/dev/null || true
   sleep 0.5
 
-  if ! agent_wait_for_pane_ready "$session" "$window" 2; then
+  agent_wait_for_pane_ready "$session" "$window" 2 0.2 "$abort_check_cmd"
+  ready_rc=$?
+  if [[ "$ready_rc" -eq 2 ]]; then
+    return 2
+  elif [[ "$ready_rc" -ne 0 ]]; then
     _agent_log_warn "  Pane $target still not ready after respawn; launching anyway"
   fi
 }
