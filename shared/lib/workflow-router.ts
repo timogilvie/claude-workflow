@@ -8,6 +8,8 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
+import { getChallengeSchedulerConfig } from './config.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
@@ -35,6 +37,7 @@ export interface WorkflowRouteDecision {
     fileTypes: string[];
     riskScore: number;
   };
+  challengeRecommendation?: ChallengeRecommendation;
 }
 
 export interface RouteWorkflowOptions {
@@ -306,9 +309,10 @@ export function routeWorkflowStageAware(
     stageAwareDecision = null;
   }
 
+  let decision: StageAwareDecision;
   if (!stageAwareDecision) {
     const fallback = routeWorkflow(prompt, options);
-    return {
+    decision = {
       ...fallback,
       routingMode: 'heuristic-fallback',
       neighborCount: 0,
@@ -317,18 +321,39 @@ export function routeWorkflowStageAware(
         (fallback.expectedCostPlan + fallback.expectedCostCode + fallback.expectedCostReview).toFixed(2)
       ),
     };
+  } else {
+    decision = {
+      ...stageAwareDecision,
+      signals: {
+        taskType: characteristics.taskType,
+        promptLength: characteristics.length,
+        complexityScore: characteristics.complexityScore,
+        fileTypes: characteristics.fileTypes,
+        riskScore,
+      },
+    };
   }
 
-  return {
-    ...stageAwareDecision,
-    signals: {
-      taskType: characteristics.taskType,
-      promptLength: characteristics.length,
-      complexityScore: characteristics.complexityScore,
-      fileTypes: characteristics.fileTypes,
-      riskScore,
-    },
-  };
+  const challengeConfig = getChallengeSchedulerConfig(repoDir);
+  if (challengeConfig.enabled === false) {
+    return decision;
+  }
+
+  const recommendation = evaluateChallenge({
+    routingDecision: decision,
+    evalSummary: buildEvalSummary(repoDir),
+    config: challengeConfig,
+    repoDir,
+  });
+
+  if (recommendation.shouldChallenge) {
+    return {
+      ...decision,
+      challengeRecommendation: recommendation,
+    };
+  }
+
+  return decision;
 }
 
 export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?: string): string {
@@ -351,6 +376,14 @@ export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?
   if ('routingMode' in decision) {
     lines.push(
       `Router:   ${decision.routingMode}  neighbors=${decision.neighborCount}  similarity=${decision.neighborSimilarityRange[0].toFixed(2)}-${decision.neighborSimilarityRange[1].toFixed(2)}`
+    );
+  }
+
+  if (decision.challengeRecommendation?.shouldChallenge) {
+    const recommendation = decision.challengeRecommendation;
+    const stageSuffix = recommendation.stage ? `  stage=${recommendation.stage}` : '';
+    lines.push(
+      `Challenge: ${recommendation.reason}  ${recommendation.defaultModel || 'unknown'} vs ${recommendation.challengerModel || 'unknown'}${stageSuffix}`
     );
   }
 

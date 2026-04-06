@@ -263,6 +263,46 @@ test('routeWorkflowStageAware falls back to heuristic when data is insufficient'
   }
 });
 
+test('routeWorkflowStageAware attaches a challenge recommendation when policy triggers', () => {
+  const records = [
+    makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
+    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 3,
+      defaultModel: 'claude-sonnet-4-5-20250929',
+      models: [
+        'claude-opus-4-6',
+        'claude-sonnet-4-5-20250929',
+        'claude-haiku-4-5-20251001',
+        'gpt-5.3-codex',
+      ],
+      defaultAgent: 'claude',
+    },
+    challengeScheduler: {
+      enabled: true,
+      confidenceThreshold: 0.99,
+      newModelChallengeCount: 1,
+      minEvalRecordsPerStage: 1,
+    },
+  });
+
+  try {
+    const decision = routeWorkflowStageAware('Build a backend feature with tests and review.', { repoDir });
+    assert.equal(decision.challengeRecommendation?.shouldChallenge, true);
+    assert.equal(decision.challengeRecommendation?.reason, 'low-confidence');
+    assert.match(summarizeWorkflowRoute(decision, repoDir), /Challenge:\s+low-confidence/);
+  } finally {
+    cleanup();
+  }
+});
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);

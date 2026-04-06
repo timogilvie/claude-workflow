@@ -18,6 +18,7 @@ import {
   loadWavemillConfig,
   clearConfigCache,
   getChallengeConfig,
+  getChallengeSchedulerConfig,
   getRouterConfig,
   getEvalConfig,
   getMillConfig,
@@ -134,6 +135,7 @@ test('valid config passes validation', () => {
     writeConfig(tmp, JSON.stringify({
       router: { enabled: true, defaultModel: 'claude-sonnet-4-5-20250929' },
       challenge: { enabled: true, rate: 0.25, models: ['claude-opus-4-6', 'gpt-5.3-codex'] },
+      challengeScheduler: { enabled: true, confidenceThreshold: 0.65, newModelChallengeCount: 4 },
       eval: { evalsDir: '.wavemill/evals' },
       mill: { maxParallel: 5 },
     }));
@@ -141,6 +143,7 @@ test('valid config passes validation', () => {
     assert.equal(config.router?.enabled, true);
     assert.equal(config.challenge?.enabled, true);
     assert.equal(config.challenge?.rate, 0.25);
+    assert.equal(config.challengeScheduler?.confidenceThreshold, 0.65);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
     assert.equal(config.mill?.maxParallel, 5);
   } finally {
@@ -176,6 +179,27 @@ test('invalid challenge rate throws validation error', () => {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
       challenge: { enabled: true, rate: 2 }
+    }));
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid challenge scheduler threshold throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challengeScheduler: { confidenceThreshold: 2 }
     }));
     if (hasAjv) {
       assert.throws(() => {
@@ -254,6 +278,31 @@ test('second load returns cached config', () => {
 
     // Should be the exact same object (cached)
     assert.equal(config1, config2);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('challenge scheduler accessor returns configured values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challengeScheduler: {
+        enabled: true,
+        confidenceThreshold: 0.55,
+        newModelChallengeCount: 3,
+        minEvalRecordsPerStage: 8,
+        maxConcurrentChallenges: 2,
+      },
+    }));
+
+    const config = getChallengeSchedulerConfig(tmp);
+    assert.equal(config.enabled, true);
+    assert.equal(config.confidenceThreshold, 0.55);
+    assert.equal(config.newModelChallengeCount, 3);
+    assert.equal(config.minEvalRecordsPerStage, 8);
+    assert.equal(config.maxConcurrentChallenges, 2);
   } finally {
     cleanUp(tmp);
   }
