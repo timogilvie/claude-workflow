@@ -1220,13 +1220,6 @@ check_coding_complete() {
   return 1
 }
 
-check_workflow_aborted() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
-  return 1
-}
-
 # Timeout for external API calls (Linear, GitHub) to prevent monitor freeze.
 # If an API call hangs, the entire monitoring loop blocks and the user cannot
 # type 'q' or select tasks.  This value caps individual calls.
