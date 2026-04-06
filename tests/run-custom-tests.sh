@@ -25,6 +25,7 @@ for f in \
   eval-persistence.test.ts \
   eval-schema.test.ts \
   llm-router.test.ts \
+  issue-expander.test.ts \
   repo-context-analyzer.test.ts \
   review-context-gatherer.test.ts \
   rule-generator.test.ts \

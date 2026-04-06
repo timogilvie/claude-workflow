@@ -8,14 +8,18 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
 
 1. **Expand task packet** (if needed):
    - Check if a detailed task packet exists in the Linear issue description
-   - If not, expand it using: npx tsx {{TOOLS_DIR}}/expand-issue.ts {{ISSUE}}
-   - This creates a comprehensive specification with requirements, constraints, and validation steps
+   - If not, expand it using:
+     npx tsx {{TOOLS_DIR}}/expand-issue.ts {{ISSUE}} --output features/{{SLUG}}/task-packet.md
+   - This updates Linear and persists the local packet artifacts at:
+     - `features/{{SLUG}}/task-packet.md`
+     - `features/{{SLUG}}/task-packet-header.md`
+     - `features/{{SLUG}}/task-packet-details.md`
 
 2. **Re-route after expansion** (if task was expanded):
    - After expanding the task packet, re-run the router on the full specification:
-     npx tsx {{TOOLS_DIR}}/route-task.ts --json --file features/{{SLUG}}/selected-task.json --repo-dir $(pwd)
+     npx tsx {{TOOLS_DIR}}/route-task.ts --json --file features/{{SLUG}}/task-packet.md --repo-dir $(pwd)
    - Save the result to: features/{{SLUG}}/.post-expansion-route.json
-   - This captures how routing changes with richer context (compared to .initial-route.json from raw description)
+   - This captures how routing changes with richer context (compared to `.initial-route.json` from the raw `selected-task.json` metadata)
 
 3. **Detect migrations** (if not already assigned):
    - After expansion, check if the expanded task mentions database migrations, Alembic, schema changes, or table alterations

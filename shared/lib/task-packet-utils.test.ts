@@ -2,11 +2,16 @@
  * Tests for task-packet-utils.ts
  */
 
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, test, expect } from 'vitest';
 import {
+  getTaskPacketArtifactPaths,
   splitTaskPacket,
   isValidTaskPacket,
   isTaskPacketFile,
+  writeTaskPacketArtifacts,
 } from './task-packet-utils.ts';
 
 describe('splitTaskPacket', () => {
@@ -166,5 +171,32 @@ describe('isTaskPacketFile', () => {
 
   test('handles paths without directory', () => {
     expect(isTaskPacketFile('task-packet.md')).toBe(true);
+  });
+});
+
+describe('task packet artifact persistence', () => {
+  test('derives conventional artifact paths from the full packet path', () => {
+    const paths = getTaskPacketArtifactPaths('features/foo/task-packet.md');
+    expect(paths).toEqual({
+      full: 'features/foo/task-packet.md',
+      header: 'features/foo/task-packet-header.md',
+      details: 'features/foo/task-packet-details.md',
+    });
+  });
+
+  test('writes full, header, and details files and creates parent directories', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-packet-utils-'));
+    const outputFile = path.join(root, 'features', 'foo', 'task-packet.md');
+
+    const artifactPaths = await writeTaskPacketArtifacts(outputFile, {
+      header: '# Header',
+      details: '## 1. Objective\n\nDetails',
+      fullContent: '# Header\n\n---\n\n## 1. Objective\n\nDetails',
+    });
+
+    await expect(fs.readFile(artifactPaths.header, 'utf-8')).resolves.toBe('# Header');
+    await expect(fs.readFile(artifactPaths.details, 'utf-8')).resolves.toBe('## 1. Objective\n\nDetails');
+    await expect(fs.readFile(artifactPaths.full, 'utf-8')).resolves.toBe('# Header\n\n---\n\n## 1. Objective\n\nDetails');
+    await fs.rm(root, { recursive: true, force: true });
   });
 });
