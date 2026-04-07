@@ -147,9 +147,9 @@ agent_completion_text() {
 
   if [[ "$agent_cmd" == "codex" ]]; then
     if [[ -n "$suffix" ]]; then
-      echo "stop there. Workflow orchestration will close the session automatically. $suffix"
+      echo "remain in the session and wait there. Do not attempt to exit manually; workflow orchestration will close the session automatically. $suffix"
     else
-      echo "stop there. Workflow orchestration will close the session automatically."
+      echo "remain in the session and wait there. Do not attempt to exit manually; workflow orchestration will close the session automatically."
     fi
   else
     if [[ -n "$suffix" ]]; then
@@ -858,7 +858,7 @@ LAUNCHEOF
     codex)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-codex exec${model_flag}${agent_flags} - < '$prompt_file'
+codex${model_flag}${agent_flags} --no-alt-screen "\$(cat '$prompt_file')"
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;

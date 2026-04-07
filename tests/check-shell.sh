@@ -613,10 +613,10 @@ for captured in "${TMUX_CAPTURE[@]}"; do
 done
 
 if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
-  && grep -q "codex exec --model gpt-5.4 --dangerously-bypass-approvals-and-sandbox - < '$CODEX_PROMPT_FILE'" "$CODEX_LAUNCHER_PATH"; then
-  pass "interactive Codex launcher uses codex exec with bypass flag"
+  && grep -q 'codex --model gpt-5.4 --dangerously-bypass-approvals-and-sandbox --no-alt-screen "\$(cat ' "$CODEX_LAUNCHER_PATH"; then
+  pass "interactive Codex launcher uses interactive codex with bypass flag"
 else
-  fail "interactive Codex launcher is missing codex exec or bypass flag"
+  fail "interactive Codex launcher is missing interactive codex flags"
 fi
 
 if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
