@@ -1059,13 +1059,20 @@ for t in "${TASKS[@]}"; do
 
   # Challengers are free overhead (don't consume a slot), so always pass
   # remaining-slots >= 2 as long as the primary slot is available.
-  _rs=$((MAX_PARALLEL - slots_used))
-  (( _rs < 2 )) && _rs=2
-  challenge_args=(--issue "$ISSUE" --slug "$SLUG" --title "$TITLE" --repo-dir "$REPO_DIR" --remaining-slots "$_rs")
-  [[ -n "$rec_model" ]] && challenge_args+=(--primary-model "$rec_model")
-  challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
-  challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
-  challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+  challenge_mode="single"
+  challenge_reason=""
+  if [[ -n "${FORCE_MODEL:-}" ]]; then
+    challenge_reason="forced_model"
+    log "  $ISSUE: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
+  else
+    _rs=$((MAX_PARALLEL - slots_used))
+    (( _rs < 2 )) && _rs=2
+    challenge_args=(--issue "$ISSUE" --slug "$SLUG" --title "$TITLE" --repo-dir "$REPO_DIR" --remaining-slots "$_rs")
+    [[ -n "$rec_model" ]] && challenge_args+=(--primary-model "$rec_model")
+    challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
+    challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
+    challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+  fi
 
   if [[ "$challenge_mode" == "challenge" ]]; then
     primary_model=$(echo "$challenge_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
@@ -2362,14 +2369,21 @@ launch_task() {
   if [[ -z "${WAVEMILL_DISABLE_CHALLENGE:-}" ]] && should_update_linear_state "$issue" && (( remaining_slots >= 1 )); then
     local challenge_args challenge_plan challenge_mode challenge_reason
     # Challengers are free overhead — always pass remaining-slots >= 2
-    local _dyn_rs=$remaining_slots
-    (( _dyn_rs < 2 )) && _dyn_rs=2
-    challenge_args=(--issue "$issue" --slug "$slug" --title "$title" --repo-dir "$REPO_DIR" --remaining-slots "$_dyn_rs")
-    [[ -n "$task_model" ]] && challenge_args+=(--primary-model "$task_model")
-    [[ -n "$packet_file" ]] && challenge_args+=(--file "$packet_file")
-    challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
-    challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
-    challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+    challenge_mode="single"
+    challenge_reason=""
+    if [[ -n "${FORCE_MODEL:-}" ]]; then
+      challenge_reason="forced_model"
+      log "  $issue: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
+    else
+      local _dyn_rs=$remaining_slots
+      (( _dyn_rs < 2 )) && _dyn_rs=2
+      challenge_args=(--issue "$issue" --slug "$slug" --title "$title" --repo-dir "$REPO_DIR" --remaining-slots "$_dyn_rs")
+      [[ -n "$task_model" ]] && challenge_args+=(--primary-model "$task_model")
+      [[ -n "$packet_file" ]] && challenge_args+=(--file "$packet_file")
+      challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
+      challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
+      challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+    fi
     if [[ "$challenge_mode" == "challenge" ]]; then
       challenge_enabled_for_launch="true"
       challenge_pair="$issue"

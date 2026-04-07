@@ -13,6 +13,7 @@ runTool({
     issue: { type: 'string', description: 'Task key / issue identifier' },
     slug: { type: 'string', description: 'Base task slug' },
     title: { type: 'string', description: 'Task title' },
+    'force-model': { type: 'string', description: 'Explicit forced model; disables challenge mode when non-empty' },
     'primary-model': { type: 'string', description: 'Router-selected or forced primary model' },
     'remaining-slots': { type: 'string', description: 'Available mill slots before launch' },
     'repo-dir': { type: 'string', description: 'Repository directory' },
@@ -23,6 +24,7 @@ runTool({
     const issue = args.issue as string;
     const slug = args.slug as string;
     const title = args.title as string;
+    const forceModel = (args['force-model'] as string | undefined)?.trim() || undefined;
     const primaryModel = (args['primary-model'] as string | undefined)?.trim() || undefined;
     const remainingSlots = Number(args['remaining-slots'] || '1');
     const taskFile = args.file as string | undefined;
@@ -58,6 +60,11 @@ runTool({
         agent: singleAgent,
       },
     };
+
+    if (forceModel) {
+      console.log(JSON.stringify({ ...base, reason: 'forced_model' }));
+      return;
+    }
 
     if (challenge.enabled !== true) {
       console.log(JSON.stringify(base));

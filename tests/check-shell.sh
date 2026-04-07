@@ -330,6 +330,35 @@ else
 fi
 
 # ============================================================================
+# TEST 4: FORCE_MODEL challenge bypass guards
+# ============================================================================
+echo ""
+echo "=== FORCE_MODEL Challenge Bypass Guards ==="
+
+FORCE_SKIP_COUNT=$(grep -c 'Challenge skipped because FORCE_MODEL is set (\$FORCE_MODEL)' "$MILL_SCRIPT" || true)
+if [[ "$FORCE_SKIP_COUNT" -eq 2 ]]; then
+  pass "wavemill-mill.sh logs FORCE_MODEL challenge skips in both launch paths"
+else
+  fail "wavemill-mill.sh is missing FORCE_MODEL challenge skip logs in one or more launch paths"
+fi
+
+FIRST_FORCE_GUARD_LINE=$(grep -n 'if \[\[ -n "\${FORCE_MODEL:-}" \]\]; then' "$MILL_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
+FIRST_RESOLVE_LINE=$(grep -n 'challenge_plan=$(npx tsx "\$TOOLS_DIR/resolve-challenge-task.ts"' "$MILL_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
+if [[ -n "$FIRST_FORCE_GUARD_LINE" && -n "$FIRST_RESOLVE_LINE" ]] && (( FIRST_FORCE_GUARD_LINE < FIRST_RESOLVE_LINE )); then
+  pass "initial launch path bypasses resolve-challenge-task.ts when FORCE_MODEL is set"
+else
+  fail "initial launch path does not guard resolve-challenge-task.ts behind FORCE_MODEL"
+fi
+
+SECOND_FORCE_GUARD_LINE=$(grep -n 'if \[\[ -n "\${FORCE_MODEL:-}" \]\]; then' "$MILL_SCRIPT" | sed -n '2p' | cut -d: -f1 || true)
+SECOND_RESOLVE_LINE=$(grep -nF 'challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts"' "$MILL_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
+if [[ -n "$SECOND_FORCE_GUARD_LINE" && -n "$SECOND_RESOLVE_LINE" ]] && (( SECOND_FORCE_GUARD_LINE < SECOND_RESOLVE_LINE )); then
+  pass "runtime launch path bypasses resolve-challenge-task.ts when FORCE_MODEL is set"
+else
+  fail "runtime launch path does not guard resolve-challenge-task.ts behind FORCE_MODEL"
+fi
+
+# ============================================================================
 # TEST 4: Codex attention-style regression guard
 # ============================================================================
 echo ""

@@ -124,6 +124,36 @@ test('recommends challenge when confidence is below threshold', () => {
   }
 });
 
+test('skips challenge when forceModel is set', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const result = evaluateChallenge({
+      routingDecision: makeDecision({ expectedSuccess: 0.2 }),
+      evalSummary: makeDenseSummary({
+        recordsByModel: {
+          'claude-sonnet-4-5-20250929': 12,
+          'gpt-5.4': 1,
+          'gpt-5.3-codex': 0,
+        },
+        recordsByStage: {
+          plan: 1,
+          implementation: 1,
+          review: 1,
+        },
+      }),
+      config: { enabled: true, confidenceThreshold: 0.7, newModelChallengeCount: 5, minEvalRecordsPerStage: 10 },
+      repoDir,
+      forceModel: 'gpt-5.4',
+    });
+
+    assert.equal(result.shouldChallenge, false);
+    assert.equal(result.reason, 'disabled');
+    assert.equal(result.priority, 0);
+  } finally {
+    cleanup();
+  }
+});
+
 test('does not trigger low-confidence challenge at threshold', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
