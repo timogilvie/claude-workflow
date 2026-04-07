@@ -34,6 +34,18 @@ DRY_RUN="${DRY_RUN:-false}"
 STATE_DIR="${STATE_DIR:-$REPO_DIR/.wavemill}"
 STATE_FILE="$STATE_DIR/workflow-state.json"
 
+trim_outer_whitespace() {
+  local value="${1-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+FORCE_MODEL="$(trim_outer_whitespace "${FORCE_MODEL:-}")"
+if [[ -z "$FORCE_MODEL" ]]; then
+  unset FORCE_MODEL
+fi
+
 
 command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq)"; exit 1; }
 command -v gh >/dev/null || { echo "Error: gh required (install: brew install gh && gh auth login)"; exit 1; }

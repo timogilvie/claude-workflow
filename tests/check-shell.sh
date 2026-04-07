@@ -359,7 +359,7 @@ else
 fi
 
 # ============================================================================
-# TEST 4: Codex attention-style regression guard
+# TEST 5: Codex attention-style regression guard
 # ============================================================================
 echo ""
 echo "=== Codex Attention Style Regression Guard ==="
@@ -455,7 +455,7 @@ else
 fi
 
 # ============================================================================
-# TEST 5: Dashboard planning-review status guards
+# TEST 6: Dashboard planning-review status guards
 # ============================================================================
 echo ""
 echo "=== Dashboard Planning Review Guards ==="
