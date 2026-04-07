@@ -1418,7 +1418,24 @@ set_task_phase() {
 
 get_task_phase() {
   local issue="$1"
-  jq -r --arg issue "$issue" '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null
+  read_state_file_value "executing" --arg issue "$issue" '.tasks[$issue].phase // "executing"'
+}
+
+read_state_file_value() {
+  local default_value="$1"
+  shift
+
+  if [[ ! -s "$STATE_FILE" ]]; then
+    printf '%s\n' "$default_value"
+    return 0
+  fi
+
+  if ! jq empty "$STATE_FILE" >/dev/null 2>&1; then
+    printf '%s\n' "$default_value"
+    return 0
+  fi
+
+  jq -r "$@" "$STATE_FILE" 2>/dev/null || printf '%s\n' "$default_value"
 }
 
 mark_eval_completed() {
@@ -2657,11 +2674,11 @@ monitor_issue_state() {
   PR="${PR_BY_ISSUE[$ISSUE]:-}"
   WIN="$ISSUE-$SLUG"
   WT_DIR="${WORKTREE_ROOT}/${SLUG}"
-  current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+  current_agent=$(read_state_file_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
   needs_attention="false"
 
   # If already merged or completed-external (requireConfirm), wait for window close then cleanup
-  task_status=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null)
+  task_status=$(read_state_file_value "" --arg issue "$ISSUE" '.tasks[$issue].status // empty')
   if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
     set_window_attention_state "$WIN" "clear"
     if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
@@ -2682,7 +2699,7 @@ monitor_issue_state() {
     if [[ -n "$PR" ]]; then
       PR_BY_ISSUE["$ISSUE"]="$PR"
       # Preserve agent when updating with PR number
-      current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+      current_agent=$(read_state_file_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
       linear_issue=$(get_linear_issue_id "$ISSUE")
       challenge_flag=$(get_task_meta "$ISSUE" "challenge")
       challenge_pair=$(get_task_meta "$ISSUE" "challengePairId")
@@ -2726,7 +2743,7 @@ monitor_issue_state() {
             linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
           fi
           # Preserve agent when marking as completed-external
-          current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+          current_agent=$(read_state_file_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
           save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "completed-external" "$current_agent"
           active_count=$((active_count + 1))
           return 0
@@ -2789,7 +2806,7 @@ monitor_issue_state() {
               fi
 
               # Save routing results to state
-              current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+              current_agent=$(read_state_file_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
               linear_issue=$(get_linear_issue_id "$ISSUE")
               save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
 
