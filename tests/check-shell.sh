@@ -464,21 +464,24 @@ echo ""
 echo "=== Abort Prompt Guidance Guards ==="
 
 if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/planning-phase.md" \
-  && grep -q 'Do NOT create the phase completion marker (.plan-approved)' "$REPO_DIR/tools/prompts/planning-phase.md"; then
+  && grep -q 'Do NOT create the phase completion marker (.plan-approved)' "$REPO_DIR/tools/prompts/planning-phase.md" \
+  && grep -q 'Stop after creating the marker and reporting the abort. Workflow orchestration will close the session.' "$REPO_DIR/tools/prompts/planning-phase.md"; then
   pass "planning template documents abort marker flow"
 else
   fail "planning template is missing abort marker guidance"
 fi
 
 if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/coding-phase.md" \
-  && grep -q 'Do NOT create the phase completion marker (.coding-complete)' "$REPO_DIR/tools/prompts/coding-phase.md"; then
+  && grep -q 'Do NOT create the phase completion marker (.coding-complete)' "$REPO_DIR/tools/prompts/coding-phase.md" \
+  && grep -q 'Stop after creating the marker and reporting the abort. Workflow orchestration will close the session.' "$REPO_DIR/tools/prompts/coding-phase.md"; then
   pass "coding template documents abort marker flow"
 else
   fail "coding template is missing abort marker guidance"
 fi
 
 if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/review-phase.md" \
-  && grep -q 'Do NOT create additional completion output or a PR' "$REPO_DIR/tools/prompts/review-phase.md"; then
+  && grep -q 'Do NOT create additional completion output or a PR' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q 'Stop after creating the marker and reporting the abort. Workflow orchestration will close the session.' "$REPO_DIR/tools/prompts/review-phase.md"; then
   pass "review template documents abort marker flow"
 else
   fail "review template is missing abort marker guidance"
@@ -536,6 +539,14 @@ if grep -q '/exit' "$PROMPT_RENDER_DIR/planning-claude.txt" \
   pass "claude-facing prompts retain /exit guidance"
 else
   fail "claude-facing prompts lost /exit guidance"
+fi
+
+if grep -q 'codex exec.*--dangerously-bypass-approvals-and-sandbox' "$LIB_DIR/agent-adapters.sh" \
+  && grep -q '\[\[ "\$agent_cmd" == "codex" \]\] && agent_flags="--dangerously-bypass-approvals-and-sandbox"' "$LIB_DIR/wavemill-mill.sh" \
+  && grep -q 'codex\${model_flag}\${agent_flags}' "$LIB_DIR/agent-adapters.sh"; then
+  pass "Codex launch paths preserve bypass flag in autonomous and interactive flows"
+else
+  fail "Codex launch paths are missing bypass flag coverage"
 fi
 
 # ============================================================================
