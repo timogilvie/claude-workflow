@@ -541,12 +541,60 @@ else
   fail "claude-facing prompts lost /exit guidance"
 fi
 
-if grep -q 'codex exec.*--dangerously-bypass-approvals-and-sandbox' "$LIB_DIR/agent-adapters.sh" \
-  && grep -q '\[\[ "\$agent_cmd" == "codex" \]\] && agent_flags="--dangerously-bypass-approvals-and-sandbox"' "$LIB_DIR/wavemill-mill.sh" \
-  && grep -q 'codex\${model_flag}\${agent_flags}' "$LIB_DIR/agent-adapters.sh"; then
-  pass "Codex launch paths preserve bypass flag in autonomous and interactive flows"
+TMUX_CAPTURE=()
+tmux() {
+  if [[ "${1:-}" == "send-keys" ]]; then
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -t|--)
+          shift
+          if [[ "${1:-}" == *:* ]]; then
+            shift
+          fi
+          ;;
+        -l|C-m)
+          shift
+          ;;
+        *)
+          TMUX_CAPTURE+=("$1")
+          shift
+          ;;
+      esac
+    done
+    return 0
+  fi
+  return 0
+}
+
+agent_prepare_pane_for_launch() {
+  return 0
+}
+
+CODEX_PROMPT_FILE="$PROMPT_RENDER_DIR/interactive-codex-prompt.txt"
+printf 'planning prompt\n' > "$CODEX_PROMPT_FILE"
+agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4"
+
+CODEX_LAUNCHER_PATH=""
+for captured in "${TMUX_CAPTURE[@]}"; do
+  if [[ "$captured" == */*-launcher.sh ]]; then
+    printf -v CODEX_LAUNCHER_PATH '%b' "${captured//\\/\\\\}"
+    break
+  fi
+done
+
+if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
+  && grep -q "codex exec --model gpt-5.4 --dangerously-bypass-approvals-and-sandbox - < '$CODEX_PROMPT_FILE'" "$CODEX_LAUNCHER_PATH"; then
+  pass "interactive Codex launcher uses codex exec with bypass flag"
 else
-  fail "Codex launch paths are missing bypass flag coverage"
+  fail "interactive Codex launcher is missing codex exec or bypass flag"
+fi
+
+if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
+  && grep -q 'echo "\[wavemill\] Agent exited (\$?)"' "$CODEX_LAUNCHER_PATH"; then
+  pass "interactive Codex launcher reports agent exit status"
+else
+  fail "interactive Codex launcher is missing exit status echo"
 fi
 
 # ============================================================================

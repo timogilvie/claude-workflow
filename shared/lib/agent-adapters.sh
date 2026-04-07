@@ -833,6 +833,10 @@ agent_launch_interactive() {
     agent_flags=" $agent_flags"
   fi
 
+  if [[ "$agent_cmd" == "codex" ]] && [[ "$agent_flags" != *" --dangerously-bypass-approvals-and-sandbox"* ]]; then
+    agent_flags="${agent_flags} --dangerously-bypass-approvals-and-sandbox"
+  fi
+
   agent_prepare_pane_for_launch "$session" "$window" 15 3 "$abort_check_cmd"
   local prepare_rc=$?
   if [[ "$prepare_rc" -ne 0 ]]; then
@@ -854,7 +858,7 @@ LAUNCHEOF
     codex)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-codex${model_flag}${agent_flags} "\$(cat '$prompt_file')"
+codex exec${model_flag}${agent_flags} - < '$prompt_file'
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;
