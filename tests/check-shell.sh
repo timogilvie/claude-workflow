@@ -292,6 +292,41 @@ else
   else
     fail "closed challenger PRs do not trigger automatic cleanup"
   fi
+
+  if grep -qE '^read_state_value\(\) \{' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor defines read_state_value helper for non-fatal state reads"
+  else
+    fail "monitor is missing read_state_value helper"
+  fi
+
+  GET_TASK_PHASE_BLOCK=$(awk '
+    /^get_task_phase\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' <<< "$HEREDOC_CONTENT")
+  if grep -q 'read_state_value "executing"' <<< "$GET_TASK_PHASE_BLOCK"; then
+    pass "monitor get_task_phase defaults safely when state reads fail"
+  else
+    fail "monitor get_task_phase is not using read_state_value"
+  fi
+
+  if grep -q 'current_agent=$(read_state_value ""' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -q 'task_status=$(read_state_value ""' <<< "$MONITOR_ISSUE_BLOCK"; then
+    pass "monitor_issue_state guards agent and status reads from STATE_FILE"
+  else
+    fail "monitor_issue_state is missing guarded state-file reads"
+  fi
+
+  READ_STATE_VALUE_BLOCK=$(awk '
+    /^read_state_value\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' <<< "$HEREDOC_CONTENT")
+  if grep -q '! -r "\$STATE_FILE" || ! -s "\$STATE_FILE"' <<< "$READ_STATE_VALUE_BLOCK"; then
+    pass "read_state_value defaults on missing, unreadable, or zero-byte state files"
+  else
+    fail "read_state_value is missing a zero-byte state-file guard"
+  fi
 fi
 
 # ============================================================================
