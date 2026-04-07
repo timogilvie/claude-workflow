@@ -806,8 +806,9 @@ agent_launch_autonomous() {
 # AGENT LAUNCH — INTERACTIVE (PLANNING) MODE
 # ============================================================================
 
-# Launch an agent interactively in a tmux window for user-guided planning.
-# Creates a small launcher script that execs the agent with the prompt.
+# Launch an agent in a tmux window from a prompt file.
+# Claude keeps its interactive CLI behavior here, while Codex must still use
+# `codex exec` so phase handoffs stop after the prompt completes.
 #
 # Args:
 #   $1 = tmux session name
@@ -833,6 +834,10 @@ agent_launch_interactive() {
     agent_flags=" $agent_flags"
   fi
 
+  if [[ "$agent_cmd" == "codex" ]] && [[ "$agent_flags" != *" --dangerously-bypass-approvals-and-sandbox"* ]]; then
+    agent_flags="${agent_flags} --dangerously-bypass-approvals-and-sandbox"
+  fi
+
   agent_prepare_pane_for_launch "$session" "$window" 15 3 "$abort_check_cmd"
   local prepare_rc=$?
   if [[ "$prepare_rc" -ne 0 ]]; then
@@ -853,7 +858,7 @@ LAUNCHEOF
     codex)
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
-codex${model_flag}${agent_flags} "\$(cat '$prompt_file')"
+codex exec${model_flag}${agent_flags} - < '$prompt_file'
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;

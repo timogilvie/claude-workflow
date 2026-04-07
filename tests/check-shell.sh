@@ -503,6 +503,53 @@ else
   fail "claude-facing prompts lost /exit guidance"
 fi
 
+TMUX_CAPTURE=""
+tmux() {
+  if [[ "${1:-}" == "send-keys" ]]; then
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -t)
+          shift 2
+          ;;
+        C-m)
+          shift
+          ;;
+        *)
+          TMUX_CAPTURE="$1"
+          shift
+          ;;
+      esac
+    done
+    return 0
+  fi
+  return 0
+}
+
+agent_prepare_pane_for_launch() {
+  return 0
+}
+
+CODEX_PROMPT_FILE="$PROMPT_RENDER_DIR/interactive-codex-prompt.txt"
+printf 'planning prompt\n' > "$CODEX_PROMPT_FILE"
+agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4"
+CODEX_LAUNCHER_PATH="${TMUX_CAPTURE#\'}"
+CODEX_LAUNCHER_PATH="${CODEX_LAUNCHER_PATH%\'}"
+
+if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
+  && grep -q "codex exec --model gpt-5.4 --dangerously-bypass-approvals-and-sandbox - < '$CODEX_PROMPT_FILE'" "$CODEX_LAUNCHER_PATH"; then
+  pass "interactive Codex launcher uses codex exec with bypass flag"
+else
+  fail "interactive Codex launcher is missing codex exec or bypass flag"
+fi
+
+if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
+  && grep -q 'echo "\[wavemill\] Agent exited (\$?)"' "$CODEX_LAUNCHER_PATH"; then
+  pass "interactive Codex launcher reports agent exit status"
+else
+  fail "interactive Codex launcher is missing exit status echo"
+fi
+
 # ============================================================================
 # TEST 8: Verify sourced libraries exist
 # ============================================================================
