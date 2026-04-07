@@ -1416,9 +1416,26 @@ set_task_phase() {
   fi
 }
 
+read_state_value() {
+  local default="$1"
+  shift
+  local value
+
+  if [[ ! -r "$STATE_FILE" || ! -s "$STATE_FILE" ]]; then
+    printf '%s\n' "$default"
+    return 0
+  fi
+
+  if value=$(jq -r "$@" "$STATE_FILE" 2>/dev/null); then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "$default"
+  fi
+}
+
 get_task_phase() {
   local issue="$1"
-  jq -r --arg issue "$issue" '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null
+  read_state_value "executing" --arg issue "$issue" '.tasks[$issue].phase // "executing"'
 }
 
 mark_eval_completed() {
@@ -1438,16 +1455,16 @@ mark_eval_completed() {
 validate_agent_set() {
   local issue="$1"
   local agent
-  agent=$(jq -r --arg i "$issue" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+  agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   if [[ -z "$agent" ]]; then
     log_warn "  ⚠ BUG: Agent not set for $issue (should have been set at launch), auto-fixing to: $AGENT_CMD"
     # Auto-fix: update the task state with the default agent
     local slug branch worktree pr status
-    slug=$(jq -r --arg i "$issue" '.tasks[$i].slug // ""' "$STATE_FILE" 2>/dev/null)
-    branch=$(jq -r --arg i "$issue" '.tasks[$i].branch // ""' "$STATE_FILE" 2>/dev/null)
-    worktree=$(jq -r --arg i "$issue" '.tasks[$i].worktree // ""' "$STATE_FILE" 2>/dev/null)
-    pr=$(jq -r --arg i "$issue" '.tasks[$i].pr // ""' "$STATE_FILE" 2>/dev/null)
-    status=$(jq -r --arg i "$issue" '.tasks[$i].status // ""' "$STATE_FILE" 2>/dev/null)
+    slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // ""')
+    branch=$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // ""')
+    worktree=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // ""')
+    pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // ""')
+    status=$(read_state_value "" --arg i "$issue" '.tasks[$i].status // ""')
     save_task_state "$issue" "$slug" "$branch" "$worktree" "$pr" "$status" "$AGENT_CMD"
   fi
 }
@@ -1653,7 +1670,7 @@ codex_has_pending_approval() {
 
 get_task_meta() {
   local issue="$1" field="$2"
-  jq -r --arg issue "$issue" --arg field "$field" '.tasks[$issue][$field] // empty' "$STATE_FILE" 2>/dev/null
+  read_state_value "" --arg issue "$issue" --arg field "$field" '.tasks[$issue][$field] // empty'
 }
 
 get_linear_issue_id() {
@@ -1704,13 +1721,13 @@ mark_challenge_compared() {
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
   local eval_completed pair_id solution_model linear_issue eval_agent
-  eval_completed=$(jq -r --arg i "$issue" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
+  eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
 
   pair_id=$(get_task_meta "$issue" "challengePairId")
   solution_model=$(get_task_meta "$issue" "challengeModel")
   linear_issue=$(get_linear_issue_id "$issue")
-  eval_agent=$(jq -r --arg i "$issue" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+  eval_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
 
   local eval_log="/tmp/${SESSION}-eval-${issue}.log"
@@ -1733,7 +1750,7 @@ launch_background_post_merge_eval() {
   local eval_agent eval_log rc
 
   validate_agent_set "$issue"
-  eval_agent=$(jq -r --arg i "$issue" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+  eval_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
 
   eval_log="/tmp/${SESSION}-eval-${issue}.log"
@@ -1773,13 +1790,13 @@ maybe_run_challenge_comparison() {
   [[ -z "$pair_id" ]] && return 0
   primary_key="$pair_id"
   challenger_key="${pair_id}__challenger"
-  compared=$(jq -r --arg i "$primary_key" '.tasks[$i].challengeCompared // false' "$STATE_FILE" 2>/dev/null)
+  compared=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].challengeCompared // false')
   [[ "$compared" == "true" ]] && return 0
 
-  primary_pr=$(jq -r --arg i "$primary_key" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null)
-  challenger_pr=$(jq -r --arg i "$challenger_key" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null)
-  primary_eval=$(jq -r --arg i "$primary_key" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
-  challenger_eval=$(jq -r --arg i "$challenger_key" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
+  primary_pr=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].pr // empty')
+  challenger_pr=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].pr // empty')
+  primary_eval=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
+  challenger_eval=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
   [[ -z "$primary_pr" || -z "$challenger_pr" || "$primary_eval" != "true" || "$challenger_eval" != "true" ]] && return 0
 
   linear_issue=$(get_linear_issue_id "$primary_key")
@@ -2657,11 +2674,11 @@ monitor_issue_state() {
   PR="${PR_BY_ISSUE[$ISSUE]:-}"
   WIN="$ISSUE-$SLUG"
   WT_DIR="${WORKTREE_ROOT}/${SLUG}"
-  current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+  current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
   needs_attention="false"
 
   # If already merged or completed-external (requireConfirm), wait for window close then cleanup
-  task_status=$(jq -r --arg issue "$ISSUE" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null)
+  task_status=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].status // empty')
   if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
     set_window_attention_state "$WIN" "clear"
     if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
@@ -2682,7 +2699,7 @@ monitor_issue_state() {
     if [[ -n "$PR" ]]; then
       PR_BY_ISSUE["$ISSUE"]="$PR"
       # Preserve agent when updating with PR number
-      current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+      current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
       linear_issue=$(get_linear_issue_id "$ISSUE")
       challenge_flag=$(get_task_meta "$ISSUE" "challenge")
       challenge_pair=$(get_task_meta "$ISSUE" "challengePairId")
@@ -2711,7 +2728,7 @@ monitor_issue_state() {
 
         # Post-completion eval (non-blocking: always exits 0)
         if [[ "$AUTO_EVAL" == "true" ]]; then
-          eval_completed=$(jq -r --arg i "$ISSUE" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
+          eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
           if [[ "$eval_completed" == "false" ]]; then
             log "  📊 Running post-completion eval..."
             launch_background_post_merge_eval "$ISSUE" "" "$BRANCH" "$SLUG" "$ISSUE" "post-completion"
@@ -2726,7 +2743,7 @@ monitor_issue_state() {
             linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
           fi
           # Preserve agent when marking as completed-external
-          current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+          current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
           save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "completed-external" "$current_agent"
           active_count=$((active_count + 1))
           return 0
@@ -2789,7 +2806,7 @@ monitor_issue_state() {
               fi
 
               # Save routing results to state
-              current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+              current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
               linear_issue=$(get_linear_issue_id "$ISSUE")
               save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
 
@@ -2798,7 +2815,7 @@ monitor_issue_state() {
               planner_agent="$(agent_resolve_from_model "$planner_model")"
 
               # Get title from state or Linear
-              title=$(jq -r --arg i "$ISSUE" '.tasks[$i].title // ""' "$STATE_FILE" 2>/dev/null)
+              title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
               if [[ -z "$title" ]]; then
                 issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
                 title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
@@ -2845,10 +2862,10 @@ monitor_issue_state() {
           if [[ -f "$mig_marker" ]] && [[ ! -f "$mig_num_file" ]]; then
             # Check if reservation already exists
             local existing_reservation
-            existing_reservation=$(jq -r --arg i "$ISSUE" '.migrationReservations[$i] // empty' "$STATE_FILE" 2>/dev/null)
+            existing_reservation=$(read_state_value "" --arg i "$ISSUE" '.migrationReservations[$i] // empty')
             if [[ -z "$existing_reservation" ]]; then
               local next_num
-              next_num=$(jq -r '.nextMigrationNum // empty' "$STATE_FILE" 2>/dev/null)
+              next_num=$(read_state_value "" '.nextMigrationNum // empty')
               if [[ -z "$next_num" ]]; then
                 local highest
                 highest=$(git -C "$REPO_DIR" ls-tree --name-only "origin/$BASE_BRANCH" alembic/versions/ 2>/dev/null \
@@ -2884,7 +2901,7 @@ monitor_issue_state() {
             coder_agent="$(agent_resolve_from_model "$coder_model")"
 
             # Get title
-            title=$(jq -r --arg i "$ISSUE" '.tasks[$i].title // ""' "$STATE_FILE" 2>/dev/null)
+            title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
             if [[ -z "$title" ]]; then
               issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
               title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
@@ -2937,7 +2954,7 @@ monitor_issue_state() {
             reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
 
             # Get title
-            title=$(jq -r --arg i "$ISSUE" '.tasks[$i].title // ""' "$STATE_FILE" 2>/dev/null)
+            title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
             if [[ -z "$title" ]]; then
               issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
               title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
@@ -3063,7 +3080,7 @@ monitor_issue_state() {
 
     # Post-merge eval (non-blocking: always exits 0)
     if [[ "$AUTO_EVAL" == "true" ]]; then
-      eval_completed=$(jq -r --arg i "$ISSUE" '.tasks[$i].evalCompleted // false' "$STATE_FILE" 2>/dev/null)
+      eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
       if [[ "$eval_completed" == "false" ]]; then
         log "  📊 Running post-merge eval..."
         launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
@@ -3078,7 +3095,7 @@ monitor_issue_state() {
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
       fi
       # Preserve agent when marking as merged
-      current_agent=$(jq -r --arg i "$ISSUE" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
+      current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
       save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged" "$current_agent"
       active_count=$((active_count + 1))
       return 0
@@ -3130,7 +3147,7 @@ while :; do
       active_count=$((active_count + 1))
     fi
     # Track active challengers separately (they are free overhead for slot counting)
-    _cr=$(jq -r --arg i "$ISSUE" '.tasks[$i].challengeRole // ""' "$STATE_FILE" 2>/dev/null || echo "")
+    _cr=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].challengeRole // ""')
     if [[ "$_cr" == "challenger" ]] && [[ -z "${CLEANED[$ISSUE]:-}" ]]; then
       active_challenger_count=$((active_challenger_count + 1))
     fi
