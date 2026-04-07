@@ -47,6 +47,7 @@ export interface ChallengeSchedulerInput {
   evalSummary: EvalSummary;
   config: ChallengeSchedulerConfig;
   repoDir?: string;
+  forceModel?: string;
 }
 
 const DEFAULT_CHALLENGE_SCHEDULER_CONFIG: Required<ChallengeSchedulerConfig> = {
@@ -246,6 +247,14 @@ function checkLowDataStage(
  * Evaluate whether routing context should trigger an exploration challenge.
  */
 export function evaluateChallenge(input: ChallengeSchedulerInput): ChallengeRecommendation {
+  if ((input.forceModel || '').trim()) {
+    return {
+      shouldChallenge: false,
+      reason: 'disabled',
+      priority: PRIORITY.disabled,
+    };
+  }
+
   const config = normalizeConfig(input.config);
   if (!config.enabled) {
     return {
