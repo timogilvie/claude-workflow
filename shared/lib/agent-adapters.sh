@@ -840,6 +840,7 @@ agent_launch_interactive() {
   fi
 
   local launcher="/tmp/${session}-$(basename "$prompt_file" .txt)-launcher.sh"
+  local launcher_cmd=""
 
   # Don't use exec — keep the shell alive so the window persists after agent exit
   case "$agent_cmd" in
@@ -867,7 +868,10 @@ LAUNCHEOF
   esac
 
   chmod +x "$launcher"
-  tmux send-keys -t "$session:$window" "'$launcher'" C-m
+  printf -v launcher_cmd '%q' "$launcher"
+  tmux send-keys -t "$session:$window" -l -- "$launcher_cmd"
+  sleep 0.1
+  tmux send-keys -t "$session:$window" C-m
 }
 
 # ============================================================================
