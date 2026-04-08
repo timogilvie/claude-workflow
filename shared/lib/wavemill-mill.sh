@@ -3065,6 +3065,13 @@ monitor_issue_state() {
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
+            if [[ "$launch_rc" -ne 0 ]]; then
+              # Ready checks failed - mark for user attention
+              log "⚠ $ISSUE → Ready checks failed (PR #$pr_number)"
+              set_window_attention_state "$WIN" "needs-user"
+              active_count=$((active_count + 1))
+              return 0
+            fi
             set_window_attention_state "$WIN" "clear"
             log "✓ $ISSUE → Review complete, launching ready phase (PR #$pr_number)"
             active_count=$((active_count + 1))
