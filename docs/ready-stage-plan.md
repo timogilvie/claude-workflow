@@ -325,3 +325,67 @@ Scope:
 6. Issue 6
 
 This ordering intentionally minimizes merge conflicts by keeping the workflow contract, planning metadata, engine, monitor wiring, and docs/tests in separate steps with explicit dependencies.
+
+## Gap Analysis (HOK-1183 Backfill)
+
+After HOK-1174 (PR #208) shipped and HOK-1176 (PR #213) merged, the revised architecture identified requirements that were not part of the original delivery plan. This section tracks the delta.
+
+| Requirement | Status | Issue |
+|---|---|---|
+| Ready stage type definitions (`ReadyCheck`, `ReadyResult`, `ReadyStageConfig`) | Shipped | HOK-1174 |
+| CLI surface (`wavemill ready <pr>`) | Shipped | HOK-1174 |
+| Planning metadata (`database_change_risk`, env/config/manual-step fields) | Shipped | HOK-1175 |
+| Shared readiness engine (`runReadyStage`, deterministic checks, verdict) | Shipped | HOK-1176 |
+| Config schema (`ready.enabled`, `ready.checks`, `ready.requiredChecks`) | Shipped | HOK-1174 |
+| Mill integration (`launch_ready_phase` shell function) | Shipped | HOK-1176 |
+| Controller-owned readiness check (`controllerCheckReadiness`) | Backfilled | HOK-1183 |
+| Legacy marker compatibility (`checkLegacyMarkers`) | Backfilled | HOK-1183 |
+| Controller readiness CLI (`tools/controller-ready.ts`) | Backfilled | HOK-1183 |
+| Shell orchestrator stub (`check_ready_stage`) | Backfilled | HOK-1183 |
+| Phase transition wiring in orchestrator | Deferred | HOK-1177 |
+| Ready-phase blocking of merge completion | Deferred | HOK-1177 |
+| Full mill-mode integration, dashboard, monitoring | Deferred | HOK-1182 |
+| Merge conflict detection and auto-resolution | Deferred | HOK-1178 |
+| Tests and documentation for full ready stage | Deferred | HOK-1179 |
+
+## Handoff Boundaries
+
+Explicit deliverables and expectations for each issue in the ready-stage chain.
+
+### HOK-1176 → HOK-1183
+
+**HOK-1176 delivers:**
+- Shared readiness engine: `runReadyStage()` with `checkSchemaMigrations`, `checkCIStatus`, `checkReleaseRequirements`, `checkDeployPaths`
+- `wavemill ready <pr>` CLI via `tools/ready.ts`
+- Basic `launch_ready_phase()` shell function in `wavemill-mill.sh`
+
+**HOK-1183 expects from HOK-1176:**
+- `ReadyCheck`, `ReadyResult`, `ReadyStageConfig` types exported from `shared/lib/ready-stage.ts`
+- `computeVerdict()` exported for reuse
+- `getReadyConfig()` available from `shared/lib/config.ts`
+
+### HOK-1183 → HOK-1177
+
+**HOK-1183 delivers:**
+- `controllerCheckReadiness(featureDir)` — evaluates feature directory phase state without PR/GitHub context
+- `checkLegacyMarkers(featureDir)` — detects `.plan-approved`, `.coding-complete`, `.workflow-aborted` and maps to `ReadyCheck[]`
+- `ControllerReadinessResult` and `LegacyMarkerResult` types
+- `tools/controller-ready.ts` — thin CLI wrapper
+- `check_ready_stage()` shell function stub in `wavemill-mill.sh`
+
+**HOK-1177 expects from HOK-1183:**
+- `controllerCheckReadiness()` function callable from shell via `tools/controller-ready.ts`
+- `check_ready_stage()` shell function defined with stable interface
+- Phase detection logic that maps markers to `planning | coding | review | ready | aborted | unknown`
+
+### HOK-1177 → HOK-1182
+
+**HOK-1177 delivers:**
+- Phase transition wiring: orchestrator calls `check_ready_stage()` at transition points
+- Ready-phase blocking: merge completion gated on readiness pass
+- State persistence for ready-stage results in workflow state JSON
+
+**HOK-1182 expects from HOK-1177:**
+- Phase transitions working end-to-end in `wavemill mill`
+- Ready-stage state persisted and queryable
+- `launch_ready_phase()` fully integrated into the phase loop

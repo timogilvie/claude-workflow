@@ -687,3 +687,209 @@ export async function runReadyStage(options: {
     summary,
   };
 }
+
+// ────────────────────────────────────────────────────────────────
+// Legacy Marker Compatibility
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Known legacy workflow marker files and their phase semantics.
+ */
+const LEGACY_MARKERS = [
+  { file: '.plan-approved', name: 'legacy-plan-approved', phase: 'planning' as const },
+  { file: '.coding-complete', name: 'legacy-coding-complete', phase: 'coding' as const },
+  { file: '.workflow-aborted', name: 'legacy-workflow-aborted', phase: 'aborted' as const },
+] as const;
+
+/**
+ * Result of checking legacy marker files in a feature directory.
+ */
+export interface LegacyMarkerResult {
+  /** Which markers were found */
+  markers: { file: string; present: boolean }[];
+  /** ReadyCheck entries for each detected marker */
+  checks: ReadyCheck[];
+}
+
+/**
+ * Check for legacy workflow marker files in a feature directory.
+ *
+ * Detects `.plan-approved`, `.coding-complete`, and `.workflow-aborted` files
+ * and maps them to structured `ReadyCheck` entries that the controller readiness
+ * engine can incorporate alongside new-style checks.
+ *
+ * @param featureDir - Absolute path to the feature directory
+ * @returns Marker presence and corresponding ReadyCheck entries
+ */
+export async function checkLegacyMarkers(featureDir: string): Promise<LegacyMarkerResult> {
+  const markers: { file: string; present: boolean }[] = [];
+  const checks: ReadyCheck[] = [];
+
+  for (const marker of LEGACY_MARKERS) {
+    const markerPath = path.join(featureDir, marker.file);
+    let present = false;
+    try {
+      await fs.access(markerPath);
+      present = true;
+    } catch {
+      // Marker not present — not an error
+    }
+
+    markers.push({ file: marker.file, present });
+
+    if (present) {
+      checks.push({
+        name: marker.name,
+        status: marker.name === 'legacy-workflow-aborted' ? 'fail' : 'pass',
+        message: `Legacy marker ${marker.file} detected`,
+        details: { phase: marker.phase },
+      });
+    }
+  }
+
+  return { markers, checks };
+}
+
+// ────────────────────────────────────────────────────────────────
+// Controller-Owned Readiness Check
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Result of a controller-owned readiness check on a feature directory.
+ *
+ * Unlike `ReadyResult` which is PR-oriented, this evaluates a feature
+ * directory's phase state without requiring GitHub CLI or a PR number.
+ */
+export interface ControllerReadinessResult {
+  /** Absolute path to the feature directory that was checked */
+  featureDir: string;
+
+  /** Whether the feature directory is ready to proceed to the next phase */
+  ready: boolean;
+
+  /** Detected workflow phase based on markers and artifacts */
+  phase: 'planning' | 'coding' | 'review' | 'ready' | 'aborted' | 'unknown';
+
+  /** Individual check results */
+  checks: ReadyCheck[];
+
+  /** ISO 8601 timestamp when checks were run */
+  timestamp: string;
+
+  /** Human-readable summary */
+  summary: string;
+}
+
+/**
+ * Run a controller-owned readiness check on a feature directory.
+ *
+ * This is the "pre-PR" readiness function that evaluates a feature directory's
+ * phase state without requiring a PR number or GitHub CLI access. The controller
+ * (shell orchestrator) uses this to determine phase transitions.
+ *
+ * Checks performed:
+ * - Legacy marker files (`.plan-approved`, `.coding-complete`, `.workflow-aborted`)
+ * - Task packet presence
+ * - Plan file presence
+ *
+ * @param featureDir - Absolute path to the feature directory
+ * @returns Controller readiness result with phase detection and check details
+ */
+export async function controllerCheckReadiness(
+  featureDir: string,
+): Promise<ControllerReadinessResult> {
+  const checks: ReadyCheck[] = [];
+
+  // 1. Verify feature directory exists
+  try {
+    await fs.access(featureDir);
+  } catch {
+    return {
+      featureDir,
+      ready: false,
+      phase: 'unknown',
+      checks: [{
+        name: 'feature-dir',
+        status: 'fail',
+        message: `Feature directory does not exist: ${featureDir}`,
+      }],
+      timestamp: new Date().toISOString(),
+      summary: 'Feature directory not found',
+    };
+  }
+
+  // 2. Check legacy markers
+  const legacyResult = await checkLegacyMarkers(featureDir);
+  checks.push(...legacyResult.checks);
+
+  // 3. Check for task packet
+  const taskPacketPath = path.join(featureDir, 'task-packet.md');
+  try {
+    await fs.access(taskPacketPath);
+    checks.push({
+      name: 'task-packet',
+      status: 'pass',
+      message: 'Task packet found',
+    });
+  } catch {
+    checks.push({
+      name: 'task-packet',
+      status: 'warn',
+      message: 'No task packet found in feature directory',
+    });
+  }
+
+  // 4. Check for plan
+  const planPath = path.join(featureDir, 'plan.md');
+  try {
+    await fs.access(planPath);
+    checks.push({
+      name: 'plan',
+      status: 'pass',
+      message: 'Implementation plan found',
+    });
+  } catch {
+    checks.push({
+      name: 'plan',
+      status: 'warn',
+      message: 'No implementation plan found in feature directory',
+    });
+  }
+
+  // 5. Determine phase from markers (highest-phase marker wins)
+  const markerMap = Object.fromEntries(
+    legacyResult.markers.map(m => [m.file, m.present])
+  );
+
+  let phase: ControllerReadinessResult['phase'] = 'unknown';
+  if (markerMap['.workflow-aborted']) {
+    phase = 'aborted';
+  } else if (markerMap['.coding-complete']) {
+    phase = 'review';
+  } else if (markerMap['.plan-approved']) {
+    phase = 'coding';
+  }
+
+  // 6. Determine readiness — ready if no failures
+  const hasFail = checks.some(c => c.status === 'fail');
+  const ready = !hasFail;
+
+  // 7. Build summary
+  let summary: string;
+  if (phase === 'aborted') {
+    summary = 'Workflow was aborted';
+  } else if (phase === 'unknown') {
+    summary = 'No phase markers detected — feature directory may be in initial state';
+  } else {
+    summary = `Feature is in ${phase} phase${ready ? '' : ' (blocked by failing checks)'}`;
+  }
+
+  return {
+    featureDir,
+    ready,
+    phase,
+    checks,
+    timestamp: new Date().toISOString(),
+    summary,
+  };
+}

@@ -1,14 +1,21 @@
-import { describe, it, mock } from 'node:test';
+import { describe, it, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   runReadyStage,
   checkSchemaMigrations,
   checkDeployPaths,
   computeVerdict,
+  checkLegacyMarkers,
+  controllerCheckReadiness,
   type ReadyResult,
   type ReadyCheck,
+  type LegacyMarkerResult,
+  type ControllerReadinessResult,
 } from './ready-stage.ts';
 import * as shellUtils from './shell-utils.ts';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
 
 describe('ready-stage', () => {
   describe('checkSchemaMigrations', () => {
@@ -109,6 +116,139 @@ describe('ready-stage', () => {
       ];
       const result = computeVerdict(checks);
       assert.equal(result, 'fail');
+    });
+  });
+
+  describe('checkLegacyMarkers', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-test-'));
+    });
+
+    afterEach(async () => {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('returns empty checks when no markers present', async () => {
+      const result = await checkLegacyMarkers(tmpDir);
+      assert.equal(result.checks.length, 0);
+      assert.equal(result.markers.length, 3);
+      assert.ok(result.markers.every(m => !m.present));
+    });
+
+    it('detects .plan-approved marker', async () => {
+      await fs.writeFile(path.join(tmpDir, '.plan-approved'), '');
+      const result = await checkLegacyMarkers(tmpDir);
+      assert.equal(result.checks.length, 1);
+      assert.equal(result.checks[0].name, 'legacy-plan-approved');
+      assert.equal(result.checks[0].status, 'pass');
+    });
+
+    it('detects .coding-complete marker', async () => {
+      await fs.writeFile(path.join(tmpDir, '.coding-complete'), '');
+      const result = await checkLegacyMarkers(tmpDir);
+      assert.equal(result.checks.length, 1);
+      assert.equal(result.checks[0].name, 'legacy-coding-complete');
+      assert.equal(result.checks[0].status, 'pass');
+    });
+
+    it('detects .workflow-aborted marker as fail', async () => {
+      await fs.writeFile(path.join(tmpDir, '.workflow-aborted'), '');
+      const result = await checkLegacyMarkers(tmpDir);
+      assert.equal(result.checks.length, 1);
+      assert.equal(result.checks[0].name, 'legacy-workflow-aborted');
+      assert.equal(result.checks[0].status, 'fail');
+    });
+
+    it('detects multiple markers simultaneously', async () => {
+      await fs.writeFile(path.join(tmpDir, '.plan-approved'), '');
+      await fs.writeFile(path.join(tmpDir, '.coding-complete'), '');
+      const result = await checkLegacyMarkers(tmpDir);
+      assert.equal(result.checks.length, 2);
+      const names = result.checks.map(c => c.name);
+      assert.ok(names.includes('legacy-plan-approved'));
+      assert.ok(names.includes('legacy-coding-complete'));
+    });
+  });
+
+  describe('controllerCheckReadiness', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-test-'));
+    });
+
+    afterEach(async () => {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('returns not ready when feature directory does not exist', async () => {
+      const result = await controllerCheckReadiness('/nonexistent/path');
+      assert.equal(result.ready, false);
+      assert.equal(result.phase, 'unknown');
+      assert.equal(result.checks[0].status, 'fail');
+      assert.match(result.checks[0].message, /does not exist/);
+    });
+
+    it('returns unknown phase for empty feature directory', async () => {
+      const result = await controllerCheckReadiness(tmpDir);
+      assert.equal(result.ready, true);
+      assert.equal(result.phase, 'unknown');
+      assert.match(result.summary, /No phase markers/);
+    });
+
+    it('detects coding phase when .plan-approved exists', async () => {
+      await fs.writeFile(path.join(tmpDir, '.plan-approved'), '');
+      const result = await controllerCheckReadiness(tmpDir);
+      assert.equal(result.phase, 'coding');
+      assert.equal(result.ready, true);
+    });
+
+    it('detects review phase when .coding-complete exists', async () => {
+      await fs.writeFile(path.join(tmpDir, '.plan-approved'), '');
+      await fs.writeFile(path.join(tmpDir, '.coding-complete'), '');
+      const result = await controllerCheckReadiness(tmpDir);
+      assert.equal(result.phase, 'review');
+      assert.equal(result.ready, true);
+    });
+
+    it('detects aborted phase and marks not ready', async () => {
+      await fs.writeFile(path.join(tmpDir, '.workflow-aborted'), '');
+      const result = await controllerCheckReadiness(tmpDir);
+      assert.equal(result.phase, 'aborted');
+      assert.equal(result.ready, false);
+    });
+
+    it('reports task packet presence', async () => {
+      await fs.writeFile(path.join(tmpDir, 'task-packet.md'), '# Task');
+      const result = await controllerCheckReadiness(tmpDir);
+      const taskCheck = result.checks.find(c => c.name === 'task-packet');
+      assert.ok(taskCheck);
+      assert.equal(taskCheck.status, 'pass');
+    });
+
+    it('warns on missing task packet', async () => {
+      const result = await controllerCheckReadiness(tmpDir);
+      const taskCheck = result.checks.find(c => c.name === 'task-packet');
+      assert.ok(taskCheck);
+      assert.equal(taskCheck.status, 'warn');
+    });
+
+    it('reports plan presence', async () => {
+      await fs.writeFile(path.join(tmpDir, 'plan.md'), '# Plan');
+      const result = await controllerCheckReadiness(tmpDir);
+      const planCheck = result.checks.find(c => c.name === 'plan');
+      assert.ok(planCheck);
+      assert.equal(planCheck.status, 'pass');
+    });
+
+    it('includes correct featureDir and timestamp in result', async () => {
+      const result = await controllerCheckReadiness(tmpDir);
+      assert.equal(result.featureDir, tmpDir);
+      assert.ok(result.timestamp);
+      // Verify ISO 8601 format
+      assert.ok(!isNaN(Date.parse(result.timestamp)));
     });
   });
 
