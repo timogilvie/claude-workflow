@@ -97,7 +97,7 @@ else
       | grep -vE '^(pipefail|euo|noglob|errexit|nounset)$' \
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
-      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at)$')
+      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits)$')
 
     # Check which called names look like they could be custom functions
     # and verify they're defined
@@ -721,7 +721,45 @@ else
 fi
 
 # ============================================================================
-# TEST 9: Verify sourced libraries exist
+# TEST 9: Mill drift refresh prompt wiring
+# ============================================================================
+echo ""
+echo "=== Mill Drift Refresh Wiring ==="
+
+if [[ ! -f "$MILL_SCRIPT" ]]; then
+  fail "wavemill-mill.sh not found for drift refresh checks"
+else
+  if grep -q 'check_subsystem_drift() {' "$MILL_SCRIPT" \
+    && grep -q 'npx tsx tools/check-drift.ts "\$REPO_DIR"' "$MILL_SCRIPT"; then
+    pass "mill script defines subsystem drift wrapper"
+  else
+    fail "mill script is missing subsystem drift wrapper"
+  fi
+
+  if grep -q "Warning: Subsystem docs stale" "$MILL_SCRIPT" \
+    && grep -q "press d to refresh" "$MILL_SCRIPT"; then
+    pass "mill script shows stale docs advisory"
+  else
+    fail "mill script is missing stale docs advisory"
+  fi
+
+  if grep -q "d to refresh docs" "$MILL_SCRIPT" \
+    && grep -q '\[\[ "\$SELECTED" =~ ^\[dD\](ocs)?\$ \]\]' "$MILL_SCRIPT"; then
+    pass "mill script supports docs refresh hotkey"
+  else
+    fail "mill script is missing docs refresh hotkey support"
+  fi
+
+  if grep -q 'npx tsx tools/init-project-context.ts --force "\$REPO_DIR"' "$MILL_SCRIPT" \
+    && grep -q 'Subsystem docs are up to date' "$MILL_SCRIPT"; then
+    pass "mill script refreshes docs and handles clean state"
+  else
+    fail "mill script is missing docs refresh command or clean-state message"
+  fi
+fi
+
+# ============================================================================
+# TEST 10: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
@@ -748,7 +786,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 10: Optional ShellCheck
+# TEST 11: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""
