@@ -135,6 +135,24 @@
         }
       }
     },
+    "dashboard": {
+      "type": "object",
+      "description": "Controls how much runtime activity is shown in the mill control pane. Lower verbosity reduces dashboard spam while all messages can still be written to a session log.",
+      "properties": {
+        "verbosity": {
+          "type": "string",
+          "enum": ["error", "status", "info", "debug"],
+          "default": "info",
+          "description": "Minimum log level shown in the mill control pane. 'error' shows only errors, 'status' shows key workflow transitions, 'info' adds routine progress, and 'debug' shows detailed diagnostic output."
+        },
+        "logToFile": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, write all control-pane messages to a per-session log file in .wavemill/logs/ even if they are hidden by the current verbosity setting."
+        }
+      },
+      "additionalProperties": false
+    },
     "eval": {
       "type": "object",
       "description": "Settings for the 'wavemill eval' command.",

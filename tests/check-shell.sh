@@ -413,7 +413,7 @@ else
 fi
 
 MERGED_BLOCK=$(awk '
-  /log "✓ \$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
+  /log "status" "✓ \$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
   in_block { print }
   in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
@@ -430,7 +430,7 @@ else
 fi
 
 EXTERNAL_BLOCK=$(awk '
-  /log "✓ \$ISSUE → Completed externally \(cross-repo or manual\)"/ { in_block=1 }
+  /log "status" "✓ \$ISSUE → Completed externally \(cross-repo or manual\)"/ { in_block=1 }
   in_block { print }
   in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
@@ -627,7 +627,101 @@ else
 fi
 
 # ============================================================================
-# TEST 8: Verify sourced libraries exist
+# TEST 8: Dashboard log filtering behavior
+# ============================================================================
+echo ""
+echo "=== Dashboard Log Filtering ==="
+
+if [[ ! -f "$MILL_SCRIPT" ]]; then
+  fail "wavemill-mill.sh not found for log filtering checks"
+else
+  LOG_FUNCTION_BLOCK=$(awk '
+    /^_log_level_num\(\) \{/ && !captured { capture=1; captured=1 }
+    capture && /^render_prompt_template\(\) \{/ { exit }
+    capture { print }
+  ' "$MILL_SCRIPT")
+
+  if [[ -z "$LOG_FUNCTION_BLOCK" ]]; then
+    fail "Could not extract log function block"
+  else
+    LOG_TEST_DIR=$(mktemp -d)
+    LOG_TEST_SCRIPT="$LOG_TEST_DIR/log-functions.sh"
+    printf '%s\n' "$LOG_FUNCTION_BLOCK" > "$LOG_TEST_SCRIPT"
+
+    SINGLE_OUTPUT=$(bash -lc '
+      source "'"$LOG_TEST_SCRIPT"'"
+      DASHBOARD_VERBOSITY=info
+      VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
+      DASHBOARD_LOG_TO_FILE=false
+      log "plain message"
+    ' 2>/dev/null || true)
+    if [[ "$SINGLE_OUTPUT" == *"plain message"* ]]; then
+      pass "single-arg log defaults to info output"
+    else
+      fail "single-arg log does not default to info output"
+    fi
+
+    ERROR_OUTPUT=$(bash -lc '
+      source "'"$LOG_TEST_SCRIPT"'"
+      DASHBOARD_VERBOSITY=error
+      VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
+      DASHBOARD_LOG_TO_FILE=false
+      log "error" "always visible"
+    ' 2>/dev/null || true)
+    if [[ "$ERROR_OUTPUT" == *"always visible"* ]]; then
+      pass "error-level log shows at error verbosity"
+    else
+      fail "error-level log is hidden at error verbosity"
+    fi
+
+    DEBUG_OUTPUT=$(bash -lc '
+      source "'"$LOG_TEST_SCRIPT"'"
+      DASHBOARD_VERBOSITY=info
+      VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
+      DASHBOARD_LOG_TO_FILE=false
+      log "debug" "hidden debug"
+    ' 2>/dev/null || true)
+    if [[ -z "$DEBUG_OUTPUT" ]]; then
+      pass "debug-level log is suppressed at info verbosity"
+    else
+      fail "debug-level log is not suppressed at info verbosity"
+    fi
+
+    STATUS_OUTPUT=$(bash -lc '
+      source "'"$LOG_TEST_SCRIPT"'"
+      DASHBOARD_VERBOSITY=status
+      VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
+      DASHBOARD_LOG_TO_FILE=false
+      log "info" "hidden info"
+    ' 2>/dev/null || true)
+    if [[ -z "$STATUS_OUTPUT" ]]; then
+      pass "info-level log is suppressed at status verbosity"
+    else
+      fail "info-level log is not suppressed at status verbosity"
+    fi
+
+    LOG_FILE_CHECK=$(bash -lc '
+      source "'"$LOG_TEST_SCRIPT"'"
+      TMP_LOG=$(mktemp)
+      DASHBOARD_VERBOSITY=error
+      VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
+      DASHBOARD_LOG_TO_FILE=true
+      MILL_LOG_FILE="$TMP_LOG"
+      log "debug" "persisted debug"
+      cat "$TMP_LOG"
+    ' 2>/dev/null || true)
+    if [[ "$LOG_FILE_CHECK" == *"[debug] persisted debug"* ]]; then
+      pass "suppressed logs still write to session log file"
+    else
+      fail "suppressed logs do not write to session log file"
+    fi
+
+    rm -rf "$LOG_TEST_DIR"
+  fi
+fi
+
+# ============================================================================
+# TEST 9: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
@@ -654,7 +748,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 9: Optional ShellCheck
+# TEST 10: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""
