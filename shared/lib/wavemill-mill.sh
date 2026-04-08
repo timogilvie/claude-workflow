@@ -3045,7 +3045,51 @@ monitor_issue_state() {
             active_count=$((active_count + 1))
             return 0
           fi
-          # Agent exited but no PR - might need attention
+
+          # Agent exited - check if PR was created and transition to ready phase if enabled
+          local pr_number
+          pr_number=$(find_pr_for_branch "$BRANCH")
+          if [[ -n "$pr_number" ]] && [[ "$_CFG_READY_ENABLED" == "true" ]]; then
+            # Transition to ready phase
+            set_task_phase "$ISSUE" "ready"
+            title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+            if [[ -z "$title" ]]; then
+              issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+              title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+            fi
+            launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"
+            local launch_rc=$?
+            if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+              log "⛔ $ISSUE → Workflow aborted during ready launch"
+              set_task_phase "$ISSUE" "aborted"
+              set_window_attention_state "$WIN" "needs-user"
+              return 0
+            fi
+            set_window_attention_state "$WIN" "clear"
+            log "✓ $ISSUE → Review complete, launching ready phase (PR #$pr_number)"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+          # No PR created or ready phase disabled - mark for attention
+          needs_attention="true"
+          ;;
+
+        ready)
+          if check_workflow_aborted "$SLUG"; then
+            log "⛔ $ISSUE → Workflow aborted by user during ready phase"
+            set_task_phase "$ISSUE" "aborted"
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+
+          # Ready phase is complete when checks pass (handled by ready.ts tool)
+          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            set_window_attention_state "$WIN" "clear"
+            # Keep ready tasks active while tool is still running
+            active_count=$((active_count + 1))
+            return 0
+          fi
+          # Tool exited - mark for user attention to review ready status
           needs_attention="true"
           ;;
 
