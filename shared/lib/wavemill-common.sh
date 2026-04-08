@@ -29,6 +29,9 @@ _WAVEMILL_DEFAULTS='{
   "plan": {
     "maxDisplay": 9
   },
+  "dashboard": {
+    "verbosity": "info"
+  },
   "challenge": {
     "enabled": false,
     "rate": 0.10,
@@ -48,7 +51,7 @@ _WAVEMILL_DEFAULTS='{
 #
 # Sets: SESSION, MAX_PARALLEL, POLL_SECONDS, BASE_BRANCH, WORKTREE_ROOT,
 #        AGENT_CMD, REQUIRE_CONFIRM, PLANNING_MODE, MAX_RETRIES, RETRY_DELAY,
-#        PROJECT_NAME, MAX_SELECT, MAX_DISPLAY, SETUP_CMD
+#        PROJECT_NAME, MAX_SELECT, MAX_DISPLAY, SETUP_CMD, DASHBOARD_VERBOSITY
 #
 # Args: $1 = repo directory (default: $PWD)
 load_config() {
@@ -99,7 +102,8 @@ load_config() {
       "_CFG_ROUTER_ENABLED=\($c.router.enabled // true)",
       "_CFG_ROUTER_DEFAULT_MODEL=\($c.router.defaultModel // "claude-sonnet-4-5-20250929" | @sh)",
       "_CFG_AUTO_EVAL=\($c.autoEval // true)",
-      "_CFG_SETUP_CMD=\($c.mill.setupCommand // "" | @sh)"
+      "_CFG_SETUP_CMD=\($c.mill.setupCommand // "" | @sh)",
+      "_CFG_DASHBOARD_VERBOSITY=\($c.dashboard.verbosity // "info" | @sh)"
     ] | .[]
     '
   ) || {
@@ -160,6 +164,13 @@ load_config() {
   ROUTER_DEFAULT_MODEL="${ROUTER_DEFAULT_MODEL:-$_CFG_ROUTER_DEFAULT_MODEL}"
   AUTO_EVAL="${AUTO_EVAL:-$_CFG_AUTO_EVAL}"
   SETUP_CMD="${SETUP_CMD:-$_CFG_SETUP_CMD}"
+  DASHBOARD_VERBOSITY="${DASHBOARD_VERBOSITY:-$_CFG_DASHBOARD_VERBOSITY}"
+
+  # Validate dashboard verbosity (fall back to info for invalid values)
+  case "$DASHBOARD_VERBOSITY" in
+    debug|info|status) ;;
+    *) DASHBOARD_VERBOSITY="info" ;;
+  esac
 
   # WORKTREE_ROOT: resolve relative paths against repo_dir
   local wt_raw="${WORKTREE_ROOT:-$_CFG_WORKTREE_ROOT}"
@@ -176,6 +187,7 @@ load_config() {
   export CHALLENGE_ENABLED CHALLENGE_RATE CHALLENGE_MODELS_JSON
   export CHALLENGE_COMPARISON_MODEL CHALLENGE_AUTO_MERGE
   export ROUTER_ENABLED ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD
+  export DASHBOARD_VERBOSITY
 
   # Clean up temp variables
   unset _CFG_PROJECT _CFG_SESSION _CFG_MAX_PARALLEL _CFG_POLL_SECONDS
@@ -185,6 +197,7 @@ load_config() {
   unset _CFG_CHALLENGE_ENABLED _CFG_CHALLENGE_RATE _CFG_CHALLENGE_MODELS
   unset _CFG_CHALLENGE_COMPARISON_MODEL _CFG_CHALLENGE_AUTO_MERGE
   unset _CFG_ROUTER_ENABLED _CFG_ROUTER_DEFAULT_MODEL _CFG_AUTO_EVAL _CFG_SETUP_CMD
+  unset _CFG_DASHBOARD_VERBOSITY
 
   # Sentinel so downstream scripts can skip re-loading
   _WAVEMILL_CONFIG_LOADED=1

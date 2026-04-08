@@ -150,6 +150,10 @@ export interface ReviewConfig {
   enabled?: boolean;
 }
 
+export interface DashboardConfig {
+  verbosity?: 'debug' | 'info' | 'status';
+}
+
 export interface LinearConfig {
   project?: string;
 }
@@ -177,6 +181,7 @@ export interface WavemillConfig {
   challengeScheduler?: ChallengeSchedulerConfig;
   validation?: ValidationConfig;
   constraints?: ConstraintsConfig;
+  dashboard?: DashboardConfig;
   ui?: UiConfig;
   review?: ReviewConfig;
   permissions?: PermissionsConfig;
@@ -497,4 +502,12 @@ export function getPlanConfig(repoDir?: string): PlanConfig {
  */
 export function getPermissionsConfig(repoDir?: string): PermissionsConfig {
   return loadWavemillConfig(repoDir).permissions || {};
+}
+
+/**
+ * Get the dashboard config section.
+ * Returns empty object if not configured.
+ */
+export function getDashboardConfig(repoDir?: string): DashboardConfig {
+  return loadWavemillConfig(repoDir).dashboard || {};
 }

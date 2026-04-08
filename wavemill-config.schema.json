@@ -570,6 +570,19 @@
       },
       "additionalProperties": false
     },
+    "dashboard": {
+      "type": "object",
+      "description": "Settings for the wavemill dashboard tmux pane output.",
+      "properties": {
+        "verbosity": {
+          "type": "string",
+          "enum": ["debug", "info", "status"],
+          "default": "info",
+          "description": "Dashboard output verbosity level. 'debug' shows all messages, 'info' (default) shows informational and status messages, 'status' shows only major lifecycle events (task start/complete/fail)."
+        }
+      },
+      "additionalProperties": false
+    },
     "permissions": {
       "type": "object",
       "description": "Permission settings for agent tool usage. Configures which commands can be auto-approved without user confirmation.",

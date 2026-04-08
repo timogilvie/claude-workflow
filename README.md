@@ -243,6 +243,25 @@ wavemill eval
 
 See [docs/eval-mode.md](docs/eval-mode.md) for details.
 
+## Dashboard Verbosity
+
+Control how much output appears on the dashboard tmux pane. All messages are always written to `.wavemill/dashboard.log` regardless of this setting.
+
+**Levels** (from most to least verbose):
+- **debug** — everything: cost tracking, internal state, worktree/branch operations
+- **info** (default) — phase transitions, routing decisions, challenge results
+- **status** — minimal: task start/complete/fail, PR creation, aborts
+
+```json
+{
+  "dashboard": {
+    "verbosity": "status"
+  }
+}
+```
+
+Override via environment variable: `DASHBOARD_VERBOSITY=debug wavemill mill`
+
 ## Model Routing
 
 The router picks the best model for each task based on historical eval performance. It classifies tasks by type (bugfix, feature, refactor, etc.), analyzes complexity, and checks which models perform best on similar work.

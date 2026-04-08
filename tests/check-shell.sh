@@ -123,7 +123,7 @@ else
     # Also verify that functions used in the main monitoring loop are defined
     # These are the critical functions that caused PRs 48 and 52
     CRITICAL_FUNCTIONS=(
-      log log_error log_warn
+      log log_error log_warn dashboard_log
       save_task_state remove_task_state set_task_phase get_task_phase
       find_pr_for_branch pr_state validate_pr_merge
       linear_set_state linear_is_completed
@@ -413,7 +413,7 @@ else
 fi
 
 MERGED_BLOCK=$(awk '
-  /log "✓ \$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
+  /dashboard_log status "✓ \$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
   in_block { print }
   in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
@@ -430,7 +430,7 @@ else
 fi
 
 EXTERNAL_BLOCK=$(awk '
-  /log "✓ \$ISSUE → Completed externally \(cross-repo or manual\)"/ { in_block=1 }
+  /dashboard_log status "✓ \$ISSUE → Completed externally \(cross-repo or manual\)"/ { in_block=1 }
   in_block { print }
   in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
@@ -668,6 +668,157 @@ if command -v shellcheck >/dev/null 2>&1; then
     fi
   done
 fi
+
+# ============================================================================
+# TEST 10: Dashboard verbosity filtering (dashboard_log)
+# ============================================================================
+echo ""
+echo "=== Dashboard Verbosity Filtering ==="
+
+# Verify dashboard_log is defined in the monitor heredoc
+if grep -qE '^dashboard_log\(\) \{' <<< "$HEREDOC_CONTENT"; then
+  pass "monitor defines dashboard_log helper"
+else
+  fail "monitor is missing dashboard_log helper"
+fi
+
+# Verify _verbosity_num helper is defined
+if grep -qE '^_verbosity_num\(\) \{' <<< "$HEREDOC_CONTENT"; then
+  pass "monitor defines _verbosity_num helper"
+else
+  fail "monitor is missing _verbosity_num helper"
+fi
+
+# Verify dashboard_log writes to a log file unconditionally
+if grep -q 'DASHBOARD_LOG_FILE' <<< "$HEREDOC_CONTENT" \
+  && grep -q '>> "\$DASHBOARD_LOG_FILE"' <<< "$HEREDOC_CONTENT"; then
+  pass "dashboard_log writes all messages to log file"
+else
+  fail "dashboard_log is missing log file output"
+fi
+
+# Verify DASHBOARD_VERBOSITY is read from monitor env
+if grep -q "DASHBOARD_VERBOSITY" "$LIB_DIR/wavemill-mill.sh"; then
+  pass "DASHBOARD_VERBOSITY is passed to monitor via env file"
+else
+  fail "DASHBOARD_VERBOSITY is missing from monitor env file"
+fi
+
+# Verify config schema includes dashboard.verbosity
+if grep -q '"dashboard"' "$REPO_DIR/wavemill-config.schema.json" \
+  && grep -q '"verbosity"' "$REPO_DIR/wavemill-config.schema.json"; then
+  pass "config schema defines dashboard.verbosity"
+else
+  fail "config schema is missing dashboard.verbosity"
+fi
+
+# Verify wavemill-common.sh loads DASHBOARD_VERBOSITY
+if grep -q '_CFG_DASHBOARD_VERBOSITY' "$LIB_DIR/wavemill-common.sh" \
+  && grep -q 'DASHBOARD_VERBOSITY=' "$LIB_DIR/wavemill-common.sh"; then
+  pass "wavemill-common.sh loads and exports DASHBOARD_VERBOSITY"
+else
+  fail "wavemill-common.sh is missing DASHBOARD_VERBOSITY config loading"
+fi
+
+# Verify dashboard_log is used with all three levels
+if grep -q 'dashboard_log status' <<< "$HEREDOC_CONTENT" \
+  && grep -q 'dashboard_log info' <<< "$HEREDOC_CONTENT" \
+  && grep -q 'dashboard_log debug' <<< "$HEREDOC_CONTENT"; then
+  pass "monitor uses all three dashboard_log levels (status, info, debug)"
+else
+  fail "monitor is not using all three dashboard_log levels"
+fi
+
+# Verify invalid verbosity falls back to info
+if grep -q 'case "\$DASHBOARD_VERBOSITY" in' "$LIB_DIR/wavemill-common.sh" \
+  && grep -q 'DASHBOARD_VERBOSITY="info"' "$LIB_DIR/wavemill-common.sh"; then
+  pass "invalid DASHBOARD_VERBOSITY values fall back to info"
+else
+  fail "missing fallback for invalid DASHBOARD_VERBOSITY values"
+fi
+
+# Functional test: verify _verbosity_num mapping
+VNUM_FUNC='
+_verbosity_num() {
+  case "$1" in
+    debug)  echo 0 ;;
+    info)   echo 1 ;;
+    status) echo 2 ;;
+    *)      echo 1 ;;
+  esac
+}
+'
+eval "$VNUM_FUNC"
+if [[ "$(_verbosity_num debug)" == "0" ]] \
+  && [[ "$(_verbosity_num info)" == "1" ]] \
+  && [[ "$(_verbosity_num status)" == "2" ]] \
+  && [[ "$(_verbosity_num invalid)" == "1" ]]; then
+  pass "_verbosity_num maps debug=0, info=1, status=2, invalid=1"
+else
+  fail "_verbosity_num level mapping is incorrect"
+fi
+
+# Functional test: dashboard_log filtering at each level
+DLOG_TEST_DIR=$(mktemp -d)
+DASHBOARD_LOG_FILE="$DLOG_TEST_DIR/dashboard.log"
+
+dashboard_log() {
+  local level="$1"
+  shift
+  local msg="$*"
+  echo "[$level] $msg" >> "$DASHBOARD_LOG_FILE"
+  local msg_level
+  msg_level=$(_verbosity_num "$level")
+  if (( msg_level >= DASHBOARD_VERBOSITY_NUM )); then
+    echo "$msg"
+  fi
+}
+
+# Test with verbosity=status (should only show status messages)
+DASHBOARD_VERBOSITY_NUM=2
+STDOUT=$(dashboard_log debug "debug msg" && dashboard_log info "info msg" && dashboard_log status "status msg")
+if [[ "$STDOUT" == "status msg" ]]; then
+  pass "verbosity=status shows only status messages on dashboard"
+else
+  fail "verbosity=status filtering is incorrect (got: '$STDOUT')"
+fi
+
+# Test with verbosity=info (should show info and status)
+> "$DASHBOARD_LOG_FILE"
+DASHBOARD_VERBOSITY_NUM=1
+STDOUT=$(dashboard_log debug "debug msg" && dashboard_log info "info msg" && dashboard_log status "status msg")
+EXPECTED=$'info msg\nstatus msg'
+if [[ "$STDOUT" == "$EXPECTED" ]]; then
+  pass "verbosity=info shows info and status messages on dashboard"
+else
+  fail "verbosity=info filtering is incorrect"
+fi
+
+# Test with verbosity=debug (should show everything)
+> "$DASHBOARD_LOG_FILE"
+DASHBOARD_VERBOSITY_NUM=0
+STDOUT=$(dashboard_log debug "debug msg" && dashboard_log info "info msg" && dashboard_log status "status msg")
+EXPECTED=$'debug msg\ninfo msg\nstatus msg'
+if [[ "$STDOUT" == "$EXPECTED" ]]; then
+  pass "verbosity=debug shows all messages on dashboard"
+else
+  fail "verbosity=debug filtering is incorrect"
+fi
+
+# Test that all messages are always written to log file regardless of verbosity
+> "$DASHBOARD_LOG_FILE"
+DASHBOARD_VERBOSITY_NUM=2  # strictest level
+dashboard_log debug "debug msg" >/dev/null
+dashboard_log info "info msg" >/dev/null
+dashboard_log status "status msg" >/dev/null
+LOG_LINES=$(wc -l < "$DASHBOARD_LOG_FILE" | tr -d ' ')
+if [[ "$LOG_LINES" == "3" ]]; then
+  pass "all messages written to log file regardless of verbosity"
+else
+  fail "log file should have 3 lines but has $LOG_LINES"
+fi
+
+rm -rf "$DLOG_TEST_DIR"
 
 # ============================================================================
 # RESULTS

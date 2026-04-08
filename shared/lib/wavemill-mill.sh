@@ -747,7 +747,7 @@ cleanup_stale_tasks() {
               rm -f "${tmp:-}"
             fi
           ) >/dev/null 2>&1 &
-          log "  ↳ Eval running in background; log: $eval_log"
+          dashboard_log debug "  ↳ Eval running in background; log: $eval_log"
         fi
       fi
     fi
@@ -1176,6 +1176,7 @@ AGENT_CMD_EXPLICIT='${AGENT_CMD_EXPLICIT:-}'
 ROUTER_ENABLED='${ROUTER_ENABLED:-true}'
 MAX_PARALLEL='$MAX_PARALLEL'
 AUTO_EVAL='$AUTO_EVAL'
+DASHBOARD_VERBOSITY='$DASHBOARD_VERBOSITY'
 ENVEOF
 
 
@@ -1193,6 +1194,40 @@ source "$1"
 log() { echo "$(date '+%H:%M:%S') $*"; }
 log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
+
+# Dashboard log file - all messages written here regardless of verbosity
+DASHBOARD_LOG_FILE="${STATE_DIR}/dashboard.log"
+mkdir -p "$(dirname "$DASHBOARD_LOG_FILE")"
+
+# Verbosity level mapping: debug=0, info=1, status=2
+_verbosity_num() {
+  case "$1" in
+    debug)  echo 0 ;;
+    info)   echo 1 ;;
+    status) echo 2 ;;
+    *)      echo 1 ;;
+  esac
+}
+
+DASHBOARD_VERBOSITY_NUM=$(_verbosity_num "${DASHBOARD_VERBOSITY:-info}")
+
+# dashboard_log <level> <message>
+# Always writes to log file. Only shows on dashboard if level >= configured verbosity.
+dashboard_log() {
+  local level="$1"
+  shift
+  local msg="$(date '+%H:%M:%S') $*"
+
+  # Always write to log file
+  echo "[$level] $msg" >> "$DASHBOARD_LOG_FILE"
+
+  # Only show on dashboard if level meets threshold
+  local msg_level
+  msg_level=$(_verbosity_num "$level")
+  if (( msg_level >= DASHBOARD_VERBOSITY_NUM )); then
+    echo "$msg"
+  fi
+}
 
 # Duplicated intentionally from the parent script because the monitor runs as a
 # standalone generated shell script and does not inherit parent functions.
@@ -1323,7 +1358,7 @@ trap cleanup_dashboard_pane EXIT INT TERM
 # Kill entire tmux session for single-step quit.
 quit_and_kill_session() {
   local message="${1:-Quitting.}"
-  log "$message"
+  dashboard_log status "$message"
 
   # If running inside tmux, kill the entire session for single-step quit
   if [[ -n "${TMUX:-}" ]]; then
@@ -1573,7 +1608,7 @@ $issue_desc
   build_planning_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$prompt_file"
 
-  log "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
+  dashboard_log info "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
   _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug"
   return $?
 }
@@ -1599,7 +1634,7 @@ $issue_desc
   build_coding_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" > "$prompt_file"
 
-  log "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
+  dashboard_log info "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
   _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug"
   return $?
 }
@@ -1625,7 +1660,7 @@ $issue_desc
   build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" > "$prompt_file"
 
-  log "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
+  dashboard_log info "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug"
   return $?
 }
@@ -1759,7 +1794,7 @@ maybe_run_challenge_eval() {
     --challenge-pair "$pair_id" \
     --debug \
     >"$eval_log" 2>&1 || true
-  while IFS= read -r line; do log "  [challenge-eval] $line"; done < "$eval_log"
+  while IFS= read -r line; do dashboard_log debug "  [challenge-eval] $line"; done < "$eval_log"
   rm -f "$eval_log"
   mark_eval_completed "$issue"
 }
@@ -1799,7 +1834,7 @@ launch_background_post_merge_eval() {
     mark_eval_completed "$issue"
   ) >/dev/null 2>&1 &
 
-  log "  ↳ Eval running in background; log: $eval_log"
+  dashboard_log debug "  ↳ Eval running in background; log: $eval_log"
 }
 
 maybe_run_challenge_comparison() {
@@ -1835,7 +1870,7 @@ maybe_run_challenge_comparison() {
   challenger_code_depth=$(get_task_meta "$challenger_key" "codeDepth")
   challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
 
-  log "  ⚖ Running challenge comparison for $pair_id"
+  dashboard_log info "  ⚖ Running challenge comparison for $pair_id"
   if _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
@@ -1873,32 +1908,32 @@ maybe_run_challenge_comparison() {
     disp_winner=$(echo "$winner_model" | sed 's/-[0-9]\{8\}$//')
 
     # Display formatted comparison summary
-    log ""
-    log "  ┌────────────────────────────────────────────────────────────┐"
-    log "  │  ⚖  Challenge Comparison: $pair_id"
-    log "  ├────────────────────────────────────────────────────────────┤"
-    log "  │                    Primary            Challenger           │"
-    log "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
-    log "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
-    log "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
-    log "  ├────────────────────────────────────────────────────────────┤"
-    log "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
-    log "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
-    log "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
-    log "  │  Scope           $(printf '%-20s' "$scope_p") $(printf '%-19s' "$scope_c")│"
-    log "  ├────────────────────────────────────────────────────────────┤"
+    dashboard_log info ""
+    dashboard_log info "  ┌────────────────────────────────────────────────────────────┐"
+    dashboard_log info "  │  ⚖  Challenge Comparison: $pair_id"
+    dashboard_log info "  ├────────────────────────────────────────────────────────────┤"
+    dashboard_log info "  │                    Primary            Challenger           │"
+    dashboard_log info "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
+    dashboard_log info "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
+    dashboard_log info "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
+    dashboard_log info "  ├────────────────────────────────────────────────────────────┤"
+    dashboard_log info "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
+    dashboard_log info "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
+    dashboard_log info "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
+    dashboard_log info "  │  Scope           $(printf '%-20s' "$scope_p") $(printf '%-19s' "$scope_c")│"
+    dashboard_log info "  ├────────────────────────────────────────────────────────────┤"
     if [[ "$winner" == "primary" ]]; then
-      log "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
+      dashboard_log info "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
     else
-      log "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
+      dashboard_log info "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
     fi
-    log "  │                                                            │"
+    dashboard_log info "  │                                                            │"
     # Word-wrap rationale to ~56 chars per line
     echo "$rationale" | fold -s -w 56 | while IFS= read -r rline; do
-      log "  │  $(printf '%-58s' "$rline")│"
+      dashboard_log info "  │  $(printf '%-58s' "$rline")│"
     done
-    log "  └────────────────────────────────────────────────────────────┘"
-    log ""
+    dashboard_log info "  └────────────────────────────────────────────────────────────┘"
+    dashboard_log info ""
 
     # Determine loser for cleanup
     local loser_key loser_slug loser_pr
@@ -1912,16 +1947,16 @@ maybe_run_challenge_comparison() {
       loser_pr=$(get_task_meta "$loser_key" "pr")
       if [[ -n "$loser_slug" ]]; then
         if [[ "${_CFG_CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
-          log "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
+          dashboard_log info "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
           # Close PR if not already closed/merged
           if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
             gh pr close "$loser_pr" \
               --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
-            log "  ✓ Closed losing PR #$loser_pr"
+            dashboard_log info "  ✓ Closed losing PR #$loser_pr"
           fi
           cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
         else
-          log "  ⚖ Both PRs remain open for manual review (autoMergeWinner=false)"
+          dashboard_log info "  ⚖ Both PRs remain open for manual review (autoMergeWinner=false)"
         fi
       fi
     fi
@@ -1982,7 +2017,7 @@ archive_stage_artifacts() {
   local count
   count=$(find "$archive_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$count" -gt 0 ]]; then
-    log "  ✓ Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
+    dashboard_log debug "  ✓ Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
   fi
 }
 
@@ -1997,20 +2032,20 @@ cleanup_completed_task() {
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
   tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
-  log "  ✓ Closed window: $win"
+  dashboard_log debug "  ✓ Closed window: $win"
 
   # Remove worktree
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   if [[ -d "$wt_dir" ]]; then
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
-    log "  ✓ Removed worktree: $wt_dir"
+    dashboard_log debug "  ✓ Removed worktree: $wt_dir"
   fi
 
   # Delete branch
   local task_branch="task/${slug}"
   if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-    log "  ✓ Deleted branch: $task_branch"
+    dashboard_log debug "  ✓ Deleted branch: $task_branch"
   fi
 
   # Clean up state
@@ -2020,9 +2055,9 @@ cleanup_completed_task() {
 
   # Log completion with optional reason
   if [[ -n "$completion_reason" ]]; then
-    log "  ✓ Complete: $issue ($completion_reason)"
+    dashboard_log status "  ✓ Complete: $issue ($completion_reason)"
   else
-    log "  ✓ Complete: $issue"
+    dashboard_log status "  ✓ Complete: $issue"
   fi
 }
 
@@ -2158,7 +2193,7 @@ launch_task() {
   linear_issue=$(get_linear_issue_id "$issue")
   challenge_model=$(get_task_meta "$issue" "challengeModel")
 
-  log "Launching $issue: $title"
+  dashboard_log status "Launching $issue: $title"
 
   # Fetch issue details
   local issue_json
@@ -2177,9 +2212,9 @@ launch_task() {
     :
   else
     if is_task_packet "$issue_desc"; then
-      log "  ✓ $issue has task packet"
+      dashboard_log debug "  ✓ $issue has task packet"
     else
-      log "  ✓ $issue raw description saved (agent will expand)"
+      dashboard_log debug "  ✓ $issue raw description saved (agent will expand)"
     fi
     echo "$issue_desc" > "$packet_file"
   fi
@@ -2236,19 +2271,19 @@ launch_task() {
 
     # Re-read packet content with migration hint included
     packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
-    log "  → Migration detected, assigned number: $next_num"
+    dashboard_log debug "  → Migration detected, assigned number: $next_num"
   fi
 
   # Create worktree + branch
   local created_new=false
   if [[ -d "$wt_dir" ]]; then
-    log "  Worktree exists: $wt_dir (resuming)"
+    dashboard_log debug "  Worktree exists: $wt_dir (resuming)"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
-    log "  Branch $branch exists, resuming"
+    dashboard_log debug "  Branch $branch exists, resuming"
     git -C "$REPO_DIR" worktree add "$wt_dir" "$branch"
     created_new=true
   else
-    log "  Creating branch $branch from origin/$BASE_BRANCH"
+    dashboard_log debug "  Creating branch $branch from origin/$BASE_BRANCH"
     git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH"
     created_new=true
   fi
@@ -2285,7 +2320,7 @@ launch_task() {
     review_mode=$(get_task_meta "$issue" "reviewMode")
     planner_agent="$(agent_resolve_from_model "${planner_model:-$task_model}")"
     reviewer_agent="$(agent_resolve_from_model "${reviewer_model:-$task_model}")"
-    log "  Challenge: $task_agent_cmd --model $task_model (planner=$planner_model, reviewer=$reviewer_model)"
+    dashboard_log info "  Challenge: $task_agent_cmd --model $task_model (planner=$planner_model, reviewer=$reviewer_model)"
   elif [[ -n "${FORCE_MODEL:-}" ]]; then
     # Validate model (should have been validated earlier, but double-check)
     if ! agent_validate_model "$FORCE_MODEL" "$REPO_DIR"; then
@@ -2299,7 +2334,7 @@ launch_task() {
     planner_agent="$task_agent_cmd"
     reviewer_model="$FORCE_MODEL"
     reviewer_agent="$task_agent_cmd"
-    log "  FORCE_MODEL: $task_agent_cmd --model $task_model"
+    dashboard_log info "  FORCE_MODEL: $task_agent_cmd --model $task_model"
   elif [[ "${AGENT_CMD_EXPLICIT:-}" != "true" ]]; then
     local route_tool="$TOOLS_DIR/route-task.ts"
     if [[ "${ROUTER_ENABLED:-true}" == "true" ]] && [[ -f "$route_tool" ]] && [[ -f "$packet_file" ]]; then
@@ -2325,10 +2360,10 @@ launch_task() {
           reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
         fi
 
-        log "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+        dashboard_log info "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
       else
         # Fallback to single-model routing if workflow routing failed
-        log "  Workflow routing unavailable, falling back to single-model routing"
+        dashboard_log debug "  Workflow routing unavailable, falling back to single-model routing"
         local suggest_tool="$TOOLS_DIR/suggest-model.ts"
         if [[ -f "$suggest_tool" ]]; then
           local suggestion
@@ -2349,9 +2384,9 @@ launch_task() {
             # Only gate model selection on data sufficiency
             if [[ "$rec_insufficient" != "true" ]] && [[ -n "$rec_model" ]]; then
               task_model="$rec_model"
-              log "  Router: $task_agent_cmd --model $task_model (confidence: $rec_confidence)"
+              dashboard_log info "  Router: $task_agent_cmd --model $task_model (confidence: $rec_confidence)"
             elif [[ -n "$rec_model" ]]; then
-              log "  Router: $task_agent_cmd --model $rec_model - $rec_reasoning"
+              dashboard_log info "  Router: $task_agent_cmd --model $rec_model - $rec_reasoning"
             fi
           fi
         fi
@@ -2385,7 +2420,7 @@ launch_task() {
     challenge_reason=""
     if [[ -n "${FORCE_MODEL:-}" ]]; then
       challenge_reason="forced_model"
-      log "  $issue: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
+      dashboard_log debug "  $issue: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
     else
       local _dyn_rs=$remaining_slots
       (( _dyn_rs < 2 )) && _dyn_rs=2
@@ -2430,9 +2465,9 @@ launch_task() {
       save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode"
       should_launch_challenger="true"
       LAST_LAUNCHED_SLOTS=1  # Challenger is free overhead, doesn't consume a slot
-      log "  Challenge selected (${task_model} vs ${challenger_model}) [challenger is extra pane]"
+      dashboard_log info "  Challenge selected (${task_model} vs ${challenger_model}) [challenger is extra pane]"
     elif [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
-      log "  Challenge skipped ($challenge_reason), launching single-model run"
+      dashboard_log debug "  Challenge skipped ($challenge_reason), launching single-model run"
     fi
   fi
 
@@ -2456,7 +2491,7 @@ launch_task() {
     if [[ "$saved_agent" != "$task_agent_cmd" ]]; then
       log_warn "  ⚠ Agent save mismatch: expected='$task_agent_cmd' but got='$saved_agent'"
     else
-      log "  ✓ Agent set to: $task_agent_cmd"
+      dashboard_log debug "  ✓ Agent set to: $task_agent_cmd"
     fi
   fi
 
@@ -2489,7 +2524,7 @@ launch_task() {
 
   # Run setup command in new worktrees (e.g., npm install)
   if [[ -n "${SETUP_CMD:-}" ]] && [[ "$created_new" == "true" ]]; then
-    log "  Running setup: $SETUP_CMD"
+    dashboard_log debug "  Running setup: $SETUP_CMD"
     local _sentinel="/tmp/.wavemill-setup-${issue//[^a-zA-Z0-9_-]/_}"
     rm -f "$_sentinel"
     tmux send-keys -t "$SESSION:$win" \
@@ -2502,7 +2537,7 @@ launch_task() {
     if (( _t >= 180 )); then
       log_warn "  Setup timed out after 180s, proceeding anyway"
     else
-      log "  Setup complete"
+      dashboard_log debug "  Setup complete"
     fi
   fi
 
@@ -2620,7 +2655,7 @@ Implement from the issue description plus direct codebase analysis."
     resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")"
     launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
       "${planner_model:-claude-sonnet-4-5-20250929}" "$resolved_planner_agent" "${plan_depth:-light}"
-    log "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-5-20250929}"
+    dashboard_log info "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-5-20250929}"
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
@@ -2630,8 +2665,8 @@ Implement from the issue description plus direct codebase analysis."
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model"
   fi
 
-  log "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
-  [[ -n "$planner_model" ]] && log "  ✓ Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
+  dashboard_log status "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
+  [[ -n "$planner_model" ]] && dashboard_log info "  ✓ Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
 
   if [[ "$should_launch_challenger" == "true" ]]; then
     WAVEMILL_DISABLE_CHALLENGE=1 launch_task "$challenger_key" "$challenger_slug" "$challenger_title" 0
@@ -2678,11 +2713,11 @@ while IFS= read -r line; do
 done < "$TASKS_FILE"
 
 
-log "Monitoring tasks and managing work queue..."
-[[ "$PLANNING_MODE" == "interactive" ]] && log "  Planning mode: interactive (watching for plan approval)"
-log "  Max parallel: $MAX_PARALLEL"
-log "  Checking every ${POLL_SECONDS}s"
-log "  Type 'q' to quit, or 'touch $STATE_DIR/.stop-loop' to stop"
+dashboard_log status "Monitoring tasks and managing work queue..."
+[[ "$PLANNING_MODE" == "interactive" ]] && dashboard_log info "  Planning mode: interactive (watching for plan approval)"
+dashboard_log info "  Max parallel: $MAX_PARALLEL"
+dashboard_log info "  Checking every ${POLL_SECONDS}s"
+dashboard_log info "  Type 'q' to quit, or 'touch $STATE_DIR/.stop-loop' to stop"
 echo ""
 
 QUIT_REQUESTED=false
@@ -2737,9 +2772,9 @@ monitor_issue_state() {
       fi
       # Fetch PR details for user-visible summary
       pr_details=$(_with_timeout "$API_TIMEOUT" gh pr view "$PR" --json title,url --jq '"  " + .title + "\n  " + .url' 2>/dev/null || echo "")
-      log "✓ $ISSUE → PR #$PR (In Review)"
+      dashboard_log status "✓ $ISSUE → PR #$PR (In Review)"
       if [[ -n "$pr_details" ]]; then
-        log "$pr_details"
+        dashboard_log info "$pr_details"
       fi
 
       if is_challenge_task "$ISSUE"; then
@@ -2749,22 +2784,22 @@ monitor_issue_state() {
     else
       # No PR in current repo - check Linear issue state for cross-repo completion
       if should_update_linear_state "$ISSUE" && linear_is_completed "$(get_linear_issue_id "$ISSUE")"; then
-        log "✓ $ISSUE → Completed externally (cross-repo or manual)"
+        dashboard_log status "✓ $ISSUE → Completed externally (cross-repo or manual)"
         set_window_attention_state "$WIN" "clear"
 
         # Post-completion eval (non-blocking: always exits 0)
         if [[ "$AUTO_EVAL" == "true" ]]; then
           eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
           if [[ "$eval_completed" == "false" ]]; then
-            log "  📊 Running post-completion eval..."
+            dashboard_log debug "  📊 Running post-completion eval..."
             launch_background_post_merge_eval "$ISSUE" "" "$BRANCH" "$SLUG" "$ISSUE" "post-completion"
           else
-            log "  ✓ Eval already completed for $ISSUE"
+            dashboard_log debug "  ✓ Eval already completed for $ISSUE"
           fi
         fi
 
         if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-          log "  → Window stays open for review - close it when ready"
+          dashboard_log info "  → Window stays open for review - close it when ready"
           if should_update_linear_state "$ISSUE"; then
             linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
           fi
@@ -2789,7 +2824,7 @@ monitor_issue_state() {
       case "$current_phase" in
         routing)
           if check_workflow_aborted "$SLUG"; then
-            log "⛔ $ISSUE → Workflow aborted by user during routing phase"
+            dashboard_log status "⛔ $ISSUE → Workflow aborted by user during routing phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -2850,13 +2885,13 @@ monitor_issue_state() {
               launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth"
               local launch_rc=$?
               if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
-                log "⛔ $ISSUE → Workflow aborted during planning launch"
+                dashboard_log status "⛔ $ISSUE → Workflow aborted during planning launch"
                 set_task_phase "$ISSUE" "aborted"
                 set_window_attention_state "$WIN" "needs-user"
                 return 0
               fi
               set_window_attention_state "$WIN" "clear"
-              log "✓ $ISSUE → Routing complete, launching planning phase"
+              dashboard_log info "✓ $ISSUE → Routing complete, launching planning phase"
               active_count=$((active_count + 1))
               return 0
             else
@@ -2876,7 +2911,7 @@ monitor_issue_state() {
 
         planning)
           if check_workflow_aborted "$SLUG"; then
-            log "⛔ $ISSUE → Workflow aborted by user during planning phase"
+            dashboard_log status "⛔ $ISSUE → Workflow aborted by user during planning phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -2900,7 +2935,7 @@ monitor_issue_state() {
               fi
               echo "$next_num" > "$mig_num_file"
               save_migration_reservation "$ISSUE" "$next_num"
-              log "  → Late migration detected for $ISSUE, assigned number: $next_num"
+              dashboard_log debug "  → Late migration detected for $ISSUE, assigned number: $next_num"
             else
               echo "$existing_reservation" > "$mig_num_file"
             fi
@@ -2936,13 +2971,13 @@ monitor_issue_state() {
             launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
             if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
-              log "⛔ $ISSUE → Workflow aborted during coding launch"
+              dashboard_log status "⛔ $ISSUE → Workflow aborted during coding launch"
               set_task_phase "$ISSUE" "aborted"
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
             set_window_attention_state "$WIN" "clear"
-            log "✓ $ISSUE → Plan approved, launching coding phase"
+            dashboard_log info "✓ $ISSUE → Plan approved, launching coding phase"
             active_count=$((active_count + 1))
             return 0
           else
@@ -2958,7 +2993,7 @@ monitor_issue_state() {
 
         coding)
           if check_workflow_aborted "$SLUG"; then
-            log "⛔ $ISSUE → Workflow aborted by user during coding phase"
+            dashboard_log status "⛔ $ISSUE → Workflow aborted by user during coding phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -2989,13 +3024,13 @@ monitor_issue_state() {
             launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
             local launch_rc=$?
             if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
-              log "⛔ $ISSUE → Workflow aborted during review launch"
+              dashboard_log status "⛔ $ISSUE → Workflow aborted during review launch"
               set_task_phase "$ISSUE" "aborted"
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
             set_window_attention_state "$WIN" "clear"
-            log "✓ $ISSUE → Coding complete, launching review phase"
+            dashboard_log info "✓ $ISSUE → Coding complete, launching review phase"
             active_count=$((active_count + 1))
             return 0
           else
@@ -3011,7 +3046,7 @@ monitor_issue_state() {
 
         review)
           if check_workflow_aborted "$SLUG"; then
-            log "⛔ $ISSUE → Workflow aborted by user during review phase"
+            dashboard_log status "⛔ $ISSUE → Workflow aborted by user during review phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3064,13 +3099,13 @@ monitor_issue_state() {
       # Respawn and re-launch the current phase instead of cleaning up.
       if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
         if check_workflow_aborted "$SLUG"; then
-          log "⛔ $ISSUE → Workflow aborted (pane exited)"
+          dashboard_log status "⛔ $ISSUE → Workflow aborted (pane exited)"
           set_task_phase "$ISSUE" "aborted"
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
 
-        log "⚠ $ISSUE → Pane died during $current_phase phase, respawning..."
+        dashboard_log info "⚠ $ISSUE → Pane died during $current_phase phase, respawning..."
         tmux respawn-pane -t "$SESSION:$WIN" 2>/dev/null || true
         sleep 1
         active_count=$((active_count + 1))
@@ -3082,7 +3117,7 @@ monitor_issue_state() {
       # handle gracefully). Flag for attention instead of cleaning up
       # immediately — the worktree and branch still have value.
       if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qF "$WIN"; then
-        log "⚠ $ISSUE → Window disappeared during $current_phase phase, recreating..."
+        dashboard_log info "⚠ $ISSUE → Window disappeared during $current_phase phase, recreating..."
         tmux new-window -t "$SESSION" -n "$WIN" -c "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true
         tmux set-option -t "$SESSION:$WIN" remain-on-exit on 2>/dev/null || true
         sleep 1
@@ -3093,7 +3128,7 @@ monitor_issue_state() {
 
       # Agent exited without creating a PR - clean up the slot
       set_window_attention_state "$WIN" "clear"
-      log "⚠ $ISSUE → Agent exited without PR - releasing slot"
+      dashboard_log status "⚠ $ISSUE → Agent exited without PR - releasing slot"
       cleanup_completed_task "$ISSUE" "$SLUG" "no PR created"
       return 0
     fi
@@ -3101,22 +3136,22 @@ monitor_issue_state() {
 
   # Check if merged
   if validate_pr_merge "$PR"; then
-    log "✓ $ISSUE → PR #$PR MERGED"
+    dashboard_log status "✓ $ISSUE → PR #$PR MERGED"
     set_window_attention_state "$WIN" "clear"
 
     # Post-merge eval (non-blocking: always exits 0)
     if [[ "$AUTO_EVAL" == "true" ]]; then
       eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
       if [[ "$eval_completed" == "false" ]]; then
-        log "  📊 Running post-merge eval..."
+        dashboard_log debug "  📊 Running post-merge eval..."
         launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
       else
-        log "  ✓ Eval already completed for $ISSUE"
+        dashboard_log debug "  ✓ Eval already completed for $ISSUE"
       fi
     fi
 
     if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-      log "  → Window stays open for review - close it when ready"
+      dashboard_log info "  → Window stays open for review - close it when ready"
       if should_update_linear_state "$ISSUE"; then
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
       fi
@@ -3137,7 +3172,7 @@ monitor_issue_state() {
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Backlog"
     fi
     if should_cleanup_closed_pr "$ISSUE"; then
-      log "  ↳ Auto-cleaning closed challenger pane/worktree"
+      dashboard_log debug "  ↳ Auto-cleaning closed challenger pane/worktree"
       set_window_attention_state "$WIN" "clear"
       cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
     else
@@ -3185,7 +3220,7 @@ while :; do
       rm -f "$STATE_DIR/.stop-loop"
       quit_and_kill_session "Stop signal detected and all tasks complete. Exiting."
     fi
-    log "Stop signal detected. Finishing $active_count active task(s)..."
+    dashboard_log status "Stop signal detected. Finishing $active_count active task(s)..."
     sleep "$POLL_SECONDS"
     continue
   fi
