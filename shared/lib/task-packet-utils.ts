@@ -29,6 +29,21 @@ export interface TaskPacketParts {
   fullContent: string;
 }
 
+/**
+ * Structured release-readiness metadata extracted from a task packet.
+ * Used by the ready-stage engine to compare implementation against planning expectations.
+ */
+export interface ReleaseReadiness {
+  /** Whether the task is expected to involve database schema changes */
+  databaseChangeRisk: 'none' | 'possible' | 'required';
+  /** Environment variables that must be added or changed for deployment */
+  envChanges: string[];
+  /** Configuration file changes required for deployment */
+  configChanges: string[];
+  /** Manual steps required before or after merge */
+  manualSteps: string[];
+}
+
 export interface TaskPacketArtifactPaths {
   full: string;
   header: string;
@@ -168,4 +183,79 @@ export async function writeTaskPacketArtifacts(
   await fs.writeFile(paths.full, parts.fullContent, 'utf-8');
 
   return paths;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Release Readiness Extraction
+// ────────────────────────────────────────────────────────────────
+
+const VALID_DB_RISK_VALUES = ['none', 'possible', 'required'] as const;
+
+/**
+ * Parse a comma-separated list field value into an array of trimmed strings.
+ * Returns an empty array for `none` or empty/missing values.
+ */
+function parseListField(value: string | undefined): string[] {
+  if (!value || value.trim().toLowerCase() === 'none' || value.trim() === '') {
+    return [];
+  }
+  return value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * Extract structured release-readiness metadata from a task packet.
+ *
+ * Looks for a `## Release Readiness` section and parses the bold-label
+ * key-value format used by the issue-writer prompt template.
+ *
+ * Returns `null` if the section is not present (backward compatibility
+ * with existing task packets).
+ *
+ * @param markdown - Task packet markdown content
+ * @returns Parsed release readiness metadata, or null if section absent
+ *
+ * @example
+ * ```typescript
+ * const readiness = extractReleaseReadiness(taskPacketMarkdown);
+ * if (readiness) {
+ *   console.log(readiness.databaseChangeRisk); // 'none' | 'possible' | 'required'
+ *   console.log(readiness.envChanges);          // ['NEW_API_KEY', 'FEATURE_FLAG_X']
+ * }
+ * ```
+ */
+export function extractReleaseReadiness(markdown: string): ReleaseReadiness | null {
+  // Find the ## Release Readiness section
+  const sectionMatch = markdown.match(/^##\s+Release Readiness\s*$/im);
+  if (!sectionMatch || sectionMatch.index === undefined) {
+    return null;
+  }
+
+  // Extract section content up to the next ## heading
+  const sectionStart = sectionMatch.index + sectionMatch[0].length;
+  const rest = markdown.substring(sectionStart);
+  const nextHeadingMatch = rest.match(/^##\s+/m);
+  const sectionContent = nextHeadingMatch && nextHeadingMatch.index !== undefined
+    ? rest.substring(0, nextHeadingMatch.index)
+    : rest;
+
+  // Parse bold-label key-value pairs: - **field_name**: value
+  const fieldPattern = /[-*]\s+\*\*(\w+)\*\*:\s*(.+)/g;
+  const fields = new Map<string, string>();
+  let match;
+  while ((match = fieldPattern.exec(sectionContent)) !== null) {
+    fields.set(match[1].toLowerCase(), match[2].trim());
+  }
+
+  // Extract database_change_risk — take only the first word to match the enum
+  const rawDbRisk = fields.get('database_change_risk')?.split(/\s/)[0];
+  const dbRisk = rawDbRisk && VALID_DB_RISK_VALUES.includes(rawDbRisk as any)
+    ? (rawDbRisk as ReleaseReadiness['databaseChangeRisk'])
+    : 'none';
+
+  return {
+    databaseChangeRisk: dbRisk,
+    envChanges: parseListField(fields.get('env_changes')),
+    configChanges: parseListField(fields.get('config_changes')),
+    manualSteps: parseListField(fields.get('manual_steps')),
+  };
 }

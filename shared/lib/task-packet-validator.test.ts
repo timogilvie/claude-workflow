@@ -9,6 +9,7 @@ import {
   validateValidationSteps,
   validateScopeBoundaries,
   validateAcceptanceCriteria,
+  validateReleaseReadiness,
 } from './task-packet-validator.ts';
 
 function assert(condition: boolean, message: string) {
@@ -134,6 +135,56 @@ function testAcceptanceCriteria() {
   assert(goodIssues.length === 0, 'Should pass with sufficient criteria (>= 3)');
 }
 
+function testReleaseReadiness() {
+  console.log('\n=== Testing Release Readiness Validation ===');
+
+  // Valid section produces no warnings
+  const validPacket = `
+## Release Readiness
+- **database_change_risk**: required
+- **env_changes**: NEW_API_KEY
+- **config_changes**: none
+- **manual_steps**: Run migration
+  `;
+
+  const validIssues = validateReleaseReadiness(validPacket);
+  assert(validIssues.length === 0, 'Should pass with valid release readiness section');
+
+  // Missing section produces no warnings (optional)
+  const missingPacket = `
+## Objective
+
+Build something
+  `;
+
+  const missingIssues = validateReleaseReadiness(missingPacket);
+  assert(missingIssues.length === 0, 'Should produce no issues when section is absent');
+
+  // Invalid database_change_risk value
+  const invalidDbRisk = `
+## Release Readiness
+- **database_change_risk**: maybe
+- **env_changes**: none
+- **config_changes**: none
+- **manual_steps**: none
+  `;
+
+  const dbRiskIssues = validateReleaseReadiness(invalidDbRisk);
+  assert(dbRiskIssues.length === 1, 'Should flag invalid database_change_risk value');
+  assert(dbRiskIssues[0].type === 'invalid-release-readiness', 'Issue type should be invalid-release-readiness');
+  assert(dbRiskIssues[0].description.includes('maybe'), 'Should mention the invalid value');
+
+  // Missing fields produce warnings
+  const missingFields = `
+## Release Readiness
+- **database_change_risk**: none
+  `;
+
+  const fieldIssues = validateReleaseReadiness(missingFields);
+  assert(fieldIssues.length === 3, 'Should flag 3 missing fields (env_changes, config_changes, manual_steps)');
+  assert(fieldIssues.every(i => i.type === 'invalid-release-readiness'), 'All issues should be invalid-release-readiness');
+}
+
 async function main() {
   console.log('Running task-packet-validator tests...\n');
 
@@ -142,6 +193,7 @@ async function main() {
     testValidationSteps();
     testScopeBoundaries();
     testAcceptanceCriteria();
+    testReleaseReadiness();
 
     console.log('\n✅ All tests passed!');
   } catch (error) {

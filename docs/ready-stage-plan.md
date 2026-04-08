@@ -84,6 +84,46 @@ Also track merge conflict state separately:
 - `conflicted`
 - `unknown`
 
+## Planning Metadata Schema
+
+Task packets and implementation plans include a `## Release Readiness` section with the following structured fields. The ready-stage engine (HOK-1176) reads these fields to compare implementation against planning expectations.
+
+### Fields
+
+| Field | Type | Allowed Values | Description |
+|-------|------|---------------|-------------|
+| `database_change_risk` | enum | `none`, `possible`, `required` | Whether the task is expected to involve database schema changes |
+| `env_changes` | list | comma-separated names or `none` | Environment variables that must be added or changed for deployment |
+| `config_changes` | list | comma-separated names or `none` | Configuration file changes required for deployment |
+| `manual_steps` | list | descriptive items or `none` | Manual steps required before or after merge (e.g., run migration script, update DNS) |
+
+### Markdown Format
+
+```markdown
+## Release Readiness
+- **database_change_risk**: none
+- **env_changes**: none
+- **config_changes**: none
+- **manual_steps**: none
+```
+
+Example with populated fields:
+
+```markdown
+## Release Readiness
+- **database_change_risk**: required
+- **env_changes**: NEW_API_KEY, FEATURE_FLAG_X
+- **config_changes**: config/production.json
+- **manual_steps**: Run migration script `scripts/migrate-v2.sh`, Update CDN cache rules
+```
+
+### Parsing Rules
+
+- `database_change_risk` must be exactly one of `none`, `possible`, or `required` (case-sensitive)
+- List fields use comma-separated values; `none` maps to an empty list
+- The section is optional — existing task packets without it remain valid
+- Extraction returns `null` when the section is absent
+
 ## Delivery Plan
 
 ### 1. Ready stage contract and CLI skeleton
