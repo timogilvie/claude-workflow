@@ -24,6 +24,7 @@ export type ValidationIssueType =
   | 'boilerplate-validation'
   | 'empty-scope'
   | 'insufficient-criteria'
+  | 'invalid-release-readiness'
   | 'vague-spec'
   | 'contradiction'
   | 'missing-requirement'
@@ -377,6 +378,62 @@ export function validateAcceptanceCriteria(taskPacket: string): ValidationIssue[
 }
 
 /**
+ * Layer 1: Release readiness metadata validation
+ *
+ * When the `## Release Readiness` section is present, validates that
+ * field values are well-formed. When absent, produces no issues
+ * (the section is optional for backward compatibility).
+ */
+export function validateReleaseReadiness(taskPacket: string): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  const section = extractSection(taskPacket, 'Release Readiness');
+  if (!section) {
+    return issues; // Section is optional
+  }
+
+  // Check database_change_risk value
+  const dbRiskMatch = section.match(/\*\*database_change_risk\*\*:\s*(\S+)/);
+  if (!dbRiskMatch) {
+    issues.push({
+      type: 'invalid-release-readiness',
+      severity: 'warning',
+      section: 'Release Readiness',
+      description: 'Missing database_change_risk field',
+      suggestedFix: 'Add `- **database_change_risk**: none` (or `possible` / `required`)',
+    });
+  } else {
+    const value = dbRiskMatch[1];
+    if (!['none', 'possible', 'required'].includes(value)) {
+      issues.push({
+        type: 'invalid-release-readiness',
+        severity: 'warning',
+        section: 'Release Readiness',
+        description: `database_change_risk must be one of: none, possible, required (got: "${value}")`,
+        suggestedFix: 'Use exactly one of: none, possible, required',
+      });
+    }
+  }
+
+  // Check that expected field names are present
+  const expectedFields = ['env_changes', 'config_changes', 'manual_steps'];
+  for (const field of expectedFields) {
+    const fieldRegex = new RegExp(`\\*\\*${field}\\*\\*:`);
+    if (!fieldRegex.test(section)) {
+      issues.push({
+        type: 'invalid-release-readiness',
+        severity: 'warning',
+        section: 'Release Readiness',
+        description: `Missing ${field} field`,
+        suggestedFix: `Add \`- **${field}**: none\` to the Release Readiness section`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
  * Run all Layer 1 validations
  */
 export function runLayer1Validation(taskPacket: string, repoPath: string): ValidationIssue[] {
@@ -386,6 +443,7 @@ export function runLayer1Validation(taskPacket: string, repoPath: string): Valid
   issues.push(...validateValidationSteps(taskPacket));
   issues.push(...validateScopeBoundaries(taskPacket));
   issues.push(...validateAcceptanceCriteria(taskPacket));
+  issues.push(...validateReleaseReadiness(taskPacket));
 
   return issues;
 }

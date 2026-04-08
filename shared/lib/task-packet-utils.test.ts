@@ -12,6 +12,7 @@ import {
   isValidTaskPacket,
   isTaskPacketFile,
   writeTaskPacketArtifacts,
+  extractReleaseReadiness,
 } from './task-packet-utils.ts';
 
 describe('splitTaskPacket', () => {
@@ -198,5 +199,132 @@ describe('task packet artifact persistence', () => {
     await expect(fs.readFile(artifactPaths.details, 'utf-8')).resolves.toBe('## 1. Objective\n\nDetails');
     await expect(fs.readFile(artifactPaths.full, 'utf-8')).resolves.toBe('# Header\n\n---\n\n## 1. Objective\n\nDetails');
     await fs.rm(root, { recursive: true, force: true });
+  });
+});
+
+describe('extractReleaseReadiness', () => {
+  test('extracts valid metadata with all fields populated', () => {
+    const markdown = `## Some Section
+
+Content here
+
+## Release Readiness
+- **database_change_risk**: required
+- **env_changes**: NEW_API_KEY, FEATURE_FLAG_X
+- **config_changes**: config/production.json
+- **manual_steps**: Run migration script, Update CDN cache rules
+
+## Next Section
+
+More content`;
+
+    const result = extractReleaseReadiness(markdown);
+
+    expect(result).toEqual({
+      databaseChangeRisk: 'required',
+      envChanges: ['NEW_API_KEY', 'FEATURE_FLAG_X'],
+      configChanges: ['config/production.json'],
+      manualSteps: ['Run migration script', 'Update CDN cache rules'],
+    });
+  });
+
+  test('returns null when section is absent', () => {
+    const markdown = `## Objective
+
+Build something
+
+## Technical Context
+
+Details`;
+
+    expect(extractReleaseReadiness(markdown)).toBeNull();
+  });
+
+  test('returns null for partial heading match', () => {
+    const markdown = `## Release
+
+Some content`;
+
+    expect(extractReleaseReadiness(markdown)).toBeNull();
+  });
+
+  test('returns null for empty string', () => {
+    expect(extractReleaseReadiness('')).toBeNull();
+  });
+
+  test('maps "none" list values to empty arrays', () => {
+    const markdown = `## Release Readiness
+- **database_change_risk**: none
+- **env_changes**: none
+- **config_changes**: none
+- **manual_steps**: none`;
+
+    const result = extractReleaseReadiness(markdown);
+
+    expect(result).toEqual({
+      databaseChangeRisk: 'none',
+      envChanges: [],
+      configChanges: [],
+      manualSteps: [],
+    });
+  });
+
+  test('handles single-item lists', () => {
+    const markdown = `## Release Readiness
+- **database_change_risk**: possible
+- **env_changes**: API_KEY
+- **config_changes**: none
+- **manual_steps**: none`;
+
+    const result = extractReleaseReadiness(markdown);
+
+    expect(result).toEqual({
+      databaseChangeRisk: 'possible',
+      envChanges: ['API_KEY'],
+      configChanges: [],
+      manualSteps: [],
+    });
+  });
+
+  test('defaults database_change_risk to none for invalid value', () => {
+    const markdown = `## Release Readiness
+- **database_change_risk**: maybe
+- **env_changes**: none
+- **config_changes**: none
+- **manual_steps**: none`;
+
+    const result = extractReleaseReadiness(markdown);
+
+    expect(result).not.toBeNull();
+    expect(result!.databaseChangeRisk).toBe('none');
+  });
+
+  test('trims whitespace from list items', () => {
+    const markdown = `## Release Readiness
+- **database_change_risk**: none
+- **env_changes**:  FOO ,  BAR ,  BAZ
+- **config_changes**: none
+- **manual_steps**: none`;
+
+    const result = extractReleaseReadiness(markdown);
+
+    expect(result!.envChanges).toEqual(['FOO', 'BAR', 'BAZ']);
+  });
+
+  test('handles section at end of document', () => {
+    const markdown = `## Objective
+
+Build something
+
+## Release Readiness
+- **database_change_risk**: required
+- **env_changes**: none
+- **config_changes**: none
+- **manual_steps**: none`;
+
+    const result = extractReleaseReadiness(markdown);
+
+    expect(result).not.toBeNull();
+    expect(result!.databaseChangeRisk).toBe('required');
   });
 });

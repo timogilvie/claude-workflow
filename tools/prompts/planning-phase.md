@@ -38,6 +38,11 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
    - Break down the work into logical phases
    - Identify dependencies and ordering constraints
    - Consider edge cases and error handling
+   - Include a **Release Readiness** section in the plan with these fields:
+     - `database_change_risk`: `none` | `possible` | `required`
+     - `env_changes`: comma-separated list of new/modified env vars, or `none`
+     - `config_changes`: comma-separated list of config files to modify, or `none`
+     - `manual_steps`: comma-separated list of manual deployment steps, or `none`
    - Save the plan to: features/{{SLUG}}/plan.md
 
 6. **Present plan to user**:
