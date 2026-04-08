@@ -21,6 +21,7 @@ import { splitTaskPacket, isValidTaskPacket, writeTaskPacketArtifacts } from '..
 import { formatValidationIssues } from '../shared/lib/validation-formatter.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
+import { logLinearUpdateError } from '../shared/lib/linear-update-error-log.ts';
 
 runTool({
   name: 'expand-issue',
@@ -184,23 +185,41 @@ runTool({
 
     // Update Linear if requested (with full content for backward compatibility)
     if (shouldUpdate) {
-      console.log(`Updating Linear issue ${issue.identifier}...`);
-      const result = await updateIssue(issue.id, { description: fullContent });
+      try {
+        console.log(`Updating Linear issue ${issue.identifier}...`);
+        const result = await updateIssue(issue.id, { description: fullContent });
 
-      if (result.success) {
-        console.log(`✓ Successfully updated: ${result.issue.url}`);
+        if (result.success) {
+          console.log(`✓ Successfully updated: ${result.issue.url}`);
 
-        // Auto-label the issue based on expanded content
-        console.log(`\nAuto-labeling issue ${issue.identifier}...`);
-        try {
-          await autoLabelIssue(issue.identifier);
-        } catch (error) {
-          const errorMsg = errorMessage(error);
-          console.warn(`⚠️  Auto-labeling failed: ${errorMsg}`);
-          console.warn('   Issue was updated but labels were not applied');
+          // Auto-label the issue based on expanded content
+          console.log(`\nAuto-labeling issue ${issue.identifier}...`);
+          try {
+            await autoLabelIssue(issue.identifier);
+          } catch (error) {
+            const errorMsg = errorMessage(error);
+            console.warn(`⚠️  Auto-labeling failed: ${errorMsg}`);
+            console.warn('   Issue was updated but labels were not applied');
+          }
+        } else {
+          throw new Error('Failed to update issue');
         }
-      } else {
-        throw new Error('Failed to update issue');
+      } catch (error) {
+        let logPath: string | null = null;
+
+        try {
+          logPath = logLinearUpdateError(repoPath, issue.identifier, error, fullContent.length);
+        } catch {
+          // Logging should never block task packet expansion.
+        }
+
+        const errorMsg = errorMessage(error);
+        if (logPath) {
+          console.warn(`⚠️  Linear update failed for ${issue.identifier}: ${errorMsg} (details logged to ${logPath})`);
+        } else {
+          console.warn(`⚠️  Linear update failed for ${issue.identifier}: ${errorMsg}`);
+        }
+        console.warn('   Continuing with local task packet...');
       }
     } else {
       console.log('ℹ Dry-run mode (--no-update). Linear was not updated.');
