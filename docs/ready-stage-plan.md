@@ -61,6 +61,80 @@ Where:
 - `ready` handles merge readiness and merge-conflict remediation
 - merge should not be considered safe until `ready` passes
 
+## Stage Transition Refactor
+
+The current phased workflow relies on a fragile combination of:
+
+- agent-specific exit behavior inside reused tmux panes
+- filesystem markers such as `.plan-approved` and `.coding-complete`
+- monitor polling that infers transition safety from pane state and marker timing
+
+That model has already produced repeated bugs across abort handling, Codex launch mode, pane readiness, and cross-phase model selection. The `ready` stage should not be added on top of the same mechanism. Instead, HOK-1174 should establish the new contract for all phased execution.
+
+### Proposed contract
+
+The orchestrator, not the agent, owns workflow state transitions.
+
+Each task should persist:
+
+- `features/<slug>/.phase-config.json`
+- one controller-owned result file per stage, for example:
+  - `features/<slug>/.planning-result.json`
+  - `features/<slug>/.coding-result.json`
+  - `features/<slug>/.review-result.json`
+  - `features/<slug>/.ready-result.json`
+
+`phase-config.json` is the canonical source for resolved per-stage configuration:
+
+- planner model / agent / depth
+- coder model / agent / depth
+- reviewer model / agent / mode
+- ready-stage model / agent / mode when introduced
+- challenge metadata if applicable
+- the effective configuration after applying overrides such as `FORCE_MODEL`
+
+Each stage result file is written by the orchestrator after observing the stage outcome and should include:
+
+- `status`: `running | awaiting_user | completed | aborted | failed`
+- `startedAt`
+- `finishedAt`
+- `agent`
+- `model`
+- `artifacts`
+- `notes` or `failureReason` when relevant
+
+### Key design decisions
+
+1. Agents produce work artifacts, not workflow bookkeeping.
+
+- Planning produces `plan.md`
+- Coding produces code changes, commits, and test results
+- Review produces a PR
+- Ready produces readiness output
+
+The orchestrator records the structured stage result after observing those artifacts. Agents should not be responsible for emitting the final JSON state record.
+
+2. User approval is a real stage state.
+
+Planning should transition to `awaiting_user` once the plan is ready for review. User approval should be recorded by the controller as a separate transition from planning completion, rather than inferred from `.plan-approved` alone.
+
+3. Stage launches should use fresh execution.
+
+Each stage should launch a fresh process or tmux window/pane instance rather than reusing a live interactive session across planning, coding, review, and ready. tmux remains a visibility/debugging layer, but not the state machine.
+
+4. Prompts should be agent-agnostic about lifecycle.
+
+Prompts should no longer tell agents to run `/exit`, remain in the session, or otherwise manage phase transitions manually. They should only describe the stage task and any required work artifacts. The orchestrator handles termination and progression.
+
+5. Migration must support both contracts during rollout.
+
+While in-flight work still uses legacy markers, the monitor should support a compatibility path:
+
+- read structured stage result files when present
+- fall back to legacy markers when the new files are absent
+
+Once all in-flight legacy tasks have drained, the marker path can be removed.
+
 ## Required Output Contract
 
 Every ready check should emit a compact block:
@@ -165,6 +239,24 @@ Add test coverage, docs, and policy changes so the new stage is operable:
 - docs for `wavemill ready <pr>`
 - monitor and review-mode documentation
 
+## Linear Issue Breakdown
+
+Parent issue: `HOK-1138 Create Merge Readiness Step`
+
+### Current Status
+
+The issue tree started executing against an earlier version of this plan before the phase-transition refactor was fully articulated:
+
+- `HOK-1174` shipped in PR `#208`
+- `HOK-1175` shipped in PR `#207`
+- `HOK-1176` shipped in PR `#213`
+- `HOK-1183` shipped in PR `#214`
+- `HOK-1178` shipped in PR `#215`
+
+Because of that, the stage-transition refactor described above should be treated as follow-up architectural guidance layered on top of the shipped baseline, not as a retroactive rewrite of completed issue scopes. The contract-gap work already captured in `HOK-1183` remains the bridge from the original scaffold toward a more controller-owned model.
+
+This avoids reopening completed work or silently changing the meaning of merged PRs.
+
 ## Implementation Contract (HOK-1174)
 
 ### Type Definitions
@@ -207,11 +299,7 @@ In `.wavemill-config.json`:
 
 **Review → Ready Transition**: Occurs when PR is opened. Review judges code quality; ready judges merge-readiness.
 
-**Current Implementation**: All checks stubbed. See HOK-1176 for check implementation.
-
-## Linear Issue Breakdown
-
-Parent issue: `HOK-1138 Create Merge Readiness Step`
+**Current Implementation**: The scaffold shipped in HOK-1174; follow-on issues add the engine, controller compatibility, conflict handling, and full monitor wiring.
 
 ### Issue 1
 
@@ -328,7 +416,7 @@ This ordering intentionally minimizes merge conflicts by keeping the workflow co
 
 ## Gap Analysis (HOK-1183 Backfill)
 
-After HOK-1174 (PR #208) shipped and HOK-1176 (PR #213) merged, the revised architecture identified requirements that were not part of the original delivery plan. This section tracks the delta.
+After HOK-1174 (PR `#208`) shipped and HOK-1176 (PR `#213`) merged, the revised architecture identified requirements that were not part of the original delivery plan. This section tracks the delta.
 
 | Requirement | Status | Issue |
 |---|---|---|
@@ -345,8 +433,8 @@ After HOK-1174 (PR #208) shipped and HOK-1176 (PR #213) merged, the revised arch
 | Phase transition wiring in orchestrator | Deferred | HOK-1177 |
 | Ready-phase blocking of merge completion | Deferred | HOK-1177 |
 | Full mill-mode integration, dashboard, monitoring | Deferred | HOK-1182 |
-| Merge conflict detection and auto-resolution | Deferred | HOK-1178 |
-| Tests and documentation for full ready stage | Deferred | HOK-1179 |
+| Merge conflict detection and auto-resolution | Shipped | HOK-1178 |
+| Tests and documentation for full ready stage | Shipped | HOK-1179 |
 
 ## Handoff Boundaries
 
