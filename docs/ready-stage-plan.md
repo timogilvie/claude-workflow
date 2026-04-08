@@ -165,6 +165,50 @@ Add test coverage, docs, and policy changes so the new stage is operable:
 - docs for `wavemill ready <pr>`
 - monitor and review-mode documentation
 
+## Implementation Contract (HOK-1174)
+
+### Type Definitions
+
+The ready stage contract is defined in `shared/lib/ready-stage.ts`:
+
+- `ReadyCheckStatus`: 'pass' | 'fail' | 'warn' | 'skip'
+- `ReadyCheck`: Individual check result with name, status, message, details
+- `ReadyResult`: Overall result with verdict, checks array, timestamp, summary
+- `ReadyStageConfig`: Configuration for ready stage
+
+### CLI Surface
+
+Command: `wavemill ready <pr>`
+
+Arguments:
+- `<pr>`: PR number or GitHub PR URL
+
+Options:
+- `--repo-dir <path>`: Repository directory (default: current directory)
+
+Output: JSON to stdout  
+Exit codes: 0 for pass/warn, 1 for fail
+
+### Configuration
+
+In `.wavemill-config.json`:
+
+```json
+{
+  "ready": {
+    "enabled": false,  // Must be explicitly enabled
+    "checks": [],      // Empty = run all available checks
+    "requiredChecks": []  // Subset that must pass
+  }
+}
+```
+
+### Phase Boundary
+
+**Review → Ready Transition**: Occurs when PR is opened. Review judges code quality; ready judges merge-readiness.
+
+**Current Implementation**: All checks stubbed. See HOK-1176 for check implementation.
+
 ## Linear Issue Breakdown
 
 Parent issue: `HOK-1138 Create Merge Readiness Step`
