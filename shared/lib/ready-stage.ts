@@ -647,7 +647,6 @@ export async function runReadyStage(options: {
   // 1. Gather context
   const prContext = await gatherPRContext(prNumber, repoDir);
   const taskPacket = await findTaskPacket(repoDir, prNumber);
-  const plan = taskPacket ? await findPlan(path.dirname(taskPacket.fullPath)) : null;
   const deployConfig = loadDeployConfig(repoDir);
 
   // 2. Run all checks

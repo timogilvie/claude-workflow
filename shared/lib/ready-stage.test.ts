@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   runReadyStage,
@@ -8,6 +8,7 @@ import {
   type ReadyResult,
   type ReadyCheck,
 } from './ready-stage.ts';
+import * as shellUtils from './shell-utils.ts';
 
 describe('ready-stage', () => {
   describe('checkSchemaMigrations', () => {
@@ -111,25 +112,52 @@ describe('ready-stage', () => {
     });
   });
 
-  describe('runReadyStage - structural tests', () => {
-    it('validates result structure shape', async () => {
-      // This will fail because we don't have a real PR, but we can test the error handling
+  describe('runReadyStage - integration', () => {
+    it('validates result structure with mocked shell commands', async () => {
+      // Mock gh CLI commands to test the success path
+      const mockExecShellCommand = mock.fn((cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [
+              { path: 'src/app.ts' },
+              { path: 'README.md' }
+            ]
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return 'diff --git a/src/app.ts b/src/app.ts\n+new code';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      // Replace execShellCommand temporarily
+      const original = shellUtils.execShellCommand;
+      (shellUtils as any).execShellCommand = mockExecShellCommand;
+
       try {
         const result = await runReadyStage({
           prNumber: 42,
           repoDir: '/tmp/test',
         });
 
-        // If it succeeds (unlikely), verify structure
+        // Verify structure
         assert.equal(typeof result.prNumber, 'number');
         assert.equal(result.prNumber, 42);
         assert.ok(['pass', 'fail', 'warn'].includes(result.verdict));
         assert.ok(Array.isArray(result.checks));
         assert.equal(typeof result.timestamp, 'string');
         assert.equal(typeof result.summary, 'string');
-      } catch (error) {
-        // Expected - gh CLI will fail without a real PR
-        assert.ok(error instanceof Error);
+        assert.equal(result.branch, 'feature-branch');
+      } finally {
+        // Restore original
+        (shellUtils as any).execShellCommand = original;
       }
     });
   });
