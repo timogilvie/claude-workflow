@@ -42,7 +42,8 @@ trap 'rm -rf "$TMP" "$FAKE_HOME"' EXIT
 UNSET_VARS="SESSION MAX_PARALLEL POLL_SECONDS BASE_BRANCH AGENT_CMD WORKTREE_ROOT
   REQUIRE_CONFIRM PLANNING_MODE MAX_RETRIES RETRY_DELAY MAX_SELECT MAX_DISPLAY
   PROJECT_NAME LINEAR_PROJECT PLAN_MAX_DISPLAY PLAN_RESEARCH PLAN_MODEL ROUTER_ENABLED
-  ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD _WAVEMILL_CONFIG_LOADED"
+  ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD DASHBOARD_VERBOSITY DASHBOARD_LOG_TO_FILE
+  _WAVEMILL_CONFIG_LOADED"
 
 # ============================================================================
 # Test 1: Default values (no config files at all)
@@ -62,6 +63,8 @@ eval "$(
   echo "D_PLANNING_MODE='$PLANNING_MODE'"
   echo "D_MAX_SELECT='$MAX_SELECT'"
   echo "D_MAX_DISPLAY='$MAX_DISPLAY'"
+  echo "D_DASHBOARD_VERBOSITY='$DASHBOARD_VERBOSITY'"
+  echo "D_DASHBOARD_LOG_TO_FILE='$DASHBOARD_LOG_TO_FILE'"
 )"
 
 check_matches "default SESSION" '^wavemill-' "$D_SESSION"
@@ -72,6 +75,8 @@ check "default REQUIRE_CONFIRM" "true" "$D_REQUIRE_CONFIRM"
 check "default PLANNING_MODE" "skip" "$D_PLANNING_MODE"
 check "default MAX_SELECT" "3" "$D_MAX_SELECT"
 check "default MAX_DISPLAY" "9" "$D_MAX_DISPLAY"
+check "default DASHBOARD_VERBOSITY" "info" "$D_DASHBOARD_VERBOSITY"
+check "default DASHBOARD_LOG_TO_FILE" "true" "$D_DASHBOARD_LOG_TO_FILE"
 
 # ============================================================================
 # Test 2: Repo config overrides defaults
@@ -93,6 +98,10 @@ cat > "$TMP/.wavemill-config.json" << 'EOF'
   "expand": {
     "maxSelect": 2,
     "maxDisplay": 6
+  },
+  "dashboard": {
+    "verbosity": "status",
+    "logToFile": false
   }
 }
 EOF
@@ -109,6 +118,8 @@ eval "$(
   echo "R_MAX_SELECT='$MAX_SELECT'"
   echo "R_MAX_DISPLAY='$MAX_DISPLAY'"
   echo "R_PROJECT_NAME='$PROJECT_NAME'"
+  echo "R_DASHBOARD_VERBOSITY='$DASHBOARD_VERBOSITY'"
+  echo "R_DASHBOARD_LOG_TO_FILE='$DASHBOARD_LOG_TO_FILE'"
 )"
 
 check "repo SESSION override" "custom-session" "$R_SESSION"
@@ -118,6 +129,8 @@ check "repo AGENT_CMD override" "codex" "$R_AGENT_CMD"
 check "repo MAX_SELECT override" "2" "$R_MAX_SELECT"
 check "repo MAX_DISPLAY override" "6" "$R_MAX_DISPLAY"
 check "repo PROJECT_NAME override" "Repo Project" "$R_PROJECT_NAME"
+check "repo DASHBOARD_VERBOSITY override" "status" "$R_DASHBOARD_VERBOSITY"
+check "repo DASHBOARD_LOG_TO_FILE override" "false" "$R_DASHBOARD_LOG_TO_FILE"
 
 # ============================================================================
 # Test 3: Env vars override repo config

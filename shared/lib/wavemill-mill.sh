@@ -33,6 +33,9 @@ load_config "$REPO_DIR"
 DRY_RUN="${DRY_RUN:-false}"
 STATE_DIR="${STATE_DIR:-$REPO_DIR/.wavemill}"
 STATE_FILE="$STATE_DIR/workflow-state.json"
+MILL_LOG_DIR="$REPO_DIR/.wavemill/logs"
+mkdir -p "$MILL_LOG_DIR"
+MILL_LOG_FILE="$MILL_LOG_DIR/mill-${SESSION}.log"
 
 trim_outer_whitespace() {
   local value="${1-}"
@@ -64,8 +67,43 @@ fi
 # ============================================================================
 
 
-# Logging with timestamps
-log() { echo "$(date '+%H:%M:%S') $*"; }
+# Logging with timestamps and dashboard verbosity filtering
+_log_level_num() {
+  case "$1" in
+    error) echo 0 ;;
+    status) echo 1 ;;
+    info) echo 2 ;;
+    debug) echo 3 ;;
+    *) echo 2 ;;
+  esac
+}
+
+VERBOSITY_NUM=$(_log_level_num "${DASHBOARD_VERBOSITY:-info}")
+
+log() {
+  local level="info"
+  local msg
+  case "${1:-}" in
+    error|status|info|debug)
+      level="$1"
+      shift
+      ;;
+  esac
+  msg="$*"
+
+  local ts formatted msg_num
+  ts="$(date '+%H:%M:%S')"
+  formatted="$ts $msg"
+
+  if [[ "${DASHBOARD_LOG_TO_FILE:-true}" == "true" ]] && [[ -n "${MILL_LOG_FILE:-}" ]]; then
+    printf '%s [%s] %s\n' "$ts" "$level" "$msg" >> "$MILL_LOG_FILE" 2>/dev/null || true
+  fi
+
+  msg_num=$(_log_level_num "$level")
+  if (( msg_num <= VERBOSITY_NUM )); then
+    echo "$formatted"
+  fi
+}
 log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
@@ -747,7 +785,7 @@ cleanup_stale_tasks() {
               rm -f "${tmp:-}"
             fi
           ) >/dev/null 2>&1 &
-          log "  ↳ Eval running in background; log: $eval_log"
+    log "debug" "  ↳ Eval running in background; log: $eval_log"
         fi
       fi
     fi
@@ -756,7 +794,7 @@ cleanup_stale_tasks() {
     # resume PR/state reconciliation after crashes.
 
     if [[ "$should_clean" == "true" ]]; then
-      log "  Pruning $issue ($reason)"
+      log "debug" "  Pruning $issue ($reason)"
       if [[ "$full_clean" == "true" ]]; then
         # Clean up worktree + branch for completed tasks
         if [[ -d "$worktree" ]]; then
@@ -774,13 +812,13 @@ cleanup_stale_tasks() {
 
   if (( cleaned > 0 )); then
     execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
-    log "  Cleaned $cleaned stale task(s)"
+    log "debug" "  Cleaned $cleaned stale task(s)"
   fi
 }
 
 stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
 if (( stale_count > 0 )); then
-  log "Found $stale_count task(s) in state file from previous run. Checking..."
+  log "debug" "Found $stale_count task(s) in state file from previous run. Checking..."
   cleanup_stale_tasks
 fi
 
@@ -793,17 +831,18 @@ if [[ "$DRY_RUN" == "true" ]]; then
 fi
 
 
-log "Configuration:"
-log "  Repository: $REPO_DIR"
-log "  Base branch: $BASE_BRANCH"
-log "  Worktree root: $WORKTREE_ROOT"
-log "  Project: ${PROJECT_NAME:-(all projects)}"
-log "  Agent: $AGENT_CMD ($(agent_name "$AGENT_CMD"))${AGENT_CMD_EXPLICIT:+ [explicit override]}"
-log "  Router: ${ROUTER_ENABLED:-true} (per-task agent+model selection)"
-log "  Max parallel: $MAX_PARALLEL"
-log "  Planning mode: $PLANNING_MODE"
-[[ -n "${SETUP_CMD:-}" ]] && log "  Setup command: $SETUP_CMD"
-log "  State file: $STATE_FILE"
+log "info" "Configuration:"
+log "info" "  Repository: $REPO_DIR"
+log "info" "  Base branch: $BASE_BRANCH"
+log "info" "  Worktree root: $WORKTREE_ROOT"
+log "info" "  Project: ${PROJECT_NAME:-(all projects)}"
+log "info" "  Agent: $AGENT_CMD ($(agent_name "$AGENT_CMD"))${AGENT_CMD_EXPLICIT:+ [explicit override]}"
+log "info" "  Router: ${ROUTER_ENABLED:-true} (per-task agent+model selection)"
+log "info" "  Max parallel: $MAX_PARALLEL"
+log "info" "  Planning mode: $PLANNING_MODE"
+log "info" "  Dashboard verbosity: ${DASHBOARD_VERBOSITY:-info}"
+[[ -n "${SETUP_CMD:-}" ]] && log "info" "  Setup command: $SETUP_CMD"
+log "info" "  State file: $STATE_FILE"
 echo ""
 
 
@@ -815,20 +854,20 @@ if [[ ! -f "$STATE_DIR/.initialized" ]] && [[ "$REQUIRE_CONFIRM" == "true" ]]; t
 fi
 
 
-log "Fetching backlog..."
+log "info" "Fetching backlog..."
 BACKLOG="$(linear_list_backlog)" || {
   log_error "Failed to fetch backlog from Linear. Check your LINEAR_API_KEY and network."
   exit 1
 }
 
 if [[ -z "$BACKLOG" ]] || [[ "$BACKLOG" == "[]" ]]; then
-  log "No backlog items returned from Linear."
+  log "status" "No backlog items returned from Linear."
   exit 0
 fi
 
 CANDIDATES="$(pick_candidates "$BACKLOG")"
 if [[ -z "$CANDIDATES" ]]; then
-  log "No backlog candidates found."
+  log "status" "No backlog candidates found."
   exit 0
 fi
 
@@ -841,7 +880,7 @@ BLOCKED_COUNT=0
 [[ -n "$BLOCKED" ]] && BLOCKED_COUNT=$(echo "$BLOCKED" | grep -c .)
 
 echo ""
-log "Available tasks (ranked by priority):"
+log "status" "Available tasks (ranked by priority):"
 if [[ -n "$UNBLOCKED" ]]; then
   echo "$UNBLOCKED" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
 else
@@ -865,7 +904,7 @@ read -r SELECTED
 if [[ "$SELECTED" =~ ^[mM] ]]; then
   ALL_CANDIDATES=$(printf '%s\n%s' "$UNBLOCKED" "$BLOCKED" | grep .)
   echo ""
-  log "All tasks (ranked by priority):"
+  log "info" "All tasks (ranked by priority):"
   line_num=0
   while IFS= read -r line; do
     line_num=$((line_num + 1))
@@ -884,7 +923,7 @@ if [[ "$SELECTED" =~ ^[mM] ]]; then
 fi
 
 if [[ "$SELECTED" =~ ^[qQ](uit)?$ ]]; then
-  log "Cancelled by user."
+  log "status" "Cancelled by user."
   exit 0
 fi
 
@@ -901,24 +940,24 @@ while IFS= read -r line; do
 done <<<"$SELECTED_LINES"
 
 
-log "Normalizing issues with task packets and launching work..."
+log "info" "Normalizing issues with task packets and launching work..."
 LAUNCH_ARGS=()
 
 
 # Pre-allocate migration numbers for parallel work
 # Fetch first so we scan the latest state of the base branch (not stale local files)
-log "Fetching latest $BASE_BRANCH for migration scan..."
+log "debug" "Fetching latest $BASE_BRANCH for migration scan..."
 git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" 2>/dev/null || true
 
 # Scan the git tree (not local filesystem) for the highest existing migration number
 HIGHEST=$(scan_highest_migration)
 NEXT_MIGRATION_NUM=$((HIGHEST + 1))
 save_next_migration_num "$NEXT_MIGRATION_NUM"
-log "Next available migration number: $NEXT_MIGRATION_NUM (highest in origin/$BASE_BRANCH: $HIGHEST)"
+log "debug" "Next available migration number: $NEXT_MIGRATION_NUM (highest in origin/$BASE_BRANCH: $HIGHEST)"
 
 
 # ── Phase 1: Fetch issue details in parallel ──────────────────────────────
-log "Fetching issue details..."
+log "info" "Fetching issue details..."
 for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
   (
@@ -927,7 +966,7 @@ for t in "${TASKS[@]}"; do
   ) &
 done
 wait
-log "  ✓ All issues fetched"
+log "info" "  ✓ All issues fetched"
 
 
 # ── Phase 2: Write task packets (no expansion — agent expands in-pane) ────
@@ -940,9 +979,9 @@ for t in "${TASKS[@]}"; do
   current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
 
   if is_task_packet "$current_desc"; then
-    log "  ✓ $ISSUE has task packet"
+    log "info" "  ✓ $ISSUE has task packet"
   else
-    log "  ✓ $ISSUE raw description saved (agent will expand)"
+    log "info" "  ✓ $ISSUE raw description saved (agent will expand)"
   fi
   echo "$current_desc" > "$PACKET_FILE"
 done
@@ -962,11 +1001,11 @@ for t in "${TASKS[@]}"; do
   is_migration=false
 
   if [[ -n "$has_migration_label" ]]; then
-    log "  → Migration detected (label: $has_migration_label), assigning number: $NEXT_MIGRATION_NUM"
+    log "debug" "  → Migration detected (label: $has_migration_label), assigning number: $NEXT_MIGRATION_NUM"
     is_migration=true
   elif echo "$current_desc" | grep -qi "alembic\|migration.*file\|database.*migration\|schema.*migration"; then
-    log "  → Migration detected (raw description keyword match), assigning number: $NEXT_MIGRATION_NUM"
-    log "    Tip: Add 'migration' label to $ISSUE for more reliable detection"
+    log "debug" "  → Migration detected (raw description keyword match), assigning number: $NEXT_MIGRATION_NUM"
+    log "debug" "    Tip: Add 'migration' label to $ISSUE for more reliable detection"
     is_migration=true
   fi
 
@@ -1000,18 +1039,18 @@ for t in "${TASKS[@]}"; do
   fi
   save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "" "" "$initial_agent"
 
-  log "  ✓ $ISSUE ready"
+  log "status" "  ✓ $ISSUE ready"
   LAUNCH_ARGS+=("$t")
 done
 
 
 # ── Phase 4: Model routing suggestions ─────────────────────────────────
 if [[ -n "${FORCE_MODEL:-}" ]]; then
-  log "FORCE_MODEL=$FORCE_MODEL — skipping router"
+  log "info" "FORCE_MODEL=$FORCE_MODEL - skipping router"
 elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
   SUGGEST_TOOL="$TOOLS_DIR/suggest-model.ts"
   if [[ -f "$SUGGEST_TOOL" ]]; then
-    log "Running model router..."
+    log "info" "Running model router..."
     for t in "${TASKS[@]}"; do
       IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
       PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
@@ -1026,9 +1065,9 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
 
           RECOMMENDED_AGENT=$(echo "$SUGGESTION" | jq -r '.recommendedAgent // empty' 2>/dev/null)
           if [[ "$INSUFFICIENT" == "true" ]]; then
-            log "  $ISSUE: Using default agent (insufficient eval data)"
+            log "info" "  $ISSUE: Using default agent (insufficient eval data)"
           else
-            log "  $ISSUE: Recommended: $RECOMMENDED_AGENT --model $RECOMMENDED (confidence: $CONFIDENCE, task type: $TASK_TYPE)"
+            log "info" "  $ISSUE: Recommended: $RECOMMENDED_AGENT --model $RECOMMENDED (confidence: $CONFIDENCE, task type: $TASK_TYPE)"
           fi
 
           # Store recommendation for orchestrator
@@ -1048,7 +1087,7 @@ slots_used=0
 for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
   if (( slots_used >= MAX_PARALLEL )); then
-    log "  $ISSUE: Deferring launch (no remaining slots after challenge allocation)"
+    log "status" "  $ISSUE: Deferring launch (no remaining slots after challenge allocation)"
     remove_task_state "$ISSUE" 2>/dev/null || true
     continue
   fi
@@ -1075,7 +1114,7 @@ for t in "${TASKS[@]}"; do
   challenge_reason=""
   if [[ -n "${FORCE_MODEL:-}" ]]; then
     challenge_reason="forced_model"
-    log "  $ISSUE: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
+    log "debug" "  $ISSUE: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
   else
     _rs=$((MAX_PARALLEL - slots_used))
     (( _rs < 2 )) && _rs=2
@@ -1105,10 +1144,10 @@ for t in "${TASKS[@]}"; do
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
     FINAL_LAUNCH_ARGS+=("$challenger_key|$challenger_slug|$TITLE")
     slots_used=$((slots_used + 1))  # Challenger is free overhead
-    log "  $ISSUE: Challenge selected (${primary_model} vs ${challenger_model}) [challenger is extra pane]"
+    log "status" "  $ISSUE: Challenge selected (${primary_model} vs ${challenger_model}) [challenger is extra pane]"
   else
     if [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
-      log "  $ISSUE: Challenge skipped ($challenge_reason), launching single-model run"
+      log "debug" "  $ISSUE: Challenge skipped ($challenge_reason), launching single-model run"
     fi
     save_task_state "$ISSUE" "$SLUG" "task/${SLUG}" "${WORKTREE_ROOT}/${SLUG}" "" "" "$rec_agent" "$ISSUE" "false" "" "" "$rec_model"
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
@@ -1131,7 +1170,7 @@ for t in "${LAUNCH_ARGS[@]}"; do
     linear_set_state "$ISSUE" "In Progress"
   fi
   set_task_phase "$ISSUE" "$INITIAL_PHASE"
-  log "Set $ISSUE → In Progress (phase: $INITIAL_PHASE)"
+  log "status" "Set $ISSUE → In Progress (phase: $INITIAL_PHASE)"
 done
 
 
@@ -1147,7 +1186,7 @@ fi
 
 
 # Fetch latest base branch so worktrees start from up-to-date main
-log "Fetching latest $BASE_BRANCH from remote..."
+log "info" "Fetching latest $BASE_BRANCH from remote..."
 git -C "$REPO_DIR" fetch origin "$BASE_BRANCH"
 
 # Call the launcher script (don't attach yet)
@@ -1176,6 +1215,9 @@ AGENT_CMD_EXPLICIT='${AGENT_CMD_EXPLICIT:-}'
 ROUTER_ENABLED='${ROUTER_ENABLED:-true}'
 MAX_PARALLEL='$MAX_PARALLEL'
 AUTO_EVAL='$AUTO_EVAL'
+DASHBOARD_VERBOSITY='$DASHBOARD_VERBOSITY'
+DASHBOARD_LOG_TO_FILE='$DASHBOARD_LOG_TO_FILE'
+MILL_LOG_FILE='$MILL_LOG_FILE'
 ENVEOF
 
 
@@ -1190,7 +1232,42 @@ set -Eeuo pipefail
 source "$1"
 
 # Logging functions - defined early so they're available for all error handling
-log() { echo "$(date '+%H:%M:%S') $*"; }
+_log_level_num() {
+  case "$1" in
+    error) echo 0 ;;
+    status) echo 1 ;;
+    info) echo 2 ;;
+    debug) echo 3 ;;
+    *) echo 2 ;;
+  esac
+}
+
+VERBOSITY_NUM=$(_log_level_num "${DASHBOARD_VERBOSITY:-info}")
+
+log() {
+  local level="info"
+  local msg
+  case "${1:-}" in
+    error|status|info|debug)
+      level="$1"
+      shift
+      ;;
+  esac
+  msg="$*"
+
+  local ts formatted msg_num
+  ts="$(date '+%H:%M:%S')"
+  formatted="$ts $msg"
+
+  if [[ "${DASHBOARD_LOG_TO_FILE:-true}" == "true" ]] && [[ -n "${MILL_LOG_FILE:-}" ]]; then
+    printf '%s [%s] %s\n' "$ts" "$level" "$msg" >> "$MILL_LOG_FILE" 2>/dev/null || true
+  fi
+
+  msg_num=$(_log_level_num "$level")
+  if (( msg_num <= VERBOSITY_NUM )); then
+    echo "$formatted"
+  fi
+}
 log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
@@ -1323,7 +1400,7 @@ trap cleanup_dashboard_pane EXIT INT TERM
 # Kill entire tmux session for single-step quit.
 quit_and_kill_session() {
   local message="${1:-Quitting.}"
-  log "$message"
+  log "status" "$message"
 
   # If running inside tmux, kill the entire session for single-step quit
   if [[ -n "${TMUX:-}" ]]; then
@@ -1573,7 +1650,7 @@ $issue_desc
   build_planning_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$prompt_file"
 
-  log "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
+  log "status" "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
   _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug"
   return $?
 }
@@ -1599,7 +1676,7 @@ $issue_desc
   build_coding_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" > "$prompt_file"
 
-  log "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
+  log "status" "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
   _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug"
   return $?
 }
@@ -1625,7 +1702,7 @@ $issue_desc
   build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" > "$prompt_file"
 
-  log "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
+  log "status" "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug"
   return $?
 }
@@ -1780,7 +1857,7 @@ maybe_run_challenge_eval() {
     --challenge-pair "$pair_id" \
     --debug \
     >"$eval_log" 2>&1 || true
-  while IFS= read -r line; do log "  [challenge-eval] $line"; done < "$eval_log"
+  while IFS= read -r line; do log "debug" "  [challenge-eval] $line"; done < "$eval_log"
   rm -f "$eval_log"
   mark_eval_completed "$issue"
 }
@@ -1820,7 +1897,7 @@ launch_background_post_merge_eval() {
     mark_eval_completed "$issue"
   ) >/dev/null 2>&1 &
 
-  log "  ↳ Eval running in background; log: $eval_log"
+  log "debug" "  ↳ Eval running in background; log: $eval_log"
 }
 
 maybe_run_challenge_comparison() {
@@ -1856,7 +1933,7 @@ maybe_run_challenge_comparison() {
   challenger_code_depth=$(get_task_meta "$challenger_key" "codeDepth")
   challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
 
-  log "  ⚖ Running challenge comparison for $pair_id"
+  log "status" "  ⚖ Running challenge comparison for $pair_id"
   if _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
@@ -1894,32 +1971,32 @@ maybe_run_challenge_comparison() {
     disp_winner=$(echo "$winner_model" | sed 's/-[0-9]\{8\}$//')
 
     # Display formatted comparison summary
-    log ""
-    log "  ┌────────────────────────────────────────────────────────────┐"
-    log "  │  ⚖  Challenge Comparison: $pair_id"
-    log "  ├────────────────────────────────────────────────────────────┤"
-    log "  │                    Primary            Challenger           │"
-    log "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
-    log "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
-    log "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
-    log "  ├────────────────────────────────────────────────────────────┤"
-    log "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
-    log "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
-    log "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
-    log "  │  Scope           $(printf '%-20s' "$scope_p") $(printf '%-19s' "$scope_c")│"
-    log "  ├────────────────────────────────────────────────────────────┤"
+    log "status" ""
+    log "status" "  ┌────────────────────────────────────────────────────────────┐"
+    log "status" "  │  ⚖  Challenge Comparison: $pair_id"
+    log "status" "  ├────────────────────────────────────────────────────────────┤"
+    log "status" "  │                    Primary            Challenger           │"
+    log "status" "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
+    log "status" "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
+    log "status" "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
+    log "status" "  ├────────────────────────────────────────────────────────────┤"
+    log "status" "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
+    log "status" "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
+    log "status" "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
+    log "status" "  │  Scope           $(printf '%-20s' "$scope_p") $(printf '%-19s' "$scope_c")│"
+    log "status" "  ├────────────────────────────────────────────────────────────┤"
     if [[ "$winner" == "primary" ]]; then
-      log "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
+      log "status" "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
     else
-      log "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
+      log "status" "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
     fi
-    log "  │                                                            │"
+    log "status" "  │                                                            │"
     # Word-wrap rationale to ~56 chars per line
     echo "$rationale" | fold -s -w 56 | while IFS= read -r rline; do
-      log "  │  $(printf '%-58s' "$rline")│"
+      log "status" "  │  $(printf '%-58s' "$rline")│"
     done
-    log "  └────────────────────────────────────────────────────────────┘"
-    log ""
+    log "status" "  └────────────────────────────────────────────────────────────┘"
+    log "status" ""
 
     # Determine loser for cleanup
     local loser_key loser_slug loser_pr
@@ -1933,16 +2010,16 @@ maybe_run_challenge_comparison() {
       loser_pr=$(get_task_meta "$loser_key" "pr")
       if [[ -n "$loser_slug" ]]; then
         if [[ "${_CFG_CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
-          log "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
+          log "status" "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
           # Close PR if not already closed/merged
           if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
             gh pr close "$loser_pr" \
               --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
-            log "  ✓ Closed losing PR #$loser_pr"
+            log "status" "  ✓ Closed losing PR #$loser_pr"
           fi
           cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
         else
-          log "  ⚖ Both PRs remain open for manual review (autoMergeWinner=false)"
+          log "status" "  ⚖ Both PRs remain open for manual review (autoMergeWinner=false)"
         fi
       fi
     fi
@@ -2003,7 +2080,7 @@ archive_stage_artifacts() {
   local count
   count=$(find "$archive_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$count" -gt 0 ]]; then
-    log "  ✓ Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
+    log "debug" "  ✓ Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
   fi
 }
 
@@ -2179,7 +2256,7 @@ launch_task() {
   linear_issue=$(get_linear_issue_id "$issue")
   challenge_model=$(get_task_meta "$issue" "challengeModel")
 
-  log "Launching $issue: $title"
+  log "status" "Launching $issue: $title"
 
   # Fetch issue details
   local issue_json
@@ -2198,9 +2275,9 @@ launch_task() {
     :
   else
     if is_task_packet "$issue_desc"; then
-      log "  ✓ $issue has task packet"
+      log "info" "  ✓ $issue has task packet"
     else
-      log "  ✓ $issue raw description saved (agent will expand)"
+      log "info" "  ✓ $issue raw description saved (agent will expand)"
     fi
     echo "$issue_desc" > "$packet_file"
   fi
@@ -2257,19 +2334,19 @@ launch_task() {
 
     # Re-read packet content with migration hint included
     packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
-    log "  → Migration detected, assigned number: $next_num"
+    log "debug" "  → Migration detected, assigned number: $next_num"
   fi
 
   # Create worktree + branch
   local created_new=false
   if [[ -d "$wt_dir" ]]; then
-    log "  Worktree exists: $wt_dir (resuming)"
+    log "info" "  Worktree exists: $wt_dir (resuming)"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
-    log "  Branch $branch exists, resuming"
+    log "info" "  Branch $branch exists, resuming"
     git -C "$REPO_DIR" worktree add "$wt_dir" "$branch"
     created_new=true
   else
-    log "  Creating branch $branch from origin/$BASE_BRANCH"
+    log "info" "  Creating branch $branch from origin/$BASE_BRANCH"
     git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH"
     created_new=true
   fi
@@ -2306,7 +2383,7 @@ launch_task() {
     review_mode=$(get_task_meta "$issue" "reviewMode")
     planner_agent="$(agent_resolve_from_model "${planner_model:-$task_model}")"
     reviewer_agent="$(agent_resolve_from_model "${reviewer_model:-$task_model}")"
-    log "  Challenge: $task_agent_cmd --model $task_model (planner=$planner_model, reviewer=$reviewer_model)"
+    log "info" "  Challenge: $task_agent_cmd --model $task_model (planner=$planner_model, reviewer=$reviewer_model)"
   elif [[ -n "${FORCE_MODEL:-}" ]]; then
     # Validate model (should have been validated earlier, but double-check)
     if ! agent_validate_model "$FORCE_MODEL" "$REPO_DIR"; then
@@ -2320,7 +2397,7 @@ launch_task() {
     planner_agent="$task_agent_cmd"
     reviewer_model="$FORCE_MODEL"
     reviewer_agent="$task_agent_cmd"
-    log "  FORCE_MODEL: $task_agent_cmd --model $task_model"
+    log "info" "  FORCE_MODEL: $task_agent_cmd --model $task_model"
   elif [[ "${AGENT_CMD_EXPLICIT:-}" != "true" ]]; then
     local route_tool="$TOOLS_DIR/route-task.ts"
     if [[ "${ROUTER_ENABLED:-true}" == "true" ]] && [[ -f "$route_tool" ]] && [[ -f "$packet_file" ]]; then
@@ -2346,10 +2423,10 @@ launch_task() {
           reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
         fi
 
-        log "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+        log "info" "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
       else
         # Fallback to single-model routing if workflow routing failed
-        log "  Workflow routing unavailable, falling back to single-model routing"
+        log "info" "  Workflow routing unavailable, falling back to single-model routing"
         local suggest_tool="$TOOLS_DIR/suggest-model.ts"
         if [[ -f "$suggest_tool" ]]; then
           local suggestion
@@ -2370,9 +2447,9 @@ launch_task() {
             # Only gate model selection on data sufficiency
             if [[ "$rec_insufficient" != "true" ]] && [[ -n "$rec_model" ]]; then
               task_model="$rec_model"
-              log "  Router: $task_agent_cmd --model $task_model (confidence: $rec_confidence)"
+              log "info" "  Router: $task_agent_cmd --model $task_model (confidence: $rec_confidence)"
             elif [[ -n "$rec_model" ]]; then
-              log "  Router: $task_agent_cmd --model $rec_model - $rec_reasoning"
+              log "info" "  Router: $task_agent_cmd --model $rec_model - $rec_reasoning"
             fi
           fi
         fi
@@ -2406,7 +2483,7 @@ launch_task() {
     challenge_reason=""
     if [[ -n "${FORCE_MODEL:-}" ]]; then
       challenge_reason="forced_model"
-      log "  $issue: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
+      log "debug" "  $issue: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
     else
       local _dyn_rs=$remaining_slots
       (( _dyn_rs < 2 )) && _dyn_rs=2
@@ -2451,9 +2528,9 @@ launch_task() {
       save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode"
       should_launch_challenger="true"
       LAST_LAUNCHED_SLOTS=1  # Challenger is free overhead, doesn't consume a slot
-      log "  Challenge selected (${task_model} vs ${challenger_model}) [challenger is extra pane]"
+      log "status" "  Challenge selected (${task_model} vs ${challenger_model}) [challenger is extra pane]"
     elif [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
-      log "  Challenge skipped ($challenge_reason), launching single-model run"
+      log "debug" "  Challenge skipped ($challenge_reason), launching single-model run"
     fi
   fi
 
@@ -2477,7 +2554,7 @@ launch_task() {
     if [[ "$saved_agent" != "$task_agent_cmd" ]]; then
       log_warn "  ⚠ Agent save mismatch: expected='$task_agent_cmd' but got='$saved_agent'"
     else
-      log "  ✓ Agent set to: $task_agent_cmd"
+      log "info" "  ✓ Agent set to: $task_agent_cmd"
     fi
   fi
 
@@ -2510,7 +2587,7 @@ launch_task() {
 
   # Run setup command in new worktrees (e.g., npm install)
   if [[ -n "${SETUP_CMD:-}" ]] && [[ "$created_new" == "true" ]]; then
-    log "  Running setup: $SETUP_CMD"
+    log "info" "  Running setup: $SETUP_CMD"
     local _sentinel="/tmp/.wavemill-setup-${issue//[^a-zA-Z0-9_-]/_}"
     rm -f "$_sentinel"
     tmux send-keys -t "$SESSION:$win" \
@@ -2523,7 +2600,7 @@ launch_task() {
     if (( _t >= 180 )); then
       log_warn "  Setup timed out after 180s, proceeding anyway"
     else
-      log "  Setup complete"
+      log "info" "  Setup complete"
     fi
   fi
 
@@ -2641,7 +2718,7 @@ Implement from the issue description plus direct codebase analysis."
     resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")"
     launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
       "${planner_model:-claude-sonnet-4-5-20250929}" "$resolved_planner_agent" "${plan_depth:-light}"
-    log "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-5-20250929}"
+    log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-5-20250929}"
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
@@ -2651,8 +2728,8 @@ Implement from the issue description plus direct codebase analysis."
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model"
   fi
 
-  log "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
-  [[ -n "$planner_model" ]] && log "  ✓ Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
+  log "status" "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
+  [[ -n "$planner_model" ]] && log "info" "  ✓ Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
 
   if [[ "$should_launch_challenger" == "true" ]]; then
     WAVEMILL_DISABLE_CHALLENGE=1 launch_task "$challenger_key" "$challenger_slug" "$challenger_title" 0
@@ -2699,11 +2776,11 @@ while IFS= read -r line; do
 done < "$TASKS_FILE"
 
 
-log "Monitoring tasks and managing work queue..."
-[[ "$PLANNING_MODE" == "interactive" ]] && log "  Planning mode: interactive (watching for plan approval)"
-log "  Max parallel: $MAX_PARALLEL"
-log "  Checking every ${POLL_SECONDS}s"
-log "  Type 'q' to quit, or 'touch $STATE_DIR/.stop-loop' to stop"
+log "status" "Monitoring tasks and managing work queue..."
+[[ "$PLANNING_MODE" == "interactive" ]] && log "info" "  Planning mode: interactive (watching for plan approval)"
+log "info" "  Max parallel: $MAX_PARALLEL"
+log "info" "  Checking every ${POLL_SECONDS}s"
+log "info" "  Type 'q' to quit, or 'touch $STATE_DIR/.stop-loop' to stop"
 echo ""
 
 QUIT_REQUESTED=false
@@ -2758,9 +2835,9 @@ monitor_issue_state() {
       fi
       # Fetch PR details for user-visible summary
       pr_details=$(_with_timeout "$API_TIMEOUT" gh pr view "$PR" --json title,url --jq '"  " + .title + "\n  " + .url' 2>/dev/null || echo "")
-      log "✓ $ISSUE → PR #$PR (In Review)"
+      log "status" "✓ $ISSUE → PR #$PR (In Review)"
       if [[ -n "$pr_details" ]]; then
-        log "$pr_details"
+        log "info" "$pr_details"
       fi
 
       if is_challenge_task "$ISSUE"; then
@@ -2770,22 +2847,22 @@ monitor_issue_state() {
     else
       # No PR in current repo - check Linear issue state for cross-repo completion
       if should_update_linear_state "$ISSUE" && linear_is_completed "$(get_linear_issue_id "$ISSUE")"; then
-        log "✓ $ISSUE → Completed externally (cross-repo or manual)"
+        log "status" "✓ $ISSUE → Completed externally (cross-repo or manual)"
         set_window_attention_state "$WIN" "clear"
 
         # Post-completion eval (non-blocking: always exits 0)
         if [[ "$AUTO_EVAL" == "true" ]]; then
           eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
           if [[ "$eval_completed" == "false" ]]; then
-            log "  📊 Running post-completion eval..."
+            log "info" "  📊 Running post-completion eval..."
             launch_background_post_merge_eval "$ISSUE" "" "$BRANCH" "$SLUG" "$ISSUE" "post-completion"
           else
-            log "  ✓ Eval already completed for $ISSUE"
+            log "debug" "  ✓ Eval already completed for $ISSUE"
           fi
         fi
 
         if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-          log "  → Window stays open for review - close it when ready"
+          log "status" "  → Window stays open for review - close it when ready"
           if should_update_linear_state "$ISSUE"; then
             linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
           fi
@@ -2810,7 +2887,7 @@ monitor_issue_state() {
       case "$current_phase" in
         routing)
           if check_workflow_aborted "$SLUG"; then
-            log "⛔ $ISSUE → Workflow aborted by user during routing phase"
+            log "status" "⛔ $ISSUE → Workflow aborted by user during routing phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -2871,13 +2948,13 @@ monitor_issue_state() {
               launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth"
               local launch_rc=$?
               if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
-                log "⛔ $ISSUE → Workflow aborted during planning launch"
+                log "status" "⛔ $ISSUE → Workflow aborted during planning launch"
                 set_task_phase "$ISSUE" "aborted"
                 set_window_attention_state "$WIN" "needs-user"
                 return 0
               fi
               set_window_attention_state "$WIN" "clear"
-              log "✓ $ISSUE → Routing complete, launching planning phase"
+              log "status" "✓ $ISSUE → Routing complete, launching planning phase"
               active_count=$((active_count + 1))
               return 0
             else
@@ -2897,7 +2974,7 @@ monitor_issue_state() {
 
         planning)
           if check_workflow_aborted "$SLUG"; then
-            log "⛔ $ISSUE → Workflow aborted by user during planning phase"
+            log "status" "⛔ $ISSUE → Workflow aborted by user during planning phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -2921,7 +2998,7 @@ monitor_issue_state() {
               fi
               echo "$next_num" > "$mig_num_file"
               save_migration_reservation "$ISSUE" "$next_num"
-              log "  → Late migration detected for $ISSUE, assigned number: $next_num"
+              log "debug" "  → Late migration detected for $ISSUE, assigned number: $next_num"
             else
               echo "$existing_reservation" > "$mig_num_file"
             fi
@@ -2957,13 +3034,13 @@ monitor_issue_state() {
             launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
             if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
-              log "⛔ $ISSUE → Workflow aborted during coding launch"
+              log "status" "⛔ $ISSUE → Workflow aborted during coding launch"
               set_task_phase "$ISSUE" "aborted"
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
             set_window_attention_state "$WIN" "clear"
-            log "✓ $ISSUE → Plan approved, launching coding phase"
+            log "status" "✓ $ISSUE → Plan approved, launching coding phase"
             active_count=$((active_count + 1))
             return 0
           else
@@ -2979,7 +3056,7 @@ monitor_issue_state() {
 
         coding)
           if check_workflow_aborted "$SLUG"; then
-            log "⛔ $ISSUE → Workflow aborted by user during coding phase"
+            log "status" "⛔ $ISSUE → Workflow aborted by user during coding phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3010,13 +3087,13 @@ monitor_issue_state() {
             launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
             local launch_rc=$?
             if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
-              log "⛔ $ISSUE → Workflow aborted during review launch"
+              log "status" "⛔ $ISSUE → Workflow aborted during review launch"
               set_task_phase "$ISSUE" "aborted"
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
             set_window_attention_state "$WIN" "clear"
-            log "✓ $ISSUE → Coding complete, launching review phase"
+            log "status" "✓ $ISSUE → Coding complete, launching review phase"
             active_count=$((active_count + 1))
             return 0
           else
@@ -3032,7 +3109,7 @@ monitor_issue_state() {
 
         review)
           if check_workflow_aborted "$SLUG"; then
-            log "⛔ $ISSUE → Workflow aborted by user during review phase"
+            log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3136,13 +3213,13 @@ monitor_issue_state() {
       # Respawn and re-launch the current phase instead of cleaning up.
       if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
         if check_workflow_aborted "$SLUG"; then
-          log "⛔ $ISSUE → Workflow aborted (pane exited)"
+          log "status" "⛔ $ISSUE → Workflow aborted (pane exited)"
           set_task_phase "$ISSUE" "aborted"
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
 
-        log "⚠ $ISSUE → Pane died during $current_phase phase, respawning..."
+        log "status" "⚠ $ISSUE → Pane died during $current_phase phase, respawning..."
         tmux respawn-pane -t "$SESSION:$WIN" 2>/dev/null || true
         sleep 1
         active_count=$((active_count + 1))
@@ -3154,7 +3231,7 @@ monitor_issue_state() {
       # handle gracefully). Flag for attention instead of cleaning up
       # immediately — the worktree and branch still have value.
       if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qF "$WIN"; then
-        log "⚠ $ISSUE → Window disappeared during $current_phase phase, recreating..."
+        log "status" "⚠ $ISSUE → Window disappeared during $current_phase phase, recreating..."
         tmux new-window -t "$SESSION" -n "$WIN" -c "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true
         tmux set-option -t "$SESSION:$WIN" remain-on-exit on 2>/dev/null || true
         sleep 1
@@ -3165,7 +3242,7 @@ monitor_issue_state() {
 
       # Agent exited without creating a PR - clean up the slot
       set_window_attention_state "$WIN" "clear"
-      log "⚠ $ISSUE → Agent exited without PR - releasing slot"
+      log "status" "⚠ $ISSUE → Agent exited without PR - releasing slot"
       cleanup_completed_task "$ISSUE" "$SLUG" "no PR created"
       return 0
     fi
@@ -3173,22 +3250,22 @@ monitor_issue_state() {
 
   # Check if merged
   if validate_pr_merge "$PR"; then
-    log "✓ $ISSUE → PR #$PR MERGED"
+    log "status" "✓ $ISSUE → PR #$PR MERGED"
     set_window_attention_state "$WIN" "clear"
 
     # Post-merge eval (non-blocking: always exits 0)
     if [[ "$AUTO_EVAL" == "true" ]]; then
       eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
       if [[ "$eval_completed" == "false" ]]; then
-        log "  📊 Running post-merge eval..."
+        log "info" "  📊 Running post-merge eval..."
         launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
       else
-        log "  ✓ Eval already completed for $ISSUE"
+        log "debug" "  ✓ Eval already completed for $ISSUE"
       fi
     fi
 
     if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-      log "  → Window stays open for review - close it when ready"
+      log "status" "  → Window stays open for review - close it when ready"
       if should_update_linear_state "$ISSUE"; then
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
       fi
@@ -3209,7 +3286,7 @@ monitor_issue_state() {
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Backlog"
     fi
     if should_cleanup_closed_pr "$ISSUE"; then
-      log "  ↳ Auto-cleaning closed challenger pane/worktree"
+      log "debug" "  ↳ Auto-cleaning closed challenger pane/worktree"
       set_window_attention_state "$WIN" "clear"
       cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
     else
@@ -3257,7 +3334,7 @@ while :; do
       rm -f "$STATE_DIR/.stop-loop"
       quit_and_kill_session "Stop signal detected and all tasks complete. Exiting."
     fi
-    log "Stop signal detected. Finishing $active_count active task(s)..."
+    log "status" "Stop signal detected. Finishing $active_count active task(s)..."
     sleep "$POLL_SECONDS"
     continue
   fi
@@ -3293,7 +3370,7 @@ while :; do
         display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
           echo ""
-          log "$free_slots slot(s) available. Next tasks:"
+          log "status" "$free_slots slot(s) available. Next tasks:"
           if [[ -n "$avail_unblocked" ]]; then
             echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
           else
@@ -3325,7 +3402,7 @@ while :; do
           if [[ "$REPLY" =~ ^[mM] ]]; then
             all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
             echo ""
-            log "$free_slots slot(s) available. All tasks:"
+            log "info" "$free_slots slot(s) available. All tasks:"
             ln=0
             while IFS= read -r mline; do
               ln=$((ln + 1))
@@ -3353,7 +3430,7 @@ while :; do
             elif [[ "$QUIT_REQUESTED" == "true" ]]; then
               quit_and_kill_session "Force quitting ($active_count task(s) still active)."
             else
-              log "Will quit after $active_count active task(s) finish. Press q again to force quit."
+              log "status" "Will quit after $active_count active task(s) finish. Press q again to force quit."
               QUIT_REQUESTED=true
             fi
           elif [[ -n "$REPLY" ]]; then
@@ -3391,7 +3468,7 @@ while :; do
         if (( active_count == 0 )); then
           waiting_msg="No new tasks available. Waiting... (type 'q' to quit)"
           if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
-            log "$waiting_msg"
+            log "status" "$waiting_msg"
             LAST_WAITING_MSG="$waiting_msg"
           fi
           if read -t "$POLL_SECONDS" -r REPLY; then
@@ -3406,7 +3483,7 @@ while :; do
       if (( active_count == 0 )); then
         waiting_msg="Backlog empty. Waiting for new tasks... (type 'q' to quit)"
         if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
-          log "$waiting_msg"
+          log "status" "$waiting_msg"
           LAST_WAITING_MSG="$waiting_msg"
         fi
         # Invalidate cache so we re-fetch next cycle
@@ -3430,7 +3507,7 @@ chmod +x "$MONITOR_SCRIPT"
 
 
 # Launch monitor in control window's first pane
-log "Starting monitoring in tmux control window..."
+log "status" "Starting monitoring in tmux control window..."
 
 
 # Write tasks to temp file and add to env
@@ -3443,13 +3520,13 @@ tmux send-keys -t "$SESSION:control.0" "clear && '$MONITOR_SCRIPT' '$MONITOR_ENV
 
 
 # Now attach to the session
-log "Attaching to session: $SESSION"
-log "  Ctrl+B then W to switch windows"
-log "  Ctrl+B then D to detach"
-log "  Type 'q' in control window to quit"
-log "  Or: touch $STATE_DIR/.stop-loop"
+log "status" "Attaching to session: $SESSION"
+log "info" "  Ctrl+B then W to switch windows"
+log "info" "  Ctrl+B then D to detach"
+log "info" "  Type 'q' in control window to quit"
+log "info" "  Or: touch $STATE_DIR/.stop-loop"
 echo ""
 sleep 1
 tmux attach -t "$SESSION"
 
-log "Session ended. Run 'git -C $REPO_DIR worktree prune' if needed."
+log "status" "Session ended. Run 'git -C $REPO_DIR worktree prune' if needed."
