@@ -85,6 +85,10 @@ Auto-approve read-only commands in worktrees to reduce friction during autonomou
 
 ## Wavemill Commands
 
+### Ready Stage - Merge Readiness Checks
+
+The ready stage validates whether a reviewed PR is safe to merge right now, covering the phase boundary between review and merge. Use `wavemill ready <pr>` for manual checks, or enable the `ready` phase in `wavemill mill` for monitor-driven gating. The stage is opt-in and disabled by default. See [docs/ready-stage.md](docs/ready-stage.md) for CLI details, monitor behavior, merge policy, and recovery paths.
+
 ### `wavemill mill` - Continuous Task Execution
 
 Fully autonomous task execution system that continuously processes your Linear backlog.
