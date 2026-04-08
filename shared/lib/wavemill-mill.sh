@@ -879,25 +879,41 @@ BLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 > 0')
 BLOCKED_COUNT=0
 [[ -n "$BLOCKED" ]] && BLOCKED_COUNT=$(echo "$BLOCKED" | grep -c .)
 
-echo ""
-log "status" "Available tasks (ranked by priority):"
-if [[ -n "$UNBLOCKED" ]]; then
-  echo "$UNBLOCKED" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
-else
-  echo "  (no unblocked tasks)"
+# Check for subsystem spec drift
+DRIFT_STALE=""
+if [[ -d "$REPO_DIR/.wavemill/context" ]]; then
+  DRIFT_STALE=$(npx tsx "$TOOLS_DIR/check-drift.ts" "$REPO_DIR" 2>/dev/null || true)
 fi
 
-if (( BLOCKED_COUNT > 0 )); then
+display_task_list() {
   echo ""
-  echo "  ($BLOCKED_COUNT blocked task(s) hidden — enter 'm' to show all)"
-fi
+  log "status" "Available tasks (ranked by priority):"
+  if [[ -n "$DRIFT_STALE" ]]; then
+    echo ""
+    echo "  Warning: Subsystem docs stale ($(echo "$DRIFT_STALE" | paste -sd, - | sed 's/,/, /g')) — press d to refresh"
+  fi
+  if [[ -n "$UNBLOCKED" ]]; then
+    echo "$UNBLOCKED" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
+  else
+    echo "  (no unblocked tasks)"
+  fi
+  if (( BLOCKED_COUNT > 0 )); then
+    echo ""
+    echo "  ($BLOCKED_COUNT blocked task(s) hidden — enter 'm' to show all)"
+  fi
+}
 
-echo ""
-if (( BLOCKED_COUNT > 0 )); then
-  echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to auto-select first $MAX_PARALLEL:"
-else
-  echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $MAX_PARALLEL:"
-fi
+display_selection_prompt() {
+  local opts="Enter numbers to run (e.g. 1 3 5)"
+  [[ -n "$DRIFT_STALE" ]] && opts+=", d to refresh docs"
+  (( BLOCKED_COUNT > 0 )) && opts+=", m for more"
+  opts+=", q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+  echo ""
+  echo "$opts"
+}
+
+display_task_list
+display_selection_prompt
 read -r SELECTED
 
 # Handle 'm' to show all tasks including blocked
@@ -915,11 +931,25 @@ if [[ "$SELECTED" =~ ^[mM] ]]; then
       printf "  %s. %s - %s (score: %.0f)\n" "$line_num" "$id" "$title" "$score"
     fi
   done <<<"$ALL_CANDIDATES"
-  echo ""
-  echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+  display_selection_prompt
   read -r SELECTED
   # Use full list for selection
   CANDIDATES="$ALL_CANDIDATES"
+fi
+
+# Handle 'd' to refresh subsystem docs
+if [[ "$SELECTED" =~ ^[dD]$ ]]; then
+  if [[ -n "$DRIFT_STALE" ]]; then
+    log "info" "Refreshing subsystem documentation..."
+    npx tsx "$TOOLS_DIR/init-project-context.ts" --force "$REPO_DIR" 2>&1 || log_warn "Doc refresh failed"
+    log "status" "Documentation refreshed."
+    DRIFT_STALE=""
+  else
+    echo "Subsystem docs are up to date."
+  fi
+  display_task_list
+  display_selection_prompt
+  read -r SELECTED
 fi
 
 if [[ "$SELECTED" =~ ^[qQ](uit)?$ ]]; then
