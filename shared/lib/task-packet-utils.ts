@@ -246,8 +246,8 @@ export function extractReleaseReadiness(markdown: string): ReleaseReadiness | nu
     fields.set(match[1].toLowerCase(), match[2].trim());
   }
 
-  // Extract database_change_risk with validation
-  const rawDbRisk = fields.get('database_change_risk');
+  // Extract database_change_risk — take only the first word to match the enum
+  const rawDbRisk = fields.get('database_change_risk')?.split(/\s/)[0];
   const dbRisk = rawDbRisk && VALID_DB_RISK_VALUES.includes(rawDbRisk as any)
     ? (rawDbRisk as ReleaseReadiness['databaseChangeRisk'])
     : 'none';
