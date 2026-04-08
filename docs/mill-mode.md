@@ -10,7 +10,7 @@ Use `wavemill mill` when you want continuous execution of backlog tasks with par
 - Expands issues that are missing implementation detail into effective plans.
 - Assesses the task and chooses the best model
 - Launches parallel worktrees/agents via `tmux`.
-- Monitors PR and merge status.
+- Monitors PR, ready-stage, and merge status.
 - Cleans up completed tasks and updates issue state.
 - **Auto-updates project context** after each PR merge with a summary of changes.
 
@@ -32,8 +32,25 @@ AGENT_CMD=codex wavemill mill
 
 - conflict checks for overlapping areas/components
 - migration conflict avoidance
-- validation before marking tasks done
+- review-to-ready-to-merge gating before marking tasks done
 - persistent workflow state in `.wavemill/workflow-state.json`
+
+## Ready Phase
+
+When the ready stage is enabled, `wavemill mill` inserts a merge-readiness phase after PR creation and before merge completion:
+
+```text
+review -> ready -> merge
+```
+
+In that phase, the monitor is responsible for:
+
+- running the same shared contract exposed by `wavemill ready <pr>`
+- recording whether the PR is ready, blocked, or warning-only
+- holding merge completion until required ready checks pass
+- surfacing manual release steps and merge-conflict remediation needs
+
+The current implementation is scaffolded and returns a stub ready result, which keeps the workflow backwards-compatible while the full readiness engine is built out. For operator details, see [Ready Stage](ready-stage.md).
 
 ## Operator Controls
 
@@ -93,6 +110,7 @@ This ensures that agent #5 knows what agents #1-4 built, leading to more consist
 - [Feature Workflow](feature-workflow.md) — guided single-issue execution with plan and validate gates
 - [Plan Mode](plan-mode.md) — decompose epics into mill-ready sub-issues
 - [Review Mode](review-mode.md) — LLM-powered code review (runs automatically in each agent's workflow)
+- [Ready Stage](ready-stage.md) — merge-readiness checks and operator policy
 - [Expand Mode](expand-mode.md) — batch expand issues into task packets
 - [Eval Mode](eval-mode.md) — evaluate LLM performance on workflows
 - [Troubleshooting](troubleshooting.md) — common issues and fixes
