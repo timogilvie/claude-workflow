@@ -651,6 +651,53 @@ After implementation is complete and tests pass, create the .coding-complete fil
 _WVML_PROMPT_
 }
 
+# Build a narrow prompt for automatic merge-conflict resolution in an existing PR worktree.
+#
+# Args:
+#   $1 = pr_number
+#   $2 = branch
+#   $3 = wt_dir
+#   $4 = status_file
+#   $5 = base_branch
+build_conflict_resolution_prompt() {
+  local pr_number="$1" branch="$2" wt_dir="$3" status_file="$4" base_branch="${5:-main}"
+
+  cat <<_WVML_PROMPT_
+You are resolving merge conflicts for open PR #$pr_number.
+
+Repo worktree: $wt_dir
+Branch: $branch
+Base branch: $base_branch
+
+Scope:
+- Resolve merge conflicts only.
+- Do not do new feature work or refactors unless strictly required to complete the merge.
+- Preserve the existing branch intent.
+
+Status Reporting:
+Throughout your work, periodically update your status by running:
+  echo '<short description of what you are doing right now>' > $status_file
+Keep it under 50 chars. Update it at each major step.
+
+Required process:
+1. Inspect the current branch state and conflict state.
+2. Fetch the latest base branch:
+   git fetch origin $base_branch
+3. Merge the base branch into the current branch:
+   git merge origin/$base_branch
+4. Resolve conflicts with the smallest safe changes possible.
+5. Run relevant validation for touched code. At minimum, run lint and typecheck if available.
+6. Commit the conflict resolution with this exact message:
+   fix: Resolve merge conflicts with $base_branch
+7. Push the branch to update PR #$pr_number.
+
+Failure handling:
+- If you cannot resolve the conflicts safely, stop without broad code changes.
+- Leave a clear explanation of the blocker in your final response.
+- Do not create markers or a PR. Workflow automation will handle follow-up.
+_WVML_PROMPT_
+}
+
 # Build the review phase prompt.
 # This phase runs self-review and creates the PR.
 #
