@@ -4,6 +4,8 @@ title: Review Mode
 
 Wavemill includes an LLM-powered code review system that catches major issues before PRs are created. It runs automatically as part of the feature workflow and can also be invoked standalone on branches or existing PRs.
 
+Review is not the final merge gate. After review passes and a PR is opened, the workflow can enter the separate `ready` stage, which judges merge-readiness, release-readiness, and operator follow-up requirements before merge. See [Ready Stage](ready-stage.md).
+
 ## What It Does
 
 - Diffs the current branch against the target branch (default: `main`).
@@ -14,10 +16,10 @@ Wavemill includes an LLM-powered code review system that catches major issues be
 
 ## How It Integrates
 
-Review runs as **Phase 4** of the [Feature Workflow](feature-workflow.md), between implementation and validation:
+Review runs as the code-quality gate in the [Feature Workflow](feature-workflow.md), between implementation and validation:
 
 ```
-Plan → Implement → Self-Review Loop → Validate → PR
+Plan → Implement → Self-Review Loop → Validate → PR → Ready → Merge
 ```
 
 After implementation completes, the agent:
@@ -27,6 +29,8 @@ After implementation completes, the agent:
 3. If `not_ready`, reads the findings, fixes blockers, commits, and re-reviews.
 4. Repeats up to `maxIterations` (default: 3).
 5. Any remaining issues are surfaced in the validation phase.
+
+If review passes, the branch can proceed to PR creation. When the ready stage is enabled, merge should still wait for `wavemill ready <pr>` or the mill monitor to confirm merge-readiness.
 
 ## Standalone Usage
 
