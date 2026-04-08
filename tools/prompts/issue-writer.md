@@ -378,7 +378,32 @@ If no routes are affected (e.g., component library changes), state: "N/A - Compo
 
 ---
 
-## 10. Proposed Labels
+## 10. Release Readiness
+
+*Assess the release-readiness impact of this task. These structured fields are consumed by the automated ready-stage engine to verify implementation matches planning expectations.*
+
+*For each field, analyze the task scope and implementation approach to determine the correct value. Do NOT default to "none" without considering the actual changes.*
+
+- **database_change_risk**: `none` | `possible` | `required`
+  - `none` — No database schema changes expected (most common)
+  - `possible` — Schema changes may be needed depending on implementation approach
+  - `required` — Schema migration is a known requirement
+- **env_changes**: Comma-separated list of environment variable names that must be added or modified, or `none`
+- **config_changes**: Comma-separated list of configuration file paths that must be modified, or `none`
+- **manual_steps**: Comma-separated list of manual steps required before or after merge (e.g., run migration scripts, update DNS, invalidate caches), or `none`
+
+**Format** (use exactly this structure):
+```markdown
+## Release Readiness
+- **database_change_risk**: none
+- **env_changes**: none
+- **config_changes**: none
+- **manual_steps**: none
+```
+
+---
+
+## 11. Proposed Labels
 
 *Based on the analysis above, suggest labels to help the autonomous workflow identify task conflicts and parallelization opportunities:*
 
@@ -554,7 +579,8 @@ Full details available on-demand in task-packet-details.md:
 - [Section 7: UI-Specific Validation](#7-ui-specific-validation-conditional) *(Conditional - UI issues only)*
 - [Section 8: Definition of Done](#8-definition-of-done)
 - [Section 9: Rollback Plan](#9-rollback-plan)
-- [Section 10: Proposed Labels](#10-proposed-labels)
+- [Section 10: Release Readiness](#10-release-readiness)
+- [Section 11: Proposed Labels](#11-proposed-labels)
 
 **Implementation Note**: Start with this overview. Read detailed sections on-demand as you implement.
 ```
@@ -570,7 +596,7 @@ Full details available on-demand in task-packet-details.md:
 Now output the complete detailed task packet with all sections as specified above:
 - Sections 1-6 (always included)
 - Section 7: UI-Specific Validation (ONLY if this is a UI-related issue)
-- Sections 8-10 (always included, but renumbered if Section 7 is omitted)
+- Sections 8-11 (always included, but renumbered if Section 7 is omitted)
 
 Start with "## 1. Objective"
 
