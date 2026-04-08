@@ -1807,6 +1807,23 @@ launch_ready_phase() {
   return 1
 }
 
+# Controller-owned feature-directory readiness check (HOK-1183).
+# Evaluates phase state without requiring a PR or GitHub CLI.
+# Returns JSON to stdout; exits 0 if ready, 1 otherwise.
+#
+# Usage: check_ready_stage <feature_dir>
+#
+# Full phase-transition wiring is deferred to HOK-1177.
+check_ready_stage() {
+  local feature_dir="$1"
+  if [[ -z "$feature_dir" ]]; then
+    echo '{"error":"feature_dir argument required"}' >&2
+    return 1
+  fi
+  npx tsx "$TOOLS_DIR/controller-ready.ts" "$feature_dir" 2>/dev/null
+  return $?
+}
+
 set_window_attention_state() {
   local win="$1" state="${2:-clear}"
   if [[ "$state" == "needs-user" ]]; then
