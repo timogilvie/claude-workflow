@@ -871,6 +871,12 @@ if [[ -z "$CANDIDATES" ]]; then
   exit 0
 fi
 
+check_subsystem_drift() {
+  local drift_output
+  drift_output="$(npx tsx tools/check-drift.ts "$REPO_DIR" 2>/dev/null)" || return 1
+  printf '%s\n' "$drift_output"
+}
+
 
 # Split candidates into unblocked and blocked
 # pick_candidates() outputs 6 fields (has_detailed_plan is stripped), so field 6 is blocked_by_count
@@ -878,59 +884,97 @@ UNBLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 == 0 || $6 == ""')
 BLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 > 0')
 BLOCKED_COUNT=0
 [[ -n "$BLOCKED" ]] && BLOCKED_COUNT=$(echo "$BLOCKED" | grep -c .)
+SHOW_BLOCKED_TASKS=false
+while true; do
+  DRIFT_SUBSYSTEMS=""
+  if DRIFT_SUBSYSTEMS="$(check_subsystem_drift)"; then
+    :
+  fi
 
-echo ""
-log "status" "Available tasks (ranked by priority):"
-if [[ -n "$UNBLOCKED" ]]; then
-  echo "$UNBLOCKED" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
-else
-  echo "  (no unblocked tasks)"
-fi
+  if [[ "$SHOW_BLOCKED_TASKS" == "true" ]]; then
+    CANDIDATES=$(printf '%s\n%s' "$UNBLOCKED" "$BLOCKED" | grep .)
+  else
+    CANDIDATES="$UNBLOCKED"
+  fi
 
-if (( BLOCKED_COUNT > 0 )); then
+  if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
+    echo ""
+    echo "  Warning: Subsystem docs stale ($DRIFT_SUBSYSTEMS) - press d to refresh"
+  fi
+
   echo ""
-  echo "  ($BLOCKED_COUNT blocked task(s) hidden — enter 'm' to show all)"
-fi
-
-echo ""
-if (( BLOCKED_COUNT > 0 )); then
-  echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to auto-select first $MAX_PARALLEL:"
-else
-  echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $MAX_PARALLEL:"
-fi
-read -r SELECTED
-
-# Handle 'm' to show all tasks including blocked
-if [[ "$SELECTED" =~ ^[mM] ]]; then
-  ALL_CANDIDATES=$(printf '%s\n%s' "$UNBLOCKED" "$BLOCKED" | grep .)
-  echo ""
-  log "info" "All tasks (ranked by priority):"
-  line_num=0
-  while IFS= read -r line; do
-    line_num=$((line_num + 1))
-    IFS='|' read -r id slug title area score blocked_by <<<"$line"
-    if (( blocked_by > 0 )); then
-      printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$line_num" "$id" "$title" "$score"
+  if [[ "$SHOW_BLOCKED_TASKS" == "true" ]]; then
+    log "info" "All tasks (ranked by priority):"
+    line_num=0
+    while IFS= read -r line; do
+      line_num=$((line_num + 1))
+      IFS='|' read -r id slug title area score blocked_by <<<"$line"
+      if (( blocked_by > 0 )); then
+        printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$line_num" "$id" "$title" "$score"
+      else
+        printf "  %s. %s - %s (score: %.0f)\n" "$line_num" "$id" "$title" "$score"
+      fi
+    done <<<"$CANDIDATES"
+  else
+    log "status" "Available tasks (ranked by priority):"
+    if [[ -n "$UNBLOCKED" ]]; then
+      echo "$UNBLOCKED" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
     else
-      printf "  %s. %s - %s (score: %.0f)\n" "$line_num" "$id" "$title" "$score"
+      echo "  (no unblocked tasks)"
     fi
-  done <<<"$ALL_CANDIDATES"
+  fi
+
+  if [[ "$SHOW_BLOCKED_TASKS" != "true" ]] && (( BLOCKED_COUNT > 0 )); then
+    echo ""
+    echo "  ($BLOCKED_COUNT blocked task(s) hidden - enter 'm' to show all)"
+  fi
+
   echo ""
-  echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+  if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
+    if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
+      echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+    else
+      echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+    fi
+  else
+    if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
+      echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+    else
+      echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+    fi
+  fi
   read -r SELECTED
-  # Use full list for selection
-  CANDIDATES="$ALL_CANDIDATES"
-fi
 
-if [[ "$SELECTED" =~ ^[qQ](uit)?$ ]]; then
-  log "status" "Cancelled by user."
-  exit 0
-fi
+  if [[ "$SELECTED" =~ ^[dD](ocs)?$ ]]; then
+    echo ""
+    if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
+      log "info" "Refreshing subsystem docs..."
+      npx tsx tools/init-project-context.ts --force "$REPO_DIR"
+      echo ""
+      log "info" "Refresh complete. Re-displaying task list..."
+    else
+      echo "Subsystem docs are up to date"
+    fi
+    SHOW_BLOCKED_TASKS=false
+    continue
+  fi
 
-# When auto-selecting (empty input), only pick from unblocked candidates
-if [[ -z "$SELECTED" ]] && [[ -n "$UNBLOCKED" ]]; then
-  CANDIDATES="$UNBLOCKED"
-fi
+  if [[ "$SELECTED" =~ ^[mM] ]] && (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
+    SHOW_BLOCKED_TASKS=true
+    continue
+  fi
+
+  if [[ "$SELECTED" =~ ^[qQ](uit)?$ ]]; then
+    log "status" "Cancelled by user."
+    exit 0
+  fi
+
+  if [[ -z "$SELECTED" ]] && [[ -n "$UNBLOCKED" ]]; then
+    CANDIDATES="$UNBLOCKED"
+  fi
+
+  break
+done
 
 # Use smart selection
 TASKS=()
