@@ -52,6 +52,11 @@ export interface PlanConfig {
   timeout?: number;
 }
 
+export interface DashboardConfig {
+  verbosity?: 'error' | 'status' | 'info' | 'debug';
+  logToFile?: boolean;
+}
+
 export interface JudgeConfig {
   model?: string;
   provider?: 'anthropic';
@@ -176,6 +181,7 @@ export interface WavemillConfig {
   mill?: MillConfig;
   expand?: ExpandConfig;
   plan?: PlanConfig;
+  dashboard?: DashboardConfig;
   eval?: EvalConfig;
   autoEval?: boolean;
   router?: RouterConfig;
@@ -509,6 +515,14 @@ export function getValidationConfig(repoDir?: string): ValidationConfig {
  */
 export function getPlanConfig(repoDir?: string): PlanConfig {
   return loadWavemillConfig(repoDir).plan || {};
+}
+
+/**
+ * Get the dashboard config section.
+ * Returns empty object if not configured.
+ */
+export function getDashboardConfig(repoDir?: string): DashboardConfig {
+  return loadWavemillConfig(repoDir).dashboard || {};
 }
 
 /**
