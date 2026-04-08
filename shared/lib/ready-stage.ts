@@ -79,6 +79,9 @@ export interface ReadyResult {
 
   /** Human-readable summary of the overall result */
   summary: string;
+
+  /** GitHub mergeability state, reported separately from readiness verdict */
+  mergeConflict?: MergeConflictResult;
 }
 
 /**
@@ -140,6 +143,30 @@ interface PlanContext {
   content: string;
 }
 
+/**
+ * Merge conflict state for an open PR.
+ *
+ * This is reported separately from the overall ready verdict because merge
+ * conflicts have a distinct remediation path in the monitor.
+ */
+export interface MergeConflictResult {
+  status: 'CLEAN' | 'CONFLICTED' | 'UNKNOWN' | 'ERROR';
+  message: string;
+  mergeable?: string | null;
+  mergeStateStatus?: string | null;
+  attempts: number;
+  error?: string;
+}
+
+export async function sleep(ms: number): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export const readyStageDeps = {
+  execShellCommand,
+  sleep,
+};
+
 // ────────────────────────────────────────────────────────────────
 // Context Gathering Functions
 // ────────────────────────────────────────────────────────────────
@@ -157,14 +184,14 @@ interface PlanContext {
 async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRContext> {
   try {
     // Fetch PR metadata
-    const prJson = execShellCommand(
+    const prJson = readyStageDeps.execShellCommand(
       `gh pr view ${escapeShellArg(String(prNumber))} --json number,headRefName,baseRefName,url,files`,
       { encoding: 'utf-8', cwd: repoDir }
     );
     const prData = JSON.parse(prJson.toString());
 
     // Fetch PR diff
-    const diff = execShellCommand(
+    const diff = readyStageDeps.execShellCommand(
       `gh pr diff ${escapeShellArg(String(prNumber))}`,
       { encoding: 'utf-8', cwd: repoDir }
     ).toString();
@@ -175,7 +202,7 @@ async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRCon
     // Fetch CI status
     let ciStatus = 'unknown';
     try {
-      const checksJson = execShellCommand(
+      const checksJson = readyStageDeps.execShellCommand(
         `gh pr checks ${escapeShellArg(String(prNumber))} --json state`,
         { encoding: 'utf-8', cwd: repoDir }
       );
@@ -514,10 +541,10 @@ function checkReleaseRequirements(
  */
 function checkCIStatus(prNumber: number, repoDir: string): ReadyCheck {
   try {
-    const checksJson = execShellCommand(
-      `gh pr checks ${escapeShellArg(String(prNumber))} --json state,name`,
-      { encoding: 'utf-8', cwd: repoDir }
-    );
+      const checksJson = readyStageDeps.execShellCommand(
+        `gh pr checks ${escapeShellArg(String(prNumber))} --json state,name`,
+        { encoding: 'utf-8', cwd: repoDir }
+      );
     const checks = JSON.parse(checksJson.toString());
 
     if (checks.length === 0) {
@@ -563,6 +590,92 @@ function checkCIStatus(prNumber: number, repoDir: string): ReadyCheck {
       },
     };
   }
+}
+
+/**
+ * Check GitHub mergeability state for an open PR.
+ *
+ * GitHub computes mergeability lazily and may initially report `UNKNOWN`.
+ * Retry a few times before giving up so the monitor can distinguish transient
+ * API latency from an actual conflicted PR.
+ */
+export async function checkMergeConflicts(
+  prNumber: number,
+  repoDir: string
+): Promise<MergeConflictResult> {
+  const maxAttempts = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const mergeabilityJson = readyStageDeps.execShellCommand(
+        `gh pr view ${escapeShellArg(String(prNumber))} --json mergeable,mergeStateStatus`,
+        { encoding: 'utf-8', cwd: repoDir }
+      );
+      const mergeability = JSON.parse(mergeabilityJson.toString()) as {
+        mergeable?: string | null;
+        mergeStateStatus?: string | null;
+      };
+
+      const mergeable = mergeability.mergeable ?? null;
+      const mergeStateStatus = mergeability.mergeStateStatus ?? null;
+
+      if (mergeable === 'MERGEABLE' || mergeStateStatus === 'CLEAN' || mergeStateStatus === 'HAS_HOOKS') {
+        return {
+          status: 'CLEAN',
+          message: 'No merge conflicts detected',
+          mergeable,
+          mergeStateStatus,
+          attempts: attempt,
+        };
+      }
+
+      if (mergeable === 'CONFLICTING' || mergeStateStatus === 'DIRTY') {
+        return {
+          status: 'CONFLICTED',
+          message: 'PR has merge conflicts with base branch',
+          mergeable,
+          mergeStateStatus,
+          attempts: attempt,
+        };
+      }
+
+      if (mergeable === 'UNKNOWN' || mergeStateStatus === 'UNKNOWN' || (!mergeable && !mergeStateStatus)) {
+        if (attempt < maxAttempts) {
+          await readyStageDeps.sleep(5000);
+          continue;
+        }
+
+        return {
+          status: 'UNKNOWN',
+          message: 'GitHub is still computing mergeability',
+          mergeable,
+          mergeStateStatus,
+          attempts: attempt,
+        };
+      }
+
+      return {
+        status: 'ERROR',
+        message: `Unexpected mergeability state: ${mergeable ?? 'null'} / ${mergeStateStatus ?? 'null'}`,
+        mergeable,
+        mergeStateStatus,
+        attempts: attempt,
+      };
+    } catch (error) {
+      return {
+        status: 'ERROR',
+        message: 'Unable to fetch mergeability from GitHub',
+        attempts: attempt,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  return {
+    status: 'UNKNOWN',
+    message: 'GitHub is still computing mergeability',
+    attempts: maxAttempts,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -641,6 +754,7 @@ export async function runReadyStage(options: {
       }],
       timestamp: new Date().toISOString(),
       summary: 'Ready stage not enabled - set ready.enabled=true in .wavemill-config.json',
+      mergeConflict: undefined,
     };
   }
 
@@ -648,6 +762,7 @@ export async function runReadyStage(options: {
   const prContext = await gatherPRContext(prNumber, repoDir);
   const taskPacket = await findTaskPacket(repoDir, prNumber);
   const deployConfig = loadDeployConfig(repoDir);
+  const mergeConflict = await checkMergeConflicts(prNumber, repoDir);
 
   // 2. Run all checks
   const allChecks: ReadyCheck[] = [
@@ -685,6 +800,7 @@ export async function runReadyStage(options: {
     checks,
     timestamp: new Date().toISOString(),
     summary,
+    mergeConflict,
   };
 }
 

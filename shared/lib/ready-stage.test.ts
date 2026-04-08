@@ -1,7 +1,11 @@
 import { describe, it, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {
   runReadyStage,
+  checkMergeConflicts,
   checkSchemaMigrations,
   checkDeployPaths,
   computeVerdict,
@@ -13,10 +17,7 @@ import {
   type ControllerReadinessResult,
   type ReadyStageConfig,
 } from './ready-stage.ts';
-import * as shellUtils from './shell-utils.ts';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import os from 'node:os';
+import * as readyStage from './ready-stage.ts';
 
 function assertIso8601(timestamp: string) {
   assert.match(
@@ -295,6 +296,70 @@ describe('ready-stage', () => {
     });
   });
 
+  describe('checkMergeConflicts', () => {
+    it('returns CLEAN when GitHub reports a mergeable PR', async () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
+        JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' })
+      );
+
+      try {
+        const result = await checkMergeConflicts(42, '/tmp/test');
+        assert.equal(result.status, 'CLEAN');
+        assert.equal(result.attempts, 1);
+        assert.equal(result.mergeStateStatus, 'CLEAN');
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('returns CONFLICTED when GitHub reports a dirty merge state', async () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
+        JSON.stringify({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' })
+      );
+
+      try {
+        const result = await checkMergeConflicts(42, '/tmp/test');
+        assert.equal(result.status, 'CONFLICTED');
+        assert.equal(result.attempts, 1);
+        assert.equal(result.mergeable, 'CONFLICTING');
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('retries UNKNOWN status and returns UNKNOWN after the final attempt', async () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
+        JSON.stringify({ mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' })
+      );
+      const sleepMock = mock.method(readyStage.readyStageDeps, 'sleep', async () => undefined);
+
+      try {
+        const result = await checkMergeConflicts(42, '/tmp/test');
+        assert.equal(result.status, 'UNKNOWN');
+        assert.equal(result.attempts, 3);
+        assert.equal(execMock.mock.callCount(), 3);
+        assert.equal(sleepMock.mock.callCount(), 2);
+      } finally {
+        execMock.mock.restore();
+        sleepMock.mock.restore();
+      }
+    });
+
+    it('returns ERROR when the gh command fails', async () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () => {
+        throw new Error('gh failed');
+      });
+
+      try {
+        const result = await checkMergeConflicts(42, '/tmp/test');
+        assert.equal(result.status, 'ERROR');
+        assert.match(result.error ?? '', /gh failed/);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+  });
+
   describe('checkLegacyMarkers', () => {
     let tmpDir: string;
 
@@ -429,10 +494,24 @@ describe('ready-stage', () => {
   });
 
   describe('runReadyStage - integration', () => {
-    it.skip('validates result structure with mocked shell commands', async () => {
+    it('includes merge conflict status independently from the readiness verdict', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
+      await fs.writeFile(
+        path.join(repoDir, '.wavemill-config.json'),
+        JSON.stringify({ ready: { enabled: true } }),
+        'utf-8'
+      );
+
       // Mock gh CLI commands to test the success path
-      const mockExecShellCommand = mock.fn((cmd: string) => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
         if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'CONFLICTING',
+              mergeStateStatus: 'DIRTY',
+            });
+          }
+
           return JSON.stringify({
             number: 42,
             headRefName: 'feature-branch',
@@ -453,14 +532,10 @@ describe('ready-stage', () => {
         return '';
       });
 
-      // Replace execShellCommand temporarily
-      const original = shellUtils.execShellCommand;
-      (shellUtils as any).execShellCommand = mockExecShellCommand;
-
       try {
         const result = await runReadyStage({
           prNumber: 42,
-          repoDir: '/tmp/test',
+          repoDir,
         });
 
         // Verify structure
@@ -471,9 +546,11 @@ describe('ready-stage', () => {
         assert.equal(typeof result.timestamp, 'string');
         assert.equal(typeof result.summary, 'string');
         assert.equal(result.branch, 'feature-branch');
+        assert.equal(result.verdict, 'warn');
+        assert.equal(result.mergeConflict?.status, 'CONFLICTED');
       } finally {
-        // Restore original
-        (shellUtils as any).execShellCommand = original;
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
       }
     });
   });
