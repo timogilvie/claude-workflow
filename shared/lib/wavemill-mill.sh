@@ -1630,6 +1630,27 @@ $issue_desc
   return $?
 }
 
+launch_ready_phase() {
+  local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
+  local pr_number="$7"
+  local win="${issue}-${slug}"
+
+  _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+
+  log "  Launching ready phase for $issue (PR #$pr_number)"
+
+  # Run the ready CLI tool
+  local result
+  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" 2>&1); then
+    log "  Ready checks passed for $issue"
+    return 0
+  else
+    log_error "  Ready checks failed for $issue"
+    log_error "$result"
+    return 1
+  fi
+}
+
 set_window_attention_state() {
   local win="$1" state="${2:-clear}"
   if [[ "$state" == "needs-user" ]]; then

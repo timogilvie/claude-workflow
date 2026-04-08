@@ -358,6 +358,30 @@
       },
       "additionalProperties": false
     },
+    "ready": {
+      "type": "object",
+      "description": "Settings for the ready stage (merge-readiness checks)",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the ready stage. Must be explicitly enabled."
+        },
+        "checks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "List of check names to run (empty = all available checks)"
+        },
+        "requiredChecks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Checks that must pass for merge approval (subset of checks)"
+        }
+      },
+      "additionalProperties": false
+    },
     "router": {
       "type": "object",
       "description": "Settings for the prompt-to-model router that suggests the best LLM for a task based on historical eval data.",

@@ -164,6 +164,12 @@ export interface PermissionsConfig {
   worktreeMode?: WorktreeModeConfig;
 }
 
+export interface ReadyConfig {
+  enabled?: boolean;
+  checks?: string[];
+  requiredChecks?: string[];
+}
+
 export interface WavemillConfig {
   configVersion?: string;
   linear?: LinearConfig;
@@ -179,6 +185,7 @@ export interface WavemillConfig {
   constraints?: ConstraintsConfig;
   ui?: UiConfig;
   review?: ReviewConfig;
+  ready?: ReadyConfig;
   permissions?: PermissionsConfig;
 }
 
@@ -457,6 +464,19 @@ export function getChallengeSchedulerConfig(repoDir?: string): ChallengeSchedule
  */
 export function getEvalConfig(repoDir?: string): EvalConfig {
   return loadWavemillConfig(repoDir).eval || {};
+}
+
+/**
+ * Get the ready stage config section.
+ * Returns defaults if not configured (disabled by default).
+ */
+export function getReadyConfig(repoDir?: string): ReadyConfig {
+  const config = loadWavemillConfig(repoDir);
+  return {
+    enabled: config.ready?.enabled ?? false,
+    checks: config.ready?.checks ?? [],
+    requiredChecks: config.ready?.requiredChecks ?? [],
+  };
 }
 
 /**
