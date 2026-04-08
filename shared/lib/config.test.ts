@@ -24,6 +24,7 @@ import {
   getMillConfig,
   getUiConfig,
   getPermissionsConfig,
+  getDashboardConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -483,6 +484,25 @@ test('getMillConfig returns mill section', () => {
     const millConfig = getMillConfig(tmp);
     assert.equal(millConfig.maxParallel, 5);
     assert.equal(millConfig.baseBranch, 'develop');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getDashboardConfig returns dashboard section', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      dashboard: {
+        verbosity: 'debug',
+        logToFile: false,
+      },
+    }));
+
+    const dashboardConfig = getDashboardConfig(tmp);
+    assert.equal(dashboardConfig.verbosity, 'debug');
+    assert.equal(dashboardConfig.logToFile, false);
   } finally {
     cleanUp(tmp);
   }

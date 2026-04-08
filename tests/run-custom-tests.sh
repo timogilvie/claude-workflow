@@ -27,6 +27,7 @@ for f in \
   eval-schema.test.ts \
   llm-router.test.ts \
   issue-expander.test.ts \
+  ready-stage.test.ts \
   repo-context-analyzer.test.ts \
   review-context-gatherer.test.ts \
   rule-generator.test.ts \
