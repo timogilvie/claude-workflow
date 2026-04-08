@@ -1707,25 +1707,104 @@ $issue_desc
   return $?
 }
 
+ready_state_dir() {
+  local wt_dir="$1" slug="$2"
+
+  for dir in features bugs; do
+    if [[ -d "$wt_dir/$dir/$slug" ]]; then
+      echo "$wt_dir/$dir/$slug"
+      return 0
+    fi
+  done
+
+  echo "$wt_dir/features/$slug"
+}
+
+write_ready_attention_file() {
+  local state_dir="$1" message="$2"
+  mkdir -p "$state_dir"
+  printf '%s\n' "$message" > "$state_dir/.needs-attention"
+}
+
 launch_ready_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local pr_number="$7"
   local win="${issue}-${slug}"
+  local state_dir status_file result ready_rc merge_status verdict
+  local current_agent current_model prompt_file launch_rc
 
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  state_dir="$(ready_state_dir "$wt_dir" "$slug")"
+  status_file="/tmp/${SESSION}-${issue}-status.txt"
 
   log "  Launching ready phase for $issue (PR #$pr_number)"
 
-  # Run the ready CLI tool
-  local result
-  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" 2>&1); then
-    log "  Ready checks passed for $issue"
-    return 0
+  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number"); then
+    ready_rc=0
   else
-    log_error "  Ready checks failed for $issue"
-    log_error "$result"
+    ready_rc=$?
+  fi
+
+  merge_status=$(printf '%s' "$result" | jq -r '.mergeConflict.status // empty' 2>/dev/null || echo "")
+  verdict=$(printf '%s' "$result" | jq -r '.verdict // empty' 2>/dev/null || echo "")
+
+  if [[ -z "$merge_status" ]]; then
+    log_error "  Ready checks produced unparseable output for $issue"
+    [[ -n "$result" ]] && log_error "$result"
+    write_ready_attention_file "$state_dir" "Ready stage produced invalid output for PR #$pr_number."
     return 1
   fi
+
+  if [[ "$merge_status" == "CONFLICTED" ]]; then
+    mkdir -p "$state_dir"
+    if [[ -f "$state_dir/.conflict-detected" ]]; then
+      write_ready_attention_file "$state_dir" "PR #$pr_number still has merge conflicts after automatic remediation."
+      log_error "  Merge conflicts persist for $issue after remediation attempt"
+      return 1
+    fi
+    touch "$state_dir/.conflict-detected"
+    rm -f "$state_dir/.needs-attention"
+    log "status" "  ⚠ Merge conflict detected for $issue (PR #$pr_number)"
+
+    current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
+    current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
+    [[ -z "$current_agent" ]] && current_agent="$AGENT_CMD"
+
+    prompt_file="/tmp/${SESSION}-${issue}-conflict-prompt.txt"
+    build_conflict_resolution_prompt "$pr_number" "$branch" "$wt_dir" "$status_file" "$base_branch" > "$prompt_file"
+    _launch_agent_in_pane "$SESSION:$win" "$current_agent" "$current_model" "$prompt_file" "$slug"
+    launch_rc=$?
+
+    if [[ "$launch_rc" -eq 0 ]]; then
+      return 3
+    fi
+    if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$slug"; then
+      return 2
+    fi
+
+    write_ready_attention_file "$state_dir" "Automatic merge-conflict resolution could not be launched for PR #$pr_number."
+    log_error "  Failed to launch conflict-resolution agent for $issue"
+    return 1
+  fi
+
+  if [[ "$merge_status" == "UNKNOWN" || "$merge_status" == "ERROR" ]]; then
+    write_ready_attention_file "$state_dir" "Ready stage reported merge status $merge_status for PR #$pr_number."
+    log_error "  Ready merge status for $issue is $merge_status"
+    [[ -n "$result" ]] && log_error "$result"
+    return 1
+  fi
+
+  rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention"
+
+  if [[ "$ready_rc" -eq 0 ]]; then
+    log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
+    return 0
+  fi
+
+  write_ready_attention_file "$state_dir" "Ready checks failed for PR #$pr_number."
+  log_error "  Ready checks failed for $issue"
+  [[ -n "$result" ]] && log_error "$result"
+  return 1
 }
 
 set_window_attention_state() {
@@ -3142,16 +3221,20 @@ monitor_issue_state() {
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
+            if [[ "$launch_rc" -eq 3 ]]; then
+              set_window_attention_state "$WIN" "clear"
+              log "status" "⚠ $ISSUE → Ready detected conflicts, launching remediation"
+              active_count=$((active_count + 1))
+              return 0
+            fi
             if [[ "$launch_rc" -ne 0 ]]; then
               # Ready checks failed - mark for user attention
               log "⚠ $ISSUE → Ready checks failed (PR #$pr_number)"
               set_window_attention_state "$WIN" "needs-user"
-              active_count=$((active_count + 1))
               return 0
             fi
-            set_window_attention_state "$WIN" "clear"
-            log "✓ $ISSUE → Review complete, launching ready phase (PR #$pr_number)"
-            active_count=$((active_count + 1))
+            set_window_attention_state "$WIN" "needs-user"
+            log "✓ $ISSUE → Ready checks completed for PR #$pr_number"
             return 0
           fi
           # No PR created or ready phase disabled - mark for attention
@@ -3166,15 +3249,55 @@ monitor_issue_state() {
             return 0
           fi
 
-          # Ready phase is complete when checks pass (handled by ready.ts tool)
-          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+          local ready_state_dir_path
+          ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+
+          if [[ -f "$ready_state_dir_path/.conflict-detected" ]]; then
+            if _pane_is_dead_or_idle "$SESSION:$WIN"; then
+              local pr_number
+              pr_number=$(find_pr_for_branch "$BRANCH")
+              if [[ -z "$pr_number" ]]; then
+                write_ready_attention_file "$ready_state_dir_path" "Unable to find open PR for branch $BRANCH after conflict remediation."
+                set_window_attention_state "$WIN" "needs-user"
+                return 0
+              fi
+
+              title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+              if [[ -z "$title" ]]; then
+                issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+                title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+              fi
+
+              launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"
+              local launch_rc=$?
+              if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+                log "⛔ $ISSUE → Workflow aborted during conflict remediation"
+                set_task_phase "$ISSUE" "aborted"
+                set_window_attention_state "$WIN" "needs-user"
+                return 0
+              fi
+              if [[ "$launch_rc" -eq 3 ]]; then
+                set_window_attention_state "$WIN" "clear"
+                active_count=$((active_count + 1))
+                return 0
+              fi
+              if [[ "$launch_rc" -ne 0 ]]; then
+                log "⚠ $ISSUE → Conflict remediation still needs attention"
+                set_window_attention_state "$WIN" "needs-user"
+                return 0
+              fi
+
+              log "✓ $ISSUE → Conflict remediation complete, ready checks rerun"
+              set_window_attention_state "$WIN" "needs-user"
+              return 0
+            fi
+
             set_window_attention_state "$WIN" "clear"
-            # Keep ready tasks active while tool is still running
             active_count=$((active_count + 1))
             return 0
           fi
-          # Tool exited - mark for user attention to review ready status
-          needs_attention="true"
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
           ;;
 
         aborted)

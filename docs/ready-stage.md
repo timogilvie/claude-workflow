@@ -7,7 +7,7 @@ This stage is available in two forms:
 - `wavemill ready <pr>` for an on-demand check of a PR number or PR URL
 - the `ready` phase inside `wavemill mill` for continuous monitor-based gating
 
-The current implementation is a scaffolded contract with stubbed checks. The CLI shape, result schema, config surface, and merge policy are stable now so operators can adopt the workflow before HOK-1176 adds the real CI, approval, and mergeability checks.
+The ready stage now includes live GitHub mergeability detection for open PRs. Merge-conflict state is reported separately from the readiness verdict so operators and the monitor can distinguish conflict remediation from other readiness failures.
 
 ## Overview
 
@@ -31,14 +31,12 @@ The target check categories for the ready stage are:
 - branch freshness
 - release and manual-step requirements
 
-Today, the shared ready-stage library returns a stub result with:
+Current implementation details:
 
-- `verdict: "pass"`
-- `checks: []`
-- a valid ISO 8601 `timestamp`
-- a summary noting that no checks are implemented yet
-
-That stub behavior preserves backwards compatibility while the monitor, CLI, and docs settle around a stable contract.
+- mergeability comes from `gh pr view --json mergeable,mergeStateStatus`
+- GitHub `UNKNOWN` mergeability is retried up to 3 times with 5-second delays
+- merge conflict state is surfaced in a dedicated `mergeConflict` field
+- the readiness verdict still reflects the configured `checks` array
 
 ## CLI Usage
 
@@ -89,15 +87,29 @@ wavemill ready 42 --repo-dir ~/src/my-repo
 
 ### Output Format
 
-The command writes JSON to stdout so it can be consumed by scripts or the monitor:
+The command writes human-readable mergeability status to `stderr` and JSON to `stdout` so it can still be consumed by scripts or the monitor:
 
 ```json
 {
   "prNumber": 42,
-  "verdict": "pass",
-  "checks": [],
+  "verdict": "warn",
+  "checks": [
+    {
+      "name": "release-requirements",
+      "status": "warn",
+      "message": "No task packet found - skipping release requirements check",
+      "details": {}
+    }
+  ],
+  "mergeConflict": {
+    "status": "CLEAN",
+    "message": "No merge conflicts detected",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN",
+    "attempts": 1
+  },
   "timestamp": "2026-04-08T12:00:00.000Z",
-  "summary": "Ready stage stub - no checks implemented yet"
+  "summary": "Checks passed with warnings - review before merge"
 }
 ```
 
@@ -108,6 +120,7 @@ The shared result schema is:
 | `prNumber` | `number` | PR that was checked |
 | `verdict` | `"pass" | "fail" | "warn"` | Overall merge-readiness verdict |
 | `checks` | `ReadyCheck[]` | Individual check results |
+| `mergeConflict` | `MergeConflictResult \| undefined` | GitHub mergeability state for the PR |
 | `timestamp` | `string` | ISO 8601 UTC timestamp |
 | `summary` | `string` | Human-readable overall summary |
 
@@ -127,19 +140,32 @@ Each item in `checks` has:
 | `0` | Ready verdict is `pass` or `warn` |
 | `1` | Ready verdict is `fail` |
 
-Operational note: the stub implementation currently returns `pass`, so the command exits `0` until real checks are added.
+Operational note: `mergeConflict.status` is independent from the main verdict. A PR can have clean readiness checks but still be blocked because GitHub reports merge conflicts.
 
 ### Example Pass Output
 
-This is what operators should expect today:
+Example clean mergeability output:
 
 ```json
 {
   "prNumber": 42,
   "verdict": "pass",
-  "checks": [],
+  "checks": [
+    {
+      "name": "ci-status",
+      "status": "pass",
+      "message": "All CI checks passing"
+    }
+  ],
+  "mergeConflict": {
+    "status": "CLEAN",
+    "message": "No merge conflicts detected",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN",
+    "attempts": 1
+  },
   "timestamp": "2026-04-08T12:00:00.000Z",
-  "summary": "Ready stage stub - no checks implemented yet"
+  "summary": "All checks passed - safe to merge"
 }
 ```
 
@@ -166,10 +192,45 @@ The fail shape below shows the contract operators and scripts should be prepared
       "message": "Required approvals are present"
     }
   ],
+  "mergeConflict": {
+    "status": "CONFLICTED",
+    "message": "PR has merge conflicts with base branch",
+    "mergeable": "CONFLICTING",
+    "mergeStateStatus": "DIRTY",
+    "attempts": 1
+  },
   "timestamp": "2026-04-08T12:05:00.000Z",
   "summary": "Merge is blocked until conflicts are resolved"
 }
 ```
+
+## Merge Conflict Detection
+
+The ready engine checks mergeability with:
+
+```bash
+gh pr view <pr> --json mergeable,mergeStateStatus
+```
+
+GitHub computes mergeability lazily, so the first response can be `UNKNOWN`. The ready engine retries up to 3 times with 5-second delays before surfacing `UNKNOWN` to the caller.
+
+Reported merge states:
+
+- `CLEAN`: GitHub reports the PR can merge cleanly
+- `CONFLICTED`: GitHub reports merge conflicts
+- `UNKNOWN`: GitHub is still computing mergeability after retries
+- `ERROR`: GitHub CLI failed or returned an unexpected state
+
+## Automatic Conflict Resolution
+
+When `wavemill mill` runs the ready stage and sees `mergeConflict.status = "CONFLICTED"`:
+
+1. It writes `features/<slug>/.conflict-detected` in the existing worktree.
+2. It relaunches the task agent in that same worktree with a conflict-resolution-only prompt.
+3. The agent fetches the base branch, merges it, resolves conflicts, validates, commits, and pushes.
+4. After the agent exits, the monitor reruns `wavemill ready <pr>`.
+
+If conflicts persist, or mergeability comes back `UNKNOWN` or `ERROR`, the monitor writes `features/<slug>/.needs-attention` and marks the task for operator follow-up.
 
 ## Monitor Behavior
 
@@ -188,6 +249,7 @@ Monitor responsibilities in the ready phase:
 - persist the result in workflow state
 - keep the task blocked from merge completion until the ready gate passes
 - rerun readiness after operator action or automated remediation
+- surface merge conflicts separately from other readiness verdict failures
 
 Expected state transitions:
 
@@ -204,7 +266,7 @@ Practical operator interpretation:
 - a warning result means merge may proceed, but the warning must be consciously handled
 - a failing result means do not merge until the blocking condition is cleared
 
-While checks are stubbed, the monitor keeps the phase boundary visible without blocking existing workflows.
+For conflicted PRs, the monitor attempts a narrow in-place remediation before escalating to the operator.
 
 ## Merge-Gating Policy
 
@@ -246,7 +308,7 @@ Compatibility cases:
 Backwards-compatibility expectations:
 
 - repositories that have not opted in should not see workflow regressions
-- the stubbed implementation preserves the CLI and result shape without requiring a live readiness engine
+- the ready contract remains stable even as checks are added
 - existing review and merge workflows can continue while teams adopt the ready phase incrementally
 
 Minimal opt-in example:
@@ -288,26 +350,18 @@ Recovery:
 
 Symptoms:
 
-- ready result shows `merge-conflicts` with status `fail`
+- ready result shows `mergeConflict.status = "CONFLICTED"`
 - GitHub reports the PR is not mergeable
 
 Typical response:
 
-```bash
-git fetch origin
-git checkout task/my-branch
-git rebase origin/main
-# resolve conflicts
-git add <resolved-files>
-git rebase --continue
-git push --force-with-lease
-wavemill ready 42
-```
+- let `wavemill mill` attempt automatic remediation first
+- if it writes `.needs-attention`, open the existing worktree and resolve manually
 
 Recovery goal:
 
 - get the PR back to a clean merge state
-- rerun ready after the force-push
+- rerun ready after the push
 
 ### Approval Failure
 
@@ -431,4 +485,4 @@ Use the ready stage as the final pre-merge decision point.
 - Warnings require deliberate operator handling.
 - Missing ready configuration keeps existing workflows compatible.
 
-When checks are stubbed, the contract and docs can still be adopted. When HOK-1176 lands, operators should already be running against the correct CLI, config, and policy surface.
+The ready contract, monitor behavior, and operator policy should stay stable as additional checks are added.
