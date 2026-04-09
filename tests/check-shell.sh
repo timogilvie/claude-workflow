@@ -127,7 +127,7 @@ else
       save_task_state remove_task_state set_task_phase get_task_phase
       find_pr_for_branch pr_state validate_pr_merge
       linear_set_state linear_is_completed
-      check_routing_complete check_plan_approved check_coding_complete check_workflow_aborted
+      check_routing_complete
       fetch_candidates filter_active_issues
       launch_task is_task_packet
       cleanup_dashboard_pane
@@ -491,10 +491,10 @@ else
 
   if grep -q '\[\[ "\$task_phase" == "planning" \]\]' "$STATUS_SCRIPT" \
     && grep -q '\[\[ "\$agent_state" == "exited" \]\]' "$STATUS_SCRIPT" \
-    && grep -q '\.plan-approved' "$STATUS_SCRIPT"; then
-    pass "dashboard review-waiting helper checks planning, exited agent, and approval marker"
+    && ! grep -q '\.plan-approved' "$STATUS_SCRIPT"; then
+    pass "dashboard review-waiting helper checks planning and exited agent without marker fallback"
   else
-    fail "dashboard review-waiting helper is missing one or more gating conditions"
+    fail "dashboard review-waiting helper has stale or missing gating conditions"
   fi
 
   if grep -q 'reported="Plan ready — waiting for approval"' "$STATUS_SCRIPT"; then

@@ -436,29 +436,29 @@ describe('ready-stage', () => {
       const result = await controllerCheckReadiness(tmpDir);
       assert.equal(result.ready, true);
       assert.equal(result.phase, 'unknown');
-      assert.match(result.summary, /No phase markers/);
+      assert.match(result.summary, /No stage results/);
     });
 
-    it('detects coding phase when .plan-approved exists', async () => {
+    it('returns unknown phase when only .plan-approved exists', async () => {
       await fs.writeFile(path.join(tmpDir, '.plan-approved'), '');
       const result = await controllerCheckReadiness(tmpDir);
-      assert.equal(result.phase, 'coding');
+      assert.equal(result.phase, 'unknown');
       assert.equal(result.ready, true);
     });
 
-    it('detects review phase when .coding-complete exists', async () => {
+    it('returns unknown phase when only .coding-complete exists', async () => {
       await fs.writeFile(path.join(tmpDir, '.plan-approved'), '');
       await fs.writeFile(path.join(tmpDir, '.coding-complete'), '');
       const result = await controllerCheckReadiness(tmpDir);
-      assert.equal(result.phase, 'review');
+      assert.equal(result.phase, 'unknown');
       assert.equal(result.ready, true);
     });
 
-    it('detects aborted phase and marks not ready', async () => {
+    it('returns unknown phase for legacy abort marker alone', async () => {
       await fs.writeFile(path.join(tmpDir, '.workflow-aborted'), '');
       const result = await controllerCheckReadiness(tmpDir);
-      assert.equal(result.phase, 'aborted');
-      assert.equal(result.ready, false);
+      assert.equal(result.phase, 'unknown');
+      assert.equal(result.ready, true);
     });
 
     it('reports task packet presence', async () => {
@@ -490,6 +490,79 @@ describe('ready-stage', () => {
       assert.ok(result.timestamp);
       // Verify ISO 8601 format
       assert.ok(!isNaN(Date.parse(result.timestamp)));
+    });
+
+    it('reports ready pass from stage artifacts', async () => {
+      await fs.writeFile(path.join(tmpDir, '.ready-result.json'), JSON.stringify({
+        stage: 'ready',
+        status: 'completed',
+        startedAt: '2026-04-09T12:00:00.000Z',
+        finishedAt: '2026-04-09T12:10:00.000Z',
+        agent: 'claude',
+        model: 'claude-opus-4-6',
+        notes: 'verdict: pass',
+        artifacts: { type: 'ready', verdict: 'pass', checksRun: 4, checksPassed: 4, mergeConflict: 'CLEAN' },
+      }));
+
+      const result = await controllerCheckReadiness(tmpDir);
+      assert.equal(result.phase, 'ready');
+      assert.equal(result.ready, true);
+      assert.equal(result.checks.find(c => c.name === 'ready-outcome')?.status, 'pass');
+    });
+
+    it('reports ready fail from stage artifacts', async () => {
+      await fs.writeFile(path.join(tmpDir, '.ready-result.json'), JSON.stringify({
+        stage: 'ready',
+        status: 'completed',
+        startedAt: '2026-04-09T12:00:00.000Z',
+        finishedAt: '2026-04-09T12:10:00.000Z',
+        agent: 'claude',
+        model: 'claude-opus-4-6',
+        notes: 'verdict: fail',
+        artifacts: { type: 'ready', verdict: 'fail', checksRun: 4, checksPassed: 2, mergeConflict: 'CLEAN' },
+      }));
+
+      const result = await controllerCheckReadiness(tmpDir);
+      assert.equal(result.phase, 'ready');
+      assert.equal(result.ready, false);
+      assert.equal(result.checks.find(c => c.name === 'ready-outcome')?.status, 'fail');
+    });
+
+    it('reports ready remediation in progress from running stage result', async () => {
+      await fs.writeFile(path.join(tmpDir, '.ready-result.json'), JSON.stringify({
+        stage: 'ready',
+        status: 'running',
+        startedAt: '2026-04-09T12:00:00.000Z',
+        finishedAt: null,
+        agent: 'claude',
+        model: 'claude-opus-4-6',
+        notes: 'Conflict remediation in progress',
+        artifacts: { type: 'ready', mergeConflict: 'CONFLICTED' },
+      }));
+
+      const result = await controllerCheckReadiness(tmpDir);
+      assert.equal(result.phase, 'ready');
+      assert.equal(result.ready, true);
+      assert.match(result.summary, /remediation in progress/);
+      assert.equal(result.checks.find(c => c.name === 'ready-outcome')?.status, 'warn');
+    });
+
+    it('reports ready needs attention from failed stage result', async () => {
+      await fs.writeFile(path.join(tmpDir, '.ready-result.json'), JSON.stringify({
+        stage: 'ready',
+        status: 'failed',
+        startedAt: '2026-04-09T12:00:00.000Z',
+        finishedAt: '2026-04-09T12:10:00.000Z',
+        agent: 'claude',
+        model: 'claude-opus-4-6',
+        notes: 'Ready checks failed',
+      }));
+
+      const result = await controllerCheckReadiness(tmpDir);
+      assert.equal(result.phase, 'ready');
+      assert.equal(result.ready, false);
+      assert.match(result.summary, /needs attention/);
+      assert.equal(result.checks.find(c => c.name === 'ready-outcome')?.status, 'fail');
     });
   });
 

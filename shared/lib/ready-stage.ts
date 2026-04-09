@@ -834,6 +834,9 @@ export interface LegacyMarkerResult {
  * and maps them to structured `ReadyCheck` entries that the controller readiness
  * engine can incorporate alongside new-style checks.
  *
+ * @deprecated Phase resolution now reads stage result files exclusively.
+ * Keep this helper only for explicit migration and compatibility callers.
+ *
  * @param featureDir - Absolute path to the feature directory
  * @returns Marker presence and corresponding ReadyCheck entries
  */
@@ -936,8 +939,7 @@ export interface ControllerReadinessResult {
  * (shell orchestrator) uses this to determine phase transitions.
  *
  * Checks performed:
- * - Stage result files (`.planning-result.json`, etc.) — preferred source
- * - Legacy marker files (`.plan-approved`, `.coding-complete`, `.workflow-aborted`) — fallback
+ * - Stage result files (`.planning-result.json`, etc.) — authoritative source
  * - Task packet presence
  * - Plan file presence
  *
@@ -984,13 +986,7 @@ export async function controllerCheckReadiness(
     });
   }
 
-  // 3. Check legacy markers (fallback when no stage results)
-  const legacyResult = await checkLegacyMarkers(featureDir);
-  if (!hasStageResults) {
-    checks.push(...legacyResult.checks);
-  }
-
-  // 4. Check for task packet
+  // 3. Check for task packet
   const taskPacketPath = path.join(featureDir, 'task-packet.md');
   try {
     await fs.access(taskPacketPath);
@@ -1007,7 +1003,7 @@ export async function controllerCheckReadiness(
     });
   }
 
-  // 5. Check for plan
+  // 4. Check for plan
   const planPath = path.join(featureDir, 'plan.md');
   try {
     await fs.access(planPath);
@@ -1024,7 +1020,7 @@ export async function controllerCheckReadiness(
     });
   }
 
-  // 6. Determine phase — prefer stage result files, then legacy markers
+  // 5. Determine phase from stage results only
   let phase: ControllerReadinessResult['phase'] = 'unknown';
 
   if (hasStageResults) {
@@ -1032,6 +1028,35 @@ export async function controllerCheckReadiness(
     const abortedStage = Object.values(stageResults).find(r => r.status === 'aborted');
     if (abortedStage) {
       phase = 'aborted';
+    } else if (stageResults.ready?.status === 'completed') {
+      const verdict = stageResults.ready.artifacts?.type === 'ready'
+        ? stageResults.ready.artifacts.verdict
+        : undefined;
+      phase = 'ready';
+      checks.push({
+        name: 'ready-outcome',
+        status: verdict === 'fail' ? 'fail' : verdict === 'warn' ? 'warn' : 'pass',
+        message: verdict === 'fail'
+          ? 'Ready stage failed - merge is blocked'
+          : verdict === 'warn'
+            ? 'Ready stage passed with warnings - merge may require manual follow-up'
+            : 'Ready stage passed - merge is allowed',
+        details: { verdict },
+      });
+    } else if (stageResults.ready?.status === 'running') {
+      phase = 'ready';
+      checks.push({
+        name: 'ready-outcome',
+        status: 'warn',
+        message: 'Ready remediation in progress',
+      });
+    } else if (stageResults.ready?.status === 'failed') {
+      phase = 'ready';
+      checks.push({
+        name: 'ready-outcome',
+        status: 'fail',
+        message: 'Ready stage needs attention',
+      });
     } else if (stageResults.ready) {
       phase = 'ready';
     } else if (stageResults.review?.status === 'completed') {
@@ -1049,34 +1074,25 @@ export async function controllerCheckReadiness(
     } else if (stageResults.planning?.status === 'running') {
       phase = 'planning';
     }
-  } else {
-    // Fallback: determine from legacy markers
-    const markerMap = Object.fromEntries(
-      legacyResult.markers.map(m => [m.file, m.present])
-    );
-    if (markerMap['.workflow-aborted']) {
-      phase = 'aborted';
-    } else if (markerMap['.coding-complete']) {
-      phase = 'review';
-    } else if (markerMap['.plan-approved']) {
-      phase = 'coding';
-    }
   }
 
-  // 7. Determine readiness — ready if no failures
+  // 6. Determine readiness — ready if no failures
   const hasFail = checks.some(c => c.status === 'fail');
   const ready = !hasFail;
 
-  // 8. Build summary
+  // 7. Build summary
   let summary: string;
   if (phase === 'aborted') {
     summary = 'Workflow was aborted';
   } else if (phase === 'unknown') {
-    summary = 'No phase markers detected — feature directory may be in initial state';
+    summary = 'No stage results detected - feature directory may be in initial state';
+  } else if (stageResults.ready?.status === 'running') {
+    summary = 'Feature is in ready phase (remediation in progress)';
+  } else if (stageResults.ready?.status === 'failed') {
+    summary = 'Feature is in ready phase (needs attention)';
   } else {
     const statusSuffix = ready ? '' : ' (blocked by failing checks)';
-    const sourceSuffix = hasStageResults ? ' (from stage results)' : ' (from legacy markers)';
-    summary = `Feature is in ${phase} phase${statusSuffix}${sourceSuffix}`;
+    summary = `Feature is in ${phase} phase${statusSuffix} (from stage results)`;
   }
 
   return {
