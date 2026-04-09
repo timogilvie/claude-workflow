@@ -447,11 +447,16 @@ set -e
 
 # Add status dashboard panel in control window (only if not already exists)
 STATUS_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wavemill-status.sh"
+STATUS_LOG_FILE="${STATUS_LOG_FILE:-/tmp/${SESSION}-control-status.log}"
 PANE_COUNT=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l)
 if [[ "$PANE_COUNT" -eq 1 ]]; then
   echo "Setting up status dashboard..."
-  tmux split-window -t "$SESSION:control" -h -l 40%
+  : > "$STATUS_LOG_FILE"
+  tmux split-window -t "$SESSION:control.0" -v -p 65
+  tmux split-window -t "$SESSION:control.0" -h -f -p 50
   tmux send-keys -t "$SESSION:control.1" "'$STATUS_SCRIPT' '$SESSION' '$WORKTREE_ROOT' '${WAVEMILL_STATE_FILE:-}'" C-m
+  tmux send-keys -t "$SESSION:control.2" "clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'" C-m
+  tmux select-pane -t "$SESSION:control.0"
 else
   echo "Status dashboard already exists, skipping..."
 fi
