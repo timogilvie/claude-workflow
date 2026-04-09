@@ -495,7 +495,7 @@ echo "=== Abort Prompt Guidance Guards ==="
 
 if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/planning-phase.md" \
   && grep -q 'Do NOT create the phase completion marker (.plan-approved)' "$REPO_DIR/tools/prompts/planning-phase.md" \
-  && grep -q 'Stop after creating the marker and reporting the abort. Workflow orchestration will close the session.' "$REPO_DIR/tools/prompts/planning-phase.md"; then
+  && grep -q 'Stop after creating the marker and reporting the abort.' "$REPO_DIR/tools/prompts/planning-phase.md"; then
   pass "planning template documents abort marker flow"
 else
   fail "planning template is missing abort marker guidance"
@@ -503,7 +503,7 @@ fi
 
 if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/coding-phase.md" \
   && grep -q 'Do NOT create the phase completion marker (.coding-complete)' "$REPO_DIR/tools/prompts/coding-phase.md" \
-  && grep -q 'Stop after creating the marker and reporting the abort. Workflow orchestration will close the session.' "$REPO_DIR/tools/prompts/coding-phase.md"; then
+  && grep -q 'Stop after creating the marker and reporting the abort.' "$REPO_DIR/tools/prompts/coding-phase.md"; then
   pass "coding template documents abort marker flow"
 else
   fail "coding template is missing abort marker guidance"
@@ -511,7 +511,7 @@ fi
 
 if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/review-phase.md" \
   && grep -q 'Do NOT create additional completion output or a PR' "$REPO_DIR/tools/prompts/review-phase.md" \
-  && grep -q 'Stop after creating the marker and reporting the abort. Workflow orchestration will close the session.' "$REPO_DIR/tools/prompts/review-phase.md"; then
+  && grep -q 'Stop after creating the marker and reporting the abort.' "$REPO_DIR/tools/prompts/review-phase.md"; then
   pass "review template documents abort marker flow"
 else
   fail "review template is missing abort marker guidance"
@@ -571,6 +571,31 @@ if grep -q '/exit' "$PROMPT_RENDER_DIR/planning-claude.txt" \
 else
   pass "claude-facing prompts use agent-agnostic lifecycle (no /exit)"
 fi
+
+EXIT_SEMANTICS_PATTERN='(/exit|remain in session|exit the process|stay running|keep running|close the session|let the session end)'
+
+for template in planning-phase.md coding-phase.md review-phase.md; do
+  if grep -qiE "$EXIT_SEMANTICS_PATTERN" "$REPO_DIR/tools/prompts/$template"; then
+    fail "$template still contains agent-managed exit semantics"
+  else
+    pass "$template omits agent-managed exit semantics"
+  fi
+done
+
+for rendered in \
+  "$PROMPT_RENDER_DIR/planning-codex.txt" \
+  "$PROMPT_RENDER_DIR/planning-claude.txt" \
+  "$PROMPT_RENDER_DIR/coding-codex.txt" \
+  "$PROMPT_RENDER_DIR/coding-claude.txt" \
+  "$PROMPT_RENDER_DIR/review-codex.txt" \
+  "$PROMPT_RENDER_DIR/review-claude.txt" \
+; do
+  if grep -qiE "$EXIT_SEMANTICS_PATTERN" "$rendered"; then
+    fail "$(basename "$rendered") still contains agent-managed exit semantics"
+  else
+    pass "$(basename "$rendered") omits agent-managed exit semantics"
+  fi
+done
 
 TMUX_CAPTURE=()
 tmux() {
