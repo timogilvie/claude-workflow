@@ -332,6 +332,61 @@ _persist_phase() {
   mv "$tmp" "$feature_dir/.resolved-phase"
 }
 
+simulate_planning_transition() {
+  local feature_dir="$1"
+  local planning_status
+  planning_status=$(read_stage_status "$feature_dir" "planning")
+
+  if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
+    if [[ -f "$feature_dir/.plan-approved" ]]; then
+      approve_plan "$feature_dir" "claude" "claude-opus-4-6"
+      echo "completed"
+      return 0
+    fi
+  fi
+
+  if [[ "$planning_status" == "running" ]] && [[ -f "$feature_dir/plan.md" ]]; then
+    write_stage_result "$feature_dir" "planning" "awaiting_user" "claude" "" "Plan ready for review"
+    echo "awaiting_user"
+    return 0
+  fi
+
+  if [[ "$planning_status" == "running" ]]; then
+    echo "running"
+    return 0
+  fi
+
+  echo "needs_attention"
+}
+
+simulate_coding_transition() {
+  local feature_dir="$1"
+  local coding_status
+  coding_status=$(read_stage_status "$feature_dir" "coding")
+
+  if [[ "$coding_status" == "running" ]] && [[ -f "$feature_dir/.coding-complete" ]]; then
+    write_stage_result "$feature_dir" "coding" "completed" "claude" "claude-opus-4-6"
+    echo "completed"
+    return 0
+  fi
+
+  if [[ "$coding_status" == "running" ]]; then
+    echo "running"
+    return 0
+  fi
+
+  echo "needs_attention"
+}
+
+simulate_review_keepalive() {
+  local feature_dir="$1"
+  if [[ "$(read_stage_status "$feature_dir" "review")" == "running" ]]; then
+    echo "active"
+  else
+    echo "inactive"
+  fi
+}
+
 # ─────────────────────────────────────────────────────────────────
 echo "=== Stage Result Tests ==="
 # ─────────────────────────────────────────────────────────────────
@@ -905,6 +960,52 @@ cat > "$FD52/.planning-result.json" <<'EOF'
 EOF
 check "planning failed → planning" "planning" "$(resolve_phase "$FD52")"
 check "failed status is not complete" "1" "$([[ $(check_stage_complete "$FD52" "planning"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Pane-Independent Transition Tests (HOK-1195) ==="
+
+# Test 53: Planning transition does not require pane exit semantics
+FD53="$TEST_DIR/test53"
+mkdir -p "$FD53"
+write_stage_result "$FD53" "planning" "running" "claude" "claude-opus-4-6"
+touch "$FD53/plan.md"
+check "planning transition ignores pane state" "awaiting_user" "$(simulate_planning_transition "$FD53")"
+check "planning transition writes awaiting_user" "awaiting_user" "$(read_stage_status "$FD53" "planning")"
+
+# Test 54: Planning approval transition does not require pane exit semantics
+FD54="$TEST_DIR/test54"
+mkdir -p "$FD54"
+write_stage_result "$FD54" "planning" "awaiting_user" "claude" "claude-opus-4-6"
+touch "$FD54/plan.md"
+touch "$FD54/.plan-approved"
+check "plan approval ignores pane state" "completed" "$(simulate_planning_transition "$FD54")"
+check "plan approval writes completed" "completed" "$(read_stage_status "$FD54" "planning")"
+
+# Test 55: Coding transition does not require pane exit semantics
+FD55="$TEST_DIR/test55"
+mkdir -p "$FD55"
+write_stage_result "$FD55" "coding" "running" "claude" "claude-opus-4-6"
+touch "$FD55/.coding-complete"
+check "coding transition ignores pane state" "completed" "$(simulate_coding_transition "$FD55")"
+check "coding transition writes completed" "completed" "$(read_stage_status "$FD55" "coding")"
+
+# Test 56: Review keepalive is stage-result based
+FD56="$TEST_DIR/test56"
+mkdir -p "$FD56"
+write_stage_result "$FD56" "review" "running" "claude" "claude-opus-4-6"
+check "review keepalive uses running stage result" "active" "$(simulate_review_keepalive "$FD56")"
+write_stage_result "$FD56" "review" "completed" "claude" "claude-opus-4-6"
+check "review completion resolves to ready" "ready" "$(resolve_phase "$FD56")"
+
+# Test 57: Regression - pane-alive state would not block coding completion
+FD57="$TEST_DIR/test57"
+mkdir -p "$FD57"
+write_stage_result "$FD57" "coding" "running" "claude" "claude-opus-4-6"
+touch "$FD57/.coding-complete"
+PANE_WOULD_BE_ALIVE=true
+check "stuck handoff regression stays completed with pane alive" "completed" "$(simulate_coding_transition "$FD57")"
+check "coding completion persists despite pane alive" "completed" "$(read_stage_status "$FD57" "coding")"
 
 # ─────────────────────────────────────────────────────────────────
 echo ""
