@@ -23,6 +23,7 @@ import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 import { isInteractive } from '../shared/lib/cli-utils.ts';
 import { logLinearUpdateError, logValidationWarning } from '../shared/lib/linear-update-error-log.ts';
+import { formatLintResults, lintSubsystemSpecs } from '../shared/lib/context-linter.ts';
 
 runTool({
   name: 'expand-issue',
@@ -90,6 +91,19 @@ runTool({
 
     // Check for subsystem drift before expansion
     await checkSubsystemDrift(repoPath, issue.description || '');
+
+    try {
+      const lintResults = await lintSubsystemSpecs(repoPath, {
+        rules: ['stale-crossref', 'contradiction'],
+      });
+      if (lintResults.length > 0) {
+        console.log(formatLintResults(lintResults));
+        console.log('');
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      console.warn(`⚠️  Spec lint failed: ${message}`);
+    }
 
     // Expand with Claude
     console.log('Expanding issue with Claude...\n');

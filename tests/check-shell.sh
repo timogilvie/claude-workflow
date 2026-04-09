@@ -690,6 +690,7 @@ else
       DASHBOARD_VERBOSITY=info
       VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
       DASHBOARD_LOG_TO_FILE=false
+      unset STATUS_LOG_FILE MILL_LOG_FILE
       log "plain message"
     ' 2>/dev/null || true)
     if [[ "$SINGLE_OUTPUT" == *"plain message"* ]]; then
@@ -703,6 +704,7 @@ else
       DASHBOARD_VERBOSITY=error
       VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
       DASHBOARD_LOG_TO_FILE=false
+      unset STATUS_LOG_FILE MILL_LOG_FILE
       log "error" "always visible"
     ' 2>/dev/null || true)
     if [[ "$ERROR_OUTPUT" == *"always visible"* ]]; then
@@ -716,6 +718,7 @@ else
       DASHBOARD_VERBOSITY=info
       VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
       DASHBOARD_LOG_TO_FILE=false
+      unset STATUS_LOG_FILE MILL_LOG_FILE
       log "debug" "hidden debug"
     ' 2>/dev/null || true)
     if [[ -z "$DEBUG_OUTPUT" ]]; then
@@ -729,6 +732,7 @@ else
       DASHBOARD_VERBOSITY=status
       VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
       DASHBOARD_LOG_TO_FILE=false
+      unset STATUS_LOG_FILE MILL_LOG_FILE
       log "info" "hidden info"
     ' 2>/dev/null || true)
     if [[ -z "$STATUS_OUTPUT" ]]; then
