@@ -1,8 +1,10 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ValidationIssue } from './task-packet-validator.ts';
 
 const LOG_DIR = join('.wavemill', 'logs');
 const LOG_FILE = 'linear-update-errors.jsonl';
+const VALIDATION_WARNING_LOG_FILE = 'linear-validation-warnings.jsonl';
 const MAX_STACK_CHARS = 500;
 
 interface LinearUpdateErrorLogEntry {
@@ -13,6 +15,19 @@ interface LinearUpdateErrorLogEntry {
   payloadSizeChars: number;
   method: 'updateIssue';
   stack: string | null;
+}
+
+interface LinearUpdateValidationWarningLogEntry {
+  timestamp: string;
+  issueId: string;
+  warnings: Array<{
+    type: ValidationIssue['type'];
+    section: string;
+    description: string;
+    severity: ValidationIssue['severity'];
+  }>;
+  mode: 'interactive' | 'non-interactive';
+  action: 'proceeded' | 'cancelled';
 }
 
 export function logLinearUpdateError(
@@ -36,6 +51,38 @@ export function logLinearUpdateError(
   mkdirSync(logDir, { recursive: true });
   appendFileSync(logPath, `${JSON.stringify(entry)}\n`, 'utf8');
   return logPath;
+}
+
+export function logValidationWarning(
+  repoPath: string,
+  issueId: string,
+  issues: ValidationIssue[],
+  mode: 'interactive' | 'non-interactive',
+  action: 'proceeded' | 'cancelled',
+): string | null {
+  try {
+    const logDir = join(repoPath, LOG_DIR);
+    const logPath = join(logDir, VALIDATION_WARNING_LOG_FILE);
+    const entry: LinearUpdateValidationWarningLogEntry = {
+      timestamp: new Date().toISOString(),
+      issueId,
+      warnings: issues.map(issue => ({
+        type: issue.type,
+        section: issue.section,
+        description: issue.description,
+        severity: issue.severity,
+      })),
+      mode,
+      action,
+    };
+
+    mkdirSync(logDir, { recursive: true });
+    appendFileSync(logPath, `${JSON.stringify(entry)}\n`, 'utf8');
+    return logPath;
+  } catch (error) {
+    console.warn(`Warning: Failed to log validation warnings: ${errorMessage(error)}`);
+    return null;
+  }
 }
 
 function errorMessage(error: unknown): string {
