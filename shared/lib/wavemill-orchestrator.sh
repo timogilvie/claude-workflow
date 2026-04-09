@@ -132,7 +132,8 @@ for t in "${TASKS[@]}"; do
     fi
 
 
-    # Load model suggestion and select per-task agent + model
+    # Load routing decision and select per-task agent + model
+    ROUTE_FILE="/tmp/${SESSION}-${ISSUE}-route.json"
     MODEL_SUGGESTION_FILE="/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
     TASK_AGENT_CMD="$AGENT_CMD"
     TASK_MODEL=""
@@ -150,20 +151,30 @@ for t in "${TASKS[@]}"; do
       TASK_MODEL="$FORCE_MODEL"
       TASK_AGENT_CMD="$(agent_resolve_from_model "$FORCE_MODEL")"
       echo "FORCE_MODEL: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL"
-    elif [[ "${AGENT_CMD_EXPLICIT:-}" != "true" ]] && [[ -f "$MODEL_SUGGESTION_FILE" ]]; then
-      RECOMMENDED_MODEL=$(jq -r '.recommendedModel // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-      RECOMMENDED_AGENT=$(jq -r '.recommendedAgent // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-      MODEL_INSUFFICIENT=$(jq -r '.insufficientData // false' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-      MODEL_CONFIDENCE=$(jq -r '.confidence // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-
-      if [[ "$MODEL_INSUFFICIENT" != "true" ]] && [[ -n "$RECOMMENDED_MODEL" ]]; then
-        TASK_MODEL="$RECOMMENDED_MODEL"
-        if [[ -n "$RECOMMENDED_AGENT" ]]; then
-          TASK_AGENT_CMD="$RECOMMENDED_AGENT"
+    elif [[ "${AGENT_CMD_EXPLICIT:-}" != "true" ]]; then
+      if [[ -f "$ROUTE_FILE" ]]; then
+        RECOMMENDED_MODEL=$(jq -r '.coder // empty' "$ROUTE_FILE" 2>/dev/null)
+        if [[ -n "$RECOMMENDED_MODEL" ]]; then
+          TASK_MODEL="$RECOMMENDED_MODEL"
+          TASK_AGENT_CMD="$(agent_resolve_from_model "$TASK_MODEL")"
+          ROUTING_MODE=$(jq -r '.routingMode // "unknown"' "$ROUTE_FILE" 2>/dev/null)
+          echo "Router: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL (routing: $ROUTING_MODE)"
         fi
-        echo "Router: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL (confidence: $MODEL_CONFIDENCE)"
-      else
-        echo "Router: $ISSUE -> using default agent (insufficient eval data)"
+      elif [[ -f "$MODEL_SUGGESTION_FILE" ]]; then
+        RECOMMENDED_MODEL=$(jq -r '.recommendedModel // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+        RECOMMENDED_AGENT=$(jq -r '.recommendedAgent // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+        MODEL_INSUFFICIENT=$(jq -r '.insufficientData // false' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+        MODEL_CONFIDENCE=$(jq -r '.confidence // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+
+        if [[ "$MODEL_INSUFFICIENT" != "true" ]] && [[ -n "$RECOMMENDED_MODEL" ]]; then
+          TASK_MODEL="$RECOMMENDED_MODEL"
+          if [[ -n "$RECOMMENDED_AGENT" ]]; then
+            TASK_AGENT_CMD="$RECOMMENDED_AGENT"
+          fi
+          echo "Router: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL (confidence: $MODEL_CONFIDENCE)"
+        else
+          echo "Router: $ISSUE -> using default agent (insufficient eval data)"
+        fi
       fi
     fi
 
