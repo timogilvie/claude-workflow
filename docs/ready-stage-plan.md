@@ -187,7 +187,7 @@ npx tsx tools/stage-result-cli.ts update <feature_dir> <stage> \
 
 The orchestrator records the structured stage result after observing those artifacts. Agents should not be responsible for emitting the final JSON state record.
 
-2. User approval is a real stage state. *(Implemented in HOK-1193)*
+2. User approval is a real stage state. *(Implemented in HOK-1193, finalized in HOK-1196)*
 
 Planning transitions to `awaiting_user` once the plan is ready for review. User approval is recorded by the controller as a separate transition (`approve_plan()`) from planning completion, rather than inferred from `.plan-approved` alone. The planning stage lifecycle is:
 
@@ -197,7 +197,7 @@ Planning transitions to `awaiting_user` once the plan is ready for review. User 
                              → [aborted]    (user aborted workflow)
 ```
 
-When a stage result file exists it is authoritative — the legacy `.plan-approved` marker is not consulted by `check_stage_complete()`. When no stage result exists (old worktrees), the legacy marker is used as a fallback. On approval the controller writes both the `completed` stage result and the legacy `.plan-approved` marker for backward compatibility. Agents no longer create `.plan-approved` — only the controller does.
+When a stage result file exists it is authoritative. As of HOK-1196, `resolve_phase()` and controller readiness no longer fall back to `.plan-approved` or `.coding-complete`. Agents still create signal markers, but the monitor converts them into stage results before phase resolution consumes them.
 
 3. Stage launches should use fresh execution.
 
@@ -207,14 +207,13 @@ Each stage should launch a fresh process or tmux window/pane instance rather tha
 
 Prompts should no longer tell agents to run `/exit`, remain in the session, or otherwise manage phase transitions manually. They should only describe the stage task and any required work artifacts. The orchestrator handles termination and progression.
 
-5. Migration must support both contracts during rollout.
+5. Final contract after rollout.
 
-While in-flight work still uses legacy markers, the monitor should support a compatibility path:
-
-- read structured stage result files when present
-- fall back to legacy markers when the new files are absent
-
-Once all in-flight legacy tasks have drained, the marker path can be removed.
+- Agent signals: `.plan-approved`, `.coding-complete`, `.workflow-aborted`
+- Controller state: `.{stage}-result.json` files are the sole source of truth for phase resolution
+- Signal flow: agent creates marker → monitor detects marker → monitor writes stage result → `resolve_phase()` and `controllerCheckReadiness()` read stage results
+- Phase flow: planning → coding → review → ready → merge or needs-attention
+- Ready states: pass, warn, fail, remediation-in-progress, needs-attention
 
 ## Required Output Contract
 
@@ -508,13 +507,13 @@ After HOK-1174 (PR `#208`) shipped and HOK-1176 (PR `#213`) merged, the revised 
 | Config schema (`ready.enabled`, `ready.checks`, `ready.requiredChecks`) | Shipped | HOK-1174 |
 | Mill integration (`launch_ready_phase` shell function) | Shipped | HOK-1176 |
 | Controller-owned readiness check (`controllerCheckReadiness`) | Backfilled | HOK-1183 |
-| Legacy marker compatibility (`checkLegacyMarkers`) | Backfilled | HOK-1183 |
+| Legacy marker compatibility (`checkLegacyMarkers`) | Backfilled, deprecated for phase resolution | HOK-1183 |
 | Controller readiness CLI (`tools/controller-ready.ts`) | Backfilled | HOK-1183 |
 | Shell orchestrator stub (`check_ready_stage`) | Backfilled | HOK-1183 |
 | Monitor phase resolution refactor (`resolve_phase()`, controller-owned state priority) | Shipped | HOK-1194 |
 | Phase progression decoupled from pane liveness / reused sessions | Shipped | HOK-1195 |
-| Phase transition wiring in orchestrator | Deferred | HOK-1177 |
-| Ready-phase blocking of merge completion | Deferred | HOK-1177 |
+| Phase transition wiring in orchestrator | Shipped | HOK-1196 |
+| Ready-phase blocking of merge completion | Shipped | HOK-1196 |
 | Full mill-mode integration, dashboard, monitoring | Deferred | HOK-1182 |
 | Merge conflict detection and auto-resolution | Shipped | HOK-1178 |
 | Tests and documentation for full ready stage | Shipped | HOK-1179 |

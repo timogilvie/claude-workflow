@@ -71,7 +71,6 @@ agent_reported_status() {
 
 # Read the planning stage display status from stage result files.
 # Returns: awaiting_approval, approved, running, rejected, aborted, or empty string.
-# Falls back to legacy .plan-approved marker when no stage result exists.
 get_planning_display_status() {
   local worktree="$1" slug="$2"
   local feature_dir="$worktree/features/$slug"
@@ -91,10 +90,6 @@ get_planning_display_status() {
     return
   fi
 
-  # Legacy fallback
-  if [[ -f "$feature_dir/.plan-approved" ]]; then
-    echo "approved"
-  fi
 }
 
 # Legacy compat wrapper — used in the render loop below.
@@ -112,9 +107,9 @@ plan_waiting_for_review() {
   display_status=$(get_planning_display_status "$worktree" "$slug")
   [[ "$display_status" == "awaiting_approval" ]] && return 0
 
-  # Legacy fallback: agent exited, no approval
+  # If planning is no longer running and approval has not been recorded, treat
+  # an exited agent as waiting for review until the monitor persists the stage update.
   [[ "$agent_state" == "exited" ]] || return 1
-  [[ -f "$worktree/features/$slug/.plan-approved" ]] && return 1
   return 0
 }
 
