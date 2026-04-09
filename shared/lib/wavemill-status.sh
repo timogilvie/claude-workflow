@@ -69,6 +69,16 @@ agent_reported_status() {
   fi
 }
 
+read_resolved_phase() {
+  local worktree="$1" slug="$2"
+  local resolved_file="$worktree/features/$slug/.resolved-phase"
+  if [[ -f "$resolved_file" ]]; then
+    head -1 "$resolved_file" 2>/dev/null
+  else
+    echo "unknown"
+  fi
+}
+
 # Read the planning stage display status from stage result files.
 # Returns: awaiting_approval, approved, running, rejected, aborted, or empty string.
 # Falls back to legacy .plan-approved marker when no stage result exists.
@@ -202,6 +212,12 @@ while true; do
       [[ -z "$line" ]] && continue
       IFS='|' read -r issue slug branch worktree task_status task_phase state_pr <<<"$line"
       task_phase="${task_phase:-executing}"
+      if [[ -n "$worktree" && -n "$slug" ]]; then
+        resolved_phase=$(read_resolved_phase "$worktree" "$slug")
+        if [[ "$resolved_phase" != "unknown" ]]; then
+          task_phase="$resolved_phase"
+        fi
+      fi
 
       # Window name
       win="${issue}-${slug}"

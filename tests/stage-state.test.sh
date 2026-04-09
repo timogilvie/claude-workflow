@@ -4,6 +4,7 @@ set -euo pipefail
 # Tests for controller-owned stage state functions (HOK-1177)
 # Tests write_stage_result, read_stage_result, read_stage_status,
 # check_stage_complete, check_stage_awaiting_user, check_stage_aborted,
+# resolve_phase, resolved-phase persistence, monitor reconciliation,
 # write_phase_config, read_phase_config
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,6 +33,9 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 WORKTREE_ROOT="$TEST_DIR"
 SESSION="test-session"
 _CFG_READY_ENABLED="true"
+MONITOR_STORED_PHASE="executing"
+MONITOR_SET_PHASE_FILE="$TEST_DIR/monitor-set-phase.log"
+touch "$MONITOR_SET_PHASE_FILE"
 
 log() { :; }
 log_warn() { :; }
@@ -173,6 +177,101 @@ check_stage_aborted() {
   done
   [[ -f "$feature_dir/.workflow-aborted" ]] && return 0
   return 1
+}
+
+resolve_phase() {
+  local feature_dir="$1"
+  local planning_status coding_status review_status ready_status
+
+  planning_status=$(read_stage_status "$feature_dir" "planning")
+  coding_status=$(read_stage_status "$feature_dir" "coding")
+  review_status=$(read_stage_status "$feature_dir" "review")
+  ready_status=$(read_stage_status "$feature_dir" "ready")
+
+  if [[ -n "$planning_status" || -n "$coding_status" || -n "$review_status" || -n "$ready_status" ]]; then
+    local stage_status
+    for stage_status in "$planning_status" "$coding_status" "$review_status" "$ready_status"; do
+      if [[ "$stage_status" == "aborted" ]]; then
+        echo "aborted"
+        return 0
+      fi
+    done
+
+    if [[ -n "$ready_status" ]]; then
+      echo "ready"
+    elif [[ "$review_status" == "completed" ]]; then
+      echo "ready"
+    elif [[ "$review_status" == "running" ]]; then
+      echo "review"
+    elif [[ "$coding_status" == "completed" ]]; then
+      echo "review"
+    elif [[ "$coding_status" == "running" ]]; then
+      echo "coding"
+    elif [[ "$planning_status" == "completed" ]]; then
+      echo "coding"
+    elif [[ "$planning_status" == "awaiting_user" || "$planning_status" == "running" ]]; then
+      echo "planning"
+    else
+      echo "unknown"
+    fi
+    return 0
+  fi
+
+  if [[ -f "$feature_dir/.workflow-aborted" ]]; then
+    echo "aborted"
+  elif [[ -f "$feature_dir/.coding-complete" ]]; then
+    echo "review"
+  elif [[ -f "$feature_dir/.plan-approved" ]]; then
+    echo "coding"
+  else
+    echo "unknown"
+  fi
+}
+
+persist_resolved_phase() {
+  local feature_dir="$1" phase="$2"
+  mkdir -p "$feature_dir"
+  printf '%s\n' "$phase" > "$feature_dir/.resolved-phase"
+}
+
+read_resolved_phase() {
+  local feature_dir="$1"
+  if [[ -f "$feature_dir/.resolved-phase" ]]; then
+    head -1 "$feature_dir/.resolved-phase" 2>/dev/null
+  else
+    echo "unknown"
+  fi
+}
+
+get_task_phase() {
+  local issue="$1"
+  echo "$MONITOR_STORED_PHASE"
+}
+
+set_task_phase() {
+  local issue="$1" phase="$2"
+  MONITOR_STORED_PHASE="$phase"
+  printf '%s:%s;\n' "$issue" "$phase" >> "$MONITOR_SET_PHASE_FILE"
+}
+
+resolve_monitor_phase() {
+  local issue="$1" feature_dir="$2"
+  local resolved_phase stored_phase current_phase
+
+  resolved_phase=$(resolve_phase "$feature_dir")
+  stored_phase=$(get_task_phase "$issue")
+
+  if [[ "$resolved_phase" != "unknown" ]]; then
+    current_phase="$resolved_phase"
+    if [[ "$stored_phase" != "$current_phase" ]]; then
+      set_task_phase "$issue" "$current_phase"
+    fi
+  else
+    current_phase="$stored_phase"
+  fi
+
+  persist_resolved_phase "$feature_dir" "$current_phase"
+  echo "$current_phase"
 }
 
 write_phase_config() {
@@ -410,6 +509,130 @@ ORIG_START_APR=$(jq -r .startedAt "$FD_APR3/.planning-result.json")
 sleep 1
 approve_plan "$FD_APR3" "claude" "opus-4-6"
 check "approve preserves startedAt" "$ORIG_START_APR" "$(jq -r .startedAt "$FD_APR3/.planning-result.json")"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== resolve_phase Tests ==="
+# ─────────────────────────────────────────────────────────────────
+
+FD_RES1="$TEST_DIR/test_res1"
+mkdir -p "$FD_RES1"
+write_stage_result "$FD_RES1" "planning" "running"
+check "planning running → planning" "planning" "$(resolve_phase "$FD_RES1")"
+
+FD_RES2="$TEST_DIR/test_res2"
+mkdir -p "$FD_RES2"
+write_stage_result "$FD_RES2" "planning" "awaiting_user"
+check "planning awaiting_user → planning" "planning" "$(resolve_phase "$FD_RES2")"
+
+FD_RES3="$TEST_DIR/test_res3"
+mkdir -p "$FD_RES3"
+write_stage_result "$FD_RES3" "planning" "completed"
+check "planning completed → coding" "coding" "$(resolve_phase "$FD_RES3")"
+
+FD_RES4="$TEST_DIR/test_res4"
+mkdir -p "$FD_RES4"
+write_stage_result "$FD_RES4" "coding" "running"
+check "coding running → coding" "coding" "$(resolve_phase "$FD_RES4")"
+
+FD_RES5="$TEST_DIR/test_res5"
+mkdir -p "$FD_RES5"
+write_stage_result "$FD_RES5" "coding" "completed"
+check "coding completed → review" "review" "$(resolve_phase "$FD_RES5")"
+
+FD_RES6="$TEST_DIR/test_res6"
+mkdir -p "$FD_RES6"
+write_stage_result "$FD_RES6" "review" "running"
+check "review running → review" "review" "$(resolve_phase "$FD_RES6")"
+
+FD_RES7="$TEST_DIR/test_res7"
+mkdir -p "$FD_RES7"
+write_stage_result "$FD_RES7" "review" "completed"
+check "review completed → ready" "ready" "$(resolve_phase "$FD_RES7")"
+
+FD_RES8="$TEST_DIR/test_res8"
+mkdir -p "$FD_RES8"
+write_stage_result "$FD_RES8" "ready" "failed"
+check "ready result exists → ready" "ready" "$(resolve_phase "$FD_RES8")"
+
+FD_RES9="$TEST_DIR/test_res9"
+mkdir -p "$FD_RES9"
+write_stage_result "$FD_RES9" "coding" "aborted"
+touch "$FD_RES9/.coding-complete"
+check "any stage aborted → aborted" "aborted" "$(resolve_phase "$FD_RES9")"
+
+FD_RES10="$TEST_DIR/test_res10"
+mkdir -p "$FD_RES10"
+touch "$FD_RES10/.plan-approved"
+check "legacy plan-approved → coding" "coding" "$(resolve_phase "$FD_RES10")"
+
+FD_RES11="$TEST_DIR/test_res11"
+mkdir -p "$FD_RES11"
+touch "$FD_RES11/.coding-complete"
+check "legacy coding-complete → review" "review" "$(resolve_phase "$FD_RES11")"
+
+FD_RES12="$TEST_DIR/test_res12"
+mkdir -p "$FD_RES12"
+touch "$FD_RES12/.workflow-aborted"
+check "legacy workflow-aborted → aborted" "aborted" "$(resolve_phase "$FD_RES12")"
+
+FD_RES13="$TEST_DIR/test_res13"
+mkdir -p "$FD_RES13"
+check "no markers → unknown" "unknown" "$(resolve_phase "$FD_RES13")"
+
+FD_RES14="$TEST_DIR/test_res14"
+mkdir -p "$FD_RES14"
+write_stage_result "$FD_RES14" "planning" "awaiting_user"
+touch "$FD_RES14/.plan-approved"
+check "stage result beats legacy marker" "planning" "$(resolve_phase "$FD_RES14")"
+
+FD_RES15="$TEST_DIR/test_res15"
+mkdir -p "$FD_RES15"
+write_stage_result "$FD_RES15" "planning" "completed"
+touch "$FD_RES15/.workflow-aborted"
+check "stage result path ignores legacy fallback" "coding" "$(resolve_phase "$FD_RES15")"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Resolved Phase Persistence Tests ==="
+# ─────────────────────────────────────────────────────────────────
+
+FD_PERSIST1="$TEST_DIR/test_persist1"
+mkdir -p "$FD_PERSIST1"
+persist_resolved_phase "$FD_PERSIST1" "review"
+check "persist_resolved_phase writes file" "review" "$(cat "$FD_PERSIST1/.resolved-phase")"
+check "read_resolved_phase reads value" "review" "$(read_resolved_phase "$FD_PERSIST1")"
+check "read_resolved_phase missing file → unknown" "unknown" "$(read_resolved_phase "$TEST_DIR/does-not-exist")"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== resolve_monitor_phase Tests ==="
+# ─────────────────────────────────────────────────────────────────
+
+FD_MON1="$TEST_DIR/test_mon1"
+mkdir -p "$FD_MON1"
+MONITOR_STORED_PHASE="routing"
+: > "$MONITOR_SET_PHASE_FILE"
+check "unknown resolved phase falls back to stored phase" "routing" "$(resolve_monitor_phase "HOK-1194" "$FD_MON1")"
+check "unknown resolved phase does not update stored phase" "" "$(tr -d '\n' < "$MONITOR_SET_PHASE_FILE")"
+check "monitor persists stored phase fallback" "routing" "$(read_resolved_phase "$FD_MON1")"
+
+FD_MON2="$TEST_DIR/test_mon2"
+mkdir -p "$FD_MON2"
+write_stage_result "$FD_MON2" "planning" "completed"
+MONITOR_STORED_PHASE="planning"
+: > "$MONITOR_SET_PHASE_FILE"
+check "resolved phase wins over stored phase" "coding" "$(resolve_monitor_phase "HOK-1194" "$FD_MON2")"
+check "resolved phase updates stored phase" "HOK-1194:coding;" "$(tr -d '\n' < "$MONITOR_SET_PHASE_FILE")"
+check "resolved phase persisted after reconcile" "coding" "$(read_resolved_phase "$FD_MON2")"
+
+FD_MON3="$TEST_DIR/test_mon3"
+mkdir -p "$FD_MON3"
+write_stage_result "$FD_MON3" "coding" "running"
+MONITOR_STORED_PHASE="coding"
+: > "$MONITOR_SET_PHASE_FILE"
+check "matching resolved phase returns current phase" "coding" "$(resolve_monitor_phase "HOK-1194" "$FD_MON3")"
+check "matching resolved phase does not rewrite state" "" "$(tr -d '\n' < "$MONITOR_SET_PHASE_FILE")"
 
 # ─────────────────────────────────────────────────────────────────
 echo ""

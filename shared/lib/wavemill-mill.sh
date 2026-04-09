@@ -110,7 +110,12 @@ log() {
 
   msg_num=$(_log_level_num "$level")
   if (( msg_num <= VERBOSITY_NUM )); then
-    append_status_log "$formatted" || echo "$formatted"
+    if [[ "$level" == "status" ]]; then
+      append_status_log "$formatted" || echo "$formatted"
+    else
+      append_status_log "$formatted" || true
+      echo "$formatted"
+    fi
   fi
 }
 log_error() {
@@ -350,58 +355,6 @@ remove_task_state() {
     rm -f "$tmp"
     log_warn "remove_task_state: failed to remove $issue"
   fi
-}
-
-
-set_task_phase() {
-  local issue="$1" phase="$2"
-  local tmp
-  tmp=$(mktemp) || { log_warn "set_task_phase: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" --arg phase "$phase" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-  else
-    rm -f "$tmp"
-    log_warn "set_task_phase: failed to update $issue"
-  fi
-}
-
-
-get_task_phase() {
-  local issue="$1"
-  jq -r --arg issue "$issue" '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null
-}
-
-
-check_routing_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.routing-complete" ]] && return 0
-  return 1
-}
-
-
-check_plan_approved() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
-  return 1
-}
-
-
-check_coding_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
-  return 1
-}
-
-check_workflow_aborted() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
-  return 1
 }
 
 
@@ -1375,7 +1328,12 @@ log() {
 
   msg_num=$(_log_level_num "$level")
   if (( msg_num <= VERBOSITY_NUM )); then
-    append_status_log "$formatted" || echo "$formatted"
+    if [[ "$level" == "status" ]]; then
+      append_status_log "$formatted" || echo "$formatted"
+    else
+      append_status_log "$formatted" || true
+      echo "$formatted"
+    fi
   fi
 }
 log_error() {
@@ -1418,27 +1376,6 @@ indent_block() {
   while IFS= read -r line || [[ -n "$line" ]]; do
     printf '%s%s\n' "$prefix" "$line"
   done
-}
-
-check_plan_approved() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
-  return 1
-}
-
-check_coding_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
-  return 1
-}
-
-check_workflow_aborted() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
-  return 1
 }
 
 # Timeout for external API calls (Linear, GitHub) to prevent monitor freeze.
@@ -1892,6 +1829,97 @@ check_stage_aborted() {
   [[ -f "$feature_dir/.workflow-aborted" ]] && return 0
 
   return 1
+}
+
+# Resolve the current workflow phase from controller-owned stage state.
+# Prefers stage result files; falls back to legacy markers when absent.
+# Usage: resolve_phase <feature_dir>
+# Prints one of: planning, coding, review, ready, aborted, unknown
+resolve_phase() {
+  local feature_dir="$1"
+  local planning_status coding_status review_status ready_status
+
+  planning_status=$(read_stage_status "$feature_dir" "planning")
+  coding_status=$(read_stage_status "$feature_dir" "coding")
+  review_status=$(read_stage_status "$feature_dir" "review")
+  ready_status=$(read_stage_status "$feature_dir" "ready")
+
+  if [[ -n "$planning_status" || -n "$coding_status" || -n "$review_status" || -n "$ready_status" ]]; then
+    local stage_status
+    for stage_status in "$planning_status" "$coding_status" "$review_status" "$ready_status"; do
+      if [[ "$stage_status" == "aborted" ]]; then
+        printf 'aborted\n'
+        return 0
+      fi
+    done
+
+    if [[ -n "$ready_status" ]]; then
+      printf 'ready\n'
+    elif [[ "$review_status" == "completed" ]]; then
+      printf 'ready\n'
+    elif [[ "$review_status" == "running" ]]; then
+      printf 'review\n'
+    elif [[ "$coding_status" == "completed" ]]; then
+      printf 'review\n'
+    elif [[ "$coding_status" == "running" ]]; then
+      printf 'coding\n'
+    elif [[ "$planning_status" == "completed" ]]; then
+      printf 'coding\n'
+    elif [[ "$planning_status" == "awaiting_user" || "$planning_status" == "running" ]]; then
+      printf 'planning\n'
+    else
+      printf 'unknown\n'
+    fi
+    return 0
+  fi
+
+  if [[ -f "$feature_dir/.workflow-aborted" ]]; then
+    printf 'aborted\n'
+  elif [[ -f "$feature_dir/.coding-complete" ]]; then
+    printf 'review\n'
+  elif [[ -f "$feature_dir/.plan-approved" ]]; then
+    printf 'coding\n'
+  else
+    printf 'unknown\n'
+  fi
+}
+
+# Persist the monitor's resolved phase so external consumers can read the same view.
+persist_resolved_phase() {
+  local feature_dir="$1" phase="$2"
+  mkdir -p "$feature_dir"
+  printf '%s\n' "$phase" > "$feature_dir/.resolved-phase"
+}
+
+read_resolved_phase() {
+  local feature_dir="$1"
+  if [[ -f "$feature_dir/.resolved-phase" ]]; then
+    head -1 "$feature_dir/.resolved-phase" 2>/dev/null
+  else
+    printf 'unknown\n'
+  fi
+}
+
+# Reconcile controller-owned phase state with the task's stored phase.
+# Routing/executing remain stored-state concepts because they have no stage result.
+resolve_monitor_phase() {
+  local issue="$1" feature_dir="$2"
+  local resolved_phase stored_phase current_phase
+
+  resolved_phase=$(resolve_phase "$feature_dir")
+  stored_phase=$(get_task_phase "$issue")
+
+  if [[ "$resolved_phase" != "unknown" ]]; then
+    current_phase="$resolved_phase"
+    if [[ "$stored_phase" != "$current_phase" ]]; then
+      set_task_phase "$issue" "$current_phase"
+    fi
+  else
+    current_phase="$stored_phase"
+  fi
+
+  persist_resolved_phase "$feature_dir" "$current_phase"
+  printf '%s\n' "$current_phase"
 }
 
 # Write .phase-config.json with resolved per-stage configuration.
@@ -3342,7 +3370,7 @@ monitor_issue_state() {
       fi
 
       # Multi-phase workflow tracking (must run before pane-alive early return)
-      current_phase=$(get_task_phase "$ISSUE")
+      current_phase=$(resolve_monitor_phase "$ISSUE" "$FEATURE_DIR")
 
       case "$current_phase" in
         routing)
