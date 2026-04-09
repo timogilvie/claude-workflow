@@ -3408,6 +3408,15 @@ QUIT_REQUESTED=false
 LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
+TASK_LIST_RENDERED=0  # track task list cursor region in control pane
+
+clear_task_list_display() {
+  if (( TASK_LIST_RENDERED == 1 )); then
+    tput rc 2>/dev/null || true
+    tput ed 2>/dev/null || printf '\033[J'
+    TASK_LIST_RENDERED=0
+  fi
+}
 
 monitor_issue_state() {
   local ISSUE="$1"
@@ -4130,7 +4139,13 @@ while :; do
         # Only re-render the prompt when the display would actually change
         display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
-          echo ""
+          if (( TASK_LIST_RENDERED == 1 )); then
+            tput rc 2>/dev/null || true
+            tput ed 2>/dev/null || printf '\033[J'
+          else
+            echo ""
+            tput sc 2>/dev/null || true
+          fi
           log "status" "$free_slots slot(s) available. Next tasks:"
           if [[ -n "$avail_unblocked" ]]; then
             echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
@@ -4150,6 +4165,7 @@ while :; do
           LAST_DISPLAY="$display_fingerprint"
           LAST_ACTIVE_COUNT=$active_count
           LAST_WAITING_MSG=""  # Clear waiting state when tasks are available
+          TASK_LIST_RENDERED=1
         fi
 
         # Default: selection against unblocked list only
@@ -4161,6 +4177,7 @@ while :; do
 
           # Handle 'm' to show all tasks including blocked
           if [[ "$REPLY" =~ ^[mM] ]]; then
+            clear_task_list_display
             all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
             echo ""
             log "info" "$free_slots slot(s) available. All tasks:"
@@ -4220,12 +4237,14 @@ while :; do
             LAST_BACKLOG_FETCH=0
             LAST_DISPLAY=""
             LAST_WAITING_MSG=""  # Clear waiting state
+            clear_task_list_display
           fi
           # User pressed Enter with no input — just continue monitoring
         fi
         # read timed out — continue monitoring
       else
         # All candidates are already active
+        clear_task_list_display
         if (( active_count == 0 )); then
           waiting_msg="No new tasks available. Waiting... (type 'q' to quit)"
           if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
@@ -4241,6 +4260,7 @@ while :; do
       fi
     else
       # Backlog empty
+      clear_task_list_display
       if (( active_count == 0 )); then
         waiting_msg="Backlog empty. Waiting for new tasks... (type 'q' to quit)"
         if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
@@ -4258,6 +4278,7 @@ while :; do
     fi
   else
     # All slots full — just monitor
+    clear_task_list_display
     sleep "$POLL_SECONDS"
   fi
 done
@@ -4277,7 +4298,7 @@ printf '%s\n' "${LAUNCH_ARGS[@]}" > "$TASKS_FILE"
 echo "TASKS_FILE='$TASKS_FILE'" >> "$MONITOR_ENV"
 
 
-tmux send-keys -t "$SESSION:control.0" "clear && '$MONITOR_SCRIPT' '$MONITOR_ENV'" C-m
+tmux respawn-pane -k -t "$SESSION:control.0" "'$MONITOR_SCRIPT' '$MONITOR_ENV'"
 
 
 # Now attach to the session
