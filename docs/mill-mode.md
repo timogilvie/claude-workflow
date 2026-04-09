@@ -105,6 +105,46 @@ This ensures that agent #5 knows what agents #1-4 built, leading to more consist
 - Other sections (Architecture, Conventions) can be manually edited
 - Agents receive this context when expanding Linear issues
 
+## Routing Artifact Contract
+
+At startup, `wavemill mill` runs `route-task.ts --json` per task and persists the result
+as `/tmp/{SESSION}-{ISSUE}-route.json`. This is the **canonical routing artifact** —
+all downstream consumers should read it via `read_route_field()` from `wavemill-common.sh`.
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `planner` | string | Model ID for the planning phase |
+| `coder` | string | Model ID for the coding phase |
+| `reviewer` | string | Model ID for the review phase |
+| `planDepth` | `"light"` \| `"deep"` | Planning depth recommendation |
+| `codeDepth` | `"light"` \| `"medium"` \| `"deep"` | Coding depth recommendation |
+| `reviewRecommended` | `"none"` \| `"static"` \| `"llm"` \| `"static+llm"` | Review mode recommendation (stored as `reviewMode` in state) |
+| `routingMode` | string | How the route was determined (e.g. `"stage-aware"`, `"heuristic-fallback"`) |
+| `neighborCount` | number | Number of similar eval records used for routing |
+| `expectedSuccess` | number | Estimated success probability (0-1) |
+| `expectedCost` | number | Estimated total cost in USD |
+| `signals` | object | Prompt analysis signals (taskType, riskScore, etc.) |
+| `challengeRecommendation` | object? | Optional challenge-mode recommendation |
+
+### Consumers
+
+| Consumer | File | Fields Used |
+|----------|------|-------------|
+| Phase 5 challenge planning | `wavemill-mill.sh` | coder, planner, reviewer, planDepth, codeDepth, reviewRecommended |
+| Orchestrator (skip mode) | `wavemill-orchestrator.sh` | coder, planner, reviewer, planDepth, codeDepth, reviewRecommended, routingMode |
+| Orchestrator (interactive) | `wavemill-orchestrator.sh` | Full route (runs router inline) |
+| Monitor launch_task() | `wavemill-mill.sh` | Full route (re-routes or reads cached) |
+
+### Fallback Chain
+
+`read_route_field()` implements: `route.json` → `model-suggestion.json` → default value.
+
+`model-suggestion.json` is a **deprecated** compatibility shim that only carries the `coder`
+model (as `recommendedModel`). It will be removed in a future PR once all consumers have
+been confirmed to work with `route.json`.
+
 ## See Also
 
 - [Feature Workflow](feature-workflow.md) — guided single-issue execution with plan and validate gates

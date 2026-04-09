@@ -813,6 +813,111 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
+# TEST 12: Route artifact helper (read_route_field)
+# ============================================================================
+echo ""
+echo "=== Route Artifact Helper ==="
+
+# Source wavemill-common.sh to get read_route_field
+# We need to stub load_config since it expects a repo with .wavemill-config.json
+_test_route_dir=$(mktemp -d)
+trap "rm -rf $_test_route_dir" EXIT
+
+# Create a minimal route.json
+cat > "$_test_route_dir/route.json" <<'ROUTE_EOF'
+{
+  "planner": "claude-opus-4-6",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-5-20250929",
+  "planDepth": "deep",
+  "codeDepth": "medium",
+  "reviewRecommended": "static+llm",
+  "routingMode": "stage-aware",
+  "neighborCount": 5
+}
+ROUTE_EOF
+
+# Create a minimal model-suggestion.json (deprecated format)
+cat > "$_test_route_dir/suggestion.json" <<'SUGGEST_EOF'
+{
+  "recommendedModel": "claude-sonnet-4-5-20250929",
+  "recommendedAgent": "claude",
+  "confidence": "medium",
+  "insufficientData": false
+}
+SUGGEST_EOF
+
+# Source only the read_route_field function (avoid full config loading)
+eval "$(sed -n '/^read_route_field()/,/^}/p' "$LIB_DIR/wavemill-common.sh")"
+
+# Test 12a: Read field from route.json
+_val=$(read_route_field "coder" "$_test_route_dir/route.json" "" "")
+if [[ "$_val" == "gpt-5.4" ]]; then
+  pass "read_route_field reads coder from route.json"
+else
+  fail "read_route_field reads coder from route.json (got: $_val)"
+fi
+
+# Test 12b: Read planner from route.json
+_val=$(read_route_field "planner" "$_test_route_dir/route.json" "" "")
+if [[ "$_val" == "claude-opus-4-6" ]]; then
+  pass "read_route_field reads planner from route.json"
+else
+  fail "read_route_field reads planner from route.json (got: $_val)"
+fi
+
+# Test 12c: Read reviewRecommended from route.json
+_val=$(read_route_field "reviewRecommended" "$_test_route_dir/route.json" "" "")
+if [[ "$_val" == "static+llm" ]]; then
+  pass "read_route_field reads reviewRecommended from route.json"
+else
+  fail "read_route_field reads reviewRecommended from route.json (got: $_val)"
+fi
+
+# Test 12d: Fallback to model-suggestion.json when route.json missing
+_val=$(read_route_field "coder" "$_test_route_dir/nonexistent.json" "$_test_route_dir/suggestion.json" "")
+if [[ "$_val" == "claude-sonnet-4-5-20250929" ]]; then
+  pass "read_route_field falls back to model-suggestion.json"
+else
+  fail "read_route_field falls back to model-suggestion.json (got: $_val)"
+fi
+
+# Test 12e: Non-coder fields don't fall back to model-suggestion.json
+_val=$(read_route_field "planner" "$_test_route_dir/nonexistent.json" "$_test_route_dir/suggestion.json" "")
+if [[ "$_val" == "" ]]; then
+  pass "read_route_field: non-coder fields don't fallback to suggestion"
+else
+  fail "read_route_field: non-coder fields don't fallback to suggestion (got: $_val)"
+fi
+
+# Test 12f: Default value when both files missing
+_val=$(read_route_field "coder" "$_test_route_dir/nope.json" "$_test_route_dir/nope2.json" "fallback-model")
+if [[ "$_val" == "fallback-model" ]]; then
+  pass "read_route_field returns default when no files exist"
+else
+  fail "read_route_field returns default when no files exist (got: $_val)"
+fi
+
+# Test 12g: Unknown field returns empty/default
+_val=$(read_route_field "nonexistent" "$_test_route_dir/route.json" "" "mydefault")
+if [[ "$_val" == "mydefault" ]]; then
+  pass "read_route_field returns default for unknown field"
+else
+  fail "read_route_field returns default for unknown field (got: $_val)"
+fi
+
+# Test 12h: Malformed JSON returns default
+echo "not json" > "$_test_route_dir/bad.json"
+_val=$(read_route_field "coder" "$_test_route_dir/bad.json" "" "safe-default")
+if [[ "$_val" == "safe-default" ]]; then
+  pass "read_route_field handles malformed JSON gracefully"
+else
+  fail "read_route_field handles malformed JSON gracefully (got: $_val)"
+fi
+
+rm -rf "$_test_route_dir"
+
+# ============================================================================
 # TEST 11: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then

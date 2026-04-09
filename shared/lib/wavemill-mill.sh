@@ -1116,7 +1116,8 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
           # Store full route for launch-time use
           echo "$ROUTE_JSON" > "/tmp/${SESSION}-${ISSUE}-route.json"
 
-          # Write backward-compatible model-suggestion.json for Phase 5 / orchestrator
+          # DEPRECATED: backward-compat shim — consumers should read route.json directly.
+          # Remove this write once all consumers use read_route_field() (HOK-1198).
           CODER_AGENT=$(agent_resolve_from_model "${CODER:-}")
           jq -n \
             --arg model "${CODER:-}" \
@@ -1157,25 +1158,26 @@ for t in "${TASKS[@]}"; do
   rec_model=""
   rec_agent="$AGENT_CMD"
 
+  # Read full route context from route.json (canonical) with model-suggestion.json fallback
+  route_file="/tmp/${SESSION}-${ISSUE}-route.json"
+  suggestion_file="/tmp/${SESSION}-${ISSUE}-model-suggestion.json"  # DEPRECATED: backward-compat shim
+
   if [[ -n "${FORCE_MODEL:-}" ]]; then
     rec_model="$FORCE_MODEL"
     rec_agent="$(agent_resolve_from_model "$FORCE_MODEL")"
   else
-    route_file="/tmp/${SESSION}-${ISSUE}-route.json"
-    suggestion_file="/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
-    if [[ -f "$route_file" ]]; then
-      rec_model=$(jq -r '.coder // empty' "$route_file" 2>/dev/null)
-      if [[ -n "$rec_model" ]]; then
-        rec_agent="$(agent_resolve_from_model "$rec_model")"
-      fi
-    elif [[ -f "$suggestion_file" ]]; then
-      rec_model=$(jq -r '.recommendedModel // empty' "$suggestion_file" 2>/dev/null)
-      suggestion_agent=$(jq -r '.recommendedAgent // empty' "$suggestion_file" 2>/dev/null)
-      if [[ -n "$suggestion_agent" ]]; then
-        rec_agent="$suggestion_agent"
-      fi
+    rec_model=$(read_route_field "coder" "$route_file" "$suggestion_file" "")
+    if [[ -n "$rec_model" ]]; then
+      rec_agent="$(agent_resolve_from_model "$rec_model")"
     fi
   fi
+
+  # Extract full route fields for downstream use (challenge planning, state persistence)
+  rec_planner=$(read_route_field "planner" "$route_file" "" "")
+  rec_reviewer=$(read_route_field "reviewer" "$route_file" "" "")
+  rec_plan_depth=$(read_route_field "planDepth" "$route_file" "" "light")
+  rec_code_depth=$(read_route_field "codeDepth" "$route_file" "" "medium")
+  rec_review_mode=$(read_route_field "reviewRecommended" "$route_file" "" "static")
 
   # Challengers are free overhead (don't consume a slot), so always pass
   # remaining-slots >= 2 as long as the primary slot is available.
@@ -1207,8 +1209,10 @@ for t in "${TASKS[@]}"; do
     cp "/tmp/${SESSION}-${ISSUE}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
     cp "/tmp/${SESSION}-${ISSUE}-taskpacket-details.md" "/tmp/${SESSION}-${challenger_key}-taskpacket-details.md" 2>/dev/null || true
 
-    save_task_state "$ISSUE" "$SLUG" "task/${SLUG}" "${WORKTREE_ROOT}/${SLUG}" "" "" "${primary_agent:-$rec_agent}" "$ISSUE" "true" "$ISSUE" "primary" "$primary_model"
-    save_task_state "$challenger_key" "$challenger_slug" "$challenger_branch" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_agent:-$AGENT_CMD}" "$ISSUE" "true" "$ISSUE" "challenger" "$challenger_model"
+    save_task_state "$ISSUE" "$SLUG" "task/${SLUG}" "${WORKTREE_ROOT}/${SLUG}" "" "" "${primary_agent:-$rec_agent}" "$ISSUE" "true" "$ISSUE" "primary" "$primary_model" \
+      "$rec_planner" "$rec_model" "$rec_reviewer" "$rec_plan_depth" "$rec_code_depth" "$rec_review_mode"
+    save_task_state "$challenger_key" "$challenger_slug" "$challenger_branch" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_agent:-$AGENT_CMD}" "$ISSUE" "true" "$ISSUE" "challenger" "$challenger_model" \
+      "$rec_planner" "$challenger_model" "$rec_reviewer" "$rec_plan_depth" "$rec_code_depth" "$rec_review_mode"
 
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
     FINAL_LAUNCH_ARGS+=("$challenger_key|$challenger_slug|$TITLE")
@@ -1218,7 +1222,8 @@ for t in "${TASKS[@]}"; do
     if [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
       log "debug" "  $ISSUE: Challenge skipped ($challenge_reason), launching single-model run"
     fi
-    save_task_state "$ISSUE" "$SLUG" "task/${SLUG}" "${WORKTREE_ROOT}/${SLUG}" "" "" "$rec_agent" "$ISSUE" "false" "" "" "$rec_model"
+    save_task_state "$ISSUE" "$SLUG" "task/${SLUG}" "${WORKTREE_ROOT}/${SLUG}" "" "" "$rec_agent" "$ISSUE" "false" "" "" "$rec_model" \
+      "$rec_planner" "$rec_model" "$rec_reviewer" "$rec_plan_depth" "$rec_code_depth" "$rec_review_mode"
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
     slots_used=$((slots_used + 1))
   fi

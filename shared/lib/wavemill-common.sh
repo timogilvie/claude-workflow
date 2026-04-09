@@ -444,6 +444,48 @@ pretrust_directory() {
 }
 
 # ============================================================================
+# ROUTING ARTIFACT HELPERS
+# ============================================================================
+
+# Read a field from route.json with fallback to model-suggestion.json and a default.
+#
+# route.json is the canonical routing artifact written by route-task.ts (via
+# wavemill-mill.sh startup).  model-suggestion.json is a deprecated shim that
+# only carries the coder model.  This helper encapsulates the fallback chain
+# so every consumer reads routing decisions consistently.
+#
+# Args:
+#   $1 = field name (e.g. "coder", "planner", "planDepth")
+#   $2 = route.json path
+#   $3 = model-suggestion.json path (optional, pass "" to skip)
+#   $4 = default value (optional, defaults to "")
+#
+# Prints the resolved value to stdout. Returns 0 always (never fails).
+read_route_field() {
+  local field="$1"
+  local route_file="$2"
+  local suggestion_file="${3:-}"
+  local default_val="${4:-}"
+  local val=""
+
+  # Primary: read from route.json
+  if [[ -f "$route_file" ]]; then
+    val=$(jq -r --arg f "$field" '.[$f] // empty' "$route_file" 2>/dev/null) || val=""
+  fi
+
+  # Fallback: model-suggestion.json (only maps coder → recommendedModel)
+  if [[ -z "$val" ]] && [[ -n "$suggestion_file" ]] && [[ -f "$suggestion_file" ]]; then
+    case "$field" in
+      coder)
+        val=$(jq -r '.recommendedModel // empty' "$suggestion_file" 2>/dev/null) || val=""
+        ;;
+    esac
+  fi
+
+  printf '%s' "${val:-$default_val}"
+}
+
+# ============================================================================
 # TASK PHASE MANAGEMENT
 # ============================================================================
 

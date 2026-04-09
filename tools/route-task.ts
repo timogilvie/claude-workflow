@@ -4,6 +4,16 @@
  * Route Task Tool
  *
  * Produces stage-aware workflow routing guidance for planning, coding, and review.
+ *
+ * The JSON output (--json) is the **canonical routing contract**.  Callers persist
+ * it as `/tmp/{SESSION}-{ISSUE}-route.json` and downstream consumers read it via
+ * `read_route_field()` in wavemill-common.sh.
+ *
+ * Canonical fields: planner, coder, reviewer, planDepth, codeDepth,
+ * reviewRecommended, routingMode, neighborCount, expectedSuccess, signals.
+ *
+ * Note: `reviewRecommended` is the router's output field name.  Downstream state
+ * files normalize this to `reviewMode`.
  */
 
 import { runTool } from '../shared/lib/tool-runner.ts';
