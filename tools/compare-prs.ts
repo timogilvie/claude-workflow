@@ -13,6 +13,7 @@ import {
 } from '../shared/lib/challenge-comparison.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import {
+  buildChallengeCommentBody,
   buildComparisonPrompt,
   formatRoutingSummary,
   prNumberFromValue,
@@ -143,27 +144,28 @@ runTool({
     appendChallengeComparison(record);
 
     const routingSummary = formatRoutingSummary(primaryRouting, challengerRouting, challengeType);
-    const commentParts = [
-      `Challenge comparison for \`${pairId}\``,
-      ``,
-    ];
-
-    if (routingSummary) {
-      commentParts.push(routingSummary, '');
-    }
-
-    commentParts.push(
-      `Recommended winner: ${record.winner} (${record.winnerModel})`,
-      `Other PR: ${record.winner === 'primary' ? challengerPrUrl : primaryPrUrl}`,
-      ``,
-      record.rationale,
-    );
-
-    const commentBody = commentParts.join('\n');
+    const primaryCommentBody = buildChallengeCommentBody({
+      pairId,
+      winner: record.winner,
+      winnerModel: record.winnerModel,
+      rationale: record.rationale,
+      otherPrUrl: challengerPrUrl,
+      routingSummary,
+    });
+    const challengerCommentBody = buildChallengeCommentBody({
+      pairId,
+      winner: record.winner,
+      winnerModel: record.winnerModel,
+      rationale: record.rationale,
+      otherPrUrl: primaryPrUrl,
+      routingSummary,
+    });
 
     if (args.comment || config.challenge?.autoMergeWinner) {
-      withBodyFile(commentBody, (bodyFile) => {
+      withBodyFile(primaryCommentBody, (bodyFile) => {
         tryGh(['pr', 'comment', primaryNumber, '--body-file', bodyFile], repoDir, `comment primary PR ${primaryNumber}`);
+      });
+      withBodyFile(challengerCommentBody, (bodyFile) => {
         tryGh(['pr', 'comment', challengerNumber, '--body-file', bodyFile], repoDir, `comment challenger PR ${challengerNumber}`);
       });
     }
