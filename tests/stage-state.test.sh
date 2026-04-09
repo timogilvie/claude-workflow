@@ -54,14 +54,6 @@ REPO_DIR="$TEST_DIR/fakerepo" source "$REPO_DIR/../shared/lib/wavemill-common.sh
 # Re-export REPO_DIR for the test context
 REPO_DIR="$SCRIPT_DIR/.."
 
-_stage_legacy_marker() {
-  case "$1" in
-    planning) echo ".plan-approved" ;;
-    coding)   echo ".coding-complete" ;;
-    *)        echo "" ;;
-  esac
-}
-
 write_stage_result() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}"
@@ -123,17 +115,7 @@ check_stage_complete() {
   local feature_dir="$1" stage="$2"
   local status
   status=$(read_stage_status "$feature_dir" "$stage")
-  if [[ -n "$status" ]]; then
-    # Stage result exists and is authoritative
-    [[ "$status" == "completed" ]] && return 0
-    return 1
-  fi
-  # No stage result — fallback to legacy marker
-  local marker
-  marker=$(_stage_legacy_marker "$stage")
-  if [[ -n "$marker" ]] && [[ -f "$feature_dir/$marker" ]]; then
-    return 0
-  fi
+  [[ "$status" == "completed" ]] && return 0
   return 1
 }
 
@@ -150,7 +132,6 @@ approve_plan() {
   local feature_dir="$1"
   local agent="${2:-}" model="${3:-}"
   write_stage_result "$feature_dir" "planning" "completed" "$agent" "$model" "Plan approved by user"
-  touch "$feature_dir/.plan-approved"
 }
 
 # Reject a plan: transition planning from awaiting_user to failed.
@@ -305,20 +286,7 @@ resolve_phase() {
     return 0
   fi
 
-  # 3. Legacy-only fallback (no stage result files exist)
-  if [[ -f "$feature_dir/.coding-complete" ]]; then
-    _persist_phase "$feature_dir" "review"
-    echo "review"
-    return 0
-  fi
-
-  if [[ -f "$feature_dir/.plan-approved" ]]; then
-    _persist_phase "$feature_dir" "coding"
-    echo "coding"
-    return 0
-  fi
-
-  # 4. Default
+  # 3. Default
   _persist_phase "$feature_dir" "planning"
   echo "planning"
   return 0
@@ -438,12 +406,12 @@ write_stage_result "$FD4" "planning" "awaiting_user"
 check_stage_complete "$FD4" "planning" && result=0 || result=1
 check "awaiting_user result → false" "1" "$result"
 
-# Test 7: legacy marker only → true (fallback)
+# Test 7: legacy marker only does not count as complete
 FD5="$TEST_DIR/test5"
 mkdir -p "$FD5"
 touch "$FD5/.plan-approved"
 check_stage_complete "$FD5" "planning" && result=0 || result=1
-check "legacy marker only → true" "0" "$result"
+check "legacy marker only → false" "1" "$result"
 
 # Test 8: neither present → false
 FD6="$TEST_DIR/test6"
@@ -459,12 +427,12 @@ touch "$FD7/.plan-approved"
 check_stage_complete "$FD7" "planning" && result=0 || result=1
 check "both present → true" "0" "$result"
 
-# Test 10: coding legacy marker
+# Test 10: coding legacy marker does not count as complete
 FD8="$TEST_DIR/test8"
 mkdir -p "$FD8"
 touch "$FD8/.coding-complete"
 check_stage_complete "$FD8" "coding" && result=0 || result=1
-check "coding legacy marker → true" "0" "$result"
+check "coding legacy marker → false" "1" "$result"
 
 # ─────────────────────────────────────────────────────────────────
 echo ""
@@ -539,13 +507,13 @@ echo ""
 echo "=== approve_plan / reject_plan Tests (HOK-1193) ==="
 # ─────────────────────────────────────────────────────────────────
 
-# Test: approve_plan transitions to completed and creates legacy marker
+# Test: approve_plan transitions to completed without touching legacy marker
 FD_APR1="$TEST_DIR/test_apr1"
 mkdir -p "$FD_APR1"
 write_stage_result "$FD_APR1" "planning" "awaiting_user" "claude" "opus-4-6"
 approve_plan "$FD_APR1" "claude" "opus-4-6"
 check "approve: status is completed" "completed" "$(read_stage_status "$FD_APR1" "planning")"
-check "approve: .plan-approved exists" "0" "$([[ -f "$FD_APR1/.plan-approved" ]]; echo $?)"
+check "approve: .plan-approved absent" "1" "$([[ -f "$FD_APR1/.plan-approved" ]]; echo $?)"
 check "approve: notes mention user" "Plan approved by user" "$(jq -r .notes "$FD_APR1/.planning-result.json")"
 check_stage_complete "$FD_APR1" "planning" && result=0 || result=1
 check "approve: check_stage_complete → true" "0" "$result"
@@ -678,24 +646,24 @@ mkdir -p "$FD30"
 touch "$FD30/.workflow-aborted"
 check "aborted via legacy marker → aborted" "aborted" "$(resolve_phase "$FD30")"
 
-# Test 31: Legacy .plan-approved only
+# Test 31: Legacy .plan-approved only falls back to planning
 FD31="$TEST_DIR/test31"
 mkdir -p "$FD31"
 touch "$FD31/.plan-approved"
-check "legacy .plan-approved only → coding" "coding" "$(resolve_phase "$FD31")"
+check "legacy .plan-approved only → planning" "planning" "$(resolve_phase "$FD31")"
 
-# Test 32: Legacy .coding-complete only
+# Test 32: Legacy .coding-complete only falls back to planning
 FD32="$TEST_DIR/test32"
 mkdir -p "$FD32"
 touch "$FD32/.coding-complete"
-check "legacy .coding-complete only → review" "review" "$(resolve_phase "$FD32")"
+check "legacy .coding-complete only → planning" "planning" "$(resolve_phase "$FD32")"
 
-# Test 33: Legacy both markers
+# Test 33: Legacy both markers still fall back to planning
 FD33="$TEST_DIR/test33"
 mkdir -p "$FD33"
 touch "$FD33/.plan-approved"
 touch "$FD33/.coding-complete"
-check "legacy both markers → review" "review" "$(resolve_phase "$FD33")"
+check "legacy both markers → planning" "planning" "$(resolve_phase "$FD33")"
 
 # Test 34: Mixed - stage result + legacy marker (stage wins)
 FD34="$TEST_DIR/test34"
@@ -709,14 +677,14 @@ FD35="$TEST_DIR/test35"
 mkdir -p "$FD35"
 write_stage_result "$FD35" "planning" "completed" "claude" "opus"
 touch "$FD35/.coding-complete"
-check "mixed: planning completed + legacy coding marker → review" "review" "$(resolve_phase "$FD35")"
+check "mixed: planning completed + legacy coding marker → coding" "coding" "$(resolve_phase "$FD35")"
 
-# Test 36: Malformed JSON (falls through to legacy/default)
+# Test 36: Malformed JSON falls through to default
 FD36="$TEST_DIR/test36"
 mkdir -p "$FD36"
 echo "not json" > "$FD36/.planning-result.json"
 touch "$FD36/.plan-approved"
-check "malformed JSON falls back to legacy → coding" "coding" "$(resolve_phase "$FD36")"
+check "malformed JSON falls back to default → planning" "planning" "$(resolve_phase "$FD36")"
 
 # Test 37: Malformed JSON without legacy fallback
 FD37="$TEST_DIR/test37"
@@ -760,11 +728,11 @@ EOF
 check "coding completed → review" "review" "$(resolve_phase "$FD39")"
 check "check_stage_complete detects completion" "0" "$([[ $(check_stage_complete "$FD39" "coding"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
 
-# Test 40: Legacy .coding-complete still works (no stage result)
+# Test 40: Legacy .coding-complete no longer resolves the phase
 FD40="$TEST_DIR/test40"
 mkdir -p "$FD40"
 touch "$FD40/.coding-complete"
-check "legacy .coding-complete only → review" "review" "$(resolve_phase "$FD40")"
+check "legacy .coding-complete only → planning" "planning" "$(resolve_phase "$FD40")"
 
 # Test 41: Coding running without .coding-complete
 FD41="$TEST_DIR/test41"
@@ -912,7 +880,7 @@ FD49="$TEST_DIR/test49"
 mkdir -p "$FD49"
 touch "$FD49/plan.md"
 touch "$FD49/.plan-approved"
-check "legacy .plan-approved only → coding" "coding" "$(resolve_phase "$FD49")"
+check "legacy .plan-approved only → planning" "planning" "$(resolve_phase "$FD49")"
 
 # Test 50: Planning running without plan.md
 FD50="$TEST_DIR/test50"

@@ -382,29 +382,6 @@ check_routing_complete() {
 }
 
 
-check_plan_approved() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
-  return 1
-}
-
-
-check_coding_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
-  return 1
-}
-
-check_workflow_aborted() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
-  return 1
-}
-
-
 set_window_attention_state() {
   local win="$1" state="${2:-clear}"
   if [[ "$state" == "needs-user" ]]; then
@@ -1420,27 +1397,6 @@ indent_block() {
   done
 }
 
-check_plan_approved() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
-  return 1
-}
-
-check_coding_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
-  return 1
-}
-
-check_workflow_aborted() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
-  return 1
-}
-
 # Timeout for external API calls (Linear, GitHub) to prevent monitor freeze.
 # If an API call hangs, the entire monitoring loop blocks and the user cannot
 # type 'q' or select tasks.  This value caps individual calls.
@@ -1696,39 +1652,9 @@ check_routing_complete() {
   return 1
 }
 
-check_plan_approved() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.plan-approved" ]] && return 0
-  return 1
-}
-
-check_coding_complete() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.coding-complete" ]] && return 0
-  return 1
-}
-
-check_workflow_aborted() {
-  local slug="$1"
-  local wt="${WORKTREE_ROOT}/${slug}"
-  [[ -f "$wt/features/$slug/.workflow-aborted" ]] && return 0
-  return 1
-}
-
 # ────────────────────────────────────────────────────────────────
 # Controller-owned stage result functions (HOK-1177)
 # ────────────────────────────────────────────────────────────────
-
-# Map stage names to their legacy marker files
-_stage_legacy_marker() {
-  case "$1" in
-    planning) echo ".plan-approved" ;;
-    coding)   echo ".coding-complete" ;;
-    *)        echo "" ;;
-  esac
-}
 
 # Write a structured stage result JSON file.
 # Usage: write_stage_result <feature_dir> <stage> <status> [agent] [model] [notes] [artifacts_json]
@@ -1813,32 +1739,14 @@ read_stage_status() {
   fi
 }
 
-# Check if a stage is complete (new-style result file or legacy marker).
+# Check if a stage is complete from controller-owned stage results.
 # Usage: check_stage_complete <feature_dir> <stage>
 # Returns 0 if completed, 1 otherwise.
-#
-# When a stage result file exists, it is authoritative — the legacy marker
-# is NOT consulted. Legacy markers are only used when no stage result file
-# exists (backward compat for old worktrees).
 check_stage_complete() {
   local feature_dir="$1" stage="$2"
-
-  # 1. Check new-style result file
   local status
   status=$(read_stage_status "$feature_dir" "$stage")
-  if [[ -n "$status" ]]; then
-    # Stage result exists and is authoritative — only "completed" counts
-    [[ "$status" == "completed" ]] && return 0
-    return 1
-  fi
-
-  # 2. No stage result file — fallback to legacy marker
-  local marker
-  marker=$(_stage_legacy_marker "$stage")
-  if [[ -n "$marker" ]] && [[ -f "$feature_dir/$marker" ]]; then
-    return 0
-  fi
-
+  [[ "$status" == "completed" ]] && return 0
   return 1
 }
 
@@ -1901,14 +1809,11 @@ phase_should_remain_active_without_pr() {
 }
 
 # Approve a plan: transition planning from awaiting_user to completed.
-# Writes both the stage result and the legacy .plan-approved marker for compat.
 # Usage: approve_plan <feature_dir> [agent] [model]
 approve_plan() {
   local feature_dir="$1"
   local agent="${2:-}" model="${3:-}"
   write_stage_result "$feature_dir" "planning" "completed" "$agent" "$model" "Plan approved by user" '{"type":"planning","planFile":"plan.md"}'
-  # Legacy marker for backward compat with any code still checking .plan-approved
-  touch "$feature_dir/.plan-approved"
 }
 
 # Reject a plan: transition planning from awaiting_user to failed.
@@ -1943,7 +1848,7 @@ check_stage_aborted() {
 }
 
 # Resolve the current workflow phase from controller-owned stage state.
-# Priority: stage result files > legacy markers > default.
+# Priority: stage result files > default.
 # Writes the resolved phase to .resolved-phase for downstream consumers.
 #
 # Usage: resolve_phase <feature_dir>
@@ -2025,20 +1930,7 @@ resolve_phase() {
     return 0
   fi
 
-  # 3. Legacy-only fallback (no stage result files exist)
-  if [[ -f "$feature_dir/.coding-complete" ]]; then
-    _persist_phase "$feature_dir" "review"
-    echo "review"
-    return 0
-  fi
-
-  if [[ -f "$feature_dir/.plan-approved" ]]; then
-    _persist_phase "$feature_dir" "coding"
-    echo "coding"
-    return 0
-  fi
-
-  # 4. Default
+  # 3. Default
   _persist_phase "$feature_dir" "planning"
   echo "planning"
   return 0
@@ -2253,11 +2145,14 @@ launch_ready_phase() {
   local pr_number="$7"
   local win="${issue}-${slug}"
   local state_dir status_file result ready_rc merge_status verdict
-  local current_agent current_model prompt_file launch_rc launch_head
+  local current_agent current_model prompt_file launch_rc launch_head checks_run checks_passed
 
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
   status_file="/tmp/${SESSION}-${issue}-status.txt"
+  current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
+  current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
+  [[ -z "$current_agent" ]] && current_agent="$AGENT_CMD"
 
   log "  Launching ready phase for $issue (PR #$pr_number)"
 
@@ -2269,6 +2164,8 @@ launch_ready_phase() {
 
   merge_status=$(printf '%s' "$result" | jq -r '.mergeConflict.status // empty' 2>/dev/null || echo "")
   verdict=$(printf '%s' "$result" | jq -r '.verdict // empty' 2>/dev/null || echo "")
+  checks_run=$(printf '%s' "$result" | jq -r '.checks | if type == "array" then length else 0 end' 2>/dev/null || echo "0")
+  checks_passed=$(printf '%s' "$result" | jq -r '[.checks[]? | select(.status == "pass")] | length' 2>/dev/null || echo "0")
 
   if [[ -z "$merge_status" ]]; then
     log_error "  Ready checks produced unparseable output for $issue"
@@ -2287,10 +2184,6 @@ launch_ready_phase() {
     touch "$state_dir/.conflict-detected"
     rm -f "$state_dir/.needs-attention"
     log "status" "  ⚠ Merge conflict detected for $issue (PR #$pr_number)"
-
-    current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
-    current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
-    [[ -z "$current_agent" ]] && current_agent="$AGENT_CMD"
 
     prompt_file="/tmp/${SESSION}-${issue}-conflict-prompt.txt"
     build_conflict_resolution_prompt "$pr_number" "$branch" "$wt_dir" "$status_file" "$base_branch" > "$prompt_file"
@@ -2324,12 +2217,14 @@ launch_ready_phase() {
 
   if [[ "$ready_rc" -eq 0 ]]; then
     # Record ready stage result (HOK-1177)
-    write_stage_result "$state_dir" "ready" "completed" "" "" "verdict: ${verdict:-unknown}" "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\"}"
+    write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
+      "verdict: ${verdict:-unknown}" \
+      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\"}"
     log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
     return 0
   fi
 
-  write_stage_result "$state_dir" "ready" "failed" "" "" "Ready checks failed"
+  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" "Ready checks failed"
   write_ready_attention_file "$state_dir" "Ready checks failed for PR #$pr_number."
   log_error "  Ready checks failed for $issue"
   [[ -n "$result" ]] && log_error "$result"
