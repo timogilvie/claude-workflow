@@ -213,6 +213,36 @@ export function withBodyFile<T>(body: string, fn: (filePath: string) => T): T {
 }
 
 /**
+ * Build the PR comment body for a challenge comparison result.
+ */
+export function buildChallengeCommentBody(input: {
+  pairId: string;
+  winner: 'primary' | 'challenger';
+  winnerModel: string;
+  rationale: string;
+  otherPrUrl: string;
+  routingSummary?: string;
+}): string {
+  const commentParts = [
+    `Challenge comparison for \`${input.pairId}\``,
+    ``,
+  ];
+
+  if (input.routingSummary) {
+    commentParts.push(input.routingSummary, '');
+  }
+
+  commentParts.push(
+    `Recommended winner: ${input.winner} (${input.winnerModel})`,
+    `Other PR: ${input.otherPrUrl}`,
+    ``,
+    input.rationale,
+  );
+
+  return commentParts.join('\n');
+}
+
+/**
  * Format routing metadata for PR comment output.
  */
 export function formatRoutingSummary(
