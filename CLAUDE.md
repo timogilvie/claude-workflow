@@ -205,7 +205,7 @@ Best practice: Keep the "Recent Work" log to the last 20-30 entries, archiving o
 The `.wavemill/context/` directory contains detailed specifications for each logical subsystem in the codebase. This implements a **three-tier memory system** inspired by "Codified Context: Infrastructure for AI Agents" (arXiv:2602.20478):
 
 - **Hot memory**: `project-context.md` - Concise constitution (always loaded)
-- **Cold memory**: `.wavemill/context/{subsystem}.md` - Detailed specs (loaded on-demand)
+- **Cold memory**: Subsystem specs and concept pages (loaded on-demand)
 - **Agent memory**: Session-specific context (per workflow)
 
 ### Structure
@@ -214,11 +214,34 @@ The `.wavemill/context/` directory contains detailed specifications for each log
 .wavemill/
 ├── project-context.md          # Hot memory (always loaded)
 └── context/                     # Cold memory (load on-demand)
-    ├── linear-api.md
-    ├── eval-system.md
-    ├── context-management.md
-    └── ...
+    ├── *.md                     # Subsystem specs (module-oriented)
+    └── concepts/                # Concept pages (cross-cutting knowledge)
+        ├── progressive-disclosure.md
+        ├── task-packet-format.md
+        └── model-routing-strategy.md
 ```
+
+### Subsystem Specs vs Concept Pages
+
+**Subsystem specs** (`.wavemill/context/*.md`):
+- Module-oriented documentation
+- Tied to specific files and directories
+- Describe implementation details, constraints, failure modes
+- Example: `linear-api.md`, `eval-system.md`, `router.md`
+
+**Concept pages** (`.wavemill/context/concepts/*.md`):
+- Cross-cutting knowledge that spans multiple subsystems
+- Durable across refactoring (not tied to specific files)
+- Define shared vocabulary, invariants, decision criteria
+- Example: `progressive-disclosure.md` (applies to task packets, context management, UI design)
+
+**When to use concepts vs subsystems**:
+- Use **subsystem specs** when documenting a specific module's implementation
+- Use **concept pages** when documenting knowledge that:
+  - Applies across multiple subsystems
+  - Defines shared vocabulary or patterns
+  - Should survive subsystem refactors (file moves, renames)
+  - Represents architectural invariants or design principles
 
 ### Subsystem Spec Format
 
@@ -263,6 +286,55 @@ Each subsystem spec is structured for machine consumption:
 ## Recent Changes
 [Auto-updated after each PR]
 ```
+
+### Concept Page Format
+
+Each concept page follows this structure (defined in `tools/prompts/concept-page-template.md`):
+
+```markdown
+# Concept: {name}
+
+**Concept ID:** `{id}`
+
+## Purpose
+What the concept is and why it exists
+
+## When It Applies
+Situations where this concept matters
+
+## Core Invariants
+Rules that must remain true regardless of implementation
+
+## Mental Model
+How to reason about the concept
+
+## Operational Rules
+Actionable constraints an agent should follow
+
+## Boundaries And Non-Goals
+What the concept does NOT cover
+
+## References In This Repo
+Related subsystem specs, docs, or files
+
+## Examples
+Concrete instances in the codebase
+
+## Guidance For Future Updates
+What kinds of repo changes should update this page
+```
+
+### Generating Concept Pages
+
+To create a new concept page:
+
+```bash
+npx tsx tools/generate-concept.ts progressive-disclosure
+# Or with context from specific subsystems:
+npx tsx tools/generate-concept.ts task-packet-format --subsystems linear-api,context-management
+```
+
+This uses LLM to generate a structured concept page at `.wavemill/context/concepts/{concept-id}.md`.
 
 ### Automatic Generation
 

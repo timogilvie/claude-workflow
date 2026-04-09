@@ -416,24 +416,54 @@ export async function gatherSubsystemContext(
  * @internal
  */
 function formatSubsystemContext(subsystems: SubsystemSearchResult[]): string {
-  let context = '\n## Subsystem Specifications\n\n';
-  context += 'The following subsystem specs are relevant to this issue:\n\n';
+  // Group by type
+  const subsystemSpecs = subsystems.filter(s => s.specType === 'subsystem');
+  const conceptPages = subsystems.filter(s => s.specType === 'concept');
 
-  for (const subsystem of subsystems.slice(0, 10)) {
-    // Limit to 10 for token budget
-    context += `### ${subsystem.subsystemName}\n\n`;
-    context += `**Spec Path**: \`.wavemill/context/${subsystem.subsystemId}.md\`\n\n`;
+  let context = '';
 
-    for (const section of subsystem.relevantSections) {
-      context += `**${section.section}**:\n`;
-      // Truncate long sections to stay within token budget
-      const truncated = section.content.substring(0, 500);
-      context += truncated;
-      if (section.content.length > 500) context += '...';
-      context += '\n\n';
+  // Format subsystem specs
+  if (subsystemSpecs.length > 0) {
+    context += '\n## Relevant Subsystem Specs\n\n';
+    context += 'The following subsystem specs are relevant to this issue:\n\n';
+
+    for (const subsystem of subsystemSpecs.slice(0, 10)) {
+      context += `### ${subsystem.subsystemName}\n\n`;
+      context += `**Spec Path**: \`.wavemill/context/${subsystem.subsystemId}.md\`\n\n`;
+
+      for (const section of subsystem.relevantSections) {
+        context += `**${section.section}**:\n`;
+        // Truncate long sections to stay within token budget
+        const truncated = section.content.substring(0, 500);
+        context += truncated;
+        if (section.content.length > 500) context += '...';
+        context += '\n\n';
+      }
+
+      context += '---\n\n';
     }
+  }
 
-    context += '---\n\n';
+  // Format concept pages
+  if (conceptPages.length > 0) {
+    context += '\n## Relevant Concept Pages\n\n';
+    context += 'The following cross-cutting concept pages are relevant to this issue:\n\n';
+
+    for (const concept of conceptPages.slice(0, 5)) {
+      context += `### ${concept.subsystemName}\n\n`;
+      context += `**Concept Path**: \`.wavemill/context/concepts/${concept.subsystemId}.md\`\n\n`;
+
+      for (const section of concept.relevantSections) {
+        context += `**${section.section}**:\n`;
+        // Truncate long sections to stay within token budget
+        const truncated = section.content.substring(0, 500);
+        context += truncated;
+        if (section.content.length > 500) context += '...';
+        context += '\n\n';
+      }
+
+      context += '---\n\n';
+    }
   }
 
   return context;

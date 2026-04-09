@@ -91,6 +91,10 @@ export function generateSubsystemSpec(
     : '- *(No related subsystems detected)*';
   template = template.replace(/{RELATED_SUBSYSTEMS}/g, relatedSubsystemsList);
 
+  // Related concepts (placeholder for now - concept detection can be added later)
+  const relatedConceptsList = '- *(No related concepts - add manually if needed)*';
+  template = template.replace(/{RELATED_CONCEPTS}/g, relatedConceptsList);
+
   // Recent changes
   const recentChanges = includeGitHistory
     ? getRecentChanges(subsystem.keyFiles, repoDir)
