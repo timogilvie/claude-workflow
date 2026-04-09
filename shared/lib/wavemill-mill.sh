@@ -1088,34 +1088,53 @@ for t in "${TASKS[@]}"; do
 done
 
 
-# ── Phase 4: Model routing suggestions ─────────────────────────────────
+# ── Phase 4: Stage-aware model routing ─────────────────────────────────
 if [[ -n "${FORCE_MODEL:-}" ]]; then
   log "info" "FORCE_MODEL=$FORCE_MODEL - skipping router"
 elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
-  SUGGEST_TOOL="$TOOLS_DIR/suggest-model.ts"
-  if [[ -f "$SUGGEST_TOOL" ]]; then
+  ROUTE_TOOL="$TOOLS_DIR/route-task.ts"
+  if [[ -f "$ROUTE_TOOL" ]]; then
     log "info" "Running model router..."
     for t in "${TASKS[@]}"; do
       IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
       PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
       if [[ -f "$PACKET_FILE" ]]; then
-        SUGGESTION=$(npx tsx "$SUGGEST_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
-        if [[ -n "$SUGGESTION" ]]; then
-          RECOMMENDED=$(echo "$SUGGESTION" | jq -r '.recommendedModel // empty' 2>/dev/null)
-          CONFIDENCE=$(echo "$SUGGESTION" | jq -r '.confidence // empty' 2>/dev/null)
-          TASK_TYPE=$(echo "$SUGGESTION" | jq -r '.taskType // empty' 2>/dev/null)
-          INSUFFICIENT=$(echo "$SUGGESTION" | jq -r '.insufficientData // false' 2>/dev/null)
-          REASONING=$(echo "$SUGGESTION" | jq -r '.reasoning // empty' 2>/dev/null)
+        ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+        if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
+          PLANNER=$(echo "$ROUTE_JSON" | jq -r '.planner // empty' 2>/dev/null)
+          CODER=$(echo "$ROUTE_JSON" | jq -r '.coder // empty' 2>/dev/null)
+          REVIEWER=$(echo "$ROUTE_JSON" | jq -r '.reviewer // empty' 2>/dev/null)
+          PLAN_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.planDepth // "light"' 2>/dev/null)
+          CODE_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.codeDepth // "medium"' 2>/dev/null)
+          REVIEW_MODE=$(echo "$ROUTE_JSON" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
+          ROUTING_MODE=$(echo "$ROUTE_JSON" | jq -r '.routingMode // "unknown"' 2>/dev/null)
+          NEIGHBOR_COUNT=$(echo "$ROUTE_JSON" | jq -r '.neighborCount // 0' 2>/dev/null)
 
-          RECOMMENDED_AGENT=$(echo "$SUGGESTION" | jq -r '.recommendedAgent // empty' 2>/dev/null)
-          if [[ "$INSUFFICIENT" == "true" ]]; then
-            log "info" "  $ISSUE: Using default agent (insufficient eval data)"
-          else
-            log "info" "  $ISSUE: Recommended: $RECOMMENDED_AGENT --model $RECOMMENDED (confidence: $CONFIDENCE, task type: $TASK_TYPE)"
-          fi
+          log "info" "  $ISSUE: planner=$PLANNER ($PLAN_DEPTH), coder=$CODER ($CODE_DEPTH), reviewer=$REVIEWER ($REVIEW_MODE)"
+          log "info" "          routing=$ROUTING_MODE, neighbors=$NEIGHBOR_COUNT"
 
-          # Store recommendation for orchestrator
-          echo "$SUGGESTION" > "/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
+          # Store full route for launch-time use
+          echo "$ROUTE_JSON" > "/tmp/${SESSION}-${ISSUE}-route.json"
+
+          # Write backward-compatible model-suggestion.json for Phase 5 / orchestrator
+          CODER_AGENT=$(agent_resolve_from_model "${CODER:-}")
+          jq -n \
+            --arg model "${CODER:-}" \
+            --arg agent "$CODER_AGENT" \
+            --arg taskType "$(echo "$ROUTE_JSON" | jq -r '.signals.taskType // "unknown"')" \
+            --arg reasoning "$(echo "$ROUTE_JSON" | jq -r '.reasoning[0] // ""')" \
+            --argjson neighborCount "${NEIGHBOR_COUNT:-0}" \
+            --arg routingMode "${ROUTING_MODE:-unknown}" \
+            '{
+              recommendedModel: $model,
+              recommendedAgent: $agent,
+              taskType: $taskType,
+              confidence: (if $neighborCount > 0 then "medium" elif $routingMode == "heuristic-fallback" then "low" else "medium" end),
+              insufficientData: ($neighborCount == 0 and $routingMode == "heuristic-fallback"),
+              reasoning: $reasoning
+            }' > "/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
+        else
+          log "info" "  $ISSUE: Router returned no result, using defaults"
         fi
       fi
     done
@@ -1142,8 +1161,14 @@ for t in "${TASKS[@]}"; do
     rec_model="$FORCE_MODEL"
     rec_agent="$(agent_resolve_from_model "$FORCE_MODEL")"
   else
+    route_file="/tmp/${SESSION}-${ISSUE}-route.json"
     suggestion_file="/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
-    if [[ -f "$suggestion_file" ]]; then
+    if [[ -f "$route_file" ]]; then
+      rec_model=$(jq -r '.coder // empty' "$route_file" 2>/dev/null)
+      if [[ -n "$rec_model" ]]; then
+        rec_agent="$(agent_resolve_from_model "$rec_model")"
+      fi
+    elif [[ -f "$suggestion_file" ]]; then
       rec_model=$(jq -r '.recommendedModel // empty' "$suggestion_file" 2>/dev/null)
       suggestion_agent=$(jq -r '.recommendedAgent // empty' "$suggestion_file" 2>/dev/null)
       if [[ -n "$suggestion_agent" ]]; then
@@ -2782,33 +2807,29 @@ launch_task() {
 
         log "info" "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
       else
-        # Fallback to single-model routing if workflow routing failed
-        log "info" "  Workflow routing unavailable, falling back to single-model routing"
-        local suggest_tool="$TOOLS_DIR/suggest-model.ts"
-        if [[ -f "$suggest_tool" ]]; then
-          local suggestion
-          suggestion=$(_with_timeout "$API_TIMEOUT" npx tsx "$suggest_tool" --json --file "$packet_file" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
-          if [[ -n "$suggestion" ]]; then
-            local rec_model rec_agent rec_insufficient rec_confidence rec_reasoning
-            rec_model=$(echo "$suggestion" | jq -r '.recommendedModel // empty' 2>/dev/null)
-            rec_agent=$(echo "$suggestion" | jq -r '.recommendedAgent // empty' 2>/dev/null)
-            rec_insufficient=$(echo "$suggestion" | jq -r '.insufficientData // false' 2>/dev/null)
-            rec_confidence=$(echo "$suggestion" | jq -r '.confidence // empty' 2>/dev/null)
-            rec_reasoning=$(echo "$suggestion" | jq -r '.reasoning // empty' 2>/dev/null)
+        # Workflow routing returned invalid output — try saved route from startup
+        local saved_route="/tmp/${SESSION}-${issue}-route.json"
+        if [[ -f "$saved_route" ]] && jq -e '.planner' "$saved_route" >/dev/null 2>&1; then
+          planner_model=$(jq -r '.planner // empty' "$saved_route" 2>/dev/null)
+          task_model=$(jq -r '.coder // empty' "$saved_route" 2>/dev/null)
+          reviewer_model=$(jq -r '.reviewer // empty' "$saved_route" 2>/dev/null)
+          plan_depth=$(jq -r '.planDepth // "light"' "$saved_route" 2>/dev/null)
+          code_depth=$(jq -r '.codeDepth // "medium"' "$saved_route" 2>/dev/null)
+          review_mode=$(jq -r '.reviewRecommended // "static"' "$saved_route" 2>/dev/null)
 
-            # Always use recommended agent if provided
-            if [[ -n "$rec_agent" ]]; then
-              task_agent_cmd="$rec_agent"
-            fi
-
-            # Only gate model selection on data sufficiency
-            if [[ "$rec_insufficient" != "true" ]] && [[ -n "$rec_model" ]]; then
-              task_model="$rec_model"
-              log "info" "  Router: $task_agent_cmd --model $task_model (confidence: $rec_confidence)"
-            elif [[ -n "$rec_model" ]]; then
-              log "info" "  Router: $task_agent_cmd --model $rec_model - $rec_reasoning"
-            fi
+          if [[ -n "$planner_model" ]]; then
+            planner_agent="$(agent_resolve_from_model "$planner_model")"
           fi
+          if [[ -n "$task_model" ]]; then
+            task_agent_cmd="$(agent_resolve_from_model "$task_model")"
+          fi
+          if [[ -n "$reviewer_model" ]]; then
+            reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+          fi
+
+          log "info" "  Workflow route (from startup cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+        else
+          log "info" "  Workflow routing unavailable, using default agent"
         fi
       fi
     fi
