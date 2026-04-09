@@ -243,8 +243,9 @@ else
     in_fn { print }
     in_fn && /^\}/ { exit }
   ')
-  PLAN_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_plan_approved "\$SLUG"' | head -n1 | cut -d: -f1 || true)
-  ABORT_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_workflow_aborted "\$SLUG"' | head -n1 | cut -d: -f1 || true)
+  # HOK-1177: check_plan_approved/check_workflow_aborted replaced by check_stage_complete/check_stage_aborted
+  PLAN_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_stage_complete "\$FEATURE_DIR" "planning"' | head -n1 | cut -d: -f1 || true)
+  ABORT_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_stage_aborted "\$FEATURE_DIR"' | head -n1 | cut -d: -f1 || true)
   PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - check if agent pane is still alive' | head -n1 | cut -d: -f1 || true)
   if [[ -n "$PLAN_CHECK_LINE" && -n "$PANE_EARLY_RETURN_LINE" ]] && (( PLAN_CHECK_LINE < PANE_EARLY_RETURN_LINE )); then
     pass "monitor checks planning approval before no-PR pane-alive early return"
@@ -562,12 +563,13 @@ else
   pass "codex-facing prompts omit /exit"
 fi
 
+# HOK-1177: agent-agnostic lifecycle — prompts no longer tell agents to run /exit
 if grep -q '/exit' "$PROMPT_RENDER_DIR/planning-claude.txt" \
-  && grep -q '/exit' "$PROMPT_RENDER_DIR/coding-claude.txt" \
-  && grep -q '/exit' "$PROMPT_RENDER_DIR/review-claude.txt"; then
-  pass "claude-facing prompts retain /exit guidance"
+  || grep -q '/exit' "$PROMPT_RENDER_DIR/coding-claude.txt" \
+  || grep -q '/exit' "$PROMPT_RENDER_DIR/review-claude.txt"; then
+  fail "claude-facing prompts still reference /exit (should be agent-agnostic)"
 else
-  fail "claude-facing prompts lost /exit guidance"
+  pass "claude-facing prompts use agent-agnostic lifecycle (no /exit)"
 fi
 
 TMUX_CAPTURE=()
