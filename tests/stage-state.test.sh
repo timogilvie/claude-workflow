@@ -191,7 +191,7 @@ resolve_phase() {
   if [[ -n "$planning_status" || -n "$coding_status" || -n "$review_status" || -n "$ready_status" ]]; then
     local stage_status
     for stage_status in "$planning_status" "$coding_status" "$review_status" "$ready_status"; do
-      if [[ "$stage_status" == "aborted" ]]; then
+      if [[ "$stage_status" == "aborted" || "$stage_status" == "failed" ]]; then
         echo "aborted"
         return 0
       fi
@@ -553,13 +553,28 @@ check "review completed → ready" "ready" "$(resolve_phase "$FD_RES7")"
 FD_RES8="$TEST_DIR/test_res8"
 mkdir -p "$FD_RES8"
 write_stage_result "$FD_RES8" "ready" "failed"
-check "ready result exists → ready" "ready" "$(resolve_phase "$FD_RES8")"
+check "ready failed → aborted" "aborted" "$(resolve_phase "$FD_RES8")"
 
 FD_RES9="$TEST_DIR/test_res9"
 mkdir -p "$FD_RES9"
 write_stage_result "$FD_RES9" "coding" "aborted"
 touch "$FD_RES9/.coding-complete"
 check "any stage aborted → aborted" "aborted" "$(resolve_phase "$FD_RES9")"
+
+FD_RES9a="$TEST_DIR/test_res9a"
+mkdir -p "$FD_RES9a"
+write_stage_result "$FD_RES9a" "planning" "failed"
+check "planning failed → aborted" "aborted" "$(resolve_phase "$FD_RES9a")"
+
+FD_RES9b="$TEST_DIR/test_res9b"
+mkdir -p "$FD_RES9b"
+write_stage_result "$FD_RES9b" "coding" "failed"
+check "coding failed → aborted" "aborted" "$(resolve_phase "$FD_RES9b")"
+
+FD_RES9c="$TEST_DIR/test_res9c"
+mkdir -p "$FD_RES9c"
+write_stage_result "$FD_RES9c" "review" "failed"
+check "review failed → aborted" "aborted" "$(resolve_phase "$FD_RES9c")"
 
 FD_RES10="$TEST_DIR/test_res10"
 mkdir -p "$FD_RES10"

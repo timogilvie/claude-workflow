@@ -1847,7 +1847,7 @@ resolve_phase() {
   if [[ -n "$planning_status" || -n "$coding_status" || -n "$review_status" || -n "$ready_status" ]]; then
     local stage_status
     for stage_status in "$planning_status" "$coding_status" "$review_status" "$ready_status"; do
-      if [[ "$stage_status" == "aborted" ]]; then
+      if [[ "$stage_status" == "aborted" || "$stage_status" == "failed" ]]; then
         printf 'aborted\n'
         return 0
       fi
