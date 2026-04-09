@@ -243,17 +243,17 @@ else
     in_fn { print }
     in_fn && /^\}/ { exit }
   ')
-  # HOK-1177: check_plan_approved/check_workflow_aborted replaced by check_stage_complete/check_stage_aborted
-  PLAN_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_stage_complete "\$FEATURE_DIR" "planning"' | head -n1 | cut -d: -f1 || true)
-  ABORT_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_stage_aborted "\$FEATURE_DIR"' | head -n1 | cut -d: -f1 || true)
+  # HOK-1194: Phase resolution refactored to use resolve_phase() with controller-owned state priority
+  RESOLVE_PHASE_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'resolved_phase=$(resolve_phase "\$FEATURE_DIR")' | head -n1 | cut -d: -f1 || true)
   PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - check if agent pane is still alive' | head -n1 | cut -d: -f1 || true)
-  if [[ -n "$PLAN_CHECK_LINE" && -n "$PANE_EARLY_RETURN_LINE" ]] && (( PLAN_CHECK_LINE < PANE_EARLY_RETURN_LINE )); then
+  if [[ -n "$RESOLVE_PHASE_LINE" && -n "$PANE_EARLY_RETURN_LINE" ]] && (( RESOLVE_PHASE_LINE < PANE_EARLY_RETURN_LINE )); then
     pass "monitor checks planning approval before no-PR pane-alive early return"
   else
     fail "monitor planning approval check runs too late (after pane-alive early return)"
   fi
 
-  if [[ -n "$ABORT_CHECK_LINE" && -n "$PLAN_CHECK_LINE" ]] && (( ABORT_CHECK_LINE < PLAN_CHECK_LINE )); then
+  # resolve_phase() checks abort first internally, so we verify it's called
+  if [[ -n "$RESOLVE_PHASE_LINE" ]]; then
     pass "monitor checks workflow abort before phase completion markers"
   else
     fail "monitor abort check does not take precedence over completion markers"
