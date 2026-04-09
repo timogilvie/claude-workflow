@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildChallengeCommentBody,
   buildComparisonPrompt,
   formatRoutingSummary,
   prNumberFromValue,
@@ -95,4 +96,28 @@ test('formatRoutingSummary includes challenge type when present', () => {
 
   assert.match(summary, /Primary used planner-a/);
   assert.match(summary, /Challenge type: multi-variable/);
+});
+
+test('buildChallengeCommentBody points each PR at the opposite PR', () => {
+  const primaryComment = buildChallengeCommentBody({
+    pairId: 'pair-123',
+    winner: 'challenger',
+    winnerModel: 'model-b',
+    rationale: 'challenger produced the better fix',
+    otherPrUrl: 'https://github.com/acme/repo/pull/22',
+    routingSummary: 'routing summary',
+  });
+  const challengerComment = buildChallengeCommentBody({
+    pairId: 'pair-123',
+    winner: 'challenger',
+    winnerModel: 'model-b',
+    rationale: 'challenger produced the better fix',
+    otherPrUrl: 'https://github.com/acme/repo/pull/11',
+    routingSummary: 'routing summary',
+  });
+
+  assert.match(primaryComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/22/);
+  assert.match(challengerComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/11/);
+  assert.doesNotMatch(primaryComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/11/);
+  assert.doesNotMatch(challengerComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/22/);
 });
