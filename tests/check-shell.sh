@@ -24,6 +24,7 @@ echo "=== Syntax Check (bash -n) ==="
 for f in \
   "$LIB_DIR"/wavemill-*.sh \
   "$LIB_DIR"/agent-adapters.sh \
+  "$LIB_DIR"/stage-state.sh \
   "$REPO_DIR/wavemill" \
 ; do
   if [[ ! -f "$f" ]]; then
@@ -78,8 +79,14 @@ else
     # Extract function definitions from wavemill-common.sh (also sourced by monitor)
     COMMON_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/wavemill-common.sh" | sed 's/()//' | sort -u)
 
+    # Extract function definitions from stage-state.sh (sourced by monitor, HOK-1177)
+    STAGE_STATE_FUNCS=""
+    if [[ -f "$LIB_DIR/stage-state.sh" ]]; then
+      STAGE_STATE_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/stage-state.sh" | sed 's/()//' | sort -u)
+    fi
+
     # Combine all available function definitions
-    ALL_DEFINED=$(printf '%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" | sort -u)
+    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$STAGE_STATE_FUNCS" | sort -u)
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
@@ -769,7 +776,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
   [[ -f "$script" ]] || continue
   while IFS= read -r line; do
     # Extract the sourced file path (handle both $SCRIPT_DIR and $LIB_DIR variables)
-    sourced=$(echo "$line" | sed -E 's/^source "//;s/"$//' \
+    sourced=$(echo "$line" | sed -E 's/^[[:space:]]*source "//;s/"$//' \
       | sed "s|\\\$SCRIPT_DIR|$LIB_DIR|g" \
       | sed "s|\\\$LIB_DIR|$LIB_DIR|g" \
       | sed "s|\\\${BASH_SOURCE\[0\]}|$script|g")
@@ -786,12 +793,228 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 11: Optional ShellCheck
+# TEST 11: Stage-state library functional tests (HOK-1177)
+# ============================================================================
+echo ""
+echo "=== Stage-State Library Tests ==="
+
+STAGE_STATE_LIB="$LIB_DIR/stage-state.sh"
+if [[ ! -f "$STAGE_STATE_LIB" ]]; then
+  fail "stage-state.sh not found"
+else
+  pass "stage-state.sh exists"
+
+  # Verify all expected functions are defined
+  for func in stage_state_init stage_state_get_current stage_state_transition \
+              stage_state_legacy_detect stage_state_write_result stage_state_is_awaiting_user \
+              _stage_state_validate_transition; do
+    if grep -qE "^${func}\(\)" "$STAGE_STATE_LIB"; then
+      pass "Function $func is defined"
+    else
+      fail "Function $func is NOT defined in stage-state.sh"
+    fi
+  done
+
+  # Functional tests using a temp directory
+  _SS_TMPDIR=$(mktemp -d)
+  _SS_FEATURE_DIR="$_SS_TMPDIR/features/test-slug"
+  mkdir -p "$_SS_FEATURE_DIR"
+
+  # Stub log_warn for testing (stage-state.sh calls it)
+  log_warn() { :; }
+  export -f log_warn
+
+  # Source the library
+  source "$STAGE_STATE_LIB"
+
+  # Test: _stage_state_validate_transition
+  if _stage_state_validate_transition "planning" "awaiting_user"; then
+    pass "Valid transition planning→awaiting_user accepted"
+  else
+    fail "Valid transition planning→awaiting_user rejected"
+  fi
+
+  if _stage_state_validate_transition "awaiting_user" "coding"; then
+    pass "Valid transition awaiting_user→coding accepted"
+  else
+    fail "Valid transition awaiting_user→coding rejected"
+  fi
+
+  if _stage_state_validate_transition "planning" "review"; then
+    fail "Invalid transition planning→review should be rejected"
+  else
+    pass "Invalid transition planning→review rejected"
+  fi
+
+  if _stage_state_validate_transition "coding" "review"; then
+    pass "Valid transition coding→review accepted"
+  else
+    fail "Valid transition coding→review rejected"
+  fi
+
+  if _stage_state_validate_transition "awaiting_user" "planning"; then
+    pass "Valid transition awaiting_user→planning (rejection) accepted"
+  else
+    fail "Valid transition awaiting_user→planning rejected"
+  fi
+
+  # Test: stage_state_init
+  stage_state_init "$_SS_FEATURE_DIR" "planning"
+  if [[ -f "$_SS_FEATURE_DIR/.phase-config.json" ]]; then
+    pass "stage_state_init creates .phase-config.json"
+  else
+    fail "stage_state_init did not create .phase-config.json"
+  fi
+
+  _SS_CURRENT=$(jq -r '.current_stage' "$_SS_FEATURE_DIR/.phase-config.json" 2>/dev/null)
+  if [[ "$_SS_CURRENT" == "planning" ]]; then
+    pass "stage_state_init sets current_stage to planning"
+  else
+    fail "stage_state_init current_stage is '$_SS_CURRENT', expected 'planning'"
+  fi
+
+  _SS_VERSION=$(jq -r '.version' "$_SS_FEATURE_DIR/.phase-config.json" 2>/dev/null)
+  if [[ "$_SS_VERSION" == "1" ]]; then
+    pass "stage_state_init sets version to 1"
+  else
+    fail "stage_state_init version is '$_SS_VERSION', expected '1'"
+  fi
+
+  # Test: stage_state_init is a no-op when file already exists
+  _SS_BEFORE=$(cat "$_SS_FEATURE_DIR/.phase-config.json")
+  stage_state_init "$_SS_FEATURE_DIR" "coding"  # Should not overwrite
+  _SS_AFTER=$(cat "$_SS_FEATURE_DIR/.phase-config.json")
+  if [[ "$_SS_BEFORE" == "$_SS_AFTER" ]]; then
+    pass "stage_state_init is no-op when file exists"
+  else
+    fail "stage_state_init overwrote existing .phase-config.json"
+  fi
+
+  # Test: stage_state_get_current
+  _SS_GOT=$(stage_state_get_current "$_SS_FEATURE_DIR")
+  if [[ "$_SS_GOT" == "planning" ]]; then
+    pass "stage_state_get_current returns 'planning'"
+  else
+    fail "stage_state_get_current returned '$_SS_GOT', expected 'planning'"
+  fi
+
+  # Test: stage_state_transition (valid)
+  if stage_state_transition "$_SS_FEATURE_DIR" "awaiting_user" "plan_complete"; then
+    pass "stage_state_transition planning→awaiting_user succeeds"
+  else
+    fail "stage_state_transition planning→awaiting_user failed"
+  fi
+
+  _SS_GOT=$(stage_state_get_current "$_SS_FEATURE_DIR")
+  if [[ "$_SS_GOT" == "awaiting_user" ]]; then
+    pass "After transition, current_stage is 'awaiting_user'"
+  else
+    fail "After transition, current_stage is '$_SS_GOT', expected 'awaiting_user'"
+  fi
+
+  # Test: stage_state_is_awaiting_user
+  if stage_state_is_awaiting_user "$_SS_FEATURE_DIR"; then
+    pass "stage_state_is_awaiting_user returns true when awaiting_user"
+  else
+    fail "stage_state_is_awaiting_user returned false when state is awaiting_user"
+  fi
+
+  # Test: stage_state_transition (invalid)
+  if stage_state_transition "$_SS_FEATURE_DIR" "review" "invalid"; then
+    fail "Invalid transition awaiting_user→review should fail"
+  else
+    pass "Invalid transition awaiting_user→review rejected"
+  fi
+
+  # Test: stage_state_transition records history
+  _SS_HISTORY_LEN=$(jq '.history | length' "$_SS_FEATURE_DIR/.phase-config.json" 2>/dev/null)
+  if [[ "$_SS_HISTORY_LEN" -ge 2 ]]; then
+    pass "History has $_SS_HISTORY_LEN entries after transitions"
+  else
+    fail "History has $_SS_HISTORY_LEN entries, expected >= 2"
+  fi
+
+  # Test: stage_state_write_result
+  stage_state_write_result "$_SS_FEATURE_DIR" "planning" "completed" "claude" "claude-opus-4-6" "plan.md"
+  if [[ -f "$_SS_FEATURE_DIR/.planning-result.json" ]]; then
+    pass "stage_state_write_result creates .planning-result.json"
+  else
+    fail "stage_state_write_result did not create .planning-result.json"
+  fi
+
+  _SS_RESULT_STAGE=$(jq -r '.stage' "$_SS_FEATURE_DIR/.planning-result.json" 2>/dev/null)
+  _SS_RESULT_STATUS=$(jq -r '.status' "$_SS_FEATURE_DIR/.planning-result.json" 2>/dev/null)
+  if [[ "$_SS_RESULT_STAGE" == "planning" && "$_SS_RESULT_STATUS" == "completed" ]]; then
+    pass "Stage result has correct stage and status"
+  else
+    fail "Stage result stage='$_SS_RESULT_STAGE' status='$_SS_RESULT_STATUS'"
+  fi
+
+  # Test: stage_state_legacy_detect
+  _SS_LEGACY_DIR="$_SS_TMPDIR/legacy-test"
+  mkdir -p "$_SS_LEGACY_DIR"
+
+  _SS_LEGACY=$(stage_state_legacy_detect "$_SS_LEGACY_DIR")
+  if [[ "$_SS_LEGACY" == "routing" ]]; then
+    pass "Legacy detect: no markers → routing"
+  else
+    fail "Legacy detect: no markers → '$_SS_LEGACY', expected 'routing'"
+  fi
+
+  touch "$_SS_LEGACY_DIR/.routing-complete"
+  _SS_LEGACY=$(stage_state_legacy_detect "$_SS_LEGACY_DIR")
+  if [[ "$_SS_LEGACY" == "planning" ]]; then
+    pass "Legacy detect: .routing-complete → planning"
+  else
+    fail "Legacy detect: .routing-complete → '$_SS_LEGACY', expected 'planning'"
+  fi
+
+  touch "$_SS_LEGACY_DIR/.plan-approved"
+  _SS_LEGACY=$(stage_state_legacy_detect "$_SS_LEGACY_DIR")
+  if [[ "$_SS_LEGACY" == "coding" ]]; then
+    pass "Legacy detect: .plan-approved → coding"
+  else
+    fail "Legacy detect: .plan-approved → '$_SS_LEGACY', expected 'coding'"
+  fi
+
+  touch "$_SS_LEGACY_DIR/.coding-complete"
+  _SS_LEGACY=$(stage_state_legacy_detect "$_SS_LEGACY_DIR")
+  if [[ "$_SS_LEGACY" == "review" ]]; then
+    pass "Legacy detect: .coding-complete → review"
+  else
+    fail "Legacy detect: .coding-complete → '$_SS_LEGACY', expected 'review'"
+  fi
+
+  touch "$_SS_LEGACY_DIR/.workflow-aborted"
+  _SS_LEGACY=$(stage_state_legacy_detect "$_SS_LEGACY_DIR")
+  if [[ "$_SS_LEGACY" == "aborted" ]]; then
+    pass "Legacy detect: .workflow-aborted → aborted"
+  else
+    fail "Legacy detect: .workflow-aborted → '$_SS_LEGACY', expected 'aborted'"
+  fi
+
+  # Test: stage_state_get_current falls back to legacy when no .phase-config.json
+  _SS_LEGACY_DIR2="$_SS_TMPDIR/legacy-fallback"
+  mkdir -p "$_SS_LEGACY_DIR2"
+  touch "$_SS_LEGACY_DIR2/.plan-approved"
+  _SS_GOT=$(stage_state_get_current "$_SS_LEGACY_DIR2")
+  if [[ "$_SS_GOT" == "coding" ]]; then
+    pass "get_current falls back to legacy when .phase-config.json absent"
+  else
+    fail "get_current legacy fallback returned '$_SS_GOT', expected 'coding'"
+  fi
+
+  # Cleanup
+  rm -rf "$_SS_TMPDIR"
+fi
+
+# ============================================================================
+# TEST 12: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""
   echo "=== ShellCheck (error severity) ==="
-  for f in "$LIB_DIR"/wavemill-common.sh "$LIB_DIR"/agent-adapters.sh; do
+  for f in "$LIB_DIR"/wavemill-common.sh "$LIB_DIR"/agent-adapters.sh "$LIB_DIR"/stage-state.sh; do
     [[ -f "$f" ]] || continue
     if shellcheck --severity=error "$f" 2>/dev/null; then
       pass "shellcheck $(basename "$f")"

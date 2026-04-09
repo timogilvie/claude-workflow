@@ -549,7 +549,7 @@ When you receive user feedback:
 - DO NOT: Create .plan-approved just because you received feedback
 - DO NOT: $exit_guard_text
 
-After the user approves your plan, create the .plan-approved file, then $approved_completion_text
+After the user approves your plan, create the .plan-approved file, then $approved_completion_text The controller will detect the marker and launch the next phase.
 _WVML_PROMPT_
 }
 
@@ -647,7 +647,7 @@ Before creating .coding-complete, verify ALL of these are true:
 - Changes are committed to git
 If ANY item is false, continue working. Do NOT create the marker.
 
-After implementation is complete and tests pass, create the .coding-complete file, then $coding_completion_text
+After implementation is complete and tests pass, create the .coding-complete file, then $coding_completion_text The controller will detect the marker and launch the next phase.
 _WVML_PROMPT_
 }
 
@@ -797,7 +797,7 @@ When you receive user feedback:
 - DO NOT: Skip remaining review steps or rush the PR just because you received feedback
 - DO NOT: $exit_guard_text
 
-After creating the PR, report the PR URL to the user, then $review_completion_text
+After creating the PR, report the PR URL to the user, then $review_completion_text The controller will detect the PR and manage subsequent phases.
 _WVML_PROMPT_
 }
 

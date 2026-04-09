@@ -430,8 +430,12 @@ After HOK-1174 (PR `#208`) shipped and HOK-1176 (PR `#213`) merged, the revised 
 | Legacy marker compatibility (`checkLegacyMarkers`) | Backfilled | HOK-1183 |
 | Controller readiness CLI (`tools/controller-ready.ts`) | Backfilled | HOK-1183 |
 | Shell orchestrator stub (`check_ready_stage`) | Backfilled | HOK-1183 |
-| Phase transition wiring in orchestrator | Deferred | HOK-1177 |
-| Ready-phase blocking of merge completion | Deferred | HOK-1177 |
+| Phase transition wiring in orchestrator | Shipped | HOK-1177 |
+| Controller-owned stage state (.phase-config.json) | Shipped | HOK-1177 |
+| Explicit awaiting_user state for plan approval | Shipped | HOK-1177 |
+| Stage-result JSON artifacts | Shipped | HOK-1177 |
+| Legacy marker fallback compatibility | Shipped | HOK-1177 |
+| Ready-phase blocking of merge completion | Deferred | HOK-1182 |
 | Full mill-mode integration, dashboard, monitoring | Deferred | HOK-1182 |
 | Merge conflict detection and auto-resolution | Shipped | HOK-1178 |
 | Tests and documentation for full ready stage | Shipped | HOK-1179 |
@@ -469,11 +473,17 @@ Explicit deliverables and expectations for each issue in the ready-stage chain.
 ### HOK-1177 → HOK-1182
 
 **HOK-1177 delivers:**
-- Phase transition wiring: orchestrator calls `check_ready_stage()` at transition points
-- Ready-phase blocking: merge completion gated on readiness pass
-- State persistence for ready-stage results in workflow state JSON
+- Controller-owned stage state via `shared/lib/stage-state.sh`
+- `.phase-config.json` as canonical per-task stage state file
+- Per-stage result files (`.planning-result.json`, `.coding-result.json`, etc.)
+- Explicit `awaiting_user` phase between planning and coding
+- `stage_state_transition()` called at every phase boundary in the monitor loop
+- Legacy marker fallback when `.phase-config.json` is absent
+- Phase transition wiring: orchestrator calls `stage_state_transition()` at transition points
 
 **HOK-1182 expects from HOK-1177:**
-- Phase transitions working end-to-end in `wavemill mill`
-- Ready-stage state persisted and queryable
+- `.phase-config.json` exists in feature directories for all new tasks
+- `stage_state_get_current()` returns the authoritative phase for any feature dir
+- Stage-result JSON files exist after each completed phase
 - `launch_ready_phase()` fully integrated into the phase loop
+- Ready-stage state persisted via `.ready-result.json` and `.phase-config.json`
