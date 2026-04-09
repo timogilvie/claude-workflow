@@ -115,48 +115,32 @@ agent_check_auth() {
 agent_exit_followup_text() {
   local agent_cmd="${1:-claude}"
 
-  if [[ "$agent_cmd" == "codex" ]]; then
-    echo "Stop there. Workflow orchestration will close the session."
-  else
-    echo "Exit cleanly by running the /exit command."
-  fi
+  # Agent-agnostic: the orchestrator detects session end via pane state (HOK-1177)
+  echo "Stop working and let the session end. The orchestrator will handle cleanup."
 }
 
 agent_abort_feedback_text() {
   local agent_cmd="${1:-claude}" marker_path="$2"
 
-  if [[ "$agent_cmd" == "codex" ]]; then
-    echo "create $marker_path and stop there. Workflow orchestration will close the session."
-  else
-    echo "create $marker_path and exit via /exit"
-  fi
+  # Agent-agnostic: create the abort marker; orchestrator detects it (HOK-1177)
+  echo "create $marker_path and stop working. The orchestrator will handle cleanup."
 }
 
 agent_exit_guard_text() {
   local agent_cmd="${1:-claude}" condition_text="$2"
 
-  if [[ "$agent_cmd" == "codex" ]]; then
-    echo "attempt any manual exit command. Stop after the required marker or output is created, and only once $condition_text."
-  else
-    echo "run /exit unless $condition_text"
-  fi
+  # Agent-agnostic: focus on artifact completion, not exit semantics (HOK-1177)
+  echo "stop working until $condition_text"
 }
 
 agent_completion_text() {
   local agent_cmd="${1:-claude}" suffix="${2:-}"
 
-  if [[ "$agent_cmd" == "codex" ]]; then
-    if [[ -n "$suffix" ]]; then
-      echo "remain in the session and wait there. Do not attempt to exit manually; workflow orchestration will close the session automatically. $suffix"
-    else
-      echo "remain in the session and wait there. Do not attempt to exit manually; workflow orchestration will close the session automatically."
-    fi
+  # Agent-agnostic: orchestrator handles termination detection (HOK-1177)
+  if [[ -n "$suffix" ]]; then
+    echo "stop working and let the session end. The orchestrator will detect completion and proceed. $suffix"
   else
-    if [[ -n "$suffix" ]]; then
-      echo "exit by running the /exit command. $suffix"
-    else
-      echo "exit by running the /exit command."
-    fi
+    echo "stop working and let the session end. The orchestrator will detect completion and proceed."
   fi
 }
 
