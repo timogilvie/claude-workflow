@@ -415,6 +415,26 @@ Read specific sections on-demand as you plan and implement:
 
       # Launch planning phase directly with the routed planner model
       PLANNER_AGENT="$(agent_resolve_from_model "$PLANNER_MODEL")"
+      PLANNING_RESULT_FILE="$FEATURE_DIR/.planning-result.json"
+      if [[ ! -f "$PLANNING_RESULT_FILE" ]] || ! jq -e '.status == "running" or .status == "awaiting_user" or .status == "completed"' "$PLANNING_RESULT_FILE" >/dev/null 2>&1; then
+        NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        _tmp=$(mktemp) || true
+        if [[ -n "${_tmp:-}" ]]; then
+          jq -n \
+            --arg startedAt "$NOW_UTC" \
+            --arg agent "$PLANNER_AGENT" \
+            --arg model "$PLANNER_MODEL" \
+            '{
+              stage: "planning",
+              status: "running",
+              startedAt: $startedAt,
+              finishedAt: null,
+              agent: $agent,
+              model: $model,
+              notes: ""
+            }' > "$_tmp" 2>/dev/null && mv "$_tmp" "$PLANNING_RESULT_FILE" || rm -f "$_tmp"
+        fi
+      fi
       PLANNING_PROMPT="/tmp/${SESSION}-${ISSUE}-planning-prompt.txt"
       build_planning_prompt "$TITLE" "$LINEAR_ISSUE" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" \
         "$ISSUE_CONTEXT" "$STATUS_FILE" "$TOOLS_DIR" "$SLUG" "$PLAN_DEPTH" "$PLANNER_AGENT" > "$PLANNING_PROMPT"
