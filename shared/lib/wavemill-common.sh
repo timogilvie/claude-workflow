@@ -222,6 +222,58 @@ detect_project_name() {
   echo "$project_name"
 }
 
+# Read a field from the canonical startup routing artifact.
+# Fallback chain: route.json -> model-suggestion.json shim -> default value.
+#
+# Canonical route.json contract (written by tools/route-task.ts):
+#   {
+#     planner,
+#     coder,
+#     reviewer,
+#     planDepth,
+#     codeDepth,
+#     reviewRecommended,
+#     routingMode,
+#     neighborCount,
+#     expectedSuccess,
+#     signals,
+#     reasoning
+#   }
+#
+# COMPAT: model-suggestion.json is a temporary coder-only shim for pre-HOK-1198
+# consumers and pre-HOK-1197 startup sessions. New routing consumers should
+# read route.json through this helper instead of reading the shim directly.
+#
+# Usage: read_route_json <session> <issue> <field> [default]
+read_route_json() {
+  local session="$1" issue="$2" field="$3" default_value="${4:-}"
+  local route_file="/tmp/${session}-${issue}-route.json"
+  local suggestion_file="/tmp/${session}-${issue}-model-suggestion.json"
+  local value=""
+
+  if [[ -f "$route_file" ]]; then
+    value=$(jq -r --arg field "$field" '.[$field] // empty' "$route_file" 2>/dev/null || true)
+    if [[ -n "$value" ]]; then
+      echo "$value"
+      return 0
+    fi
+  fi
+
+  if [[ -f "$suggestion_file" ]]; then
+    case "$field" in
+      coder)
+        value=$(jq -r '.recommendedModel // empty' "$suggestion_file" 2>/dev/null || true)
+        if [[ -n "$value" ]]; then
+          echo "$value"
+          return 0
+        fi
+        ;;
+    esac
+  fi
+
+  echo "$default_value"
+}
+
 # ============================================================================
 # TASK PACKET DETECTION
 # ============================================================================

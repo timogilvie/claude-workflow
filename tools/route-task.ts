@@ -4,6 +4,26 @@
  * Route Task Tool
  *
  * Produces stage-aware workflow routing guidance for planning, coding, and review.
+ *
+ * When invoked with `--json`, the output is the canonical persisted startup
+ * routing artifact. Shell consumers store it as `/tmp/{SESSION}-{ISSUE}-route.json`
+ * and should read that file directly instead of reconstructing routing from the
+ * legacy coder-only `model-suggestion.json` shim.
+ *
+ * Canonical JSON shape:
+ * {
+ *   planner: string,
+ *   coder: string,
+ *   reviewer: string,
+ *   planDepth: string,
+ *   codeDepth: string,
+ *   reviewRecommended: string,
+ *   routingMode: string,
+ *   neighborCount: number,
+ *   expectedSuccess: number,
+ *   signals: object,
+ *   reasoning: string[]
+ * }
  */
 
 import { runTool } from '../shared/lib/tool-runner.ts';
