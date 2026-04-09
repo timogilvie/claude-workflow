@@ -252,6 +252,14 @@ else
     fail "monitor planning approval check runs too late (after controller-state keepalive)"
   fi
 
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$resolved_phase" == "awaiting_user" \]\]; then' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q '_pane_is_dead_or_idle "\$SESSION:\$WIN"' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Agent exited with plan ready, auto-approving'; then
+    pass "monitor auto-captures planning approval after interactive agent exit"
+  else
+    fail "monitor is missing planning auto-approval capture on agent exit"
+  fi
+
   # resolve_phase() checks abort first internally, so we verify it's called
   if [[ -n "$RESOLVE_PHASE_LINE" ]]; then
     pass "monitor checks workflow abort before phase completion markers"

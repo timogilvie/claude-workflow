@@ -134,6 +134,10 @@ approve_plan() {
   write_stage_result "$feature_dir" "planning" "completed" "$agent" "$model" "Plan approved by user"
 }
 
+_pane_is_dead_or_idle() {
+  [[ "${PANE_IS_DEAD_OR_IDLE:-false}" == "true" ]]
+}
+
 # Reject a plan: transition planning from awaiting_user to failed.
 reject_plan() {
   local feature_dir="$1"
@@ -311,6 +315,14 @@ simulate_planning_transition() {
       echo "completed"
       return 0
     fi
+  fi
+
+  if [[ "$planning_status" == "awaiting_user" ]] \
+    && [[ -f "$feature_dir/plan.md" ]] \
+    && _pane_is_dead_or_idle "test-session:1"; then
+    approve_plan "$feature_dir" "claude" "claude-opus-4-6"
+    echo "completed"
+    return 0
   fi
 
   if [[ "$planning_status" == "running" ]] && [[ -f "$feature_dir/plan.md" ]]; then
@@ -931,7 +943,7 @@ check "failed status is not complete" "1" "$([[ $(check_stage_complete "$FD52" "
 
 # ─────────────────────────────────────────────────────────────────
 echo ""
-echo "=== Pane-Independent Transition Tests (HOK-1195) ==="
+echo "=== Transition Reconciliation Tests ==="
 
 # Test 53: Planning transition does not require pane exit semantics
 FD53="$TEST_DIR/test53"
@@ -949,6 +961,34 @@ touch "$FD54/plan.md"
 touch "$FD54/.plan-approved"
 check "plan approval ignores pane state" "completed" "$(simulate_planning_transition "$FD54")"
 check "plan approval writes completed" "completed" "$(read_stage_status "$FD54" "planning")"
+
+# Test 54b: Planning approval auto-captures when pane is dead/idle
+FD54B="$TEST_DIR/test54b"
+mkdir -p "$FD54B"
+write_stage_result "$FD54B" "planning" "awaiting_user" "claude" "claude-opus-4-6"
+touch "$FD54B/plan.md"
+PANE_IS_DEAD_OR_IDLE=true
+check "plan approval auto-captures on idle pane" "completed" "$(simulate_planning_transition "$FD54B")"
+check "auto-capture writes completed planning status" "completed" "$(read_stage_status "$FD54B" "planning")"
+check "auto-capture writes legacy approval marker" "yes" "$([[ -f "$FD54B/.plan-approved" ]] && echo yes || echo no)"
+
+# Test 54c: No auto-approval without plan.md
+FD54C="$TEST_DIR/test54c"
+mkdir -p "$FD54C"
+write_stage_result "$FD54C" "planning" "awaiting_user" "claude" "claude-opus-4-6"
+PANE_IS_DEAD_OR_IDLE=true
+check "idle pane without plan.md stays awaiting_user" "needs_attention" "$(simulate_planning_transition "$FD54C")"
+check "missing plan.md does not approve planning" "awaiting_user" "$(read_stage_status "$FD54C" "planning")"
+
+# Test 54d: No auto-approval while planning is still running
+FD54D="$TEST_DIR/test54d"
+mkdir -p "$FD54D"
+write_stage_result "$FD54D" "planning" "running" "claude" "claude-opus-4-6"
+touch "$FD54D/plan.md"
+PANE_IS_DEAD_OR_IDLE=true
+check "running planning with plan.md still becomes awaiting_user first" "awaiting_user" "$(simulate_planning_transition "$FD54D")"
+check "running planning is not auto-approved directly" "awaiting_user" "$(read_stage_status "$FD54D" "planning")"
+PANE_IS_DEAD_OR_IDLE=false
 
 # Test 55: Coding transition does not require pane exit semantics
 FD55="$TEST_DIR/test55"
@@ -971,9 +1011,19 @@ FD57="$TEST_DIR/test57"
 mkdir -p "$FD57"
 write_stage_result "$FD57" "coding" "running" "claude" "claude-opus-4-6"
 touch "$FD57/.coding-complete"
-PANE_WOULD_BE_ALIVE=true
 check "stuck handoff regression stays completed with pane alive" "completed" "$(simulate_coding_transition "$FD57")"
 check "coding completion persists despite pane alive" "completed" "$(read_stage_status "$FD57" "coding")"
+
+# Test 58: Planning auto-approval is idempotent once completed
+FD58="$TEST_DIR/test58"
+mkdir -p "$FD58"
+write_stage_result "$FD58" "planning" "awaiting_user" "claude" "claude-opus-4-6"
+touch "$FD58/plan.md"
+PANE_IS_DEAD_OR_IDLE=true
+check "first auto-approval completes planning" "completed" "$(simulate_planning_transition "$FD58")"
+check "second auto-approval pass is a no-op" "needs_attention" "$(simulate_planning_transition "$FD58")"
+check "completed planning remains completed after second pass" "completed" "$(read_stage_status "$FD58" "planning")"
+PANE_IS_DEAD_OR_IDLE=false
 
 # ─────────────────────────────────────────────────────────────────
 echo ""
