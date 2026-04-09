@@ -158,14 +158,21 @@ runTool({
           console.error('\n❌ Validation FAILED');
 
           if (shouldUpdate) {
-            // Ask user whether to proceed
-            console.log('\nThe task packet has quality issues that may cause problems for autonomous agents.');
-            const proceed = await confirm('Do you want to update Linear anyway?');
+            const isInteractive = process.stdin.isTTY && !process.env.MILL_MODE;
 
-            if (!proceed) {
-              throw new Error('Cancelled. Fix the issues and try again.');
+            if (isInteractive) {
+              // Ask user whether to proceed
+              console.log('\nThe task packet has quality issues that may cause problems for autonomous agents.');
+              const proceed = await confirm('Do you want to update Linear anyway?');
+
+              if (!proceed) {
+                throw new Error('Cancelled. Fix the issues and try again.');
+              } else {
+                console.log('⚠️  Proceeding with update despite validation failures...');
+              }
             } else {
-              console.log('⚠️  Proceeding with update despite validation failures...');
+              // Non-interactive / mill mode: log warning and proceed
+              console.warn('\n⚠️  Validation failed but running in non-interactive mode — proceeding with Linear update.');
             }
           } else {
             console.log('\nℹ Dry-run mode (--no-update). Remove --no-update to save to Linear.');

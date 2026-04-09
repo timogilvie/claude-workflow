@@ -185,6 +185,76 @@ Build something
   assert(fieldIssues.every(i => i.type === 'invalid-release-readiness'), 'All issues should be invalid-release-readiness');
 }
 
+function testNumberedSectionHeadings() {
+  console.log('\n=== Testing Numbered Section Headings ===');
+
+  // Numbered validation steps (the exact format that caused the bug)
+  const numberedPacket = `
+## 6. Validation Steps
+\`\`\`bash
+pnpm lint
+curl -X POST http://localhost:3000/api/test -d '{"test": true}'
+\`\`\`
+  `;
+
+  const numberedIssues = validateValidationSteps(numberedPacket);
+  assert(numberedIssues.length === 0, 'Should find Validation Steps with numbered heading "## 6. Validation Steps"');
+
+  // Numbered scope sections
+  const numberedScope = `
+## 1. Objective
+
+### Scope In
+- Add login endpoint
+- Add token validation
+
+### Scope Out
+- No registration endpoint
+- No password reset
+  `;
+
+  const scopeIssues = validateScopeBoundaries(numberedScope);
+  assert(scopeIssues.length === 0, 'Should find Scope In/Out under numbered Objective section');
+
+  // Numbered functional requirements
+  const numberedCriteria = `
+## 4. Success Criteria
+
+### Functional Requirements
+- [ ] POST /api/login returns 200 with token
+- [ ] Invalid credentials return 401
+- [ ] Network errors show retry button
+  `;
+
+  const criteriaIssues = validateAcceptanceCriteria(numberedCriteria);
+  assert(criteriaIssues.length === 0, 'Should find Functional Requirements under numbered Success Criteria');
+
+  // Numbered release readiness
+  const numberedRelease = `
+## 10. Release Readiness
+- **database_change_risk**: none
+- **env_changes**: none
+- **config_changes**: none
+- **manual_steps**: none
+  `;
+
+  const releaseIssues = validateReleaseReadiness(numberedRelease);
+  assert(releaseIssues.length === 0, 'Should find Release Readiness with numbered heading');
+
+  // Missing section still detected with numbered headings present
+  const missingValidation = `
+## 1. Objective
+Some objective text
+
+## 2. Technical Context
+Some context
+  `;
+
+  const missingIssues = validateValidationSteps(missingValidation);
+  assert(missingIssues.length === 1, 'Should still detect missing Validation Steps when other sections are numbered');
+  assert(missingIssues[0].description === 'Validation Steps section is missing', 'Should report correct error for missing section');
+}
+
 async function main() {
   console.log('Running task-packet-validator tests...\n');
 
@@ -194,6 +264,7 @@ async function main() {
     testScopeBoundaries();
     testAcceptanceCriteria();
     testReleaseReadiness();
+    testNumberedSectionHeadings();
 
     console.log('\n✅ All tests passed!');
   } catch (error) {

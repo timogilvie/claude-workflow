@@ -140,8 +140,8 @@ function extractFilePaths(markdown: string): string[] {
  * Extract a markdown section by heading
  */
 function extractSection(markdown: string, heading: string): string | null {
-  // Match ## Heading or ### Heading (case insensitive)
-  const headingRegex = new RegExp(`^#{2,3}\\s+${heading}\\s*$`, 'im');
+  // Match ## Heading or ### Heading, with optional number prefix like "## 6. Heading" (case insensitive)
+  const headingRegex = new RegExp(`^#{2,3}\\s+(?:\\d+\\.\\s+)?${heading}\\s*$`, 'im');
   const match = markdown.match(headingRegex);
 
   if (!match || match.index === undefined) {
