@@ -480,7 +480,7 @@ else
     fail "dashboard review-waiting helper is missing one or more gating conditions"
   fi
 
-  if grep -q 'reported="Plan waiting for review"' "$STATUS_SCRIPT"; then
+  if grep -q 'reported="Plan ready — waiting for approval"' "$STATUS_SCRIPT"; then
     pass "dashboard overrides stale status with plan review message"
   else
     fail "dashboard does not override stale status with plan review message"
@@ -494,7 +494,7 @@ echo ""
 echo "=== Abort Prompt Guidance Guards ==="
 
 if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/planning-phase.md" \
-  && grep -q 'Do NOT create the phase completion marker (.plan-approved)' "$REPO_DIR/tools/prompts/planning-phase.md" \
+  && grep -q 'Do NOT create any phase completion or approval markers' "$REPO_DIR/tools/prompts/planning-phase.md" \
   && grep -q 'Stop after creating the marker and reporting the abort.' "$REPO_DIR/tools/prompts/planning-phase.md"; then
   pass "planning template documents abort marker flow"
 else

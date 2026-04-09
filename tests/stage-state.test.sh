@@ -123,7 +123,12 @@ check_stage_complete() {
   local feature_dir="$1" stage="$2"
   local status
   status=$(read_stage_status "$feature_dir" "$stage")
-  [[ "$status" == "completed" ]] && return 0
+  if [[ -n "$status" ]]; then
+    # Stage result exists and is authoritative
+    [[ "$status" == "completed" ]] && return 0
+    return 1
+  fi
+  # No stage result — fallback to legacy marker
   local marker
   marker=$(_stage_legacy_marker "$stage")
   if [[ -n "$marker" ]] && [[ -f "$feature_dir/$marker" ]]; then
@@ -138,6 +143,21 @@ check_stage_awaiting_user() {
   status=$(read_stage_status "$feature_dir" "$stage")
   [[ "$status" == "awaiting_user" ]] && return 0
   return 1
+}
+
+# Approve a plan: transition planning from awaiting_user to completed.
+approve_plan() {
+  local feature_dir="$1"
+  local agent="${2:-}" model="${3:-}"
+  write_stage_result "$feature_dir" "planning" "completed" "$agent" "$model" "Plan approved by user"
+  touch "$feature_dir/.plan-approved"
+}
+
+# Reject a plan: transition planning from awaiting_user to failed.
+reject_plan() {
+  local feature_dir="$1"
+  local agent="${2:-}" model="${3:-}"
+  write_stage_result "$feature_dir" "planning" "failed" "$agent" "$model" "Plan rejected by user"
 }
 
 check_stage_aborted() {
@@ -325,6 +345,71 @@ mkdir -p "$FD11"
 write_stage_result "$FD11" "planning" "running"
 check_stage_aborted "$FD11" && result=0 || result=1
 check "no abort → false" "1" "$result"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Stage Result Precedence Tests (HOK-1193) ==="
+# ─────────────────────────────────────────────────────────────────
+
+# Test: awaiting_user result + legacy marker → false (stage result is authoritative)
+FD_PREC1="$TEST_DIR/test_prec1"
+mkdir -p "$FD_PREC1"
+write_stage_result "$FD_PREC1" "planning" "awaiting_user"
+touch "$FD_PREC1/.plan-approved"
+check_stage_complete "$FD_PREC1" "planning" && result=0 || result=1
+check "awaiting_user + .plan-approved → false (stage result authoritative)" "1" "$result"
+
+# Test: running result + legacy marker → false (stage result is authoritative)
+FD_PREC2="$TEST_DIR/test_prec2"
+mkdir -p "$FD_PREC2"
+write_stage_result "$FD_PREC2" "planning" "running"
+touch "$FD_PREC2/.plan-approved"
+check_stage_complete "$FD_PREC2" "planning" && result=0 || result=1
+check "running + .plan-approved → false (stage result authoritative)" "1" "$result"
+
+# Test: failed result + legacy marker → false
+FD_PREC3="$TEST_DIR/test_prec3"
+mkdir -p "$FD_PREC3"
+write_stage_result "$FD_PREC3" "planning" "failed"
+touch "$FD_PREC3/.plan-approved"
+check_stage_complete "$FD_PREC3" "planning" && result=0 || result=1
+check "failed + .plan-approved → false (stage result authoritative)" "1" "$result"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== approve_plan / reject_plan Tests (HOK-1193) ==="
+# ─────────────────────────────────────────────────────────────────
+
+# Test: approve_plan transitions to completed and creates legacy marker
+FD_APR1="$TEST_DIR/test_apr1"
+mkdir -p "$FD_APR1"
+write_stage_result "$FD_APR1" "planning" "awaiting_user" "claude" "opus-4-6"
+approve_plan "$FD_APR1" "claude" "opus-4-6"
+check "approve: status is completed" "completed" "$(read_stage_status "$FD_APR1" "planning")"
+check "approve: .plan-approved exists" "0" "$([[ -f "$FD_APR1/.plan-approved" ]]; echo $?)"
+check "approve: notes mention user" "Plan approved by user" "$(jq -r .notes "$FD_APR1/.planning-result.json")"
+check_stage_complete "$FD_APR1" "planning" && result=0 || result=1
+check "approve: check_stage_complete → true" "0" "$result"
+
+# Test: reject_plan transitions to failed
+FD_APR2="$TEST_DIR/test_apr2"
+mkdir -p "$FD_APR2"
+write_stage_result "$FD_APR2" "planning" "awaiting_user" "claude" "opus-4-6"
+reject_plan "$FD_APR2" "claude" "opus-4-6"
+check "reject: status is failed" "failed" "$(read_stage_status "$FD_APR2" "planning")"
+check "reject: notes mention user" "Plan rejected by user" "$(jq -r .notes "$FD_APR2/.planning-result.json")"
+check_stage_complete "$FD_APR2" "planning" && result=0 || result=1
+check "reject: check_stage_complete → false" "1" "$result"
+check "reject: no .plan-approved" "1" "$([[ -f "$FD_APR2/.plan-approved" ]]; echo $?)"
+
+# Test: approve_plan preserves startedAt from awaiting_user
+FD_APR3="$TEST_DIR/test_apr3"
+mkdir -p "$FD_APR3"
+write_stage_result "$FD_APR3" "planning" "awaiting_user" "claude" "opus-4-6"
+ORIG_START_APR=$(jq -r .startedAt "$FD_APR3/.planning-result.json")
+sleep 1
+approve_plan "$FD_APR3" "claude" "opus-4-6"
+check "approve preserves startedAt" "$ORIG_START_APR" "$(jq -r .startedAt "$FD_APR3/.planning-result.json")"
 
 # ─────────────────────────────────────────────────────────────────
 echo ""

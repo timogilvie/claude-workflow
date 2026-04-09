@@ -977,7 +977,9 @@ export async function controllerCheckReadiness(
       status: result.status === 'aborted' || result.status === 'failed' ? 'fail'
             : result.status === 'completed' ? 'pass'
             : 'warn',
-      message: `Stage ${stage}: ${result.status}`,
+      message: result.status === 'awaiting_user'
+        ? `Stage ${stage}: awaiting_user — plan ready for approval`
+        : `Stage ${stage}: ${result.status}`,
       details: { stage, status: result.status, agent: result.agent, model: result.model },
     });
   }
