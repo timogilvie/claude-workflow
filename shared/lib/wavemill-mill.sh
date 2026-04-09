@@ -80,6 +80,15 @@ _log_level_num() {
 
 VERBOSITY_NUM=$(_log_level_num "${DASHBOARD_VERBOSITY:-info}")
 
+append_status_log() {
+  local payload="$1"
+  [[ -n "${STATUS_LOG_FILE:-}" ]] || return 1
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '%s\n' "$line" >> "$STATUS_LOG_FILE" 2>/dev/null || return 1
+  done <<< "$payload"
+}
+
 log() {
   local level="info"
   local msg
@@ -101,11 +110,19 @@ log() {
 
   msg_num=$(_log_level_num "$level")
   if (( msg_num <= VERBOSITY_NUM )); then
-    echo "$formatted"
+    append_status_log "$formatted" || echo "$formatted"
   fi
 }
-log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
-log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
+log_error() {
+  local formatted
+  formatted="$(date '+%H:%M:%S') ERROR: $*"
+  append_status_log "$formatted" || echo "$formatted" >&2
+}
+log_warn() {
+  local formatted
+  formatted="$(date '+%H:%M:%S') WARN: $*"
+  append_status_log "$formatted" || echo "$formatted" >&2
+}
 
 # Kept local to this script because the generated monitor script below runs as a
 # standalone shell and must carry its own copy of any helpers it calls.
@@ -1258,9 +1275,13 @@ fi
 log "info" "Fetching latest $BASE_BRANCH from remote..."
 git -C "$REPO_DIR" fetch origin "$BASE_BRANCH"
 
+# Dedicated scrolling log for the control window's status pane.
+STATUS_LOG_FILE="/tmp/${SESSION}-control-status.log"
+: > "$STATUS_LOG_FILE"
+
 # Call the launcher script (don't attach yet)
 # Pass state file so the dashboard can show richer info
-WAVEMILL_STATE_FILE="$STATE_FILE" ORCHESTRATOR_NO_ATTACH=1 "$ORCHESTRATOR" "$SESSION" "${LAUNCH_ARGS[@]}"
+WAVEMILL_STATE_FILE="$STATE_FILE" STATUS_LOG_FILE="$STATUS_LOG_FILE" ORCHESTRATOR_NO_ATTACH=1 "$ORCHESTRATOR" "$SESSION" "${LAUNCH_ARGS[@]}"
 
 
 # Write monitor env file (avoids long command lines in tmux pane)
@@ -1287,6 +1308,7 @@ AUTO_EVAL='$AUTO_EVAL'
 DASHBOARD_VERBOSITY='$DASHBOARD_VERBOSITY'
 DASHBOARD_LOG_TO_FILE='$DASHBOARD_LOG_TO_FILE'
 MILL_LOG_FILE='$MILL_LOG_FILE'
+STATUS_LOG_FILE='$STATUS_LOG_FILE'
 ENVEOF
 
 
@@ -1313,6 +1335,15 @@ _log_level_num() {
 
 VERBOSITY_NUM=$(_log_level_num "${DASHBOARD_VERBOSITY:-info}")
 
+append_status_log() {
+  local payload="$1"
+  [[ -n "${STATUS_LOG_FILE:-}" ]] || return 1
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '%s\n' "$line" >> "$STATUS_LOG_FILE" 2>/dev/null || return 1
+  done <<< "$payload"
+}
+
 log() {
   local level="info"
   local msg
@@ -1334,11 +1365,19 @@ log() {
 
   msg_num=$(_log_level_num "$level")
   if (( msg_num <= VERBOSITY_NUM )); then
-    echo "$formatted"
+    append_status_log "$formatted" || echo "$formatted"
   fi
 }
-log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
-log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
+log_error() {
+  local formatted
+  formatted="$(date '+%H:%M:%S') ERROR: $*"
+  append_status_log "$formatted" || echo "$formatted" >&2
+}
+log_warn() {
+  local formatted
+  formatted="$(date '+%H:%M:%S') WARN: $*"
+  append_status_log "$formatted" || echo "$formatted" >&2
+}
 
 # Duplicated intentionally from the parent script because the monitor runs as a
 # standalone generated shell script and does not inherit parent functions.
@@ -1455,14 +1494,16 @@ source "$LIB_DIR/wavemill-common.sh"
 # Ensure gh commands target the correct GitHub repo (not inherited CWD)
 cd "$REPO_DIR"
 
-# Close dashboard pane when monitor exits so quitting control is a single action.
-_DASHBOARD_CLEANED=0
+# Close auxiliary panes when monitor exits so quitting control is a single action.
+_AUX_PANES_CLEANED=0
 cleanup_dashboard_pane() {
-  [[ "$_DASHBOARD_CLEANED" -eq 1 ]] && return 0
-  _DASHBOARD_CLEANED=1
+  [[ "$_AUX_PANES_CLEANED" -eq 1 ]] && return 0
+  _AUX_PANES_CLEANED=1
 
-  tmux list-panes -t "$SESSION:control.1" >/dev/null 2>&1 || return 0
-  tmux kill-pane -t "$SESSION:control.1" >/dev/null 2>&1 || true
+  for pane in 1 2; do
+    tmux list-panes -t "$SESSION:control.$pane" >/dev/null 2>&1 || continue
+    tmux kill-pane -t "$SESSION:control.$pane" >/dev/null 2>&1 || true
+  done
 }
 trap cleanup_dashboard_pane EXIT INT TERM
 

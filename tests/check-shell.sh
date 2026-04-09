@@ -455,6 +455,16 @@ else
   fail "orchestrator is missing launch-time attention-style reset"
 fi
 
+if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] \
+  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-orchestrator.sh" \
+  && grep -q 'split-window -t "\$SESSION:control.0" -h -p 50 -f' "$LIB_DIR/wavemill-orchestrator.sh" \
+  && grep -q 'send-keys -t "\$SESSION:control.2"' "$LIB_DIR/wavemill-orchestrator.sh" \
+  && grep -q "tail -n 200 -f '\$STATUS_LOG_FILE'" "$LIB_DIR/wavemill-orchestrator.sh"; then
+  pass "orchestrator builds task, dashboard, and log control panes"
+else
+  fail "orchestrator is missing the 3-pane control layout wiring"
+fi
+
 # ============================================================================
 # TEST 6: Dashboard planning-review status guards
 # ============================================================================
@@ -741,6 +751,37 @@ else
       pass "suppressed logs still write to session log file"
     else
       fail "suppressed logs do not write to session log file"
+    fi
+
+    STATUS_PANE_CHECK=$(bash -lc '
+      source "'"$LOG_TEST_SCRIPT"'"
+      TMP_STATUS=$(mktemp)
+      DASHBOARD_VERBOSITY=info
+      VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
+      DASHBOARD_LOG_TO_FILE=false
+      STATUS_LOG_FILE="$TMP_STATUS"
+      log "status" "pane line"
+      cat "$TMP_STATUS"
+    ' 2>/dev/null || true)
+    if [[ "$STATUS_PANE_CHECK" == *"pane line"* ]]; then
+      pass "visible logs write to dedicated control status log"
+    else
+      fail "visible logs do not write to dedicated control status log"
+    fi
+
+    STATUS_PANE_STDOUT=$(bash -lc '
+      source "'"$LOG_TEST_SCRIPT"'"
+      TMP_STATUS=$(mktemp)
+      DASHBOARD_VERBOSITY=info
+      VERBOSITY_NUM=$(_log_level_num "$DASHBOARD_VERBOSITY")
+      DASHBOARD_LOG_TO_FILE=false
+      STATUS_LOG_FILE="$TMP_STATUS"
+      log "status" "pane only"
+    ' 2>/dev/null || true)
+    if [[ -z "$STATUS_PANE_STDOUT" ]]; then
+      pass "status pane logging stays out of the task list pane"
+    else
+      fail "status pane logging still writes to stdout"
     fi
 
     rm -rf "$LOG_TEST_DIR"
