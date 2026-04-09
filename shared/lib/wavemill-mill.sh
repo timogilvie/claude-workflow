@@ -2696,7 +2696,7 @@ launch_task() {
   if [[ "$PLANNING_MODE" == "interactive" ]] && command -v stage_state_init >/dev/null 2>&1; then
     local feature_dir="$wt_dir/features/$slug"
     mkdir -p "$feature_dir"
-    stage_state_init "$feature_dir" "planning" || true
+    stage_state_init "$feature_dir" "planning" || log_warn "stage_state_init failed for $issue"
   fi
 
   # Verify agent was saved correctly (helps debug future issues)
@@ -3034,7 +3034,13 @@ monitor_issue_state() {
       fi
 
       # Multi-phase workflow tracking (must run before pane-alive early return)
-      current_phase=$(get_task_phase "$ISSUE")
+      # Prefer .phase-config.json (controller-owned, HOK-1177) over session state
+      local _feature_dir="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}"
+      if command -v stage_state_get_current >/dev/null 2>&1 && [[ -f "$_feature_dir/.phase-config.json" ]]; then
+        current_phase=$(stage_state_get_current "$_feature_dir")
+      else
+        current_phase=$(get_task_phase "$ISSUE")
+      fi
 
       case "$current_phase" in
         routing)
@@ -3090,8 +3096,8 @@ monitor_issue_state() {
               set_task_phase "$ISSUE" "planning"
               if command -v stage_state_transition >/dev/null 2>&1; then
                 local feature_dir="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}"
-                stage_state_init "$feature_dir" "routing" || true
-                stage_state_transition "$feature_dir" "planning" "routing_complete" || true
+                stage_state_init "$feature_dir" "routing" || log_warn "stage_state_init failed for $ISSUE"
+                stage_state_transition "$feature_dir" "planning" "routing_complete" || log_warn "stage_state_transition failed for $ISSUE"
               fi
               planner_agent="$(agent_resolve_from_model "$planner_model")"
 
@@ -3134,7 +3140,7 @@ monitor_issue_state() {
             log "status" "⛔ $ISSUE → Workflow aborted by user during planning phase"
             set_task_phase "$ISSUE" "aborted"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || true
+              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || log_warn "stage_state_transition failed for $ISSUE"
             fi
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3170,7 +3176,7 @@ monitor_issue_state() {
           if [[ -f "$feature_dir/plan.md" ]] && ! check_plan_approved "$SLUG"; then
             set_task_phase "$ISSUE" "awaiting_user"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "$feature_dir" "awaiting_user" "plan_complete" || true
+              stage_state_transition "$feature_dir" "awaiting_user" "plan_complete" || log_warn "stage_state_transition failed for $ISSUE"
               local planner_model_for_result
               planner_model_for_result=$(get_task_meta "$ISSUE" "plannerModel")
               stage_state_write_result "$feature_dir" "planning" "completed" \
@@ -3191,7 +3197,7 @@ monitor_issue_state() {
           if check_plan_approved "$SLUG"; then
             set_task_phase "$ISSUE" "awaiting_user"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "$feature_dir" "awaiting_user" "plan_complete" || true
+              stage_state_transition "$feature_dir" "awaiting_user" "plan_complete" || log_warn "stage_state_transition failed for $ISSUE"
               local planner_model_for_result
               planner_model_for_result=$(get_task_meta "$ISSUE" "plannerModel")
               stage_state_write_result "$feature_dir" "planning" "completed" \
@@ -3200,7 +3206,7 @@ monitor_issue_state() {
             # Immediately transition to coding
             set_task_phase "$ISSUE" "coding"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "$feature_dir" "coding" "plan_approved" || true
+              stage_state_transition "$feature_dir" "coding" "plan_approved" || log_warn "stage_state_transition failed for $ISSUE"
             fi
 
             # FORCE_MODEL takes priority, then challenge, then state, then default
@@ -3230,7 +3236,7 @@ monitor_issue_state() {
               log "status" "⛔ $ISSUE → Workflow aborted during coding launch"
               set_task_phase "$ISSUE" "aborted"
               if command -v stage_state_transition >/dev/null 2>&1; then
-                stage_state_transition "$feature_dir" "aborted" "user_abort" || true
+                stage_state_transition "$feature_dir" "aborted" "user_abort" || log_warn "stage_state_transition failed for $ISSUE"
               fi
               set_window_attention_state "$WIN" "needs-user"
               return 0
@@ -3255,7 +3261,7 @@ monitor_issue_state() {
             log "status" "⛔ $ISSUE → Workflow aborted by user during plan approval"
             set_task_phase "$ISSUE" "aborted"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || true
+              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || log_warn "stage_state_transition failed for $ISSUE"
             fi
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3280,7 +3286,7 @@ monitor_issue_state() {
             # Transition to coding phase
             set_task_phase "$ISSUE" "coding"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "$feature_dir" "coding" "plan_approved" || true
+              stage_state_transition "$feature_dir" "coding" "plan_approved" || log_warn "stage_state_transition failed for $ISSUE"
             fi
             coder_agent="$(agent_resolve_from_model "$coder_model")"
 
@@ -3296,7 +3302,7 @@ monitor_issue_state() {
               log "status" "⛔ $ISSUE → Workflow aborted during coding launch"
               set_task_phase "$ISSUE" "aborted"
               if command -v stage_state_transition >/dev/null 2>&1; then
-                stage_state_transition "$feature_dir" "aborted" "user_abort" || true
+                stage_state_transition "$feature_dir" "aborted" "user_abort" || log_warn "stage_state_transition failed for $ISSUE"
               fi
               set_window_attention_state "$WIN" "needs-user"
               return 0
@@ -3321,7 +3327,7 @@ monitor_issue_state() {
             log "status" "⛔ $ISSUE → Workflow aborted by user during coding phase"
             set_task_phase "$ISSUE" "aborted"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || true
+              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || log_warn "stage_state_transition failed for $ISSUE"
             fi
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3342,7 +3348,7 @@ monitor_issue_state() {
             # Transition to review phase
             set_task_phase "$ISSUE" "review"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "$feature_dir" "review" "coding_complete" || true
+              stage_state_transition "$feature_dir" "review" "coding_complete" || log_warn "stage_state_transition failed for $ISSUE"
               local coder_model_for_result
               coder_model_for_result=$(get_task_meta "$ISSUE" "coderModel")
               stage_state_write_result "$feature_dir" "coding" "completed" \
@@ -3363,7 +3369,7 @@ monitor_issue_state() {
               log "status" "⛔ $ISSUE → Workflow aborted during review launch"
               set_task_phase "$ISSUE" "aborted"
               if command -v stage_state_transition >/dev/null 2>&1; then
-                stage_state_transition "$feature_dir" "aborted" "user_abort" || true
+                stage_state_transition "$feature_dir" "aborted" "user_abort" || log_warn "stage_state_transition failed for $ISSUE"
               fi
               set_window_attention_state "$WIN" "needs-user"
               return 0
@@ -3388,7 +3394,7 @@ monitor_issue_state() {
             log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
             set_task_phase "$ISSUE" "aborted"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || true
+              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || log_warn "stage_state_transition failed for $ISSUE"
             fi
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3410,7 +3416,7 @@ monitor_issue_state() {
             set_task_phase "$ISSUE" "ready"
             if command -v stage_state_transition >/dev/null 2>&1; then
               local review_feature_dir="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}"
-              stage_state_transition "$review_feature_dir" "ready" "pr_created" || true
+              stage_state_transition "$review_feature_dir" "ready" "pr_created" || log_warn "stage_state_transition failed for $ISSUE"
               local reviewer_model_for_result
               reviewer_model_for_result=$(get_task_meta "$ISSUE" "reviewerModel")
               stage_state_write_result "$review_feature_dir" "review" "completed" \
@@ -3454,7 +3460,7 @@ monitor_issue_state() {
             log "⛔ $ISSUE → Workflow aborted by user during ready phase"
             set_task_phase "$ISSUE" "aborted"
             if command -v stage_state_transition >/dev/null 2>&1; then
-              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || true
+              stage_state_transition "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" "aborted" "user_abort" || log_warn "stage_state_transition failed for $ISSUE"
             fi
             set_window_attention_state "$WIN" "needs-user"
             return 0
