@@ -1638,6 +1638,203 @@ check_workflow_aborted() {
   return 1
 }
 
+# ────────────────────────────────────────────────────────────────
+# Controller-owned stage result functions (HOK-1177)
+# ────────────────────────────────────────────────────────────────
+
+# Map stage names to their legacy marker files
+_stage_legacy_marker() {
+  case "$1" in
+    planning) echo ".plan-approved" ;;
+    coding)   echo ".coding-complete" ;;
+    *)        echo "" ;;
+  esac
+}
+
+# Write a structured stage result JSON file.
+# Usage: write_stage_result <feature_dir> <stage> <status> [agent] [model] [notes]
+# Stages: routing, planning, coding, review, ready
+# Statuses: running, awaiting_user, completed, aborted, failed
+write_stage_result() {
+  local feature_dir="$1" stage="$2" status="$3"
+  local agent="${4:-}" model="${5:-}" notes="${6:-}"
+  local result_file="$feature_dir/.${stage}-result.json"
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  mkdir -p "$feature_dir"
+
+  # If result file already exists, preserve startedAt
+  local started_at="$now"
+  if [[ -f "$result_file" ]]; then
+    local prev_start
+    prev_start=$(jq -r '.startedAt // empty' "$result_file" 2>/dev/null || echo "")
+    [[ -n "$prev_start" ]] && started_at="$prev_start"
+  fi
+
+  local finished_at="null"
+  if [[ "$status" == "completed" || "$status" == "aborted" || "$status" == "failed" ]]; then
+    finished_at="\"$now\""
+  fi
+
+  local tmp
+  tmp=$(mktemp) || { log_warn "write_stage_result: mktemp failed"; return 0; }
+  cat > "$tmp" <<EOF
+{
+  "stage": "$stage",
+  "status": "$status",
+  "startedAt": "$started_at",
+  "finishedAt": $finished_at,
+  "agent": "$agent",
+  "model": "$model",
+  "notes": "$notes"
+}
+EOF
+  mv "$tmp" "$result_file"
+}
+
+# Read a stage result file, returning its JSON content or empty string.
+# Usage: read_stage_result <feature_dir> <stage>
+read_stage_result() {
+  local feature_dir="$1" stage="$2"
+  local result_file="$feature_dir/.${stage}-result.json"
+  if [[ -f "$result_file" ]] && jq empty "$result_file" 2>/dev/null; then
+    cat "$result_file"
+  else
+    echo ""
+  fi
+}
+
+# Read the status field from a stage result file.
+# Usage: read_stage_status <feature_dir> <stage>
+# Returns the status string or empty.
+read_stage_status() {
+  local feature_dir="$1" stage="$2"
+  local result_file="$feature_dir/.${stage}-result.json"
+  if [[ -f "$result_file" ]]; then
+    jq -r '.status // empty' "$result_file" 2>/dev/null || echo ""
+  else
+    echo ""
+  fi
+}
+
+# Check if a stage is complete (new-style result file or legacy marker).
+# Usage: check_stage_complete <feature_dir> <stage>
+# Returns 0 if completed, 1 otherwise.
+check_stage_complete() {
+  local feature_dir="$1" stage="$2"
+
+  # 1. Check new-style result file
+  local status
+  status=$(read_stage_status "$feature_dir" "$stage")
+  [[ "$status" == "completed" ]] && return 0
+
+  # 2. Fallback to legacy marker
+  local marker
+  marker=$(_stage_legacy_marker "$stage")
+  if [[ -n "$marker" ]] && [[ -f "$feature_dir/$marker" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+# Check if a stage is in awaiting_user state.
+# Usage: check_stage_awaiting_user <feature_dir> <stage>
+check_stage_awaiting_user() {
+  local feature_dir="$1" stage="$2"
+  local status
+  status=$(read_stage_status "$feature_dir" "$stage")
+  [[ "$status" == "awaiting_user" ]] && return 0
+  return 1
+}
+
+# Check if the workflow is aborted (new-style result or legacy marker).
+# Usage: check_stage_aborted <feature_dir>
+# Checks any stage result for aborted status, then falls back to .workflow-aborted marker.
+check_stage_aborted() {
+  local feature_dir="$1"
+
+  # 1. Check new-style: any stage result with status=aborted
+  local stage result_file
+  for stage in planning coding review ready; do
+    result_file="$feature_dir/.${stage}-result.json"
+    if [[ -f "$result_file" ]]; then
+      local status
+      status=$(jq -r '.status // empty' "$result_file" 2>/dev/null || echo "")
+      [[ "$status" == "aborted" ]] && return 0
+    fi
+  done
+
+  # 2. Fallback to legacy marker
+  [[ -f "$feature_dir/.workflow-aborted" ]] && return 0
+
+  return 1
+}
+
+# Write .phase-config.json with resolved per-stage configuration.
+# Usage: write_phase_config <feature_dir> <planner_model> <coder_model> <reviewer_model> \
+#                           <plan_depth> <code_depth> <review_mode> [force_model]
+write_phase_config() {
+  local feature_dir="$1"
+  local planner_model="$2" coder_model="$3" reviewer_model="$4"
+  local plan_depth="$5" code_depth="$6" review_mode="$7"
+  local force_model="${8:-}"
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  mkdir -p "$feature_dir"
+  local tmp
+  tmp=$(mktemp) || { log_warn "write_phase_config: mktemp failed"; return 0; }
+
+  local force_model_json="null"
+  [[ -n "$force_model" ]] && force_model_json="\"$force_model\""
+
+  local planner_agent coder_agent reviewer_agent
+  planner_agent="$(agent_resolve_from_model "$planner_model")"
+  coder_agent="$(agent_resolve_from_model "$coder_model")"
+  reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+
+  cat > "$tmp" <<EOF
+{
+  "planning": {
+    "model": "$planner_model",
+    "agent": "$planner_agent",
+    "depth": "$plan_depth"
+  },
+  "coding": {
+    "model": "$coder_model",
+    "agent": "$coder_agent",
+    "depth": "$code_depth"
+  },
+  "review": {
+    "model": "$reviewer_model",
+    "agent": "$reviewer_agent",
+    "mode": "$review_mode"
+  },
+  "ready": {
+    "enabled": ${_CFG_READY_ENABLED:-false}
+  },
+  "resolvedAt": "$now",
+  "forceModel": $force_model_json
+}
+EOF
+  mv "$tmp" "$feature_dir/.phase-config.json"
+}
+
+# Read a field from .phase-config.json for a given stage.
+# Usage: read_phase_config <feature_dir> <stage> <field>
+# Example: read_phase_config "$dir" "coding" "model"
+read_phase_config() {
+  local feature_dir="$1" stage="$2" field="$3"
+  local config_file="$feature_dir/.phase-config.json"
+  if [[ -f "$config_file" ]]; then
+    jq -r --arg s "$stage" --arg f "$field" '.[$s][$f] // empty' "$config_file" 2>/dev/null || echo ""
+  else
+    echo ""
+  fi
+}
+
 # Ensure a tmux window exists, creating it if missing (e.g. after monitor restart).
 _ensure_window_exists() {
   local session="$1" win="$2" wt_dir="$3"
@@ -1668,7 +1865,8 @@ _launch_agent_in_pane() {
   local abort_check_cmd=""
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
-    abort_check_cmd="check_workflow_aborted '$slug'"
+    local feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
+    abort_check_cmd="check_stage_aborted '$feature_dir'"
   fi
   agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd"
 }
@@ -1822,7 +2020,7 @@ launch_ready_phase() {
     if [[ "$launch_rc" -eq 0 ]]; then
       return 3
     fi
-    if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$slug"; then
+    if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
       return 2
     fi
 
@@ -1841,10 +2039,13 @@ launch_ready_phase() {
   rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention"
 
   if [[ "$ready_rc" -eq 0 ]]; then
+    # Record ready stage result (HOK-1177)
+    write_stage_result "$state_dir" "ready" "completed" "" "" "verdict: ${verdict:-unknown}"
     log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
     return 0
   fi
 
+  write_stage_result "$state_dir" "ready" "failed" "" "" "Ready checks failed"
   write_ready_attention_file "$state_dir" "Ready checks failed for PR #$pr_number."
   log_error "  Ready checks failed for $issue"
   [[ -n "$result" ]] && log_error "$result"
@@ -2938,6 +3139,7 @@ monitor_issue_state() {
   PR="${PR_BY_ISSUE[$ISSUE]:-}"
   WIN="$ISSUE-$SLUG"
   WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+  local FEATURE_DIR="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}"
   current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
   needs_attention="false"
 
@@ -3026,7 +3228,7 @@ monitor_issue_state() {
 
       case "$current_phase" in
         routing)
-          if check_workflow_aborted "$SLUG"; then
+          if check_stage_aborted "$FEATURE_DIR"; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during routing phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -3074,6 +3276,9 @@ monitor_issue_state() {
               linear_issue=$(get_linear_issue_id "$ISSUE")
               save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
 
+              # Write canonical phase config (HOK-1177)
+              write_phase_config "$FEATURE_DIR" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${FORCE_MODEL:-}"
+
               # Transition to planning phase
               set_task_phase "$ISSUE" "planning"
               planner_agent="$(agent_resolve_from_model "$planner_model")"
@@ -3085,10 +3290,14 @@ monitor_issue_state() {
                 title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
               fi
 
+              # Record planning stage as running (HOK-1177)
+              write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_model"
+
               launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth"
               local launch_rc=$?
-              if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+              if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
                 log "status" "⛔ $ISSUE → Workflow aborted during planning launch"
+                write_stage_result "$FEATURE_DIR" "planning" "aborted" "$planner_agent" "$planner_model"
                 set_task_phase "$ISSUE" "aborted"
                 set_window_attention_state "$WIN" "needs-user"
                 return 0
@@ -3113,8 +3322,9 @@ monitor_issue_state() {
           ;;
 
         planning)
-          if check_workflow_aborted "$SLUG"; then
+          if check_stage_aborted "$FEATURE_DIR"; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during planning phase"
+            write_stage_result "$FEATURE_DIR" "planning" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3144,12 +3354,16 @@ monitor_issue_state() {
             fi
           fi
 
-          if check_plan_approved "$SLUG"; then
+          if check_stage_complete "$FEATURE_DIR" "planning"; then
+            # Mark planning as completed (HOK-1177)
+            write_stage_result "$FEATURE_DIR" "planning" "completed" "$current_agent" "" "Plan approved"
+
             # FORCE_MODEL takes priority, then challenge, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
               coder_model="$FORCE_MODEL"
             else
-              coder_model=$(get_task_meta "$ISSUE" "coderModel")
+              coder_model=$(read_phase_config "$FEATURE_DIR" "coding" "model")
+              [[ -z "$coder_model" ]] && coder_model=$(get_task_meta "$ISSUE" "coderModel")
               # For challenge tasks, the challenge model MUST override the routed coder
               challenge_coder=$(get_task_meta "$ISSUE" "challengeModel")
               if [[ -n "$challenge_coder" ]]; then
@@ -3157,7 +3371,8 @@ monitor_issue_state() {
               fi
             fi
             [[ -z "$coder_model" ]] && coder_model="claude-opus-4-6"
-            code_depth=$(get_task_meta "$ISSUE" "codeDepth")
+            code_depth=$(read_phase_config "$FEATURE_DIR" "coding" "depth")
+            [[ -z "$code_depth" ]] && code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
 
             # Transition to coding phase
@@ -3171,10 +3386,14 @@ monitor_issue_state() {
               title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
             fi
 
+            # Record coding stage as running (HOK-1177)
+            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_model"
+
             launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
-            if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+            if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
               log "status" "⛔ $ISSUE → Workflow aborted during coding launch"
+              write_stage_result "$FEATURE_DIR" "coding" "aborted" "$coder_agent" "$coder_model"
               set_task_phase "$ISSUE" "aborted"
               set_window_attention_state "$WIN" "needs-user"
               return 0
@@ -3183,34 +3402,55 @@ monitor_issue_state() {
             log "status" "✓ $ISSUE → Plan approved, launching coding phase"
             active_count=$((active_count + 1))
             return 0
-          else
-            if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
-              set_window_attention_state "$WIN" "clear"
-              # Keep unapproved planning tasks active while agent is still running
-              active_count=$((active_count + 1))
-              return 0
-            fi
-            needs_attention="true"
           fi
+
+          # Check if plan exists but not yet approved (awaiting_user)
+          if check_stage_awaiting_user "$FEATURE_DIR" "planning"; then
+            set_window_attention_state "$WIN" "needs-user"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            set_window_attention_state "$WIN" "clear"
+            # Keep unapproved planning tasks active while agent is still running
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          # Agent exited — if plan exists but not approved, mark as awaiting_user
+          if [[ -f "$FEATURE_DIR/plan.md" ]] && ! check_stage_complete "$FEATURE_DIR" "planning"; then
+            write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+
+          needs_attention="true"
           ;;
 
         coding)
-          if check_workflow_aborted "$SLUG"; then
+          if check_stage_aborted "$FEATURE_DIR"; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during coding phase"
+            write_stage_result "$FEATURE_DIR" "coding" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
           fi
 
-          if check_coding_complete "$SLUG"; then
-            # FORCE_MODEL takes priority, then state, then default
+          if check_stage_complete "$FEATURE_DIR" "coding"; then
+            # Mark coding as completed (HOK-1177)
+            write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
+
+            # FORCE_MODEL takes priority, then phase config, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
               reviewer_model="$FORCE_MODEL"
             else
-              reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
+              reviewer_model=$(read_phase_config "$FEATURE_DIR" "review" "model")
+              [[ -z "$reviewer_model" ]] && reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
             fi
             [[ -z "$reviewer_model" ]] && reviewer_model="claude-sonnet-4-5-20250929"
-            review_mode=$(get_task_meta "$ISSUE" "reviewMode")
+            review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
+            [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")
             [[ -z "$review_mode" ]] && review_mode="static"
 
             # Transition to review phase
@@ -3224,10 +3464,14 @@ monitor_issue_state() {
               title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
             fi
 
+            # Record review stage as running (HOK-1177)
+            write_stage_result "$FEATURE_DIR" "review" "running" "$reviewer_agent" "$reviewer_model"
+
             launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
             local launch_rc=$?
-            if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+            if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
               log "status" "⛔ $ISSUE → Workflow aborted during review launch"
+              write_stage_result "$FEATURE_DIR" "review" "aborted" "$reviewer_agent" "$reviewer_model"
               set_task_phase "$ISSUE" "aborted"
               set_window_attention_state "$WIN" "needs-user"
               return 0
@@ -3248,8 +3492,9 @@ monitor_issue_state() {
           ;;
 
         review)
-          if check_workflow_aborted "$SLUG"; then
+          if check_stage_aborted "$FEATURE_DIR"; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
+            write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3267,6 +3512,9 @@ monitor_issue_state() {
           local pr_number
           pr_number=$(find_pr_for_branch "$BRANCH")
           if [[ -n "$pr_number" ]] && [[ "$_CFG_READY_ENABLED" == "true" ]]; then
+            # Mark review as completed with PR artifact (HOK-1177)
+            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number"
+
             # Transition to ready phase
             set_task_phase "$ISSUE" "ready"
             title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -3276,7 +3524,7 @@ monitor_issue_state() {
             fi
             launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"
             local launch_rc=$?
-            if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+            if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
               log "⛔ $ISSUE → Workflow aborted during ready launch"
               set_task_phase "$ISSUE" "aborted"
               set_window_attention_state "$WIN" "needs-user"
@@ -3303,8 +3551,9 @@ monitor_issue_state() {
           ;;
 
         ready)
-          if check_workflow_aborted "$SLUG"; then
+          if check_stage_aborted "$FEATURE_DIR"; then
             log "⛔ $ISSUE → Workflow aborted by user during ready phase"
+            write_stage_result "$FEATURE_DIR" "ready" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -3331,7 +3580,7 @@ monitor_issue_state() {
 
               launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"
               local launch_rc=$?
-              if [[ "$launch_rc" -eq 2 ]] && check_workflow_aborted "$SLUG"; then
+              if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
                 log "⛔ $ISSUE → Workflow aborted during conflict remediation"
                 set_task_phase "$ISSUE" "aborted"
                 set_window_attention_state "$WIN" "needs-user"
@@ -3396,7 +3645,7 @@ monitor_issue_state() {
       # Check if the pane is dead but window still exists (remain-on-exit).
       # Respawn and re-launch the current phase instead of cleaning up.
       if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
-        if check_workflow_aborted "$SLUG"; then
+        if check_stage_aborted "$FEATURE_DIR"; then
           log "status" "⛔ $ISSUE → Workflow aborted (pane exited)"
           set_task_phase "$ISSUE" "aborted"
           set_window_attention_state "$WIN" "needs-user"
