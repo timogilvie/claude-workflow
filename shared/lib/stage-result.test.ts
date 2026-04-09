@@ -1,0 +1,420 @@
+/**
+ * Tests for stage-result module (HOK-1192)
+ *
+ * Covers read/write/update helpers, atomic writes, malformed input handling,
+ * artifact round-trips, and backward compatibility.
+ */
+
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
+
+import {
+  writeStageResult,
+  readStageResult,
+  readAllStageResults,
+  updateStageResult,
+  getResultFilePath,
+  isValidStage,
+  isValidStatus,
+} from './stage-result.ts';
+import type {
+  StageResult,
+  PlanningArtifacts,
+  CodingArtifacts,
+  ReviewArtifacts,
+  ReadyArtifacts,
+} from './stage-result.ts';
+
+let testDir: string;
+
+async function createTestDir(): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), 'stage-result-test-'));
+}
+
+function makeResult(overrides: Partial<StageResult> = {}): StageResult {
+  return {
+    stage: 'planning',
+    status: 'running',
+    startedAt: '2026-04-09T10:00:00Z',
+    finishedAt: null,
+    agent: 'claude',
+    model: 'claude-opus-4-6',
+    notes: '',
+    ...overrides,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────
+// getResultFilePath
+// ────────────────────────────────────────────────────────────────
+
+describe('getResultFilePath', () => {
+  it('returns correct path for each stage', () => {
+    assert.equal(getResultFilePath('/tmp/feat', 'planning'), '/tmp/feat/.planning-result.json');
+    assert.equal(getResultFilePath('/tmp/feat', 'coding'), '/tmp/feat/.coding-result.json');
+    assert.equal(getResultFilePath('/tmp/feat', 'review'), '/tmp/feat/.review-result.json');
+    assert.equal(getResultFilePath('/tmp/feat', 'ready'), '/tmp/feat/.ready-result.json');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// writeStageResult + readStageResult round-trip
+// ────────────────────────────────────────────────────────────────
+
+describe('writeStageResult and readStageResult', () => {
+  beforeEach(async () => { testDir = await createTestDir(); });
+  afterEach(async () => { await fs.rm(testDir, { recursive: true, force: true }); });
+
+  it('round-trips a basic result', async () => {
+    const result = makeResult();
+    await writeStageResult(testDir, result);
+
+    const read = await readStageResult(testDir, 'planning');
+    assert.deepEqual(read, result);
+  });
+
+  it('overwrites existing file completely', async () => {
+    const first = makeResult({ notes: 'first' });
+    await writeStageResult(testDir, first);
+
+    const second = makeResult({ notes: 'second', status: 'completed', finishedAt: '2026-04-09T11:00:00Z' });
+    await writeStageResult(testDir, second);
+
+    const read = await readStageResult(testDir, 'planning');
+    assert.equal(read?.notes, 'second');
+    assert.equal(read?.status, 'completed');
+  });
+
+  it('creates feature directory if missing', async () => {
+    const nestedDir = path.join(testDir, 'sub', 'dir');
+    await writeStageResult(nestedDir, makeResult());
+
+    const read = await readStageResult(nestedDir, 'planning');
+    assert.equal(read?.status, 'running');
+  });
+
+  it('writes pretty-printed JSON', async () => {
+    await writeStageResult(testDir, makeResult());
+    const raw = await fs.readFile(getResultFilePath(testDir, 'planning'), 'utf-8');
+    assert.ok(raw.includes('\n  "stage"'), 'Expected 2-space indented JSON');
+  });
+
+  it('cleans up temp file after atomic write', async () => {
+    await writeStageResult(testDir, makeResult());
+    const files = await fs.readdir(testDir);
+    const tmpFiles = files.filter(f => f.startsWith('.tmp-'));
+    assert.equal(tmpFiles.length, 0, 'No temp files should remain');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// readStageResult error cases
+// ────────────────────────────────────────────────────────────────
+
+describe('readStageResult error handling', () => {
+  beforeEach(async () => { testDir = await createTestDir(); });
+  afterEach(async () => { await fs.rm(testDir, { recursive: true, force: true }); });
+
+  it('returns null for missing file', async () => {
+    const result = await readStageResult(testDir, 'coding');
+    assert.equal(result, null);
+  });
+
+  it('returns null for empty file', async () => {
+    await fs.writeFile(path.join(testDir, '.coding-result.json'), '');
+    const result = await readStageResult(testDir, 'coding');
+    assert.equal(result, null);
+  });
+
+  it('returns null for malformed JSON', async () => {
+    await fs.writeFile(path.join(testDir, '.coding-result.json'), '{broken json');
+    const result = await readStageResult(testDir, 'coding');
+    assert.equal(result, null);
+  });
+
+  it('returns null when stage field mismatches filename', async () => {
+    const result = makeResult({ stage: 'review' });
+    await fs.writeFile(
+      path.join(testDir, '.coding-result.json'),
+      JSON.stringify(result),
+    );
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read, null);
+  });
+
+  it('returns null when status field is missing', async () => {
+    await fs.writeFile(
+      path.join(testDir, '.coding-result.json'),
+      JSON.stringify({ stage: 'coding', startedAt: '2026-01-01T00:00:00Z' }),
+    );
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read, null);
+  });
+
+  it('returns null for nonexistent directory', async () => {
+    const result = await readStageResult('/nonexistent/path', 'planning');
+    assert.equal(result, null);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// readAllStageResults
+// ────────────────────────────────────────────────────────────────
+
+describe('readAllStageResults', () => {
+  beforeEach(async () => { testDir = await createTestDir(); });
+  afterEach(async () => { await fs.rm(testDir, { recursive: true, force: true }); });
+
+  it('returns empty map when no files exist', async () => {
+    const results = await readAllStageResults(testDir);
+    assert.deepEqual(results, {});
+  });
+
+  it('reads multiple stage files', async () => {
+    await writeStageResult(testDir, makeResult({ stage: 'planning', status: 'completed' }));
+    await writeStageResult(testDir, makeResult({ stage: 'coding', status: 'running' }));
+
+    const results = await readAllStageResults(testDir);
+    assert.equal(results.planning?.status, 'completed');
+    assert.equal(results.coding?.status, 'running');
+    assert.equal(results.review, undefined);
+    assert.equal(results.ready, undefined);
+  });
+
+  it('skips invalid files', async () => {
+    await writeStageResult(testDir, makeResult({ stage: 'planning', status: 'completed' }));
+    await fs.writeFile(path.join(testDir, '.coding-result.json'), 'not json');
+
+    const results = await readAllStageResults(testDir);
+    assert.equal(results.planning?.status, 'completed');
+    assert.equal(results.coding, undefined);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// updateStageResult
+// ────────────────────────────────────────────────────────────────
+
+describe('updateStageResult', () => {
+  beforeEach(async () => { testDir = await createTestDir(); });
+  afterEach(async () => { await fs.rm(testDir, { recursive: true, force: true }); });
+
+  it('merges patch into existing result', async () => {
+    await writeStageResult(testDir, makeResult({
+      stage: 'review',
+      status: 'running',
+      startedAt: '2026-04-09T10:00:00Z',
+      agent: 'claude',
+      model: 'opus-4-6',
+    }));
+
+    await updateStageResult(testDir, 'review', {
+      status: 'completed',
+      finishedAt: '2026-04-09T10:30:00Z',
+      artifacts: { type: 'review', findingsCount: 2 },
+    });
+
+    const read = await readStageResult(testDir, 'review');
+    assert.equal(read?.status, 'completed');
+    assert.equal(read?.startedAt, '2026-04-09T10:00:00Z'); // preserved
+    assert.equal(read?.finishedAt, '2026-04-09T10:30:00Z');
+    assert.equal(read?.agent, 'claude'); // preserved
+    assert.deepEqual(read?.artifacts, { type: 'review', findingsCount: 2 });
+  });
+
+  it('creates new file when none exists', async () => {
+    await updateStageResult(testDir, 'coding', {
+      status: 'running',
+      agent: 'codex',
+      model: 'gpt-5',
+    });
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.status, 'running');
+    assert.equal(read?.stage, 'coding');
+    assert.equal(read?.agent, 'codex');
+    assert.ok(read?.startedAt); // auto-set
+  });
+
+  it('preserves startedAt from existing result', async () => {
+    const originalStart = '2026-04-09T08:00:00Z';
+    await writeStageResult(testDir, makeResult({
+      stage: 'coding',
+      startedAt: originalStart,
+    }));
+
+    await updateStageResult(testDir, 'coding', { status: 'completed' });
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.startedAt, originalStart);
+  });
+
+  it('allows explicit startedAt override in patch', async () => {
+    await writeStageResult(testDir, makeResult({
+      stage: 'coding',
+      startedAt: '2026-04-09T08:00:00Z',
+    }));
+
+    const override = '2026-04-09T09:00:00Z';
+    await updateStageResult(testDir, 'coding', { startedAt: override });
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.startedAt, override);
+  });
+
+  it('enforces stage from argument, not patch', async () => {
+    await updateStageResult(testDir, 'ready', {
+      stage: 'planning' as any, // try to override
+      status: 'running',
+    });
+
+    const read = await readStageResult(testDir, 'ready');
+    assert.equal(read?.stage, 'ready');
+  });
+
+  it('sets null failureReason explicitly', async () => {
+    await updateStageResult(testDir, 'coding', {
+      status: 'running',
+      failureReason: null,
+    });
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.failureReason, null);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// Artifacts round-trip
+// ────────────────────────────────────────────────────────────────
+
+describe('artifacts round-trip', () => {
+  beforeEach(async () => { testDir = await createTestDir(); });
+  afterEach(async () => { await fs.rm(testDir, { recursive: true, force: true }); });
+
+  it('round-trips PlanningArtifacts', async () => {
+    const artifacts: PlanningArtifacts = { type: 'planning', planFile: 'plan.md', taskPacketFile: 'task-packet.md' };
+    await writeStageResult(testDir, makeResult({ stage: 'planning', artifacts }));
+
+    const read = await readStageResult(testDir, 'planning');
+    assert.deepEqual(read?.artifacts, artifacts);
+  });
+
+  it('round-trips CodingArtifacts', async () => {
+    const artifacts: CodingArtifacts = { type: 'coding', filesChanged: 5, linesAdded: 200, linesRemoved: 50, commitCount: 3 };
+    await writeStageResult(testDir, makeResult({ stage: 'coding', artifacts }));
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.deepEqual(read?.artifacts, artifacts);
+  });
+
+  it('round-trips ReviewArtifacts', async () => {
+    const artifacts: ReviewArtifacts = { type: 'review', prNumber: 42, prUrl: 'https://github.com/org/repo/pull/42', findingsCount: 3, blockingIssues: 1 };
+    await writeStageResult(testDir, makeResult({ stage: 'review', artifacts }));
+
+    const read = await readStageResult(testDir, 'review');
+    assert.deepEqual(read?.artifacts, artifacts);
+  });
+
+  it('round-trips ReadyArtifacts', async () => {
+    const artifacts: ReadyArtifacts = { type: 'ready', verdict: 'pass', checksRun: 4, checksPassed: 4, mergeConflict: 'CLEAN' };
+    await writeStageResult(testDir, makeResult({ stage: 'ready', artifacts }));
+
+    const read = await readStageResult(testDir, 'ready');
+    assert.deepEqual(read?.artifacts, artifacts);
+  });
+
+  it('handles result without artifacts (backward compat)', async () => {
+    // Write a result without artifacts (simulating old format)
+    const result = makeResult();
+    await fs.mkdir(testDir, { recursive: true });
+    await fs.writeFile(
+      path.join(testDir, '.planning-result.json'),
+      JSON.stringify(result, null, 2),
+    );
+
+    const read = await readStageResult(testDir, 'planning');
+    assert.equal(read?.artifacts, undefined);
+    assert.equal(read?.status, 'running');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// failureReason round-trip
+// ────────────────────────────────────────────────────────────────
+
+describe('failureReason round-trip', () => {
+  beforeEach(async () => { testDir = await createTestDir(); });
+  afterEach(async () => { await fs.rm(testDir, { recursive: true, force: true }); });
+
+  it('round-trips failureReason string', async () => {
+    const result = makeResult({
+      stage: 'coding',
+      status: 'failed',
+      failureReason: 'Tests failed: 3 assertions failed',
+      finishedAt: '2026-04-09T11:00:00Z',
+    });
+    await writeStageResult(testDir, result);
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.failureReason, 'Tests failed: 3 assertions failed');
+  });
+
+  it('round-trips null failureReason', async () => {
+    const result = makeResult({ stage: 'coding', failureReason: null });
+    await writeStageResult(testDir, result);
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.failureReason, null);
+  });
+
+  it('handles result without failureReason (backward compat)', async () => {
+    // Write without failureReason field at all
+    const result = makeResult();
+    await fs.mkdir(testDir, { recursive: true });
+    await fs.writeFile(
+      path.join(testDir, '.planning-result.json'),
+      JSON.stringify(result, null, 2),
+    );
+
+    const read = await readStageResult(testDir, 'planning');
+    assert.equal(read?.failureReason, undefined);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// Validation helpers
+// ────────────────────────────────────────────────────────────────
+
+describe('isValidStage', () => {
+  it('accepts valid stages', () => {
+    assert.ok(isValidStage('planning'));
+    assert.ok(isValidStage('coding'));
+    assert.ok(isValidStage('review'));
+    assert.ok(isValidStage('ready'));
+  });
+
+  it('rejects invalid stages', () => {
+    assert.ok(!isValidStage('routing'));
+    assert.ok(!isValidStage(''));
+    assert.ok(!isValidStage('PLANNING'));
+  });
+});
+
+describe('isValidStatus', () => {
+  it('accepts valid statuses', () => {
+    assert.ok(isValidStatus('running'));
+    assert.ok(isValidStatus('awaiting_user'));
+    assert.ok(isValidStatus('completed'));
+    assert.ok(isValidStatus('aborted'));
+    assert.ok(isValidStatus('failed'));
+  });
+
+  it('rejects invalid statuses', () => {
+    assert.ok(!isValidStatus('pending'));
+    assert.ok(!isValidStatus(''));
+    assert.ok(!isValidStatus('RUNNING'));
+  });
+});

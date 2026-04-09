@@ -867,59 +867,36 @@ export async function checkLegacyMarkers(featureDir: string): Promise<LegacyMark
 }
 
 // ────────────────────────────────────────────────────────────────
-// Stage Result Files (HOK-1177)
+// Stage Result Files (HOK-1177, extended by HOK-1192)
+//
+// Types and I/O helpers live in stage-result.ts. This module
+// re-exports them for backward compatibility.
 // ────────────────────────────────────────────────────────────────
 
-/** Status values for controller-owned stage result files. */
-export type StageStatus = 'running' | 'awaiting_user' | 'completed' | 'aborted' | 'failed';
+export type { StageStatus, StageName, StageResult, StageResultMap } from './stage-result.ts';
+export type {
+  StageArtifacts,
+  PlanningArtifacts,
+  CodingArtifacts,
+  ReviewArtifacts,
+  ReadyArtifacts,
+} from './stage-result.ts';
 
-/** Stage names used in result file naming. */
-export type StageName = 'planning' | 'coding' | 'review' | 'ready';
+export {
+  readStageResult,
+  readAllStageResults,
+  writeStageResult,
+  updateStageResult,
+  getResultFilePath,
+  isValidStage,
+  isValidStatus,
+} from './stage-result.ts';
 
-/** Structure of a .<stage>-result.json file written by the orchestrator. */
-export interface StageResult {
-  stage: StageName;
-  status: StageStatus;
-  startedAt: string;
-  finishedAt: string | null;
-  agent: string;
-  model: string;
-  notes: string;
-}
-
-/** All stage result files found in a feature directory. */
-export interface StageResultMap {
-  planning?: StageResult;
-  coding?: StageResult;
-  review?: StageResult;
-  ready?: StageResult;
-}
-
-/**
- * Read all stage result files from a feature directory.
- *
- * Looks for `.planning-result.json`, `.coding-result.json`, etc.
- * Invalid or missing files are silently skipped.
- */
-export async function readStageResults(featureDir: string): Promise<StageResultMap> {
-  const stages: StageName[] = ['planning', 'coding', 'review', 'ready'];
-  const results: StageResultMap = {};
-
-  for (const stage of stages) {
-    const resultPath = path.join(featureDir, `.${stage}-result.json`);
-    try {
-      const content = await fs.readFile(resultPath, 'utf-8');
-      const parsed = JSON.parse(content) as StageResult;
-      if (parsed.stage === stage && parsed.status) {
-        results[stage] = parsed;
-      }
-    } catch {
-      // File missing or invalid — not an error
-    }
-  }
-
-  return results;
-}
+// Re-export readAllStageResults under the legacy name for existing callers.
+// Also bind locally as readStageResults so controllerCheckReadiness can call it.
+import { readAllStageResults } from './stage-result.ts';
+const readStageResults = readAllStageResults;
+export { readStageResults };
 
 // ────────────────────────────────────────────────────────────────
 // Controller-Owned Readiness Check
