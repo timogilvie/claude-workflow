@@ -3660,6 +3660,16 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
+
+            # HOK-1204: In interactive sessions, the controller owns approval
+            # capture after the user approves in conversation and the agent exits.
+            if [[ -f "$FEATURE_DIR/plan.md" ]] && _pane_is_dead_or_idle "$SESSION:$WIN"; then
+              log "status" "✓ $ISSUE → Agent exited with plan ready, auto-approving"
+              approve_plan "$FEATURE_DIR" "$current_agent" ""
+              active_count=$((active_count + 1))
+              return 0
+            fi
+
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
@@ -3743,6 +3753,7 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
+            log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"
           fi
 
           # Stage still running
