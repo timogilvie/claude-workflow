@@ -256,6 +256,10 @@ Each subsystem spec is structured for machine consumption:
 ## Dependencies
 ...
 
+## Related Subsystems
+- [eval-system](eval-system.md) — eval orchestrator consumes router decisions
+- [tools-prompts](tools-prompts.md) — prompt templates reference subsystem constraints
+
 ## Recent Changes
 [Auto-updated after each PR]
 ```

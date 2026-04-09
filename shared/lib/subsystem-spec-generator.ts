@@ -12,6 +12,7 @@ import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execShellCommand } from './shell-utils.ts';
 import type { Subsystem } from './subsystem-detector.ts';
+import type { RelatedSubsystem } from './subsystem-cross-reference.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -27,6 +28,8 @@ export interface SubsystemSpecOptions {
   includeGitHistory?: boolean;
   /** Repository directory */
   repoDir: string;
+  /** Related subsystems (cross-references) */
+  relatedSubsystems?: RelatedSubsystem[];
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -40,7 +43,7 @@ export function generateSubsystemSpec(
   subsystem: Subsystem,
   options: SubsystemSpecOptions
 ): string {
-  const { repoDir, templatePath, includeGitHistory = true } = options;
+  const { repoDir, templatePath, includeGitHistory = true, relatedSubsystems } = options;
 
   // Load template
   const templateDir = templatePath || join(dirname(dirname(__dirname)), 'tools', 'prompts', 'subsystem-spec-template.md');
@@ -82,6 +85,12 @@ export function generateSubsystemSpec(
   template = template.replace(/{DEPENDENCIES}/g, dependencies);
   template = template.replace(/{DEPENDENTS}/g, '- *(TODO: Analyze which subsystems use this one)*');
 
+  // Related subsystems (cross-references)
+  const relatedSubsystemsList = relatedSubsystems?.length
+    ? relatedSubsystems.map(r => `- [${r.name}](${r.id}.md) — ${r.reason}`).join('\n')
+    : '- *(No related subsystems detected)*';
+  template = template.replace(/{RELATED_SUBSYSTEMS}/g, relatedSubsystemsList);
+
   // Recent changes
   const recentChanges = includeGitHistory
     ? getRecentChanges(subsystem.keyFiles, repoDir)
@@ -97,7 +106,10 @@ export function generateSubsystemSpec(
 export function writeSubsystemSpecs(
   subsystems: Subsystem[],
   contextDir: string,
-  options: Omit<SubsystemSpecOptions, 'repoDir'> & { repoDir: string }
+  options: Omit<SubsystemSpecOptions, 'repoDir' | 'relatedSubsystems'> & {
+    repoDir: string;
+    crossReferences?: Map<string, RelatedSubsystem[]>;
+  }
 ): void {
   // Create context directory if it doesn't exist
   if (!existsSync(contextDir)) {
@@ -106,7 +118,11 @@ export function writeSubsystemSpecs(
 
   // Generate and write each spec
   for (const subsystem of subsystems) {
-    const spec = generateSubsystemSpec(subsystem, options);
+    const relatedSubsystems = options.crossReferences?.get(subsystem.id);
+    const spec = generateSubsystemSpec(subsystem, {
+      ...options,
+      relatedSubsystems,
+    });
     const filename = `${subsystem.id}.md`;
     const filepath = join(contextDir, filename);
 

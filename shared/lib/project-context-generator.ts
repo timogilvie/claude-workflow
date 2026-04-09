@@ -5,6 +5,7 @@ import { analyzeCodeConventions, type ConventionAnalysis } from './context-analy
 import { analyzeRepoContext } from './repo-context-analyzer.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { writeSubsystemSpecs } from './subsystem-spec-generator.ts';
+import { detectSubsystemRelationships } from './subsystem-cross-reference.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -260,12 +261,17 @@ export async function generateProjectContext(opts: { repoDir: string; force: boo
     }
 
     console.log('\nGenerating subsystem specifications...');
+
+    // Generate cross-references
+    const crossReferences = detectSubsystemRelationships(subsystems);
+
     writeSubsystemSpecs(subsystems, contextDir, {
       repoDir,
       includeGitHistory: true,
+      crossReferences,
     });
 
-    console.log(`✓ Created ${subsystems.length} subsystem spec(s) in ${contextDir}`);
+    console.log(`✓ Created ${subsystems.length} subsystem spec(s) with cross-references`);
 
     const subsystemLinks = subsystems
       .map((subsystem) => `- [${subsystem.name}](context/${subsystem.id}.md) - ${subsystem.description}`)
