@@ -21,7 +21,8 @@ import { splitTaskPacket, isValidTaskPacket, writeTaskPacketArtifacts } from '..
 import { formatValidationIssues } from '../shared/lib/validation-formatter.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
-import { logLinearUpdateError } from '../shared/lib/linear-update-error-log.ts';
+import { isInteractive } from '../shared/lib/cli-utils.ts';
+import { logLinearUpdateError, logValidationWarning } from '../shared/lib/linear-update-error-log.ts';
 
 runTool({
   name: 'expand-issue',
@@ -151,21 +152,56 @@ runTool({
 
       try {
         validationResult = await validateTaskPacket(fullContent, repoPath, validationConfig);
+      } catch (validationError) {
+        const errorMsg = errorMessage(validationError);
+        console.warn(`\n⚠️  Validation failed with error: ${errorMsg}`);
+        console.warn('   Proceeding without validation...');
+      }
 
+      if (validationResult) {
         console.log(formatValidationIssues(validationResult.issues));
 
         if (!validationResult.passed) {
           console.error('\n❌ Validation FAILED');
 
           if (shouldUpdate) {
-            // Ask user whether to proceed
-            console.log('\nThe task packet has quality issues that may cause problems for autonomous agents.');
-            const proceed = await confirm('Do you want to update Linear anyway?');
+            const interactive = isInteractive();
+            let proceed = true;
+
+            if (interactive) {
+              console.log('\nThe task packet has quality issues that may cause problems for autonomous agents.');
+              proceed = await confirm('Do you want to update Linear anyway?');
+            } else {
+              console.warn('\n⚠️  Running in non-interactive mode. Proceeding with Linear update despite validation failures.');
+              console.warn('   Validation issues:');
+              for (const issue of validationResult.issues) {
+                console.warn(`   - [${issue.type}] ${issue.section}: ${issue.description}`);
+              }
+            }
+
+            const action = proceed ? 'proceeded' : 'cancelled';
+            const mode = interactive ? 'interactive' : 'non-interactive';
+            const warningLogPath = logValidationWarning(
+              repoPath,
+              issue.identifier,
+              validationResult.issues,
+              mode,
+              action,
+            );
 
             if (!proceed) {
+              if (warningLogPath) {
+                console.warn(`⚠️  Validation cancellation logged to ${warningLogPath}`);
+              }
               throw new Error('Cancelled. Fix the issues and try again.');
-            } else {
+            }
+
+            if (interactive) {
               console.log('⚠️  Proceeding with update despite validation failures...');
+            }
+
+            if (warningLogPath) {
+              console.warn(`⚠️  Validation warning logged to ${warningLogPath}`);
             }
           } else {
             console.log('\nℹ Dry-run mode (--no-update). Remove --no-update to save to Linear.');
@@ -174,10 +210,6 @@ runTool({
         } else {
           console.log('\n✓ Validation PASSED');
         }
-      } catch (validationError) {
-        const errorMsg = errorMessage(validationError);
-        console.warn(`\n⚠️  Validation failed with error: ${errorMsg}`);
-        console.warn('   Proceeding without validation...');
       }
     } else {
       console.log('\n⚠️  Skipping validation (--skip-validation flag)');
