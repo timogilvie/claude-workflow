@@ -934,6 +934,23 @@ else
     fail "History has $_SS_HISTORY_LEN entries, expected >= 2"
   fi
 
+  # Test: dual-write legacy markers during transition
+  # The transition to awaiting_user above should NOT have written a legacy marker
+  # (no legacy marker maps to awaiting_user). Transition to coding should write .plan-approved.
+  stage_state_transition "$_SS_FEATURE_DIR" "coding" "plan_approved"
+  if [[ -f "$_SS_FEATURE_DIR/.plan-approved" ]]; then
+    pass "Dual-write: transition to coding creates .plan-approved"
+  else
+    fail "Dual-write: transition to coding did not create .plan-approved"
+  fi
+
+  stage_state_transition "$_SS_FEATURE_DIR" "review" "coding_complete"
+  if [[ -f "$_SS_FEATURE_DIR/.coding-complete" ]]; then
+    pass "Dual-write: transition to review creates .coding-complete"
+  else
+    fail "Dual-write: transition to review did not create .coding-complete"
+  fi
+
   # Test: stage_state_write_result
   stage_state_write_result "$_SS_FEATURE_DIR" "planning" "completed" "claude" "claude-opus-4-6" "plan.md"
   if [[ -f "$_SS_FEATURE_DIR/.planning-result.json" ]]; then

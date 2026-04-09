@@ -165,6 +165,14 @@ stage_state_transition() {
       .history += [{ from: $old_stage, to: $new_stage, timestamp: $now, reason: $reason }]
     ' "$config_file" > "$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
     mv "$tmp" "$config_file"
+
+    # Dual-write legacy markers for backward compatibility during rollout
+    case "$new_stage" in
+      planning)  touch "$feature_dir/.routing-complete" ;;
+      coding)    touch "$feature_dir/.plan-approved" ;;
+      review)    touch "$feature_dir/.coding-complete" ;;
+      aborted)   touch "$feature_dir/.workflow-aborted" ;;
+    esac
   else
     rm -f "$tmp"
     log_warn "stage_state_transition: failed to update $config_file"
