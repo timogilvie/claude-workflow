@@ -69,6 +69,35 @@ agent_reported_status() {
   fi
 }
 
+# Read the planning stage display status from stage result files.
+# Returns: awaiting_approval, approved, running, rejected, aborted, or empty string.
+# Falls back to legacy .plan-approved marker when no stage result exists.
+get_planning_display_status() {
+  local worktree="$1" slug="$2"
+  local feature_dir="$worktree/features/$slug"
+  local result_file="$feature_dir/.planning-result.json"
+
+  if [[ -f "$result_file" ]]; then
+    local status
+    status=$(jq -r '.status // empty' "$result_file" 2>/dev/null)
+    case "$status" in
+      awaiting_user) echo "awaiting_approval" ;;
+      completed)     echo "approved" ;;
+      running)       echo "running" ;;
+      failed)        echo "rejected" ;;
+      aborted)       echo "aborted" ;;
+      *)             echo "" ;;
+    esac
+    return
+  fi
+
+  # Legacy fallback
+  if [[ -f "$feature_dir/.plan-approved" ]]; then
+    echo "approved"
+  fi
+}
+
+# Legacy compat wrapper — used in the render loop below.
 plan_waiting_for_review() {
   local task_phase="$1"
   local agent_state="$2"
@@ -76,8 +105,15 @@ plan_waiting_for_review() {
   local slug="$4"
 
   [[ "$task_phase" == "planning" ]] || return 1
-  [[ "$agent_state" == "exited" ]] || return 1
   [[ -z "$worktree" || -z "$slug" ]] && return 1
+
+  # Prefer stage result
+  local display_status
+  display_status=$(get_planning_display_status "$worktree" "$slug")
+  [[ "$display_status" == "awaiting_approval" ]] && return 0
+
+  # Legacy fallback: agent exited, no approval
+  [[ "$agent_state" == "exited" ]] || return 1
   [[ -f "$worktree/features/$slug/.plan-approved" ]] && return 1
   return 0
 }
@@ -216,9 +252,18 @@ while true; do
         esac
       fi
 
-      # Phase display
+      # Phase display — enrich planning with stage result status
       case "$task_phase" in
-        planning)  phase_str="${Y}📋 planning${N}" ;;
+        planning)
+          local plan_status=""
+          [[ -n "$worktree" && -n "$slug" ]] && plan_status=$(get_planning_display_status "$worktree" "$slug")
+          case "$plan_status" in
+            awaiting_approval) phase_str="${Y}⏳ awaiting${N}" ;;
+            approved)          phase_str="${G}✅ approved${N}" ;;
+            rejected)          phase_str="${R}❌ rejected${N}" ;;
+            *)                 phase_str="${Y}📋 planning${N}" ;;
+          esac
+          ;;
         executing) phase_str="${G}🔨 executing${N}" ;;
         *)         phase_str="${D}$task_phase${N}" ;;
       esac
@@ -232,7 +277,7 @@ while true; do
       # Show agent-reported status on a second line (if available)
       reported=$(agent_reported_status "$issue")
       if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
-        reported="Plan waiting for review"
+        reported="Plan ready — waiting for approval"
       fi
       if [[ -n "$reported" ]]; then
         printf "${D}%10s  └─ %s${N}\n" "" "$reported" >> "$FRAME"

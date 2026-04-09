@@ -51,8 +51,8 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
    - Wait for user approval
 
 7. **After approval**:
-   - Create the approval marker: features/{{SLUG}}/.plan-approved
-   - Your work is done - the next phase (coding) will be launched automatically
+   - Your work is done - the orchestrator handles plan approval and launches the next phase automatically
+   - Do NOT create any approval marker files
 
 ### Planning Depth: {{PLAN_DEPTH}}
 
@@ -65,7 +65,6 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
 - [ ] Codebase research completed
 - [ ] Implementation plan created at features/{{SLUG}}/plan.md
 - [ ] User has approved the plan
-- [ ] Approval marker created at features/{{SLUG}}/.plan-approved
 
 ### Important Notes
 - Do NOT implement anything in this phase - only plan
@@ -77,6 +76,6 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
 
 If the user asks you to stop work, close the issue, abort, or otherwise discontinue this workflow:
 - Create the abort marker: touch features/{{SLUG}}/.workflow-aborted
-- Do NOT create the phase completion marker (.plan-approved)
+- Do NOT create any phase completion or approval markers
 - Inform the user that the workflow is being stopped
 - Stop after creating the marker and reporting the abort.

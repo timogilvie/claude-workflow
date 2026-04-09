@@ -293,9 +293,9 @@ Task context is pre-seeded at: features/$slug/selected-task.json
 3. Create a detailed implementation plan with phases
 4. Save the plan to: features/$slug/plan.md
 5. Present the plan summary to the user and wait for approval
-6. After approval, create a file: features/$slug/.plan-approved
 
 Do NOT proceed to Phase 2 until the user has approved the plan.
+Do NOT create any approval marker files — the orchestrator handles plan approval.
 If anything is unclear about the requirements, ask the user for clarification before finalizing the plan.
 
 ### Phase 2: Implementation
@@ -530,10 +530,10 @@ When you receive user feedback:
 - DO: If the user asks to stop, abort, close the issue, or discontinue work, $abort_feedback_instruction
 - DO NOT: Interpret feedback as "wrap up now" or "move to next phase"
 - DO NOT: Create the phase completion marker if the user wants to stop
-- DO NOT: Create .plan-approved just because you received feedback
+- DO NOT: Create any approval marker files — the orchestrator handles approval
 - DO NOT: $exit_guard_text
 
-After the user approves your plan, create the .plan-approved file, then $approved_completion_text
+After the user approves your plan, $approved_completion_text
 _WVML_PROMPT_
 }
 
