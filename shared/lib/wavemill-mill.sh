@@ -1852,6 +1852,54 @@ check_stage_awaiting_user() {
   return 1
 }
 
+# Check whether a stage is actively in progress according to controller-owned state.
+# Usage: stage_result_is_in_progress <feature_dir> <stage>
+stage_result_is_in_progress() {
+  local feature_dir="$1" stage="$2"
+  local status
+  status=$(read_stage_status "$feature_dir" "$stage")
+
+  case "$stage" in
+    planning)
+      [[ "$status" == "running" || "$status" == "awaiting_user" ]]
+      return $?
+      ;;
+    coding|review|ready)
+      [[ "$status" == "running" ]]
+      return $?
+      ;;
+  esac
+
+  return 1
+}
+
+ready_conflict_launch_head() {
+  local feature_dir="$1"
+  local result_file="$feature_dir/.ready-result.json"
+  if [[ -f "$result_file" ]]; then
+    jq -r '.artifacts.launchHead // empty' "$result_file" 2>/dev/null || echo ""
+  else
+    echo ""
+  fi
+}
+
+phase_should_remain_active_without_pr() {
+  local feature_dir="$1" phase="$2" slug="$3"
+
+  case "$phase" in
+    routing)
+      ! check_routing_complete "$slug"
+      return $?
+      ;;
+    planning|coding|review|ready)
+      stage_result_is_in_progress "$feature_dir" "$phase"
+      return $?
+      ;;
+  esac
+
+  return 1
+}
+
 # Approve a plan: transition planning from awaiting_user to completed.
 # Writes both the stage result and the legacy .plan-approved marker for compat.
 # Usage: approve_plan <feature_dir> [agent] [model]
@@ -2205,7 +2253,7 @@ launch_ready_phase() {
   local pr_number="$7"
   local win="${issue}-${slug}"
   local state_dir status_file result ready_rc merge_status verdict
-  local current_agent current_model prompt_file launch_rc
+  local current_agent current_model prompt_file launch_rc launch_head
 
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
@@ -2250,6 +2298,10 @@ launch_ready_phase() {
     launch_rc=$?
 
     if [[ "$launch_rc" -eq 0 ]]; then
+      launch_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
+      write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
+        "Conflict remediation in progress for PR #$pr_number" \
+        "{\"type\":\"ready\",\"prNumber\":$pr_number,\"mergeConflict\":\"CONFLICTED\",\"launchHead\":\"$launch_head\"}"
       return 3
     fi
     if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
@@ -3543,9 +3595,9 @@ monitor_issue_state() {
               needs_attention="true"
             fi
           else
-            if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            if ! check_routing_complete "$SLUG"; then
               set_window_attention_state "$WIN" "clear"
-              # Keep routing tasks active while agent is still running
+              # Keep routing tasks active while the controller-owned routing state is incomplete
               active_count=$((active_count + 1))
               return 0
             fi
@@ -3640,15 +3692,9 @@ monitor_issue_state() {
           local planning_status
           planning_status=$(read_stage_status "$FEATURE_DIR" "planning")
 
-          # Check if agent is still active
-          local agent_active=false
-          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
-            agent_active=true
-          fi
-
-          # Transition 1: running/awaiting_user + .plan-approved + exited agent → completed
+          # Transition 1: running/awaiting_user + .plan-approved → completed
           if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
-            if [[ "$agent_active" == false ]] && [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+            if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               log "status" "✓ $ISSUE → Plan approved (via .plan-approved marker), marking as completed"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
               # Next iteration will detect resolved_phase == "coding" and launch coding
@@ -3657,10 +3703,10 @@ monitor_issue_state() {
             fi
           fi
 
-          # Transition 2: running + plan.md + exited agent → awaiting_user
+          # Transition 2: running + plan.md → awaiting_user
           if [[ "$planning_status" == "running" ]]; then
-            if [[ "$agent_active" == false ]] && [[ -f "$FEATURE_DIR/plan.md" ]]; then
-              log "status" "✓ $ISSUE → Planning agent exited with plan.md, marking as awaiting_user"
+            if [[ -f "$FEATURE_DIR/plan.md" ]]; then
+              log "status" "✓ $ISSUE → plan.md detected, marking planning as awaiting_user"
               write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
               set_window_attention_state "$WIN" "needs-user"
               active_count=$((active_count + 1))
@@ -3683,14 +3729,14 @@ monitor_issue_state() {
             return 0
           fi
 
-          # Agent still running — keep task active
-          if [[ "$agent_active" == true ]]; then
+          # Stage still running — keep task active
+          if [[ "$planning_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
             active_count=$((active_count + 1))
             return 0
           fi
 
-          # Agent exited without plan.md or approval — needs attention
+          # No controller-observed transition artifact — needs attention
           needs_attention="true"
           ;;
 
@@ -3749,33 +3795,29 @@ monitor_issue_state() {
           fi
 
           # HOK-1194: Detect running→completed transition
-          # When stage result is "running", agent is done, and .coding-complete exists,
+          # When stage result is "running" and .coding-complete exists,
           # write completed status (next iteration will launch review)
           local coding_status
           coding_status=$(read_stage_status "$FEATURE_DIR" "coding")
           if [[ "$coding_status" == "running" ]]; then
-            # Check if agent is done (pane is dead)
-            if ! tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
-              # Pane is dead - check for .coding-complete marker
-              if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
-                log "status" "✓ $ISSUE → Coding agent exited with .coding-complete, marking as completed"
-                write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
-                # Next iteration will detect resolved_phase == "review" and launch review
-                active_count=$((active_count + 1))
-                return 0
-              fi
+            if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
+              log "status" "✓ $ISSUE → .coding-complete detected, marking coding as completed"
+              write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
+              # Next iteration will detect resolved_phase == "review" and launch review
+              active_count=$((active_count + 1))
+              return 0
             fi
           fi
 
-          # Agent still running
-          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+          # Stage still running
+          if [[ "$coding_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
-            # Keep coding tasks active while agent is still running
+            # Keep coding tasks active while the controller-owned stage is running
             active_count=$((active_count + 1))
             return 0
           fi
 
-          # Agent exited without .coding-complete
+          # No controller-observed completion artifact
           needs_attention="true"
           ;;
 
@@ -3788,15 +3830,18 @@ monitor_issue_state() {
             return 0
           fi
 
-          # Review phase is complete when PR is created (handled above)
-          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+          local review_status
+          review_status=$(read_stage_status "$FEATURE_DIR" "review")
+
+          # Review phase is complete when PR is created (handled below)
+          if [[ "$review_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
-            # Keep review tasks active while agent is still running
+            # Keep review tasks active while the controller-owned stage is running
             active_count=$((active_count + 1))
             return 0
           fi
 
-          # Agent exited - check if PR was created and transition to ready phase if enabled
+          # Review is no longer running - check if PR was created and transition to ready phase if enabled
           local pr_number
           pr_number=$(find_pr_for_branch "$BRANCH")
           if [[ -n "$pr_number" ]] && [[ "$_CFG_READY_ENABLED" == "true" ]]; then
@@ -3851,7 +3896,18 @@ monitor_issue_state() {
           ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
 
           if [[ -f "$ready_state_dir_path/.conflict-detected" ]]; then
-            if _pane_is_dead_or_idle "$SESSION:$WIN"; then
+            local ready_status launch_head current_head
+            ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
+            launch_head=$(ready_conflict_launch_head "$ready_state_dir_path")
+            current_head=$(git -C "${WORKTREE_ROOT}/${SLUG}" rev-parse HEAD 2>/dev/null || echo "")
+
+            if [[ "$ready_status" == "running" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
+              set_window_attention_state "$WIN" "clear"
+              active_count=$((active_count + 1))
+              return 0
+            fi
+
+            if [[ "$ready_status" != "running" || -z "$launch_head" || "$launch_head" != "$current_head" ]]; then
               local pr_number
               pr_number=$(find_pr_for_branch "$BRANCH")
               if [[ -z "$pr_number" ]]; then
@@ -3889,10 +3945,6 @@ monitor_issue_state() {
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
-
-            set_window_attention_state "$WIN" "clear"
-            active_count=$((active_count + 1))
-            return 0
           fi
           set_window_attention_state "$WIN" "needs-user"
           return 0
@@ -3923,27 +3975,15 @@ monitor_issue_state() {
         set_window_attention_state "$WIN" "clear"
       fi
 
-      # Not completed externally - check if agent pane is still alive
-      if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
-        # Pane still running - agent is working, keep slot active
+      # Not completed externally - keep controller-owned running stages active
+      if phase_should_remain_active_without_pr "$FEATURE_DIR" "$current_phase" "$SLUG"; then
         active_count=$((active_count + 1))
         return 0
       fi
 
-      # Check if the pane is dead but window still exists (remain-on-exit).
-      # Respawn and re-launch the current phase instead of cleaning up.
-      if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
-        if check_stage_aborted "$FEATURE_DIR"; then
-          log "status" "⛔ $ISSUE → Workflow aborted (pane exited)"
-          set_task_phase "$ISSUE" "aborted"
-          set_window_attention_state "$WIN" "needs-user"
-          return 0
-        fi
-
-        log "status" "⚠ $ISSUE → Pane died during $current_phase phase, respawning..."
-        tmux respawn-pane -t "$SESSION:$WIN" 2>/dev/null || true
-        sleep 1
-        active_count=$((active_count + 1))
+      if check_stage_aborted "$FEATURE_DIR"; then
+        log "status" "⛔ $ISSUE → Workflow aborted (controller state)"
+        set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi

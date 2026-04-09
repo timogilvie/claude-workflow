@@ -245,11 +245,11 @@ else
   ')
   # HOK-1194: Phase resolution refactored to use resolve_phase() with controller-owned state priority
   RESOLVE_PHASE_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'resolved_phase=$(resolve_phase "\$FEATURE_DIR")' | head -n1 | cut -d: -f1 || true)
-  PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - check if agent pane is still alive' | head -n1 | cut -d: -f1 || true)
+  PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - keep controller-owned running stages active' | head -n1 | cut -d: -f1 || true)
   if [[ -n "$RESOLVE_PHASE_LINE" && -n "$PANE_EARLY_RETURN_LINE" ]] && (( RESOLVE_PHASE_LINE < PANE_EARLY_RETURN_LINE )); then
-    pass "monitor checks planning approval before no-PR pane-alive early return"
+    pass "monitor checks planning approval before controller-state keepalive"
   else
-    fail "monitor planning approval check runs too late (after pane-alive early return)"
+    fail "monitor planning approval check runs too late (after controller-state keepalive)"
   fi
 
   # resolve_phase() checks abort first internally, so we verify it's called
@@ -260,10 +260,17 @@ else
   fi
 
   if echo "$MONITOR_ISSUE_BLOCK" | grep -qE '^[[:space:]]*aborted\)$' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Workflow aborted (pane exited)'; then
-    pass "monitor handles aborted state and pane-exit abort fallback"
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Workflow aborted (controller state)'; then
+    pass "monitor handles aborted state and controller-state abort fallback"
   else
-    fail "monitor is missing aborted-state handling or pane-exit abort fallback"
+    fail "monitor is missing aborted-state handling or controller-state abort fallback"
+  fi
+
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'phase_should_remain_active_without_pr "\$FEATURE_DIR" "\$current_phase" "\$SLUG"' \
+    && ! echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Pane died during \$current_phase phase, respawning'; then
+    pass "monitor keepalive and fallback logic uses controller state instead of pane respawn"
+  else
+    fail "monitor still relies on pane-respawn fallback for phase progression"
   fi
 
   CLOSED_BLOCK=$(echo "$MONITOR_ISSUE_BLOCK" | awk '
