@@ -34,7 +34,7 @@ export interface StageAwareOptions extends StageAwareConstraints {
 }
 
 export interface StageAwareDecision extends WorkflowRouteDecision {
-  routingMode: 'stage-aware' | 'heuristic-fallback';
+  routingMode: 'stage-aware' | 'stage-aware-partial' | 'heuristic-fallback';
   neighborCount: number;
   neighborSimilarityRange: [number, number];
   expectedCost: number;
@@ -78,7 +78,7 @@ const LANGUAGE_DIMENSIONS = ['ts', 'js', 'py', 'go', 'rs', 'sh', 'sql', 'other']
 const DOMAIN_DIMENSIONS = ['frontend', 'backend', 'data-pipeline', 'infrastructure', 'devtools', 'full-stack'] as const;
 const DEFAULT_BACKFILLED_EVALS_PATH = '.wavemill/evals/aggregated-evals.backfilled.jsonl';
 const DEFAULT_AGGREGATED_EVALS_PATH = '.wavemill/evals/aggregated-evals.jsonl';
-const DEFAULT_K_NEIGHBORS = 10;
+const DEFAULT_K_NEIGHBORS = 20;
 const DEFAULT_MIN_RECORDS = 20;
 const DEFAULT_MIN_MODELS = 2;
 const DEFAULT_STAGE_BLEND_WEIGHT = 0.3;
@@ -581,16 +581,17 @@ export function routeStageAware(
     repoDir,
   });
 
-  const distinctModels = new Set(records.map((record) => record.modelId));
-  if (records.length < minRecords || distinctModels.size < minModels) {
+  if (records.length < minRecords) {
     return null;
   }
 
   const neighbors = findKNearest(queryDescriptor, records, kNeighbors);
-  const distinctNeighborModels = new Set(neighbors.map((neighbor) => neighbor.record.modelId));
-  if (neighbors.length === 0 || distinctNeighborModels.size < minModels) {
+  if (neighbors.length === 0) {
     return null;
   }
+
+  const distinctNeighborModels = new Set(neighbors.map((neighbor) => neighbor.record.modelId));
+  const hasModelDiversity = distinctNeighborModels.size >= minModels;
 
   const { selection } = rankModelsPerStage(neighbors, {
     modelsAvailable: options.modelsAvailable,
@@ -601,5 +602,14 @@ export function routeStageAware(
     return null;
   }
 
-  return buildStageAwareDecision(selection, neighbors, repoDir);
+  const decision = buildStageAwareDecision(selection, neighbors, repoDir);
+
+  // When neighbors lack model diversity, use neighbor data for stage calibration
+  // (depth, review mode, cost estimates) but mark the decision as partial so the
+  // caller can overlay heuristic model selection.
+  if (!hasModelDiversity) {
+    decision.routingMode = 'stage-aware-partial';
+  }
+
+  return decision;
 }

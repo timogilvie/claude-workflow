@@ -321,6 +321,23 @@ export function routeWorkflowStageAware(
         (fallback.expectedCostPlan + fallback.expectedCostCode + fallback.expectedCostReview).toFixed(2)
       ),
     };
+  } else if (stageAwareDecision.routingMode === 'stage-aware-partial') {
+    // Neighbors lacked model diversity — use neighbor-calibrated stage depths
+    // and cost estimates, but overlay heuristic model selection.
+    const fallback = routeWorkflow(prompt, options);
+    decision = {
+      ...stageAwareDecision,
+      planner: fallback.planner,
+      coder: fallback.coder,
+      reviewer: fallback.reviewer,
+      signals: {
+        taskType: characteristics.taskType,
+        promptLength: characteristics.length,
+        complexityScore: characteristics.complexityScore,
+        fileTypes: characteristics.fileTypes,
+        riskScore,
+      },
+    };
   } else {
     decision = {
       ...stageAwareDecision,
