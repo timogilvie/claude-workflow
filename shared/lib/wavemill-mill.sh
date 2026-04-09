@@ -1239,6 +1239,9 @@ LAUNCH_ARGS=("${FINAL_LAUNCH_ARGS[@]}")
 
 # User confirmed (or no confirmation needed) - now set issues to In Progress
 INITIAL_PHASE="routing"
+# Interactive mode launches planning directly after deterministic routing, so
+# the persisted state should reflect planning immediately.
+[[ "$PLANNING_MODE" == "interactive" ]] && INITIAL_PHASE="planning"
 # Legacy mode: skip routing and planning phases if autonomous
 [[ "$PLANNING_MODE" == "skip" ]] && INITIAL_PHASE="executing"
 
@@ -3270,6 +3273,11 @@ Implement from the issue description plus direct codebase analysis."
     # Launch planning phase directly with the routed model (skip routing agent)
     local resolved_planner_agent
     resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")"
+
+    # Record planning stage as running before the first launch so the monitor
+    # keeps the task active even before any planning artifacts exist.
+    write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-5-20250929}"
+
     launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
       "${planner_model:-claude-sonnet-4-5-20250929}" "$resolved_planner_agent" "${plan_depth:-light}"
     log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-5-20250929}"
