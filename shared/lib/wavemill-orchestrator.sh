@@ -137,9 +137,25 @@ for t in "${TASKS[@]}"; do
     MODEL_SUGGESTION_FILE="/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
     TASK_AGENT_CMD="$AGENT_CMD"
     TASK_MODEL=""
+    PLANNER_MODEL=""
+    REVIEWER_MODEL=""
+    PLAN_DEPTH="light"
+    CODE_DEPTH="medium"
+    REVIEW_MODE="static"
+    ROUTING_MODE="unknown"
     if [[ -n "$CHALLENGE_MODEL" ]]; then
       TASK_MODEL="$CHALLENGE_MODEL"
       TASK_AGENT_CMD="$(agent_resolve_from_model "$TASK_MODEL")"
+      PLANNER_MODEL="claude-sonnet-4-5-20250929"
+      REVIEWER_MODEL="claude-sonnet-4-5-20250929"
+      if [[ -f "$ROUTE_FILE" ]]; then
+        PLANNER_MODEL="$(read_route_json "$SESSION" "$ISSUE" "planner" "$PLANNER_MODEL")"
+        REVIEWER_MODEL="$(read_route_json "$SESSION" "$ISSUE" "reviewer" "$REVIEWER_MODEL")"
+        PLAN_DEPTH="$(read_route_json "$SESSION" "$ISSUE" "planDepth" "$PLAN_DEPTH")"
+        CODE_DEPTH="$(read_route_json "$SESSION" "$ISSUE" "codeDepth" "$CODE_DEPTH")"
+        REVIEW_MODE="$(read_route_json "$SESSION" "$ISSUE" "reviewRecommended" "$REVIEW_MODE")"
+        ROUTING_MODE="$(read_route_json "$SESSION" "$ISSUE" "routingMode" "$ROUTING_MODE")"
+      fi
       echo "Challenge: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL"
     elif [[ -n "${FORCE_MODEL:-}" ]]; then
       # Validate model before using it
@@ -150,30 +166,24 @@ for t in "${TASKS[@]}"; do
       # FORCE_MODEL env var overrides the router entirely
       TASK_MODEL="$FORCE_MODEL"
       TASK_AGENT_CMD="$(agent_resolve_from_model "$FORCE_MODEL")"
+      PLANNER_MODEL="$FORCE_MODEL"
+      REVIEWER_MODEL="$FORCE_MODEL"
       echo "FORCE_MODEL: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL"
     elif [[ "${AGENT_CMD_EXPLICIT:-}" != "true" ]]; then
-      if [[ -f "$ROUTE_FILE" ]]; then
-        RECOMMENDED_MODEL=$(jq -r '.coder // empty' "$ROUTE_FILE" 2>/dev/null)
-        if [[ -n "$RECOMMENDED_MODEL" ]]; then
-          TASK_MODEL="$RECOMMENDED_MODEL"
-          TASK_AGENT_CMD="$(agent_resolve_from_model "$TASK_MODEL")"
-          ROUTING_MODE=$(jq -r '.routingMode // "unknown"' "$ROUTE_FILE" 2>/dev/null)
-          echo "Router: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL (routing: $ROUTING_MODE)"
-        fi
-      elif [[ -f "$MODEL_SUGGESTION_FILE" ]]; then
-        RECOMMENDED_MODEL=$(jq -r '.recommendedModel // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-        RECOMMENDED_AGENT=$(jq -r '.recommendedAgent // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-        MODEL_INSUFFICIENT=$(jq -r '.insufficientData // false' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
-        MODEL_CONFIDENCE=$(jq -r '.confidence // empty' "$MODEL_SUGGESTION_FILE" 2>/dev/null)
+      TASK_MODEL="$(read_route_json "$SESSION" "$ISSUE" "coder")"
+      PLANNER_MODEL="$(read_route_json "$SESSION" "$ISSUE" "planner")"
+      REVIEWER_MODEL="$(read_route_json "$SESSION" "$ISSUE" "reviewer")"
+      PLAN_DEPTH="$(read_route_json "$SESSION" "$ISSUE" "planDepth" "$PLAN_DEPTH")"
+      CODE_DEPTH="$(read_route_json "$SESSION" "$ISSUE" "codeDepth" "$CODE_DEPTH")"
+      REVIEW_MODE="$(read_route_json "$SESSION" "$ISSUE" "reviewRecommended" "$REVIEW_MODE")"
+      ROUTING_MODE="$(read_route_json "$SESSION" "$ISSUE" "routingMode" "$ROUTING_MODE")"
 
-        if [[ "$MODEL_INSUFFICIENT" != "true" ]] && [[ -n "$RECOMMENDED_MODEL" ]]; then
-          TASK_MODEL="$RECOMMENDED_MODEL"
-          if [[ -n "$RECOMMENDED_AGENT" ]]; then
-            TASK_AGENT_CMD="$RECOMMENDED_AGENT"
-          fi
-          echo "Router: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL (confidence: $MODEL_CONFIDENCE)"
-        else
-          echo "Router: $ISSUE -> using default agent (insufficient eval data)"
+      if [[ -n "$TASK_MODEL" ]]; then
+        TASK_AGENT_CMD="$(agent_resolve_from_model "$TASK_MODEL")"
+        if [[ -f "$ROUTE_FILE" ]]; then
+          echo "Router: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL (routing: $ROUTING_MODE)"
+        elif [[ -f "$MODEL_SUGGESTION_FILE" ]]; then
+          echo "Router: $ISSUE -> $TASK_AGENT_CMD --model $TASK_MODEL (compat shim)"
         fi
       fi
     fi
@@ -197,8 +207,19 @@ for t in "${TASKS[@]}"; do
     # Persist resolved agent to state file so monitor/eval uses the correct agent
     if [[ -n "${WAVEMILL_STATE_FILE:-}" ]] && [[ -f "$WAVEMILL_STATE_FILE" ]]; then
       _tmp=$(mktemp) || true
-      if [[ -n "${_tmp:-}" ]] && jq --arg issue "$ISSUE" --arg agent "$TASK_AGENT_CMD" \
-         'if .tasks[$issue] then .tasks[$issue].agent = $agent else . end' \
+      if [[ -n "${_tmp:-}" ]] && jq \
+         --arg issue "$ISSUE" --arg agent "$TASK_AGENT_CMD" --arg coder "$TASK_MODEL" \
+         --arg planner "$PLANNER_MODEL" --arg reviewer "$REVIEWER_MODEL" \
+         --arg planDepth "$PLAN_DEPTH" --arg codeDepth "$CODE_DEPTH" --arg reviewMode "$REVIEW_MODE" \
+         'if .tasks[$issue] then
+            .tasks[$issue].agent = $agent |
+            (if $coder != "" then .tasks[$issue].coderModel = $coder else . end) |
+            (if $planner != "" then .tasks[$issue].plannerModel = $planner else . end) |
+            (if $reviewer != "" then .tasks[$issue].reviewerModel = $reviewer else . end) |
+            .tasks[$issue].planDepth = $planDepth |
+            .tasks[$issue].codeDepth = $codeDepth |
+            .tasks[$issue].reviewMode = $reviewMode
+          else . end' \
          "$WAVEMILL_STATE_FILE" > "$_tmp" 2>/dev/null; then
         mv "$_tmp" "$WAVEMILL_STATE_FILE"
       else

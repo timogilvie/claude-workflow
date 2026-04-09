@@ -786,7 +786,90 @@ else
 fi
 
 # ============================================================================
-# TEST 10: Verify sourced libraries exist
+# TEST 10: route.json fallback helper behavior
+# ============================================================================
+echo ""
+echo "=== route.json Fallback Helper ==="
+
+COMMON_LIB="$LIB_DIR/wavemill-common.sh"
+
+if [[ ! -f "$COMMON_LIB" ]]; then
+  fail "wavemill-common.sh not found"
+else
+  source "$COMMON_LIB"
+
+  _test_route_helper() {
+    local session="$1" issue="$2" field="$3" default_value="${4:-}"
+    SESSION="$session" read_route_json "$session" "$issue" "$field" "$default_value"
+  }
+
+  route_session="check-shell-$$"
+  route_issue="HOK-1198"
+  route_file="/tmp/${route_session}-${route_issue}-route.json"
+  suggestion_file="/tmp/${route_session}-${route_issue}-model-suggestion.json"
+  rm -f "$route_file" "$suggestion_file"
+  trap 'rm -f "$route_file" "$suggestion_file"' EXIT
+
+  cat > "$route_file" <<'EOF'
+{"planner":"planner-a","coder":"coder-a","reviewer":"reviewer-a","planDepth":"deep","codeDepth":"medium","reviewRecommended":"dynamic"}
+EOF
+  if [[ "$(_test_route_helper "$route_session" "$route_issue" "coder")" == "coder-a" ]] \
+    && [[ "$(_test_route_helper "$route_session" "$route_issue" "planner")" == "planner-a" ]] \
+    && [[ "$(_test_route_helper "$route_session" "$route_issue" "reviewRecommended" "static")" == "dynamic" ]]; then
+    pass "read_route_json returns values from canonical route.json"
+  else
+    fail "read_route_json does not read route.json fields correctly"
+  fi
+
+  rm -f "$route_file"
+  cat > "$suggestion_file" <<'EOF'
+{"recommendedModel":"coder-compat","recommendedAgent":"codex"}
+EOF
+  if [[ "$(_test_route_helper "$route_session" "$route_issue" "coder")" == "coder-compat" ]]; then
+    pass "read_route_json falls back to model-suggestion.json for coder"
+  else
+    fail "read_route_json did not use compat coder fallback"
+  fi
+
+  if [[ "$(_test_route_helper "$route_session" "$route_issue" "planner" "planner-default")" == "planner-default" ]]; then
+    pass "read_route_json does not invent non-coder compat fields"
+  else
+    fail "read_route_json returned unexpected compat data for planner"
+  fi
+
+  rm -f "$suggestion_file"
+  if [[ "$(_test_route_helper "$route_session" "$route_issue" "coder" "coder-default")" == "coder-default" ]]; then
+    pass "read_route_json returns the supplied default when artifacts are missing"
+  else
+    fail "read_route_json did not return default when artifacts were missing"
+  fi
+
+  cat > "$route_file" <<'EOF'
+{"coder":"coder-b"}
+EOF
+  if [[ "$(_test_route_helper "$route_session" "$route_issue" "reviewRecommended" "static")" == "static" ]]; then
+    pass "read_route_json returns defaults for missing route.json fields"
+  else
+    fail "read_route_json did not return default for missing route.json field"
+  fi
+
+  cat > "$route_file" <<'EOF'
+{"coder":
+EOF
+  cat > "$suggestion_file" <<'EOF'
+{"recommendedModel":"coder-from-shim"}
+EOF
+  if [[ "$(_test_route_helper "$route_session" "$route_issue" "coder" "coder-default")" == "coder-from-shim" ]]; then
+    pass "read_route_json falls back to compat shim when route.json is malformed"
+  else
+    fail "read_route_json did not recover from malformed route.json"
+  fi
+
+  rm -f "$route_file" "$suggestion_file"
+fi
+
+# ============================================================================
+# TEST 11: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
@@ -813,7 +896,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 11: Optional ShellCheck
+# TEST 12: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""
