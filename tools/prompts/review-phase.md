@@ -50,6 +50,29 @@ The implementation is complete. Your job is to review and create a PR.
    - A "## Self-review" section noting the review verdict and iterations run
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
 
+### Authorship Attribution
+
+Before creating the PR, determine whether you are the principal author:
+
+1. **Check commit authorship** using:
+   ```bash
+   git shortlog -sn --no-merges {{BASE_BRANCH}}..HEAD
+   ```
+
+2. **Principal author determination**:
+   - If you authored >50% of commits on this branch, you ARE the principal author
+   - If you authored ≤50% of commits, you are NOT the principal author
+
+3. **Attribution rules**:
+   - **If you ARE the principal author**: Add standard co-authored-by trailer when creating commits:
+     ```
+     Co-authored-by: Claude [Model] <noreply@anthropic.com>
+     ```
+   - **If you are NOT the principal author**: Do NOT add co-authored-by trailers
+     - You are reviewing or contributing to someone else's work
+     - Use "Reviewed-by" tag if appropriate, or simply omit attribution
+     - Never override the PR author field if someone else created the branch
+
 4. **Link the PR to {{ISSUE}}**
 
 ### Review Mode: {{REVIEW_MODE}}
