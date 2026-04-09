@@ -420,6 +420,64 @@ test('routeWorkflowStageAware attaches a challenge recommendation when policy tr
   }
 });
 
+test('routeWorkflowStageAware uses partial routing when neighbors lack model diversity', () => {
+  // All records are the same model — enough data, but no model diversity in neighbors
+  const records = [
+    makeEvalRecord('1', 'claude-sonnet-4-5-20250929', { plan: 0.9, implementation: 0.85, review: 0.88 }),
+    makeEvalRecord('2', 'claude-sonnet-4-5-20250929', { plan: 0.88, implementation: 0.82, review: 0.9 }),
+    makeEvalRecord('3', 'claude-sonnet-4-5-20250929', { plan: 0.92, implementation: 0.87, review: 0.86 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 3,
+      defaultAgent: 'claude',
+    },
+  });
+
+  try {
+    const decision = routeWorkflowStageAware('Build a backend feature with tests.', { repoDir });
+    assert.equal(decision.routingMode, 'stage-aware-partial');
+    assert.ok(decision.neighborCount > 0, 'should have neighbors');
+    // Model selection comes from heuristic, not from the single-model neighbors
+    assert.ok(decision.planner, 'should have a planner model');
+    assert.ok(decision.coder, 'should have a coder model');
+    // Stage calibration comes from neighbors — verify depths are set
+    assert.ok(['light', 'deep'].includes(decision.planDepth));
+    assert.ok(['light', 'medium', 'deep'].includes(decision.codeDepth));
+    const summary = summarizeWorkflowRoute(decision, repoDir);
+    assert.match(summary, /Router:\s+stage-aware-partial/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('routeStageAware returns stage-aware-partial when neighbors have single model', () => {
+  const records = [
+    makeEvalRecord('1', 'claude-sonnet-4-5-20250929', { plan: 0.9, implementation: 0.85, review: 0.88 }),
+    makeEvalRecord('2', 'claude-sonnet-4-5-20250929', { plan: 0.88, implementation: 0.82, review: 0.9 }),
+    makeEvalRecord('3', 'claude-sonnet-4-5-20250929', { plan: 0.92, implementation: 0.87, review: 0.86 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records);
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 3,
+    });
+    assert.ok(decision);
+    assert.equal(decision?.routingMode, 'stage-aware-partial');
+    assert.equal(decision?.neighborCount, 3);
+  } finally {
+    cleanup();
+  }
+});
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);
