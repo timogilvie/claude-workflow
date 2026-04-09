@@ -199,4 +199,40 @@ describe('controllerCheckReadiness with stage results', () => {
     assert.equal(result.ready, false);
     assert.equal(result.phase, 'unknown');
   });
+
+  it('awaiting_user with .plan-approved still shows planning phase (HOK-1193)', async () => {
+    // Stage result is authoritative — awaiting_user overrides legacy marker
+    await fs.writeFile(
+      path.join(testDir, '.planning-result.json'),
+      JSON.stringify(makeStageResult({ stage: 'planning', status: 'awaiting_user' })),
+    );
+    await fs.writeFile(path.join(testDir, '.plan-approved'), '');
+
+    const result = await controllerCheckReadiness(testDir);
+    assert.equal(result.phase, 'planning');
+    // Should NOT be 'coding' even though .plan-approved exists
+  });
+
+  it('awaiting_user check message includes approval hint (HOK-1193)', async () => {
+    await fs.writeFile(
+      path.join(testDir, '.planning-result.json'),
+      JSON.stringify(makeStageResult({ stage: 'planning', status: 'awaiting_user' })),
+    );
+
+    const result = await controllerCheckReadiness(testDir);
+    const planningCheck = result.checks.find(c => c.name === 'stage-planning');
+    assert.ok(planningCheck);
+    assert.match(planningCheck!.message, /plan ready for approval/);
+  });
+
+  it('failed planning stage is detected correctly (HOK-1193)', async () => {
+    await fs.writeFile(
+      path.join(testDir, '.planning-result.json'),
+      JSON.stringify(makeStageResult({ stage: 'planning', status: 'failed' })),
+    );
+
+    const result = await controllerCheckReadiness(testDir);
+    const planningCheck = result.checks.find(c => c.name === 'stage-planning');
+    assert.equal(planningCheck?.status, 'fail');
+  });
 });

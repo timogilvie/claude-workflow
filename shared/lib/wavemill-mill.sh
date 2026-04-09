@@ -1762,15 +1762,23 @@ read_stage_status() {
 # Check if a stage is complete (new-style result file or legacy marker).
 # Usage: check_stage_complete <feature_dir> <stage>
 # Returns 0 if completed, 1 otherwise.
+#
+# When a stage result file exists, it is authoritative — the legacy marker
+# is NOT consulted. Legacy markers are only used when no stage result file
+# exists (backward compat for old worktrees).
 check_stage_complete() {
   local feature_dir="$1" stage="$2"
 
   # 1. Check new-style result file
   local status
   status=$(read_stage_status "$feature_dir" "$stage")
-  [[ "$status" == "completed" ]] && return 0
+  if [[ -n "$status" ]]; then
+    # Stage result exists and is authoritative — only "completed" counts
+    [[ "$status" == "completed" ]] && return 0
+    return 1
+  fi
 
-  # 2. Fallback to legacy marker
+  # 2. No stage result file — fallback to legacy marker
   local marker
   marker=$(_stage_legacy_marker "$stage")
   if [[ -n "$marker" ]] && [[ -f "$feature_dir/$marker" ]]; then
@@ -1788,6 +1796,25 @@ check_stage_awaiting_user() {
   status=$(read_stage_status "$feature_dir" "$stage")
   [[ "$status" == "awaiting_user" ]] && return 0
   return 1
+}
+
+# Approve a plan: transition planning from awaiting_user to completed.
+# Writes both the stage result and the legacy .plan-approved marker for compat.
+# Usage: approve_plan <feature_dir> [agent] [model]
+approve_plan() {
+  local feature_dir="$1"
+  local agent="${2:-}" model="${3:-}"
+  write_stage_result "$feature_dir" "planning" "completed" "$agent" "$model" "Plan approved by user" '{"type":"planning","planFile":"plan.md"}'
+  # Legacy marker for backward compat with any code still checking .plan-approved
+  touch "$feature_dir/.plan-approved"
+}
+
+# Reject a plan: transition planning from awaiting_user to failed.
+# Usage: reject_plan <feature_dir> [agent] [model]
+reject_plan() {
+  local feature_dir="$1"
+  local agent="${2:-}" model="${3:-}"
+  write_stage_result "$feature_dir" "planning" "failed" "$agent" "$model" "Plan rejected by user"
 }
 
 # Check if the workflow is aborted (new-style result or legacy marker).
@@ -3392,8 +3419,8 @@ monitor_issue_state() {
           fi
 
           if check_stage_complete "$FEATURE_DIR" "planning"; then
-            # Mark planning as completed (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "planning" "completed" "$current_agent" "" "Plan approved" '{"type":"planning","planFile":"plan.md"}'
+            # Record approval via approve_plan (HOK-1193: writes completed + legacy marker)
+            approve_plan "$FEATURE_DIR" "$current_agent" ""
 
             # FORCE_MODEL takes priority, then challenge, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
@@ -3443,6 +3470,14 @@ monitor_issue_state() {
 
           # Check if plan exists but not yet approved (awaiting_user)
           if check_stage_awaiting_user "$FEATURE_DIR" "planning"; then
+            # Check if user signaled approval by creating .plan-approved marker
+            if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+              log "status" "✓ $ISSUE → User approved plan (via .plan-approved marker)"
+              approve_plan "$FEATURE_DIR" "$current_agent" ""
+              # Now completed — next poll iteration will pick up and launch coding
+              active_count=$((active_count + 1))
+              return 0
+            fi
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0

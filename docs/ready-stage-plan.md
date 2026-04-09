@@ -187,9 +187,17 @@ npx tsx tools/stage-result-cli.ts update <feature_dir> <stage> \
 
 The orchestrator records the structured stage result after observing those artifacts. Agents should not be responsible for emitting the final JSON state record.
 
-2. User approval is a real stage state.
+2. User approval is a real stage state. *(Implemented in HOK-1193)*
 
-Planning should transition to `awaiting_user` once the plan is ready for review. User approval should be recorded by the controller as a separate transition from planning completion, rather than inferred from `.plan-approved` alone.
+Planning transitions to `awaiting_user` once the plan is ready for review. User approval is recorded by the controller as a separate transition (`approve_plan()`) from planning completion, rather than inferred from `.plan-approved` alone. The planning stage lifecycle is:
+
+```
+[running] → [awaiting_user] → [completed]  (user approved via approve_plan)
+                             → [failed]     (user rejected via reject_plan)
+                             → [aborted]    (user aborted workflow)
+```
+
+When a stage result file exists it is authoritative — the legacy `.plan-approved` marker is not consulted by `check_stage_complete()`. When no stage result exists (old worktrees), the legacy marker is used as a fallback. On approval the controller writes both the `completed` stage result and the legacy `.plan-approved` marker for backward compatibility. Agents no longer create `.plan-approved` — only the controller does.
 
 3. Stage launches should use fresh execution.
 
