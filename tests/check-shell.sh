@@ -456,10 +456,10 @@ else
 fi
 
 if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] \
+  && grep -q 'split-window -t "\$SESSION:control.0" -h -b -f -p 50' "$LIB_DIR/wavemill-orchestrator.sh" \
   && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-orchestrator.sh" \
-  && grep -q 'split-window -t "\$SESSION:control.0" -h -p 50 -f' "$LIB_DIR/wavemill-orchestrator.sh" \
-  && grep -q 'send-keys -t "\$SESSION:control.2"' "$LIB_DIR/wavemill-orchestrator.sh" \
-  && grep -q "tail -n 200 -f '\$STATUS_LOG_FILE'" "$LIB_DIR/wavemill-orchestrator.sh"; then
+  && grep -q 'send-keys -t "\$SESSION:control.1".*tail -n 200 -f' "$LIB_DIR/wavemill-orchestrator.sh" \
+  && grep -q 'send-keys -t "\$SESSION:control.2".*STATUS_SCRIPT' "$LIB_DIR/wavemill-orchestrator.sh"; then
   pass "orchestrator builds task, dashboard, and log control panes"
 else
   fail "orchestrator is missing the 3-pane control layout wiring"
