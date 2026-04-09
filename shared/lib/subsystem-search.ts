@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import type { Subsystem } from './subsystem-detector.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { detectFilesInIssue, detectSubsystemsInIssue } from './subsystem-mapper.ts';
+import { listContextSpecPaths, getSpecType } from './context-tool.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -27,6 +28,7 @@ export interface SubsystemSearchResult {
   subsystemId: string;
   subsystemName: string;
   specPath: string;
+  specType: 'subsystem' | 'concept';
   score: number;
   relevantSections: {
     section: string;
@@ -38,6 +40,7 @@ export interface SpecSnippetSearchResult {
   subsystemId: string;
   subsystemName: string;
   specPath: string;
+  specType: 'subsystem' | 'concept';
   score: number;
   snippets: string[];
   matchLocations: string[];
@@ -66,11 +69,18 @@ const DEFAULT_OPTIONS: Required<SubsystemSearchOptions> = {
 // ────────────────────────────────────────────────────────────────
 
 /**
- * Extract subsystem name from spec content.
+ * Extract subsystem or concept name from spec content.
  */
 function extractSubsystemName(content: string): string {
-  const match = content.match(/^# Subsystem:\s*(.+)$/m);
-  return match ? match[1].trim() : 'Unknown';
+  // Try subsystem pattern first
+  let match = content.match(/^# Subsystem:\s*(.+)$/m);
+  if (match) return match[1].trim();
+
+  // Try concept pattern
+  match = content.match(/^# Concept:\s*(.+)$/m);
+  if (match) return match[1].trim();
+
+  return 'Unknown';
 }
 
 /**
@@ -182,6 +192,7 @@ function searchSpecContent(
 ): SpecSnippetSearchResult | null {
   const subsystemName = extractSubsystemName(content);
   const subsystemId = getSubsystemIdFromSpecPath(specPath);
+  const specType = getSpecType(specPath);
   const searchContent = sectionFilter ? extractSection(content, sectionFilter) : content;
 
   if (!searchContent || searchContent.trim().length === 0) {
@@ -199,6 +210,7 @@ function searchSpecContent(
     subsystemId,
     subsystemName,
     specPath,
+    specType,
     score,
     snippets: snippets.slice(0, 3),
     matchLocations: locations.slice(0, 3),
@@ -332,10 +344,13 @@ export function searchSubsystems(
     return [];
   }
 
-  // Find all spec files
-  const specFiles = readdirSync(contextDir)
-    .filter(f => f.endsWith('.md'))
-    .map(f => join(contextDir, f));
+  // Find all spec files (includes both subsystems and concepts)
+  let specFiles: string[];
+  try {
+    specFiles = listContextSpecPaths(repoDir);
+  } catch (error) {
+    return [];
+  }
 
   if (specFiles.length === 0) {
     return [];
@@ -348,6 +363,7 @@ export function searchSubsystems(
       const content = readFileSync(specPath, 'utf-8');
       const subsystemName = extractSubsystemName(content);
       const subsystemId = getSubsystemIdFromSpecPath(specPath);
+      const specType = getSpecType(specPath);
 
       // Filter to section if requested
       const searchContent = opts.sectionFilter
@@ -379,6 +395,7 @@ export function searchSubsystems(
         subsystemId,
         subsystemName,
         specPath,
+        specType,
         score,
         relevantSections,
       });
@@ -407,9 +424,13 @@ export function searchSubsystemSpecs(
     return [];
   }
 
-  const specFiles = readdirSync(contextDir)
-    .filter((file) => file.endsWith('.md'))
-    .map((file) => join(contextDir, file));
+  // Get all spec files (includes both subsystems and concepts)
+  let specFiles: string[];
+  try {
+    specFiles = listContextSpecPaths(repoDir);
+  } catch (error) {
+    return [];
+  }
 
   if (specFiles.length === 0) {
     return [];
@@ -498,6 +519,7 @@ export function findRelevantSubsystems(
         subsystemId: subsystem.id,
         subsystemName: subsystem.name,
         specPath,
+        specType: getSpecType(specPath),
         score: 100 + fileMatchCount * 50, // High base score for file matches
         relevantSections,
       });

@@ -48,6 +48,12 @@
 
 {RELATED_SUBSYSTEMS}
 
+## Related Concepts
+
+Cross-cutting knowledge pages relevant to this subsystem:
+
+{RELATED_CONCEPTS}
+
 ## Recent Changes
 
 {RECENT_CHANGES}

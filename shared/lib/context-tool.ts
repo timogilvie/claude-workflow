@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 export function resolveRepoDir(repoPath?: string): string {
   return resolve(repoPath || process.cwd());
@@ -13,6 +13,10 @@ export function getContextDir(repoDir: string): string {
   return join(getWavemillDir(repoDir), 'context');
 }
 
+export function getConceptsDir(repoDir: string): string {
+  return join(getContextDir(repoDir), 'concepts');
+}
+
 export function requireContextDir(repoDir: string): string {
   const contextDir = getContextDir(repoDir);
   if (!existsSync(contextDir)) {
@@ -21,11 +25,29 @@ export function requireContextDir(repoDir: string): string {
   return contextDir;
 }
 
+export function listConceptPaths(repoDir: string): string[] {
+  const conceptsDir = getConceptsDir(repoDir);
+  if (!existsSync(conceptsDir)) {
+    return [];
+  }
+
+  return readdirSync(conceptsDir)
+    .filter((file) => file.endsWith('.md'))
+    .map((file) => join(conceptsDir, file));
+}
+
 export function listContextSpecPaths(repoDir: string): string[] {
   const contextDir = requireContextDir(repoDir);
-  return readdirSync(contextDir)
+
+  // Get subsystem specs (flat structure)
+  const subsystemPaths = readdirSync(contextDir)
     .filter((file) => file.endsWith('.md'))
     .map((file) => join(contextDir, file));
+
+  // Get concept pages (subdirectory)
+  const conceptPaths = listConceptPaths(repoDir);
+
+  return [...subsystemPaths, ...conceptPaths];
 }
 
 export function readContextSpec(repoDir: string, subsystemId: string): { contextDir: string; specPath: string; content: string } {
@@ -99,4 +121,8 @@ export function extractKeyFiles(specContent: string): string[] {
   }
 
   return files;
+}
+
+export function getSpecType(specPath: string): 'subsystem' | 'concept' {
+  return specPath.split(sep).includes('concepts') ? 'concept' : 'subsystem';
 }

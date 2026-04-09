@@ -9,6 +9,8 @@
 
 import type { Subsystem } from './subsystem-detector.ts';
 import { basename, dirname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { listConceptPaths, listContextSpecPaths } from './context-tool.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -23,6 +25,17 @@ export interface RelatedSubsystem {
   reason: string;
   /** Number of shared key files (for ranking) */
   sharedFileCount: number;
+}
+
+export interface RelatedConcept {
+  /** Concept ID (kebab-case) */
+  id: string;
+  /** Human-readable name */
+  name: string;
+  /** Always 'concept' for type discrimination */
+  type: 'concept';
+  /** Description of relationship */
+  reason: string;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -104,6 +117,103 @@ function generateReason(sharedFiles: string[]): string {
 
   const dirName = commonDir === '.' ? 'root' : basename(commonDir);
   return `closely coupled via \`${dirName}\` modules`;
+}
+
+/**
+ * Extract concept or subsystem name from spec content.
+ * Looks for "# Concept: Name" or "# Subsystem: Name" pattern.
+ */
+function extractSpecName(content: string): string {
+  const match = content.match(/^#\s+(?:Concept|Subsystem):\s+(.+)$/m);
+  return match ? match[1].trim() : '';
+}
+
+/**
+ * Detect concept references in a subsystem spec or another concept.
+ * Looks for markdown links to concept pages.
+ */
+export function detectConceptReferences(
+  specContent: string,
+  repoDir: string
+): RelatedConcept[] {
+  const conceptPaths = listConceptPaths(repoDir);
+  if (conceptPaths.length === 0) return [];
+
+  const references: RelatedConcept[] = [];
+  const seen = new Set<string>();
+
+  // Pattern: [text](concepts/concept-id.md) or [text](concept-id.md)
+  const linkPattern = /\[([^\]]+)\]\((?:concepts\/)?([^)]+\.md)\)/g;
+
+  for (const match of specContent.matchAll(linkPattern)) {
+    const linkedFile = match[2];
+    const conceptId = linkedFile.replace('.md', '');
+
+    if (seen.has(conceptId)) continue;
+
+    // Find matching concept path
+    const conceptPath = conceptPaths.find(p => p.endsWith(`/${conceptId}.md`));
+
+    if (conceptPath && existsSync(conceptPath)) {
+      const conceptContent = readFileSync(conceptPath, 'utf-8');
+      const conceptName = extractSpecName(conceptContent) || conceptId;
+
+      references.push({
+        id: conceptId,
+        name: conceptName,
+        type: 'concept',
+        reason: `references [${conceptName}](concepts/${conceptId}.md)`,
+      });
+
+      seen.add(conceptId);
+    }
+  }
+
+  return references;
+}
+
+/**
+ * Detect subsystem references in a concept page.
+ * Looks for markdown links to subsystem specs.
+ */
+export function detectSubsystemReferencesFromConcept(
+  conceptContent: string,
+  repoDir: string
+): RelatedSubsystem[] {
+  const subsystemPaths = listContextSpecPaths(repoDir);
+  if (subsystemPaths.length === 0) return [];
+
+  const references: RelatedSubsystem[] = [];
+  const seen = new Set<string>();
+
+  // Pattern: [text](subsystem-id.md) or [text](../subsystem-id.md)
+  const linkPattern = /\[([^\]]+)\]\((?:\.\.\/)?([^)]+\.md)\)/g;
+
+  for (const match of conceptContent.matchAll(linkPattern)) {
+    const linkedFile = match[2];
+    const subsystemId = linkedFile.replace('.md', '');
+
+    if (seen.has(subsystemId)) continue;
+
+    // Find matching subsystem path
+    const subsystemPath = subsystemPaths.find(p => p.endsWith(`/${subsystemId}.md`));
+
+    if (subsystemPath && existsSync(subsystemPath)) {
+      const subsystemContent = readFileSync(subsystemPath, 'utf-8');
+      const subsystemName = extractSpecName(subsystemContent) || subsystemId;
+
+      references.push({
+        id: subsystemId,
+        name: subsystemName,
+        reason: `referenced by concept`,
+        sharedFileCount: 0, // Not based on shared files
+      });
+
+      seen.add(subsystemId);
+    }
+  }
+
+  return references;
 }
 
 /**

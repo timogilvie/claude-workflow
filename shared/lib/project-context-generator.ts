@@ -1,11 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeCodeConventions, type ConventionAnalysis } from './context-analyzer.ts';
 import { analyzeRepoContext } from './repo-context-analyzer.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { writeSubsystemSpecs } from './subsystem-spec-generator.ts';
 import { detectSubsystemRelationships } from './subsystem-cross-reference.ts';
+import { listConceptPaths } from './context-tool.ts';
+import { extractSection } from './context-tool.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -277,7 +279,23 @@ export async function generateProjectContext(opts: { repoDir: string; force: boo
       .map((subsystem) => `- [${subsystem.name}](context/${subsystem.id}.md) - ${subsystem.description}`)
       .join('\n');
 
-    const subsystemSection = `\n\n## Subsystem Documentation\n\nFor detailed documentation on specific subsystems, see \`.wavemill/context/\`:\n\n${subsystemLinks}\n\n---`;
+    let subsystemSection = `\n\n## Subsystem Documentation\n\nFor detailed documentation on specific subsystems, see \`.wavemill/context/\`:\n\n${subsystemLinks}`;
+
+    // Add concept pages if they exist
+    const conceptPaths = listConceptPaths(repoDir);
+    if (conceptPaths.length > 0) {
+      const conceptLinks = conceptPaths.map(path => {
+        const conceptId = basename(path, '.md');
+        const content = readFileSync(path, 'utf-8');
+        const name = extractConceptName(content);
+        const purpose = extractConceptPurpose(content);
+        return `- [${name}](context/concepts/${conceptId}.md) - ${purpose}`;
+      }).join('\n');
+
+      subsystemSection += `\n\n### Concept Pages\n\nCross-cutting knowledge that applies across multiple subsystems:\n\n${conceptLinks}`;
+    }
+
+    subsystemSection += '\n\n---';
 
     const updatedContext = readFileSync(contextPath, 'utf-8').replace(
       /## Recent Work/,
@@ -297,4 +315,21 @@ export async function generateProjectContext(opts: { repoDir: string; force: boo
   console.log('4. The "Recent Work" section will be auto-updated after each PR merge');
   console.log('\nTo use this context in issue expansion:');
   console.log('  npx tsx tools/expand-issue.ts <issue-id>');
+}
+
+/**
+ * Extract concept name from concept page content.
+ */
+function extractConceptName(content: string): string {
+  const match = content.match(/^# Concept:\s*(.+)$/m);
+  return match ? match[1].trim() : 'Unknown Concept';
+}
+
+/**
+ * Extract concept purpose (first line of Purpose section).
+ */
+function extractConceptPurpose(content: string): string {
+  const purposeSection = extractSection(content, 'Purpose');
+  const firstLine = purposeSection.split('\n').find(line => line.trim());
+  return firstLine ? firstLine.trim() : 'Cross-cutting concept';
 }
