@@ -465,8 +465,8 @@ fi
 if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] \
   && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-orchestrator.sh" \
   && grep -q 'split-window -t "\$SESSION:control.0" -h -f -p 50' "$LIB_DIR/wavemill-orchestrator.sh" \
-  && grep -q 'send-keys -t "\$SESSION:control.1".*STATUS_SCRIPT' "$LIB_DIR/wavemill-orchestrator.sh" \
-  && grep -q 'send-keys -t "\$SESSION:control.2".*tail -n 200 -f' "$LIB_DIR/wavemill-orchestrator.sh"; then
+  && grep -q 'respawn-pane -k -t "\$SESSION:control.1".*STATUS_SCRIPT' "$LIB_DIR/wavemill-orchestrator.sh" \
+  && grep -q 'respawn-pane -k -t "\$SESSION:control.2".*tail -n 200 -f' "$LIB_DIR/wavemill-orchestrator.sh"; then
   pass "orchestrator builds task, dashboard, and log control panes"
 else
   fail "orchestrator is missing the 3-pane control layout wiring"
@@ -501,6 +501,17 @@ else
     pass "dashboard overrides stale status with plan review message"
   else
     fail "dashboard does not override stale status with plan review message"
+  fi
+
+  STATUS_MAIN_LOOP=$(awk '
+    /while true; do/ { in_loop=1 }
+    in_loop { print }
+    in_loop && /^[[:space:]]*done[[:space:]]*$/ { exit }
+  ' "$STATUS_SCRIPT")
+  if echo "$STATUS_MAIN_LOOP" | grep -qE '^[[:space:]]*local[[:space:]]'; then
+    fail "dashboard main loop contains local declarations"
+  else
+    pass "dashboard main loop avoids local declarations"
   fi
 fi
 

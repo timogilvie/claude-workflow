@@ -454,8 +454,8 @@ if [[ "$PANE_COUNT" -eq 1 ]]; then
   : > "$STATUS_LOG_FILE"
   tmux split-window -t "$SESSION:control.0" -v -p 65
   tmux split-window -t "$SESSION:control.0" -h -f -p 50
-  tmux send-keys -t "$SESSION:control.1" "'$STATUS_SCRIPT' '$SESSION' '$WORKTREE_ROOT' '${WAVEMILL_STATE_FILE:-}'" C-m
-  tmux send-keys -t "$SESSION:control.2" "clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'" C-m
+  tmux respawn-pane -k -t "$SESSION:control.1" "'$STATUS_SCRIPT' '$SESSION' '$WORKTREE_ROOT' '${WAVEMILL_STATE_FILE:-}'"
+  tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\\\n\\\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
   tmux select-pane -t "$SESSION:control.0"
 else
   echo "Status dashboard already exists, skipping..."
