@@ -138,9 +138,9 @@ agent_completion_text() {
 
   # Agent-agnostic: orchestrator handles termination detection (HOK-1177)
   if [[ -n "$suffix" ]]; then
-    echo "stop working and let the session end. The orchestrator will detect completion and proceed. $suffix"
+    echo "stop working. The orchestrator will detect completion and proceed. $suffix"
   else
-    echo "stop working and let the session end. The orchestrator will detect completion and proceed."
+    echo "stop working. The orchestrator will detect completion and proceed."
   fi
 }
 

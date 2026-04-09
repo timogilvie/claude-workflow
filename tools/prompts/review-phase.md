@@ -74,4 +74,4 @@ If the user asks you to stop work, close the issue, abort, or otherwise disconti
 - Create the abort marker: touch features/{{SLUG}}/.workflow-aborted
 - Do NOT create additional completion output or a PR
 - Inform the user that the workflow is being stopped
-- Stop after creating the marker and reporting the abort. Workflow orchestration will close the session.
+- Stop after creating the marker and reporting the abort.
