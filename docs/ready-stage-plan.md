@@ -103,6 +103,79 @@ Each stage result file is written by the orchestrator after observing the stage 
 - `artifacts`
 - `notes` or `failureReason` when relevant
 
+### Stage Result Artifact Schema (HOK-1192)
+
+The schema is implemented in `shared/lib/stage-result.ts` with TypeScript types and
+read/write/update helpers. A CLI wrapper at `tools/stage-result-cli.ts` allows the
+shell orchestrator to manage result files without constructing JSON inline.
+
+#### Base StageResult
+
+```json
+{
+  "stage": "planning | coding | review | ready",
+  "status": "running | awaiting_user | completed | aborted | failed",
+  "startedAt": "2026-04-09T10:00:00Z",
+  "finishedAt": "2026-04-09T10:30:00Z",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "notes": "Human-readable status note",
+  "artifacts": { ... },
+  "failureReason": "Optional failure description"
+}
+```
+
+`artifacts` and `failureReason` are optional. Files written before HOK-1192
+(without these fields) remain valid and are read without error.
+
+#### Per-Stage Artifact Types
+
+Each artifact type is identified by a `type` discriminator field.
+
+**PlanningArtifacts** — written when planning completes:
+```json
+{ "type": "planning", "planFile": "plan.md", "taskPacketFile": "task-packet.md" }
+```
+
+**CodingArtifacts** — written when coding completes:
+```json
+{ "type": "coding", "filesChanged": 5, "linesAdded": 200, "linesRemoved": 50, "commitCount": 3 }
+```
+
+**ReviewArtifacts** — written when review completes:
+```json
+{ "type": "review", "prNumber": 42, "prUrl": "https://github.com/org/repo/pull/42", "findingsCount": 3, "blockingIssues": 1 }
+```
+
+**ReadyArtifacts** — written when ready checks complete:
+```json
+{ "type": "ready", "verdict": "pass", "checksRun": 4, "checksPassed": 4, "mergeConflict": "CLEAN" }
+```
+
+All artifact fields are optional. The orchestrator writes what it knows at each
+transition point.
+
+#### Ownership Rules
+
+- Only the **orchestrator** (`wavemill-mill.sh`) writes `.*-result.json` files.
+- Agents produce work artifacts (plan.md, code, PRs); the orchestrator records the structured result after observing those artifacts.
+- Agent prompts must not reference or modify stage result files.
+
+#### CLI Usage
+
+```bash
+# Write a new result (shell orchestrator calls this)
+npx tsx tools/stage-result-cli.ts write <feature_dir> <stage> <status> \
+  [--agent X] [--model Y] [--notes Z] [--artifacts '{"type":"planning",...}']
+
+# Read a result (returns JSON to stdout)
+npx tsx tools/stage-result-cli.ts read <feature_dir> <stage>
+
+# Update with merge semantics (preserves startedAt, merges patch)
+npx tsx tools/stage-result-cli.ts update <feature_dir> <stage> \
+  --status completed [--artifacts '...']
+```
+
 ### Key design decisions
 
 1. Agents produce work artifacts, not workflow bookkeeping.
