@@ -1513,6 +1513,7 @@ trap monitor_err_trap ERR
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-active}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
+  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local tmp
   tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
 
@@ -1521,6 +1522,8 @@ save_task_state() {
      --arg agent "$agent" --arg linearIssue "$linear_issue" --arg challenge "$challenge" \
      --arg challengePair "$challenge_pair" --arg challengeRole "$challenge_role" \
      --arg challengeModel "$challenge_model" \
+     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
+     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
      '(.tasks[$issue].agent // "") as $old_agent |
       (.tasks[$issue].phase // "executing") as $old_phase |
       (.tasks[$issue].evalCompleted // false) as $old_eval |
@@ -1547,12 +1550,12 @@ save_task_state() {
         challengePairId: (if $challengePair != "" then $challengePair else $old_challenge_pair end),
         challengeRole: (if $challengeRole != "" then $challengeRole else $old_challenge_role end),
         challengeModel: (if $challengeModel != "" then $challengeModel else $old_challenge_model end),
-        coderModel: $old_coderModel,
-        plannerModel: $old_plannerModel,
-        reviewerModel: $old_reviewerModel,
-        planDepth: $old_planDepth,
-        codeDepth: $old_codeDepth,
-        reviewMode: $old_reviewMode,
+        coderModel: (if $coderModel != "" then $coderModel else $old_coderModel end),
+        plannerModel: (if $plannerModel != "" then $plannerModel else $old_plannerModel end),
+        reviewerModel: (if $reviewerModel != "" then $reviewerModel else $old_reviewerModel end),
+        planDepth: (if $planDepth != "" then $planDepth else $old_planDepth end),
+        codeDepth: (if $codeDepth != "" then $codeDepth else $old_codeDepth end),
+        reviewMode: (if $reviewMode != "" then $reviewMode else $old_reviewMode end),
         phase: $old_phase,
         evalCompleted: $old_eval,
         updated: (now | todate)
