@@ -511,6 +511,7 @@ After HOK-1174 (PR `#208`) shipped and HOK-1176 (PR `#213`) merged, the revised 
 | Legacy marker compatibility (`checkLegacyMarkers`) | Backfilled | HOK-1183 |
 | Controller readiness CLI (`tools/controller-ready.ts`) | Backfilled | HOK-1183 |
 | Shell orchestrator stub (`check_ready_stage`) | Backfilled | HOK-1183 |
+| Monitor phase resolution refactor (`resolve_phase()`, controller-owned state priority) | Shipped | HOK-1194 |
 | Phase transition wiring in orchestrator | Deferred | HOK-1177 |
 | Ready-phase blocking of merge completion | Deferred | HOK-1177 |
 | Full mill-mode integration, dashboard, monitoring | Deferred | HOK-1182 |
