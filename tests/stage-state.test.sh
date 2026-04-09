@@ -228,6 +228,110 @@ read_phase_config() {
   fi
 }
 
+resolve_phase() {
+  local feature_dir="$1"
+
+  if [[ ! -d "$feature_dir" ]]; then
+    echo "unknown"
+    return 0
+  fi
+
+  # 1. Check for abort first (any stage or legacy marker)
+  if check_stage_aborted "$feature_dir"; then
+    _persist_phase "$feature_dir" "aborted"
+    echo "aborted"
+    return 0
+  fi
+
+  # 2. Check stages in reverse order (highest stage wins)
+  # Ready
+  local ready_status
+  ready_status=$(read_stage_status "$feature_dir" "ready")
+  if [[ "$ready_status" == "completed" ]]; then
+    _persist_phase "$feature_dir" "ready"
+    echo "ready"
+    return 0
+  fi
+
+  # Review
+  if check_stage_complete "$feature_dir" "review"; then
+    _persist_phase "$feature_dir" "ready"
+    echo "ready"
+    return 0
+  fi
+
+  local review_status
+  review_status=$(read_stage_status "$feature_dir" "review")
+  if [[ -n "$review_status" ]]; then
+    # Review stage exists (running/failed/etc) — we're in review
+    _persist_phase "$feature_dir" "review"
+    echo "review"
+    return 0
+  fi
+
+  # Coding
+  if check_stage_complete "$feature_dir" "coding"; then
+    _persist_phase "$feature_dir" "review"
+    echo "review"
+    return 0
+  fi
+
+  local coding_status
+  coding_status=$(read_stage_status "$feature_dir" "coding")
+  if [[ -n "$coding_status" ]]; then
+    _persist_phase "$feature_dir" "coding"
+    echo "coding"
+    return 0
+  fi
+
+  # Planning
+  if check_stage_awaiting_user "$feature_dir" "planning"; then
+    _persist_phase "$feature_dir" "awaiting_user"
+    echo "awaiting_user"
+    return 0
+  fi
+
+  if check_stage_complete "$feature_dir" "planning"; then
+    _persist_phase "$feature_dir" "coding"
+    echo "coding"
+    return 0
+  fi
+
+  local planning_status
+  planning_status=$(read_stage_status "$feature_dir" "planning")
+  if [[ -n "$planning_status" ]]; then
+    _persist_phase "$feature_dir" "planning"
+    echo "planning"
+    return 0
+  fi
+
+  # 3. Legacy-only fallback (no stage result files exist)
+  if [[ -f "$feature_dir/.coding-complete" ]]; then
+    _persist_phase "$feature_dir" "review"
+    echo "review"
+    return 0
+  fi
+
+  if [[ -f "$feature_dir/.plan-approved" ]]; then
+    _persist_phase "$feature_dir" "coding"
+    echo "coding"
+    return 0
+  fi
+
+  # 4. Default
+  _persist_phase "$feature_dir" "planning"
+  echo "planning"
+  return 0
+}
+
+_persist_phase() {
+  local feature_dir="$1" phase="$2"
+  local tmp
+  tmp=$(mktemp) || return 0
+  printf '%s\n' "$phase" > "$tmp"
+  mv "$tmp" "$feature_dir/.resolved-phase"
+}
+
 # ─────────────────────────────────────────────────────────────────
 echo "=== Stage Result Tests ==="
 # ─────────────────────────────────────────────────────────────────
@@ -435,6 +539,372 @@ check "forceModel set" "forced" "$(jq -r '.forceModel' "$FD13/.phase-config.json
 
 # Test 18: missing config file
 check "read missing config" "" "$(read_phase_config "$TEST_DIR/nonexistent" "planning" "model")"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== resolve_phase Tests ==="
+# ─────────────────────────────────────────────────────────────────
+
+# Test 19: Empty dir → planning
+FD19="$TEST_DIR/test19"
+mkdir -p "$FD19"
+check "empty dir → planning" "planning" "$(resolve_phase "$FD19")"
+check "persisted phase matches" "planning" "$(cat "$FD19/.resolved-phase")"
+
+# Test 20: Non-existent dir → unknown
+check "non-existent dir → unknown" "unknown" "$(resolve_phase "$TEST_DIR/nonexistent-dir")"
+
+# Test 21: Planning running
+FD21="$TEST_DIR/test21"
+mkdir -p "$FD21"
+write_stage_result "$FD21" "planning" "running" "claude" "opus"
+check "planning running → planning" "planning" "$(resolve_phase "$FD21")"
+
+# Test 22: Planning awaiting_user
+FD22="$TEST_DIR/test22"
+mkdir -p "$FD22"
+write_stage_result "$FD22" "planning" "awaiting_user" "claude" "opus"
+check "planning awaiting_user → awaiting_user" "awaiting_user" "$(resolve_phase "$FD22")"
+
+# Test 23: Planning completed
+FD23="$TEST_DIR/test23"
+mkdir -p "$FD23"
+write_stage_result "$FD23" "planning" "completed" "claude" "opus"
+check "planning completed → coding" "coding" "$(resolve_phase "$FD23")"
+
+# Test 24: Coding running
+FD24="$TEST_DIR/test24"
+mkdir -p "$FD24"
+write_stage_result "$FD24" "planning" "completed" "claude" "opus"
+write_stage_result "$FD24" "coding" "running" "claude" "opus"
+check "coding running → coding" "coding" "$(resolve_phase "$FD24")"
+
+# Test 25: Coding completed
+FD25="$TEST_DIR/test25"
+mkdir -p "$FD25"
+write_stage_result "$FD25" "planning" "completed" "claude" "opus"
+write_stage_result "$FD25" "coding" "completed" "claude" "opus"
+check "coding completed → review" "review" "$(resolve_phase "$FD25")"
+
+# Test 26: Review running
+FD26="$TEST_DIR/test26"
+mkdir -p "$FD26"
+write_stage_result "$FD26" "planning" "completed" "claude" "opus"
+write_stage_result "$FD26" "coding" "completed" "claude" "opus"
+write_stage_result "$FD26" "review" "running" "claude" "opus"
+check "review running → review" "review" "$(resolve_phase "$FD26")"
+
+# Test 27: Review completed
+FD27="$TEST_DIR/test27"
+mkdir -p "$FD27"
+write_stage_result "$FD27" "planning" "completed" "claude" "opus"
+write_stage_result "$FD27" "coding" "completed" "claude" "opus"
+write_stage_result "$FD27" "review" "completed" "claude" "opus"
+check "review completed → ready" "ready" "$(resolve_phase "$FD27")"
+
+# Test 28: Ready completed
+FD28="$TEST_DIR/test28"
+mkdir -p "$FD28"
+write_stage_result "$FD28" "planning" "completed" "claude" "opus"
+write_stage_result "$FD28" "coding" "completed" "claude" "opus"
+write_stage_result "$FD28" "review" "completed" "claude" "opus"
+write_stage_result "$FD28" "ready" "completed" "claude" "opus"
+check "ready completed → ready" "ready" "$(resolve_phase "$FD28")"
+
+# Test 29: Aborted (stage result)
+FD29="$TEST_DIR/test29"
+mkdir -p "$FD29"
+write_stage_result "$FD29" "planning" "aborted" "claude" "opus"
+check "aborted via stage result → aborted" "aborted" "$(resolve_phase "$FD29")"
+
+# Test 30: Aborted (legacy marker)
+FD30="$TEST_DIR/test30"
+mkdir -p "$FD30"
+touch "$FD30/.workflow-aborted"
+check "aborted via legacy marker → aborted" "aborted" "$(resolve_phase "$FD30")"
+
+# Test 31: Legacy .plan-approved only
+FD31="$TEST_DIR/test31"
+mkdir -p "$FD31"
+touch "$FD31/.plan-approved"
+check "legacy .plan-approved only → coding" "coding" "$(resolve_phase "$FD31")"
+
+# Test 32: Legacy .coding-complete only
+FD32="$TEST_DIR/test32"
+mkdir -p "$FD32"
+touch "$FD32/.coding-complete"
+check "legacy .coding-complete only → review" "review" "$(resolve_phase "$FD32")"
+
+# Test 33: Legacy both markers
+FD33="$TEST_DIR/test33"
+mkdir -p "$FD33"
+touch "$FD33/.plan-approved"
+touch "$FD33/.coding-complete"
+check "legacy both markers → review" "review" "$(resolve_phase "$FD33")"
+
+# Test 34: Mixed - stage result + legacy marker (stage wins)
+FD34="$TEST_DIR/test34"
+mkdir -p "$FD34"
+write_stage_result "$FD34" "planning" "awaiting_user" "claude" "opus"
+touch "$FD34/.plan-approved"
+check "mixed: stage awaiting_user + legacy marker → awaiting_user" "awaiting_user" "$(resolve_phase "$FD34")"
+
+# Test 35: Mixed - planning result completed + coding legacy
+FD35="$TEST_DIR/test35"
+mkdir -p "$FD35"
+write_stage_result "$FD35" "planning" "completed" "claude" "opus"
+touch "$FD35/.coding-complete"
+check "mixed: planning completed + legacy coding marker → review" "review" "$(resolve_phase "$FD35")"
+
+# Test 36: Malformed JSON (falls through to legacy/default)
+FD36="$TEST_DIR/test36"
+mkdir -p "$FD36"
+echo "not json" > "$FD36/.planning-result.json"
+touch "$FD36/.plan-approved"
+check "malformed JSON falls back to legacy → coding" "coding" "$(resolve_phase "$FD36")"
+
+# Test 37: Malformed JSON without legacy fallback
+FD37="$TEST_DIR/test37"
+mkdir -p "$FD37"
+echo "not json" > "$FD37/.planning-result.json"
+check "malformed JSON without legacy → planning" "planning" "$(resolve_phase "$FD37")"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Coding Stage Transition Tests (HOK-1194) ==="
+
+# Test 38: Coding running + .coding-complete (before monitor transition)
+# Phase should still be "coding" because monitor hasn't written "completed" yet
+FD38="$TEST_DIR/test38"
+mkdir -p "$FD38"
+cat > "$FD38/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:00:00Z"
+}
+EOF
+touch "$FD38/.coding-complete"
+check "coding running + .coding-complete → coding" "coding" "$(resolve_phase "$FD38")"
+check "read_stage_status detects running" "running" "$(read_stage_status "$FD38" "coding")"
+
+# Test 39: Coding completed (after monitor transition)
+FD39="$TEST_DIR/test39"
+mkdir -p "$FD39"
+cat > "$FD39/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "completed",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:05:00Z"
+}
+EOF
+check "coding completed → review" "review" "$(resolve_phase "$FD39")"
+check "check_stage_complete detects completion" "0" "$([[ $(check_stage_complete "$FD39" "coding"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# Test 40: Legacy .coding-complete still works (no stage result)
+FD40="$TEST_DIR/test40"
+mkdir -p "$FD40"
+touch "$FD40/.coding-complete"
+check "legacy .coding-complete only → review" "review" "$(resolve_phase "$FD40")"
+
+# Test 41: Coding running without .coding-complete
+FD41="$TEST_DIR/test41"
+mkdir -p "$FD41"
+cat > "$FD41/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:00:00Z"
+}
+EOF
+check "coding running without marker → coding" "coding" "$(resolve_phase "$FD41")"
+
+# Test 42: Legacy marker works even when stage result is running (migration compat)
+# Monitor will detect .coding-complete and transition running→completed
+FD42="$TEST_DIR/test42"
+mkdir -p "$FD42"
+cat > "$FD42/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:00:00Z"
+}
+EOF
+touch "$FD42/.coding-complete"
+# Before monitor transition: still shows as coding (status is "running")
+check "running + legacy marker (pre-transition) → coding" "coding" "$(resolve_phase "$FD42")"
+# Simulate monitor transition
+write_stage_result "$FD42" "coding" "completed" "claude" "claude-opus-4-6"
+check "running + legacy marker (post-transition) → review" "review" "$(resolve_phase "$FD42")"
+
+# Test 43: Coding failed status
+FD43="$TEST_DIR/test43"
+mkdir -p "$FD43"
+cat > "$FD43/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "failed",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:00:00Z",
+  "notes": "Agent crashed"
+}
+EOF
+check "coding failed → coding" "coding" "$(resolve_phase "$FD43")"
+check "failed status is not complete" "1" "$([[ $(check_stage_complete "$FD43" "coding"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Planning Stage Transition Tests (HOK-1194) ==="
+
+# Test 44: Planning running + plan.md (before monitor transition)
+# Phase should still be "planning" because monitor hasn't written "awaiting_user" yet
+FD44="$TEST_DIR/test44"
+mkdir -p "$FD44"
+cat > "$FD44/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:00:00Z"
+}
+EOF
+touch "$FD44/plan.md"
+check "planning running + plan.md → planning" "planning" "$(resolve_phase "$FD44")"
+check "read_stage_status detects running" "running" "$(read_stage_status "$FD44" "planning")"
+
+# Test 45: Planning awaiting_user (after monitor transition)
+FD45="$TEST_DIR/test45"
+mkdir -p "$FD45"
+cat > "$FD45/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "awaiting_user",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:05:00Z",
+  "notes": "Plan ready for review"
+}
+EOF
+touch "$FD45/plan.md"
+check "planning awaiting_user → awaiting_user" "awaiting_user" "$(resolve_phase "$FD45")"
+check "check_stage_awaiting_user detects awaiting" "0" "$([[ $(check_stage_awaiting_user "$FD45" "planning"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# Test 46: Planning running + .plan-approved (before monitor transition)
+FD46="$TEST_DIR/test46"
+mkdir -p "$FD46"
+cat > "$FD46/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:00:00Z"
+}
+EOF
+touch "$FD46/plan.md"
+touch "$FD46/.plan-approved"
+# Still planning because monitor hasn't written completed yet
+check "planning running + .plan-approved (pre-transition) → planning" "planning" "$(resolve_phase "$FD46")"
+
+# Test 47: Planning awaiting_user + .plan-approved (before monitor transition)
+FD47="$TEST_DIR/test47"
+mkdir -p "$FD47"
+cat > "$FD47/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "awaiting_user",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:05:00Z"
+}
+EOF
+touch "$FD47/plan.md"
+touch "$FD47/.plan-approved"
+# Still awaiting_user because monitor hasn't written completed yet
+# (monitor will detect this and call approve_plan)
+check "planning awaiting_user + .plan-approved (pre-transition) → awaiting_user" "awaiting_user" "$(resolve_phase "$FD47")"
+
+# Test 48: Planning completed (after monitor calls approve_plan)
+FD48="$TEST_DIR/test48"
+mkdir -p "$FD48"
+cat > "$FD48/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "completed",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:10:00Z",
+  "notes": "Approved by user"
+}
+EOF
+touch "$FD48/plan.md"
+touch "$FD48/.plan-approved"
+check "planning completed → coding" "coding" "$(resolve_phase "$FD48")"
+check "check_stage_complete detects completion" "0" "$([[ $(check_stage_complete "$FD48" "planning"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# Test 49: Legacy .plan-approved only (no stage result)
+FD49="$TEST_DIR/test49"
+mkdir -p "$FD49"
+touch "$FD49/plan.md"
+touch "$FD49/.plan-approved"
+check "legacy .plan-approved only → coding" "coding" "$(resolve_phase "$FD49")"
+
+# Test 50: Planning running without plan.md
+FD50="$TEST_DIR/test50"
+mkdir -p "$FD50"
+cat > "$FD50/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:00:00Z"
+}
+EOF
+check "planning running without plan.md → planning" "planning" "$(resolve_phase "$FD50")"
+
+# Test 51: Simulate monitor transition: running → awaiting_user → completed
+FD51="$TEST_DIR/test51"
+mkdir -p "$FD51"
+# Initial state: running
+write_stage_result "$FD51" "planning" "running" "claude" "claude-opus-4-6"
+touch "$FD51/plan.md"
+check "initial running state → planning" "planning" "$(resolve_phase "$FD51")"
+
+# Agent exited with plan.md, monitor writes awaiting_user
+write_stage_result "$FD51" "planning" "awaiting_user" "claude" "" "Plan ready for review"
+check "after running→awaiting_user transition → awaiting_user" "awaiting_user" "$(resolve_phase "$FD51")"
+
+# User approves, monitor writes completed
+touch "$FD51/.plan-approved"
+approve_plan "$FD51" "claude" ""
+check "after approval→completed transition → coding" "coding" "$(resolve_phase "$FD51")"
+
+# Test 52: Planning failed status
+FD52="$TEST_DIR/test52"
+mkdir -p "$FD52"
+cat > "$FD52/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "failed",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:00:00Z",
+  "notes": "Agent crashed during planning"
+}
+EOF
+check "planning failed → planning" "planning" "$(resolve_phase "$FD52")"
+check "failed status is not complete" "1" "$([[ $(check_stage_complete "$FD52" "planning"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
 
 # ─────────────────────────────────────────────────────────────────
 echo ""

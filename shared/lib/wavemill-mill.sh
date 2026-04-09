@@ -1894,6 +1894,116 @@ check_stage_aborted() {
   return 1
 }
 
+# Resolve the current workflow phase from controller-owned stage state.
+# Priority: stage result files > legacy markers > default.
+# Writes the resolved phase to .resolved-phase for downstream consumers.
+#
+# Usage: resolve_phase <feature_dir>
+# Returns: prints one of: planning, coding, review, ready, aborted, awaiting_user, unknown
+resolve_phase() {
+  local feature_dir="$1"
+
+  if [[ ! -d "$feature_dir" ]]; then
+    echo "unknown"
+    return 0
+  fi
+
+  # 1. Check for abort first (any stage or legacy marker)
+  if check_stage_aborted "$feature_dir"; then
+    _persist_phase "$feature_dir" "aborted"
+    echo "aborted"
+    return 0
+  fi
+
+  # 2. Check stages in reverse order (highest stage wins)
+  # Ready
+  local ready_status
+  ready_status=$(read_stage_status "$feature_dir" "ready")
+  if [[ "$ready_status" == "completed" ]]; then
+    _persist_phase "$feature_dir" "ready"
+    echo "ready"
+    return 0
+  fi
+
+  # Review
+  if check_stage_complete "$feature_dir" "review"; then
+    _persist_phase "$feature_dir" "ready"
+    echo "ready"
+    return 0
+  fi
+
+  local review_status
+  review_status=$(read_stage_status "$feature_dir" "review")
+  if [[ -n "$review_status" ]]; then
+    # Review stage exists (running/failed/etc) — we're in review
+    _persist_phase "$feature_dir" "review"
+    echo "review"
+    return 0
+  fi
+
+  # Coding
+  if check_stage_complete "$feature_dir" "coding"; then
+    _persist_phase "$feature_dir" "review"
+    echo "review"
+    return 0
+  fi
+
+  local coding_status
+  coding_status=$(read_stage_status "$feature_dir" "coding")
+  if [[ -n "$coding_status" ]]; then
+    _persist_phase "$feature_dir" "coding"
+    echo "coding"
+    return 0
+  fi
+
+  # Planning
+  if check_stage_awaiting_user "$feature_dir" "planning"; then
+    _persist_phase "$feature_dir" "awaiting_user"
+    echo "awaiting_user"
+    return 0
+  fi
+
+  if check_stage_complete "$feature_dir" "planning"; then
+    _persist_phase "$feature_dir" "coding"
+    echo "coding"
+    return 0
+  fi
+
+  local planning_status
+  planning_status=$(read_stage_status "$feature_dir" "planning")
+  if [[ -n "$planning_status" ]]; then
+    _persist_phase "$feature_dir" "planning"
+    echo "planning"
+    return 0
+  fi
+
+  # 3. Legacy-only fallback (no stage result files exist)
+  if [[ -f "$feature_dir/.coding-complete" ]]; then
+    _persist_phase "$feature_dir" "review"
+    echo "review"
+    return 0
+  fi
+
+  if [[ -f "$feature_dir/.plan-approved" ]]; then
+    _persist_phase "$feature_dir" "coding"
+    echo "coding"
+    return 0
+  fi
+
+  # 4. Default
+  _persist_phase "$feature_dir" "planning"
+  echo "planning"
+  return 0
+}
+
+_persist_phase() {
+  local feature_dir="$1" phase="$2"
+  local tmp
+  tmp=$(mktemp) || return 0
+  printf '%s\n' "$phase" > "$tmp"
+  mv "$tmp" "$feature_dir/.resolved-phase"
+}
+
 # Write .phase-config.json with resolved per-stage configuration.
 # Usage: write_phase_config <feature_dir> <planner_model> <coder_model> <reviewer_model> \
 #                           <plan_depth> <code_depth> <review_mode> [force_model]
@@ -3344,6 +3454,10 @@ monitor_issue_state() {
       # Multi-phase workflow tracking (must run before pane-alive early return)
       current_phase=$(get_task_phase "$ISSUE")
 
+      # Resolve current phase from controller-owned stage state
+      local resolved_phase
+      resolved_phase=$(resolve_phase "$FEATURE_DIR")
+
       case "$current_phase" in
         routing)
           if check_stage_aborted "$FEATURE_DIR"; then
@@ -3440,7 +3554,7 @@ monitor_issue_state() {
           ;;
 
         planning)
-          if check_stage_aborted "$FEATURE_DIR"; then
+          if [[ "$resolved_phase" == "aborted" ]]; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during planning phase"
             write_stage_result "$FEATURE_DIR" "planning" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
@@ -3472,7 +3586,7 @@ monitor_issue_state() {
             fi
           fi
 
-          if check_stage_complete "$FEATURE_DIR" "planning"; then
+          if [[ "$resolved_phase" == "coding" ]]; then
             # Record approval via approve_plan (HOK-1193: writes completed + legacy marker)
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
@@ -3522,8 +3636,40 @@ monitor_issue_state() {
             return 0
           fi
 
+          # HOK-1194: Detect planning stage transitions
+          local planning_status
+          planning_status=$(read_stage_status "$FEATURE_DIR" "planning")
+
+          # Check if agent is still active
+          local agent_active=false
+          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            agent_active=true
+          fi
+
+          # Transition 1: running/awaiting_user + .plan-approved + exited agent → completed
+          if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
+            if [[ "$agent_active" == false ]] && [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+              log "status" "✓ $ISSUE → Plan approved (via .plan-approved marker), marking as completed"
+              approve_plan "$FEATURE_DIR" "$current_agent" ""
+              # Next iteration will detect resolved_phase == "coding" and launch coding
+              active_count=$((active_count + 1))
+              return 0
+            fi
+          fi
+
+          # Transition 2: running + plan.md + exited agent → awaiting_user
+          if [[ "$planning_status" == "running" ]]; then
+            if [[ "$agent_active" == false ]] && [[ -f "$FEATURE_DIR/plan.md" ]]; then
+              log "status" "✓ $ISSUE → Planning agent exited with plan.md, marking as awaiting_user"
+              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
+              set_window_attention_state "$WIN" "needs-user"
+              active_count=$((active_count + 1))
+              return 0
+            fi
+          fi
+
           # Check if plan exists but not yet approved (awaiting_user)
-          if check_stage_awaiting_user "$FEATURE_DIR" "planning"; then
+          if [[ "$resolved_phase" == "awaiting_user" ]]; then
             # Check if user signaled approval by creating .plan-approved marker
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               log "status" "✓ $ISSUE → User approved plan (via .plan-approved marker)"
@@ -3537,25 +3683,19 @@ monitor_issue_state() {
             return 0
           fi
 
-          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+          # Agent still running — keep task active
+          if [[ "$agent_active" == true ]]; then
             set_window_attention_state "$WIN" "clear"
-            # Keep unapproved planning tasks active while agent is still running
             active_count=$((active_count + 1))
             return 0
           fi
 
-          # Agent exited — if plan exists but not approved, mark as awaiting_user
-          if [[ -f "$FEATURE_DIR/plan.md" ]] && ! check_stage_complete "$FEATURE_DIR" "planning"; then
-            write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
-            set_window_attention_state "$WIN" "needs-user"
-            return 0
-          fi
-
+          # Agent exited without plan.md or approval — needs attention
           needs_attention="true"
           ;;
 
         coding)
-          if check_stage_aborted "$FEATURE_DIR"; then
+          if [[ "$resolved_phase" == "aborted" ]]; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during coding phase"
             write_stage_result "$FEATURE_DIR" "coding" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
@@ -3563,7 +3703,7 @@ monitor_issue_state() {
             return 0
           fi
 
-          if check_stage_complete "$FEATURE_DIR" "coding"; then
+          if [[ "$resolved_phase" == "review" ]]; then
             # Mark coding as completed (HOK-1177)
             write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
 
@@ -3606,19 +3746,41 @@ monitor_issue_state() {
             log "status" "✓ $ISSUE → Coding complete, launching review phase"
             active_count=$((active_count + 1))
             return 0
-          else
-            if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
-              set_window_attention_state "$WIN" "clear"
-              # Keep coding tasks active while agent is still running
-              active_count=$((active_count + 1))
-              return 0
-            fi
-            needs_attention="true"
           fi
+
+          # HOK-1194: Detect running→completed transition
+          # When stage result is "running", agent is done, and .coding-complete exists,
+          # write completed status (next iteration will launch review)
+          local coding_status
+          coding_status=$(read_stage_status "$FEATURE_DIR" "coding")
+          if [[ "$coding_status" == "running" ]]; then
+            # Check if agent is done (pane is dead)
+            if ! tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+              # Pane is dead - check for .coding-complete marker
+              if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
+                log "status" "✓ $ISSUE → Coding agent exited with .coding-complete, marking as completed"
+                write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
+                # Next iteration will detect resolved_phase == "review" and launch review
+                active_count=$((active_count + 1))
+                return 0
+              fi
+            fi
+          fi
+
+          # Agent still running
+          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            set_window_attention_state "$WIN" "clear"
+            # Keep coding tasks active while agent is still running
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          # Agent exited without .coding-complete
+          needs_attention="true"
           ;;
 
         review)
-          if check_stage_aborted "$FEATURE_DIR"; then
+          if [[ "$resolved_phase" == "aborted" ]]; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
             write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
@@ -3677,7 +3839,7 @@ monitor_issue_state() {
           ;;
 
         ready)
-          if check_stage_aborted "$FEATURE_DIR"; then
+          if [[ "$resolved_phase" == "aborted" ]]; then
             log "⛔ $ISSUE → Workflow aborted by user during ready phase"
             write_stage_result "$FEATURE_DIR" "ready" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
