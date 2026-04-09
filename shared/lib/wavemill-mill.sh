@@ -2791,8 +2791,30 @@ launch_task() {
 
         log "info" "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
       else
-        # Workflow routing returned invalid output — use default agent
-        log "info" "  Workflow routing unavailable, using default agent"
+        # Workflow routing returned invalid output — try saved route from startup
+        local saved_route="/tmp/${SESSION}-${issue}-route.json"
+        if [[ -f "$saved_route" ]] && jq -e '.planner' "$saved_route" >/dev/null 2>&1; then
+          planner_model=$(jq -r '.planner // empty' "$saved_route" 2>/dev/null)
+          task_model=$(jq -r '.coder // empty' "$saved_route" 2>/dev/null)
+          reviewer_model=$(jq -r '.reviewer // empty' "$saved_route" 2>/dev/null)
+          plan_depth=$(jq -r '.planDepth // "light"' "$saved_route" 2>/dev/null)
+          code_depth=$(jq -r '.codeDepth // "medium"' "$saved_route" 2>/dev/null)
+          review_mode=$(jq -r '.reviewRecommended // "static"' "$saved_route" 2>/dev/null)
+
+          if [[ -n "$planner_model" ]]; then
+            planner_agent="$(agent_resolve_from_model "$planner_model")"
+          fi
+          if [[ -n "$task_model" ]]; then
+            task_agent_cmd="$(agent_resolve_from_model "$task_model")"
+          fi
+          if [[ -n "$reviewer_model" ]]; then
+            reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+          fi
+
+          log "info" "  Workflow route (from startup cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+        else
+          log "info" "  Workflow routing unavailable, using default agent"
+        fi
       fi
     fi
   fi
