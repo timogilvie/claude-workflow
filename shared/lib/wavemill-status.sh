@@ -254,7 +254,7 @@ while true; do
       # Phase display — enrich planning with stage result status
       case "$task_phase" in
         planning)
-          local plan_status=""
+          plan_status=""
           [[ -n "$worktree" && -n "$slug" ]] && plan_status=$(get_planning_display_status "$worktree" "$slug")
           case "$plan_status" in
             awaiting_approval) phase_str="${Y}⏳ awaiting${N}" ;;

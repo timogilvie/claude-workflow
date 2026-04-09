@@ -3356,6 +3356,28 @@ QUIT_REQUESTED=false
 LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
+TASK_DISPLAY_ACTIVE=false
+
+render_task_display() {
+  local content="$1"
+
+  if [[ "$TASK_DISPLAY_ACTIVE" != "true" ]]; then
+    tput sc 2>/dev/null || printf '\0337'
+    TASK_DISPLAY_ACTIVE=true
+  fi
+
+  tput rc 2>/dev/null || printf '\0338'
+  tput ed 2>/dev/null || printf '\033[J'
+  printf '%s' "$content"
+  [[ "$content" == *$'\n' ]] || printf '\n'
+}
+
+clear_task_display() {
+  [[ "$TASK_DISPLAY_ACTIVE" == "true" ]] || return 0
+  tput rc 2>/dev/null || printf '\0338'
+  tput ed 2>/dev/null || printf '\033[J'
+  TASK_DISPLAY_ACTIVE=false
+}
 
 monitor_issue_state() {
   local ISSUE="$1"
@@ -4090,23 +4112,23 @@ while :; do
         # Only re-render the prompt when the display would actually change
         display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
-          echo ""
-          log "status" "$free_slots slot(s) available. Next tasks:"
+          task_display=$(printf "%s %s\n" "$(date '+%H:%M:%S')" "$free_slots slot(s) available. Next tasks:")
           if [[ -n "$avail_unblocked" ]]; then
-            echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
+            task_display+=$(echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}')
           else
-            echo "  (no unblocked tasks)"
+            task_display+="  (no unblocked tasks)\n"
           fi
           if (( avail_blocked_count > 0 )); then
-            echo ""
-            echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
+            task_display+="\n"
+            task_display+="  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)\n"
           fi
-          echo ""
+          task_display+="\n"
           if (( avail_blocked_count > 0 )); then
-            echo "Enter number(s) to start (e.g. 1 3), 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            task_display+="Enter number(s) to start (e.g. 1 3), 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:\n"
           else
-            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            task_display+="Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:\n"
           fi
+          render_task_display "$(printf '%b' "$task_display")"
           LAST_DISPLAY="$display_fingerprint"
           LAST_ACTIVE_COUNT=$active_count
           LAST_WAITING_MSG=""  # Clear waiting state when tasks are available
@@ -4122,20 +4144,21 @@ while :; do
           # Handle 'm' to show all tasks including blocked
           if [[ "$REPLY" =~ ^[mM] ]]; then
             all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
-            echo ""
-            log "info" "$free_slots slot(s) available. All tasks:"
+            task_display=$(printf "%s %s\n" "$(date '+%H:%M:%S')" "$free_slots slot(s) available. All tasks:")
             ln=0
             while IFS= read -r mline; do
               ln=$((ln + 1))
               IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
               if (( mblocked > 0 )); then
-                printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
+                printf -v task_line "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
               else
-                printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
+                printf -v task_line "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
               fi
+              task_display+="$task_line"
             done <<<"$all_avail"
-            echo ""
-            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            task_display+="\n"
+            task_display+="Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:\n"
+            render_task_display "$(printf '%b' "$task_display")"
             select_from="$all_avail"
             # Re-read for actual selection
             if read -t "$POLL_SECONDS" -r REPLY; then
@@ -4180,6 +4203,7 @@ while :; do
             LAST_BACKLOG_FETCH=0
             LAST_DISPLAY=""
             LAST_WAITING_MSG=""  # Clear waiting state
+            clear_task_display
           fi
           # User pressed Enter with no input — just continue monitoring
         fi
@@ -4189,13 +4213,15 @@ while :; do
         if (( active_count == 0 )); then
           waiting_msg="No new tasks available. Waiting... (type 'q' to quit)"
           if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
-            log "status" "$waiting_msg"
+            render_task_display "$(printf '%s %s\n' "$(date '+%H:%M:%S')" "$waiting_msg")"
             LAST_WAITING_MSG="$waiting_msg"
+            LAST_DISPLAY=""
           fi
           if read -t "$POLL_SECONDS" -r REPLY; then
             [[ "$REPLY" =~ ^[Qq] ]] && quit_and_kill_session
           fi
         else
+          clear_task_display
           sleep "$POLL_SECONDS"
         fi
       fi
@@ -4204,8 +4230,9 @@ while :; do
       if (( active_count == 0 )); then
         waiting_msg="Backlog empty. Waiting for new tasks... (type 'q' to quit)"
         if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
-          log "status" "$waiting_msg"
+          render_task_display "$(printf '%s %s\n' "$(date '+%H:%M:%S')" "$waiting_msg")"
           LAST_WAITING_MSG="$waiting_msg"
+          LAST_DISPLAY=""
         fi
         # Invalidate cache so we re-fetch next cycle
         LAST_BACKLOG_FETCH=0
@@ -4213,11 +4240,13 @@ while :; do
           [[ "$REPLY" =~ ^[Qq] ]] && quit_and_kill_session
         fi
       else
+        clear_task_display
         sleep "$POLL_SECONDS"
       fi
     fi
   else
     # All slots full — just monitor
+    clear_task_display
     sleep "$POLL_SECONDS"
   fi
 done

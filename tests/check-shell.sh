@@ -37,6 +37,20 @@ for f in \
   fi
 done
 
+STATUS_SCRIPT="$LIB_DIR/wavemill-status.sh"
+STATUS_RENDER_BLOCK=$(awk '
+  /^# ── Main render loop/ { capture=1 }
+  capture { print }
+' "$STATUS_SCRIPT")
+
+if [[ -z "$STATUS_RENDER_BLOCK" ]]; then
+  fail "Could not extract wavemill-status.sh render loop"
+elif grep -qE '^[[:space:]]*local[[:space:]]' <<< "$STATUS_RENDER_BLOCK"; then
+  fail "wavemill-status.sh render loop contains top-level local declarations"
+else
+  pass "wavemill-status.sh render loop has no top-level local declarations"
+fi
+
 # ============================================================================
 # TEST 2: Heredoc function-availability check
 # ============================================================================
