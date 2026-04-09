@@ -2441,6 +2441,38 @@ is_challenge_task() {
   [[ "$(get_task_meta "$issue" "challenge")" == "true" ]]
 }
 
+get_challenge_sibling_pr() {
+  local issue="$1"
+  local pair_id role sibling_key
+
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  role=$(get_task_meta "$issue" "challengeRole")
+
+  [[ -z "$pair_id" || -z "$role" ]] && return 1
+
+  if [[ "$role" == "primary" ]]; then
+    sibling_key="${pair_id}__challenger"
+  elif [[ "$role" == "challenger" ]]; then
+    sibling_key="$pair_id"
+  else
+    return 1
+  fi
+
+  read_state_value "" --arg issue "$sibling_key" '.tasks[$issue].pr // empty'
+}
+
+# Check if a challenge task's sibling PR was merged.
+# Returns 0 if merged, 1 if not merged or unavailable.
+check_challenge_sibling_merged() {
+  local issue="$1"
+  local sibling_pr
+
+  sibling_pr=$(get_challenge_sibling_pr "$issue")
+  [[ -z "$sibling_pr" ]] && return 1
+
+  validate_pr_merge "$sibling_pr"
+}
+
 mark_challenge_compared() {
   local pair_id="$1"
   local tmp
@@ -4052,8 +4084,39 @@ monitor_issue_state() {
     cleanup_completed_task "$ISSUE" "$SLUG"
   elif [[ "$(pr_state "$PR")" == "CLOSED" ]]; then
     log_warn "$ISSUE → PR #$PR CLOSED without merge"
-    if should_update_linear_state "$ISSUE"; then
-      linear_set_state "$(get_linear_issue_id "$ISSUE")" "Backlog"
+    local linear_status="Backlog"
+    if is_challenge_task "$ISSUE"; then
+      local sibling_pr sibling_state
+      sibling_pr=$(get_challenge_sibling_pr "$ISSUE")
+      sibling_state=""
+
+      # Challenge tasks should only move once the sibling outcome is definitive.
+      if check_challenge_sibling_merged "$ISSUE"; then
+        linear_status="Done"
+        log "status" "  ✓ Challenge sibling merged → marking Linear as Done"
+      fi
+
+      if [[ "$linear_status" != "Done" && -n "$sibling_pr" ]]; then
+        sibling_state=$(pr_state "$sibling_pr")
+      fi
+
+      case "$linear_status:$sibling_pr:$sibling_state" in
+        Done:*) ;;
+        Backlog::*)
+          linear_status=""
+          log "debug" "  ↳ Challenge sibling PR not found yet, deferring Linear state update"
+          ;;
+        Backlog:*:CLOSED)
+          log "status" "  ↺ Challenge sibling also closed → returning Linear to Backlog"
+          ;;
+        Backlog:*)
+          linear_status=""
+          log "debug" "  ↳ Challenge sibling still active or unknown, deferring Linear state update"
+          ;;
+      esac
+    fi
+    if [[ -n "$linear_status" ]] && should_update_linear_state "$ISSUE"; then
+      linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
     fi
     if should_cleanup_closed_pr "$ISSUE"; then
       log "debug" "  ↳ Auto-cleaning closed challenger pane/worktree"

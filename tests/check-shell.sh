@@ -293,12 +293,39 @@ else
     fail "monitor is missing closed-PR cleanup helper for manual-review challengers"
   fi
 
+  if grep -Fq 'get_challenge_sibling_pr() {' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq 'check_challenge_sibling_merged() {' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq 'validate_pr_merge "$sibling_pr"' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor defines challenge sibling helpers for closed-PR resolution"
+  else
+    fail "monitor is missing challenge sibling helpers for closed-PR resolution"
+  fi
+
   if echo "$CLOSED_BLOCK" | grep -q 'if should_cleanup_closed_pr "\$ISSUE"; then' \
     && echo "$CLOSED_BLOCK" | grep -q 'cleanup_completed_task "\$ISSUE" "\$SLUG" "closed without merge"' \
     && echo "$CLOSED_BLOCK" | grep -q 'Auto-cleaning closed challenger pane/worktree'; then
     pass "closed challenger PRs trigger automatic pane/worktree cleanup"
   else
     fail "closed challenger PRs do not trigger automatic cleanup"
+  fi
+
+  if echo "$CLOSED_BLOCK" | grep -q 'local linear_status="Backlog"' \
+    && echo "$CLOSED_BLOCK" | grep -q 'if is_challenge_task "\$ISSUE"; then' \
+    && echo "$CLOSED_BLOCK" | grep -q 'check_challenge_sibling_merged "\$ISSUE"' \
+    && echo "$CLOSED_BLOCK" | grep -q 'linear_status="Done"' \
+    && echo "$CLOSED_BLOCK" | grep -q 'Challenge sibling merged → marking Linear as Done' \
+    && echo "$CLOSED_BLOCK" | grep -q 'linear_set_state "\$(get_linear_issue_id "\$ISSUE")" "\$linear_status"'; then
+    pass "closed challenge PRs mark Linear Done when the sibling PR was merged"
+  else
+    fail "closed challenge PRs do not promote Linear to Done when sibling merged"
+  fi
+
+  if echo "$CLOSED_BLOCK" | grep -q 'linear_status=""' \
+    && echo "$CLOSED_BLOCK" | grep -q 'Challenge sibling still active or unknown, deferring Linear state update' \
+    && echo "$CLOSED_BLOCK" | grep -q 'Challenge sibling PR not found yet, deferring Linear state update'; then
+    pass "closed challenge PRs defer Linear updates until the sibling outcome is known"
+  else
+    fail "closed challenge PRs do not defer Linear updates for unresolved sibling outcomes"
   fi
 
   if grep -qE '^read_state_value\(\) \{' <<< "$HEREDOC_CONTENT"; then
