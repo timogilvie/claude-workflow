@@ -89,6 +89,10 @@
       "selfReviewBlocker": 0.2
     }
   },
+  "challengeScheduler": {
+    "enabled": true,
+    "newModelChallengeCount": 25
+  },
   "autoEval": true,
   "challenge": {
     "enabled": true,
