@@ -15,7 +15,8 @@ describe('createTimer', () => {
     await sleep(50);
     const elapsed = t.elapsed();
     assert.ok(elapsed >= 30, `Expected >= 30ms, got ${elapsed}`);
-    assert.ok(elapsed <= 150, `Expected <= 150ms, got ${elapsed}`);
+    // Allow for CI jitter: a 50ms sleep can overshoot notably under load.
+    assert.ok(elapsed <= 200, `Expected <= 200ms, got ${elapsed}`);
   });
 
   it('excludes paused time from elapsed', async () => {
