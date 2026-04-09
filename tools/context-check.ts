@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { getContextDir, resolveRepoDir } from '../shared/lib/context-tool.ts';
+import { formatLintResults, lintSubsystemSpecs } from '../shared/lib/context-linter.ts';
 
 interface SubsystemStatus {
   id: string;
@@ -134,7 +135,7 @@ runTool({
   ⚠️  Stale         Files modified since last update (>7 days)
   ❌ Orphaned      Referenced files no longer exist
   🆕 Undocumented  New subsystem detected, no spec yet`,
-  run({ args, positional }) {
+  async run({ args, positional }) {
     const repoDir = resolveRepoDir(positional[0]);
     const contextDir = getContextDir(repoDir);
 
@@ -151,8 +152,10 @@ runTool({
       statuses.push(status);
     }
 
+    const lintResults = await lintSubsystemSpecs(repoDir);
+
     if (args.json) {
-      console.log(JSON.stringify(statuses, null, 2));
+      console.log(JSON.stringify({ statuses, lintResults }, null, 2));
     } else {
       console.log('\n📊 Subsystem Status Report\n');
       for (const status of statuses) {
@@ -166,6 +169,11 @@ runTool({
         if (status.missingFiles && status.missingFiles.length > 0) {
           console.log(`   Missing: ${status.missingFiles.join(', ')}`);
         }
+      }
+
+      if (lintResults.length > 0) {
+        console.log('\nSpec Lint Results\n');
+        console.log(formatLintResults(lintResults));
       }
     }
   },

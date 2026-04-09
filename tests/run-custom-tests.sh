@@ -25,6 +25,7 @@ for f in \
   eval-export.test.ts \
   eval-persistence.test.ts \
   eval-schema.test.ts \
+  context-linter.test.ts \
   llm-router.test.ts \
   issue-expander.test.ts \
   ready-stage.test.ts \

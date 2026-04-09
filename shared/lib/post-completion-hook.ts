@@ -18,6 +18,7 @@ import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
 import { runEvalAnalysis } from './eval-analysis.ts';
 import { callClaude } from './llm-cli.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
+import { formatLintResults, lintSubsystemSpecs } from './context-linter.ts';
 import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
@@ -381,6 +382,14 @@ async function updateProjectContext(
 
     // Update subsystem specs (cold memory)
     await updateSubsystemSpecs(ctx, prDiff, issueContext, repoDir);
+
+    const lintResults = await lintSubsystemSpecs(repoDir, {
+      rules: ['orphaned-spec', 'missing-spec'],
+    });
+    if (lintResults.length > 0) {
+      console.log('\nSpec lint results:');
+      console.log(formatLintResults(lintResults));
+    }
 
   } catch (error: unknown) {
     const message = errorMessage(error);
