@@ -43,7 +43,9 @@ function displayResults(results: SpecSnippetSearchResult[], query: string): void
   console.log('');
 
   results.forEach((result, index) => {
-    console.log(`${index + 1}. ${result.subsystemName} (${result.subsystemId})`);
+    // Add type label
+    const typeLabel = result.specType === 'concept' ? '[concept]' : '[subsystem]';
+    console.log(`${index + 1}. ${typeLabel} ${result.subsystemName} (${result.subsystemId})`);
     console.log(`   ${result.specPath}`);
     console.log('');
 
@@ -79,7 +81,7 @@ async function main(
 
 runTool({
   name: 'context-search',
-  description: 'Keyword search across subsystem specs',
+  description: 'Keyword search across subsystem specs and concept pages',
   options: {
     limit: { type: 'string', description: 'Max results to show (default: 10)' },
     section: { type: 'string', description: 'Search only in specific section' },
@@ -94,7 +96,7 @@ runTool({
     'npx tsx tools/context-search.ts "error handling" --limit 5',
     'npx tsx tools/context-search.ts "validation" --section "Architectural Constraints"',
   ],
-  additionalHelp: `Performs case-insensitive substring matching across all subsystem specs.
+  additionalHelp: `Performs case-insensitive substring matching across all subsystem specs and concept pages.
 Returns ranked results with relevant snippets.`,
   async run({ args, positional }) {
     const query = positional[0];
