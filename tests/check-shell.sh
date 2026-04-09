@@ -128,6 +128,7 @@ else
       find_pr_for_branch pr_state validate_pr_merge
       linear_set_state linear_is_completed
       check_routing_complete check_plan_approved check_coding_complete check_workflow_aborted
+      resolve_phase persist_resolved_phase read_resolved_phase resolve_monitor_phase
       fetch_candidates filter_active_issues
       launch_task is_task_packet
       cleanup_dashboard_pane
@@ -243,7 +244,7 @@ else
     in_fn { print }
     in_fn && /^\}/ { exit }
   ')
-  # HOK-1177: check_plan_approved/check_workflow_aborted replaced by check_stage_complete/check_stage_aborted
+  # HOK-1194: Phase resolution now uses resolve_phase() with controller-owned stage state, legacy check_stage_* functions as fallback
   PLAN_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_stage_complete "\$FEATURE_DIR" "planning"' | head -n1 | cut -d: -f1 || true)
   ABORT_CHECK_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'check_stage_aborted "\$FEATURE_DIR"' | head -n1 | cut -d: -f1 || true)
   PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - check if agent pane is still alive' | head -n1 | cut -d: -f1 || true)
