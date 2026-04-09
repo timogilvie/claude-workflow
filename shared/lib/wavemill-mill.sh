@@ -1652,19 +1652,35 @@ _stage_legacy_marker() {
 }
 
 # Write a structured stage result JSON file.
-# Usage: write_stage_result <feature_dir> <stage> <status> [agent] [model] [notes]
+# Usage: write_stage_result <feature_dir> <stage> <status> [agent] [model] [notes] [artifacts_json]
 # Stages: routing, planning, coding, review, ready
 # Statuses: running, awaiting_user, completed, aborted, failed
+# artifacts_json: optional JSON string for stage-specific artifacts (HOK-1192)
 write_stage_result() {
   local feature_dir="$1" stage="$2" status="$3"
-  local agent="${4:-}" model="${5:-}" notes="${6:-}"
+  local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+
+  # Try the TypeScript CLI first (HOK-1192: structured writes with artifacts support)
+  if [[ -n "${TOOLS_DIR:-}" ]]; then
+    local cli_args=("$feature_dir" "$stage" "$status")
+    [[ -n "$agent" ]] && cli_args+=(--agent "$agent")
+    [[ -n "$model" ]] && cli_args+=(--model "$model")
+    [[ -n "$notes" ]] && cli_args+=(--notes "$notes")
+    [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
+
+    if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write "${cli_args[@]}" 2>/dev/null; then
+      return 0
+    fi
+    log_warn "write_stage_result: TypeScript CLI failed, falling back to shell"
+  fi
+
+  # Fallback: inline JSON construction (legacy path)
   local result_file="$feature_dir/.${stage}-result.json"
   local now
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
   mkdir -p "$feature_dir"
 
-  # If result file already exists, preserve startedAt
   local started_at="$now"
   if [[ -f "$result_file" ]]; then
     local prev_start
@@ -2040,7 +2056,7 @@ launch_ready_phase() {
 
   if [[ "$ready_rc" -eq 0 ]]; then
     # Record ready stage result (HOK-1177)
-    write_stage_result "$state_dir" "ready" "completed" "" "" "verdict: ${verdict:-unknown}"
+    write_stage_result "$state_dir" "ready" "completed" "" "" "verdict: ${verdict:-unknown}" "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\"}"
     log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
     return 0
   fi
@@ -3356,7 +3372,7 @@ monitor_issue_state() {
 
           if check_stage_complete "$FEATURE_DIR" "planning"; then
             # Mark planning as completed (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "planning" "completed" "$current_agent" "" "Plan approved"
+            write_stage_result "$FEATURE_DIR" "planning" "completed" "$current_agent" "" "Plan approved" '{"type":"planning","planFile":"plan.md"}'
 
             # FORCE_MODEL takes priority, then challenge, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
@@ -3513,7 +3529,7 @@ monitor_issue_state() {
           pr_number=$(find_pr_for_branch "$BRANCH")
           if [[ -n "$pr_number" ]] && [[ "$_CFG_READY_ENABLED" == "true" ]]; then
             # Mark review as completed with PR artifact (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number"
+            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
 
             # Transition to ready phase
             set_task_phase "$ISSUE" "ready"
