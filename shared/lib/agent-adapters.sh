@@ -116,7 +116,7 @@ agent_exit_followup_text() {
   local agent_cmd="${1:-claude}"
 
   # Agent-agnostic: the orchestrator detects session end via pane state (HOK-1177)
-  echo "Stop working and let the session end. The orchestrator will handle cleanup."
+  echo "Stop working. The orchestrator will handle cleanup."
 }
 
 agent_abort_feedback_text() {
