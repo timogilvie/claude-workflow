@@ -144,6 +144,24 @@ else
 fi
 
 # ============================================================================
+# TEST 2B: Monitor shell escaping regression guards
+# ============================================================================
+echo ""
+echo "=== Monitor Shell Escaping Guards ==="
+
+if grep -q 'write_shell_assignment()' "$MILL_SCRIPT"; then
+  pass "monitor env assignments use write_shell_assignment"
+else
+  fail "wavemill-mill.sh is missing write_shell_assignment helper"
+fi
+
+if grep -q 'printf -v MONITOR_CMD '\''%q %q'\''' "$MILL_SCRIPT"; then
+  pass "monitor tmux launch command uses shell escaping"
+else
+  fail "monitor tmux launch command is not shell-escaped"
+fi
+
+# ============================================================================
 # TEST 3: Monitor PR-detection regression guards
 # ============================================================================
 echo ""

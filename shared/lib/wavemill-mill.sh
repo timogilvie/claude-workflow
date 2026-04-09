@@ -156,6 +156,12 @@ indent_block() {
   done
 }
 
+write_shell_assignment() {
+  local name="$1" value="${2-}"
+  printf '%s=' "$name"
+  printf '%q\n' "$value"
+}
+
 
 # Dry-run wrapper
 execute() {
@@ -1273,30 +1279,30 @@ WAVEMILL_STATE_FILE="$STATE_FILE" STATUS_LOG_FILE="$STATUS_LOG_FILE" ORCHESTRATO
 
 # Write monitor env file (avoids long command lines in tmux pane)
 MONITOR_ENV="/tmp/${SESSION}-monitor.env"
-cat > "$MONITOR_ENV" <<ENVEOF
-SESSION='$SESSION'
-REPO_DIR='$REPO_DIR'
-WORKTREE_ROOT='$WORKTREE_ROOT'
-TOOLS_DIR='$TOOLS_DIR'
-LIB_DIR='$SCRIPT_DIR'
-STATE_DIR='$STATE_DIR'
-STATE_FILE='$STATE_FILE'
-POLL_SECONDS='$POLL_SECONDS'
-REQUIRE_CONFIRM='$REQUIRE_CONFIRM'
-DRY_RUN='$DRY_RUN'
-BASE_BRANCH='$BASE_BRANCH'
-PROJECT_NAME='$PROJECT_NAME'
-PLANNING_MODE='$PLANNING_MODE'
-AGENT_CMD='$AGENT_CMD'
-AGENT_CMD_EXPLICIT='${AGENT_CMD_EXPLICIT:-}'
-ROUTER_ENABLED='${ROUTER_ENABLED:-true}'
-MAX_PARALLEL='$MAX_PARALLEL'
-AUTO_EVAL='$AUTO_EVAL'
-DASHBOARD_VERBOSITY='$DASHBOARD_VERBOSITY'
-DASHBOARD_LOG_TO_FILE='$DASHBOARD_LOG_TO_FILE'
-MILL_LOG_FILE='$MILL_LOG_FILE'
-STATUS_LOG_FILE='$STATUS_LOG_FILE'
-ENVEOF
+{
+  write_shell_assignment "SESSION" "$SESSION"
+  write_shell_assignment "REPO_DIR" "$REPO_DIR"
+  write_shell_assignment "WORKTREE_ROOT" "$WORKTREE_ROOT"
+  write_shell_assignment "TOOLS_DIR" "$TOOLS_DIR"
+  write_shell_assignment "LIB_DIR" "$SCRIPT_DIR"
+  write_shell_assignment "STATE_DIR" "$STATE_DIR"
+  write_shell_assignment "STATE_FILE" "$STATE_FILE"
+  write_shell_assignment "POLL_SECONDS" "$POLL_SECONDS"
+  write_shell_assignment "REQUIRE_CONFIRM" "$REQUIRE_CONFIRM"
+  write_shell_assignment "DRY_RUN" "$DRY_RUN"
+  write_shell_assignment "BASE_BRANCH" "$BASE_BRANCH"
+  write_shell_assignment "PROJECT_NAME" "$PROJECT_NAME"
+  write_shell_assignment "PLANNING_MODE" "$PLANNING_MODE"
+  write_shell_assignment "AGENT_CMD" "$AGENT_CMD"
+  write_shell_assignment "AGENT_CMD_EXPLICIT" "${AGENT_CMD_EXPLICIT:-}"
+  write_shell_assignment "ROUTER_ENABLED" "${ROUTER_ENABLED:-true}"
+  write_shell_assignment "MAX_PARALLEL" "$MAX_PARALLEL"
+  write_shell_assignment "AUTO_EVAL" "$AUTO_EVAL"
+  write_shell_assignment "DASHBOARD_VERBOSITY" "$DASHBOARD_VERBOSITY"
+  write_shell_assignment "DASHBOARD_LOG_TO_FILE" "$DASHBOARD_LOG_TO_FILE"
+  write_shell_assignment "MILL_LOG_FILE" "$MILL_LOG_FILE"
+  write_shell_assignment "STATUS_LOG_FILE" "$STATUS_LOG_FILE"
+} > "$MONITOR_ENV"
 
 
 # Create monitoring script that will run in tmux
@@ -4190,10 +4196,11 @@ log "status" "Starting monitoring in tmux control window..."
 # Write tasks to temp file and add to env
 TASKS_FILE="/tmp/${SESSION}-tasks.txt"
 printf '%s\n' "${LAUNCH_ARGS[@]}" > "$TASKS_FILE"
-echo "TASKS_FILE='$TASKS_FILE'" >> "$MONITOR_ENV"
+write_shell_assignment "TASKS_FILE" "$TASKS_FILE" >> "$MONITOR_ENV"
 
 
-tmux respawn-pane -k -t "$SESSION:control.0" "'$MONITOR_SCRIPT' '$MONITOR_ENV'"
+printf -v MONITOR_CMD '%q %q' "$MONITOR_SCRIPT" "$MONITOR_ENV"
+tmux respawn-pane -k -t "$SESSION:control.0" "$MONITOR_CMD"
 
 
 # Now attach to the session
