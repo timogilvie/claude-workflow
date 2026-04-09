@@ -671,6 +671,98 @@ check "malformed JSON without legacy → planning" "planning" "$(resolve_phase "
 
 # ─────────────────────────────────────────────────────────────────
 echo ""
+echo "=== Coding Stage Transition Tests (HOK-1194) ==="
+
+# Test 38: Coding running + .coding-complete (before monitor transition)
+# Phase should still be "coding" because monitor hasn't written "completed" yet
+FD38="$TEST_DIR/test38"
+mkdir -p "$FD38"
+cat > "$FD38/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:00:00Z"
+}
+EOF
+touch "$FD38/.coding-complete"
+check "coding running + .coding-complete → coding" "coding" "$(resolve_phase "$FD38")"
+check "read_stage_status detects running" "running" "$(read_stage_status "$FD38" "coding")"
+
+# Test 39: Coding completed (after monitor transition)
+FD39="$TEST_DIR/test39"
+mkdir -p "$FD39"
+cat > "$FD39/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "completed",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:05:00Z"
+}
+EOF
+check "coding completed → review" "review" "$(resolve_phase "$FD39")"
+check "check_stage_complete detects completion" "0" "$([[ $(check_stage_complete "$FD39" "coding"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# Test 40: Legacy .coding-complete still works (no stage result)
+FD40="$TEST_DIR/test40"
+mkdir -p "$FD40"
+touch "$FD40/.coding-complete"
+check "legacy .coding-complete only → review" "review" "$(resolve_phase "$FD40")"
+
+# Test 41: Coding running without .coding-complete
+FD41="$TEST_DIR/test41"
+mkdir -p "$FD41"
+cat > "$FD41/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:00:00Z"
+}
+EOF
+check "coding running without marker → coding" "coding" "$(resolve_phase "$FD41")"
+
+# Test 42: Legacy marker works even when stage result is running (migration compat)
+# Monitor will detect .coding-complete and transition running→completed
+FD42="$TEST_DIR/test42"
+mkdir -p "$FD42"
+cat > "$FD42/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:00:00Z"
+}
+EOF
+touch "$FD42/.coding-complete"
+# Before monitor transition: still shows as coding (status is "running")
+check "running + legacy marker (pre-transition) → coding" "coding" "$(resolve_phase "$FD42")"
+# Simulate monitor transition
+write_stage_result "$FD42" "coding" "completed" "claude" "claude-opus-4-6"
+check "running + legacy marker (post-transition) → review" "review" "$(resolve_phase "$FD42")"
+
+# Test 43: Coding failed status
+FD43="$TEST_DIR/test43"
+mkdir -p "$FD43"
+cat > "$FD43/.coding-result.json" <<'EOF'
+{
+  "stage": "coding",
+  "status": "failed",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T10:00:00Z",
+  "notes": "Agent crashed"
+}
+EOF
+check "coding failed → coding" "coding" "$(resolve_phase "$FD43")"
+check "failed status is not complete" "1" "$([[ $(check_stage_complete "$FD43" "coding"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
 echo "=== Summary ==="
 echo "  $PASS passed, $FAIL failed"
 

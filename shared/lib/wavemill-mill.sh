@@ -3720,15 +3720,37 @@ monitor_issue_state() {
             log "status" "✓ $ISSUE → Coding complete, launching review phase"
             active_count=$((active_count + 1))
             return 0
-          else
-            if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
-              set_window_attention_state "$WIN" "clear"
-              # Keep coding tasks active while agent is still running
-              active_count=$((active_count + 1))
-              return 0
-            fi
-            needs_attention="true"
           fi
+
+          # HOK-1194: Detect running→completed transition
+          # When stage result is "running", agent is done, and .coding-complete exists,
+          # write completed status (next iteration will launch review)
+          local coding_status
+          coding_status=$(read_stage_status "$FEATURE_DIR" "coding")
+          if [[ "$coding_status" == "running" ]]; then
+            # Check if agent is done (pane is dead)
+            if ! tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+              # Pane is dead - check for .coding-complete marker
+              if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
+                log "status" "✓ $ISSUE → Coding agent exited with .coding-complete, marking as completed"
+                write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
+                # Next iteration will detect resolved_phase == "review" and launch review
+                active_count=$((active_count + 1))
+                return 0
+              fi
+            fi
+          fi
+
+          # Agent still running
+          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            set_window_attention_state "$WIN" "clear"
+            # Keep coding tasks active while agent is still running
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          # Agent exited without .coding-complete
+          needs_attention="true"
           ;;
 
         review)
