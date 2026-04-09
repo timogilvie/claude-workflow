@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 export function resolveRepoDir(repoPath?: string): string {
   return resolve(repoPath || process.cwd());
@@ -124,5 +124,5 @@ export function extractKeyFiles(specContent: string): string[] {
 }
 
 export function getSpecType(specPath: string): 'subsystem' | 'concept' {
-  return specPath.includes('/concepts/') ? 'concept' : 'subsystem';
+  return specPath.split(sep).includes('concepts') ? 'concept' : 'subsystem';
 }
