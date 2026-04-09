@@ -763,6 +763,151 @@ check "failed status is not complete" "1" "$([[ $(check_stage_complete "$FD43" "
 
 # ─────────────────────────────────────────────────────────────────
 echo ""
+echo "=== Planning Stage Transition Tests (HOK-1194) ==="
+
+# Test 44: Planning running + plan.md (before monitor transition)
+# Phase should still be "planning" because monitor hasn't written "awaiting_user" yet
+FD44="$TEST_DIR/test44"
+mkdir -p "$FD44"
+cat > "$FD44/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:00:00Z"
+}
+EOF
+touch "$FD44/plan.md"
+check "planning running + plan.md → planning" "planning" "$(resolve_phase "$FD44")"
+check "read_stage_status detects running" "running" "$(read_stage_status "$FD44" "planning")"
+
+# Test 45: Planning awaiting_user (after monitor transition)
+FD45="$TEST_DIR/test45"
+mkdir -p "$FD45"
+cat > "$FD45/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "awaiting_user",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:05:00Z",
+  "notes": "Plan ready for review"
+}
+EOF
+touch "$FD45/plan.md"
+check "planning awaiting_user → awaiting_user" "awaiting_user" "$(resolve_phase "$FD45")"
+check "check_stage_awaiting_user detects awaiting" "0" "$([[ $(check_stage_awaiting_user "$FD45" "planning"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# Test 46: Planning running + .plan-approved (before monitor transition)
+FD46="$TEST_DIR/test46"
+mkdir -p "$FD46"
+cat > "$FD46/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:00:00Z"
+}
+EOF
+touch "$FD46/plan.md"
+touch "$FD46/.plan-approved"
+# Still planning because monitor hasn't written completed yet
+check "planning running + .plan-approved (pre-transition) → planning" "planning" "$(resolve_phase "$FD46")"
+
+# Test 47: Planning awaiting_user + .plan-approved (before monitor transition)
+FD47="$TEST_DIR/test47"
+mkdir -p "$FD47"
+cat > "$FD47/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "awaiting_user",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:05:00Z"
+}
+EOF
+touch "$FD47/plan.md"
+touch "$FD47/.plan-approved"
+# Still awaiting_user because monitor hasn't written completed yet
+# (monitor will detect this and call approve_plan)
+check "planning awaiting_user + .plan-approved (pre-transition) → awaiting_user" "awaiting_user" "$(resolve_phase "$FD47")"
+
+# Test 48: Planning completed (after monitor calls approve_plan)
+FD48="$TEST_DIR/test48"
+mkdir -p "$FD48"
+cat > "$FD48/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "completed",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:10:00Z",
+  "notes": "Approved by user"
+}
+EOF
+touch "$FD48/plan.md"
+touch "$FD48/.plan-approved"
+check "planning completed → coding" "coding" "$(resolve_phase "$FD48")"
+check "check_stage_complete detects completion" "0" "$([[ $(check_stage_complete "$FD48" "planning"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# Test 49: Legacy .plan-approved only (no stage result)
+FD49="$TEST_DIR/test49"
+mkdir -p "$FD49"
+touch "$FD49/plan.md"
+touch "$FD49/.plan-approved"
+check "legacy .plan-approved only → coding" "coding" "$(resolve_phase "$FD49")"
+
+# Test 50: Planning running without plan.md
+FD50="$TEST_DIR/test50"
+mkdir -p "$FD50"
+cat > "$FD50/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "running",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:00:00Z"
+}
+EOF
+check "planning running without plan.md → planning" "planning" "$(resolve_phase "$FD50")"
+
+# Test 51: Simulate monitor transition: running → awaiting_user → completed
+FD51="$TEST_DIR/test51"
+mkdir -p "$FD51"
+# Initial state: running
+write_stage_result "$FD51" "planning" "running" "claude" "claude-opus-4-6"
+touch "$FD51/plan.md"
+check "initial running state → planning" "planning" "$(resolve_phase "$FD51")"
+
+# Agent exited with plan.md, monitor writes awaiting_user
+write_stage_result "$FD51" "planning" "awaiting_user" "claude" "" "Plan ready for review"
+check "after running→awaiting_user transition → awaiting_user" "awaiting_user" "$(resolve_phase "$FD51")"
+
+# User approves, monitor writes completed
+touch "$FD51/.plan-approved"
+approve_plan "$FD51" "claude" ""
+check "after approval→completed transition → coding" "coding" "$(resolve_phase "$FD51")"
+
+# Test 52: Planning failed status
+FD52="$TEST_DIR/test52"
+mkdir -p "$FD52"
+cat > "$FD52/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "failed",
+  "agent": "claude",
+  "model": "claude-opus-4-6",
+  "timestamp": "2026-04-09T09:00:00Z",
+  "notes": "Agent crashed during planning"
+}
+EOF
+check "planning failed → planning" "planning" "$(resolve_phase "$FD52")"
+check "failed status is not complete" "1" "$([[ $(check_stage_complete "$FD52" "planning"; echo $?) -eq 0 ]] && echo 0 || echo 1)"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
 echo "=== Summary ==="
 echo "  $PASS passed, $FAIL failed"
 

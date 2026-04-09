@@ -3636,6 +3636,38 @@ monitor_issue_state() {
             return 0
           fi
 
+          # HOK-1194: Detect planning stage transitions
+          local planning_status
+          planning_status=$(read_stage_status "$FEATURE_DIR" "planning")
+
+          # Check if agent is still active
+          local agent_active=false
+          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+            agent_active=true
+          fi
+
+          # Transition 1: running/awaiting_user + .plan-approved + exited agent → completed
+          if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
+            if [[ "$agent_active" == false ]] && [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+              log "status" "✓ $ISSUE → Plan approved (via .plan-approved marker), marking as completed"
+              approve_plan "$FEATURE_DIR" "$current_agent" ""
+              # Next iteration will detect resolved_phase == "coding" and launch coding
+              active_count=$((active_count + 1))
+              return 0
+            fi
+          fi
+
+          # Transition 2: running + plan.md + exited agent → awaiting_user
+          if [[ "$planning_status" == "running" ]]; then
+            if [[ "$agent_active" == false ]] && [[ -f "$FEATURE_DIR/plan.md" ]]; then
+              log "status" "✓ $ISSUE → Planning agent exited with plan.md, marking as awaiting_user"
+              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
+              set_window_attention_state "$WIN" "needs-user"
+              active_count=$((active_count + 1))
+              return 0
+            fi
+          fi
+
           # Check if plan exists but not yet approved (awaiting_user)
           if [[ "$resolved_phase" == "awaiting_user" ]]; then
             # Check if user signaled approval by creating .plan-approved marker
@@ -3651,20 +3683,14 @@ monitor_issue_state() {
             return 0
           fi
 
-          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+          # Agent still running — keep task active
+          if [[ "$agent_active" == true ]]; then
             set_window_attention_state "$WIN" "clear"
-            # Keep unapproved planning tasks active while agent is still running
             active_count=$((active_count + 1))
             return 0
           fi
 
-          # Agent exited — if plan exists but not approved, mark as awaiting_user
-          if [[ -f "$FEATURE_DIR/plan.md" && "$resolved_phase" == "planning" ]]; then
-            write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
-            set_window_attention_state "$WIN" "needs-user"
-            return 0
-          fi
-
+          # Agent exited without plan.md or approval — needs attention
           needs_attention="true"
           ;;
 
