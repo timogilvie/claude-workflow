@@ -2511,7 +2511,7 @@ mark_challenge_compared() {
 
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
-  local eval_completed pair_id solution_model linear_issue eval_agent
+  local eval_completed pair_id solution_model linear_issue eval_agent rc
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
 
@@ -2522,7 +2522,7 @@ maybe_run_challenge_eval() {
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
 
   local eval_log="/tmp/${SESSION}-eval-${issue}.log"
-  _with_timeout 180 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+  if _with_timeout 180 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
     --issue "$linear_issue" --pr "$pr" --branch "$branch" \
     --worktree "${WORKTREE_ROOT}/${slug}" \
     --workflow-type mill --repo-dir "$REPO_DIR" \
@@ -2530,10 +2530,18 @@ maybe_run_challenge_eval() {
     --solution-model "$solution_model" \
     --challenge-pair "$pair_id" \
     --debug \
-    >"$eval_log" 2>&1 || true
+    >"$eval_log" 2>&1; then
+    rc=0
+  else
+    rc=$?
+  fi
   while IFS= read -r line; do log "debug" "  [challenge-eval] $line"; done < "$eval_log"
   rm -f "$eval_log"
-  mark_eval_completed "$issue"
+  if [[ "$rc" -eq 0 ]]; then
+    mark_eval_completed "$issue"
+  else
+    log_warn "challenge eval failed for $issue (exit $rc); leaving evalCompleted=false"
+  fi
 }
 
 launch_background_post_merge_eval() {
@@ -2551,24 +2559,35 @@ launch_background_post_merge_eval() {
     {
       printf 'Launching %s eval in background\n' "$reason"
       if [[ -n "$pr" ]]; then
-        _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+        if _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$issue_ref" --pr "$pr" --branch "$branch" \
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
           --agent "$eval_agent" \
-          --debug
+          --debug; then
+          rc=0
+        else
+          rc=$?
+        fi
       else
-        _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+        if _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$issue_ref" --branch "$branch" \
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
           --agent "$eval_agent" \
-          --debug
+          --debug; then
+          rc=0
+        else
+          rc=$?
+        fi
       fi
-      rc=$?
       printf 'Eval process exited with code %s\n' "$rc"
-    } >>"$eval_log" 2>&1 || true
-    mark_eval_completed "$issue"
+      if [[ "$rc" -eq 0 ]]; then
+        mark_eval_completed "$issue"
+      else
+        printf 'WARN: Eval failed for %s; leaving evalCompleted=false\n' "$issue"
+      fi
+    } >>"$eval_log" 2>&1
   ) >/dev/null 2>&1 &
 
   log "debug" "  ↳ Eval running in background; log: $eval_log"
@@ -2576,7 +2595,7 @@ launch_background_post_merge_eval() {
 
 maybe_run_challenge_comparison() {
   local issue="$1"
-  local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model
+  local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model compare_log
   pair_id=$(get_task_meta "$issue" "challengePairId")
   [[ -z "$pair_id" ]] && return 0
   primary_key="$pair_id"
@@ -2607,7 +2626,21 @@ maybe_run_challenge_comparison() {
   challenger_code_depth=$(get_task_meta "$challenger_key" "codeDepth")
   challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
 
+  compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
+  if ! _with_timeout 60 npx tsx "$TOOLS_DIR/compare-prs.ts" \
+    --issue "$linear_issue" --pair-id "$pair_id" \
+    --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
+    --primary-model "$primary_model" --challenger-model "$challenger_model" \
+    --repo-dir "$REPO_DIR" --check-only >"$compare_log" 2>&1; then
+    log_warn "challenge comparison skipped for $pair_id: evalCompleted=true but eval records are missing"
+    while IFS= read -r line; do log "debug" "  [challenge-compare] $line"; done < "$compare_log"
+    rm -f "$compare_log"
+    return 0
+  fi
+  rm -f "$compare_log"
+
   log "status" "  ⚖ Running challenge comparison for $pair_id"
+  compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
   if _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
@@ -2616,7 +2649,7 @@ maybe_run_challenge_comparison() {
     --primary-plan-depth "$primary_plan_depth" --primary-code-depth "$primary_code_depth" --primary-review-mode "$primary_review_mode" \
     --challenger-planner "$challenger_planner" --challenger-reviewer "$challenger_reviewer" \
     --challenger-plan-depth "$challenger_plan_depth" --challenger-code-depth "$challenger_code_depth" --challenger-review-mode "$challenger_review_mode" \
-    --repo-dir "$REPO_DIR" --comment >/tmp/${SESSION}-compare-${pair_id}.log 2>&1; then
+    --repo-dir "$REPO_DIR" --comment >"$compare_log" 2>&1; then
     mark_challenge_compared "$pair_id"
 
     # Read comparison result from challenge records
@@ -2698,9 +2731,9 @@ maybe_run_challenge_comparison() {
       fi
     fi
   else
-    while IFS= read -r line; do log_warn "  [challenge-compare] $line"; done < "/tmp/${SESSION}-compare-${pair_id}.log"
+    while IFS= read -r line; do log_warn "  [challenge-compare] $line"; done < "$compare_log"
   fi
-  rm -f "/tmp/${SESSION}-compare-${pair_id}.log"
+  rm -f "$compare_log"
 }
 
 # Archive stage artifacts from worktree before cleanup.

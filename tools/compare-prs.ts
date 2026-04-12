@@ -3,7 +3,7 @@
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { callClaude, parseJsonFromLLM } from '../shared/lib/llm-cli.ts';
 import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/lib/eval-context-gatherer.ts';
-import { readEvalRecords } from '../shared/lib/eval-persistence.ts';
+import { hasChallengeEvalRecordPair, readEvalRecords } from '../shared/lib/eval-persistence.ts';
 import {
   appendChallengeComparison,
   detectVariedDimensions,
@@ -12,6 +12,7 @@ import {
   type ChallengeRoutingMeta,
 } from '../shared/lib/challenge-comparison.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
+import { resolveEvalsDir } from '../shared/lib/evals-paths.ts';
 import {
   buildChallengeCommentBody,
   buildComparisonPrompt,
@@ -47,6 +48,7 @@ runTool({
     model: { type: 'string', description: 'Comparison judge model override' },
     comment: { type: 'boolean', description: 'Post recommendation comments on both PRs' },
     'auto-merge': { type: 'boolean', description: 'Merge winner and close loser after comparison' },
+    'check-only': { type: 'boolean', description: 'Only verify required eval records exist' },
   },
   async run({ args }) {
     const repoDir = (args['repo-dir'] as string) || process.cwd();
@@ -67,9 +69,29 @@ runTool({
     const challengerNumber = prNumberFromValue(challengerPr);
     const primaryPrUrl = prUrlFromNumber(primaryPr, repoDir);
     const challengerPrUrl = prUrlFromNumber(challengerPr, repoDir);
+    const evalsDir = resolveEvalsDir(undefined, repoDir).dir;
+    const hasRequiredEvalRecords = hasChallengeEvalRecordPair(
+      pairId,
+      primaryPrUrl,
+      challengerPrUrl,
+      { dir: evalsDir },
+    );
+    if (!hasRequiredEvalRecords) {
+      throw new Error(`Missing eval records for challenge pair ${pairId}`);
+    }
+    if (args['check-only']) {
+      console.log(JSON.stringify({
+        pairId,
+        primaryPrUrl,
+        challengerPrUrl,
+        hasRequiredEvalRecords,
+      }, null, 2));
+      return;
+    }
+
     const primaryDiff = fetchPrContext(primaryNumber, repoDir).diff;
     const challengerDiff = fetchPrContext(challengerNumber, repoDir).diff;
-    const evals = readEvalRecords();
+    const evals = readEvalRecords({ dir: evalsDir });
     const primaryEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === primaryPrUrl);
     const challengerEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === challengerPrUrl);
     if (!primaryEval || !challengerEval) {

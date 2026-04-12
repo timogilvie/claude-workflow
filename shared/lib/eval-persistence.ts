@@ -119,6 +119,32 @@ export function readEvalRecordsFromFile(
 }
 
 /**
+ * Return whether an eval record exists for a specific challenge pair / PR URL.
+ */
+export function hasChallengeEvalRecord(
+  pairId: string,
+  prUrl: string,
+  options?: QueryOptions,
+): boolean {
+  return readEvalRecords(options).some((record) =>
+    record.challengePairId === pairId && record.prUrl === prUrl,
+  );
+}
+
+/**
+ * Return whether both sides of a challenge pair have persisted eval records.
+ */
+export function hasChallengeEvalRecordPair(
+  pairId: string,
+  primaryPrUrl: string,
+  challengerPrUrl: string,
+  options?: QueryOptions,
+): boolean {
+  return hasChallengeEvalRecord(pairId, primaryPrUrl, options)
+    && hasChallengeEvalRecord(pairId, challengerPrUrl, options);
+}
+
+/**
  * Check whether a record matches all provided query filters.
  */
 function matchesFilters(
