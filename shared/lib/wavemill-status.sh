@@ -203,6 +203,13 @@ while true; do
   # Build entire frame into a temp file (avoids $() stripping newlines)
   : > "$FRAME"
   printf "${B}Wavemill Dashboard${N}  ${D}%s${N}\n" "$(date '+%H:%M:%S')" >> "$FRAME"
+  free_slots=""
+  if [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]]; then
+    free_slots=$(jq -r '.freeSlots // empty' "$STATE_FILE" 2>/dev/null || echo "")
+  fi
+  if [[ -n "$free_slots" ]]; then
+    printf "${D}├─ %b${N}\n" "${G}${free_slots} slot(s) available${N}" >> "$FRAME"
+  fi
 
   tasks=$(gather_tasks)
 

@@ -1611,6 +1611,21 @@ save_task_state() {
   fi
 }
 
+update_free_slots_state() {
+  local slots="$1"
+  local tmp
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  tmp=$(mktemp) || { log_warn "update_free_slots_state: mktemp failed"; return 0; }
+  if jq --argjson slots "$slots" \
+     '.freeSlots = $slots | .updated = (now | todate)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "update_free_slots_state: failed to update free slots"
+  fi
+}
+
 remove_task_state() {
   local issue="$1"
   local tmp
@@ -4214,6 +4229,7 @@ while :; do
   # ── Phase C: Offer new tasks if slots available ─────────────────────
   # Challengers are free overhead — don't count them against MAX_PARALLEL
   free_slots=$((MAX_PARALLEL - (active_count - active_challenger_count)))
+  update_free_slots_state "$free_slots"
 
   if (( free_slots > 0 )); then
     candidates=$(fetch_candidates)
@@ -4239,7 +4255,7 @@ while :; do
             echo ""
             tput sc 2>/dev/null || true
           fi
-          log "status" "$free_slots slot(s) available. Next tasks:"
+          log "status" "Next tasks:"
           if [[ -n "$avail_unblocked" ]]; then
             echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
           else
@@ -4273,7 +4289,7 @@ while :; do
             clear_task_list_display
             all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
             echo ""
-            log "info" "$free_slots slot(s) available. All tasks:"
+            log "info" "All tasks:"
             ln=0
             while IFS= read -r mline; do
               ln=$((ln + 1))
