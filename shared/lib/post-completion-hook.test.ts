@@ -3,14 +3,14 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
-import { enrichPostCompletionRecord } from './post-completion-hook.ts';
+import { enrichPostCompletionRecord, runPostCompletionEval } from './post-completion-hook.ts';
 
 let passed = 0;
 let failed = 0;
 
-function test(name: string, fn: () => void) {
+async function test(name: string, fn: () => void | Promise<void>) {
   try {
-    fn();
+    await fn();
     passed++;
     console.log(`  PASS  ${name}`);
   } catch (err) {
@@ -47,7 +47,7 @@ function makeRecord(): EvalRecord {
 
 console.log('\n--- post-completion-hook Tests ---\n');
 
-test('enrichPostCompletionRecord attaches taskDescriptor for persisted records', () => {
+await test('enrichPostCompletionRecord attaches taskDescriptor for persisted records', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-hook-'));
   const featureDir = join(repoDir, 'features', 'enrich-task');
   mkdirSync(featureDir, { recursive: true });
@@ -136,6 +136,15 @@ test('enrichPostCompletionRecord attaches taskDescriptor for persisted records',
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
+});
+
+await test('runPostCompletionEval returns false when no issue or PR is provided', async () => {
+  const persisted = await runPostCompletionEval({
+    workflowType: 'mill',
+    repoDir: process.cwd(),
+  });
+
+  assert.equal(persisted, false);
 });
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
