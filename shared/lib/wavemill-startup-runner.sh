@@ -178,10 +178,12 @@ write_monitor_env() {
 setup_control_dashboard() {
   local status_script="$LIB_DIR/wavemill-status.sh"
   local pane_count
-  pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l)
+  pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l | tr -d ' ')
   if [[ "$pane_count" -eq 1 ]]; then
-    tmux split-window -t "$SESSION:control.0" -v -p 65
-    tmux split-window -t "$SESSION:control.0" -h -f -p 50
+    tmux split-window -t "$SESSION:control.0" -v -p 35
+    tmux split-window -t "$SESSION:control.1" -h -p 50
+  elif [[ "$pane_count" -eq 2 ]]; then
+    tmux split-window -t "$SESSION:control.1" -h -p 50
   fi
   tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'"
   tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
@@ -241,22 +243,31 @@ launch_task_from_plan() {
   if [[ -d "$wt_dir" ]]; then
     startup_step "[1/7] Reusing worktree...       ✓"
   else
-    if git show-ref --verify --quiet "refs/heads/$branch"; then
-      if ! git worktree add "$wt_dir" "$branch" >/dev/null; then
+    local worktree_stderr
+    worktree_stderr="$(mktemp)"
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch"; then
+      if ! git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" >/dev/null 2>"$worktree_stderr"; then
         startup_log "✗ $issue FAILED at step [1/7]: worktree creation"
         startup_log "  Error: failed to attach existing branch $branch"
+        [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
+        [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr"
+        rm -f "$worktree_stderr"
         startup_log "  Task will not be launched. Retry with: wavemill mill"
         return 1
       fi
     else
-      if ! git worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >/dev/null; then
+      if ! git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >/dev/null 2>"$worktree_stderr"; then
         startup_log "✗ $issue FAILED at step [1/7]: worktree creation"
         startup_log "  Error: failed to create $branch from origin/$BASE_BRANCH"
+        [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
+        [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr"
+        rm -f "$worktree_stderr"
         startup_log "  Task will not be launched. Retry with: wavemill mill"
         return 1
       fi
       created_new=true
     fi
+    rm -f "$worktree_stderr"
     startup_step "[1/7] Creating worktree...     ✓"
   fi
 
@@ -407,11 +418,16 @@ $details_context"
 }
 
 main() {
-  local task_count idx tasks_file monitor_cmd task_json resumed_count
+  local task_count idx tasks_file monitor_cmd task_json resumed_count launched_count
 
   ensure_state_file
   : > "$STATUS_LOG_FILE"
   : > "$LAUNCHED_ISSUES_FILE"
+
+  if ! cd "$REPO_DIR"; then
+    startup_log "✗ Startup failed: could not cd to repo root: $REPO_DIR"
+    exit 1
+  fi
 
   startup_log "═══ Wavemill Startup ═══"
   startup_log "Reading launch plan: $PLAN_FILE"
@@ -435,9 +451,17 @@ main() {
   write_monitor_env "$tasks_file"
   setup_control_dashboard
 
+  launched_count="$(wc -l < "$LAUNCHED_ISSUES_FILE" | tr -d ' ')"
+  if [[ "$launched_count" -eq 0 ]]; then
+    startup_log ""
+    startup_log "No tasks launched. Keeping startup diagnostics visible in control window."
+    tmux respawn-pane -k -t "$SESSION:control.0" "bash -lc \"clear; cat '$STATUS_LOG_FILE'; printf '\\nPress Ctrl+B then D to detach.\\n'; tail -f /dev/null\""
+    return 0
+  fi
+
   startup_log ""
   startup_log "Starting monitor in control window..."
-  printf -v monitor_cmd '%q %q' "$MONITOR_SCRIPT" "$MONITOR_ENV"
+  printf -v monitor_cmd '%q -lc %q' "/opt/homebrew/bin/bash" "clear; exec $(printf '%q %q' "$MONITOR_SCRIPT" "$MONITOR_ENV")"
   tmux respawn-pane -k -t "$SESSION:control.0" "$monitor_cmd"
 }
 
