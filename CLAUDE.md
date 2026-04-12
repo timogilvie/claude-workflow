@@ -115,6 +115,69 @@ Use `docs/prompt-locations.md` as the canonical registry for agent instruction l
 - `commands/bugfix.md` - Bug workflow does not include self-review.
 - `commands/implement-plan.md` - Does not define self-review; `/workflow` owns it.
 
+## Hook-Based Status Tracking
+
+Wavemill tracks agent lifecycle using a JSON status file contract at `/tmp/wavemill-${SESSION}-${ISSUE}.hook`. This replaces tmux pane liveness checks with richer state reporting (working/idle/waiting/error) and supports staleness detection via timestamps.
+
+### Architecture
+
+**Shared Protocol** ([wavemill-hook-protocol.sh](shared/hooks/wavemill-hook-protocol.sh)):
+- `wavemill_hook_check()` - Ensures hooks are no-ops outside wavemill contexts
+- `wavemill_hook_write(state, event, detail, agent)` - Atomic JSON writes with timestamps
+- 300s TTL for staleness detection
+
+**Agent Adapters**:
+- **Claude** ([claude-status-hook.sh](shared/hooks/claude-status-hook.sh)) - Hooks configured per-worktree in `.claude/settings.local.json` (gitignored). Fires on UserPromptSubmit, PreToolUse, Stop, StopFailure, and Notification events.
+- **Codex** ([codex-status-monitor.sh](shared/hooks/codex-status-monitor.sh)) - Monitors JSONL event stream from `codex exec --json`
+- **Generic** ([process-status-monitor.sh](shared/hooks/process-status-monitor.sh)) - Fallback monitoring via child process detection
+
+**Status Reading** ([wavemill-status.sh](shared/lib/wavemill-status.sh)):
+- Reads JSON hook files with TTL validation (300s)
+- Falls back to tmux pane liveness if hook is stale or missing
+- Extracts detail field (tool names, error messages) for dashboard
+
+**Hook Configuration** ([wavemill-common.sh](shared/lib/wavemill-common.sh)):
+- `configure_agent_hooks()` dynamically writes `.claude/settings.local.json` per-worktree
+- Only affects wavemill-launched agents, not standalone Claude usage
+- Called before each phase launch (planning, coding, review)
+
+### JSON Status Format
+
+```json
+{
+  "state": "working",
+  "event": "PreToolUse",
+  "detail": "Read",
+  "agent": "claude",
+  "timestamp": 1712345678
+}
+```
+
+**States**: `working` (agent active), `idle` (stopped normally), `waiting` (blocked on user input), `error` (failure)
+
+**TTL**: 300s - dashboard falls back to pane liveness if timestamp is stale
+
+**Atomic Writes**: Uses tmp file + mv to prevent partial reads
+
+### Dependencies
+
+- `jq` (required for all adapters) - JSON parsing and creation
+- `pgrep` (optional) - Child process detection for generic adapter
+
+Without `jq`, hooks are no-ops. Without `pgrep`, generic adapter degrades to initial/final state only.
+
+### Adding New Adapters
+
+1. **Prefer native hooks** if the CLI exposes them (like Claude Code)
+2. **Otherwise prefer structured event streams** (like Codex JSONL)
+3. **Fall back to process monitoring** for agents without hooks/streams
+
+All adapters:
+- Source `wavemill-hook-protocol.sh`
+- Call `wavemill_hook_check()` at startup
+- Use `wavemill_hook_write()` for all status updates
+- Set `WAVEMILL_SESSION` and `WAVEMILL_ISSUE` environment variables
+
 ### Prompt Version Registry
 
 Template usage is automatically logged to `.wavemill/evals/prompt-registry.jsonl` for GEPA training attribution. Each entry captures:

@@ -24,6 +24,7 @@ echo "=== Syntax Check (bash -n) ==="
 for f in \
   "$LIB_DIR"/wavemill-*.sh \
   "$LIB_DIR"/agent-adapters.sh \
+  "$REPO_DIR"/shared/hooks/*.sh \
   "$REPO_DIR/wavemill" \
 ; do
   if [[ ! -f "$f" ]]; then
@@ -557,6 +558,21 @@ else
     pass "dashboard overrides stale status with plan review message"
   else
     fail "dashboard does not override stale status with plan review message"
+  fi
+
+  if grep -q 'running:working' "$STATUS_SCRIPT" \
+    && grep -q 'running:waiting' "$STATUS_SCRIPT" \
+    && grep -q 'running:done' "$STATUS_SCRIPT" \
+    && grep -q 'exited:\*' "$STATUS_SCRIPT"; then
+    pass "dashboard combines pane liveness with machine status keywords"
+  else
+    fail "dashboard is missing pane-plus-status lifecycle mapping"
+  fi
+
+  if grep -q 'working|waiting|done' "$STATUS_SCRIPT"; then
+    pass "dashboard recognizes machine lifecycle keywords"
+  else
+    fail "dashboard does not recognize machine lifecycle keywords"
   fi
 
   if grep -Fq '.freeSlots // empty' "$STATUS_SCRIPT" \
@@ -1264,27 +1280,55 @@ else
   if agent_launch_interactive "$launch_session" "window" "$prompt_file" "codex" "deep" "" ""; then
     if [[ -f "$launcher_file" ]] \
       && grep -q 'codex --model gpt-5.4' "$launcher_file" \
+      && grep -q "export WAVEMILL_SESSION='$launch_session'" "$launcher_file" \
       && ! grep -q -- '--model deep' "$launcher_file"; then
-      pass "interactive launcher replaces depth tags with a valid codex model"
+      pass "interactive launcher replaces depth tags with a valid codex model and exports status env"
     else
-      fail "interactive launcher did not sanitize invalid codex model"
+      fail "interactive launcher did not sanitize invalid codex model or export status env"
     fi
   else
     fail "interactive launcher failed for invalid model fallback test"
   fi
 
   rm -f "$launcher_file"
-  if agent_launch_interactive "$launch_session" "window" "$prompt_file" "codex" "gpt-5.4" "" ""; then
-    if [[ -f "$launcher_file" ]] && grep -q 'codex --model gpt-5.4' "$launcher_file"; then
-      pass "interactive launcher preserves valid codex models"
+  if agent_launch_interactive "$launch_session" "window" "$prompt_file" "codex" "gpt-5.4" "" "" "HOK-1221"; then
+    if [[ -f "$launcher_file" ]] \
+      && grep -q 'codex --model gpt-5.4' "$launcher_file" \
+      && grep -q "export WAVEMILL_ISSUE='HOK-1221'" "$launcher_file" \
+      && grep -q '/tmp/check-shell-.*-status.txt' "$launcher_file"; then
+      pass "interactive launcher preserves valid codex models and writes initial status"
     else
-      fail "interactive launcher did not preserve valid codex model"
+      fail "interactive launcher did not preserve valid codex model or initial status wiring"
     fi
   else
     fail "interactive launcher failed for valid model test"
   fi
 
   rm -f "$prompt_file" "$launcher_file"
+fi
+
+# ============================================================================
+# TEST 12A: Hook adapter files
+# ============================================================================
+echo ""
+echo "=== Hook Adapter Files ==="
+
+if [[ -f "$REPO_DIR/shared/hooks/wavemill-status-writer.sh" ]] \
+  && [[ -f "$REPO_DIR/shared/hooks/claude-status-hook.sh" ]] \
+  && [[ -f "$REPO_DIR/shared/hooks/codex-status-monitor.sh" ]] \
+  && [[ -f "$REPO_DIR/shared/hooks/process-status-monitor.sh" ]]; then
+  pass "all hook adapter scripts exist"
+else
+  fail "one or more hook adapter scripts are missing"
+fi
+
+if [[ -f "$REPO_DIR/.claude/settings.json" ]] \
+  && grep -q '"PreToolUse"' "$REPO_DIR/.claude/settings.json" \
+  && grep -q '"Notification"' "$REPO_DIR/.claude/settings.json" \
+  && grep -q 'shared/hooks/claude-status-hook.sh UserPromptSubmit' "$REPO_DIR/.claude/settings.json"; then
+  pass "claude project hooks are configured for status tracking"
+else
+  fail "claude project hooks are missing status tracking configuration"
 fi
 
 # ============================================================================
