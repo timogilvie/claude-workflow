@@ -516,6 +516,7 @@ cleanup_completed_task() {
 
   # Clean up state
   execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   remove_task_state "$issue"
   CLEANED["$issue"]=1
 
@@ -2159,12 +2160,22 @@ _launch_agent_in_pane() {
   local window="${target#*:}"
   local agent_flags=""
   local abort_check_cmd=""
+  local esc_session esc_issue esc_slug
+
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
     local feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
     abort_check_cmd="check_stage_aborted '$feature_dir'"
   fi
-  agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd" "$issue"
+
+  # Export wavemill context environment variables for hook protocol
+  esc_session=${session//\'/\'\\\'\'}
+  esc_issue=${issue//\'/\'\\\'\'}
+  esc_slug=${slug//\'/\'\\\'\'}
+  tmux send-keys -t "$target" \
+    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_SLUG='$esc_slug'" C-m
+
+  agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd"
 }
 
 # Launch the planning phase in an existing tmux window
@@ -2174,6 +2185,7 @@ launch_planning_phase() {
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  configure_agent_hooks "$planner_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -2200,6 +2212,7 @@ launch_coding_phase() {
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  configure_agent_hooks "$coder_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -2226,6 +2239,7 @@ launch_review_phase() {
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  configure_agent_hooks "$reviewer_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -2796,6 +2810,7 @@ cleanup_completed_task() {
 
   # Clean up state
   git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   remove_task_state "$issue"
   CLEANED["$issue"]=1
 

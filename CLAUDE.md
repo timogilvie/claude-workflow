@@ -117,23 +117,66 @@ Use `docs/prompt-locations.md` as the canonical registry for agent instruction l
 
 ## Hook-Based Status Tracking
 
-Wavemill tracks agent lifecycle with a shared status file contract at `/tmp/${SESSION}-${ISSUE}-status.txt`.
+Wavemill tracks agent lifecycle using a JSON status file contract at `/tmp/wavemill-${SESSION}-${ISSUE}.hook`. This replaces tmux pane liveness checks with richer state reporting (working/idle/waiting/error) and supports staleness detection via timestamps.
 
-- Claude writes lifecycle state through project hooks in [.claude/settings.json](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/.claude/settings.json).
-- Codex autonomous runs write lifecycle state by piping `codex exec --json` through [shared/hooks/codex-status-monitor.sh](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/shared/hooks/codex-status-monitor.sh).
-- Other agent CLIs fall back to [shared/hooks/process-status-monitor.sh](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/shared/hooks/process-status-monitor.sh), which infers activity from child processes.
-- All adapters write through [shared/hooks/wavemill-status-writer.sh](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/shared/hooks/wavemill-status-writer.sh), so the dashboard consumes one stable format.
+### Architecture
 
-**Dependencies**: codex-status-monitor.sh requires `jq` to parse JSONL events; process-status-monitor.sh requires `pgrep` to detect child processes. Without these tools, monitoring degrades gracefully (showing initial 'working' and final 'done' states) but won't provide real-time status updates.
+**Shared Protocol** ([wavemill-hook-protocol.sh](shared/hooks/wavemill-hook-protocol.sh)):
+- `wavemill_hook_check()` - Ensures hooks are no-ops outside wavemill contexts
+- `wavemill_hook_write(state, event, detail, agent)` - Atomic JSON writes with timestamps
+- 300s TTL for staleness detection
 
-Recognized machine statuses are `working`, `waiting`, and `done`. Free-text status lines are still supported for richer manual progress reporting from prompts.
+**Agent Adapters**:
+- **Claude** ([claude-status-hook.sh](shared/hooks/claude-status-hook.sh)) - Hooks configured per-worktree in `.claude/settings.local.json` (gitignored). Fires on UserPromptSubmit, PreToolUse, Stop, StopFailure, and Notification events.
+- **Codex** ([codex-status-monitor.sh](shared/hooks/codex-status-monitor.sh)) - Monitors JSONL event stream from `codex exec --json`
+- **Generic** ([process-status-monitor.sh](shared/hooks/process-status-monitor.sh)) - Fallback monitoring via child process detection
 
-To add a new agent adapter:
+**Status Reading** ([wavemill-status.sh](shared/lib/wavemill-status.sh)):
+- Reads JSON hook files with TTL validation (300s)
+- Falls back to tmux pane liveness if hook is stale or missing
+- Extracts detail field (tool names, error messages) for dashboard
 
-1. Prefer native hooks if the CLI exposes them.
-2. Otherwise prefer a structured event stream monitor.
-3. Fall back to the process monitor if neither exists.
-4. Wire `WAVEMILL_SESSION` and `WAVEMILL_ISSUE` through the launcher path and keep writes going through the shared status writer.
+**Hook Configuration** ([wavemill-common.sh](shared/lib/wavemill-common.sh)):
+- `configure_agent_hooks()` dynamically writes `.claude/settings.local.json` per-worktree
+- Only affects wavemill-launched agents, not standalone Claude usage
+- Called before each phase launch (planning, coding, review)
+
+### JSON Status Format
+
+```json
+{
+  "state": "working",
+  "event": "PreToolUse",
+  "detail": "Read",
+  "agent": "claude",
+  "timestamp": 1712345678
+}
+```
+
+**States**: `working` (agent active), `idle` (stopped normally), `waiting` (blocked on user input), `error` (failure)
+
+**TTL**: 300s - dashboard falls back to pane liveness if timestamp is stale
+
+**Atomic Writes**: Uses tmp file + mv to prevent partial reads
+
+### Dependencies
+
+- `jq` (required for all adapters) - JSON parsing and creation
+- `pgrep` (optional) - Child process detection for generic adapter
+
+Without `jq`, hooks are no-ops. Without `pgrep`, generic adapter degrades to initial/final state only.
+
+### Adding New Adapters
+
+1. **Prefer native hooks** if the CLI exposes them (like Claude Code)
+2. **Otherwise prefer structured event streams** (like Codex JSONL)
+3. **Fall back to process monitoring** for agents without hooks/streams
+
+All adapters:
+- Source `wavemill-hook-protocol.sh`
+- Call `wavemill_hook_check()` at startup
+- Use `wavemill_hook_write()` for all status updates
+- Set `WAVEMILL_SESSION` and `WAVEMILL_ISSUE` environment variables
 
 ### Prompt Version Registry
 

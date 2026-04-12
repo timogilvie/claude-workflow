@@ -78,6 +78,22 @@ agent_reported_status() {
   fi
 }
 
+# Read detail field from hook JSON (e.g., tool name, error message).
+# Only returns detail if hook file is fresh (300s TTL).
+agent_hook_detail() {
+  local issue="$1"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  [[ -f "$hook_file" ]] || return
+
+  local ts now staleness
+  ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  staleness=$(( now - ts ))
+  (( staleness < 300 )) || return
+
+  jq -r '.detail // empty' "$hook_file" 2>/dev/null || true
+}
+
 # Read the planning stage display status from stage result files.
 # Returns: awaiting_approval, approved, running, rejected, aborted, or empty string.
 get_planning_display_status() {
@@ -140,8 +156,35 @@ elapsed() {
 
 # ── Agent status via tmux pane liveness ───────────────────────────────────
 
+# Read agent status via hook protocol with TTL-based fallback to pane liveness.
+# Hook files use a 300s TTL - stale status falls back to tmux pane state.
 agent_status() {
   local win="$1"
+  local issue="${win%%-*}"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+
+  # Prefer hook-reported state when fresh (300s TTL)
+  if [[ -f "$hook_file" ]]; then
+    local state ts now staleness
+    state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || true)
+    ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    staleness=$(( now - ts ))
+
+    if (( staleness < 300 )) && [[ -n "$state" ]]; then
+      # Map hook states to dashboard display states
+      case "$state" in
+        working) echo "running" ;;
+        idle)    echo "exited" ;;
+        waiting) echo "waiting" ;;
+        error)   echo "error" ;;
+        *)       echo "$state" ;;
+      esac
+      return
+    fi
+  fi
+
+  # Fallback to pane liveness for agents without hook support or stale hooks
   local dead
   dead=$(tmux list-panes -t "$SESSION:$win" -F '#{pane_dead}' 2>/dev/null | head -1) || {
     echo "done"; return
@@ -253,7 +296,9 @@ while true; do
         st_str="${G}✓ merged${N}"
       else
         agent_state=$(agent_status "$win")
-        reported=$(agent_reported_status "$issue")
+        # Prefer hook detail (tool names, error messages) over legacy status file
+        reported=$(agent_hook_detail "$issue")
+        [[ -z "$reported" ]] && reported=$(agent_reported_status "$issue")
         case "$agent_state:$reported" in
           exited:*)     st_str="${D}○ exited${N}" ;;
           running:working) st_str="${G}● working${N}" ;;
