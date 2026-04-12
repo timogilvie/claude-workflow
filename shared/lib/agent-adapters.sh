@@ -50,6 +50,27 @@ agent_validate_model() {
   fi
 }
 
+agent_model_looks_like_depth_tag() {
+  local model="$1"
+  case "$model" in
+    light|medium|deep|standard|fast)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+agent_default_model_for_cmd() {
+  local agent_cmd="$1"
+  case "$agent_cmd" in
+    codex) echo "gpt-5.4" ;;
+    claude) echo "claude-sonnet-4-5-20250929" ;;
+    *) echo "" ;;
+  esac
+}
+
 # ============================================================================
 # AGENT VALIDATION
 # ============================================================================
@@ -854,6 +875,24 @@ agent_launch_interactive() {
   local model="${5:-}"
   local agent_flags="${6:-}"
   local abort_check_cmd="${7:-}"
+
+  if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
+    local fallback_model=""
+    fallback_model="$(agent_default_model_for_cmd "$agent_cmd")"
+    if agent_model_looks_like_depth_tag "$model"; then
+      _agent_log_warn "Rejecting depth tag '$model' as model ID for $agent_cmd"
+    else
+      _agent_log_warn "Rejecting invalid model '$model' for $agent_cmd"
+    fi
+
+    if [[ -n "$fallback_model" ]]; then
+      _agent_log_warn "Falling back to $fallback_model"
+      model="$fallback_model"
+    else
+      _agent_log_warn "Launching without explicit --model override"
+      model=""
+    fi
+  fi
 
   local model_flag=""
   if [[ -n "$model" ]]; then

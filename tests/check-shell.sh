@@ -986,7 +986,59 @@ EOF
 fi
 
 # ============================================================================
-# TEST 11: Verify sourced libraries exist
+# TEST 11: Interactive launcher model validation
+# ============================================================================
+echo ""
+echo "=== Interactive Launcher Model Validation ==="
+
+ADAPTER_LIB="$LIB_DIR/agent-adapters.sh"
+
+if [[ ! -f "$ADAPTER_LIB" ]]; then
+  fail "agent-adapters.sh not found"
+else
+  TOOLS_DIR="$REPO_DIR/tools"
+  export TOOLS_DIR REPO_DIR
+  # shellcheck source=/dev/null
+  source "$ADAPTER_LIB"
+
+  agent_prepare_pane_for_launch() { return 0; }
+  tmux() { :; }
+
+  launch_session="check-shell-$$"
+  prompt_file="/tmp/${launch_session}-prompt.txt"
+  launcher_file="/tmp/${launch_session}-$(basename "$prompt_file" .txt)-launcher.sh"
+  trap 'rm -f "$prompt_file" "$launcher_file"' EXIT
+  printf 'test prompt\n' > "$prompt_file"
+  rm -f "$launcher_file"
+
+  if agent_launch_interactive "$launch_session" "window" "$prompt_file" "codex" "deep" "" ""; then
+    if [[ -f "$launcher_file" ]] \
+      && grep -q 'codex --model gpt-5.4' "$launcher_file" \
+      && ! grep -q -- '--model deep' "$launcher_file"; then
+      pass "interactive launcher replaces depth tags with a valid codex model"
+    else
+      fail "interactive launcher did not sanitize invalid codex model"
+    fi
+  else
+    fail "interactive launcher failed for invalid model fallback test"
+  fi
+
+  rm -f "$launcher_file"
+  if agent_launch_interactive "$launch_session" "window" "$prompt_file" "codex" "gpt-5.4" "" ""; then
+    if [[ -f "$launcher_file" ]] && grep -q 'codex --model gpt-5.4' "$launcher_file"; then
+      pass "interactive launcher preserves valid codex models"
+    else
+      fail "interactive launcher did not preserve valid codex model"
+    fi
+  else
+    fail "interactive launcher failed for valid model test"
+  fi
+
+  rm -f "$prompt_file" "$launcher_file"
+fi
+
+# ============================================================================
+# TEST 12: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
