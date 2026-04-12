@@ -827,6 +827,22 @@ else
   pass "agent_verify_launch fails when the pane stays idle"
 fi
 
+VERIFY_TMUX_MODE="running"
+VERIFY_TMUX_CHILDREN=1
+if agent_verify_launch "wavemill-test" "planning" 0.1 0.05 "codex" "1"; then
+  fail "agent_verify_launch mistook a pre-existing busy pane for a fresh launch"
+else
+  pass "agent_verify_launch ignores a pre-existing busy pane state"
+fi
+
+VERIFY_TMUX_MODE="running"
+VERIFY_TMUX_CHILDREN=2
+if agent_verify_launch "wavemill-test" "planning" 0.1 0.05 "codex" "1"; then
+  pass "agent_verify_launch succeeds once pane state changes after dispatch"
+else
+  fail "agent_verify_launch did not detect a post-dispatch pane state change"
+fi
+
 LAUNCH_VERIFY_RESULTS=(1 0)
 LAUNCH_VERIFY_INDEX=0
 LAUNCH_SEND_KEYS=0
@@ -872,6 +888,59 @@ else
     fail "agent_launch_interactive failure path did not execute the expected send-keys sequence"
   fi
 fi
+
+LAUNCH_VERIFY_INDEX=0
+LAUNCH_SEND_KEYS=0
+LAUNCH_RESPAWNS=0
+LAUNCH_READY_INDEX=0
+tmux() {
+  case "${1:-}" in
+    send-keys)
+      LAUNCH_SEND_KEYS=$((LAUNCH_SEND_KEYS + 1))
+      return 0
+      ;;
+    respawn-pane)
+      LAUNCH_RESPAWNS=$((LAUNCH_RESPAWNS + 1))
+      return 0
+      ;;
+    display-message)
+      if [[ "${*: -1}" == '#{pane_current_path}' ]]; then
+        printf '%s\n' "$PWD"
+      elif [[ "${*: -1}" == '#{pane_current_command}' ]]; then
+        printf '%s\n' "zsh"
+      elif [[ "${*: -1}" == '#{pane_pid}' ]]; then
+        printf '%s\n' "$$"
+      fi
+      return 0
+      ;;
+  esac
+  return 0
+}
+agent_prepare_pane_for_launch() {
+  return 1
+}
+agent_pane_is_ready() {
+  local ready_states=(1 0)
+  local result="${ready_states[$LAUNCH_READY_INDEX]:-0}"
+  LAUNCH_READY_INDEX=$((LAUNCH_READY_INDEX + 1))
+  return "$result"
+}
+agent_verify_launch() {
+  LAUNCH_VERIFY_INDEX=$((LAUNCH_VERIFY_INDEX + 1))
+  return 0
+}
+AGENT_LAUNCH_MAX_RETRIES=1
+if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4" ""; then
+  if [[ "$LAUNCH_RESPAWNS" -ge 2 ]] && [[ "$LAUNCH_SEND_KEYS" -ge 2 ]] && [[ "$LAUNCH_VERIFY_INDEX" -eq 1 ]]; then
+    pass "agent_launch_interactive respawns before dispatch when pane prep or readiness fails"
+  else
+    fail "agent_launch_interactive did not use the respawn fallback before dispatch"
+  fi
+else
+  fail "agent_launch_interactive failed to recover with respawn fallback"
+fi
+
+unset -f agent_pane_is_ready
 unset AGENT_LAUNCH_MAX_RETRIES AGENT_LAUNCH_SETTLE_DELAY AGENT_LAUNCH_ENTER_DELAY AGENT_LAUNCH_RETRY_DELAY
 unset -f sleep pgrep
 
@@ -1262,7 +1331,68 @@ else
 fi
 
 # ============================================================================
-# TEST 13: Verify sourced libraries exist
+# TEST 13: Pane handoff regression guards
+# ============================================================================
+echo ""
+echo "=== Pane Handoff Guards ==="
+
+if [[ ! -f "$ADAPTER_LIB" ]]; then
+  fail "agent-adapters.sh not found for pane handoff checks"
+else
+  PREPARE_CHECK=$(bash -lc '
+    set -euo pipefail
+    source "'"$ADAPTER_LIB"'"
+    sleep() { :; }
+    agent_terminate_in_pane() { return 1; }
+    agent_wait_for_pane_ready() { return 1; }
+    tmux() {
+      if [[ "${1:-}" == "display-message" && "${*: -1}" == "#{pane_pid}" ]]; then
+        printf "%s\n" "$$"
+      fi
+      return 0
+    }
+    pkill() { return 0; }
+    set +e
+    agent_prepare_pane_for_launch "wavemill-test" "coding" 0 0 ""
+    rc=$?
+    set -e
+    printf "rc=%s\n" "$rc"
+  ' 2>/dev/null || true)
+  if [[ "$PREPARE_CHECK" == *"rc=1"* ]]; then
+    pass "agent_prepare_pane_for_launch returns failure when respawn cannot clear the pane"
+  else
+    fail "agent_prepare_pane_for_launch still falls through as success after respawn failure"
+  fi
+fi
+
+if [[ ! -f "$MILL_SCRIPT" ]]; then
+  fail "wavemill-mill.sh not found for pane handoff checks"
+else
+  CODING_LAUNCH_BLOCK=$(awk '
+    /^launch_coding_phase\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' "$MILL_SCRIPT")
+  if grep -q '_launch_agent_in_pane' <<< "$CODING_LAUNCH_BLOCK"; then
+    pass "launch_coding_phase uses protected pane launcher"
+  else
+    fail "launch_coding_phase does not call protected pane launcher"
+  fi
+
+  REVIEW_LAUNCH_BLOCK=$(awk '
+    /^launch_review_phase\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' "$MILL_SCRIPT")
+  if grep -q '_launch_agent_in_pane' <<< "$REVIEW_LAUNCH_BLOCK"; then
+    pass "launch_review_phase uses protected pane launcher"
+  else
+    fail "launch_review_phase does not call protected pane launcher"
+  fi
+fi
+
+# ============================================================================
+# TEST 14: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
@@ -1289,7 +1419,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 14: Optional ShellCheck
+# TEST 15: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""
