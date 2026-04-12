@@ -129,15 +129,47 @@ elapsed() {
   fi
 }
 
-# ── Agent status via tmux pane liveness ───────────────────────────────────
+# ── Agent status via hook protocol with pane-liveness fallback ─────────────
 
 agent_status() {
   local win="$1"
+  local issue="${win%%-*}"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+
+  # Prefer hook-reported state when fresh.
+  if [[ -f "$hook_file" ]]; then
+    local state ts now staleness
+    state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || true)
+    ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    staleness=$(( now - ts ))
+
+    if (( staleness < 300 )) && [[ -n "$state" ]]; then
+      echo "$state"
+      return
+    fi
+  fi
+
+  # Fallback to pane liveness for agents without hook support.
   local dead
   dead=$(tmux list-panes -t "$SESSION:$win" -F '#{pane_dead}' 2>/dev/null | head -1) || {
     echo "done"; return
   }
   if [[ "$dead" == "1" ]]; then echo "exited"; else echo "running"; fi
+}
+
+agent_hook_detail() {
+  local issue="$1"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  [[ -f "$hook_file" ]] || return
+
+  local ts now staleness
+  ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  staleness=$(( now - ts ))
+  (( staleness < 300 )) || return
+
+  jq -r '.detail // empty' "$hook_file" 2>/dev/null || true
 }
 
 # ── Task discovery ────────────────────────────────────────────────────────
@@ -245,6 +277,10 @@ while true; do
       else
         agent_state=$(agent_status "$win")
         case "$agent_state" in
+          working) st_str="${G}● working${N}" ;;
+          idle)    st_str="${Y}◌ idle${N}" ;;
+          waiting) st_str="${Y}⏳ waiting${N}" ;;
+          error)   st_str="${R}✗ error${N}" ;;
           running) st_str="${G}● running${N}" ;;
           exited)  st_str="${Y}○ exited${N}" ;;
           *)       st_str="${D}  done${N}"   ;;
@@ -296,8 +332,9 @@ while true; do
 
       printf "%-10s  %-22s  %6s  %-12b  %-11b  %b\n" "$issue" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
-      # Show agent-reported status on a second line (if available)
-      reported=$(agent_reported_status "$issue")
+      # Show hook detail (preferred) or agent-reported status on a second line.
+      reported=$(agent_hook_detail "$issue")
+      [[ -z "$reported" ]] && reported=$(agent_reported_status "$issue")
       if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
         reported="Plan ready — waiting for approval"
       fi

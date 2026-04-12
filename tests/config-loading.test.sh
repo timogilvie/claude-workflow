@@ -205,6 +205,68 @@ check_matches "defaults with no config files" '^wavemill-' "$M_SESSION"
 check "defaults with no config files (parallel)" "7" "$M_MAX_PARALLEL"
 
 # ============================================================================
+# Test 6: Hook config merge behavior (claude/codex)
+# ============================================================================
+echo ""
+echo "=== Hook Config Merge Behavior ==="
+
+source "$COMMON"
+
+HOOK_REPO="$TMP/fake-repo"
+WT="$TMP/fake-worktree"
+mkdir -p "$HOOK_REPO/shared/hooks" "$WT/.claude" "$WT/.codex"
+
+cat > "$HOOK_REPO/shared/hooks/claude-hook.sh" << 'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+
+cat > "$HOOK_REPO/shared/hooks/codex-hook.sh" << 'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+
+chmod +x "$HOOK_REPO/shared/hooks/claude-hook.sh" "$HOOK_REPO/shared/hooks/codex-hook.sh"
+
+cat > "$WT/.claude/settings.local.json" << 'EOF'
+{
+  "permissions": {
+    "allow": ["Bash"]
+  }
+}
+EOF
+
+configure_agent_hooks "claude" "$WT" "$HOOK_REPO"
+
+CLAUDE_KEEP=$(jq -r '.permissions.allow[0] // empty' "$WT/.claude/settings.local.json")
+CLAUDE_HOOK=$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].command // empty' "$WT/.claude/settings.local.json")
+check "claude config preserves existing keys" "Bash" "$CLAUDE_KEEP"
+check "claude config adds hook command" "$HOOK_REPO/shared/hooks/claude-hook.sh" "$CLAUDE_HOOK"
+
+cat > "$WT/.codex/hooks.json" << 'EOF'
+{
+  "otherConfig": {
+    "enabled": true
+  }
+}
+EOF
+
+configure_agent_hooks "codex" "$WT" "$HOOK_REPO"
+
+CODEX_KEEP=$(jq -r '.otherConfig.enabled // empty' "$WT/.codex/hooks.json")
+CODEX_HOOK=$(jq -r '.hooks.PreToolUse[0].hooks[0].command // empty' "$WT/.codex/hooks.json")
+check "codex config preserves existing keys" "true" "$CODEX_KEEP"
+check "codex config adds PreToolUse hook" "bash $HOOK_REPO/shared/hooks/codex-hook.sh PreToolUse" "$CODEX_HOOK"
+
+rm -f "$WT/.claude/settings.local.json"
+configure_agent_hooks "unsupported-agent" "$WT" "$HOOK_REPO"
+if [[ ! -f "$WT/.claude/settings.local.json" ]]; then
+  pass "unsupported agent is a no-op for hook config"
+else
+  fail "unsupported agent is a no-op for hook config" "missing file" "file exists"
+fi
+
+# ============================================================================
 # Results
 # ============================================================================
 echo ""

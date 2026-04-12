@@ -496,6 +496,123 @@ pretrust_directory() {
 }
 
 # ============================================================================
+# AGENT HOOK STATUS CONFIGURATION
+# ============================================================================
+
+_log_hook_config_warn() {
+  if declare -F log_warn >/dev/null 2>&1; then
+    log_warn "$@"
+  fi
+}
+
+_log_hook_config_info() {
+  if declare -F log >/dev/null 2>&1; then
+    log "debug" "$@"
+  fi
+}
+
+# Configure hook-based status reporting for a specific agent in a worktree.
+# Args: agent_cmd, worktree_dir, repo_dir
+configure_agent_hooks() {
+  local agent_cmd="$1" worktree_dir="$2" repo_dir="$3"
+  local hooks_dir="$repo_dir/shared/hooks"
+  local claude_hook="$hooks_dir/claude-hook.sh"
+  local codex_hook="$hooks_dir/codex-hook.sh"
+  local tmp config_file
+
+  command -v jq >/dev/null 2>&1 || return 0
+  [[ -n "$worktree_dir" && -d "$worktree_dir" ]] || return 0
+
+  case "$agent_cmd" in
+    claude)
+      if [[ ! -x "$claude_hook" ]]; then
+        _log_hook_config_warn "  Hook status unavailable (missing $claude_hook)"
+        return 0
+      fi
+
+      mkdir -p "$worktree_dir/.claude"
+      config_file="$worktree_dir/.claude/settings.local.json"
+      if [[ ! -f "$config_file" ]]; then
+        printf '{}\n' > "$config_file"
+      elif ! jq empty "$config_file" >/dev/null 2>&1; then
+        _log_hook_config_warn "  Invalid JSON in $config_file, resetting local hook config"
+        printf '{}\n' > "$config_file"
+      fi
+
+      tmp=$(mktemp) || { _log_hook_config_warn "  Failed to allocate temp file for Claude hook config"; return 0; }
+      if jq \
+        --arg hook_cmd "$claude_hook" \
+        '
+        . as $base |
+        ($base.hooks // {}) as $hooks |
+        $base + {
+          hooks: ($hooks + {
+            UserPromptSubmit: [{hooks: [{type: "command", command: $hook_cmd}]}],
+            PreToolUse: [{hooks: [{type: "command", command: $hook_cmd}]}],
+            Stop: [{hooks: [{type: "command", command: $hook_cmd}]}],
+            StopFailure: [{hooks: [{type: "command", command: $hook_cmd}]}],
+            Notification: [{hooks: [{type: "command", command: $hook_cmd}]}]
+          })
+        }
+        ' "$config_file" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$config_file"
+        _log_hook_config_info "  Configured Claude hook status in $config_file"
+      else
+        rm -f "$tmp"
+        _log_hook_config_warn "  Failed to write Claude hook config at $config_file"
+      fi
+      ;;
+
+    codex)
+      if [[ ! -x "$codex_hook" ]]; then
+        _log_hook_config_warn "  Hook status unavailable (missing $codex_hook)"
+        return 0
+      fi
+
+      mkdir -p "$worktree_dir/.codex"
+      config_file="$worktree_dir/.codex/hooks.json"
+      if [[ ! -f "$config_file" ]]; then
+        printf '{}\n' > "$config_file"
+      elif ! jq empty "$config_file" >/dev/null 2>&1; then
+        _log_hook_config_warn "  Invalid JSON in $config_file, resetting local hook config"
+        printf '{}\n' > "$config_file"
+      fi
+
+      tmp=$(mktemp) || { _log_hook_config_warn "  Failed to allocate temp file for Codex hook config"; return 0; }
+      if jq \
+        --arg cmd_start "bash $codex_hook SessionStart" \
+        --arg cmd_prompt "bash $codex_hook UserPromptSubmit" \
+        --arg cmd_tool "bash $codex_hook PreToolUse" \
+        --arg cmd_stop "bash $codex_hook Stop" \
+        '
+        . as $base |
+        ($base.hooks // {}) as $hooks |
+        $base + {
+          hooks: ($hooks + {
+            SessionStart: [{matcher: "startup|resume", hooks: [{type: "command", command: $cmd_start}]}],
+            UserPromptSubmit: [{hooks: [{type: "command", command: $cmd_prompt}]}],
+            PreToolUse: [{hooks: [{type: "command", command: $cmd_tool}]}],
+            Stop: [{hooks: [{type: "command", command: $cmd_stop}]}]
+          })
+        }
+        ' "$config_file" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$config_file"
+        _log_hook_config_info "  Configured Codex hook status in $config_file"
+      else
+        rm -f "$tmp"
+        _log_hook_config_warn "  Failed to write Codex hook config at $config_file"
+      fi
+      ;;
+
+    *)
+      _log_hook_config_info "  Hook-based status not supported for agent '$agent_cmd'"
+      ;;
+  esac
+
+  return 0
+}
+
+# ============================================================================
 # TASK PHASE MANAGEMENT
 # ============================================================================
 

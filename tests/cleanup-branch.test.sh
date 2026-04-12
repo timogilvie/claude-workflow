@@ -40,7 +40,11 @@ else
   fail "monitor cleanup is missing remote branch deletion"
 fi
 
-outer_cleanup=$(sed -n '2705,2750p' "$MILL_SCRIPT")
+outer_cleanup=$(awk '
+  /^cleanup_completed_task\(\) \{/ { block++; if (block == 1) in_block=1 }
+  in_block { print }
+  in_block && /^}$/ { exit }
+' "$MILL_SCRIPT")
 if grep -Fq 'push origin --delete "$task_branch"' <<< "$outer_cleanup" \
   && grep -Fq 'Deleted remote branch: $task_branch' <<< "$outer_cleanup"; then
   pass "outer cleanup deletes remote task branches"

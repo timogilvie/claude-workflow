@@ -601,7 +601,60 @@ else
 fi
 
 # ============================================================================
-# TEST 7: Abort prompt guidance regression guards
+# TEST 7: Hook-based status tracking guards
+# ============================================================================
+echo ""
+echo "=== Hook Status Tracking Guards ==="
+
+HOOK_DIR="$REPO_DIR/shared/hooks"
+if [[ -x "$HOOK_DIR/wavemill-hook-protocol.sh" ]] \
+  && [[ -x "$HOOK_DIR/claude-hook.sh" ]] \
+  && [[ -x "$HOOK_DIR/codex-hook.sh" ]]; then
+  pass "hook protocol and adapter scripts are present and executable"
+else
+  fail "hook protocol/adapters are missing or not executable"
+fi
+
+COMMON_LIB="$LIB_DIR/wavemill-common.sh"
+if grep -qE '^configure_agent_hooks\(\) \{' "$COMMON_LIB"; then
+  pass "common library defines configure_agent_hooks"
+else
+  fail "common library is missing configure_agent_hooks"
+fi
+
+if grep -q '\.claude/settings.local.json' "$COMMON_LIB" \
+  && grep -q '\.codex/hooks.json' "$COMMON_LIB" \
+  && grep -q 'SessionStart' "$COMMON_LIB" \
+  && grep -q 'Notification' "$COMMON_LIB"; then
+  pass "configure_agent_hooks configures claude and codex hook events"
+else
+  fail "configure_agent_hooks is missing claude/codex event wiring"
+fi
+
+if grep -qE '^agent_hook_detail\(\) \{' "$STATUS_SCRIPT" \
+  && grep -q '/tmp/wavemill-\${SESSION}-\${issue}\.hook' "$STATUS_SCRIPT" \
+  && grep -q 'staleness < 300' "$STATUS_SCRIPT" \
+  && grep -q 'working) st_str=' "$STATUS_SCRIPT" \
+  && grep -q 'idle)    st_str=' "$STATUS_SCRIPT" \
+  && grep -q 'waiting) st_str=' "$STATUS_SCRIPT" \
+  && grep -q 'error)   st_str=' "$STATUS_SCRIPT"; then
+  pass "dashboard reads fresh hook status/details and renders mapped states"
+else
+  fail "dashboard hook status consumption/rendering is incomplete"
+fi
+
+if grep -q 'export WAVEMILL_SESSION='\''$esc_session'\''' "$MILL_SCRIPT" \
+  && grep -q 'configure_agent_hooks "\$planner_agent"' "$MILL_SCRIPT" \
+  && grep -q 'configure_agent_hooks "\$coder_agent"' "$MILL_SCRIPT" \
+  && grep -q 'configure_agent_hooks "\$reviewer_agent"' "$MILL_SCRIPT" \
+  && grep -q 'configure_agent_hooks "\$task_agent_cmd"' "$MILL_SCRIPT"; then
+  pass "mill exports wavemill hook env vars and configures hooks at launch"
+else
+  fail "mill hook env export/configure wiring is missing"
+fi
+
+# ============================================================================
+# TEST 8: Abort prompt guidance regression guards
 # ============================================================================
 echo ""
 echo "=== Abort Prompt Guidance Guards ==="

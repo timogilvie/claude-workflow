@@ -516,6 +516,7 @@ cleanup_completed_task() {
 
   # Clean up state
   execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   remove_task_state "$issue"
   CLEANED["$issue"]=1
 
@@ -2155,13 +2156,22 @@ _launch_agent_in_pane() {
   local target="$1" agent_cmd="$2" model="$3" prompt_file="$4" slug="${5:-}"
   local session="${target%%:*}"
   local window="${target#*:}"
+  local issue="${window%%-*}"
   local agent_flags=""
   local abort_check_cmd=""
+  local esc_session esc_issue esc_slug
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
     local feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
     abort_check_cmd="check_stage_aborted '$feature_dir'"
   fi
+
+  esc_session=${session//\'/\'\\\'\'}
+  esc_issue=${issue//\'/\'\\\'\'}
+  esc_slug=${slug//\'/\'\\\'\'}
+  tmux send-keys -t "$target" \
+    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_SLUG='$esc_slug'" C-m
+
   agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd"
 }
 
@@ -2172,6 +2182,7 @@ launch_planning_phase() {
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  configure_agent_hooks "$planner_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -2198,6 +2209,7 @@ launch_coding_phase() {
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  configure_agent_hooks "$coder_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -2224,6 +2236,7 @@ launch_review_phase() {
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  configure_agent_hooks "$reviewer_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -2794,6 +2807,7 @@ cleanup_completed_task() {
 
   # Clean up state
   git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   remove_task_state "$issue"
   CLEANED["$issue"]=1
 
@@ -3410,6 +3424,10 @@ Implement from the issue description plus direct codebase analysis."
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
       "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" > "$instr_file"
+
+    configure_agent_hooks "$task_agent_cmd" "$wt_dir" "$REPO_DIR"
+    tmux send-keys -t "$SESSION:$win" \
+      "export WAVEMILL_SESSION='${SESSION//\'/\'\\\'\'}' WAVEMILL_ISSUE='${issue//\'/\'\\\'\'}' WAVEMILL_SLUG='${slug//\'/\'\\\'\'}'" C-m
 
     # Use coder model for implementation phase
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model"

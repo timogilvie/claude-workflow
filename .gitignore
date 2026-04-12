@@ -30,6 +30,7 @@ npm-debug.log*
 
 # Local settings (machine-specific permissions)
 .claude/settings.local.json
+.codex/hooks.json
 
 # Workspace artifacts
 features/*/
