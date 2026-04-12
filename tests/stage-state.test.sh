@@ -382,6 +382,25 @@ simulate_planning_transition() {
   echo "needs_attention"
 }
 
+simulate_approval_wait_log() {
+  local issue="$1"
+  local approval_wait_var="_approval_wait_logged_${issue//[^a-zA-Z0-9]/_}"
+
+  if [[ "${!approval_wait_var:-}" != "true" ]]; then
+    printf -v "$approval_wait_var" '%s' "true"
+    LAST_APPROVAL_WAIT_LOG_RESULT="logged"
+    return 0
+  fi
+
+  LAST_APPROVAL_WAIT_LOG_RESULT="skipped"
+}
+
+reset_approval_wait_log() {
+  local issue="$1"
+  local approval_wait_var="_approval_wait_logged_${issue//[^a-zA-Z0-9]/_}"
+  unset "$approval_wait_var" 2>/dev/null || true
+}
+
 simulate_coding_transition() {
   local feature_dir="$1"
   local coding_status
@@ -1078,6 +1097,23 @@ touch "$FD58/.plan-approved"
 check "adding .plan-approved completes planning" "completed" "$(simulate_planning_transition "$FD58")"
 check "planning status is completed after marker" "completed" "$(read_stage_status "$FD58" "planning")"
 PANE_IS_DEAD_OR_IDLE=false
+
+# Test 59: HOK-1216 — approval-wait log is emitted only once per wait session
+reset_approval_wait_log "TEST-59"
+simulate_approval_wait_log "TEST-59"
+check "approval-wait log emits on first idle iteration" "logged" "$LAST_APPROVAL_WAIT_LOG_RESULT"
+simulate_approval_wait_log "TEST-59"
+check "approval-wait log is suppressed on repeat idle iteration" "skipped" "$LAST_APPROVAL_WAIT_LOG_RESULT"
+simulate_approval_wait_log "TEST-59"
+check "approval-wait log stays suppressed on later idle iteration" "skipped" "$LAST_APPROVAL_WAIT_LOG_RESULT"
+
+# Test 60: HOK-1216 — approval-wait log guard resets after approval/new cycle
+reset_approval_wait_log "TEST-60"
+simulate_approval_wait_log "TEST-60"
+check "approval-wait log emits before reset" "logged" "$LAST_APPROVAL_WAIT_LOG_RESULT"
+reset_approval_wait_log "TEST-60"
+simulate_approval_wait_log "TEST-60"
+check "approval-wait log emits again after reset" "logged" "$LAST_APPROVAL_WAIT_LOG_RESULT"
 
 # ─────────────────────────────────────────────────────────────────
 echo ""
