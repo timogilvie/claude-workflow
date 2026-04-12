@@ -509,3 +509,83 @@ set_task_phase() {
      '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
      "$state_file" > "$tmp" && mv "$tmp" "$state_file"
 }
+
+# ============================================================================
+# Hook Configuration
+# ============================================================================
+
+# Configure agent hooks for status tracking in a worktree-specific settings file.
+# This writes to .claude/settings.local.json (gitignored) so hooks only affect
+# wavemill-launched agents, not standalone Claude usage.
+#
+# Args: $1 = agent_cmd (claude|codex), $2 = worktree_dir, $3 = repo_dir
+configure_agent_hooks() {
+  local agent_cmd="$1" worktree_dir="$2" repo_dir="$3"
+  local hooks_dir="$repo_dir/shared/hooks"
+  local claude_hook="$hooks_dir/claude-status-hook.sh"
+  local tmp config_file
+
+  # Gracefully skip if jq is unavailable or worktree is invalid
+  command -v jq >/dev/null 2>&1 || return 0
+  [[ -n "$worktree_dir" && -d "$worktree_dir" ]] || return 0
+
+  case "$agent_cmd" in
+    claude)
+      # Verify hook script exists and is executable
+      if [[ ! -x "$claude_hook" ]]; then
+        log "warn" "  Hook status unavailable (missing $claude_hook)"
+        return 0
+      fi
+
+      # Create .claude directory if needed
+      mkdir -p "$worktree_dir/.claude"
+      config_file="$worktree_dir/.claude/settings.local.json"
+
+      # Initialize or validate existing config
+      if [[ ! -f "$config_file" ]]; then
+        printf '{}\n' > "$config_file"
+      elif ! jq empty "$config_file" >/dev/null 2>&1; then
+        log "warn" "  Invalid JSON in $config_file, resetting local hook config"
+        printf '{}\n' > "$config_file"
+      fi
+
+      # Merge hook configuration using jq (atomic via tmp + mv)
+      tmp=$(mktemp) || {
+        log "warn" "  Failed to allocate temp file for Claude hook config"
+        return 0
+      }
+
+      if jq \
+        --arg hook_cmd "$claude_hook" \
+        '
+        . as $base |
+        ($base.hooks // {}) as $hooks |
+        $base + {
+          hooks: ($hooks + {
+            UserPromptSubmit: (($hooks.UserPromptSubmit // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            PreToolUse: (($hooks.PreToolUse // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            Stop: (($hooks.Stop // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            StopFailure: (($hooks.StopFailure // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            Notification: (($hooks.Notification // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command))
+          })
+        }
+        ' "$config_file" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$config_file"
+        log "info" "  Configured Claude hook status in $config_file"
+      else
+        rm -f "$tmp"
+        log "warn" "  Failed to write Claude hook config at $config_file"
+      fi
+      ;;
+
+    codex)
+      # Codex uses event stream piped through monitor - no config file needed
+      log "info" "  Codex status tracking via JSONL event stream"
+      ;;
+
+    *)
+      # Generic agents use process monitoring - no config needed
+      log "info" "  Generic agent status tracking via process monitor"
+      ;;
+  esac
+}

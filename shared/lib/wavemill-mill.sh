@@ -698,6 +698,7 @@ cleanup_completed_task() {
 
   # Clean up state
   execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   remove_task_state "$issue"
   CLEANED["$issue"]=1
 
@@ -2315,17 +2316,29 @@ _ensure_window_exists() {
 #   $2 = agent command (claude/codex)
 #   $3 = model ID
 #   $4 = path to prompt file
+#   $5 = slug (optional)
+#   $6 = issue ID (optional)
 _launch_agent_in_pane() {
-  local target="$1" agent_cmd="$2" model="$3" prompt_file="$4" slug="${5:-}"
+  local target="$1" agent_cmd="$2" model="$3" prompt_file="$4" slug="${5:-}" issue="${6:-}"
   local session="${target%%:*}"
   local window="${target#*:}"
   local agent_flags=""
   local abort_check_cmd=""
+  local esc_session esc_issue esc_slug
+
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
     local feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
     abort_check_cmd="check_stage_aborted '$feature_dir'"
   fi
+
+  # Export wavemill context environment variables for hook protocol
+  esc_session=${session//\'/\'\\\'\'}
+  esc_issue=${issue//\'/\'\\\'\'}
+  esc_slug=${slug//\'/\'\\\'\'}
+  tmux send-keys -t "$target" \
+    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_SLUG='$esc_slug'" C-m
+
   agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd"
 }
 
@@ -2336,6 +2349,7 @@ launch_planning_phase() {
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  configure_agent_hooks "$planner_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -2351,7 +2365,7 @@ $issue_desc
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$prompt_file"
 
   log "status" "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
-  _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug"
+  _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
 
@@ -2362,6 +2376,7 @@ launch_coding_phase() {
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  configure_agent_hooks "$coder_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -2377,7 +2392,7 @@ $issue_desc
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" > "$prompt_file"
 
   log "status" "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
-  _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug"
+  _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
 
@@ -2388,6 +2403,7 @@ launch_review_phase() {
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  configure_agent_hooks "$reviewer_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
   local issue_json issue_desc issue_context
@@ -2403,7 +2419,7 @@ $issue_desc
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" > "$prompt_file"
 
   log "status" "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
-  _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug"
+  _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
 
@@ -2993,6 +3009,7 @@ cleanup_completed_task() {
 
   # Clean up state
   git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   remove_task_state "$issue"
   CLEANED["$issue"]=1
 
@@ -3611,7 +3628,7 @@ Implement from the issue description plus direct codebase analysis."
       "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" > "$instr_file"
 
     # Use coder model for implementation phase
-    agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model"
+    agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model" "$issue"
   fi
 
   log "status" "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
