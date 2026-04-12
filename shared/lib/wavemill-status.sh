@@ -65,7 +65,16 @@ agent_reported_status() {
   local issue="$1"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   if [[ -f "$status_file" ]]; then
-    head -1 "$status_file" 2>/dev/null | cut -c1-40
+    local raw_status
+    raw_status=$(head -1 "$status_file" 2>/dev/null | tr -d '\r' | cut -c1-40)
+    case "$raw_status" in
+      working|waiting|done)
+        echo "$raw_status"
+        ;;
+      *)
+        echo "$raw_status"
+        ;;
+    esac
   fi
 }
 
@@ -244,10 +253,14 @@ while true; do
         st_str="${G}✓ merged${N}"
       else
         agent_state=$(agent_status "$win")
-        case "$agent_state" in
-          running) st_str="${G}● running${N}" ;;
-          exited)  st_str="${Y}○ exited${N}" ;;
-          *)       st_str="${D}  done${N}"   ;;
+        reported=$(agent_reported_status "$issue")
+        case "$agent_state:$reported" in
+          exited:*)     st_str="${D}○ exited${N}" ;;
+          running:working) st_str="${G}● working${N}" ;;
+          running:waiting) st_str="${Y}⏳ waiting${N}" ;;
+          running:done)    st_str="${D}● idle${N}" ;;
+          running:*)       st_str="${G}● running${N}" ;;
+          *)               st_str="${D}  done${N}" ;;
         esac
       fi
 
@@ -297,10 +310,14 @@ while true; do
       printf "%-10s  %-22s  %6s  %-12b  %-11b  %b\n" "$issue" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
       # Show agent-reported status on a second line (if available)
-      reported=$(agent_reported_status "$issue")
       if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
         reported="Plan ready — waiting for approval"
       fi
+      case "$reported" in
+        working|waiting|done)
+          reported=""
+          ;;
+      esac
       if [[ -n "$reported" ]]; then
         printf "${D}%10s  └─ %s${N}\n" "" "$reported" >> "$FRAME"
       fi

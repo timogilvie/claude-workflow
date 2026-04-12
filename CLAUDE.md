@@ -115,6 +115,24 @@ Use `docs/prompt-locations.md` as the canonical registry for agent instruction l
 - `commands/bugfix.md` - Bug workflow does not include self-review.
 - `commands/implement-plan.md` - Does not define self-review; `/workflow` owns it.
 
+## Hook-Based Status Tracking
+
+Wavemill tracks agent lifecycle with a shared status file contract at `/tmp/${SESSION}-${ISSUE}-status.txt`.
+
+- Claude writes lifecycle state through project hooks in [.claude/settings.json](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/.claude/settings.json).
+- Codex autonomous runs write lifecycle state by piping `codex exec --json` through [shared/hooks/codex-status-monitor.sh](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/shared/hooks/codex-status-monitor.sh).
+- Other agent CLIs fall back to [shared/hooks/process-status-monitor.sh](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/shared/hooks/process-status-monitor.sh), which infers activity from child processes.
+- All adapters write through [shared/hooks/wavemill-status-writer.sh](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/shared/hooks/wavemill-status-writer.sh), so the dashboard consumes one stable format.
+
+Recognized machine statuses are `working`, `waiting`, and `done`. Free-text status lines are still supported for richer manual progress reporting from prompts.
+
+To add a new agent adapter:
+
+1. Prefer native hooks if the CLI exposes them.
+2. Otherwise prefer a structured event stream monitor.
+3. Fall back to the process monitor if neither exists.
+4. Wire `WAVEMILL_SESSION` and `WAVEMILL_ISSUE` through the launcher path and keep writes going through the shared status writer.
+
 ### Prompt Version Registry
 
 Template usage is automatically logged to `.wavemill/evals/prompt-registry.jsonl` for GEPA training attribution. Each entry captures:
