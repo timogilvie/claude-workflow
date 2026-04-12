@@ -2016,6 +2016,28 @@ read_phase_config() {
   fi
 }
 
+resolve_phase_model() {
+  local stage="$1" model="${2:-}" fallback_model="$3"
+
+  if [[ -z "$model" ]]; then
+    printf '%s\n' "$fallback_model"
+    return 0
+  fi
+
+  if agent_validate_model "$model" "$REPO_DIR" >/dev/null 2>&1; then
+    printf '%s\n' "$model"
+    return 0
+  fi
+
+  if agent_model_looks_like_depth_tag "$model"; then
+    log_warn "  Invalid ${stage} model '$model' looks like a depth tag; using '$fallback_model'"
+  else
+    log_warn "  Invalid ${stage} model '$model'; using '$fallback_model'"
+  fi
+
+  printf '%s\n' "$fallback_model"
+}
+
 # Ensure a tmux window exists, creating it if missing (e.g. after monitor restart).
 _ensure_window_exists() {
   local session="$1" win="$2" wt_dir="$3"
@@ -3505,6 +3527,10 @@ monitor_issue_state() {
                 review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
               fi
 
+              planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-4-5-20250929")"
+              coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-6")"
+              reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-5-20250929")"
+
               # Save routing results to state
               current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
               linear_issue=$(get_linear_issue_id "$ISSUE")
@@ -3515,6 +3541,7 @@ monitor_issue_state() {
 
               # Transition to planning phase
               set_task_phase "$ISSUE" "planning"
+              planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-4-5-20250929")"
               planner_agent="$(agent_resolve_from_model "$planner_model")"
 
               # Get title from state or Linear
@@ -3589,7 +3616,7 @@ monitor_issue_state() {
           fi
 
           if [[ "$resolved_phase" == "coding" ]]; then
-            # Record approval via approve_plan (HOK-1193: writes completed + legacy marker)
+            # Record approval via approve_plan (HOK-1193: controller-owned stage result)
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
             # FORCE_MODEL takes priority, then challenge, then state, then default
@@ -3604,7 +3631,7 @@ monitor_issue_state() {
                 coder_model="$challenge_coder"
               fi
             fi
-            [[ -z "$coder_model" ]] && coder_model="claude-opus-4-6"
+            coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-6")"
             code_depth=$(read_phase_config "$FEATURE_DIR" "coding" "depth")
             [[ -z "$code_depth" ]] && code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
@@ -3720,7 +3747,7 @@ monitor_issue_state() {
               reviewer_model=$(read_phase_config "$FEATURE_DIR" "review" "model")
               [[ -z "$reviewer_model" ]] && reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
             fi
-            [[ -z "$reviewer_model" ]] && reviewer_model="claude-sonnet-4-5-20250929"
+            reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-5-20250929")"
             review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
             [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")
             [[ -z "$review_mode" ]] && review_mode="static"

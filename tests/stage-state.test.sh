@@ -36,6 +36,26 @@ _CFG_READY_ENABLED="true"
 log() { :; }
 log_warn() { :; }
 agent_resolve_from_model() { echo "claude"; }
+agent_validate_model() {
+  case "$1" in
+    claude-*|gpt-*|o[0-9]*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+agent_model_looks_like_depth_tag() {
+  case "$1" in
+    light|medium|deep|standard|fast)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
 # Source only the functions we need — the mill script sources common first
 # We need to source common, but it expects certain env vars
@@ -211,6 +231,28 @@ read_phase_config() {
   else
     echo ""
   fi
+}
+
+resolve_phase_model() {
+  local stage="$1" model="${2:-}" fallback_model="$3"
+
+  if [[ -z "$model" ]]; then
+    printf '%s\n' "$fallback_model"
+    return 0
+  fi
+
+  if agent_validate_model "$model" "$REPO_DIR" >/dev/null 2>&1; then
+    printf '%s\n' "$model"
+    return 0
+  fi
+
+  if agent_model_looks_like_depth_tag "$model"; then
+    log_warn "invalid ${stage} model depth tag"
+  else
+    log_warn "invalid ${stage} model"
+  fi
+
+  printf '%s\n' "$fallback_model"
 }
 
 resolve_phase() {
@@ -575,53 +617,62 @@ check "forceModel set" "forced" "$(jq -r '.forceModel' "$FD13/.phase-config.json
 # Test 18: missing config file
 check "read missing config" "" "$(read_phase_config "$TEST_DIR/nonexistent" "planning" "model")"
 
+# Test 19: valid stage model is preserved
+check "resolve valid review model" "gpt-5.4" "$(resolve_phase_model "review" "gpt-5.4" "claude-sonnet-4-5-20250929")"
+
+# Test 20: depth tag falls back to stage default
+check "resolve deep tag fallback" "claude-sonnet-4-5-20250929" "$(resolve_phase_model "review" "deep" "claude-sonnet-4-5-20250929")"
+
+# Test 21: unknown model falls back to stage default
+check "resolve unknown model fallback" "claude-opus-4-6" "$(resolve_phase_model "coding" "not-a-model" "claude-opus-4-6")"
+
 # ─────────────────────────────────────────────────────────────────
 echo ""
 echo "=== resolve_phase Tests ==="
 # ─────────────────────────────────────────────────────────────────
 
-# Test 19: Empty dir → planning
+# Test 22: Empty dir → planning
 FD19="$TEST_DIR/test19"
 mkdir -p "$FD19"
 check "empty dir → planning" "planning" "$(resolve_phase "$FD19")"
 check "persisted phase matches" "planning" "$(cat "$FD19/.resolved-phase")"
 
-# Test 20: Non-existent dir → unknown
+# Test 23: Non-existent dir → unknown
 check "non-existent dir → unknown" "unknown" "$(resolve_phase "$TEST_DIR/nonexistent-dir")"
 
-# Test 21: Planning running
+# Test 24: Planning running
 FD21="$TEST_DIR/test21"
 mkdir -p "$FD21"
 write_stage_result "$FD21" "planning" "running" "claude" "opus"
 check "planning running → planning" "planning" "$(resolve_phase "$FD21")"
 
-# Test 22: Planning awaiting_user
+# Test 25: Planning awaiting_user
 FD22="$TEST_DIR/test22"
 mkdir -p "$FD22"
 write_stage_result "$FD22" "planning" "awaiting_user" "claude" "opus"
 check "planning awaiting_user → awaiting_user" "awaiting_user" "$(resolve_phase "$FD22")"
 
-# Test 23: Planning completed
+# Test 26: Planning completed
 FD23="$TEST_DIR/test23"
 mkdir -p "$FD23"
 write_stage_result "$FD23" "planning" "completed" "claude" "opus"
 check "planning completed → coding" "coding" "$(resolve_phase "$FD23")"
 
-# Test 24: Coding running
+# Test 27: Coding running
 FD24="$TEST_DIR/test24"
 mkdir -p "$FD24"
 write_stage_result "$FD24" "planning" "completed" "claude" "opus"
 write_stage_result "$FD24" "coding" "running" "claude" "opus"
 check "coding running → coding" "coding" "$(resolve_phase "$FD24")"
 
-# Test 25: Coding completed
+# Test 28: Coding completed
 FD25="$TEST_DIR/test25"
 mkdir -p "$FD25"
 write_stage_result "$FD25" "planning" "completed" "claude" "opus"
 write_stage_result "$FD25" "coding" "completed" "claude" "opus"
 check "coding completed → review" "review" "$(resolve_phase "$FD25")"
 
-# Test 26: Review running
+# Test 29: Review running
 FD26="$TEST_DIR/test26"
 mkdir -p "$FD26"
 write_stage_result "$FD26" "planning" "completed" "claude" "opus"
@@ -629,7 +680,7 @@ write_stage_result "$FD26" "coding" "completed" "claude" "opus"
 write_stage_result "$FD26" "review" "running" "claude" "opus"
 check "review running → review" "review" "$(resolve_phase "$FD26")"
 
-# Test 27: Review completed
+# Test 30: Review completed
 FD27="$TEST_DIR/test27"
 mkdir -p "$FD27"
 write_stage_result "$FD27" "planning" "completed" "claude" "opus"
@@ -637,7 +688,7 @@ write_stage_result "$FD27" "coding" "completed" "claude" "opus"
 write_stage_result "$FD27" "review" "completed" "claude" "opus"
 check "review completed → ready" "ready" "$(resolve_phase "$FD27")"
 
-# Test 28: Ready completed
+# Test 31: Ready completed
 FD28="$TEST_DIR/test28"
 mkdir -p "$FD28"
 write_stage_result "$FD28" "planning" "completed" "claude" "opus"
@@ -646,13 +697,13 @@ write_stage_result "$FD28" "review" "completed" "claude" "opus"
 write_stage_result "$FD28" "ready" "completed" "claude" "opus"
 check "ready completed → ready" "ready" "$(resolve_phase "$FD28")"
 
-# Test 29: Aborted (stage result)
+# Test 32: Aborted (stage result)
 FD29="$TEST_DIR/test29"
 mkdir -p "$FD29"
 write_stage_result "$FD29" "planning" "aborted" "claude" "opus"
 check "aborted via stage result → aborted" "aborted" "$(resolve_phase "$FD29")"
 
-# Test 30: Aborted (legacy marker)
+# Test 33: Aborted (legacy marker)
 FD30="$TEST_DIR/test30"
 mkdir -p "$FD30"
 touch "$FD30/.workflow-aborted"
@@ -970,7 +1021,7 @@ touch "$FD54B/plan.md"
 PANE_IS_DEAD_OR_IDLE=true
 check "plan approval auto-captures on idle pane" "completed" "$(simulate_planning_transition "$FD54B")"
 check "auto-capture writes completed planning status" "completed" "$(read_stage_status "$FD54B" "planning")"
-check "auto-capture writes legacy approval marker" "yes" "$([[ -f "$FD54B/.plan-approved" ]] && echo yes || echo no)"
+check "auto-capture avoids legacy approval marker" "no" "$([[ -f "$FD54B/.plan-approved" ]] && echo yes || echo no)"
 
 # Test 54c: No auto-approval without plan.md
 FD54C="$TEST_DIR/test54c"
