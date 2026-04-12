@@ -943,9 +943,39 @@ LAUNCHEOF
 
   chmod +x "$launcher"
   printf -v launcher_cmd '%q' "$launcher"
-  tmux send-keys -t "$session:$window" -l -- "$launcher_cmd"
-  sleep 0.1
-  tmux send-keys -t "$session:$window" C-m
+
+  local max_retries="${AGENT_LAUNCH_MAX_RETRIES:-3}"
+  local settle_delay="${AGENT_LAUNCH_SETTLE_DELAY:-0.2}"
+  local enter_delay="${AGENT_LAUNCH_ENTER_DELAY:-0.2}"
+  local retry_delay="${AGENT_LAUNCH_RETRY_DELAY:-0.5}"
+  local verify_wait="${AGENT_LAUNCH_VERIFY_WAIT:-5}"
+  local verify_poll="${AGENT_LAUNCH_VERIFY_POLL:-0.3}"
+  local retry=0
+
+  while (( retry < max_retries )); do
+    if (( retry > 0 )); then
+      _agent_log_warn "  Retry $retry/$((max_retries - 1)): re-dispatching launcher to $session:$window"
+      sleep "$retry_delay"
+    fi
+
+    # A shell can report as the current pane command slightly before readline
+    # is actually ready to consume pasted input after a respawn or prior exit.
+    sleep "$settle_delay"
+    tmux send-keys -t "$session:$window" -l -- "$launcher_cmd"
+    sleep "$enter_delay"
+    tmux send-keys -t "$session:$window" C-m
+
+    if agent_verify_launch "$session" "$window" "$verify_wait" "$verify_poll"; then
+      return 0
+    fi
+
+    tmux send-keys -t "$session:$window" C-c 2>/dev/null || true
+    sleep "$enter_delay"
+    (( retry += 1 ))
+  done
+
+  _agent_log_warn "  FAILED: launcher did not start in $session:$window after $max_retries attempts"
+  return 1
 }
 
 # ============================================================================
@@ -1136,6 +1166,50 @@ agent_pane_is_ready() {
   local children
   children=$(_pane_child_count "$target")
   [[ "$children" == "0" ]]
+}
+
+# Verify that a launched command actually started in the pane.
+# Returns 0 once the pane leaves an idle shell state, 1 on timeout.
+#
+# Args:
+#   $1 = tmux session name
+#   $2 = tmux window name
+#   $3 = max wait seconds (optional, default 5)
+#   $4 = poll interval seconds (optional, default 0.3)
+agent_verify_launch() {
+  local session="$1"
+  local window="$2"
+  local max_wait="${3:-5}"
+  local poll_interval="${4:-0.3}"
+  local target="$session:$window"
+
+  local attempts
+  attempts=$(awk "BEGIN { v = $max_wait / $poll_interval; if (v < 1) v = 1; printf \"%d\", (v == int(v) ? v : int(v) + 1) }")
+
+  local attempt=1
+  while (( attempt <= attempts )); do
+    local current_command
+    current_command=$(_pane_current_command "$target")
+    if [[ -n "$current_command" ]] && ! _pane_command_is_shell "$current_command"; then
+      _agent_log_debug "Launch verified: pane $target running '$current_command' (attempt $attempt/$attempts)"
+      return 0
+    fi
+
+    local children
+    children=$(_pane_child_count "$target")
+    if [[ -n "$children" ]] && (( children > 0 )); then
+      _agent_log_debug "Launch verified: pane $target has $children child process(es) (attempt $attempt/$attempts)"
+      return 0
+    fi
+
+    if (( attempt < attempts )); then
+      sleep "$poll_interval"
+    fi
+    (( attempt += 1 ))
+  done
+
+  _agent_log_warn "Launch not verified: pane $target remained at an idle shell for ${max_wait}s"
+  return 1
 }
 
 agent_wait_for_pane_ready() {
