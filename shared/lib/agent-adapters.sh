@@ -991,6 +991,25 @@ _agent_log_warn() {
   echo "$(date '+%H:%M:%S') WARN: $*" >&2
 }
 
+# Recursively kill all descendant processes of a given PID.
+# Walks the process tree depth-first so children die before parents,
+# preventing orphan re-parenting races.  The root PID itself is NOT
+# killed — only its descendants — so the pane shell survives.
+#
+# Args:
+#   $1 = parent PID whose descendants to kill
+#   $2 = signal name (optional, default TERM)
+_kill_descendant_processes() {
+  local parent_pid="$1"
+  local signal="${2:-TERM}"
+  local child_pids
+  child_pids=$(pgrep -P "$parent_pid" 2>/dev/null || true)
+  for pid in $child_pids; do
+    _kill_descendant_processes "$pid" "$signal"
+    kill -"$signal" "$pid" 2>/dev/null || true
+  done
+}
+
 _pane_current_command() {
   local target="$1"
   tmux display-message -t "$target" -p '#{pane_current_command}' 2>/dev/null || true
@@ -1072,15 +1091,18 @@ agent_terminate_in_pane() {
   fi
 
   # --- Phase 1: Polite exit ---
-  # Ctrl-C interrupts any in-progress generation in Claude Code
+  # Ctrl-C interrupts any in-progress generation in Claude Code.
+  # Wait 0.8s (not 0.3s) so the agent can fully process the interrupt
+  # and return to its input prompt before we send /exit.
   tmux send-keys -t "$target" C-c 2>/dev/null || true
-  sleep 0.3
+  sleep 0.8
 
   if _pane_is_dead_or_idle "$target"; then return 0; fi
 
-  # /exit is the canonical way to exit Claude Code
+  # /exit is the canonical way to exit Claude Code.
+  # Wait 1.0s (not 0.5s) for cleanup (memory writes, tool teardown).
   tmux send-keys -t "$target" "/exit" C-m 2>/dev/null || true
-  sleep 0.5
+  sleep 1.0
 
   if _pane_is_dead_or_idle "$target"; then return 0; fi
 
@@ -1118,14 +1140,16 @@ agent_terminate_in_pane() {
     return 0
   fi
 
-  # Last resort: directly kill child processes of the pane shell
+  # Last resort: recursively kill the entire descendant tree of the pane
+  # shell.  pkill -P only kills direct children; the actual tree is often
+  # 3+ levels deep (shell → launcher.sh → node/claude → subprocesses).
   local pane_pid
   pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
   if [[ -n "$pane_pid" ]]; then
-    pkill -TERM -P "$pane_pid" 2>/dev/null || true
+    _kill_descendant_processes "$pane_pid" TERM
     sleep 1
     if ! _pane_is_dead_or_idle "$target"; then
-      pkill -KILL -P "$pane_pid" 2>/dev/null || true
+      _kill_descendant_processes "$pane_pid" KILL
       sleep 0.5
     fi
   fi
@@ -1268,18 +1292,18 @@ agent_prepare_pane_for_launch() {
     return 2
   fi
 
-  _agent_log_warn "  Pane $target not ready, force-killing children..."
+  _agent_log_warn "  Pane $target not ready, force-killing descendant tree..."
   local pane_pid
   pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
   if [[ -n "$pane_pid" ]]; then
-    pkill -TERM -P "$pane_pid" 2>/dev/null || true
+    _kill_descendant_processes "$pane_pid" TERM
     sleep 0.5
     agent_wait_for_pane_ready "$session" "$window" 1 0.2 "$abort_check_cmd"
     ready_rc=$?
     if [[ "$ready_rc" -eq 2 ]]; then
       return 2
     elif [[ "$ready_rc" -ne 0 ]]; then
-      pkill -KILL -P "$pane_pid" 2>/dev/null || true
+      _kill_descendant_processes "$pane_pid" KILL
       sleep 0.5
     fi
   fi
@@ -1301,7 +1325,8 @@ agent_prepare_pane_for_launch() {
   if [[ "$ready_rc" -eq 2 ]]; then
     return 2
   elif [[ "$ready_rc" -ne 0 ]]; then
-    _agent_log_warn "  Pane $target still not ready after respawn; launching anyway"
+    _agent_log_warn "  Pane $target still not ready after respawn; aborting launch"
+    return 1
   fi
 }
 
