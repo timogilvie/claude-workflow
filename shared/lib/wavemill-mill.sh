@@ -1060,7 +1060,11 @@ cleanup_stale_tasks() {
 
 check_and_offer_resume() {
   local remaining_count
-  remaining_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
+  remaining_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null)
+  if [[ -z "$remaining_count" ]]; then
+    log "warn" "State file may be corrupted or unreadable, treating as empty"
+    remaining_count=0
+  fi
   (( remaining_count == 0 )) && return 0  # No tasks to resume
 
   echo ""
@@ -3368,10 +3372,17 @@ launch_task() {
   LAST_LAUNCHED_SLOTS=1
 
   # [REQ-F6] Prevent double-rehydration: Skip if task was already launched at startup
+  # AND its pane is still alive. If the pane died, we should re-launch.
   if [[ -f "/tmp/${SESSION}-rehydrated-at-startup.txt" ]] && \
      grep -qxF "$issue" "/tmp/${SESSION}-rehydrated-at-startup.txt" 2>/dev/null; then
-    log "debug" "  Task $issue was already rehydrated at startup, skipping launch"
-    return 0
+    local win="$issue-$slug"
+    # Check if pane exists and is alive
+    if tmux list-panes -t "$SESSION:$win" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+      log "debug" "  Task $issue was already rehydrated at startup and pane is alive, skipping launch"
+      return 0
+    else
+      log "info" "  Task $issue was rehydrated at startup but pane died, re-launching"
+    fi
   fi
 
   linear_issue=$(get_linear_issue_id "$issue")
