@@ -709,6 +709,10 @@ agent_prepare_pane_for_launch() {
   return 0
 }
 
+agent_verify_launch() {
+  return 0
+}
+
 CODEX_PROMPT_FILE="$PROMPT_RENDER_DIR/interactive-codex-prompt.txt"
 printf 'planning prompt\n' > "$CODEX_PROMPT_FILE"
 agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4"
@@ -734,6 +738,118 @@ if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
 else
   fail "interactive Codex launcher is missing exit status echo"
 fi
+
+echo ""
+echo "=== Interactive Launch Verification ==="
+
+unset -f agent_verify_launch
+# shellcheck source=/dev/null
+source "$LIB_DIR/agent-adapters.sh"
+sleep() { :; }
+
+VERIFY_TMUX_MODE="idle"
+VERIFY_TMUX_CHILDREN=0
+tmux() {
+  case "${1:-}" in
+    display-message)
+      if [[ "${*: -1}" == '#{pane_current_command}' ]]; then
+        case "$VERIFY_TMUX_MODE" in
+          idle) echo "zsh" ;;
+          running) echo "codex" ;;
+          shell-child) echo "zsh" ;;
+        esac
+      elif [[ "${*: -1}" == '#{pane_pid}' ]]; then
+        echo "$$"
+      fi
+      return 0
+      ;;
+  esac
+  return 0
+}
+pgrep() {
+  if [[ "${1:-}" == "-P" ]]; then
+    local count="${VERIFY_TMUX_CHILDREN:-0}"
+    local i=0
+    while (( i < count )); do
+      echo $((1000 + i))
+      (( i += 1 ))
+    done
+    return 0
+  fi
+  return 1
+}
+
+VERIFY_TMUX_MODE="running"
+VERIFY_TMUX_CHILDREN=0
+if agent_verify_launch "wavemill-test" "planning" 0.1 0.05; then
+  pass "agent_verify_launch succeeds when pane command leaves the shell"
+else
+  fail "agent_verify_launch did not detect a non-shell pane command"
+fi
+
+VERIFY_TMUX_MODE="shell-child"
+VERIFY_TMUX_CHILDREN=2
+if agent_verify_launch "wavemill-test" "planning" 0.1 0.05; then
+  pass "agent_verify_launch succeeds when the shell has child processes"
+else
+  fail "agent_verify_launch did not detect shell child processes"
+fi
+
+VERIFY_TMUX_MODE="idle"
+VERIFY_TMUX_CHILDREN=0
+if agent_verify_launch "wavemill-test" "planning" 0.1 0.05; then
+  fail "agent_verify_launch reported success for an idle shell"
+else
+  pass "agent_verify_launch fails when the pane stays idle"
+fi
+
+LAUNCH_VERIFY_RESULTS=(1 0)
+LAUNCH_VERIFY_INDEX=0
+LAUNCH_SEND_KEYS=0
+tmux() {
+  if [[ "${1:-}" == "send-keys" ]]; then
+    LAUNCH_SEND_KEYS=$((LAUNCH_SEND_KEYS + 1))
+  fi
+  return 0
+}
+agent_prepare_pane_for_launch() {
+  return 0
+}
+agent_verify_launch() {
+  local result="${LAUNCH_VERIFY_RESULTS[$LAUNCH_VERIFY_INDEX]:-1}"
+  LAUNCH_VERIFY_INDEX=$((LAUNCH_VERIFY_INDEX + 1))
+  return "$result"
+}
+AGENT_LAUNCH_MAX_RETRIES=2
+AGENT_LAUNCH_SETTLE_DELAY=0
+AGENT_LAUNCH_ENTER_DELAY=0
+AGENT_LAUNCH_RETRY_DELAY=0
+printf 'retry prompt\n' > "$CODEX_PROMPT_FILE"
+if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4" ""; then
+  if [[ "$LAUNCH_VERIFY_INDEX" -eq 2 ]] && [[ "$LAUNCH_SEND_KEYS" -ge 5 ]]; then
+    pass "agent_launch_interactive retries dispatch after a failed verification"
+  else
+    fail "agent_launch_interactive did not perform the expected retry sequence"
+  fi
+else
+  fail "agent_launch_interactive should have succeeded after a retry"
+fi
+
+LAUNCH_VERIFY_RESULTS=(1)
+LAUNCH_VERIFY_INDEX=0
+LAUNCH_SEND_KEYS=0
+AGENT_LAUNCH_MAX_RETRIES=1
+if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4" ""; then
+  fail "agent_launch_interactive succeeded even though verification never passed"
+else
+  if [[ "$LAUNCH_VERIFY_INDEX" -eq 1 ]] && [[ "$LAUNCH_SEND_KEYS" -ge 3 ]]; then
+    pass "agent_launch_interactive returns failure when launch verification never passes"
+  else
+    fail "agent_launch_interactive failure path did not execute the expected send-keys sequence"
+  fi
+fi
+unset AGENT_LAUNCH_MAX_RETRIES AGENT_LAUNCH_SETTLE_DELAY AGENT_LAUNCH_ENTER_DELAY AGENT_LAUNCH_RETRY_DELAY
+unset -f sleep pgrep
 
 # ============================================================================
 # TEST 8: Dashboard log filtering behavior
@@ -1002,6 +1118,7 @@ else
   source "$ADAPTER_LIB"
 
   agent_prepare_pane_for_launch() { return 0; }
+  agent_verify_launch() { return 0; }
   tmux() { :; }
 
   launch_session="check-shell-$$"
@@ -1038,7 +1155,90 @@ else
 fi
 
 # ============================================================================
-# TEST 12: Verify sourced libraries exist
+# TEST 12: Phase launch failure recovery helper
+# ============================================================================
+echo ""
+echo "=== Phase Launch Recovery ==="
+
+if [[ ! -f "$MILL_SCRIPT" ]]; then
+  fail "wavemill-mill.sh not found for launch recovery checks"
+else
+  RECOVERY_BLOCK=$(awk '
+    /^clear_stage_result\(\) \{/ && !captured { capture=1; captured=1 }
+    capture && /^# Resolve the current workflow phase from controller-owned stage state\./ { exit }
+    capture { print }
+  ' "$MILL_SCRIPT")
+
+  if [[ -z "$RECOVERY_BLOCK" ]]; then
+    fail "Could not extract phase launch recovery helper"
+  else
+    RECOVERY_DIR=$(mktemp -d)
+    RECOVERY_SCRIPT="$RECOVERY_DIR/recovery.sh"
+    printf '%s\n' "$RECOVERY_BLOCK" > "$RECOVERY_SCRIPT"
+
+    FAILURE_CHECK=$(bash -lc '
+      set -euo pipefail
+      source "'"$RECOVERY_SCRIPT"'"
+      TEST_DIR=$(mktemp -d)
+      trap "rm -rf \"$TEST_DIR\"" EXIT
+      touch "$TEST_DIR/.coding-result.json"
+      PHASE_SET=""
+      ATTN_SET=""
+      LOG_LINE=""
+      set_task_phase() { PHASE_SET="$2"; }
+      set_window_attention_state() { ATTN_SET="$2"; }
+      check_stage_aborted() { return 1; }
+      write_stage_result() { :; }
+      log() { LOG_LINE="$*"; }
+      set +e
+      handle_phase_launch_result "HOK-1212" "$TEST_DIR" "coding" "planning" 1 "win-1" "codex" "gpt-5.4"
+      rc=$?
+      set -e
+      printf "rc=%s phase=%s attn=%s exists=%s log=%s\n" "$rc" "$PHASE_SET" "$ATTN_SET" "$([[ -f "$TEST_DIR/.coding-result.json" ]] && echo yes || echo no)" "$LOG_LINE"
+    ' 2>/dev/null || true)
+    if [[ "$FAILURE_CHECK" == *"rc=1"* ]] \
+      && [[ "$FAILURE_CHECK" == *"phase=planning"* ]] \
+      && [[ "$FAILURE_CHECK" == *"attn=needs-user"* ]] \
+      && [[ "$FAILURE_CHECK" == *"exists=no"* ]]; then
+      pass "handle_phase_launch_result clears running state and reverts phase after launch failure"
+    else
+      fail "handle_phase_launch_result did not revert failed launches correctly"
+    fi
+
+    ABORT_CHECK=$(bash -lc '
+      set -euo pipefail
+      source "'"$RECOVERY_SCRIPT"'"
+      TEST_DIR=$(mktemp -d)
+      trap "rm -rf \"$TEST_DIR\"" EXIT
+      PHASE_SET=""
+      ATTN_SET=""
+      WRITES=""
+      set_task_phase() { PHASE_SET="$2"; }
+      set_window_attention_state() { ATTN_SET="$2"; }
+      check_stage_aborted() { return 0; }
+      write_stage_result() { WRITES="$1|$2|$3|$4|$5"; }
+      log() { :; }
+      set +e
+      handle_phase_launch_result "HOK-1212" "$TEST_DIR" "review" "coding" 2 "win-1" "claude" "sonnet"
+      rc=$?
+      set -e
+      printf "rc=%s phase=%s attn=%s write=%s\n" "$rc" "$PHASE_SET" "$ATTN_SET" "$WRITES"
+    ' 2>/dev/null || true)
+    if [[ "$ABORT_CHECK" == *"rc=1"* ]] \
+      && [[ "$ABORT_CHECK" == *"phase=aborted"* ]] \
+      && [[ "$ABORT_CHECK" == *"attn=needs-user"* ]] \
+      && [[ "$ABORT_CHECK" == *"|review|aborted|claude|sonnet"* ]]; then
+      pass "handle_phase_launch_result records an aborted stage when launch aborts"
+    else
+      fail "handle_phase_launch_result did not preserve abort semantics"
+    fi
+
+    rm -rf "$RECOVERY_DIR"
+  fi
+fi
+
+# ============================================================================
+# TEST 13: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
@@ -1065,7 +1265,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 12: Optional ShellCheck
+# TEST 14: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""

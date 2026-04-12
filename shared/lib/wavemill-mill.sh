@@ -1723,6 +1723,11 @@ EOF
   mv "$tmp" "$result_file"
 }
 
+clear_stage_result() {
+  local feature_dir="$1" stage="$2"
+  rm -f "$feature_dir/.${stage}-result.json"
+}
+
 # Read a stage result file, returning its JSON content or empty string.
 # Usage: read_stage_result <feature_dir> <stage>
 read_stage_result() {
@@ -1854,6 +1859,39 @@ check_stage_aborted() {
   [[ -f "$feature_dir/.workflow-aborted" ]] && return 0
 
   return 1
+}
+
+# Normalize launch outcomes after the controller has already advanced phase state.
+# On launch failure, revert the controller phase so the next monitor cycle retries
+# the same transition instead of waiting for artifacts that will never arrive.
+#
+# Usage:
+#   handle_phase_launch_result <issue> <feature_dir> <launched_phase> <retry_phase> \
+#     <launch_rc> <win> [agent] [model]
+# Returns:
+#   0 if launch succeeded and callers should continue success handling
+#   1 if the outcome was handled here (abort or failure) and callers should stop
+handle_phase_launch_result() {
+  local issue="$1" feature_dir="$2" launched_phase="$3" retry_phase="$4"
+  local launch_rc="$5" win="$6" agent="${7:-}" model="${8:-}"
+
+  if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$feature_dir"; then
+    log "status" "⛔ $issue → Workflow aborted during ${launched_phase} launch"
+    write_stage_result "$feature_dir" "$launched_phase" "aborted" "$agent" "$model"
+    set_task_phase "$issue" "aborted"
+    set_window_attention_state "$win" "needs-user"
+    return 1
+  fi
+
+  if [[ "$launch_rc" -ne 0 ]]; then
+    clear_stage_result "$feature_dir" "$launched_phase"
+    set_task_phase "$issue" "$retry_phase"
+    set_window_attention_state "$win" "needs-user"
+    log "warn" "⚠ $issue → ${launched_phase^} phase launch failed (rc=$launch_rc), reverting to $retry_phase for retry"
+    return 1
+  fi
+
+  return 0
 }
 
 # Resolve the current workflow phase from controller-owned stage state.
@@ -3302,6 +3340,11 @@ Implement from the issue description plus direct codebase analysis."
 
     launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
       "${planner_model:-claude-sonnet-4-5-20250929}" "$resolved_planner_agent" "${plan_depth:-light}"
+    local launch_rc=$?
+    if ! handle_phase_launch_result "$issue" "$feature_dir" "planning" "routing" "$launch_rc" "$win" \
+      "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-5-20250929}"; then
+      return 0
+    fi
     log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-5-20250929}"
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
@@ -3555,11 +3598,7 @@ monitor_issue_state() {
 
               launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth"
               local launch_rc=$?
-              if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-                log "status" "⛔ $ISSUE → Workflow aborted during planning launch"
-                write_stage_result "$FEATURE_DIR" "planning" "aborted" "$planner_agent" "$planner_model"
-                set_task_phase "$ISSUE" "aborted"
-                set_window_attention_state "$WIN" "needs-user"
+              if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "planning" "routing" "$launch_rc" "$WIN" "$planner_agent" "$planner_model"; then
                 return 0
               fi
               set_window_attention_state "$WIN" "clear"
@@ -3651,12 +3690,8 @@ monitor_issue_state() {
 
             launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
-            if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-              log "status" "⛔ $ISSUE → Workflow aborted during coding launch"
-              write_stage_result "$FEATURE_DIR" "coding" "aborted" "$coder_agent" "$coder_model"
-              set_task_phase "$ISSUE" "aborted"
-              set_window_attention_state "$WIN" "needs-user"
-              return 0
+            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "coding" "planning" "$launch_rc" "$WIN" "$coder_agent" "$coder_model"; then
+                return 0
             fi
             set_window_attention_state "$WIN" "clear"
             log "status" "✓ $ISSUE → Plan approved, launching coding phase"
@@ -3765,11 +3800,7 @@ monitor_issue_state() {
 
             launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
             local launch_rc=$?
-            if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-              log "status" "⛔ $ISSUE → Workflow aborted during review launch"
-              write_stage_result "$FEATURE_DIR" "review" "aborted" "$reviewer_agent" "$reviewer_model"
-              set_task_phase "$ISSUE" "aborted"
-              set_window_attention_state "$WIN" "needs-user"
+            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "review" "coding" "$launch_rc" "$WIN" "$reviewer_agent" "$reviewer_model"; then
               return 0
             fi
             set_window_attention_state "$WIN" "clear"
