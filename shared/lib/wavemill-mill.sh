@@ -3541,7 +3541,6 @@ monitor_issue_state() {
 
               # Transition to planning phase
               set_task_phase "$ISSUE" "planning"
-              planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-4-5-20250929")"
               planner_agent="$(agent_resolve_from_model "$planner_model")"
 
               # Get title from state or Linear
