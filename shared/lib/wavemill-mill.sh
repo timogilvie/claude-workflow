@@ -1079,8 +1079,14 @@ check_and_offer_resume() {
   echo "  a — Resume these tasks AND add more from backlog"
   echo "  f — Forget old tasks and start fresh"
   echo ""
-  read -rp "Choice [r/a/f]: " choice
-  choice="${choice:-r}"
+  # [REQ-F7]: In non-TTY mode, default to Resume without prompting
+  if [[ -t 0 ]]; then
+    read -rp "Choice [r/a/f]: " choice
+    choice="${choice:-r}"
+  else
+    choice="r"
+    log "info" "Non-TTY detected, defaulting to Resume mode"
+  fi
 
   case "$choice" in
     [rR]*)
@@ -1419,6 +1425,18 @@ declare -A TASK_CODE_DEPTH_BY_ISSUE
 declare -A TASK_REVIEW_MODE_BY_ISSUE
 declare -A TASK_RESUME_PHASE_BY_ISSUE
 
+# ── Rehydrate tasks from state file (if resuming) ─────────────────────────
+# Call build_rehydrated_launch_args() to populate LAUNCH_ARGS and metadata arrays
+# for tasks being resumed from a previous session
+declare -A REHYDRATED_ISSUES  # Track which issues were rehydrated (skip fresh processing)
+if [[ "$RESUME_MODE" == "resume_only" ]] || [[ "$RESUME_MODE" == "resume_and_add" ]]; then
+  build_rehydrated_launch_args
+  # Mark all rehydrated issues so we skip them in fresh processing
+  for arg in "${LAUNCH_ARGS[@]}"; do
+    IFS='|' read -r issue _ _ <<<"$arg"
+    REHYDRATED_ISSUES[$issue]=1
+  done
+fi
 
 # Pre-allocate migration numbers for parallel work
 # Fetch first so we scan the latest state of the base branch (not stale local files)
@@ -1436,6 +1454,8 @@ log "debug" "Next available migration number: $NEXT_MIGRATION_NUM (highest in or
 log "info" "Fetching issue details..."
 for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+  # Skip rehydrated tasks - they already have state
+  [[ -n "${REHYDRATED_ISSUES[$ISSUE]:-}" ]] && continue
   (
     json=$(linear_get_issue "$ISSUE" 2>/dev/null || echo "{}")
     echo "$json" > "/tmp/${SESSION}-${ISSUE}-issue.json"
@@ -1450,6 +1470,8 @@ log "info" "  ✓ All issues fetched"
 # Otherwise, write the raw description — the planning agent will expand later.
 for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+  # Skip rehydrated tasks - they already have state
+  [[ -n "${REHYDRATED_ISSUES[$ISSUE]:-}" ]] && continue
   PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
   issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
   current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
@@ -1466,6 +1488,8 @@ done
 # ── Phase 3: Migration detection ──────────────────────────────────────────
 for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+  # Skip rehydrated tasks - they already have state and are in LAUNCH_ARGS
+  [[ -n "${REHYDRATED_ISSUES[$ISSUE]:-}" ]] && continue
   PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
   issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
   current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
