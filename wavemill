@@ -297,6 +297,23 @@ run_mill() {
     exit 1
   fi
 
+  # Guard: refuse to start mill inside a git worktree (HOK-1214)
+  local _gd _gcd
+  _gd=$(git rev-parse --git-dir 2>/dev/null || echo "")
+  _gcd=$(git rev-parse --git-common-dir 2>/dev/null || echo "")
+  if [[ -n "$_gd" && -n "$_gcd" && "$_gd" != "$_gcd" ]]; then
+    echo -e "${RED}Error:${NC} wavemill mill cannot run inside a git worktree." >&2
+    echo "  Run from the main repository root instead." >&2
+    exit 1
+  fi
+
+  # Guard: refuse nested mill invocation (HOK-1214)
+  if [[ -n "${WAVEMILL_MILL_ACTIVE:-}" ]]; then
+    echo -e "${RED}Error:${NC} wavemill mill is already running for: $WAVEMILL_MILL_ACTIVE" >&2
+    echo "  Nested mill invocations are not allowed." >&2
+    exit 1
+  fi
+
   if [[ ! -x "$mill_script" ]]; then
     chmod +x "$mill_script"
   fi

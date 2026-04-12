@@ -79,6 +79,8 @@ fi
 tmux -f "$TMUX_CONF" new-session -d -s "$SESSION" -c "$REPO_DIR" -n control
 # Store REPO_DIR in tmux environment so other instances can detect cross-repo conflicts
 tmux set-environment -t "$SESSION" REPO_DIR "$REPO_DIR"
+# Propagate nested-invocation guard to tmux panes (HOK-1214)
+tmux set-environment -t "$SESSION" WAVEMILL_MILL_ACTIVE "$REPO_DIR"
 
 
 # Control window message
