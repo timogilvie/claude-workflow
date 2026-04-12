@@ -1689,6 +1689,20 @@ mark_eval_completed() {
   fi
 }
 
+mark_eval_failed() {
+  local issue="$1"
+  local tmp
+  tmp=$(mktemp) || { log_warn "mark_eval_failed: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" \
+     '.tasks[$issue].evalFailed = true | .tasks[$issue].updated = (now | todate)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+    log_warn "mark_eval_failed: failed to update $issue"
+  fi
+}
+
 validate_agent_set() {
   local issue="$1"
   local agent
@@ -2540,7 +2554,8 @@ maybe_run_challenge_eval() {
   if [[ "$rc" -eq 0 ]]; then
     mark_eval_completed "$issue"
   else
-    log_warn "challenge eval failed for $issue (exit $rc); leaving evalCompleted=false"
+    log_warn "challenge eval failed for $issue (exit $rc); setting evalFailed=true"
+    mark_eval_failed "$issue"
   fi
 }
 
@@ -2585,7 +2600,8 @@ launch_background_post_merge_eval() {
       if [[ "$rc" -eq 0 ]]; then
         mark_eval_completed "$issue"
       else
-        printf 'WARN: Eval failed for %s; leaving evalCompleted=false\n' "$issue"
+        printf 'WARN: Eval failed for %s; setting evalFailed=true\n' "$issue"
+        mark_eval_failed "$issue"
       fi
     } >>"$eval_log" 2>&1
   ) >/dev/null 2>&1 &
