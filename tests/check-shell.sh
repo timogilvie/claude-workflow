@@ -985,7 +985,67 @@ EOF
 fi
 
 # ============================================================================
-# TEST 11: Verify sourced libraries exist
+# TEST 11: Model name validation (prevent routing tags as model identifiers)
+# ============================================================================
+echo ""
+echo "=== Model Name Validation ==="
+
+# Source the mill script to get the validate_model_name function
+source "$MILL_SCRIPT" 2>/dev/null || true
+
+# Test that validate_model_name detects routing tags
+test_model_validation() {
+  local model="$1"
+  local expected="$2"
+  local default="$3"
+
+  # Call validate_model_name and capture output
+  result=$(validate_model_name "$model" "$default" 2>&1 | tail -1)
+  if [[ "$result" == "$expected" ]]; then
+    return 0
+  else
+    echo "Expected: $expected, Got: $result"
+    return 1
+  fi
+}
+
+# Test 1: Detect "deep" as routing tag
+if test_model_validation "deep" "claude-sonnet-4-5-20250929" "claude-sonnet-4-5-20250929"; then
+  pass "validate_model_name detects 'deep' as routing tag"
+else
+  fail "validate_model_name does not detect 'deep' as routing tag"
+fi
+
+# Test 2: Detect "shallow" as routing tag
+if test_model_validation "shallow" "claude-opus-4-6" "claude-opus-4-6"; then
+  pass "validate_model_name detects 'shallow' as routing tag"
+else
+  fail "validate_model_name does not detect 'shallow' as routing tag"
+fi
+
+# Test 3: Allow valid model names
+if test_model_validation "claude-sonnet-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-6"; then
+  pass "validate_model_name allows valid model names"
+else
+  fail "validate_model_name rejects valid model names"
+fi
+
+# Test 4: Detect "light" as routing tag
+if test_model_validation "light" "claude-opus-4-6" "claude-opus-4-6"; then
+  pass "validate_model_name detects 'light' as routing tag"
+else
+  fail "validate_model_name does not detect 'light' as routing tag"
+fi
+
+# Test 5: Detect "medium" as routing tag
+if test_model_validation "medium" "claude-sonnet-4-5-20250929" "claude-sonnet-4-5-20250929"; then
+  pass "validate_model_name detects 'medium' as routing tag"
+else
+  fail "validate_model_name does not detect 'medium' as routing tag"
+fi
+
+# ============================================================================
+# TEST 12: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
@@ -1012,7 +1072,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 12: Optional ShellCheck
+# TEST 13: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""

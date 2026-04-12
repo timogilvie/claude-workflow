@@ -124,6 +124,26 @@ log_warn() {
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 
+# Validate that a model identifier is not a routing tag
+# Returns the model if valid, or the provided default if invalid
+validate_model_name() {
+  local model="$1"
+  local default_model="$2"
+
+  # Check if model is a routing tag instead of a model name
+  case "$model" in
+    deep|shallow|light|medium)
+      log_warn "⚠️ BUG: Model identifier '$model' is a routing tag, not a model name! Using default: $default_model"
+      echo "$default_model"
+      return 1
+      ;;
+    *)
+      echo "$model"
+      return 0
+      ;;
+  esac
+}
+
 # Kept local to this script because the generated monitor script below runs as a
 # standalone shell and must carry its own copy of any helpers it calls.
 render_prompt_template() {
@@ -3505,6 +3525,11 @@ monitor_issue_state() {
                 review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
               fi
 
+              # Validate models are not routing tags
+              planner_model=$(validate_model_name "$planner_model" "claude-sonnet-4-5-20250929")
+              coder_model=$(validate_model_name "$coder_model" "claude-opus-4-6")
+              reviewer_model=$(validate_model_name "$reviewer_model" "claude-sonnet-4-5-20250929")
+
               # Save routing results to state
               current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
               linear_issue=$(get_linear_issue_id "$ISSUE")
@@ -3605,6 +3630,8 @@ monitor_issue_state() {
               fi
             fi
             [[ -z "$coder_model" ]] && coder_model="claude-opus-4-6"
+            # Validate coder_model is not a routing tag
+            coder_model=$(validate_model_name "$coder_model" "claude-opus-4-6")
             code_depth=$(read_phase_config "$FEATURE_DIR" "coding" "depth")
             [[ -z "$code_depth" ]] && code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
@@ -3721,6 +3748,8 @@ monitor_issue_state() {
               [[ -z "$reviewer_model" ]] && reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
             fi
             [[ -z "$reviewer_model" ]] && reviewer_model="claude-sonnet-4-5-20250929"
+            # Validate reviewer_model is not a routing tag
+            reviewer_model=$(validate_model_name "$reviewer_model" "claude-sonnet-4-5-20250929")
             review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
             [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")
             [[ -z "$review_mode" ]] && review_mode="static"
