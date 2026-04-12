@@ -98,7 +98,7 @@ else
       | grep -vE '^(pipefail|euo|noglob|errexit|nounset)$' \
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
-      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits)$')
+      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting)$')
 
     # Check which called names look like they could be custom functions
     # and verify they're defined
@@ -439,6 +439,15 @@ if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] && ! grep -q 'window-status-acti
   pass "orchestrator no longer uses codex activity-style override"
 else
   fail "orchestrator still uses codex activity-style override"
+fi
+
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
+  && grep -qE '^detect_inflight_tasks\(\) \{' "$LIB_DIR/wavemill-mill.sh" \
+  && grep -q 'SKIP_BACKLOG_SELECTION' "$LIB_DIR/wavemill-mill.sh" \
+  && grep -q 'STARTUP_SLOT_LIMIT' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "mill detects resumable tasks before backlog selection"
+else
+  fail "mill is missing early resume detection or startup slot limiting"
 fi
 
 if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] && grep -qE '^set_window_attention_state\(\) \{' "$LIB_DIR/wavemill-mill.sh"; then
@@ -1317,18 +1326,24 @@ if [[ -f "$REPO_DIR/shared/hooks/wavemill-status-writer.sh" ]] \
   && [[ -f "$REPO_DIR/shared/hooks/claude-status-hook.sh" ]] \
   && [[ -f "$REPO_DIR/shared/hooks/codex-status-monitor.sh" ]] \
   && [[ -f "$REPO_DIR/shared/hooks/process-status-monitor.sh" ]]; then
-  pass "all hook adapter scripts exist"
+  pass "all legacy and current hook adapter scripts exist"
+elif [[ -f "$REPO_DIR/shared/hooks/claude-status-hook.sh" ]] \
+  && [[ -f "$REPO_DIR/shared/hooks/codex-status-monitor.sh" ]] \
+  && [[ -f "$REPO_DIR/shared/hooks/process-status-monitor.sh" ]]; then
+  pass "current hook adapter scripts exist"
 else
   fail "one or more hook adapter scripts are missing"
 fi
 
-if [[ -f "$REPO_DIR/.claude/settings.json" ]] \
-  && grep -q '"PreToolUse"' "$REPO_DIR/.claude/settings.json" \
-  && grep -q '"Notification"' "$REPO_DIR/.claude/settings.json" \
-  && grep -q 'shared/hooks/claude-status-hook.sh UserPromptSubmit' "$REPO_DIR/.claude/settings.json"; then
-  pass "claude project hooks are configured for status tracking"
+if [[ -f "$REPO_DIR/shared/lib/wavemill-common.sh" ]] \
+  && grep -q '\.claude/settings.local.json' "$REPO_DIR/shared/lib/wavemill-common.sh" \
+  && grep -q 'claude-status-hook\.sh' "$REPO_DIR/shared/lib/wavemill-common.sh" \
+  && grep -q 'UserPromptSubmit' "$REPO_DIR/shared/lib/wavemill-common.sh" \
+  && grep -q 'PreToolUse' "$REPO_DIR/shared/lib/wavemill-common.sh" \
+  && grep -q 'Notification' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+  pass "claude worktree-local hooks are configured for status tracking"
 else
-  fail "claude project hooks are missing status tracking configuration"
+  fail "claude hook configuration is missing worktree-local status tracking"
 fi
 
 # ============================================================================
