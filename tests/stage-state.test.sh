@@ -1115,6 +1115,71 @@ reset_approval_wait_log "TEST-60"
 simulate_approval_wait_log "TEST-60"
 check "approval-wait log emits again after reset" "logged" "$LAST_APPROVAL_WAIT_LOG_RESULT"
 
+# ── Nested invocation guard tests (HOK-1214) ────────────────────
+
+# Test 61: WAVEMILL_MILL_ACTIVE blocks nested mill when set to a repo path
+out=$(WAVEMILL_MILL_ACTIVE=/some/repo bash -c '
+  if [[ -n "${WAVEMILL_MILL_ACTIVE:-}" ]]; then
+    echo "blocked"
+  else
+    echo "allowed"
+  fi
+')
+check "WAVEMILL_MILL_ACTIVE set blocks nested mill" "blocked" "$out"
+
+# Test 62: Unset WAVEMILL_MILL_ACTIVE allows mill
+out=$(unset WAVEMILL_MILL_ACTIVE; bash -c '
+  if [[ -n "${WAVEMILL_MILL_ACTIVE:-}" ]]; then
+    echo "blocked"
+  else
+    echo "allowed"
+  fi
+')
+check "unset WAVEMILL_MILL_ACTIVE allows mill" "allowed" "$out"
+
+# Test 63: Empty WAVEMILL_MILL_ACTIVE allows mill
+out=$(WAVEMILL_MILL_ACTIVE="" bash -c '
+  if [[ -n "${WAVEMILL_MILL_ACTIVE:-}" ]]; then
+    echo "blocked"
+  else
+    echo "allowed"
+  fi
+')
+check "empty WAVEMILL_MILL_ACTIVE allows mill" "allowed" "$out"
+
+# Test 64: Git worktree detection — real worktree is detected
+# Create a temp git repo and worktree to test the actual guard logic
+_wt_test_dir=$(mktemp -d)
+(
+  cd "$_wt_test_dir"
+  git init -q main-repo
+  cd main-repo
+  git commit --allow-empty -m "init" -q
+  git worktree add -q ../test-worktree -b test-branch
+)
+_wt_git_dir=$(cd "$_wt_test_dir/test-worktree" && git rev-parse --git-dir 2>/dev/null || echo "")
+_wt_git_common=$(cd "$_wt_test_dir/test-worktree" && git rev-parse --git-common-dir 2>/dev/null || echo "")
+if [[ -n "$_wt_git_dir" && -n "$_wt_git_common" && "$_wt_git_dir" != "$_wt_git_common" ]]; then
+  _wt_detected="yes"
+else
+  _wt_detected="no"
+fi
+check "git worktree is detected in actual worktree" "yes" "$_wt_detected"
+
+# Test 65: Git worktree detection — main repo is NOT detected as worktree
+_main_git_dir=$(cd "$_wt_test_dir/main-repo" && git rev-parse --git-dir 2>/dev/null || echo "")
+_main_git_common=$(cd "$_wt_test_dir/main-repo" && git rev-parse --git-common-dir 2>/dev/null || echo "")
+if [[ -n "$_main_git_dir" && -n "$_main_git_common" && "$_main_git_dir" != "$_main_git_common" ]]; then
+  _main_detected="yes"
+else
+  _main_detected="no"
+fi
+check "main repo is NOT detected as worktree" "no" "$_main_detected"
+
+# Cleanup temp worktree test
+(cd "$_wt_test_dir/main-repo" && git worktree remove -f ../test-worktree 2>/dev/null || true)
+rm -rf "$_wt_test_dir"
+
 # ─────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Summary ==="

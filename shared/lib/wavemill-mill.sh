@@ -29,6 +29,32 @@ source "$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/agent-adapters.sh"
 load_config "$REPO_DIR"
 
+# ── Nested invocation guards (HOK-1214) ──────────────────────────
+
+# Guard 1: Detect if running inside a git worktree
+_git_dir=$(git rev-parse --git-dir 2>/dev/null || echo "")
+_git_common_dir=$(git rev-parse --git-common-dir 2>/dev/null || echo "")
+if [[ -n "$_git_dir" && -n "$_git_common_dir" && "$_git_dir" != "$_git_common_dir" ]]; then
+  echo "ERROR: wavemill mill cannot run inside a git worktree." >&2
+  echo "  Detected worktree: $(git rev-parse --show-toplevel 2>/dev/null)" >&2
+  echo "  Main repository:   $(cd "$_git_common_dir/.." && pwd)" >&2
+  echo "  Run 'wavemill mill' from the main repository root instead." >&2
+  exit 1
+fi
+unset _git_dir _git_common_dir
+
+# Guard 2: Detect nested mill invocation via environment
+# Stores repo path so separate repos in separate terminals don't conflict
+if [[ -n "${WAVEMILL_MILL_ACTIVE:-}" ]]; then
+  echo "ERROR: wavemill mill is already running for: $WAVEMILL_MILL_ACTIVE" >&2
+  echo "  Nested mill invocations are not allowed." >&2
+  echo "  If this is unexpected, unset WAVEMILL_MILL_ACTIVE and retry." >&2
+  exit 1
+fi
+export WAVEMILL_MILL_ACTIVE="$REPO_DIR"
+
+# ─────────────────────────────────────────────────────────────────
+
 # Derived variables (not in config files)
 DRY_RUN="${DRY_RUN:-false}"
 STATE_DIR="${STATE_DIR:-$REPO_DIR/.wavemill}"
