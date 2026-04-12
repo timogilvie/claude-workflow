@@ -567,6 +567,28 @@ else
   else
     pass "dashboard main loop avoids local declarations"
   fi
+
+  if grep -qE '^clear_dashboard_scrollback\(\) \{' "$STATUS_SCRIPT" \
+    && grep -q "tput E3 2>/dev/null || printf '\\\\033\\[3J'" "$STATUS_SCRIPT"; then
+    pass "dashboard clears scrollback without blanking the visible pane"
+  else
+    fail "dashboard is missing the scrollback-only clear helper"
+  fi
+
+  if echo "$STATUS_MAIN_LOOP" | grep -qE '^[[:space:]]*clear[[:space:]]*$'; then
+    fail "dashboard main loop still performs a full clear each refresh"
+  else
+    pass "dashboard main loop avoids full-screen clears"
+  fi
+
+  if grep -qE '^redraw_dashboard_frame\(\) \{' "$STATUS_SCRIPT" \
+    && grep -q 'cat "\$frame_file"' "$STATUS_SCRIPT" \
+    && grep -q "tput cup 0 0 2>/dev/null || printf '\\\\033\\[H'" "$STATUS_SCRIPT" \
+    && grep -q "tput ed 2>/dev/null || printf '\\\\033\\[J'" "$STATUS_SCRIPT"; then
+    pass "dashboard redraw helper groups cursor, frame, and clear operations"
+  else
+    fail "dashboard redraw helper is missing grouped atomic redraw behavior"
+  fi
 fi
 
 # ============================================================================

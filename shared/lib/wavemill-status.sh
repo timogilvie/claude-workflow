@@ -171,14 +171,33 @@ is_active() {
   return 1
 }
 
+# Clear saved scrollback lines without blanking the visible pane. This keeps
+# tmux history from accumulating stale dashboards while avoiding a full-screen
+# flash on every refresh.
+clear_dashboard_scrollback() {
+  tput E3 2>/dev/null || printf '\033[3J'
+}
+
+# Redraw the dashboard from the top-left corner in one grouped write so tmux
+# sees a single refresh operation rather than separate cursor, content, and
+# clear steps.
+redraw_dashboard_frame() {
+  local frame_file="$1"
+  {
+    tput cup 0 0 2>/dev/null || printf '\033[H'
+    cat "$frame_file"
+    tput ed 2>/dev/null || printf '\033[J'
+  }
+}
+
 # ── Main render loop ─────────────────────────────────────────────────────
 
 FRAME=$(mktemp)
 trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT INT TERM
 
 while true; do
-  # Start each refresh from a clean pane so headers do not accumulate.
-  clear
+  # Keep tmux scrollback clean without blanking the visible pane.
+  clear_dashboard_scrollback
   refresh_pr_cache
 
   # Build entire frame into a temp file (avoids $() stripping newlines)
@@ -287,10 +306,7 @@ while true; do
 
   printf "\n${D}Refreshes every ${REFRESH}s │ Ctrl+B W: switch windows${N}\n" >> "$FRAME"
 
-  # Atomic redraw: cursor to top-left, print frame, clear remaining lines
-  tput cup 0 0 2>/dev/null || printf '\033[H'
-  cat "$FRAME"
-  tput ed 2>/dev/null || printf '\033[J'
+  redraw_dashboard_frame "$FRAME"
 
   sleep "$REFRESH"
 done
