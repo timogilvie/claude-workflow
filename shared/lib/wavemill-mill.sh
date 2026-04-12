@@ -3701,13 +3701,11 @@ monitor_issue_state() {
               return 0
             fi
 
-            # HOK-1204: In interactive sessions, the controller owns approval
-            # capture after the user approves in conversation and the agent exits.
+            # HOK-1210: Do NOT auto-approve just because the pane is idle.
+            # The agent must create .plan-approved after explicit user approval.
+            # If the agent exited without the marker, keep needs-user attention.
             if [[ -f "$FEATURE_DIR/plan.md" ]] && _pane_is_dead_or_idle "$SESSION:$WIN"; then
-              log "status" "✓ $ISSUE → Agent exited with plan ready, auto-approving"
-              approve_plan "$FEATURE_DIR" "$current_agent" ""
-              active_count=$((active_count + 1))
-              return 0
+              log "status" "⏳ $ISSUE → Agent exited with plan ready but no approval marker — waiting for user"
             fi
 
             set_window_attention_state "$WIN" "needs-user"

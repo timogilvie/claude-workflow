@@ -177,6 +177,8 @@ FRAME=$(mktemp)
 trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT INT TERM
 
 while true; do
+  # Start each refresh from a clean pane so headers do not accumulate.
+  clear
   refresh_pr_cache
 
   # Build entire frame into a temp file (avoids $() stripping newlines)

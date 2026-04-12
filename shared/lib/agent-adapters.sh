@@ -551,10 +551,10 @@ When you receive user feedback:
 - DO: If the user asks to stop, abort, close the issue, or discontinue work, $abort_feedback_instruction
 - DO NOT: Interpret feedback as "wrap up now" or "move to next phase"
 - DO NOT: Create the phase completion marker if the user wants to stop
-- DO NOT: Create any approval marker files — the orchestrator handles approval
+- DO: After the user explicitly approves, create the approval marker: touch features/$slug/.plan-approved
 - DO NOT: $exit_guard_text
 
-After the user approves your plan, $approved_completion_text
+After the user approves your plan, create features/$slug/.plan-approved and then $approved_completion_text
 _WVML_PROMPT_
 }
 

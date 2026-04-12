@@ -359,11 +359,12 @@ simulate_planning_transition() {
     fi
   fi
 
+  # HOK-1210: Do NOT auto-approve when pane is idle without .plan-approved marker.
+  # Agent must create .plan-approved after explicit user approval.
   if [[ "$planning_status" == "awaiting_user" ]] \
     && [[ -f "$feature_dir/plan.md" ]] \
     && _pane_is_dead_or_idle "test-session:1"; then
-    approve_plan "$feature_dir" "claude" "claude-opus-4-6"
-    echo "completed"
+    echo "awaiting_user"
     return 0
   fi
 
@@ -1013,15 +1014,15 @@ touch "$FD54/.plan-approved"
 check "plan approval ignores pane state" "completed" "$(simulate_planning_transition "$FD54")"
 check "plan approval writes completed" "completed" "$(read_stage_status "$FD54" "planning")"
 
-# Test 54b: Planning approval auto-captures when pane is dead/idle
+# Test 54b: HOK-1210 — idle pane without .plan-approved does NOT auto-approve
 FD54B="$TEST_DIR/test54b"
 mkdir -p "$FD54B"
 write_stage_result "$FD54B" "planning" "awaiting_user" "claude" "claude-opus-4-6"
 touch "$FD54B/plan.md"
 PANE_IS_DEAD_OR_IDLE=true
-check "plan approval auto-captures on idle pane" "completed" "$(simulate_planning_transition "$FD54B")"
-check "auto-capture writes completed planning status" "completed" "$(read_stage_status "$FD54B" "planning")"
-check "auto-capture avoids legacy approval marker" "no" "$([[ -f "$FD54B/.plan-approved" ]] && echo yes || echo no)"
+check "idle pane with plan.md but no .plan-approved stays awaiting_user" "awaiting_user" "$(simulate_planning_transition "$FD54B")"
+check "no auto-capture without .plan-approved marker" "awaiting_user" "$(read_stage_status "$FD54B" "planning")"
+check "no .plan-approved created automatically" "no" "$([[ -f "$FD54B/.plan-approved" ]] && echo yes || echo no)"
 
 # Test 54c: No auto-approval without plan.md
 FD54C="$TEST_DIR/test54c"
@@ -1065,15 +1066,17 @@ touch "$FD57/.coding-complete"
 check "stuck handoff regression stays completed with pane alive" "completed" "$(simulate_coding_transition "$FD57")"
 check "coding completion persists despite pane alive" "completed" "$(read_stage_status "$FD57" "coding")"
 
-# Test 58: Planning auto-approval is idempotent once completed
+# Test 58: HOK-1210 — idle pane stays awaiting_user until .plan-approved is created
 FD58="$TEST_DIR/test58"
 mkdir -p "$FD58"
 write_stage_result "$FD58" "planning" "awaiting_user" "claude" "claude-opus-4-6"
 touch "$FD58/plan.md"
 PANE_IS_DEAD_OR_IDLE=true
-check "first auto-approval completes planning" "completed" "$(simulate_planning_transition "$FD58")"
-check "second auto-approval pass is a no-op" "needs_attention" "$(simulate_planning_transition "$FD58")"
-check "completed planning remains completed after second pass" "completed" "$(read_stage_status "$FD58" "planning")"
+check "idle pane without marker stays awaiting_user" "awaiting_user" "$(simulate_planning_transition "$FD58")"
+# Now simulate the agent creating .plan-approved after user approval
+touch "$FD58/.plan-approved"
+check "adding .plan-approved completes planning" "completed" "$(simulate_planning_transition "$FD58")"
+check "planning status is completed after marker" "completed" "$(read_stage_status "$FD58" "planning")"
 PANE_IS_DEAD_OR_IDLE=false
 
 # ─────────────────────────────────────────────────────────────────
