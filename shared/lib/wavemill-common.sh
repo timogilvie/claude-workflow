@@ -547,11 +547,11 @@ configure_agent_hooks() {
         ($base.hooks // {}) as $hooks |
         $base + {
           hooks: ($hooks + {
-            UserPromptSubmit: (($hooks.UserPromptSubmit // []) + [{hooks: [{type: "command", command: $hook_cmd}]}]),
-            PreToolUse: (($hooks.PreToolUse // []) + [{hooks: [{type: "command", command: $hook_cmd}]}]),
-            Stop: (($hooks.Stop // []) + [{hooks: [{type: "command", command: $hook_cmd}]}]),
-            StopFailure: (($hooks.StopFailure // []) + [{hooks: [{type: "command", command: $hook_cmd}]}]),
-            Notification: (($hooks.Notification // []) + [{hooks: [{type: "command", command: $hook_cmd}]}])
+            UserPromptSubmit: (($hooks.UserPromptSubmit // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            PreToolUse: (($hooks.PreToolUse // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            Stop: (($hooks.Stop // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            StopFailure: (($hooks.StopFailure // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            Notification: (($hooks.Notification // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command))
           })
         }
         ' "$config_file" > "$tmp" 2>/dev/null; then
@@ -589,10 +589,10 @@ configure_agent_hooks() {
         ($base.hooks // {}) as $hooks |
         $base + {
           hooks: ($hooks + {
-            SessionStart: (($hooks.SessionStart // []) + [{matcher: "startup|resume", hooks: [{type: "command", command: $cmd_start}]}]),
-            UserPromptSubmit: (($hooks.UserPromptSubmit // []) + [{hooks: [{type: "command", command: $cmd_prompt}]}]),
-            PreToolUse: (($hooks.PreToolUse // []) + [{hooks: [{type: "command", command: $cmd_tool}]}]),
-            Stop: (($hooks.Stop // []) + [{hooks: [{type: "command", command: $cmd_stop}]}])
+            SessionStart: (($hooks.SessionStart // []) + [{matcher: "startup|resume", hooks: [{type: "command", command: $cmd_start}]}] | unique_by(.hooks[0].command)),
+            UserPromptSubmit: (($hooks.UserPromptSubmit // []) + [{hooks: [{type: "command", command: $cmd_prompt}]}] | unique_by(.hooks[0].command)),
+            PreToolUse: (($hooks.PreToolUse // []) + [{hooks: [{type: "command", command: $cmd_tool}]}] | unique_by(.hooks[0].command)),
+            Stop: (($hooks.Stop // []) + [{hooks: [{type: "command", command: $cmd_stop}]}] | unique_by(.hooks[0].command))
           })
         }
         ' "$config_file" > "$tmp" 2>/dev/null; then
