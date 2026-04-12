@@ -909,7 +909,7 @@ agent_launch_interactive() {
 
   agent_prepare_pane_for_launch "$session" "$window" 15 3 "$abort_check_cmd"
   local prepare_rc=$?
-  if [[ "$prepare_rc" -ne 0 ]]; then
+  if [[ "$prepare_rc" -eq 2 ]]; then
     return "$prepare_rc"
   fi
 
@@ -944,6 +944,15 @@ LAUNCHEOF
   chmod +x "$launcher"
   printf -v launcher_cmd '%q' "$launcher"
 
+  local target="$session:$window"
+  if [[ "$prepare_rc" -ne 0 ]]; then
+    _agent_log_warn "  Pane not ready for send-keys; using respawn-pane fallback"
+    local wt_dir
+    wt_dir=$(_pane_current_path "$target")
+    tmux respawn-pane -k -t "$target" -c "$wt_dir" 2>/dev/null || true
+    sleep 0.5
+  fi
+
   local max_retries="${AGENT_LAUNCH_MAX_RETRIES:-3}"
   local settle_delay="${AGENT_LAUNCH_SETTLE_DELAY:-0.2}"
   local enter_delay="${AGENT_LAUNCH_ENTER_DELAY:-0.2}"
@@ -958,14 +967,25 @@ LAUNCHEOF
       sleep "$retry_delay"
     fi
 
+    if ! agent_pane_is_ready "$session" "$window"; then
+      _agent_log_warn "  Pre-send check: pane $target still busy, respawning before retry"
+      local wt_dir
+      wt_dir=$(_pane_current_path "$target")
+      tmux respawn-pane -k -t "$target" -c "$wt_dir" 2>/dev/null || true
+      sleep 0.5
+    fi
+
     # A shell can report as the current pane command slightly before readline
     # is actually ready to consume pasted input after a respawn or prior exit.
     sleep "$settle_delay"
+    local baseline_command baseline_children
+    baseline_command=$(_pane_current_command "$target")
+    baseline_children=$(_pane_child_count "$target")
     tmux send-keys -t "$session:$window" -l -- "$launcher_cmd"
     sleep "$enter_delay"
     tmux send-keys -t "$session:$window" C-m
 
-    if agent_verify_launch "$session" "$window" "$verify_wait" "$verify_poll"; then
+    if agent_verify_launch "$session" "$window" "$verify_wait" "$verify_poll" "$baseline_command" "$baseline_children"; then
       return 0
     fi
 
@@ -996,16 +1016,47 @@ _pane_current_command() {
   tmux display-message -t "$target" -p '#{pane_current_command}' 2>/dev/null || true
 }
 
+_pane_current_path() {
+  local target="$1"
+  tmux display-message -t "$target" -p '#{pane_current_path}' 2>/dev/null || pwd
+}
+
 _pane_child_count() {
   local target="$1"
   local pane_pid
   pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
   if [[ -z "$pane_pid" ]]; then
     echo ""
-    return 1
+    return 0
   fi
 
   pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' '
+}
+
+_pane_descendant_pids() {
+  local root_pid="$1"
+  local queue="$root_pid"
+  local seen=" $root_pid "
+  local descendants=""
+
+  while [[ -n "$queue" ]]; do
+    local next_queue=""
+    local pid
+    for pid in $queue; do
+      local child
+      while IFS= read -r child; do
+        [[ -z "$child" ]] && continue
+        if [[ "$seen" != *" $child "* ]]; then
+          descendants+="$child"$'\n'
+          next_queue+=" $child"
+          seen+=" $child "
+        fi
+      done < <(pgrep -P "$pid" 2>/dev/null || true)
+    done
+    queue="${next_queue# }"
+  done
+
+  printf '%s' "$descendants"
 }
 
 _pane_command_is_shell() {
@@ -1035,12 +1086,13 @@ _pane_is_dead_or_idle() {
 
   local current_command
   current_command=$(_pane_current_command "$target")
-  if _pane_command_is_shell "$current_command"; then
-    return 0
-  fi
-
   local children
   children=$(_pane_child_count "$target")
+  if _pane_command_is_shell "$current_command"; then
+    [[ "$children" == "0" ]] && return 0
+    return 1
+  fi
+
   [[ "$children" == "0" ]] && return 0
 
   return 1
@@ -1073,14 +1125,16 @@ agent_terminate_in_pane() {
 
   # --- Phase 1: Polite exit ---
   # Ctrl-C interrupts any in-progress generation in Claude Code
+  tmux send-keys -t "$target" Escape 2>/dev/null || true
+  sleep 0.1
   tmux send-keys -t "$target" C-c 2>/dev/null || true
-  sleep 0.3
+  sleep 1
 
   if _pane_is_dead_or_idle "$target"; then return 0; fi
 
   # /exit is the canonical way to exit Claude Code
   tmux send-keys -t "$target" "/exit" C-m 2>/dev/null || true
-  sleep 0.5
+  sleep 2
 
   if _pane_is_dead_or_idle "$target"; then return 0; fi
 
@@ -1123,9 +1177,17 @@ agent_terminate_in_pane() {
   pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
   if [[ -n "$pane_pid" ]]; then
     pkill -TERM -P "$pane_pid" 2>/dev/null || true
+    local descendant_pids
+    descendant_pids=$(_pane_descendant_pids "$pane_pid")
+    if [[ -n "$descendant_pids" ]]; then
+      echo "$descendant_pids" | xargs kill -TERM 2>/dev/null || true
+    fi
     sleep 1
     if ! _pane_is_dead_or_idle "$target"; then
       pkill -KILL -P "$pane_pid" 2>/dev/null || true
+      if [[ -n "$descendant_pids" ]]; then
+        echo "$descendant_pids" | xargs kill -KILL 2>/dev/null || true
+      fi
       sleep 0.5
     fi
   fi
@@ -1160,7 +1222,10 @@ agent_pane_is_ready() {
   local current_command
   current_command=$(_pane_current_command "$target")
   if _pane_command_is_shell "$current_command"; then
-    return 0
+    local children
+    children=$(_pane_child_count "$target")
+    [[ "$children" == "0" ]]
+    return $?
   fi
 
   local children
@@ -1181,6 +1246,8 @@ agent_verify_launch() {
   local window="$2"
   local max_wait="${3:-5}"
   local poll_interval="${4:-0.3}"
+  local baseline_command="${5:-}"
+  local baseline_children="${6:-}"
   local target="$session:$window"
 
   local attempts
@@ -1188,16 +1255,24 @@ agent_verify_launch() {
 
   local attempt=1
   while (( attempt <= attempts )); do
-    local current_command
+    local current_command children state_changed=0
     current_command=$(_pane_current_command "$target")
-    if [[ -n "$current_command" ]] && ! _pane_command_is_shell "$current_command"; then
+    children=$(_pane_child_count "$target")
+
+    if [[ -n "$baseline_command" ]] || [[ -n "$baseline_children" ]]; then
+      if [[ "$current_command" != "$baseline_command" ]] || [[ "$children" != "${baseline_children:-}" ]]; then
+        state_changed=1
+      fi
+    else
+      state_changed=1
+    fi
+
+    if (( state_changed )) && [[ -n "$current_command" ]] && ! _pane_command_is_shell "$current_command"; then
       _agent_log_debug "Launch verified: pane $target running '$current_command' (attempt $attempt/$attempts)"
       return 0
     fi
 
-    local children
-    children=$(_pane_child_count "$target")
-    if [[ -n "$children" ]] && (( children > 0 )); then
+    if (( state_changed )) && [[ -n "$children" ]] && (( children > 0 )); then
       _agent_log_debug "Launch verified: pane $target has $children child process(es) (attempt $attempt/$attempts)"
       return 0
     fi
@@ -1301,7 +1376,8 @@ agent_prepare_pane_for_launch() {
   if [[ "$ready_rc" -eq 2 ]]; then
     return 2
   elif [[ "$ready_rc" -ne 0 ]]; then
-    _agent_log_warn "  Pane $target still not ready after respawn; launching anyway"
+    _agent_log_warn "  Pane $target still not ready after respawn"
+    return 1
   fi
 }
 
