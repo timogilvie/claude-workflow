@@ -124,6 +124,8 @@ Wavemill tracks agent lifecycle with a shared status file contract at `/tmp/${SE
 - Other agent CLIs fall back to [shared/hooks/process-status-monitor.sh](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/shared/hooks/process-status-monitor.sh), which infers activity from child processes.
 - All adapters write through [shared/hooks/wavemill-status-writer.sh](/Users/timothyogilvie/Dropbox/wavemill/worktrees/hook-based-agent-status-tracking/shared/hooks/wavemill-status-writer.sh), so the dashboard consumes one stable format.
 
+**Dependencies**: codex-status-monitor.sh requires `jq` to parse JSONL events; process-status-monitor.sh requires `pgrep` to detect child processes. Without these tools, monitoring degrades gracefully (showing initial 'working' and final 'done' states) but won't provide real-time status updates.
+
 Recognized machine statuses are `working`, `waiting`, and `done`. Free-text status lines are still supported for richer manual progress reporting from prompts.
 
 To add a new agent adapter:
