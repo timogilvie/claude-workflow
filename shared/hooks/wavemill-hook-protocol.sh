@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 # Shared hook protocol helpers for wavemill agent status tracking.
 
 # Verify we are running inside a wavemill-launched agent context.
