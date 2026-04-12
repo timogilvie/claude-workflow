@@ -559,6 +559,13 @@ else
     fail "dashboard does not override stale status with plan review message"
   fi
 
+  if grep -Fq '.freeSlots // empty' "$STATUS_SCRIPT" \
+    && grep -Fq 'slot(s) available' "$STATUS_SCRIPT"; then
+    pass "dashboard renders free slot count from workflow state"
+  else
+    fail "dashboard is missing free slot count rendering"
+  fi
+
   STATUS_MAIN_LOOP=$(awk '
     /while true; do/ { in_loop=1 }
     in_loop { print }
@@ -953,6 +960,15 @@ echo "=== Dashboard Log Filtering ==="
 if [[ ! -f "$MILL_SCRIPT" ]]; then
   fail "wavemill-mill.sh not found for log filtering checks"
 else
+  if grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT" \
+    && grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT" \
+    && ! grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" \
+    && ! grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT"; then
+    pass "monitor logs task headers without slot counts"
+  else
+    fail "monitor still logs slot counts in task selection prompts"
+  fi
+
   LOG_FUNCTION_BLOCK=$(awk '
     /^_log_level_num\(\) \{/ && !captured { capture=1; captured=1 }
     capture && /^render_prompt_template\(\) \{/ { exit }
