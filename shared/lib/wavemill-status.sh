@@ -177,8 +177,9 @@ FRAME=$(mktemp)
 trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT INT TERM
 
 while true; do
-  # Start each refresh from a clean pane so headers do not accumulate.
-  clear
+  # Atomic redraw (tput cup + cat + tput ed) overwrites the visible area;
+  # tmux clear-history after redraw prevents duplicate headers accumulating
+  # in tmux scrollback. Together they avoid the flash that `clear` caused.
   refresh_pr_cache
 
   # Build entire frame into a temp file (avoids $() stripping newlines)
@@ -291,6 +292,9 @@ while true; do
   tput cup 0 0 2>/dev/null || printf '\033[H'
   cat "$FRAME"
   tput ed 2>/dev/null || printf '\033[J'
+
+  # Clear scrollback to prevent header accumulation (without affecting visible content)
+  tmux clear-history -t "$SESSION:control.1" 2>/dev/null || true
 
   sleep "$REFRESH"
 done
