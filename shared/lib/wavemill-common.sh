@@ -547,11 +547,11 @@ configure_agent_hooks() {
         ($base.hooks // {}) as $hooks |
         $base + {
           hooks: ($hooks + {
-            UserPromptSubmit: [{hooks: [{type: "command", command: $hook_cmd}]}],
-            PreToolUse: [{hooks: [{type: "command", command: $hook_cmd}]}],
-            Stop: [{hooks: [{type: "command", command: $hook_cmd}]}],
-            StopFailure: [{hooks: [{type: "command", command: $hook_cmd}]}],
-            Notification: [{hooks: [{type: "command", command: $hook_cmd}]}]
+            UserPromptSubmit: (($hooks.UserPromptSubmit // []) + [{hooks: [{type: "command", command: $hook_cmd}]}]),
+            PreToolUse: (($hooks.PreToolUse // []) + [{hooks: [{type: "command", command: $hook_cmd}]}]),
+            Stop: (($hooks.Stop // []) + [{hooks: [{type: "command", command: $hook_cmd}]}]),
+            StopFailure: (($hooks.StopFailure // []) + [{hooks: [{type: "command", command: $hook_cmd}]}]),
+            Notification: (($hooks.Notification // []) + [{hooks: [{type: "command", command: $hook_cmd}]}])
           })
         }
         ' "$config_file" > "$tmp" 2>/dev/null; then
@@ -589,10 +589,10 @@ configure_agent_hooks() {
         ($base.hooks // {}) as $hooks |
         $base + {
           hooks: ($hooks + {
-            SessionStart: [{matcher: "startup|resume", hooks: [{type: "command", command: $cmd_start}]}],
-            UserPromptSubmit: [{hooks: [{type: "command", command: $cmd_prompt}]}],
-            PreToolUse: [{hooks: [{type: "command", command: $cmd_tool}]}],
-            Stop: [{hooks: [{type: "command", command: $cmd_stop}]}]
+            SessionStart: (($hooks.SessionStart // []) + [{matcher: "startup|resume", hooks: [{type: "command", command: $cmd_start}]}]),
+            UserPromptSubmit: (($hooks.UserPromptSubmit // []) + [{hooks: [{type: "command", command: $cmd_prompt}]}]),
+            PreToolUse: (($hooks.PreToolUse // []) + [{hooks: [{type: "command", command: $cmd_tool}]}]),
+            Stop: (($hooks.Stop // []) + [{hooks: [{type: "command", command: $cmd_stop}]}])
           })
         }
         ' "$config_file" > "$tmp" 2>/dev/null; then
