@@ -796,16 +796,17 @@ pick_candidates() {
 smart_select_from_candidates() {
   local candidates="$1"
   local selected_numbers="$2"
+  local selection_limit="${STARTUP_SLOT_LIMIT:-$MAX_PARALLEL}"
 
 
   if [[ -z "$selected_numbers" ]]; then
-    # Auto-select up to MAX_PARALLEL with conflict avoidance
+    # Auto-select up to the startup slot limit with conflict avoidance
     local -A area_used=()
     local -a result=()
     local count=0
 
 
-    while IFS= read -r line && [[ $count -lt $MAX_PARALLEL ]]; do
+    while IFS= read -r line && [[ $count -lt $selection_limit ]]; do
       IFS='|' read -r issue slug title area score blocked_by <<<"$line"
 
 
@@ -1045,10 +1046,137 @@ cleanup_stale_tasks() {
   fi
 }
 
+detect_inflight_tasks() {
+  [[ -f "$STATE_FILE" ]] || return 0
+  jq -r '
+    (.tasks // {})
+    | to_entries[]
+    | select((.value.status // "") as $status
+        | $status != "merged"
+        and $status != "completed-external"
+        and $status != "aborted")
+    | "\(.key)|\(.value.slug // "")|\(.value.phase // "executing")|\(.value.agent // "")|\(.value.branch // "")|\(.value.worktree // "")|\(.value.challengeRole // "")"
+  ' "$STATE_FILE" 2>/dev/null || true
+}
+
+count_inflight_primary_tasks() {
+  local inflight_tasks="$1"
+  local count=0
+  local issue slug phase agent branch worktree challenge_role
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    IFS='|' read -r issue slug phase agent branch worktree challenge_role <<<"$line"
+    [[ "$challenge_role" == "challenger" ]] && continue
+    count=$((count + 1))
+  done <<<"$inflight_tasks"
+  echo "$count"
+}
+
+clear_inflight_tasks_from_state() {
+  local tmp
+  tmp=$(mktemp) || return 1
+  if jq '.tasks = {} | .updated = (now | todate)' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
 stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
 if (( stale_count > 0 )); then
   log "debug" "Found $stale_count task(s) in state file from previous run. Checking..."
   cleanup_stale_tasks
+fi
+
+SKIP_BACKLOG_SELECTION=false
+STARTUP_SLOT_LIMIT="$MAX_PARALLEL"
+inflight_tasks="$(detect_inflight_tasks)"
+if [[ -n "$inflight_tasks" ]]; then
+  inflight_count=$(printf '%s\n' "$inflight_tasks" | grep -c .)
+  inflight_primary_count=$(count_inflight_primary_tasks "$inflight_tasks")
+  available_startup_slots=$((MAX_PARALLEL - inflight_primary_count))
+  (( available_startup_slots < 0 )) && available_startup_slots=0
+
+  echo ""
+  log "status" "Found $inflight_count in-flight task(s) from a previous session:"
+  menu_index=0
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    IFS='|' read -r issue slug phase agent branch worktree challenge_role <<<"$line"
+    menu_index=$((menu_index + 1))
+    display_slug="$slug"
+    [[ -z "$display_slug" && -n "$branch" ]] && display_slug="${branch#task/}"
+    [[ -z "$display_slug" ]] && display_slug="unknown-slug"
+    display_phase="$phase"
+    [[ -z "$display_phase" ]] && display_phase="executing"
+    display_agent="$agent"
+    [[ -z "$display_agent" ]] && display_agent="unknown"
+    printf '  %s. %s (%s) - %s phase [%s]\n' "$menu_index" "$issue" "$display_slug" "$display_phase" "$display_agent"
+
+    if [[ -z "$worktree" ]]; then
+      worktree="${WORKTREE_ROOT}/${display_slug}"
+    fi
+    if [[ -n "$worktree" && ! -d "$worktree" ]]; then
+      log_warn "  Worktree missing for $issue - will be recreated on resume"
+    fi
+  done <<<"$inflight_tasks"
+
+  echo ""
+  if (( available_startup_slots > 0 )); then
+    log "info" "Resume impact: $inflight_primary_count slot(s) already in use, $available_startup_slots slot(s) available for new work"
+  else
+    log "info" "Resume impact: all $MAX_PARALLEL startup slot(s) are already occupied by in-flight primary tasks"
+  fi
+  echo ""
+  echo "Options:"
+  echo "  r  Resume these tasks (skip backlog selection)"
+  echo "  a  Resume these tasks and pick additional tasks from backlog"
+  echo "  f  Ignore old state and start fresh"
+  echo "  q  Quit"
+
+  while true; do
+    echo ""
+    echo "Choose: [r/a/f/q]"
+    read -r RESUME_CHOICE
+    case "${RESUME_CHOICE:-}" in
+      r|R)
+        SKIP_BACKLOG_SELECTION=true
+        STARTUP_SLOT_LIMIT=0
+        break
+        ;;
+      a|A)
+        if (( available_startup_slots == 0 )); then
+          log "status" "No startup slots are available for new work. Resuming existing tasks only."
+          SKIP_BACKLOG_SELECTION=true
+          STARTUP_SLOT_LIMIT=0
+        else
+          STARTUP_SLOT_LIMIT="$available_startup_slots"
+        fi
+        break
+        ;;
+      f|F)
+        if clear_inflight_tasks_from_state; then
+          log "status" "Cleared in-flight task state. Starting fresh."
+          inflight_tasks=""
+          inflight_count=0
+          inflight_primary_count=0
+          STARTUP_SLOT_LIMIT="$MAX_PARALLEL"
+        else
+          log_error "Failed to clear in-flight task state."
+          exit 1
+        fi
+        break
+        ;;
+      q|Q)
+        log "status" "Cancelled by user."
+        exit 0
+        ;;
+      *)
+        log_warn "Invalid selection: ${RESUME_CHOICE:-<empty>}"
+        ;;
+    esac
+  done
 fi
 
 
@@ -1072,6 +1200,9 @@ log "info" "  Planning mode: $PLANNING_MODE"
 log "info" "  Dashboard verbosity: ${DASHBOARD_VERBOSITY:-info}"
 [[ -n "${SETUP_CMD:-}" ]] && log "info" "  Setup command: $SETUP_CMD"
 log "info" "  State file: $STATE_FILE"
+if [[ -n "${inflight_tasks:-}" ]]; then
+  log "info" "  Resume detected: ${inflight_count:-0} in-flight task(s), startup slot limit: $STARTUP_SLOT_LIMIT"
+fi
 echo ""
 
 
@@ -1083,21 +1214,24 @@ if [[ ! -f "$STATE_DIR/.initialized" ]] && [[ "$REQUIRE_CONFIRM" == "true" ]]; t
 fi
 
 
-log "info" "Fetching backlog..."
-BACKLOG="$(linear_list_backlog)" || {
-  log_error "Failed to fetch backlog from Linear. Check your LINEAR_API_KEY and network."
-  exit 1
-}
+TASKS=()
+if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
+  log "info" "Fetching backlog..."
+  BACKLOG="$(linear_list_backlog)" || {
+    log_error "Failed to fetch backlog from Linear. Check your LINEAR_API_KEY and network."
+    exit 1
+  }
 
-if [[ -z "$BACKLOG" ]] || [[ "$BACKLOG" == "[]" ]]; then
-  log "status" "No backlog items returned from Linear."
-  exit 0
-fi
+  if [[ -z "$BACKLOG" ]] || [[ "$BACKLOG" == "[]" ]]; then
+    log "status" "No backlog items returned from Linear."
+    exit 0
+  fi
 
-CANDIDATES="$(pick_candidates "$BACKLOG")"
-if [[ -z "$CANDIDATES" ]]; then
-  log "status" "No backlog candidates found."
-  exit 0
+  CANDIDATES="$(pick_candidates "$BACKLOG")"
+  if [[ -z "$CANDIDATES" ]]; then
+    log "status" "No backlog candidates found."
+    exit 0
+  fi
 fi
 
 check_subsystem_drift() {
@@ -1107,113 +1241,121 @@ check_subsystem_drift() {
 }
 
 
-# Split candidates into unblocked and blocked
-# pick_candidates() outputs 6 fields (has_detailed_plan is stripped), so field 6 is blocked_by_count
-UNBLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 == 0 || $6 == ""')
-BLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 > 0')
-BLOCKED_COUNT=0
-[[ -n "$BLOCKED" ]] && BLOCKED_COUNT=$(echo "$BLOCKED" | grep -c .)
-SHOW_BLOCKED_TASKS=false
-while true; do
-  DRIFT_SUBSYSTEMS=""
-  if DRIFT_SUBSYSTEMS="$(check_subsystem_drift)"; then
-    :
-  fi
-
-  if [[ "$SHOW_BLOCKED_TASKS" == "true" ]]; then
-    CANDIDATES=$(printf '%s\n%s' "$UNBLOCKED" "$BLOCKED" | grep .)
-  else
-    CANDIDATES="$UNBLOCKED"
-  fi
-
-  if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
-    echo ""
-    echo "  Warning: Subsystem docs stale ($DRIFT_SUBSYSTEMS) - press d to refresh"
-  fi
-
-  echo ""
-  if [[ "$SHOW_BLOCKED_TASKS" == "true" ]]; then
-    log "info" "All tasks (ranked by priority):"
-    line_num=0
-    while IFS= read -r line; do
-      line_num=$((line_num + 1))
-      IFS='|' read -r id slug title area score blocked_by <<<"$line"
-      if (( blocked_by > 0 )); then
-        printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$line_num" "$id" "$title" "$score"
-      else
-        printf "  %s. %s - %s (score: %.0f)\n" "$line_num" "$id" "$title" "$score"
-      fi
-    done <<<"$CANDIDATES"
-  else
-    log "status" "Available tasks (ranked by priority):"
-    if [[ -n "$UNBLOCKED" ]]; then
-      echo "$UNBLOCKED" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
-    else
-      echo "  (no unblocked tasks)"
+if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
+  # Split candidates into unblocked and blocked
+  # pick_candidates() outputs 6 fields (has_detailed_plan is stripped), so field 6 is blocked_by_count
+  UNBLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 == 0 || $6 == ""')
+  BLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 > 0')
+  BLOCKED_COUNT=0
+  [[ -n "$BLOCKED" ]] && BLOCKED_COUNT=$(echo "$BLOCKED" | grep -c .)
+  SHOW_BLOCKED_TASKS=false
+  while true; do
+    DRIFT_SUBSYSTEMS=""
+    if DRIFT_SUBSYSTEMS="$(check_subsystem_drift)"; then
+      :
     fi
-  fi
 
-  if [[ "$SHOW_BLOCKED_TASKS" != "true" ]] && (( BLOCKED_COUNT > 0 )); then
-    echo ""
-    echo "  ($BLOCKED_COUNT blocked task(s) hidden - enter 'm' to show all)"
-  fi
-
-  echo ""
-  if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
-    if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-      echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+    if [[ "$SHOW_BLOCKED_TASKS" == "true" ]]; then
+      CANDIDATES=$(printf '%s\n%s' "$UNBLOCKED" "$BLOCKED" | grep .)
     else
-      echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, q to quit, or Enter to auto-select first $MAX_PARALLEL:"
+      CANDIDATES="$UNBLOCKED"
     fi
-  else
-    if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-      echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to auto-select first $MAX_PARALLEL:"
-    else
-      echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $MAX_PARALLEL:"
-    fi
-  fi
-  read -r SELECTED
 
-  if [[ "$SELECTED" =~ ^[dD](ocs)?$ ]]; then
-    echo ""
     if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
-      log "info" "Refreshing subsystem docs..."
-      npx tsx tools/init-project-context.ts --force "$REPO_DIR"
       echo ""
-      log "info" "Refresh complete. Re-displaying task list..."
-    else
-      echo "Subsystem docs are up to date"
+      echo "  Warning: Subsystem docs stale ($DRIFT_SUBSYSTEMS) - press d to refresh"
     fi
-    SHOW_BLOCKED_TASKS=false
-    continue
-  fi
 
-  if [[ "$SELECTED" =~ ^[mM] ]] && (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-    SHOW_BLOCKED_TASKS=true
-    continue
-  fi
+    echo ""
+    if [[ "$SHOW_BLOCKED_TASKS" == "true" ]]; then
+      log "info" "All tasks (ranked by priority):"
+      line_num=0
+      while IFS= read -r line; do
+        line_num=$((line_num + 1))
+        IFS='|' read -r id slug title area score blocked_by <<<"$line"
+        if (( blocked_by > 0 )); then
+          printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$line_num" "$id" "$title" "$score"
+        else
+          printf "  %s. %s - %s (score: %.0f)\n" "$line_num" "$id" "$title" "$score"
+        fi
+      done <<<"$CANDIDATES"
+    else
+      log "status" "Available tasks (ranked by priority):"
+      if [[ -n "$UNBLOCKED" ]]; then
+        echo "$UNBLOCKED" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
+      else
+        echo "  (no unblocked tasks)"
+      fi
+    fi
 
-  if [[ "$SELECTED" =~ ^[qQ](uit)?$ ]]; then
-    log "status" "Cancelled by user."
-    exit 0
-  fi
+    if [[ "$SHOW_BLOCKED_TASKS" != "true" ]] && (( BLOCKED_COUNT > 0 )); then
+      echo ""
+      echo "  ($BLOCKED_COUNT blocked task(s) hidden - enter 'm' to show all)"
+    fi
 
-  if [[ -z "$SELECTED" ]] && [[ -n "$UNBLOCKED" ]]; then
-    CANDIDATES="$UNBLOCKED"
-  fi
+    echo ""
+    if (( STARTUP_SLOT_LIMIT < MAX_PARALLEL )); then
+      log "info" "Startup launch capacity: $STARTUP_SLOT_LIMIT new task(s) (max parallel $MAX_PARALLEL, accounting for resumed work)"
+    fi
+    if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
+      if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
+        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, q to quit, or Enter to auto-select first $STARTUP_SLOT_LIMIT:"
+      else
+        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, q to quit, or Enter to auto-select first $STARTUP_SLOT_LIMIT:"
+      fi
+    else
+      if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
+        echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to auto-select first $STARTUP_SLOT_LIMIT:"
+      else
+        echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $STARTUP_SLOT_LIMIT:"
+      fi
+    fi
+    read -r SELECTED
 
-  break
-done
+    if [[ "$SELECTED" =~ ^[dD](ocs)?$ ]]; then
+      echo ""
+      if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
+        log "info" "Refreshing subsystem docs..."
+        npx tsx tools/init-project-context.ts --force "$REPO_DIR"
+        echo ""
+        log "info" "Refresh complete. Re-displaying task list..."
+      else
+        echo "Subsystem docs are up to date"
+      fi
+      SHOW_BLOCKED_TASKS=false
+      continue
+    fi
 
-# Use smart selection
-TASKS=()
-SELECTED_LINES="$(smart_select_from_candidates "$CANDIDATES" "$SELECTED")"
-while IFS= read -r line; do
-  [[ -n "$line" ]] && TASKS+=("$line")
-done <<<"$SELECTED_LINES"
+    if [[ "$SELECTED" =~ ^[mM] ]] && (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
+      SHOW_BLOCKED_TASKS=true
+      continue
+    fi
+
+    if [[ "$SELECTED" =~ ^[qQ](uit)?$ ]]; then
+      log "status" "Cancelled by user."
+      exit 0
+    fi
+
+    if [[ -z "$SELECTED" ]] && [[ -n "$UNBLOCKED" ]]; then
+      CANDIDATES="$UNBLOCKED"
+    fi
+
+    break
+  done
+
+  # Use smart selection
+  SELECTED_LINES="$(smart_select_from_candidates "$CANDIDATES" "$SELECTED")"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && TASKS+=("$line")
+  done <<<"$SELECTED_LINES"
+fi
 
 
-log "info" "Normalizing issues with task packets and launching work..."
+if [[ "$SKIP_BACKLOG_SELECTION" == "true" ]]; then
+  log "info" "Skipping backlog selection and new task launch; monitor will resume in-flight tasks."
+else
+  log "info" "Normalizing issues with task packets and launching work..."
+fi
 LAUNCH_ARGS=()
 declare -A TASK_LINEAR_ISSUE_BY_ISSUE
 declare -A TASK_CHALLENGE_BY_ISSUE
@@ -1229,47 +1371,49 @@ declare -A TASK_CODE_DEPTH_BY_ISSUE
 declare -A TASK_REVIEW_MODE_BY_ISSUE
 
 
-# Pre-allocate migration numbers for parallel work
-# Fetch first so we scan the latest state of the base branch (not stale local files)
-log "debug" "Fetching latest $BASE_BRANCH for migration scan..."
-git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" 2>/dev/null || true
+if (( ${#TASKS[@]} > 0 )); then
+  # Pre-allocate migration numbers for parallel work
+  # Fetch first so we scan the latest state of the base branch (not stale local files)
+  log "debug" "Fetching latest $BASE_BRANCH for migration scan..."
+  git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" 2>/dev/null || true
 
-# Scan the git tree (not local filesystem) for the highest existing migration number
-HIGHEST=$(scan_highest_migration)
-NEXT_MIGRATION_NUM=$((HIGHEST + 1))
-save_next_migration_num "$NEXT_MIGRATION_NUM"
-log "debug" "Next available migration number: $NEXT_MIGRATION_NUM (highest in origin/$BASE_BRANCH: $HIGHEST)"
-
-
-# ── Phase 1: Fetch issue details in parallel ──────────────────────────────
-log "info" "Fetching issue details..."
-for t in "${TASKS[@]}"; do
-  IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
-  (
-    json=$(linear_get_issue "$ISSUE" 2>/dev/null || echo "{}")
-    echo "$json" > "/tmp/${SESSION}-${ISSUE}-issue.json"
-  ) &
-done
-wait
-log "info" "  ✓ All issues fetched"
+  # Scan the git tree (not local filesystem) for the highest existing migration number
+  HIGHEST=$(scan_highest_migration)
+  NEXT_MIGRATION_NUM=$((HIGHEST + 1))
+  save_next_migration_num "$NEXT_MIGRATION_NUM"
+  log "debug" "Next available migration number: $NEXT_MIGRATION_NUM (highest in origin/$BASE_BRANCH: $HIGHEST)"
 
 
-# ── Phase 2: Write task packets (no expansion — agent expands in-pane) ────
-# If the Linear description is already a task packet, use it directly.
-# Otherwise, write the raw description — the planning agent will expand later.
-for t in "${TASKS[@]}"; do
-  IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
-  PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
-  issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
-  current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
+  # ── Phase 1: Fetch issue details in parallel ──────────────────────────────
+  log "info" "Fetching issue details..."
+  for t in "${TASKS[@]}"; do
+    IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+    (
+      json=$(linear_get_issue "$ISSUE" 2>/dev/null || echo "{}")
+      echo "$json" > "/tmp/${SESSION}-${ISSUE}-issue.json"
+    ) &
+  done
+  wait
+  log "info" "  ✓ All issues fetched"
 
-  if is_task_packet "$current_desc"; then
-    log "info" "  ✓ $ISSUE has task packet"
-  else
-    log "info" "  ✓ $ISSUE raw description saved (agent will expand)"
-  fi
-  echo "$current_desc" > "$PACKET_FILE"
-done
+
+  # ── Phase 2: Write task packets (no expansion — agent expands in-pane) ────
+  # If the Linear description is already a task packet, use it directly.
+  # Otherwise, write the raw description — the planning agent will expand later.
+  for t in "${TASKS[@]}"; do
+    IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+    PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
+    issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+    current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
+
+    if is_task_packet "$current_desc"; then
+      log "info" "  ✓ $ISSUE has task packet"
+    else
+      log "info" "  ✓ $ISSUE raw description saved (agent will expand)"
+    fi
+    echo "$current_desc" > "$PACKET_FILE"
+  done
+fi
 
 
 # ── Phase 3: Migration detection ──────────────────────────────────────────
@@ -1380,7 +1524,7 @@ slots_used=0
 
 for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
-  if (( slots_used >= MAX_PARALLEL )); then
+  if (( slots_used >= STARTUP_SLOT_LIMIT )); then
     log "status" "  $ISSUE: Deferring launch (no remaining slots after challenge allocation)"
     continue
   fi
@@ -1420,7 +1564,7 @@ for t in "${TASKS[@]}"; do
     challenge_reason="forced_model"
     log "debug" "  $ISSUE: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
   else
-    _rs=$((MAX_PARALLEL - slots_used))
+    _rs=$((STARTUP_SLOT_LIMIT - slots_used))
     (( _rs < 2 )) && _rs=2
     challenge_args=(--issue "$ISSUE" --slug "$SLUG" --title "$TITLE" --repo-dir "$REPO_DIR" --remaining-slots "$_rs")
     [[ -n "$rec_model" ]] && challenge_args+=(--primary-model "$rec_model")

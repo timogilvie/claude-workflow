@@ -146,13 +146,13 @@ if [[ ! -f "$MILL_SCRIPT" || ! -f "$RUNNER_SCRIPT" ]]; then
 fi
 
 PRE_TMUX_BLOCK="$(awk '
-  /^log "info" "Normalizing issues with task packets and launching work\.\.\."$/ { capture=1 }
+  /^LAUNCH_ARGS=\(\)$/ { capture=1 }
   /^# Now attach to the session$/ { capture=0 }
   capture { print }
 ' "$MILL_SCRIPT")"
 
 OUTER_PRE_HANDOFF_BLOCK="$(awk '
-  /^log "info" "Normalizing issues with task packets and launching work\.\.\."$/ { capture=1 }
+  /^LAUNCH_ARGS=\(\)$/ { capture=1 }
   /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { capture=0 }
   capture { print }
 ' "$MILL_SCRIPT")"
@@ -315,6 +315,38 @@ if grep -q "respawn-pane -k -t startup-success:control.0" "$MOCK_TMUX_LOG"; then
   pass "startup runner hands control-pane startup off to the monitor"
 else
   fail "startup runner did not launch the monitor in the control pane"
+fi
+
+printf '{"session":"startup-test","started":"2026-04-12T00:00:00Z","tasks":{"HOK-1999":{"slug":"resumed-task","branch":"task/resumed-task","phase":"executing"}}}\n' > "$STATE_FILE"
+: > "$MOCK_TMUX_LOG"
+EMPTY_PLAN="$TMP_ROOT/empty-plan.json"
+EMPTY_MONITOR_ENV="$TMP_ROOT/empty-monitor.env"
+EMPTY_MONITOR_SCRIPT="$TMP_ROOT/empty-monitor.sh"
+EMPTY_STATUS_LOG="$TMP_ROOT/empty-status.log"
+EMPTY_LAUNCHED="$TMP_ROOT/empty-launched.txt"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$EMPTY_MONITOR_SCRIPT"
+chmod +x "$EMPTY_MONITOR_SCRIPT"
+write_plan "$EMPTY_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-empty" "$EMPTY_MONITOR_ENV" "$EMPTY_MONITOR_SCRIPT" "$EMPTY_STATUS_LOG" "$EMPTY_LAUNCHED" "[]"
+
+EMPTY_OUTPUT="$TMP_ROOT/empty-output.txt"
+bash "$RUNNER_SCRIPT" "$EMPTY_PLAN" > "$EMPTY_OUTPUT" 2>&1
+
+if [[ -f "$EMPTY_MONITOR_ENV" ]] && grep -q '^TASKS_FILE=' "$EMPTY_MONITOR_ENV"; then
+  pass "startup runner writes the monitor env when there are no new tasks"
+else
+  fail "startup runner did not write the monitor env for resume-only startup"
+fi
+
+if grep -q 'No new tasks selected. Resuming 1 in-flight task(s) from previous session.' "$EMPTY_OUTPUT"; then
+  pass "startup runner logs resume-only startup when launch plan is empty"
+else
+  fail "startup runner did not report resume-only startup"
+fi
+
+if grep -q "respawn-pane -k -t startup-empty:control.0" "$MOCK_TMUX_LOG"; then
+  pass "startup runner still launches the monitor for resume-only startup"
+else
+  fail "startup runner did not launch the monitor for resume-only startup"
 fi
 
 printf '{"session":"startup-test","started":"2026-04-12T00:00:00Z","tasks":{}}\n' > "$STATE_FILE"

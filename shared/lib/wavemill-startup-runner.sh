@@ -407,7 +407,7 @@ $details_context"
 }
 
 main() {
-  local task_count idx tasks_file monitor_cmd task_json
+  local task_count idx tasks_file monitor_cmd task_json resumed_count
 
   ensure_state_file
   : > "$STATUS_LOG_FILE"
@@ -418,6 +418,10 @@ main() {
 
   task_count="$(jq '.tasks | length' "$PLAN_FILE")"
   startup_log "Tasks to launch: $task_count"
+  if [[ "$task_count" -eq 0 ]]; then
+    resumed_count="$(jq '(.tasks // {}) | length' "$STATE_FILE" 2>/dev/null || echo 0)"
+    startup_log "No new tasks selected. Resuming $resumed_count in-flight task(s) from previous session."
+  fi
 
   idx=0
   while IFS= read -r task_json; do
