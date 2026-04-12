@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
-import { appendEvalRecord, readEvalRecords } from './eval-persistence.ts';
+import { appendEvalRecord, hasChallengeEvalRecord, hasChallengeEvalRecordPair, readEvalRecords } from './eval-persistence.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Test Harness
@@ -286,6 +286,71 @@ test('empty file returns empty array', () => {
     writeFileSync(join(evalsDir, 'evals.jsonl'), '', 'utf-8');
     const records = readEvalRecords({ dir: evalsDir });
     assert.deepEqual(records, []);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+console.log('\n--- Challenge Record Tests ---\n');
+
+test('hasChallengeEvalRecord finds a persisted challenge eval by pair and PR URL', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    appendEvalRecord(makeRecord({
+      id: 'challenge-1',
+      challengePairId: 'pair-123',
+      prUrl: 'https://github.com/org/repo/pull/10',
+    }), { dir: evalsDir });
+
+    assert.equal(
+      hasChallengeEvalRecord('pair-123', 'https://github.com/org/repo/pull/10', { dir: evalsDir }),
+      true,
+    );
+    assert.equal(
+      hasChallengeEvalRecord('pair-123', 'https://github.com/org/repo/pull/11', { dir: evalsDir }),
+      false,
+    );
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('hasChallengeEvalRecordPair requires both challenge eval records to exist', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    appendEvalRecord(makeRecord({
+      id: 'pair-primary',
+      challengePairId: 'pair-456',
+      prUrl: 'https://github.com/org/repo/pull/20',
+    }), { dir: evalsDir });
+
+    assert.equal(
+      hasChallengeEvalRecordPair(
+        'pair-456',
+        'https://github.com/org/repo/pull/20',
+        'https://github.com/org/repo/pull/21',
+        { dir: evalsDir },
+      ),
+      false,
+    );
+
+    appendEvalRecord(makeRecord({
+      id: 'pair-challenger',
+      challengePairId: 'pair-456',
+      prUrl: 'https://github.com/org/repo/pull/21',
+    }), { dir: evalsDir });
+
+    assert.equal(
+      hasChallengeEvalRecordPair(
+        'pair-456',
+        'https://github.com/org/repo/pull/20',
+        'https://github.com/org/repo/pull/21',
+        { dir: evalsDir },
+      ),
+      true,
+    );
   } finally {
     cleanUp(tmp);
   }

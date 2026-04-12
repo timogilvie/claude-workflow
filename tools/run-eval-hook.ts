@@ -4,7 +4,7 @@
  * Post-Completion Eval Hook — CLI wrapper
  *
  * Triggers eval automatically after a workflow completes.
- * Always exits 0 so eval failures never break workflows.
+ * Exits non-zero when the eval record was not persisted.
  */
 
 import { errorMessage } from '../shared/lib/error-utils.ts';
@@ -33,7 +33,7 @@ runTool({
   ],
   additionalHelp: `Notes:
   - Reads autoEval from .wavemill-config.json; skips eval if disabled
-  - Always exits 0 — eval failures are logged but never fail the workflow
+  - Exits non-zero when eval persistence fails or no record is written
   - Results are appended to .wavemill/eval-store.jsonl
   - Use --debug to troubleshoot "no session data found" issues`,
   async run({ args }) {
@@ -87,10 +87,14 @@ runTool({
     }
 
     try {
-      await runPostCompletionEval(context);
+      const persisted = await runPostCompletionEval(context);
+      if (!persisted) {
+        process.exit(1);
+      }
     } catch (err) {
       const message = errorMessage(err);
       console.warn(`Post-completion eval hook: unexpected error — ${message}`);
+      process.exit(1);
     }
   },
 });
