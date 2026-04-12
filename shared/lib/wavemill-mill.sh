@@ -62,6 +62,7 @@ STATE_FILE="$STATE_DIR/workflow-state.json"
 MILL_LOG_DIR="$REPO_DIR/.wavemill/logs"
 mkdir -p "$MILL_LOG_DIR"
 MILL_LOG_FILE="$MILL_LOG_DIR/mill-${SESSION}.log"
+RESUME_MODE="none"  # Will be set by check_and_offer_resume()
 
 trim_outer_whitespace() {
   local value="${1-}"
@@ -223,6 +224,7 @@ write_launch_plan() {
   local t issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file route_file
   local route_json route_planner route_coder route_reviewer route_plan_depth route_code_depth route_review_mode
   local route_payload challenge_flag challenge_pair challenge_role challenge_model migration_number task_agent
+  local resume_phase is_rehydrated
 
   for t in "${LAUNCH_ARGS[@]}"; do
     IFS='|' read -r issue slug title <<<"$t"
@@ -248,6 +250,11 @@ write_launch_plan() {
     challenge_model="${TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]:-}"
     migration_number="$(jq -r --arg issue "$issue" '.migrationReservations[$issue] // empty' "$STATE_FILE" 2>/dev/null || echo "")"
     task_agent="${TASK_AGENT_BY_ISSUE[$issue]:-$AGENT_CMD}"
+
+    # Check if this task is being rehydrated
+    resume_phase="${TASK_RESUME_PHASE_BY_ISSUE[$issue]:-}"
+    is_rehydrated="false"
+    [[ -n "$resume_phase" ]] && is_rehydrated="true"
 
     route_payload="$(jq -n \
       --arg planner "$route_planner" \
@@ -284,6 +291,8 @@ write_launch_plan() {
       --arg challengeModel "$challenge_model" \
       --arg migrationNumber "$migration_number" \
       --arg agent "$task_agent" \
+      --arg resumePhase "$resume_phase" \
+      --arg isRehydrated "$is_rehydrated" \
       '$tasks + [{
         issue: $issue,
         slug: $slug,
@@ -301,7 +310,9 @@ write_launch_plan() {
         challengeRole: (if $challengeRole == "" then null else $challengeRole end),
         challengeModel: (if $challengeModel == "" then null else $challengeModel end),
         migrationNumber: (if $migrationNumber == "" then null else ($migrationNumber | tonumber) end),
-        agent: $agent
+        agent: $agent,
+        resumePhase: (if $resumePhase == "" then null else $resumePhase end),
+        isRehydrated: ($isRehydrated == "true")
       }]')"
   done
 
@@ -1045,11 +1056,111 @@ cleanup_stale_tasks() {
   fi
 }
 
+# ── Rehydration: Resume stalled tasks from previous session ──────────────
+
+check_and_offer_resume() {
+  local remaining_count
+  remaining_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
+  (( remaining_count == 0 )) && return 0  # No tasks to resume
+
+  echo ""
+  log "status" "Found $remaining_count task(s) from a previous session:"
+  echo ""
+
+  # Display each task with its phase
+  while IFS= read -r line; do
+    IFS='|' read -r issue slug phase <<< "$line"
+    printf "  • %s (%s) — %s phase\n" "$issue" "$slug" "${phase:-unknown}"
+  done < <(jq -r '.tasks | to_entries[] | "\(.key)|\(.value.slug)|\(.value.phase // "unknown")"' "$STATE_FILE")
+
+  echo ""
+  echo "Options:"
+  echo "  r — Resume these tasks (default)"
+  echo "  a — Resume these tasks AND add more from backlog"
+  echo "  f — Forget old tasks and start fresh"
+  echo ""
+  read -rp "Choice [r/a/f]: " choice
+  choice="${choice:-r}"
+
+  case "$choice" in
+    [rR]*)
+      RESUME_MODE="resume_only"
+      ;;
+    [aA]*)
+      RESUME_MODE="resume_and_add"
+      ;;
+    [fF]*)
+      RESUME_MODE="fresh"
+      # Clear all tasks from state
+      local tmp; tmp=$(mktemp)
+      jq '.tasks = {} | .updated = (now | todate)' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+      log "info" "Cleared previous task state."
+      ;;
+    *)
+      RESUME_MODE="resume_only"
+      ;;
+  esac
+}
+
+build_rehydrated_launch_args() {
+  # Read all active tasks from workflow-state.json and populate LAUNCH_ARGS
+  # along with all task-specific metadata arrays
+
+  local tasks_json
+  tasks_json=$(jq '.tasks' "$STATE_FILE" 2>/dev/null || echo '{}')
+
+  [[ "$tasks_json" == "{}" ]] && return 0  # No tasks
+
+  while IFS= read -r issue; do
+    [[ -z "$issue" ]] && continue
+
+    local task_json
+    task_json=$(jq -r --arg i "$issue" '.tasks[$i]' "$STATE_FILE")
+
+    local slug title linear_issue phase
+    slug=$(echo "$task_json" | jq -r '.slug // empty')
+    title=$(echo "$task_json" | jq -r '.title // empty')
+    linear_issue=$(echo "$task_json" | jq -r '.linearIssueId // empty')
+    phase=$(echo "$task_json" | jq -r '.phase // "unknown"')
+
+    # If title is empty, try to fetch from Linear
+    if [[ -z "$title" ]]; then
+      title=$(linear_get_issue_title "$issue" 2>/dev/null || echo "$issue")
+    fi
+
+    # Add to LAUNCH_ARGS
+    LAUNCH_ARGS+=("$issue|$slug|$title")
+
+    # Populate metadata arrays from state file
+    TASK_LINEAR_ISSUE_BY_ISSUE[$issue]="$linear_issue"
+    TASK_PLANNER_MODEL_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.plannerModel // empty')"
+    TASK_CODER_MODEL_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.coderModel // empty')"
+    TASK_REVIEWER_MODEL_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.reviewerModel // empty')"
+    TASK_PLAN_DEPTH_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.planDepth // "light"')"
+    TASK_CODE_DEPTH_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.codeDepth // "medium"')"
+    TASK_REVIEW_MODE_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.reviewMode // "static"')"
+    TASK_CHALLENGE_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.challenge // false')"
+    TASK_CHALLENGE_PAIR_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.challengePairId // empty')"
+    TASK_CHALLENGE_ROLE_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.challengeRole // empty')"
+    TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.challengeModel // empty')"
+    TASK_AGENT_BY_ISSUE[$issue]="$(echo "$task_json" | jq -r '.agent // empty')"
+
+    # Store resume phase for later use in startup runner
+    TASK_RESUME_PHASE_BY_ISSUE[$issue]="$phase"
+
+  done < <(jq -r '.tasks | keys[]' "$STATE_FILE")
+
+  log "info" "Rehydrated $((${#LAUNCH_ARGS[@]})) task(s) from previous session."
+}
+
 stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
 if (( stale_count > 0 )); then
   log "debug" "Found $stale_count task(s) in state file from previous run. Checking..."
   cleanup_stale_tasks
 fi
+
+# ── Check for and offer to resume stalled tasks ────────────────────────
+check_and_offer_resume
 
 
 # Display configuration
@@ -1082,23 +1193,76 @@ if [[ ! -f "$STATE_DIR/.initialized" ]] && [[ "$REQUIRE_CONFIRM" == "true" ]]; t
   execute touch "$STATE_DIR/.initialized"
 fi
 
+# ── Handle resume modes ────────────────────────────────────────────────────
 
-log "info" "Fetching backlog..."
-BACKLOG="$(linear_list_backlog)" || {
-  log_error "Failed to fetch backlog from Linear. Check your LINEAR_API_KEY and network."
-  exit 1
-}
+# For resume_only mode, skip backlog selection entirely
+if [[ "$RESUME_MODE" == "resume_only" ]]; then
+  log "info" "Resuming $(($(jq '.tasks | length' "$STATE_FILE"))) task(s) from previous session..."
+  # Populate TASKS from state file for downstream processing
+  TASKS=()
+  while IFS= read -r issue; do
+    [[ -z "$issue" ]] && continue
+    local task_json slug title
+    task_json=$(jq -r --arg i "$issue" '.tasks[$i]' "$STATE_FILE")
+    slug=$(echo "$task_json" | jq -r '.slug // empty')
+    title=$(echo "$task_json" | jq -r '.title // empty')
+    [[ -z "$title" ]] && title=$(linear_get_issue_title "$issue" 2>/dev/null || echo "$issue")
+    TASKS+=("$issue|$slug|$title")
+  done < <(jq -r '.tasks | keys[]' "$STATE_FILE")
+  log "info" "Ready to launch $((${#TASKS[@]})) task(s)"
+  # Jump directly to issue details fetching
+else
+  # Normal flow: fetch backlog and let user select, or resume_and_add
 
-if [[ -z "$BACKLOG" ]] || [[ "$BACKLOG" == "[]" ]]; then
-  log "status" "No backlog items returned from Linear."
-  exit 0
-fi
+  SKIP_BACKLOG_SELECTION=false
+  if [[ "$RESUME_MODE" == "resume_and_add" ]]; then
+    # Adjust MAX_PARALLEL for backlog selection
+    local resumed_count
+    resumed_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
+    if (( resumed_count > 0 )); then
+      log "info" "Resuming $resumed_count task(s) and adding more from backlog..."
+      REMAINING_SLOTS=$((MAX_PARALLEL - resumed_count))
+      if (( REMAINING_SLOTS <= 0 )); then
+        log "status" "Max parallel tasks ($MAX_PARALLEL) already reached by resumed tasks. Skipping backlog selection."
+        # Skip backlog selection entirely - just use resumed tasks
+        TASKS=()
+        while IFS= read -r issue; do
+          [[ -z "$issue" ]] && continue
+          local task_json slug title
+          task_json=$(jq -r --arg i "$issue" '.tasks[$i]' "$STATE_FILE")
+          slug=$(echo "$task_json" | jq -r '.slug // empty')
+          title=$(echo "$task_json" | jq -r '.title // empty')
+          [[ -z "$title" ]] && title=$(linear_get_issue_title "$issue" 2>/dev/null || echo "$issue")
+          TASKS+=("$issue|$slug|$title")
+        done < <(jq -r '.tasks | keys[]' "$STATE_FILE")
+        SKIP_BACKLOG_SELECTION=true
+      else
+        log "info" "Remaining slots for new tasks: $REMAINING_SLOTS"
+        MAX_PARALLEL="$REMAINING_SLOTS"
+      fi
+    fi
+  fi
 
-CANDIDATES="$(pick_candidates "$BACKLOG")"
-if [[ -z "$CANDIDATES" ]]; then
-  log "status" "No backlog candidates found."
-  exit 0
-fi
+SELECTED_TASKS=()
+if [[ "$SKIP_BACKLOG_SELECTION" == "true" ]]; then
+  log "info" "Skipping backlog selection"
+else
+  log "info" "Fetching backlog..."
+  BACKLOG="$(linear_list_backlog)" || {
+    log_error "Failed to fetch backlog from Linear. Check your LINEAR_API_KEY and network."
+    exit 1
+  }
+
+  if [[ -z "$BACKLOG" ]] || [[ "$BACKLOG" == "[]" ]]; then
+    log "status" "No backlog items returned from Linear."
+    exit 0
+  fi
+
+  CANDIDATES="$(pick_candidates "$BACKLOG")"
+  if [[ -z "$CANDIDATES" ]]; then
+    log "status" "No backlog candidates found."
+    exit 0
+  fi
 
 check_subsystem_drift() {
   local drift_output
@@ -1206,12 +1370,38 @@ while true; do
 done
 
 # Use smart selection
-TASKS=()
 SELECTED_LINES="$(smart_select_from_candidates "$CANDIDATES" "$SELECTED")"
 while IFS= read -r line; do
-  [[ -n "$line" ]] && TASKS+=("$line")
+  [[ -n "$line" ]] && SELECTED_TASKS+=("$line")
 done <<<"$SELECTED_LINES"
+fi  # Close the if [[ "$SKIP_BACKLOG_SELECTION" == "true" ]] block
 
+# Merge selected tasks with resumed tasks (for resume_and_add mode)
+if [[ "$RESUME_MODE" == "resume_and_add" ]]; then
+  local resumed_count
+  resumed_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
+  if (( resumed_count > 0 )); then
+    log "info" "Merging resumed tasks with selected tasks..."
+    TASKS=()
+    while IFS= read -r issue; do
+      [[ -z "$issue" ]] && continue
+      local task_json slug title
+      task_json=$(jq -r --arg i "$issue" '.tasks[$i]' "$STATE_FILE")
+      slug=$(echo "$task_json" | jq -r '.slug // empty')
+      title=$(echo "$task_json" | jq -r '.title // empty')
+      [[ -z "$title" ]] && title=$(linear_get_issue_title "$issue" 2>/dev/null || echo "$issue")
+      TASKS+=("$issue|$slug|$title")
+    done < <(jq -r '.tasks | keys[]' "$STATE_FILE")
+    # Add selected tasks
+    TASKS+=("${SELECTED_TASKS[@]}")
+  else
+    TASKS=("${SELECTED_TASKS[@]}")
+  fi
+else
+  TASKS=("${SELECTED_TASKS[@]}")
+fi
+
+fi  # Close the if [[ "$RESUME_MODE" == "resume_only" ]] block
 
 log "info" "Normalizing issues with task packets and launching work..."
 LAUNCH_ARGS=()
@@ -1227,6 +1417,7 @@ declare -A TASK_REVIEWER_MODEL_BY_ISSUE
 declare -A TASK_PLAN_DEPTH_BY_ISSUE
 declare -A TASK_CODE_DEPTH_BY_ISSUE
 declare -A TASK_REVIEW_MODE_BY_ISSUE
+declare -A TASK_RESUME_PHASE_BY_ISSUE
 
 
 # Pre-allocate migration numbers for parallel work

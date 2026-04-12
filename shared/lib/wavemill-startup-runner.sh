@@ -200,6 +200,7 @@ launch_task_from_plan() {
   local challenge challenge_pair challenge_role challenge_model task_agent win
   local packet_content issue_json issue_description issue_context details_context labels_json
   local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false
+  local resume_phase is_rehydrated
 
   issue="$(echo "$task_json" | jq -r '.issue')"
   slug="$(echo "$task_json" | jq -r '.slug')"
@@ -221,6 +222,8 @@ launch_task_from_plan() {
   challenge_role="$(echo "$task_json" | jq -r '.challengeRole // empty')"
   challenge_model="$(echo "$task_json" | jq -r '.challengeModel // empty')"
   task_agent="$(echo "$task_json" | jq -r '.agent // empty')"
+  resume_phase="$(echo "$task_json" | jq -r '.resumePhase // empty')"
+  is_rehydrated="$(echo "$task_json" | jq -r '.isRehydrated // false')"
 
   [[ -z "$task_agent" ]] && task_agent="$AGENT_CMD"
   [[ -z "$coder_model" && -n "$challenge_model" ]] && coder_model="$challenge_model"
@@ -359,7 +362,11 @@ $details_context"
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     return 1
   fi
-  if ! set_task_phase_local "$issue" "$INITIAL_PHASE"; then
+
+  # Determine phase: use resumePhase if rehydrated, otherwise use INITIAL_PHASE
+  local target_phase="${resume_phase:-$INITIAL_PHASE}"
+
+  if ! set_task_phase_local "$issue" "$target_phase"; then
     remove_task_state "$issue" >/dev/null 2>&1 || true
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED at step [5/7]: setting phase"
@@ -368,26 +375,76 @@ $details_context"
   state_written=true
   startup_step "[5/7] Saving workflow state...  ✓"
 
-  if [[ "$PLANNING_MODE" == "interactive" ]]; then
-    planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
-    build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")" > "$planning_prompt"
-    if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")" "${planner_model:-claude-sonnet-4-5-20250929}"; then
-      [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
-      tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-      startup_log "✗ $issue FAILED at step [6/7]: launching planning agent"
-      return 1
-    fi
-  else
-    instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
-    build_autonomous_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" "$task_agent" > "$instr_file"
-    if ! agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent" "$coder_model"; then
-      [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
-      tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-      startup_log "✗ $issue FAILED at step [6/7]: launching implementation agent"
-      return 1
-    fi
+  # Phase-aware agent launch
+  local agent_launch_failed=false
+
+  case "$target_phase" in
+    planning)
+      # Launch planning agent (interactive)
+      planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
+      build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")" > "$planning_prompt"
+      if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")" "${planner_model:-claude-sonnet-4-5-20250929}"; then
+        agent_launch_failed=true
+      fi
+      ;;
+
+    coding|executing)
+      # Launch coding agent (autonomous)
+      instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
+      build_coding_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$task_agent" > "$instr_file"
+      if ! agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent" "$coder_model"; then
+        agent_launch_failed=true
+      fi
+      ;;
+
+    review)
+      # Launch review agent (autonomous)
+      instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
+      build_review_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$task_agent" > "$instr_file"
+      if ! agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent" "$reviewer_model"; then
+        agent_launch_failed=true
+      fi
+      ;;
+
+    awaiting_user|ready|aborted)
+      # Don't launch agent for these phases
+      startup_step "[6/7] Skipping agent launch  ✓"
+      agent_launch_failed=false
+      ;;
+
+    routing)
+      # Default routing phase - use planning or autonomous based on PLANNING_MODE
+      if [[ "$PLANNING_MODE" == "interactive" ]]; then
+        planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
+        build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+          "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")" > "$planning_prompt"
+        if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")" "${planner_model:-claude-sonnet-4-5-20250929}"; then
+          agent_launch_failed=true
+        fi
+      else
+        instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
+        build_autonomous_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+          "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" "$task_agent" > "$instr_file"
+        if ! agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent" "$coder_model"; then
+          agent_launch_failed=true
+        fi
+      fi
+      ;;
+
+    *)
+      startup_log "✗ $issue FAILED at step [6/7]: unknown phase '$target_phase'"
+      agent_launch_failed=true
+      ;;
+  esac
+
+  if [[ "$agent_launch_failed" == true ]]; then
+    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+    tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    startup_log "✗ $issue FAILED at step [6/7]: launching agent for phase '$target_phase'"
+    return 1
   fi
   startup_step "[6/7] Launching agent...        ✓"
 
@@ -402,7 +459,7 @@ $details_context"
   startup_step "[7/7] Setting Linear → In Progress... ✓"
 
   printf '%s\n' "$issue" >> "$LAUNCHED_ISSUES_FILE"
-  startup_log "✓ $issue launched (${coder_model:-$planner_model}, phase: $INITIAL_PHASE)"
+  startup_log "✓ $issue launched (${coder_model:-$planner_model}, phase: $target_phase)"
   return 0
 }
 
