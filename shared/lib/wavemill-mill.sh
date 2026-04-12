@@ -474,11 +474,18 @@ cleanup_completed_task() {
     log "  ✓ Removed worktree: $wt_dir"
   fi
 
-  # Delete branch
+  # Delete branch after removing the worktree so Git can detach cleanly first.
   local task_branch="task/${slug}"
-  if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+    log_warn "  Refusing to delete protected branch: $task_branch"
+  elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-    log "  ✓ Deleted branch: $task_branch"
+    log "  ✓ Deleted local branch: $task_branch"
+    if execute git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
+      log "  ✓ Deleted remote branch: $task_branch"
+    else
+      log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
+    fi
   fi
 
   # Clean up state
@@ -801,7 +808,12 @@ cleanup_stale_tasks() {
           execute git -C "$REPO_DIR" worktree remove "$worktree" --force 2>/dev/null || true
         fi
         if [[ "$reason" != "branch deleted" ]]; then
-          git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
+          if [[ "$branch" == "main" || "$branch" == "master" ]]; then
+            log_warn "  Refusing to delete protected branch: $branch"
+          else
+            git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
+            git -C "$REPO_DIR" push origin --delete "$branch" 2>/dev/null || true
+          fi
         fi
       fi
       # Remove from state file (dashboard will stop showing it)
@@ -2725,11 +2737,18 @@ cleanup_completed_task() {
     log "  ✓ Removed worktree: $wt_dir"
   fi
 
-  # Delete branch
+  # Delete branch after removing the worktree so Git can detach cleanly first.
   local task_branch="task/${slug}"
-  if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+    log_warn "  Refusing to delete protected branch: $task_branch"
+  elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-    log "  ✓ Deleted branch: $task_branch"
+    log "  ✓ Deleted local branch: $task_branch"
+    if git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
+      log "  ✓ Deleted remote branch: $task_branch"
+    else
+      log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
+    fi
   fi
 
   # Clean up state
