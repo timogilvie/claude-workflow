@@ -219,6 +219,30 @@ else
     fail "monitor does not overlay new tasks from TASKS_FILE"
   fi
 
+  if grep -q 'Coding phase launch FAILED (rc=\$launch_rc)' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor logs coding launch failures"
+  else
+    fail "monitor is missing coding launch failure log"
+  fi
+
+  if grep -q 'write_stage_result "\$FEATURE_DIR" "coding" "failed"' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor writes failed coding stage result on launch failure"
+  else
+    fail "monitor does not mark coding stage failed on launch failure"
+  fi
+
+  if grep -q 'Review phase launch FAILED (rc=\$launch_rc)' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor logs review launch failures"
+  else
+    fail "monitor is missing review launch failure log"
+  fi
+
+  if grep -q 'write_stage_result "\$FEATURE_DIR" "review" "failed"' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor writes failed review stage result on launch failure"
+  else
+    fail "monitor does not mark review stage failed on launch failure"
+  fi
+
   if grep -q 'update-linear-state.ts' <<< "$HEREDOC_CONTENT"; then
     fail "monitor references removed update-linear-state.ts tool"
   else
@@ -1002,6 +1026,7 @@ else
   source "$ADAPTER_LIB"
 
   agent_prepare_pane_for_launch() { return 0; }
+  _verify_agent_launched() { return 0; }
   tmux() { :; }
 
   launch_session="check-shell-$$"
@@ -1032,6 +1057,24 @@ else
     fi
   else
     fail "interactive launcher failed for valid model test"
+  fi
+
+  if _pane_command_is_shell "bash"; then
+    pass "_pane_command_is_shell recognizes bash"
+  else
+    fail "_pane_command_is_shell did not recognize bash"
+  fi
+
+  if _pane_command_is_shell "zsh"; then
+    pass "_pane_command_is_shell recognizes zsh"
+  else
+    fail "_pane_command_is_shell did not recognize zsh"
+  fi
+
+  if ! _pane_command_is_shell "codex"; then
+    pass "_pane_command_is_shell rejects non-shell commands"
+  else
+    fail "_pane_command_is_shell accepted a non-shell command"
   fi
 
   rm -f "$prompt_file" "$launcher_file"

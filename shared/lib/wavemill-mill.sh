@@ -3658,6 +3658,13 @@ monitor_issue_state() {
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
+            if [[ "$launch_rc" -ne 0 ]]; then
+              log_error "  $ISSUE → Coding phase launch FAILED (rc=$launch_rc)"
+              write_stage_result "$FEATURE_DIR" "coding" "failed" "$coder_agent" "$coder_model" \
+                "Launch injection failed after retries"
+              set_window_attention_state "$WIN" "needs-user"
+              return 0
+            fi
             set_window_attention_state "$WIN" "clear"
             log "status" "✓ $ISSUE → Plan approved, launching coding phase"
             active_count=$((active_count + 1))
@@ -3769,6 +3776,13 @@ monitor_issue_state() {
               log "status" "⛔ $ISSUE → Workflow aborted during review launch"
               write_stage_result "$FEATURE_DIR" "review" "aborted" "$reviewer_agent" "$reviewer_model"
               set_task_phase "$ISSUE" "aborted"
+              set_window_attention_state "$WIN" "needs-user"
+              return 0
+            fi
+            if [[ "$launch_rc" -ne 0 ]]; then
+              log_error "  $ISSUE → Review phase launch FAILED (rc=$launch_rc)"
+              write_stage_result "$FEATURE_DIR" "review" "failed" "$reviewer_agent" "$reviewer_model" \
+                "Launch injection failed after retries"
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi

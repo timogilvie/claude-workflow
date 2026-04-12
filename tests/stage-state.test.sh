@@ -158,6 +158,14 @@ _pane_is_dead_or_idle() {
   [[ "${PANE_IS_DEAD_OR_IDLE:-false}" == "true" ]]
 }
 
+_pane_command_is_shell() {
+  local cmd="$1"
+  case "$cmd" in
+    bash|zsh|sh|fish|dash|ksh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Reject a plan: transition planning from awaiting_user to failed.
 reject_plan() {
   local feature_dir="$1"
@@ -410,6 +418,28 @@ simulate_review_keepalive() {
   fi
 }
 
+simulate_launch_coding_transition() {
+  local feature_dir="$1"
+  local launch_rc="$2"
+  local coder_agent="${3:-claude}"
+  local coder_model="${4:-claude-opus-4-6}"
+
+  if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$feature_dir"; then
+    write_stage_result "$feature_dir" "coding" "aborted" "$coder_agent" "$coder_model"
+    echo "aborted"
+    return 0
+  fi
+
+  if [[ "$launch_rc" -ne 0 ]]; then
+    write_stage_result "$feature_dir" "coding" "failed" "$coder_agent" "$coder_model" \
+      "Launch injection failed after retries"
+    echo "failed"
+    return 0
+  fi
+
+  echo "running"
+}
+
 # ─────────────────────────────────────────────────────────────────
 echo "=== Stage Result Tests ==="
 # ─────────────────────────────────────────────────────────────────
@@ -592,6 +622,21 @@ ORIG_START_APR=$(jq -r .startedAt "$FD_APR3/.planning-result.json")
 sleep 1
 approve_plan "$FD_APR3" "claude" "opus-4-6"
 check "approve preserves startedAt" "$ORIG_START_APR" "$(jq -r .startedAt "$FD_APR3/.planning-result.json")"
+
+# ─────────────────────────────────────────────────────────────────
+echo ""
+echo "=== Pane Command Classification Tests ==="
+# ─────────────────────────────────────────────────────────────────
+
+check "_pane_command_is_shell bash" "0" "$(_pane_command_is_shell bash; echo $?)"
+check "_pane_command_is_shell zsh" "0" "$(_pane_command_is_shell zsh; echo $?)"
+check "_pane_command_is_shell sh" "0" "$(_pane_command_is_shell sh; echo $?)"
+check "_pane_command_is_shell fish" "0" "$(_pane_command_is_shell fish; echo $?)"
+check "_pane_command_is_shell dash" "0" "$(_pane_command_is_shell dash; echo $?)"
+check "_pane_command_is_shell ksh" "0" "$(_pane_command_is_shell ksh; echo $?)"
+check "_pane_command_is_shell claude" "1" "$(_pane_command_is_shell claude; echo $?)"
+check "_pane_command_is_shell codex" "1" "$(_pane_command_is_shell codex; echo $?)"
+check "_pane_command_is_shell node" "1" "$(_pane_command_is_shell node; echo $?)"
 
 # ─────────────────────────────────────────────────────────────────
 echo ""
@@ -1078,6 +1123,14 @@ touch "$FD58/.plan-approved"
 check "adding .plan-approved completes planning" "completed" "$(simulate_planning_transition "$FD58")"
 check "planning status is completed after marker" "completed" "$(read_stage_status "$FD58" "planning")"
 PANE_IS_DEAD_OR_IDLE=false
+
+# Test 59: Coding launch non-zero return transitions stage to failed
+FD59="$TEST_DIR/test59"
+mkdir -p "$FD59"
+write_stage_result "$FD59" "coding" "running" "claude" "claude-opus-4-6"
+check "launch rc=1 returns failed transition" "failed" "$(simulate_launch_coding_transition "$FD59" 1)"
+check "launch rc=1 writes failed status" "failed" "$(read_stage_status "$FD59" "coding")"
+check "launch failure notes are recorded" "Launch injection failed after retries" "$(jq -r .notes "$FD59/.coding-result.json")"
 
 # ─────────────────────────────────────────────────────────────────
 echo ""

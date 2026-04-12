@@ -943,9 +943,28 @@ LAUNCHEOF
 
   chmod +x "$launcher"
   printf -v launcher_cmd '%q' "$launcher"
-  tmux send-keys -t "$session:$window" -l -- "$launcher_cmd"
-  sleep 0.1
-  tmux send-keys -t "$session:$window" C-m
+
+  local launch_attempt=1
+  while (( launch_attempt <= 2 )); do
+    _agent_log_debug "Injection attempt $launch_attempt for $session:$window"
+    tmux send-keys -t "$session:$window" -l -- "$launcher_cmd"
+    sleep 0.1
+    tmux send-keys -t "$session:$window" C-m
+
+    if _verify_agent_launched "$session" "$window" 5; then
+      return 0
+    fi
+
+    if (( launch_attempt == 1 )); then
+      _agent_log_warn "First injection failed for $session:$window, retrying..."
+      tmux send-keys -t "$session:$window" C-c 2>/dev/null || true
+      sleep 0.5
+    fi
+    (( launch_attempt += 1 ))
+  done
+
+  _agent_log_warn "Agent launch FAILED after 2 attempts in $session:$window"
+  return 1
 }
 
 # ============================================================================
@@ -1005,13 +1024,14 @@ _pane_is_dead_or_idle() {
 
   local current_command
   current_command=$(_pane_current_command "$target")
-  if _pane_command_is_shell "$current_command"; then
+  local children
+  children=$(_pane_child_count "$target")
+
+  if _pane_command_is_shell "$current_command" && [[ "${children:-0}" == "0" ]]; then
     return 0
   fi
 
-  local children
-  children=$(_pane_child_count "$target")
-  [[ "$children" == "0" ]] && return 0
+  [[ "${children:-0}" == "0" ]] && return 0
 
   return 1
 }
@@ -1127,15 +1147,52 @@ agent_pane_is_ready() {
     return 1
   fi
 
-  local current_command
+  local current_command children
   current_command=$(_pane_current_command "$target")
-  if _pane_command_is_shell "$current_command"; then
+  children=$(_pane_child_count "$target")
+
+  if _pane_command_is_shell "$current_command" && [[ "${children:-0}" == "0" ]]; then
     return 0
   fi
 
-  local children
-  children=$(_pane_child_count "$target")
-  [[ "$children" == "0" ]]
+  [[ "${children:-0}" == "0" ]]
+}
+
+# Verify an agent process started in a pane after launcher injection.
+#
+# Args:
+#   $1 = tmux session name
+#   $2 = tmux window name
+#   $3 = max wait seconds (optional, default 5)
+# Returns: 0 if launched, 1 if pane remains idle
+_verify_agent_launched() {
+  local session="$1"
+  local window="$2"
+  local max_wait="${3:-5}"
+  local target="$session:$window"
+  local elapsed=0
+
+  while (( elapsed < max_wait )); do
+    sleep 1
+    (( elapsed += 1 ))
+
+    local current_command children
+    current_command=$(_pane_current_command "$target")
+    children=$(_pane_child_count "$target")
+
+    if [[ "${children:-0}" != "0" ]]; then
+      _agent_log_debug "Agent verified in $target after ${elapsed}s (children=$children)"
+      return 0
+    fi
+
+    if ! _pane_command_is_shell "$current_command"; then
+      _agent_log_debug "Agent verified in $target after ${elapsed}s (cmd=${current_command:-unknown})"
+      return 0
+    fi
+  done
+
+  _agent_log_warn "Agent NOT detected in $target after ${max_wait}s — pane still idle"
+  return 1
 }
 
 agent_wait_for_pane_ready() {
