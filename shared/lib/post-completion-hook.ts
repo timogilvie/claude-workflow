@@ -137,10 +137,12 @@ export function enrichPostCompletionRecord(
  * - Invokes the LLM judge via evaluateTask().
  * - Persists the result via appendEvalRecord() from eval-persistence.
  * - Never throws: all errors are caught and logged as warnings.
+ * - Returns true only after the eval record has been persisted.
  */
-export async function runPostCompletionEval(ctx: PostCompletionContext): Promise<void> {
+export async function runPostCompletionEval(ctx: PostCompletionContext): Promise<boolean> {
   const repoDir = ctx.repoDir || process.cwd();
   const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
+  let persisted = false;
 
   // Always log that we entered this function (for debugging)
   console.log('Post-completion eval: DEBUG_COST=' + (debug ? 'enabled' : 'disabled'));
@@ -162,7 +164,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
 
   if (!ctx.issueId && !ctx.prNumber) {
     console.warn('Post-completion eval: skipped (no issue ID or PR number provided)');
-    return;
+    return false;
   }
 
   try {
@@ -332,15 +334,18 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     // 7. Persist
     const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
     appendEvalRecord(record, { dir: evalsDir });
+    persisted = true;
 
     // 8. Update project context
     await updateProjectContext(ctx, evalContext.prDiff, evalContext.taskPrompt);
 
     // 9. Print summary
     printEvalSummary(record);
+    return true;
   } catch (error: unknown) {
     const message = errorMessage(error);
     console.warn(`Post-completion eval: failed (workflow unaffected) — ${message}`);
+    return persisted;
   }
 }
 

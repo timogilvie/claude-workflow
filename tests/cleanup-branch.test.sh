@@ -41,14 +41,9 @@ else
 fi
 
 outer_cleanup=$(awk '
-  /^cleanup_completed_task\(\)/ {
-    defs += 1
-    if (defs == 2) {
-      in_fn = 1
-    }
-  }
+  /^cleanup_completed_task\(\) \{/ { count++; if (count == 2) in_fn=1 }
   in_fn { print }
-  in_fn && /^}/ { exit }
+  in_fn && /^}$/ { exit }
 ' "$MILL_SCRIPT")
 if grep -Fq 'push origin --delete "$task_branch"' <<< "$outer_cleanup" \
   && grep -Fq 'Deleted remote branch: $task_branch' <<< "$outer_cleanup"; then

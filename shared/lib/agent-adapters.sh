@@ -1075,7 +1075,11 @@ _pane_child_count() {
     return 0
   fi
 
-  pgrep -P "$pane_pid" 2>/dev/null | wc -l | tr -d ' '
+  # pgrep exits 1 when there are no children; under pipefail that should still
+  # count as zero children rather than aborting the caller.
+  {
+    pgrep -P "$pane_pid" 2>/dev/null || true
+  } | wc -l | tr -d ' '
 }
 
 _pane_descendant_pids() {

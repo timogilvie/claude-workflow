@@ -156,10 +156,10 @@ else
   fail "wavemill-mill.sh is missing write_shell_assignment helper"
 fi
 
-if grep -q 'printf -v MONITOR_CMD '\''%q %q'\''' "$MILL_SCRIPT"; then
-  pass "monitor tmux launch command uses shell escaping"
+if grep -q 'printf -v STARTUP_CMD '\''%q %q'\''' "$MILL_SCRIPT"; then
+  pass "startup runner tmux launch command uses shell escaping"
 else
-  fail "monitor tmux launch command is not shell-escaped"
+  fail "startup runner tmux launch command is not shell-escaped"
 fi
 
 # ============================================================================
@@ -511,22 +511,22 @@ else
   fail "external completion path still runs eval inline"
 fi
 
-if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] \
-  && grep -q 'set-window-option -u -t "\$SESSION:\$WIN" window-status-style' "$LIB_DIR/wavemill-orchestrator.sh" \
-  && grep -q 'set-window-option -u -t "\$SESSION:\$WIN" window-status-current-style' "$LIB_DIR/wavemill-orchestrator.sh"; then
-  pass "orchestrator clears per-window attention styling at launch"
+if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
+  && grep -q 'set-window-option -u -t "\$SESSION:\$win" window-status-style' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'set-window-option -u -t "\$SESSION:\$win" window-status-current-style' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  pass "startup runner clears per-window attention styling at launch"
 else
-  fail "orchestrator is missing launch-time attention-style reset"
+  fail "startup runner is missing launch-time attention-style reset"
 fi
 
-if [[ -f "$LIB_DIR/wavemill-orchestrator.sh" ]] \
-  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-orchestrator.sh" \
-  && grep -q 'split-window -t "\$SESSION:control.0" -h -f -p 50' "$LIB_DIR/wavemill-orchestrator.sh" \
-  && grep -q 'respawn-pane -k -t "\$SESSION:control.1".*STATUS_SCRIPT' "$LIB_DIR/wavemill-orchestrator.sh" \
-  && grep -q 'respawn-pane -k -t "\$SESSION:control.2".*tail -n 200 -f' "$LIB_DIR/wavemill-orchestrator.sh"; then
-  pass "orchestrator builds task, dashboard, and log control panes"
+if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
+  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'split-window -t "\$SESSION:control.0" -h -f -p 50' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\$SESSION:control.1".*status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\$SESSION:control.2".*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  pass "startup runner builds task, dashboard, and log control panes"
 else
-  fail "orchestrator is missing the 3-pane control layout wiring"
+  fail "startup runner is missing the 3-pane control layout wiring"
 fi
 
 # ============================================================================
@@ -848,6 +848,30 @@ if agent_verify_launch "wavemill-test" "planning" 0.1 0.05; then
   fail "agent_verify_launch reported success for an idle shell"
 else
   pass "agent_verify_launch fails when the pane stays idle"
+fi
+
+PANE_CHILD_CHECK=$(bash -lc '
+  set -euo pipefail
+  source "'"$LIB_DIR/agent-adapters.sh"'"
+  tmux() {
+    if [[ "${1:-}" == "display-message" && "${*: -1}" == "#{pane_pid}" ]]; then
+      printf "%s\n" "$$"
+      return 0
+    fi
+    return 1
+  }
+  pgrep() {
+    if [[ "${1:-}" == "-P" ]]; then
+      return 1
+    fi
+    return 2
+  }
+  printf "children=%s\n" "$(_pane_child_count wavemill-test:planning)"
+' 2>/dev/null || true)
+if [[ "$PANE_CHILD_CHECK" == "children=0" ]]; then
+  pass "_pane_child_count treats missing child processes as zero"
+else
+  fail "_pane_child_count still fails when pgrep reports no child processes"
 fi
 
 VERIFY_TMUX_MODE="running"
