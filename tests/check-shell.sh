@@ -834,6 +834,30 @@ else
   pass "agent_verify_launch fails when the pane stays idle"
 fi
 
+PANE_CHILD_CHECK=$(bash -lc '
+  set -euo pipefail
+  source "'"$LIB_DIR/agent-adapters.sh"'"
+  tmux() {
+    if [[ "${1:-}" == "display-message" && "${*: -1}" == "#{pane_pid}" ]]; then
+      printf "%s\n" "$$"
+      return 0
+    fi
+    return 1
+  }
+  pgrep() {
+    if [[ "${1:-}" == "-P" ]]; then
+      return 1
+    fi
+    return 2
+  }
+  printf "children=%s\n" "$(_pane_child_count wavemill-test:planning)"
+' 2>/dev/null || true)
+if [[ "$PANE_CHILD_CHECK" == "children=0" ]]; then
+  pass "_pane_child_count treats missing child processes as zero"
+else
+  fail "_pane_child_count still fails when pgrep reports no child processes"
+fi
+
 VERIFY_TMUX_MODE="running"
 VERIFY_TMUX_CHILDREN=1
 if agent_verify_launch "wavemill-test" "planning" 0.1 0.05 "codex" "1"; then
