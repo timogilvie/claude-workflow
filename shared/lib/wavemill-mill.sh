@@ -188,6 +188,188 @@ write_shell_assignment() {
   printf '%q\n' "$value"
 }
 
+create_tmux_session() {
+  local tmux_conf
+  tmux_conf="$(cd "$SCRIPT_DIR/../.." && pwd)/.tmux.conf"
+
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    local existing_dir
+    existing_dir=$(tmux show-environment -t "$SESSION" REPO_DIR 2>/dev/null | sed 's/^REPO_DIR=//') || true
+    if [[ -n "$existing_dir" && "$existing_dir" != "$REPO_DIR" ]]; then
+      echo "ERROR: tmux session '$SESSION' is already active in: $existing_dir" >&2
+      echo "Cannot start a new session for: $REPO_DIR" >&2
+      echo "" >&2
+      echo "Options:" >&2
+      echo "  - Stop the existing session first (tmux kill-session -t '$SESSION')" >&2
+      echo "  - Use a different session name: SESSION=my-session wavemill mill" >&2
+      return 1
+    fi
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+  fi
+
+  tmux -f "$tmux_conf" new-session -d -s "$SESSION" -c "$REPO_DIR" -n control
+  tmux set-environment -t "$SESSION" REPO_DIR "$REPO_DIR"
+  tmux set-environment -t "$SESSION" WAVEMILL_MILL_ACTIVE "$REPO_DIR"
+  tmux send-keys -t "$SESSION:control" "echo 'Control window for $SESSION'" C-m
+}
+
+write_launch_plan() {
+  local launch_plan_file="$1"
+  local initial_phase="routing"
+  [[ "$PLANNING_MODE" == "interactive" ]] && initial_phase="planning"
+  [[ "$PLANNING_MODE" == "skip" ]] && initial_phase="executing"
+
+  local tasks_json='[]'
+  local t issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file route_file
+  local route_json route_planner route_coder route_reviewer route_plan_depth route_code_depth route_review_mode
+  local route_payload challenge_flag challenge_pair challenge_role challenge_model migration_number task_agent
+
+  for t in "${LAUNCH_ARGS[@]}"; do
+    IFS='|' read -r issue slug title <<<"$t"
+    branch="task/${slug}"
+    wt_dir="${WORKTREE_ROOT}/${slug}"
+    linear_issue="${TASK_LINEAR_ISSUE_BY_ISSUE[$issue]:-$issue}"
+    task_packet_file="/tmp/${SESSION}-${issue}-taskpacket.md"
+    details_file="/tmp/${SESSION}-${issue}-taskpacket-details.md"
+    issue_json_file="/tmp/${SESSION}-${issue}-issue.json"
+    route_file="/tmp/${SESSION}-${issue}-route.json"
+    route_json='{}'
+    [[ -f "$route_file" ]] && route_json="$(cat "$route_file" 2>/dev/null || echo '{}')"
+
+    route_planner="${TASK_PLANNER_MODEL_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.planner // empty' 2>/dev/null)}"
+    route_coder="${TASK_CODER_MODEL_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.coder // empty' 2>/dev/null)}"
+    route_reviewer="${TASK_REVIEWER_MODEL_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.reviewer // empty' 2>/dev/null)}"
+    route_plan_depth="${TASK_PLAN_DEPTH_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.planDepth // "light"' 2>/dev/null)}"
+    route_code_depth="${TASK_CODE_DEPTH_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.codeDepth // "medium"' 2>/dev/null)}"
+    route_review_mode="${TASK_REVIEW_MODE_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.reviewRecommended // .reviewMode // "static"' 2>/dev/null)}"
+    challenge_flag="${TASK_CHALLENGE_BY_ISSUE[$issue]:-false}"
+    challenge_pair="${TASK_CHALLENGE_PAIR_BY_ISSUE[$issue]:-}"
+    challenge_role="${TASK_CHALLENGE_ROLE_BY_ISSUE[$issue]:-}"
+    challenge_model="${TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]:-}"
+    migration_number="$(jq -r --arg issue "$issue" '.migrationReservations[$issue] // empty' "$STATE_FILE" 2>/dev/null || echo "")"
+    task_agent="${TASK_AGENT_BY_ISSUE[$issue]:-$AGENT_CMD}"
+
+    route_payload="$(jq -n \
+      --arg planner "$route_planner" \
+      --arg coder "$route_coder" \
+      --arg reviewer "$route_reviewer" \
+      --arg planDepth "$route_plan_depth" \
+      --arg codeDepth "$route_code_depth" \
+      --arg reviewMode "$route_review_mode" \
+      '{
+        planner: $planner,
+        coder: $coder,
+        reviewer: $reviewer,
+        planDepth: $planDepth,
+        codeDepth: $codeDepth,
+        reviewMode: $reviewMode
+      }')"
+
+    tasks_json="$(jq -n \
+      --argjson tasks "$tasks_json" \
+      --arg issue "$issue" \
+      --arg slug "$slug" \
+      --arg title "$title" \
+      --arg branch "$branch" \
+      --arg worktreeDir "$wt_dir" \
+      --arg linearIssueId "$linear_issue" \
+      --arg taskPacketFile "$task_packet_file" \
+      --arg taskPacketDetailsFile "$details_file" \
+      --arg issueJsonFile "$issue_json_file" \
+      --arg routeFile "$route_file" \
+      --argjson route "$route_payload" \
+      --arg challenge "$challenge_flag" \
+      --arg challengePairId "$challenge_pair" \
+      --arg challengeRole "$challenge_role" \
+      --arg challengeModel "$challenge_model" \
+      --arg migrationNumber "$migration_number" \
+      --arg agent "$task_agent" \
+      '$tasks + [{
+        issue: $issue,
+        slug: $slug,
+        title: $title,
+        branch: $branch,
+        worktreeDir: $worktreeDir,
+        linearIssueId: $linearIssueId,
+        taskPacketFile: $taskPacketFile,
+        taskPacketDetailsFile: $taskPacketDetailsFile,
+        issueJsonFile: $issueJsonFile,
+        routeFile: $routeFile,
+        route: $route,
+        challenge: ($challenge == "true"),
+        challengePairId: (if $challengePairId == "" then null else $challengePairId end),
+        challengeRole: (if $challengeRole == "" then null else $challengeRole end),
+        challengeModel: (if $challengeModel == "" then null else $challengeModel end),
+        migrationNumber: (if $migrationNumber == "" then null else ($migrationNumber | tonumber) end),
+        agent: $agent
+      }]')"
+  done
+
+  jq -n \
+    --arg session "$SESSION" \
+    --arg repoDir "$REPO_DIR" \
+    --arg baseBranch "$BASE_BRANCH" \
+    --arg worktreeRoot "$WORKTREE_ROOT" \
+    --arg planningMode "$PLANNING_MODE" \
+    --arg agentCmd "$AGENT_CMD" \
+    --arg agentCmdExplicit "${AGENT_CMD_EXPLICIT:-}" \
+    --arg forceModel "${FORCE_MODEL:-}" \
+    --arg routerEnabled "${ROUTER_ENABLED:-true}" \
+    --arg maxParallel "$MAX_PARALLEL" \
+    --arg stateDir "$STATE_DIR" \
+    --arg stateFile "$STATE_FILE" \
+    --arg toolsDir "$TOOLS_DIR" \
+    --arg libDir "$SCRIPT_DIR" \
+    --arg initialPhase "$initial_phase" \
+    --arg statusLogFile "$STATUS_LOG_FILE" \
+    --arg monitorEnv "$MONITOR_ENV" \
+    --arg monitorScript "$MONITOR_SCRIPT" \
+    --arg launchedIssuesFile "$LAUNCHED_ISSUES_FILE" \
+    --argjson tasks "$tasks_json" \
+    --arg pollSeconds "$POLL_SECONDS" \
+    --arg requireConfirm "$REQUIRE_CONFIRM" \
+    --arg dryRun "$DRY_RUN" \
+    --arg projectName "$PROJECT_NAME" \
+    --arg autoEval "$AUTO_EVAL" \
+    --arg dashboardVerbosity "$DASHBOARD_VERBOSITY" \
+    --arg dashboardLogToFile "$DASHBOARD_LOG_TO_FILE" \
+    --arg millLogFile "$MILL_LOG_FILE" \
+    '{
+      session: $session,
+      repoDir: $repoDir,
+      baseBranch: $baseBranch,
+      worktreeRoot: $worktreeRoot,
+      planningMode: $planningMode,
+      agentCmd: $agentCmd,
+      agentCmdExplicit: ($agentCmdExplicit == "true"),
+      forceModel: (if $forceModel == "" then null else $forceModel end),
+      routerEnabled: ($routerEnabled == "true"),
+      maxParallel: ($maxParallel | tonumber),
+      stateDir: $stateDir,
+      stateFile: $stateFile,
+      toolsDir: $toolsDir,
+      libDir: $libDir,
+      initialPhase: $initialPhase,
+      tasks: $tasks,
+      startupConfig: {
+        statusLogFile: $statusLogFile,
+        monitorEnv: $monitorEnv,
+        monitorScript: $monitorScript,
+        launchedIssuesFile: $launchedIssuesFile,
+        millLogFile: $millLogFile
+      },
+      monitorConfig: {
+        pollSeconds: ($pollSeconds | tonumber),
+        requireConfirm: ($requireConfirm == "true"),
+        dryRun: ($dryRun == "true"),
+        projectName: $projectName,
+        autoEval: ($autoEval == "true"),
+        dashboardVerbosity: $dashboardVerbosity,
+        dashboardLogToFile: ($dashboardLogToFile == "true")
+      }
+    }' > "$launch_plan_file"
+}
+
 
 # Dry-run wrapper
 execute() {
@@ -724,6 +906,14 @@ validate_pr_merge() {
 ISSUES_IN_PROGRESS=()
 cleanup_on_exit() {
   local exit_code=$?
+  local launched_issue_file="/tmp/${SESSION}-launched-issues.txt"
+
+  if [[ ${#ISSUES_IN_PROGRESS[@]} -eq 0 && -f "$launched_issue_file" ]]; then
+    while IFS= read -r issue; do
+      [[ -n "$issue" ]] && ISSUES_IN_PROGRESS+=("$issue")
+    done < <(sort -u "$launched_issue_file" 2>/dev/null || true)
+  fi
+
   if [[ ${#ISSUES_IN_PROGRESS[@]} -gt 0 ]]; then
     log_warn "Interrupted - resetting Linear state for unfinished tasks..."
     log_warn "Worktrees and branches preserved for resumption on next run."
@@ -1024,6 +1214,18 @@ done <<<"$SELECTED_LINES"
 
 log "info" "Normalizing issues with task packets and launching work..."
 LAUNCH_ARGS=()
+declare -A TASK_LINEAR_ISSUE_BY_ISSUE
+declare -A TASK_CHALLENGE_BY_ISSUE
+declare -A TASK_CHALLENGE_PAIR_BY_ISSUE
+declare -A TASK_CHALLENGE_ROLE_BY_ISSUE
+declare -A TASK_CHALLENGE_MODEL_BY_ISSUE
+declare -A TASK_AGENT_BY_ISSUE
+declare -A TASK_PLANNER_MODEL_BY_ISSUE
+declare -A TASK_CODER_MODEL_BY_ISSUE
+declare -A TASK_REVIEWER_MODEL_BY_ISSUE
+declare -A TASK_PLAN_DEPTH_BY_ISSUE
+declare -A TASK_CODE_DEPTH_BY_ISSUE
+declare -A TASK_REVIEW_MODE_BY_ISSUE
 
 
 # Pre-allocate migration numbers for parallel work
@@ -1069,7 +1271,7 @@ for t in "${TASKS[@]}"; do
 done
 
 
-# ── Phase 3: Migration detection + state saving ──────────────────────────
+# ── Phase 3: Migration detection ──────────────────────────────────────────
 for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
   PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
@@ -1104,23 +1306,6 @@ for t in "${TASKS[@]}"; do
     NEXT_MIGRATION_NUM=$((NEXT_MIGRATION_NUM + 1))
   fi
 
-  # Don't set state yet - wait until user confirms
-  # Save to state ledger (for tracking)
-  BRANCH="task/${SLUG}"
-  WT_DIR="${WORKTREE_ROOT}/${SLUG}"
-  # Initialize with correct agent (resolve from FORCE_MODEL if set)
-  initial_agent="$AGENT_CMD"
-  if [[ -n "${FORCE_MODEL:-}" ]]; then
-    # Validate model before proceeding
-    if ! agent_validate_model "$FORCE_MODEL" "$REPO_DIR"; then
-      log_error "Invalid FORCE_MODEL: $FORCE_MODEL"
-      log_error "Run 'wavemill mill' without FORCE_MODEL to use the router, or fix the model name."
-      exit 1
-    fi
-    initial_agent="$(agent_resolve_from_model "$FORCE_MODEL")"
-  fi
-  save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "" "" "$initial_agent"
-
   log "status" "  ✓ $ISSUE ready"
   LAUNCH_ARGS+=("$t")
 done
@@ -1128,6 +1313,11 @@ done
 
 # ── Phase 4: Stage-aware model routing ─────────────────────────────────
 if [[ -n "${FORCE_MODEL:-}" ]]; then
+  if ! agent_validate_model "$FORCE_MODEL" "$REPO_DIR"; then
+    log_error "Invalid FORCE_MODEL: $FORCE_MODEL"
+    log_error "Run 'wavemill mill' without FORCE_MODEL to use the router, or fix the model name."
+    exit 1
+  fi
   log "info" "FORCE_MODEL=$FORCE_MODEL - skipping router"
 elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
   ROUTE_TOOL="$TOOLS_DIR/route-task.ts"
@@ -1191,7 +1381,6 @@ for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
   if (( slots_used >= MAX_PARALLEL )); then
     log "status" "  $ISSUE: Deferring launch (no remaining slots after challenge allocation)"
-    remove_task_state "$ISSUE" 2>/dev/null || true
     continue
   fi
   rec_model=""
@@ -1252,10 +1441,31 @@ for t in "${TASKS[@]}"; do
     cp "/tmp/${SESSION}-${ISSUE}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
     cp "/tmp/${SESSION}-${ISSUE}-taskpacket-details.md" "/tmp/${SESSION}-${challenger_key}-taskpacket-details.md" 2>/dev/null || true
 
-    save_task_state "$ISSUE" "$SLUG" "task/${SLUG}" "${WORKTREE_ROOT}/${SLUG}" "" "" "${primary_agent:-$rec_agent}" "$ISSUE" "true" "$ISSUE" "primary" "$primary_model" \
-      "$route_planner" "$primary_model" "$route_reviewer" "$route_plan_depth" "$route_code_depth" "$route_review_mode"
-    save_task_state "$challenger_key" "$challenger_slug" "$challenger_branch" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_agent:-$AGENT_CMD}" "$ISSUE" "true" "$ISSUE" "challenger" "$challenger_model" \
-      "$route_planner" "$challenger_model" "$route_reviewer" "$route_plan_depth" "$route_code_depth" "$route_review_mode"
+    TASK_LINEAR_ISSUE_BY_ISSUE["$ISSUE"]="$ISSUE"
+    TASK_CHALLENGE_BY_ISSUE["$ISSUE"]="true"
+    TASK_CHALLENGE_PAIR_BY_ISSUE["$ISSUE"]="$ISSUE"
+    TASK_CHALLENGE_ROLE_BY_ISSUE["$ISSUE"]="primary"
+    TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
+    TASK_AGENT_BY_ISSUE["$ISSUE"]="${primary_agent:-$rec_agent}"
+    TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="$route_planner"
+    TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
+    TASK_REVIEWER_MODEL_BY_ISSUE["$ISSUE"]="$route_reviewer"
+    TASK_PLAN_DEPTH_BY_ISSUE["$ISSUE"]="$route_plan_depth"
+    TASK_CODE_DEPTH_BY_ISSUE["$ISSUE"]="$route_code_depth"
+    TASK_REVIEW_MODE_BY_ISSUE["$ISSUE"]="$route_review_mode"
+
+    TASK_LINEAR_ISSUE_BY_ISSUE["$challenger_key"]="$ISSUE"
+    TASK_CHALLENGE_BY_ISSUE["$challenger_key"]="true"
+    TASK_CHALLENGE_PAIR_BY_ISSUE["$challenger_key"]="$ISSUE"
+    TASK_CHALLENGE_ROLE_BY_ISSUE["$challenger_key"]="challenger"
+    TASK_CHALLENGE_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
+    TASK_AGENT_BY_ISSUE["$challenger_key"]="${challenger_agent:-$AGENT_CMD}"
+    TASK_PLANNER_MODEL_BY_ISSUE["$challenger_key"]="$route_planner"
+    TASK_CODER_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
+    TASK_REVIEWER_MODEL_BY_ISSUE["$challenger_key"]="$route_reviewer"
+    TASK_PLAN_DEPTH_BY_ISSUE["$challenger_key"]="$route_plan_depth"
+    TASK_CODE_DEPTH_BY_ISSUE["$challenger_key"]="$route_code_depth"
+    TASK_REVIEW_MODE_BY_ISSUE["$challenger_key"]="$route_review_mode"
 
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
     FINAL_LAUNCH_ARGS+=("$challenger_key|$challenger_slug|$TITLE")
@@ -1265,89 +1475,29 @@ for t in "${TASKS[@]}"; do
     if [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
       log "debug" "  $ISSUE: Challenge skipped ($challenge_reason), launching single-model run"
     fi
-    save_task_state "$ISSUE" "$SLUG" "task/${SLUG}" "${WORKTREE_ROOT}/${SLUG}" "" "" "$rec_agent" "$ISSUE" "false" "" "" "$rec_model" \
-      "$route_planner" "$rec_model" "$route_reviewer" "$route_plan_depth" "$route_code_depth" "$route_review_mode"
+    TASK_LINEAR_ISSUE_BY_ISSUE["$ISSUE"]="$ISSUE"
+    TASK_CHALLENGE_BY_ISSUE["$ISSUE"]="false"
+    TASK_CHALLENGE_PAIR_BY_ISSUE["$ISSUE"]=""
+    TASK_CHALLENGE_ROLE_BY_ISSUE["$ISSUE"]=""
+    TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]=""
+    TASK_AGENT_BY_ISSUE["$ISSUE"]="$rec_agent"
+    TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="$route_planner"
+    TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$rec_model"
+    TASK_REVIEWER_MODEL_BY_ISSUE["$ISSUE"]="$route_reviewer"
+    TASK_PLAN_DEPTH_BY_ISSUE["$ISSUE"]="$route_plan_depth"
+    TASK_CODE_DEPTH_BY_ISSUE["$ISSUE"]="$route_code_depth"
+    TASK_REVIEW_MODE_BY_ISSUE["$ISSUE"]="$route_review_mode"
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
     slots_used=$((slots_used + 1))
   fi
 done
 
 LAUNCH_ARGS=("${FINAL_LAUNCH_ARGS[@]}")
-
-
-# User confirmed (or no confirmation needed) - now set issues to In Progress
-INITIAL_PHASE="routing"
-# Interactive mode launches planning directly after deterministic routing, so
-# the persisted state should reflect planning immediately.
-[[ "$PLANNING_MODE" == "interactive" ]] && INITIAL_PHASE="planning"
-# Legacy mode: skip routing and planning phases if autonomous
-[[ "$PLANNING_MODE" == "skip" ]] && INITIAL_PHASE="executing"
-
-for t in "${LAUNCH_ARGS[@]}"; do
-  IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
-  ISSUES_IN_PROGRESS+=("$ISSUE")
-  if [[ "$ISSUE" != *"__challenger" ]]; then
-    linear_set_state "$ISSUE" "In Progress"
-  fi
-  set_task_phase "$ISSUE" "$INITIAL_PHASE"
-  log "status" "Set $ISSUE → In Progress (phase: $INITIAL_PHASE)"
-done
-
-
-# Find orchestrator script (should be in same directory as this script)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ORCHESTRATOR="$SCRIPT_DIR/wavemill-orchestrator.sh"
-
-
-if [[ ! -f "$ORCHESTRATOR" ]]; then
-  echo "Error: wavemill-orchestrator.sh not found at $ORCHESTRATOR"
-  exit 1
-fi
-
-
-# Fetch latest base branch so worktrees start from up-to-date main
-log "info" "Fetching latest $BASE_BRANCH from remote..."
-git -C "$REPO_DIR" fetch origin "$BASE_BRANCH"
-
-# Dedicated scrolling log for the control window's status pane.
-STATUS_LOG_FILE="/tmp/${SESSION}-control-status.log"
-: > "$STATUS_LOG_FILE"
-
-# Call the launcher script (don't attach yet)
-# Pass state file so the dashboard can show richer info
-WAVEMILL_STATE_FILE="$STATE_FILE" STATUS_LOG_FILE="$STATUS_LOG_FILE" ORCHESTRATOR_NO_ATTACH=1 "$ORCHESTRATOR" "$SESSION" "${LAUNCH_ARGS[@]}"
-
-
-# Write monitor env file (avoids long command lines in tmux pane)
-MONITOR_ENV="/tmp/${SESSION}-monitor.env"
-{
-  write_shell_assignment "SESSION" "$SESSION"
-  write_shell_assignment "REPO_DIR" "$REPO_DIR"
-  write_shell_assignment "WORKTREE_ROOT" "$WORKTREE_ROOT"
-  write_shell_assignment "TOOLS_DIR" "$TOOLS_DIR"
-  write_shell_assignment "LIB_DIR" "$SCRIPT_DIR"
-  write_shell_assignment "STATE_DIR" "$STATE_DIR"
-  write_shell_assignment "STATE_FILE" "$STATE_FILE"
-  write_shell_assignment "POLL_SECONDS" "$POLL_SECONDS"
-  write_shell_assignment "REQUIRE_CONFIRM" "$REQUIRE_CONFIRM"
-  write_shell_assignment "DRY_RUN" "$DRY_RUN"
-  write_shell_assignment "BASE_BRANCH" "$BASE_BRANCH"
-  write_shell_assignment "PROJECT_NAME" "$PROJECT_NAME"
-  write_shell_assignment "PLANNING_MODE" "$PLANNING_MODE"
-  write_shell_assignment "AGENT_CMD" "$AGENT_CMD"
-  write_shell_assignment "AGENT_CMD_EXPLICIT" "${AGENT_CMD_EXPLICIT:-}"
-  write_shell_assignment "ROUTER_ENABLED" "${ROUTER_ENABLED:-true}"
-  write_shell_assignment "MAX_PARALLEL" "$MAX_PARALLEL"
-  write_shell_assignment "AUTO_EVAL" "$AUTO_EVAL"
-  write_shell_assignment "DASHBOARD_VERBOSITY" "$DASHBOARD_VERBOSITY"
-  write_shell_assignment "DASHBOARD_LOG_TO_FILE" "$DASHBOARD_LOG_TO_FILE"
-  write_shell_assignment "MILL_LOG_FILE" "$MILL_LOG_FILE"
-  write_shell_assignment "STATUS_LOG_FILE" "$STATUS_LOG_FILE"
-} > "$MONITOR_ENV"
-
-
 # Create monitoring script that will run in tmux
+STATUS_LOG_FILE="/tmp/${SESSION}-control-status.log"
+MONITOR_ENV="/tmp/${SESSION}-monitor.env"
 MONITOR_SCRIPT="/tmp/${SESSION}-monitor.sh"
+LAUNCHED_ISSUES_FILE="/tmp/${SESSION}-launched-issues.txt"
 cat > "$MONITOR_SCRIPT" <<'MONITOR_EOF'
 #!/opt/homebrew/bin/bash
 set -Eeuo pipefail
@@ -4446,18 +4596,27 @@ MONITOR_EOF
 chmod +x "$MONITOR_SCRIPT"
 
 
-# Launch monitor in control window's first pane
-log "status" "Starting monitoring in tmux control window..."
+# Fetch latest base branch so worktrees start from up-to-date main
+log "info" "Fetching latest $BASE_BRANCH from remote..."
+git -C "$REPO_DIR" fetch origin "$BASE_BRANCH"
 
+: > "$STATUS_LOG_FILE"
+: > "$LAUNCHED_ISSUES_FILE"
 
-# Write tasks to temp file and add to env
-TASKS_FILE="/tmp/${SESSION}-tasks.txt"
-printf '%s\n' "${LAUNCH_ARGS[@]}" > "$TASKS_FILE"
-write_shell_assignment "TASKS_FILE" "$TASKS_FILE" >> "$MONITOR_ENV"
+LAUNCH_PLAN_FILE="/tmp/${SESSION}-launch-plan.json"
+write_launch_plan "$LAUNCH_PLAN_FILE"
 
+STARTUP_RUNNER="$SCRIPT_DIR/wavemill-startup-runner.sh"
+if [[ ! -f "$STARTUP_RUNNER" ]]; then
+  echo "Error: wavemill-startup-runner.sh not found at $STARTUP_RUNNER" >&2
+  exit 1
+fi
 
-printf -v MONITOR_CMD '%q %q' "$MONITOR_SCRIPT" "$MONITOR_ENV"
-tmux respawn-pane -k -t "$SESSION:control.0" "$MONITOR_CMD"
+log "status" "Creating tmux session..."
+create_tmux_session
+
+printf -v STARTUP_CMD '%q %q' "$STARTUP_RUNNER" "$LAUNCH_PLAN_FILE"
+tmux respawn-pane -k -t "$SESSION:control.0" "$STARTUP_CMD"
 
 
 # Now attach to the session
