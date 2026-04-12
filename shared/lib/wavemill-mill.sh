@@ -3621,7 +3621,10 @@ monitor_issue_state() {
           ;;
 
         planning)
+          local approval_wait_var="_approval_wait_logged_${ISSUE//[^a-zA-Z0-9]/_}"
+
           if [[ "$resolved_phase" == "aborted" ]]; then
+            unset "$approval_wait_var" 2>/dev/null || true
             log "status" "⛔ $ISSUE → Workflow aborted by user during planning phase"
             write_stage_result "$FEATURE_DIR" "planning" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
@@ -3654,6 +3657,7 @@ monitor_issue_state() {
           fi
 
           if [[ "$resolved_phase" == "coding" ]]; then
+            unset "$approval_wait_var" 2>/dev/null || true
             # Record approval via approve_plan (HOK-1193: controller-owned stage result)
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
@@ -3706,6 +3710,7 @@ monitor_issue_state() {
           # Transition 1: running/awaiting_user + .plan-approved → completed
           if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+              unset "$approval_wait_var" 2>/dev/null || true
               log "status" "✓ $ISSUE → Plan approved (via .plan-approved marker), marking as completed"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
               # Next iteration will detect resolved_phase == "coding" and launch coding
@@ -3717,6 +3722,7 @@ monitor_issue_state() {
           # Transition 2: running + plan.md → awaiting_user
           if [[ "$planning_status" == "running" ]]; then
             if [[ -f "$FEATURE_DIR/plan.md" ]]; then
+              unset "$approval_wait_var" 2>/dev/null || true
               log "status" "✓ $ISSUE → plan.md detected, marking planning as awaiting_user"
               write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
               set_window_attention_state "$WIN" "needs-user"
@@ -3729,6 +3735,7 @@ monitor_issue_state() {
           if [[ "$resolved_phase" == "awaiting_user" ]]; then
             # Check if user signaled approval by creating .plan-approved marker
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+              unset "$approval_wait_var" 2>/dev/null || true
               log "status" "✓ $ISSUE → User approved plan (via .plan-approved marker)"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
               # Now completed — next poll iteration will pick up and launch coding
@@ -3738,9 +3745,12 @@ monitor_issue_state() {
 
             # HOK-1210: Do NOT auto-approve just because the pane is idle.
             # The agent must create .plan-approved after explicit user approval.
-            # If the agent exited without the marker, keep needs-user attention.
+            # If the pane is idle or dead without the marker, log once and wait for user.
             if [[ -f "$FEATURE_DIR/plan.md" ]] && _pane_is_dead_or_idle "$SESSION:$WIN"; then
-              log "status" "⏳ $ISSUE → Agent exited with plan ready but no approval marker — waiting for user"
+              if [[ "${!approval_wait_var:-}" != "true" ]]; then
+                log "status" "⏳ $ISSUE → Plan ready — awaiting user approval (touch .plan-approved to continue)"
+                printf -v "$approval_wait_var" '%s' "true"
+              fi
             fi
 
             set_window_attention_state "$WIN" "needs-user"
