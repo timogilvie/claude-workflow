@@ -270,12 +270,13 @@ else
     fail "monitor planning approval check runs too late (after controller-state keepalive)"
   fi
 
+  # HOK-1210: Monitor must NOT auto-approve on idle pane. It should log and wait.
   if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$resolved_phase" == "awaiting_user" \]\]; then' \
     && echo "$MONITOR_ISSUE_BLOCK" | grep -q '_pane_is_dead_or_idle "\$SESSION:\$WIN"' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Agent exited with plan ready, auto-approving'; then
-    pass "monitor auto-captures planning approval after interactive agent exit"
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'no approval marker'; then
+    pass "monitor logs idle pane without auto-approving (HOK-1210)"
   else
-    fail "monitor is missing planning auto-approval capture on agent exit"
+    fail "monitor is missing HOK-1210 idle-pane-without-approval guard"
   fi
 
   # resolve_phase() checks abort first internally, so we verify it's called

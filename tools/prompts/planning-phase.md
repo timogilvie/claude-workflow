@@ -51,8 +51,8 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
    - Wait for user approval
 
 7. **After approval**:
-   - Your work is done - the orchestrator handles plan approval and launches the next phase automatically
-   - Do NOT create any approval marker files
+   - Create the approval marker: touch features/{{SLUG}}/.plan-approved
+   - Then stop working — the orchestrator detects this marker and launches the coding phase automatically
 
 ### Planning Depth: {{PLAN_DEPTH}}
 
