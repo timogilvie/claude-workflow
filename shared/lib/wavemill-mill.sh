@@ -1432,9 +1432,11 @@ declare -A REHYDRATED_ISSUES  # Track which issues were rehydrated (skip fresh p
 if [[ "$RESUME_MODE" == "resume_only" ]] || [[ "$RESUME_MODE" == "resume_and_add" ]]; then
   build_rehydrated_launch_args
   # Mark all rehydrated issues so we skip them in fresh processing
+  # AND persist to a marker file so the monitor knows they were already launched
   for arg in "${LAUNCH_ARGS[@]}"; do
     IFS='|' read -r issue _ _ <<<"$arg"
     REHYDRATED_ISSUES[$issue]=1
+    echo "$issue" >> "/tmp/${SESSION}-rehydrated-at-startup.txt"
   done
 fi
 
@@ -3365,6 +3367,13 @@ launch_task() {
   local challenge_model=""
   LAST_LAUNCHED_SLOTS=1
 
+  # [REQ-F6] Prevent double-rehydration: Skip if task was already launched at startup
+  if [[ -f "/tmp/${SESSION}-rehydrated-at-startup.txt" ]] && \
+     grep -qxF "$issue" "/tmp/${SESSION}-rehydrated-at-startup.txt" 2>/dev/null; then
+    log "debug" "  Task $issue was already rehydrated at startup, skipping launch"
+    return 0
+  fi
+
   linear_issue=$(get_linear_issue_id "$issue")
   challenge_model=$(get_task_meta "$issue" "challengeModel")
 
@@ -3862,8 +3871,10 @@ Implement from the issue description plus direct codebase analysis."
 # Parse initial tasks from file
 declare -A PR_BY_ISSUE BRANCH_BY_ISSUE SLUG_BY_ISSUE CLEANED
 
-# Rehydrate tracked tasks from persisted state first so restarts continue
+# [REQ-F6] Rehydrate tracked tasks from persisted state first so restarts continue
 # monitoring prior in-flight issues.
+# NOTE: This only populates lookup tables for monitoring. Tasks rehydrated at startup
+# were already launched by the startup runner. The monitor will NOT re-launch them.
 if [[ -f "$STATE_FILE" ]]; then
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
