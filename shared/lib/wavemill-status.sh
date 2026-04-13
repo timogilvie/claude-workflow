@@ -38,7 +38,7 @@ refresh_pr_cache() {
   [[ -f "$PR_CACHE" ]] && mtime=$(stat -f %m "$PR_CACHE" 2>/dev/null || echo 0)
   if (( now - mtime >= PR_TTL )); then
     gh pr list --json number,headRefName,state,statusCheckRollup --limit 50 \
-      2>/dev/null > "${PR_CACHE}.tmp" && mv "${PR_CACHE}.tmp" "$PR_CACHE" || true
+      < /dev/null 2>/dev/null > "${PR_CACHE}.tmp" && mv "${PR_CACHE}.tmp" "$PR_CACHE" || true
   fi
 }
 
