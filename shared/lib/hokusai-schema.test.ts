@@ -4,18 +4,21 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { TaskDescriptor } from './eval-schema.ts';
+import type { EvalRecord, TaskDescriptor } from './eval-schema.ts';
 import {
   complexityToHokusaiScore,
   descriptionLengthToBucket,
   filesTouchedToBucket,
+  type HokusaiSubmission,
   mapDomain,
   mapLanguage,
   mapTaskType,
   repoSizeToBucket,
   riskFlagsToBooleans,
   riskFlagsToLevel,
+  toHokusaiSubmission,
   toHokusaiInput,
+  validateHokusaiSubmission,
 } from './hokusai-schema.ts';
 
 function makeDescriptor(overrides: Partial<TaskDescriptor> = {}): TaskDescriptor {
@@ -47,6 +50,55 @@ function makeDescriptor(overrides: Partial<TaskDescriptor> = {}): TaskDescriptor
       objective: 'balanced',
     },
     stages: {},
+    ...overrides,
+  };
+}
+
+function makeRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
+  return {
+    id: 'eval-1',
+    schemaVersion: '1.4.0',
+    originalPrompt: 'Implement the requested change',
+    modelId: 'gpt-5.3-codex',
+    modelVersion: 'gpt-5.3-codex-2026-01-01',
+    score: 0.8,
+    scoreBand: 'Minor Feedback',
+    timeSeconds: 1840,
+    timestamp: '2026-04-13T12:00:00.000Z',
+    interventionRequired: false,
+    interventionCount: 1,
+    interventionDetails: [],
+    rationale: 'Looks good.',
+    issueId: 'HOK-1237',
+    workflowCost: 2.41,
+    outcomes: {
+      success: true,
+      review: {
+        humanReviewRequired: false,
+        rounds: 0,
+        approvals: 0,
+        changeRequests: 0,
+      },
+      rework: {
+        agentIterations: 1,
+      },
+      delivery: {
+        prCreated: true,
+        merged: false,
+      },
+    },
+    taskDescriptor: makeDescriptor({
+      constraints: {
+        max_cost_usd: 3,
+        models_available: ['planner-a', 'coder-a', 'reviewer-a'],
+        objective: 'balanced',
+      },
+      stages: {
+        planner: { model: 'planner-a' },
+        coder: { model: 'coder-a' },
+        reviewer: { model: 'reviewer-a' },
+      },
+    }),
     ...overrides,
   };
 }
@@ -320,6 +372,277 @@ describe('hokusai-schema', () => {
         coder_models: ['gpt-5.4'],
         reviewer_models: ['gpt-5.4'],
       });
+    });
+  });
+
+  describe('toHokusaiSubmission', () => {
+    it('maps a populated eval record into a valid submission', () => {
+      const result = toHokusaiSubmission(makeRecord());
+
+      assert.deepEqual(result, {
+        run_id: 'eval-1',
+        task_id: 'HOK-1237',
+        constraints: {
+          max_cost_usd: 3,
+        },
+        route_taken: {
+          planner_model: 'planner-a',
+          coder_model: 'coder-a',
+          reviewer_model: 'reviewer-a',
+        },
+        observed_outcomes: {
+          completed_successfully: true,
+          actual_cost_usd: 2.41,
+          actual_time_seconds: 1840,
+          intervention_count: 1,
+        },
+      });
+    });
+
+    it('uses taskDescriptor stage models when present', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        routingDecision: {
+          candidates: [
+            { agentType: 'codex', modelId: 'fallback-model' },
+          ],
+          chosen: 0,
+        },
+      }));
+
+      assert.deepEqual(result?.route_taken, {
+        planner_model: 'planner-a',
+        coder_model: 'coder-a',
+        reviewer_model: 'reviewer-a',
+      });
+    });
+
+    it('falls back to a chosen routing candidate object when stages are missing', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        taskDescriptor: undefined,
+        routingDecision: {
+          candidates: [
+            { agentType: 'codex', modelId: 'gpt-5.4' },
+          ],
+          chosen: { agentType: 'codex', modelId: 'gpt-5.4' },
+        },
+      }));
+
+      assert.deepEqual(result?.route_taken, {
+        planner_model: 'gpt-5.4',
+        coder_model: 'gpt-5.4',
+        reviewer_model: 'gpt-5.4',
+      });
+    });
+
+    it('falls back to a chosen routing candidate index when stages are missing', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        taskDescriptor: undefined,
+        routingDecision: {
+          candidates: [
+            { agentType: 'codex', modelId: 'candidate-a' },
+            { agentType: 'codex', modelId: 'candidate-b' },
+          ],
+          chosen: 1,
+        },
+      }));
+
+      assert.deepEqual(result?.route_taken, {
+        planner_model: 'candidate-b',
+        coder_model: 'candidate-b',
+        reviewer_model: 'candidate-b',
+      });
+    });
+
+    it('returns null when issueId is missing', () => {
+      assert.equal(
+        toHokusaiSubmission(makeRecord({ issueId: undefined })),
+        null,
+      );
+    });
+
+    it('returns null when workflowCost is missing', () => {
+      assert.equal(
+        toHokusaiSubmission(makeRecord({ workflowCost: undefined })),
+        null,
+      );
+    });
+
+    it('accepts zero timeSeconds and zero workflowCost as valid observed outcomes', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        workflowCost: 0,
+        timeSeconds: 0,
+      }));
+
+      assert.equal(result?.observed_outcomes.actual_cost_usd, 0);
+      assert.equal(result?.observed_outcomes.actual_time_seconds, 0);
+    });
+
+    it('returns null when routing information is unavailable', () => {
+      assert.equal(
+        toHokusaiSubmission(makeRecord({
+          taskDescriptor: undefined,
+          routingDecision: undefined,
+        })),
+        null,
+      );
+    });
+
+    it('returns null for an old-format record without taskDescriptor or routingDecision', () => {
+      assert.equal(
+        toHokusaiSubmission(makeRecord({
+          taskDescriptor: undefined,
+          routingDecision: undefined,
+          outcomes: undefined,
+          score: 0.3,
+        })),
+        null,
+      );
+    });
+
+    it('prefers EvalConstraints maxCostUsd over descriptor constraints', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        constraints: { maxCostUsd: 1.25 },
+      }));
+
+      assert.equal(result?.constraints.max_cost_usd, 1.25);
+    });
+
+    it('sets max_cost_usd to null when no budget constraint is available', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        constraints: undefined,
+        taskDescriptor: makeDescriptor({
+          constraints: {
+            models_available: ['planner-a'],
+            objective: 'balanced',
+          },
+          stages: {
+            planner: { model: 'planner-a' },
+            coder: { model: 'coder-a' },
+            reviewer: { model: 'reviewer-a' },
+          },
+        }),
+      }));
+
+      assert.equal(result?.constraints.max_cost_usd, null);
+    });
+
+    it('uses outcomes.success when available', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        score: 1,
+        outcomes: {
+          success: false,
+          review: {
+            humanReviewRequired: false,
+            rounds: 0,
+            approvals: 0,
+            changeRequests: 0,
+          },
+          rework: {
+            agentIterations: 1,
+          },
+          delivery: {
+            prCreated: true,
+            merged: false,
+          },
+        },
+      }));
+
+      assert.equal(result?.observed_outcomes.completed_successfully, false);
+    });
+
+    it('falls back to score when outcomes are missing', () => {
+      const success = toHokusaiSubmission(makeRecord({
+        outcomes: undefined,
+        score: 0.5,
+      }));
+      const failure = toHokusaiSubmission(makeRecord({
+        outcomes: undefined,
+        score: 0.4,
+      }));
+
+      assert.equal(success?.observed_outcomes.completed_successfully, true);
+      assert.equal(failure?.observed_outcomes.completed_successfully, false);
+    });
+
+    it('defaults missing interventionCount to zero', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        interventionCount: undefined as unknown as number,
+      }));
+
+      assert.equal(result?.observed_outcomes.intervention_count, 0);
+    });
+  });
+
+  describe('validateHokusaiSubmission', () => {
+    it('accepts a complete valid submission', () => {
+      const submission = toHokusaiSubmission(makeRecord());
+
+      assert.ok(submission);
+      assert.deepEqual(validateHokusaiSubmission(submission), {
+        valid: true,
+        errors: [],
+      });
+    });
+
+    it('reports an empty run_id', () => {
+      const submission = toHokusaiSubmission(makeRecord()) as HokusaiSubmission;
+      submission.run_id = '';
+
+      const result = validateHokusaiSubmission(submission);
+
+      assert.equal(result.valid, false);
+      assert.deepEqual(result.errors, [
+        'run_id must be a non-empty string',
+      ]);
+    });
+
+    it('rejects negative costs', () => {
+      const submission = toHokusaiSubmission(makeRecord()) as HokusaiSubmission;
+      submission.observed_outcomes.actual_cost_usd = -1;
+
+      const result = validateHokusaiSubmission(submission);
+
+      assert.equal(result.valid, false);
+      assert.deepEqual(result.errors, [
+        'observed_outcomes.actual_cost_usd must be a non-negative number',
+      ]);
+    });
+
+    it('reports multiple errors at once', () => {
+      const submission = {
+        run_id: '',
+        task_id: '',
+        constraints: {
+          max_cost_usd: -1,
+        },
+        route_taken: {
+          planner_model: '',
+          coder_model: '',
+          reviewer_model: '',
+        },
+        observed_outcomes: {
+          completed_successfully: 'yes',
+          actual_cost_usd: -1,
+          actual_time_seconds: -2,
+          intervention_count: 1.5,
+        },
+      } as unknown as HokusaiSubmission;
+
+      const result = validateHokusaiSubmission(submission);
+
+      assert.equal(result.valid, false);
+      assert.deepEqual(result.errors, [
+        'run_id must be a non-empty string',
+        'task_id must be a non-empty string',
+        'route_taken.planner_model must be a non-empty string',
+        'route_taken.coder_model must be a non-empty string',
+        'route_taken.reviewer_model must be a non-empty string',
+        'observed_outcomes.completed_successfully must be a boolean',
+        'observed_outcomes.actual_cost_usd must be a non-negative number',
+        'observed_outcomes.actual_time_seconds must be a non-negative number',
+        'observed_outcomes.intervention_count must be a non-negative integer',
+        'constraints.max_cost_usd must be null or a non-negative number',
+      ]);
     });
   });
 });

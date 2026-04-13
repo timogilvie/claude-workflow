@@ -8,7 +8,13 @@
  * @module hokusai-schema
  */
 
-import type { RepoContext, TaskDescriptor } from './eval-schema.ts';
+import type {
+  EvalRecord,
+  RepoContext,
+  RoutingCandidate,
+  RoutingDecision,
+  TaskDescriptor,
+} from './eval-schema.ts';
 
 // ============================================================================
 // Input Schema Types
@@ -129,6 +135,31 @@ export interface HokusaiOutput {
   schema_version: string;
   route: HokusaiRoute;
   predictions: HokusaiPredictions;
+}
+
+// ============================================================================
+// Submission Schema Types
+// ============================================================================
+
+export interface HokusaiSubmissionRoutes {
+  planner_model: string;
+  coder_model: string;
+  reviewer_model: string;
+}
+
+export interface HokusaiSubmissionOutcomes {
+  completed_successfully: boolean;
+  actual_cost_usd: number;
+  actual_time_seconds: number;
+  intervention_count: number;
+}
+
+export interface HokusaiSubmission {
+  run_id: string;
+  task_id: string;
+  constraints: { max_cost_usd: number | null };
+  route_taken: HokusaiSubmissionRoutes;
+  observed_outcomes: HokusaiSubmissionOutcomes;
 }
 
 // ============================================================================
@@ -400,6 +431,179 @@ function pickAvailableModels(
     planner_models: overrides?.plannerModels || sharedModels,
     coder_models: overrides?.coderModels || sharedModels,
     reviewer_models: overrides?.reviewerModels || sharedModels,
+  };
+}
+
+function resolveChosenCandidate(
+  decision?: RoutingDecision,
+): RoutingCandidate | undefined {
+  if (!decision) {
+    return undefined;
+  }
+
+  if (typeof decision.chosen === 'number') {
+    return decision.candidates[decision.chosen];
+  }
+
+  return decision.chosen;
+}
+
+function extractRoutes(record: EvalRecord): HokusaiSubmissionRoutes | null {
+  const stages = record.taskDescriptor?.stages;
+  const plannerModel = stages?.planner?.model;
+  const coderModel = stages?.coder?.model;
+  const reviewerModel = stages?.reviewer?.model;
+
+  if (plannerModel && coderModel && reviewerModel) {
+    return {
+      planner_model: plannerModel,
+      coder_model: coderModel,
+      reviewer_model: reviewerModel,
+    };
+  }
+
+  const chosenCandidate = resolveChosenCandidate(record.routingDecision);
+  if (chosenCandidate?.modelId) {
+    return {
+      planner_model: chosenCandidate.modelId,
+      coder_model: chosenCandidate.modelId,
+      reviewer_model: chosenCandidate.modelId,
+    };
+  }
+
+  return null;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * Converts an eval result into the Hokusai training/submission schema.
+ *
+ * Returns `null` when the record does not contain the required identifiers,
+ * routing details, or observed outcome data needed for a complete submission.
+ */
+export function toHokusaiSubmission(
+  record: EvalRecord,
+): HokusaiSubmission | null {
+  if (!isNonEmptyString(record.id) || !isNonEmptyString(record.issueId)) {
+    return null;
+  }
+
+  const routeTaken = extractRoutes(record);
+  if (!routeTaken) {
+    return null;
+  }
+
+  if (
+    typeof record.workflowCost !== 'number'
+    || !Number.isFinite(record.workflowCost)
+    || typeof record.timeSeconds !== 'number'
+    || !Number.isFinite(record.timeSeconds)
+  ) {
+    return null;
+  }
+
+  return {
+    run_id: record.id,
+    task_id: record.issueId,
+    constraints: {
+      max_cost_usd:
+        record.constraints?.maxCostUsd
+        ?? record.taskDescriptor?.constraints?.max_cost_usd
+        ?? null,
+    },
+    route_taken: routeTaken,
+    observed_outcomes: {
+      completed_successfully: record.outcomes?.success ?? record.score >= 0.5,
+      actual_cost_usd: record.workflowCost,
+      actual_time_seconds: record.timeSeconds,
+      intervention_count: record.interventionCount ?? 0,
+    },
+  };
+}
+
+/**
+ * Validates a Hokusai submission object and reports all field errors found.
+ */
+export function validateHokusaiSubmission(
+  submission: HokusaiSubmission,
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  if (!isNonEmptyString(submission.run_id)) {
+    errors.push('run_id must be a non-empty string');
+  }
+
+  if (!isNonEmptyString(submission.task_id)) {
+    errors.push('task_id must be a non-empty string');
+  }
+
+  if (!isNonEmptyString(submission.route_taken?.planner_model)) {
+    errors.push('route_taken.planner_model must be a non-empty string');
+  }
+
+  if (!isNonEmptyString(submission.route_taken?.coder_model)) {
+    errors.push('route_taken.coder_model must be a non-empty string');
+  }
+
+  if (!isNonEmptyString(submission.route_taken?.reviewer_model)) {
+    errors.push('route_taken.reviewer_model must be a non-empty string');
+  }
+
+  if (
+    typeof submission.observed_outcomes?.completed_successfully !== 'boolean'
+  ) {
+    errors.push(
+      'observed_outcomes.completed_successfully must be a boolean',
+    );
+  }
+
+  if (
+    typeof submission.observed_outcomes?.actual_cost_usd !== 'number'
+    || !Number.isFinite(submission.observed_outcomes.actual_cost_usd)
+    || submission.observed_outcomes.actual_cost_usd < 0
+  ) {
+    errors.push(
+      'observed_outcomes.actual_cost_usd must be a non-negative number',
+    );
+  }
+
+  if (
+    typeof submission.observed_outcomes?.actual_time_seconds !== 'number'
+    || !Number.isFinite(submission.observed_outcomes.actual_time_seconds)
+    || submission.observed_outcomes.actual_time_seconds < 0
+  ) {
+    errors.push(
+      'observed_outcomes.actual_time_seconds must be a non-negative number',
+    );
+  }
+
+  if (
+    typeof submission.observed_outcomes?.intervention_count !== 'number'
+    || !Number.isInteger(submission.observed_outcomes.intervention_count)
+    || submission.observed_outcomes.intervention_count < 0
+  ) {
+    errors.push(
+      'observed_outcomes.intervention_count must be a non-negative integer',
+    );
+  }
+
+  if (
+    submission.constraints?.max_cost_usd !== null
+    && (
+      typeof submission.constraints?.max_cost_usd !== 'number'
+      || !Number.isFinite(submission.constraints.max_cost_usd)
+      || submission.constraints.max_cost_usd < 0
+    )
+  ) {
+    errors.push('constraints.max_cost_usd must be null or a non-negative number');
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
   };
 }
 
