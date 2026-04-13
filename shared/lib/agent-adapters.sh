@@ -873,7 +873,7 @@ agent_launch_autonomous() {
       tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
       ;;
     codex)
-      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid'; codex exec${model_flag} --json --dangerously-bypass-approvals-and-sandbox - < '$instr_file' | '$hooks_dir/codex-status-monitor.sh'; echo '[wavemill] Agent exited (\$?)'" C-m
+      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid'; codex exec${model_flag} --json --dangerously-bypass-approvals-and-sandbox - < '$instr_file' | '$hooks_dir/codex-status-monitor.sh'; codex_rc=\${PIPESTATUS[0]}; monitor_rc=\${PIPESTATUS[1]}; if [[ \$codex_rc -ne 0 && -n '$issue' ]]; then source '$hooks_dir/wavemill-hook-protocol.sh'; wavemill_hook_write 'error' 'pipeline_exit' \"codex exited with code \$codex_rc\" 'codex'; fi; echo \"[wavemill] Agent exited (codex=\$codex_rc monitor=\$monitor_rc)\"" C-m
       ;;
     *)
       # Generic fallback: start the agent, then paste instructions via tmux buffer.
