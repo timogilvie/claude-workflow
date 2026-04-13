@@ -474,7 +474,7 @@ main() {
   write_monitor_env "$tasks_file"
 
   launched_count="$(wc -l < "$LAUNCHED_ISSUES_FILE" | tr -d ' ')"
-  if [[ "$launched_count" -eq 0 ]]; then
+  if [[ "$launched_count" -eq 0 && "${resumed_count:-0}" -eq 0 ]]; then
     startup_log ""
     startup_log "No tasks launched. Keeping startup diagnostics visible in control window."
     tmux respawn-pane -k -t "$SESSION:control.0" "bash -lc \"clear; cat '$STATUS_LOG_FILE'; printf '\\nPress Ctrl+B then D to detach.\\n'; tail -f /dev/null\""
