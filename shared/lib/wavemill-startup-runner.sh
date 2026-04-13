@@ -39,6 +39,7 @@ PROJECT_NAME="$(jq -r '.monitorConfig.projectName // empty' "$PLAN_FILE")"
 AUTO_EVAL="$(jq -r '.monitorConfig.autoEval // true' "$PLAN_FILE")"
 DASHBOARD_VERBOSITY="$(jq -r '.monitorConfig.dashboardVerbosity // "info"' "$PLAN_FILE")"
 DASHBOARD_LOG_TO_FILE="$(jq -r '.monitorConfig.dashboardLogToFile // true' "$PLAN_FILE")"
+DASHBOARD_PID=""
 
 export SESSION REPO_DIR BASE_BRANCH WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
 export FORCE_MODEL ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
@@ -169,6 +170,7 @@ write_monitor_env() {
     write_shell_assignment "AUTO_EVAL" "$AUTO_EVAL"
     write_shell_assignment "DASHBOARD_VERBOSITY" "$DASHBOARD_VERBOSITY"
     write_shell_assignment "DASHBOARD_LOG_TO_FILE" "$DASHBOARD_LOG_TO_FILE"
+    write_shell_assignment "WAVEMILL_DASHBOARD_PID" "${WAVEMILL_DASHBOARD_PID:-}"
     write_shell_assignment "MILL_LOG_FILE" "$MILL_LOG_FILE"
     write_shell_assignment "STATUS_LOG_FILE" "$STATUS_LOG_FILE"
     write_shell_assignment "TASKS_FILE" "$tasks_file"
@@ -186,6 +188,18 @@ setup_control_dashboard() {
     tmux split-window -t "$SESSION:control.0" -h -f -p 50
   fi
   tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'"
+
+  WAVEMILL_DASHBOARD_PID=""
+  for attempt in {1..10}; do
+    WAVEMILL_DASHBOARD_PID="$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)"
+    [[ -n "$WAVEMILL_DASHBOARD_PID" ]] && break
+    sleep 0.1
+  done
+
+  if [[ -n "${WAVEMILL_DASHBOARD_PID:-}" ]]; then
+    tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$WAVEMILL_DASHBOARD_PID"
+  fi
+
   tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
   tmux select-pane -t "$SESSION:control.0"
 }
@@ -448,8 +462,8 @@ main() {
 
   tasks_file="/tmp/${SESSION}-tasks.txt"
   jq -r '.tasks[] | "\(.issue)|\(.slug)|\(.title)"' "$PLAN_FILE" > "$tasks_file"
-  write_monitor_env "$tasks_file"
   setup_control_dashboard
+  write_monitor_env "$tasks_file"
 
   launched_count="$(wc -l < "$LAUNCHED_ISSUES_FILE" | tr -d ' ')"
   if [[ "$launched_count" -eq 0 ]]; then

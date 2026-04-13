@@ -550,6 +550,7 @@ configure_agent_hooks() {
       fi
 
       # Merge hook configuration using jq (atomic via tmp + mv)
+      # WAVEMILL_DASHBOARD_PID is available via tmux session environment
       tmp=$(mktemp) || {
         log "warn" "  Failed to allocate temp file for Claude hook config"
         return 0
