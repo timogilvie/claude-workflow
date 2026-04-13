@@ -70,6 +70,12 @@ export interface PricingEntry {
   cacheReadCostPerMTok?: number;
 }
 
+export interface HokusaiRouterConfig {
+  endpoint?: string;
+  apiKey?: string;
+  timeout?: number;
+}
+
 export interface AggregationConfig {
   repos?: string[];
   outputPath?: string;
@@ -99,12 +105,13 @@ export interface RouterConfig {
   models?: string[];
   defaultAgent?: string;
   agentMap?: Record<string, string>;
-  mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware';
+  mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware' | 'hokusai';
   llmModel?: string;
   llmProvider?: 'openai' | 'anthropic';
   kNeighbors?: number;
   backfilledEvalsPath?: string;
   stageBlendWeight?: number;
+  hokusai?: HokusaiRouterConfig;
 }
 
 export interface ChallengeConfig {
@@ -447,6 +454,14 @@ export function clearConfigCache(repoDir?: string): void {
  */
 export function getRouterConfig(repoDir?: string): RouterConfig {
   return loadWavemillConfig(repoDir).router || {};
+}
+
+/**
+ * Get the Hokusai router config subsection.
+ * Returns empty object if not configured.
+ */
+export function getHokusaiRouterConfig(repoDir?: string): HokusaiRouterConfig {
+  return loadWavemillConfig(repoDir).router?.hokusai || {};
 }
 
 /**

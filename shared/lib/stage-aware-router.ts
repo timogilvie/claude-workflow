@@ -34,7 +34,7 @@ export interface StageAwareOptions extends StageAwareConstraints {
 }
 
 export interface StageAwareDecision extends WorkflowRouteDecision {
-  routingMode: 'stage-aware' | 'stage-aware-partial' | 'heuristic-fallback';
+  routingMode: 'stage-aware' | 'stage-aware-partial' | 'heuristic-fallback' | 'hokusai';
   neighborCount: number;
   neighborSimilarityRange: [number, number];
   expectedCost: number;
