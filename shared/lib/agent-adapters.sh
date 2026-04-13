@@ -877,12 +877,21 @@ agent_launch_autonomous() {
       ;;
     *)
       # Generic fallback: start the agent, then paste instructions via tmux buffer.
-      tmux send-keys -t "$session:$window" "$agent_cmd" C-m
+      local exit_file=""
+      if [[ -n "$issue" ]]; then
+        exit_file="/tmp/wavemill-${session}-${issue}.exit"
+        rm -f "$exit_file" 2>/dev/null || true
+      fi
+      if [[ -n "$exit_file" ]]; then
+        tmux send-keys -t "$session:$window" "$agent_cmd${model_flag}; rc=\$?; printf '%s\n' \"\$rc\" > '$exit_file'" C-m
+      else
+        tmux send-keys -t "$session:$window" "$agent_cmd${model_flag}" C-m
+      fi
       sleep 0.3
       local pane_pid=""
       pane_pid=$(tmux display-message -t "$session:$window" -p '#{pane_pid}' 2>/dev/null || echo "")
       if [[ -n "$pane_pid" && -n "$issue" ]]; then
-        env WAVEMILL_SESSION="$session" WAVEMILL_ISSUE="$issue" WAVEMILL_DASHBOARD_PID="$dashboard_pid" "$hooks_dir/process-status-monitor.sh" "$pane_pid" >/dev/null 2>&1 &
+        env WAVEMILL_SESSION="$session" WAVEMILL_ISSUE="$issue" WAVEMILL_DASHBOARD_PID="$dashboard_pid" "$hooks_dir/process-status-monitor.sh" "$pane_pid" "$exit_file" >/dev/null 2>&1 &
       fi
       local instr
       instr="$(cat "$instr_file")"
@@ -891,6 +900,66 @@ agent_launch_autonomous() {
       tmux send-keys -t "$session:$window" C-m
       ;;
   esac
+}
+
+_agent_find_issue_window() {
+  local session="$1"
+  local issue="$2"
+
+  tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
+    | awk -v prefix="${issue}-" 'index($0, prefix) == 1 { print; exit }'
+}
+
+# Resume an agent after a transient API failure without discarding its context.
+# If the pane is sitting at an idle shell, dispatch an agent-specific resume
+# command. If the agent UI is still active, send a continuation prompt directly
+# to the pane so the existing session can pick it up.
+#
+# Args:
+#   $1 = tmux session
+#   $2 = issue id
+#   $3 = agent command (claude/codex/other)
+# Returns: 0 on success, 1 on failure
+agent_resume_after_error() {
+  local session="$1"
+  local issue="$2"
+  local agent_cmd="${3:-claude}"
+  local window target
+  local resume_prompt="The previous attempt encountered a transient API error. Please continue working on the task from where you left off."
+
+  window=$(_agent_find_issue_window "$session" "$issue")
+  if [[ -z "$window" ]]; then
+    _agent_log_warn "Cannot resume $issue: no tmux window found in session $session"
+    return 1
+  fi
+
+  target="$session:$window"
+  if ! tmux list-panes -t "$target" >/dev/null 2>&1; then
+    _agent_log_warn "Cannot resume $issue: tmux target $target is unavailable"
+    return 1
+  fi
+
+  if agent_pane_is_ready "$session" "$window"; then
+    case "$agent_cmd" in
+      claude)
+        if claude --help 2>/dev/null | grep -q -- '--resume'; then
+          tmux send-keys -t "$target" "claude --resume" C-m
+        else
+          tmux send-keys -t "$target" "$resume_prompt" C-m
+        fi
+        ;;
+      codex)
+        tmux send-keys -t "$target" "$resume_prompt" C-m
+        ;;
+      *)
+        tmux send-keys -t "$target" "$resume_prompt" C-m
+        ;;
+    esac
+  else
+    tmux send-keys -t "$target" "$resume_prompt" C-m
+  fi
+
+  return 0
 }
 
 # ============================================================================
