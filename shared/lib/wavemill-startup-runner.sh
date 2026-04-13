@@ -57,6 +57,7 @@ write_shell_assignment() {
 
 startup_log() {
   local line="$*"
+  printf '%s\n' "$line"
   [[ -n "${STATUS_LOG_FILE:-}" ]] && printf '%s\n' "$line" >> "$STATUS_LOG_FILE" 2>/dev/null || true
 }
 
@@ -263,8 +264,8 @@ launch_task_from_plan() {
   else
     local worktree_stderr
     worktree_stderr="$(mktemp)"
-    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch"; then
-      if ! git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" >/dev/null 2>"$worktree_stderr"; then
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+      if ! git worktree add "$wt_dir" "$branch" >/dev/null 2>"$worktree_stderr"; then
         startup_log "✗ $issue FAILED at step [1/7]: worktree creation"
         startup_log "  Error: failed to attach existing branch $branch"
         [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
@@ -274,7 +275,7 @@ launch_task_from_plan() {
         return 1
       fi
     else
-      if ! git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >/dev/null 2>"$worktree_stderr"; then
+      if ! git worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >/dev/null 2>"$worktree_stderr"; then
         startup_log "✗ $issue FAILED at step [1/7]: worktree creation"
         startup_log "  Error: failed to create $branch from origin/$BASE_BRANCH"
         [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
@@ -411,7 +412,7 @@ $details_context"
     instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     build_autonomous_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
       "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" "$task_agent" > "$instr_file"
-    if ! agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent" "$coder_model"; then
+    if ! agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent" "$coder_model" "$issue"; then
       [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
       tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
       startup_log "✗ $issue FAILED at step [6/7]: launching implementation agent"
