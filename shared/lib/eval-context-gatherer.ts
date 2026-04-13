@@ -259,6 +259,7 @@ export interface RoutingCompleteData {
   planDepth?: string;
   codeDepth?: string;
   reviewMode?: string;
+  maxCostUsd?: number;
 }
 
 /**
@@ -328,7 +329,8 @@ export function fetchRoutingDecision(
         if (
           typeof data.planner !== 'string' ||
           typeof data.coder !== 'string' ||
-          typeof data.reviewer !== 'string'
+          typeof data.reviewer !== 'string' ||
+          (data.maxCostUsd !== undefined && typeof data.maxCostUsd !== 'number')
         ) {
           return null;
         }
@@ -378,7 +380,8 @@ export function fetchRoutingCompleteRaw(
         if (
           typeof data.planner !== 'string' ||
           typeof data.coder !== 'string' ||
-          typeof data.reviewer !== 'string'
+          typeof data.reviewer !== 'string' ||
+          (data.maxCostUsd !== undefined && typeof data.maxCostUsd !== 'number')
         ) {
           return null;
         }

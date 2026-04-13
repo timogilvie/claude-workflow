@@ -112,6 +112,19 @@ test('routes documentation work to lighter review', () => {
   }
 });
 
+test('includes budget constraints in heuristic routing decisions when provided', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Implement a backend workflow feature with tests.',
+      { repoDir, maxCostUsd: 3.5 },
+    );
+    assert.deepEqual(decision.constraints, { maxCostUsd: 3.5 });
+  } finally {
+    cleanup();
+  }
+});
+
 test('reads selected-task style json files', () => {
   const { repoDir, cleanup } = makeRepo();
   try {

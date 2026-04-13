@@ -252,6 +252,26 @@ test('routeStageAware returns a stage-aware decision from backfilled evals', () 
   }
 });
 
+test('routeStageAware carries maxCostUsd through the decision', () => {
+  const records = [
+    makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
+    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records);
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests and review.', {
+      repoDir,
+      maxCostUsd: 12,
+    });
+    assert.ok(decision);
+    assert.deepEqual(decision?.constraints, { maxCostUsd: 12 });
+  } finally {
+    cleanup();
+  }
+});
+
 test('loadStageAwareEvalRecords merges sources and prefers richer local duplicates', () => {
   const duplicateAggregate = makeEvalRecord('dup', 'claude-opus-4-6', { plan: 0.4, implementation: 0.4, review: 0.4 }, {
     taskDescriptor: undefined,

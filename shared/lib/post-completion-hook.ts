@@ -25,6 +25,7 @@ import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer
 import { fetchRoutingCompleteRaw } from './eval-context-gatherer.ts';
 import { attachStageOutcomes, enrichEvalRecord } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
+import { getMaxCostUsd } from './config.ts';
 import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, formatRepoContextDisplay, formatInterventionDisplay } from './eval-summary-printer.ts';
 import { errorMessage } from './error-utils.ts';
 import type { EvalRecord, InterventionRecord, RoutingDecision, TaskContext, RepoContext } from './eval-schema.ts';
@@ -83,6 +84,9 @@ export function buildTaskDescriptorForPostCompletion(
   const workflowTokenUsage = input.costOutcome?.status === 'success'
     ? input.costOutcome.models
     : input.record.workflowTokenUsage;
+  const maxCostUsd = routingComplete?.maxCostUsd
+    ?? input.record.constraints?.maxCostUsd
+    ?? getMaxCostUsd(input.repoDir);
 
   return buildTaskDescriptor({
     originalPrompt: input.originalPrompt,
@@ -101,6 +105,7 @@ export function buildTaskDescriptorForPostCompletion(
     interventions: input.interventionRecords || undefined,
     modelsAvailable: ['claude-sonnet-4-5-20250929', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
     objective: 'balanced',
+    maxCostUsd: typeof maxCostUsd === 'number' ? maxCostUsd : undefined,
   });
 }
 
@@ -124,6 +129,16 @@ export function enrichPostCompletionRecord(
     repoContext: input.repoContextData,
     workflowCost: input.costOutcome,
     taskDescriptor,
+    constraints: typeof input.record.constraints?.maxCostUsd === 'number'
+      ? input.record.constraints
+      : (() => {
+          const slug = input.branchName?.replace(/^(task|bug)\//, '') || input.issueId?.toLowerCase() || '';
+          const routingComplete = slug
+            ? fetchRoutingCompleteRaw(input.repoDir, slug, input.worktreePath)
+            : null;
+          const maxCostUsd = routingComplete?.maxCostUsd ?? getMaxCostUsd(input.repoDir);
+          return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
+        })(),
   });
 }
 

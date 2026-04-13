@@ -20,7 +20,8 @@ _WAVEMILL_DEFAULTS='{
     "planningMode": "skip",
     "maxRetries": 3,
     "retryDelay": 2,
-    "setupCommand": ""
+    "setupCommand": "",
+    "defaultMaxCostUsd": null
   },
   "expand": {
     "maxSelect": 3,
@@ -106,6 +107,7 @@ load_config() {
       "_CFG_ROUTER_DEFAULT_MODEL=\($c.router.defaultModel // "claude-sonnet-4-5-20250929" | @sh)",
       "_CFG_AUTO_EVAL=\($c.autoEval // true)",
       "_CFG_SETUP_CMD=\($c.mill.setupCommand // "" | @sh)",
+      "_CFG_DEFAULT_MAX_COST_USD=\(($c.mill.defaultMaxCostUsd // null) | if . == null then "" else tostring end | @sh)",
       "_CFG_READY_ENABLED=\($c.ready.enabled // false)"
     ] | .[]
     '
@@ -169,6 +171,7 @@ load_config() {
   ROUTER_DEFAULT_MODEL="${ROUTER_DEFAULT_MODEL:-$_CFG_ROUTER_DEFAULT_MODEL}"
   AUTO_EVAL="${AUTO_EVAL:-$_CFG_AUTO_EVAL}"
   SETUP_CMD="${SETUP_CMD:-$_CFG_SETUP_CMD}"
+  DEFAULT_MAX_COST_USD="${DEFAULT_MAX_COST_USD:-$_CFG_DEFAULT_MAX_COST_USD}"
 
   # WORKTREE_ROOT: resolve relative paths against repo_dir
   local wt_raw="${WORKTREE_ROOT:-$_CFG_WORKTREE_ROOT}"
@@ -185,7 +188,7 @@ load_config() {
   export DASHBOARD_VERBOSITY DASHBOARD_LOG_TO_FILE
   export CHALLENGE_ENABLED CHALLENGE_RATE CHALLENGE_MODELS_JSON
   export CHALLENGE_COMPARISON_MODEL CHALLENGE_AUTO_MERGE
-  export ROUTER_ENABLED ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD
+  export ROUTER_ENABLED ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD DEFAULT_MAX_COST_USD
 
   # Clean up temp variables
   unset _CFG_PROJECT _CFG_SESSION _CFG_MAX_PARALLEL _CFG_POLL_SECONDS
@@ -195,7 +198,7 @@ load_config() {
   unset _CFG_DASHBOARD_VERBOSITY _CFG_DASHBOARD_LOG_TO_FILE
   unset _CFG_CHALLENGE_ENABLED _CFG_CHALLENGE_RATE _CFG_CHALLENGE_MODELS
   unset _CFG_CHALLENGE_COMPARISON_MODEL _CFG_CHALLENGE_AUTO_MERGE
-  unset _CFG_ROUTER_ENABLED _CFG_ROUTER_DEFAULT_MODEL _CFG_AUTO_EVAL _CFG_SETUP_CMD
+  unset _CFG_ROUTER_ENABLED _CFG_ROUTER_DEFAULT_MODEL _CFG_AUTO_EVAL _CFG_SETUP_CMD _CFG_DEFAULT_MAX_COST_USD
 
   # Sentinel so downstream scripts can skip re-loading
   _WAVEMILL_CONFIG_LOADED=1
@@ -236,6 +239,7 @@ detect_project_name() {
 #     routingMode,
 #     neighborCount,
 #     expectedSuccess,
+#     constraints,
 #     signals,
 #     reasoning
 #   }
@@ -252,7 +256,10 @@ read_route_json() {
   local value=""
 
   if [[ -f "$route_file" ]]; then
-    value=$(jq -r --arg field "$field" '.[$field] // empty' "$route_file" 2>/dev/null || true)
+    value=$(jq -r --arg field "$field" '
+      ($field | split(".")) as $path |
+      getpath($path) // empty
+    ' "$route_file" 2>/dev/null || true)
     if [[ -n "$value" ]]; then
       echo "$value"
       return 0

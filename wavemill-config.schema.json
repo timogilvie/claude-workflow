@@ -82,6 +82,11 @@
           "default": "",
           "description": "Shell command to run in each new worktree before agent launch (e.g., 'npm install'). Skipped when resuming an existing worktree.",
           "examples": ["npm install", "pnpm install", "pip install -r requirements.txt"]
+        },
+        "defaultMaxCostUsd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Default per-task cost budget in USD. When set, the router filters model combinations whose expected cost exceeds this budget. Null or omitted means no cost constraint."
         }
       }
     },
