@@ -431,6 +431,12 @@ render_dashboard() {
 }
 
 run_dashboard() {
+  # Disable errexit inside the render loop. USR1 signals (from hook writes)
+  # can interrupt any command mid-execution; under set -e the interrupted
+  # command's non-zero exit kills the entire script. The render helpers
+  # already guard failures with "|| true" / "2>/dev/null" so errexit adds
+  # no safety here — only fragility.
+  set +e
   while true; do
     # Keep tmux scrollback clean without blanking the visible pane.
     clear_dashboard_scrollback

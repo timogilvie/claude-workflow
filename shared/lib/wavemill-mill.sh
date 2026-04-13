@@ -4192,7 +4192,10 @@ monitor_issue_state() {
   task_status=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].status // empty')
   if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
     set_window_attention_state "$WIN" "clear"
-    if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+    # When quit is requested, force-clean merged tasks instead of waiting for the
+    # user to close the review window (which blocks shutdown indefinitely).
+    if [[ "${QUIT_REQUESTED:-false}" != "true" ]] \
+       && tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
       active_count=$((active_count + 1))
       return 0
     fi
@@ -4947,8 +4950,12 @@ while :; do
     if (( active_count == 0 )); then
       quit_and_kill_session "All tasks complete. Exiting."
     fi
-    # Still have active tasks — keep monitoring but don't offer new ones
-    sleep "$POLL_SECONDS"
+    # Still have active tasks — keep monitoring but accept 'q' for force-quit
+    if read -rsn1 -t "$POLL_SECONDS" REPLY 2>/dev/null; then
+      if [[ "$REPLY" =~ ^[Qq] ]]; then
+        quit_and_kill_session "Force quitting ($active_count task(s) still active)."
+      fi
+    fi
     continue
   fi
 
