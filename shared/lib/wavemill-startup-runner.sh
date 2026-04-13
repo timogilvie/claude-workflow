@@ -295,7 +295,7 @@ launch_task_from_plan() {
   startup_step "[2/7] Pre-trusting directory... ✓"
 
   win="$issue-$slug"
-  tmux new-window -t "$SESSION" -n "$win" -c "$wt_dir" >/dev/null
+  tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" >/dev/null
   tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
   tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
   tmux set-option -t "$SESSION:$win" remain-on-exit on >/dev/null 2>&1 || true
