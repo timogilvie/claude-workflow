@@ -2620,6 +2620,7 @@ restore_review_task_window() {
     fi
   fi
 
+  # Fetch title and description from state or issue data (used for both packet and agent launch)
   title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')
   [[ -z "$title" ]] && title=$(printf '%s' "$issue_json" | jq -r '.title // empty' 2>/dev/null || echo "")
   [[ -z "$title" ]] && title="Task"
@@ -2676,10 +2677,9 @@ EOF
 
   if _pane_is_dead_or_idle "$SESSION:$win"; then
     # Get review phase configuration from state
-    local reviewer_model review_mode reviewer_agent title
+    local reviewer_model review_mode reviewer_agent
     reviewer_model=$(read_state_value "claude-sonnet-4-5-20250929" --arg i "$issue" '.tasks[$i].reviewerModel // "claude-sonnet-4-5-20250929"')
     review_mode=$(read_state_value "static+llm" --arg i "$issue" '.tasks[$i].reviewMode // "static+llm"')
-    title=$(read_state_value "Task" --arg i "$issue" '.tasks[$i].title // "Task"')
 
     # Resolve agent from model
     reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
@@ -4607,10 +4607,15 @@ monitor_issue_state() {
 
   current_phase=$(get_task_phase "$ISSUE")
   if [[ "$current_phase" == "review" ]]; then
-    if ! restore_review_task_window "$ISSUE" "$SLUG" "$BRANCH" "$PR" "$WT_DIR"; then
-      set_window_attention_state "$WIN" "needs-user"
-      active_count=$((active_count + 1))
-      return 0
+    # Only restore window if PR is still open (not merged or closed)
+    local pr_status
+    pr_status=$(pr_state "$PR")
+    if [[ "$pr_status" == "OPEN" ]]; then
+      if ! restore_review_task_window "$ISSUE" "$SLUG" "$BRANCH" "$PR" "$WT_DIR"; then
+        set_window_attention_state "$WIN" "needs-user"
+        active_count=$((active_count + 1))
+        return 0
+      fi
     fi
   fi
 
