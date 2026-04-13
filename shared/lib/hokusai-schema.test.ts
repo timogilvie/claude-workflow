@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { TaskDescriptor } from './eval-schema.ts';
+import type { EvalRecord, TaskDescriptor } from './eval-schema.ts';
 import {
   complexityToHokusaiScore,
   descriptionLengthToBucket,
@@ -16,6 +16,8 @@ import {
   riskFlagsToBooleans,
   riskFlagsToLevel,
   toHokusaiInput,
+  toHokusaiSubmission,
+  validateHokusaiSubmission,
 } from './hokusai-schema.ts';
 
 function makeDescriptor(overrides: Partial<TaskDescriptor> = {}): TaskDescriptor {
@@ -320,6 +322,525 @@ describe('hokusai-schema', () => {
         coder_models: ['gpt-5.4'],
         reviewer_models: ['gpt-5.4'],
       });
+    });
+  });
+
+  describe('toHokusaiSubmission', () => {
+    function makeEvalRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
+      return {
+        id: 'run-123',
+        schemaVersion: '1.4.0',
+        originalPrompt: 'Test prompt',
+        modelId: 'claude-opus-4-6',
+        modelVersion: '1.0',
+        score: 0.9,
+        scoreBand: 'Minor Feedback',
+        timeSeconds: 1840,
+        timestamp: '2026-04-13T00:00:00Z',
+        interventionRequired: false,
+        interventionCount: 0,
+        interventionDetails: [],
+        rationale: 'Test rationale',
+        issueId: 'HOK-1237',
+        workflowCost: 2.41,
+        ...overrides,
+      };
+    }
+
+    it('converts complete record with taskDescriptor.stages to submission', () => {
+      const record = makeEvalRecord({
+        taskDescriptor: {
+          schema_version: '1.0',
+          signals: {
+            heuristic: {
+              task_type: 'feature',
+              languages: ['typescript'],
+              framework_tags: [],
+              files_touched: 3,
+              repo_size_loc: 50000,
+              description_tokens: 100,
+              is_greenfield: false,
+              has_migration: false,
+              has_ui: false,
+              has_tests: true,
+              cross_service: false,
+            },
+            learned: {
+              complexity: 3,
+              domain: 'backend',
+              risk_flags: [],
+            },
+          },
+          constraints: {
+            max_cost_usd: 5.0,
+            models_available: ['claude-opus-4-6'],
+            objective: 'balanced',
+          },
+          stages: {
+            planner: { model: 'claude-opus-4-6' },
+            coder: { model: 'claude-opus-4-6' },
+            reviewer: { model: 'claude-opus-4-6' },
+          },
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      assert.equal(submission.run_id, 'run-123');
+      assert.equal(submission.task_id, 'HOK-1237');
+      assert.equal(submission.route_taken.planner_model, 'claude-opus-4-6');
+      assert.equal(submission.route_taken.coder_model, 'claude-opus-4-6');
+      assert.equal(submission.route_taken.reviewer_model, 'claude-opus-4-6');
+      assert.equal(submission.observed_outcomes.actual_cost_usd, 2.41);
+      assert.equal(submission.observed_outcomes.actual_time_seconds, 1840);
+      assert.equal(submission.observed_outcomes.intervention_count, 0);
+      assert.equal(submission.observed_outcomes.completed_successfully, true);
+      assert.equal(submission.constraints.max_cost_usd, 5.0);
+    });
+
+    it('uses taskDescriptor.stages over routingDecision', () => {
+      const record = makeEvalRecord({
+        taskDescriptor: {
+          schema_version: '1.0',
+          signals: {
+            heuristic: {
+              task_type: 'feature',
+              languages: ['typescript'],
+              framework_tags: [],
+              files_touched: 3,
+              repo_size_loc: 50000,
+              description_tokens: 100,
+              is_greenfield: false,
+              has_migration: false,
+              has_ui: false,
+              has_tests: true,
+              cross_service: false,
+            },
+            learned: {
+              complexity: 3,
+              domain: 'backend',
+              risk_flags: [],
+            },
+          },
+          constraints: {
+            max_cost_usd: undefined,
+            models_available: [],
+            objective: 'balanced',
+          },
+          stages: {
+            planner: { model: 'opus-stages' },
+            coder: { model: 'opus-stages' },
+            reviewer: { model: 'opus-stages' },
+          },
+        },
+        routingDecision: {
+          candidates: [
+            { agentType: 'claude', modelId: 'sonnet-routing' },
+          ],
+          chosen: { agentType: 'claude', modelId: 'sonnet-routing' },
+          decisionPolicyVersion: 'baseline',
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      // Should prefer stages over routingDecision
+      assert.equal(submission.route_taken.planner_model, 'opus-stages');
+      assert.equal(submission.route_taken.coder_model, 'opus-stages');
+      assert.equal(submission.route_taken.reviewer_model, 'opus-stages');
+    });
+
+    it('falls back to routingDecision.chosen when no stages', () => {
+      const record = makeEvalRecord({
+        routingDecision: {
+          candidates: [
+            { agentType: 'claude', modelId: 'opus-chosen' },
+          ],
+          chosen: { agentType: 'claude', modelId: 'opus-chosen' },
+          decisionPolicyVersion: 'router-v1',
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      // All stages use the single chosen modelId
+      assert.equal(submission.route_taken.planner_model, 'opus-chosen');
+      assert.equal(submission.route_taken.coder_model, 'opus-chosen');
+      assert.equal(submission.route_taken.reviewer_model, 'opus-chosen');
+    });
+
+    it('resolves routingDecision.chosen when it is an index', () => {
+      const record = makeEvalRecord({
+        routingDecision: {
+          candidates: [
+            { agentType: 'claude', modelId: 'model-0' },
+            { agentType: 'claude', modelId: 'model-1' },
+            { agentType: 'claude', modelId: 'model-2' },
+          ],
+          chosen: 1, // Index into candidates array
+          decisionPolicyVersion: 'router-v2',
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      // Should resolve index 1 to model-1
+      assert.equal(submission.route_taken.planner_model, 'model-1');
+      assert.equal(submission.route_taken.coder_model, 'model-1');
+      assert.equal(submission.route_taken.reviewer_model, 'model-1');
+    });
+
+    it('returns null when issueId missing', () => {
+      const record = makeEvalRecord({ issueId: undefined });
+      const submission = toHokusaiSubmission(record);
+      assert.equal(submission, null);
+    });
+
+    it('returns null when run_id (id) missing', () => {
+      const record = makeEvalRecord({ id: '' });
+      const submission = toHokusaiSubmission(record);
+      assert.equal(submission, null);
+    });
+
+    it('returns null when workflowCost is undefined', () => {
+      const record = makeEvalRecord({ workflowCost: undefined });
+      const submission = toHokusaiSubmission(record);
+      assert.equal(submission, null);
+    });
+
+    it('returns null when workflowCost is null', () => {
+      const record = makeEvalRecord({ workflowCost: null });
+      const submission = toHokusaiSubmission(record);
+      assert.equal(submission, null);
+    });
+
+    it('returns valid submission when workflowCost is 0', () => {
+      const record = makeEvalRecord({
+        workflowCost: 0,
+        routingDecision: {
+          candidates: [{ agentType: 'claude', modelId: 'opus' }],
+          chosen: { agentType: 'claude', modelId: 'opus' },
+          decisionPolicyVersion: 'baseline',
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      assert.equal(submission.observed_outcomes.actual_cost_usd, 0);
+    });
+
+    it('returns null when neither stages nor routingDecision available', () => {
+      const record = makeEvalRecord({});
+      const submission = toHokusaiSubmission(record);
+      assert.equal(submission, null);
+    });
+
+    it('derives completed_successfully from score when outcomes.success unavailable', () => {
+      const recordSuccess = makeEvalRecord({
+        score: 0.5,
+        routingDecision: {
+          candidates: [{ agentType: 'claude', modelId: 'opus' }],
+          chosen: { agentType: 'claude', modelId: 'opus' },
+          decisionPolicyVersion: 'baseline',
+        },
+      });
+
+      const submissionSuccess = toHokusaiSubmission(recordSuccess);
+      assert.ok(submissionSuccess);
+      assert.equal(submissionSuccess.observed_outcomes.completed_successfully, true);
+
+      const recordFailure = makeEvalRecord({
+        score: 0,
+        routingDecision: {
+          candidates: [{ agentType: 'claude', modelId: 'opus' }],
+          chosen: { agentType: 'claude', modelId: 'opus' },
+          decisionPolicyVersion: 'baseline',
+        },
+      });
+
+      const submissionFailure = toHokusaiSubmission(recordFailure);
+      assert.ok(submissionFailure);
+      assert.equal(submissionFailure.observed_outcomes.completed_successfully, false);
+    });
+
+    it('prefers outcomes.success over score for completed_successfully', () => {
+      const record = makeEvalRecord({
+        score: 0, // score is 0 (would mean failure)
+        outcomes: { success: true }, // but outcomes says success
+        routingDecision: {
+          candidates: [{ agentType: 'claude', modelId: 'opus' }],
+          chosen: { agentType: 'claude', modelId: 'opus' },
+          decisionPolicyVersion: 'baseline',
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      // Should use outcomes.success, not score
+      assert.equal(submission.observed_outcomes.completed_successfully, true);
+    });
+
+    it('extracts max_cost_usd from record.constraints', () => {
+      const record = makeEvalRecord({
+        constraints: { maxCostUsd: 3.5 },
+        routingDecision: {
+          candidates: [{ agentType: 'claude', modelId: 'opus' }],
+          chosen: { agentType: 'claude', modelId: 'opus' },
+          decisionPolicyVersion: 'baseline',
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      assert.equal(submission.constraints.max_cost_usd, 3.5);
+    });
+
+    it('falls back to taskDescriptor.constraints.max_cost_usd', () => {
+      const record = makeEvalRecord({
+        taskDescriptor: {
+          schema_version: '1.0',
+          signals: {
+            heuristic: {
+              task_type: 'feature',
+              languages: ['typescript'],
+              framework_tags: [],
+              files_touched: 3,
+              repo_size_loc: 50000,
+              description_tokens: 100,
+              is_greenfield: false,
+              has_migration: false,
+              has_ui: false,
+              has_tests: true,
+              cross_service: false,
+            },
+            learned: {
+              complexity: 3,
+              domain: 'backend',
+              risk_flags: [],
+            },
+          },
+          constraints: {
+            max_cost_usd: 2.75,
+            models_available: [],
+            objective: 'balanced',
+          },
+          stages: {
+            planner: { model: 'opus' },
+            coder: { model: 'opus' },
+            reviewer: { model: 'opus' },
+          },
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      assert.equal(submission.constraints.max_cost_usd, 2.75);
+    });
+
+    it('sets max_cost_usd to null when both sources unavailable', () => {
+      const record = makeEvalRecord({
+        routingDecision: {
+          candidates: [{ agentType: 'claude', modelId: 'opus' }],
+          chosen: { agentType: 'claude', modelId: 'opus' },
+          decisionPolicyVersion: 'baseline',
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      assert.equal(submission.constraints.max_cost_usd, null);
+    });
+
+    it('prioritizes record.constraints over taskDescriptor.constraints', () => {
+      const record = makeEvalRecord({
+        constraints: { maxCostUsd: 10.0 },
+        taskDescriptor: {
+          schema_version: '1.0',
+          signals: {
+            heuristic: {
+              task_type: 'feature',
+              languages: ['typescript'],
+              framework_tags: [],
+              files_touched: 3,
+              repo_size_loc: 50000,
+              description_tokens: 100,
+              is_greenfield: false,
+              has_migration: false,
+              has_ui: false,
+              has_tests: true,
+              cross_service: false,
+            },
+            learned: {
+              complexity: 3,
+              domain: 'backend',
+              risk_flags: [],
+            },
+          },
+          constraints: {
+            max_cost_usd: 5.0, // This should be ignored
+            models_available: [],
+            objective: 'balanced',
+          },
+          stages: {
+            planner: { model: 'opus' },
+            coder: { model: 'opus' },
+            reviewer: { model: 'opus' },
+          },
+        },
+      });
+
+      const submission = toHokusaiSubmission(record);
+      assert.ok(submission);
+      assert.equal(submission.constraints.max_cost_usd, 10.0);
+    });
+  });
+
+  describe('validateHokusaiSubmission', () => {
+    function makeSubmission(overrides: any = {}) {
+      return {
+        run_id: 'run-123',
+        task_id: 'HOK-1237',
+        constraints: {
+          max_cost_usd: 5.0,
+        },
+        route_taken: {
+          planner_model: 'claude-opus-4-6',
+          coder_model: 'claude-opus-4-6',
+          reviewer_model: 'claude-opus-4-6',
+        },
+        observed_outcomes: {
+          completed_successfully: true,
+          actual_cost_usd: 2.41,
+          actual_time_seconds: 1840,
+          intervention_count: 0,
+        },
+        ...overrides,
+      };
+    }
+
+    it('validates a correct submission', () => {
+      const submission = makeSubmission();
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, true);
+      assert.deepEqual(result.errors, []);
+    });
+
+    it('rejects empty run_id', () => {
+      const submission = makeSubmission({ run_id: '' });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('run_id')));
+    });
+
+    it('rejects empty task_id', () => {
+      const submission = makeSubmission({ task_id: '' });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('task_id')));
+    });
+
+    it('rejects empty planner_model', () => {
+      const submission = makeSubmission({
+        route_taken: {
+          planner_model: '',
+          coder_model: 'opus',
+          reviewer_model: 'opus',
+        },
+      });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('planner_model')));
+    });
+
+    it('rejects empty coder_model', () => {
+      const submission = makeSubmission({
+        route_taken: {
+          planner_model: 'opus',
+          coder_model: '',
+          reviewer_model: 'opus',
+        },
+      });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('coder_model')));
+    });
+
+    it('rejects empty reviewer_model', () => {
+      const submission = makeSubmission({
+        route_taken: {
+          planner_model: 'opus',
+          coder_model: 'opus',
+          reviewer_model: '',
+        },
+      });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('reviewer_model')));
+    });
+
+    it('rejects negative actual_cost_usd', () => {
+      const submission = makeSubmission({
+        observed_outcomes: {
+          completed_successfully: true,
+          actual_cost_usd: -1,
+          actual_time_seconds: 1840,
+          intervention_count: 0,
+        },
+      });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('actual_cost_usd')));
+    });
+
+    it('rejects negative actual_time_seconds', () => {
+      const submission = makeSubmission({
+        observed_outcomes: {
+          completed_successfully: true,
+          actual_cost_usd: 2.41,
+          actual_time_seconds: -100,
+          intervention_count: 0,
+        },
+      });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('actual_time_seconds')));
+    });
+
+    it('rejects negative intervention_count', () => {
+      const submission = makeSubmission({
+        observed_outcomes: {
+          completed_successfully: true,
+          actual_cost_usd: 2.41,
+          actual_time_seconds: 1840,
+          intervention_count: -1,
+        },
+      });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('intervention_count')));
+    });
+
+    it('allows max_cost_usd to be null', () => {
+      const submission = makeSubmission({
+        constraints: { max_cost_usd: null },
+      });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, true);
+    });
+
+    it('accumulates multiple errors', () => {
+      const submission = makeSubmission({
+        run_id: '',
+        task_id: '',
+        route_taken: {
+          planner_model: '',
+          coder_model: '',
+          reviewer_model: '',
+        },
+      });
+      const result = validateHokusaiSubmission(submission);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.length >= 5); // run_id, task_id, planner, coder, reviewer
     });
   });
 });

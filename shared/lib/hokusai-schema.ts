@@ -8,7 +8,7 @@
  * @module hokusai-schema
  */
 
-import type { RepoContext, TaskDescriptor } from './eval-schema.ts';
+import type { EvalRecord, RepoContext, RoutingCandidate, TaskDescriptor } from './eval-schema.ts';
 
 // ============================================================================
 // Input Schema Types
@@ -129,6 +129,35 @@ export interface HokusaiOutput {
   schema_version: string;
   route: HokusaiRoute;
   predictions: HokusaiPredictions;
+}
+
+// ============================================================================
+// Submission Schema Types
+// ============================================================================
+
+export interface HokusaiSubmissionConstraints {
+  max_cost_usd: number | null;
+}
+
+export interface HokusaiRouteTaken {
+  planner_model: string;
+  coder_model: string;
+  reviewer_model: string;
+}
+
+export interface HokusaiObservedOutcomes {
+  completed_successfully: boolean;
+  actual_cost_usd: number;
+  actual_time_seconds: number;
+  intervention_count: number;
+}
+
+export interface HokusaiSubmission {
+  run_id: string;
+  task_id: string;
+  constraints: HokusaiSubmissionConstraints;
+  route_taken: HokusaiRouteTaken;
+  observed_outcomes: HokusaiObservedOutcomes;
 }
 
 // ============================================================================
@@ -452,5 +481,173 @@ export function toHokusaiInput(
         ?? 0,
     },
     available_models: pickAvailableModels(descriptor, overrides),
+  };
+}
+
+// ============================================================================
+// Submission Schema Adapters
+// ============================================================================
+
+/**
+ * Extracts route information from stages or routing decision.
+ *
+ * Priority: `taskDescriptor.stages` (planner/coder/reviewer) >
+ *           `routingDecision.chosen` (resolve if index, use modelId for all stages) >
+ *           null
+ *
+ * @param record - EvalRecord to extract route from
+ * @returns HokusaiRouteTaken object or null if no route data available
+ */
+function resolveRouteTaken(record: EvalRecord): HokusaiRouteTaken | null {
+  // Priority 1: Extract from taskDescriptor.stages
+  if (record.taskDescriptor?.stages) {
+    const stages = record.taskDescriptor.stages;
+    const plannerModel = stages.planner?.model;
+    const coderModel = stages.coder?.model;
+    const reviewerModel = stages.reviewer?.model;
+
+    if (plannerModel && coderModel && reviewerModel) {
+      return {
+        planner_model: plannerModel,
+        coder_model: coderModel,
+        reviewer_model: reviewerModel,
+      };
+    }
+  }
+
+  // Priority 2: Extract from routingDecision.chosen
+  if (record.routingDecision?.chosen !== undefined) {
+    let chosen: RoutingCandidate;
+
+    if (typeof record.routingDecision.chosen === 'number') {
+      // Resolve index reference to actual candidate
+      const idx = record.routingDecision.chosen;
+      const candidate = record.routingDecision.candidates?.[idx];
+      if (!candidate) {
+        return null;
+      }
+      chosen = candidate;
+    } else {
+      chosen = record.routingDecision.chosen;
+    }
+
+    if (chosen.modelId) {
+      return {
+        planner_model: chosen.modelId,
+        coder_model: chosen.modelId,
+        reviewer_model: chosen.modelId,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Converts an EvalRecord into a Hokusai training/submission schema.
+ *
+ * Returns null if required fields are missing:
+ * - `record.id` (run_id)
+ * - `record.issueId` (task_id)
+ * - `record.workflowCost` (actual_cost_usd — must not be undefined/null)
+ * - Route information (stages or routingDecision)
+ *
+ * @param record - EvalRecord to convert
+ * @returns HokusaiSubmission object or null if required fields missing
+ */
+export function toHokusaiSubmission(record: EvalRecord): HokusaiSubmission | null {
+  // Guard: required IDs
+  if (!record.id || !record.issueId) {
+    return null;
+  }
+
+  // Guard: workflowCost required (not undefined/null, but 0 is valid)
+  if (record.workflowCost === undefined || record.workflowCost === null) {
+    return null;
+  }
+
+  // Extract route taken
+  const route = resolveRouteTaken(record);
+  if (!route) {
+    return null;
+  }
+
+  // Determine completion status
+  // Prefer outcomes.success, fallback to score > 0
+  const completedSuccessfully =
+    record.outcomes?.success !== undefined ? record.outcomes.success : record.score > 0;
+
+  // Determine max_cost_usd
+  // Priority: record.constraints?.maxCostUsd > record.taskDescriptor?.constraints?.max_cost_usd > null
+  const maxCostUsd =
+    record.constraints?.maxCostUsd
+    ?? record.taskDescriptor?.constraints?.max_cost_usd
+    ?? null;
+
+  return {
+    run_id: record.id,
+    task_id: record.issueId,
+    constraints: {
+      max_cost_usd: maxCostUsd,
+    },
+    route_taken: route,
+    observed_outcomes: {
+      completed_successfully: completedSuccessfully,
+      actual_cost_usd: record.workflowCost,
+      actual_time_seconds: record.timeSeconds,
+      intervention_count: record.interventionCount,
+    },
+  };
+}
+
+/**
+ * Validates a HokusaiSubmission object.
+ *
+ * Checks all required fields and their constraints.
+ *
+ * @param submission - HokusaiSubmission to validate
+ * @returns Object with valid flag and array of error messages (empty if valid)
+ */
+export function validateHokusaiSubmission(
+  submission: HokusaiSubmission,
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  // run_id validation
+  if (!submission.run_id || typeof submission.run_id !== 'string' || submission.run_id.trim() === '') {
+    errors.push('run_id must be a non-empty string');
+  }
+
+  // task_id validation
+  if (!submission.task_id || typeof submission.task_id !== 'string' || submission.task_id.trim() === '') {
+    errors.push('task_id must be a non-empty string');
+  }
+
+  // route_taken validation
+  if (!submission.route_taken?.planner_model || submission.route_taken.planner_model.trim() === '') {
+    errors.push('route_taken.planner_model must be a non-empty string');
+  }
+  if (!submission.route_taken?.coder_model || submission.route_taken.coder_model.trim() === '') {
+    errors.push('route_taken.coder_model must be a non-empty string');
+  }
+  if (!submission.route_taken?.reviewer_model || submission.route_taken.reviewer_model.trim() === '') {
+    errors.push('route_taken.reviewer_model must be a non-empty string');
+  }
+
+  // observed_outcomes validation
+  const outcomes = submission.observed_outcomes;
+  if (typeof outcomes.actual_cost_usd !== 'number' || outcomes.actual_cost_usd < 0) {
+    errors.push('observed_outcomes.actual_cost_usd must be a non-negative number');
+  }
+  if (typeof outcomes.actual_time_seconds !== 'number' || outcomes.actual_time_seconds < 0) {
+    errors.push('observed_outcomes.actual_time_seconds must be a non-negative number');
+  }
+  if (typeof outcomes.intervention_count !== 'number' || outcomes.intervention_count < 0) {
+    errors.push('observed_outcomes.intervention_count must be a non-negative number');
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
   };
 }
