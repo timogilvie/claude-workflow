@@ -57,7 +57,6 @@ write_shell_assignment() {
 
 startup_log() {
   local line="$*"
-  printf '%s\n' "$line"
   [[ -n "${STATUS_LOG_FILE:-}" ]] && printf '%s\n' "$line" >> "$STATUS_LOG_FILE" 2>/dev/null || true
 }
 
