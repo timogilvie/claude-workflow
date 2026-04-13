@@ -49,6 +49,10 @@ runTool({
       type: 'string',
       description: 'Routing mode: auto, stage-aware, or heuristic',
     },
+    'max-cost': {
+      type: 'string',
+      description: 'Maximum cost budget in USD for routing',
+    },
   },
   positional: {
     name: 'prompt',
@@ -81,9 +85,16 @@ runTool({
 
     const repoDir = args['repo-dir'] || process.cwd();
     const mode = args.mode || 'auto';
+    let maxCostUsd: number | undefined;
+    if (args['max-cost']) {
+      maxCostUsd = Number(args['max-cost']);
+      if (!Number.isFinite(maxCostUsd) || maxCostUsd < 0) {
+        throw new Error(`--max-cost must be a non-negative number, got ${args['max-cost']}`);
+      }
+    }
     const decision = mode === 'heuristic'
-      ? routeWorkflow(prompt, { repoDir })
-      : routeWorkflowStageAware(prompt, { repoDir });
+      ? routeWorkflow(prompt, { repoDir, maxCostUsd })
+      : routeWorkflowStageAware(prompt, { repoDir, maxCostUsd });
 
     if (args.json) {
       console.log(JSON.stringify(decision, null, 2));

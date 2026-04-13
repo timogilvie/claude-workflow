@@ -603,6 +603,9 @@ export function routeStageAware(
   }
 
   const decision = buildStageAwareDecision(selection, neighbors, repoDir);
+  if (options.maxCostUsd !== undefined) {
+    decision.constraints = { maxCostUsd: options.maxCostUsd };
+  }
 
   // When neighbors lack model diversity, use neighbor data for stage calibration
   // (depth, review mode, cost estimates) but mark the decision as partial so the

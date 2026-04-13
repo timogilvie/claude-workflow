@@ -44,13 +44,21 @@ import { evaluateTask } from './eval.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
+import { getMaxCostUsd } from './config.ts';
 import type {
   EvalRecord,
   Outcomes,
-  StageOutcomes,
-  StageScore,
-  RoutingOutcome,
+  EvalConstraints,
 } from './eval-schema.ts';
+import type { RoutingCompleteData } from './eval-context-gatherer.ts';
+
+function resolveEvalConstraints(
+  routingComplete: RoutingCompleteData | null,
+  repoDir: string,
+): EvalConstraints | undefined {
+  const maxCostUsd = routingComplete?.maxCostUsd ?? getMaxCostUsd(repoDir);
+  return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
+}
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -308,6 +316,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
 
   // 9b. Build task descriptor for router training (HOK-1120)
   let taskDescriptor = null;
+  let evalConstraints: EvalConstraints | undefined;
   try {
     // Derive feature slug from branch or issue ID
     const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
@@ -316,6 +325,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     const routingComplete = slug
       ? fetchRoutingCompleteRaw(repoDir, slug, worktreePath)
       : null;
+    evalConstraints = resolveEvalConstraints(routingComplete, repoDir);
 
     // Build descriptor from all gathered context
     taskDescriptor = buildTaskDescriptor({
@@ -335,6 +345,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       interventions: interventionRecords || undefined,
       modelsAvailable: ['claude-sonnet-4-5-20250929', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
       objective: 'balanced',
+      maxCostUsd: evalConstraints?.maxCostUsd,
     });
   } catch (err) {
     const errorMsg = errorMessage(err);
@@ -349,6 +360,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     taskContext: taskContextData,
     repoContext: repoContextData,
     taskDescriptor,
+    constraints: evalConstraints,
   });
 
   // 11. Set solution model if provided

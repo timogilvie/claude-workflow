@@ -529,6 +529,17 @@ export interface Outcomes {
   delivery: DeliveryOutcome;
 }
 
+/**
+ * Budget constraints applied to the task at routing time.
+ *
+ * Separate from taskContext.constraints, which describes prompt-level rules
+ * such as style, scope, or environment restrictions.
+ */
+export interface EvalConstraints {
+  /** Maximum routing budget in USD for the task. */
+  maxCostUsd?: number;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Difficulty Classification (HOK-777)
 // ────────────────────────────────────────────────────────────────
@@ -947,6 +958,9 @@ export interface EvalRecord {
    * @since 1.4.0
    */
   taskDescriptor?: TaskDescriptor;
+
+  /** Budget constraints applied during routing and execution. */
+  constraints?: EvalConstraints;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;

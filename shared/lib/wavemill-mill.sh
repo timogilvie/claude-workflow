@@ -1474,11 +1474,15 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
   ROUTE_TOOL="$TOOLS_DIR/route-task.ts"
   if [[ -f "$ROUTE_TOOL" ]]; then
     log "info" "Running model router..."
+    ROUTE_MAX_COST_ARGS=()
+    if [[ -n "${DEFAULT_MAX_COST_USD:-}" ]]; then
+      ROUTE_MAX_COST_ARGS=(--max-cost "$DEFAULT_MAX_COST_USD")
+    fi
     for t in "${TASKS[@]}"; do
       IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
       PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
       if [[ -f "$PACKET_FILE" ]]; then
-        ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+        ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" "${ROUTE_MAX_COST_ARGS[@]}" 2>/dev/null || echo "")
         if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
           PLANNER=$(echo "$ROUTE_JSON" | jq -r '.planner // empty' 2>/dev/null)
           CODER=$(echo "$ROUTE_JSON" | jq -r '.coder // empty' 2>/dev/null)
@@ -3764,7 +3768,11 @@ launch_task() {
     local route_tool="$TOOLS_DIR/route-task.ts"
     if [[ "${ROUTER_ENABLED:-true}" == "true" ]] && [[ -f "$route_tool" ]] && [[ -f "$packet_file" ]]; then
       local route_json
-      route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$packet_file" --repo-dir "$REPO_DIR" 2>/dev/null || echo "")
+      local route_max_cost_args=()
+      if [[ -n "${DEFAULT_MAX_COST_USD:-}" ]]; then
+        route_max_cost_args=(--max-cost "$DEFAULT_MAX_COST_USD")
+      fi
+      route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$packet_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2>/dev/null || echo "")
       if [[ -n "$route_json" ]] && echo "$route_json" | jq -e '.planner' >/dev/null 2>&1; then
         # Extract stage-specific models from workflow routing decision
         planner_model=$(echo "$route_json" | jq -r '.planner // empty' 2>/dev/null)
@@ -4059,6 +4067,7 @@ Implement from the issue description plus direct codebase analysis."
       --arg planDepth "${plan_depth:-light}" \
       --arg codeDepth "${code_depth:-medium}" \
       --arg reviewMode "${review_mode:-static}" \
+      --argjson maxCostUsd "$(read_route_json "$SESSION" "$issue" "constraints.maxCostUsd" "null")" \
       '{
         planner: $planner,
         coder: $coder,
@@ -4066,7 +4075,7 @@ Implement from the issue description plus direct codebase analysis."
         planDepth: $planDepth,
         codeDepth: $codeDepth,
         reviewMode: $reviewMode
-      }' > "$routing_file"
+      } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$routing_file"
 
     # Save initial route for eval comparison (routed on raw description)
     cp "$routing_file" "$feature_dir/.initial-route.json"

@@ -39,6 +39,9 @@ export interface WorkflowRouteDecision {
     riskScore: number;
   };
   challengeRecommendation?: ChallengeRecommendation;
+  constraints?: {
+    maxCostUsd?: number;
+  };
 }
 
 export interface RouteWorkflowOptions {
@@ -202,6 +205,67 @@ export function estimateStageCost(
   return roundMoney(computeModelCost(profile, pricing));
 }
 
+function downgradeModelsForBudget(params: {
+  planner: string;
+  coder: string;
+  reviewer: string;
+  planDepth: PlanDepth;
+  codeDepth: CodeDepth;
+  reviewMode: ReviewMode;
+  pool: string[];
+  maxCostUsd: number;
+  repoDir?: string;
+}): { planner: string; coder: string; reviewer: string } | null {
+  const { planner, coder, reviewer, planDepth, codeDepth, reviewMode, pool, maxCostUsd, repoDir } = params;
+
+  // Define downgrade tiers for each role (most expensive to cheapest)
+  const coderTiers = [
+    ['claude-opus-4-6', 'gpt-5.4'],
+    ['gpt-5.3-codex', 'claude-sonnet-4-5-20250929'],
+    ['claude-haiku-4-5-20251001'],
+  ];
+
+  const plannerTiers = [
+    ['claude-opus-4-6'],
+    ['claude-sonnet-4-5-20250929'],
+    ['claude-haiku-4-5-20251001'],
+  ];
+
+  const reviewerTiers = [
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'],
+    ['claude-haiku-4-5-20251001'],
+  ];
+
+  // Try all combinations, starting with minimal downgrades
+  for (const coderTier of coderTiers) {
+    const downgradedCoder = pickAvailableModel(pool, coderTier, coder);
+    for (const plannerTier of plannerTiers) {
+      const downgradedPlanner = pickAvailableModel(pool, plannerTier, planner);
+      for (const reviewerTier of reviewerTiers) {
+        const downgradedReviewer = pickAvailableModel(pool, reviewerTier, reviewer);
+
+        const totalCost =
+          estimateStageCost(downgradedPlanner, PLAN_TOKENS[planDepth], repoDir) +
+          estimateStageCost(downgradedCoder, CODE_TOKENS[codeDepth], repoDir) +
+          (reviewMode === 'none'
+            ? 0
+            : estimateStageCost(downgradedReviewer, REVIEW_TOKENS[reviewMode as Exclude<ReviewMode, 'none'>], repoDir));
+
+        if (totalCost <= maxCostUsd) {
+          return {
+            planner: downgradedPlanner,
+            coder: downgradedCoder,
+            reviewer: downgradedReviewer,
+          };
+        }
+      }
+    }
+  }
+
+  // Could not find a combination within budget
+  return null;
+}
+
 export function readTaskPromptFromFile(filePath: string): string {
   const content = readFileSync(filePath, 'utf-8');
   if (filePath.endsWith('.json')) {
@@ -244,6 +308,43 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       ? pickAvailableModel(pool, ['claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', planner], planner)
       : pickAvailableModel(pool, ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929', planner], planner);
 
+  // Enforce budget constraint if provided
+  let finalPlanner = planner;
+  let finalCoder = coder;
+  let finalReviewer = reviewer;
+  let budgetAdjustmentApplied = false;
+
+  if (typeof options?.maxCostUsd === 'number') {
+    const initialCost =
+      estimateStageCost(planner, PLAN_TOKENS[planDepth], repoDir) +
+      estimateStageCost(coder, CODE_TOKENS[codeDepth], repoDir) +
+      (reviewRecommended === 'none'
+        ? 0
+        : estimateStageCost(reviewer, REVIEW_TOKENS[reviewRecommended as Exclude<ReviewMode, 'none'>], repoDir));
+
+    if (initialCost > options.maxCostUsd) {
+      // Try downgrading models to fit within budget
+      const downgradedModels = downgradeModelsForBudget({
+        planner,
+        coder,
+        reviewer,
+        planDepth,
+        codeDepth,
+        reviewMode: reviewRecommended,
+        pool,
+        maxCostUsd: options.maxCostUsd,
+        repoDir,
+      });
+
+      if (downgradedModels) {
+        finalPlanner = downgradedModels.planner;
+        finalCoder = downgradedModels.coder;
+        finalReviewer = downgradedModels.reviewer;
+        budgetAdjustmentApplied = true;
+      }
+    }
+  }
+
   const confidenceBoost =
     coderRecommendation.confidence === 'high' ? 0.08 :
     coderRecommendation.confidence === 'medium' ? 0.03 : -0.04;
@@ -267,19 +368,23 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     `Review mode ${reviewRecommended} chosen to match expected change risk.`,
   ];
 
+  if (budgetAdjustmentApplied) {
+    reasoning.push(`Models downgraded to fit within $${options!.maxCostUsd} budget constraint.`);
+  }
+
   return {
-    planner,
-    coder,
-    reviewer,
+    planner: finalPlanner,
+    coder: finalCoder,
+    reviewer: finalReviewer,
     planDepth,
     codeDepth,
     reviewRecommended,
     expectedSuccess,
-    expectedCostPlan: estimateStageCost(planner, PLAN_TOKENS[planDepth], repoDir),
-    expectedCostCode: estimateStageCost(coder, CODE_TOKENS[codeDepth], repoDir),
+    expectedCostPlan: estimateStageCost(finalPlanner, PLAN_TOKENS[planDepth], repoDir),
+    expectedCostCode: estimateStageCost(finalCoder, CODE_TOKENS[codeDepth], repoDir),
     expectedCostReview: reviewRecommended === 'none'
       ? 0
-      : estimateStageCost(reviewer, REVIEW_TOKENS[reviewRecommended as Exclude<ReviewMode, 'none'>], repoDir),
+      : estimateStageCost(finalReviewer, REVIEW_TOKENS[reviewRecommended as Exclude<ReviewMode, 'none'>], repoDir),
     reasoning,
     signals: {
       taskType: characteristics.taskType,
@@ -288,6 +393,9 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       fileTypes: characteristics.fileTypes,
       riskScore,
     },
+    constraints: options?.maxCostUsd === undefined
+      ? undefined
+      : { maxCostUsd: options.maxCostUsd },
   };
 }
 

@@ -22,6 +22,7 @@ import type {
   RoutingOutcome,
   RoutingDecision,
   TaskDescriptor,
+  EvalConstraints,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
@@ -49,6 +50,8 @@ export interface EvalRecordMetadata {
   workflowCost?: WorkflowCostOutcome | null;
   /** Task descriptor for router training */
   taskDescriptor?: TaskDescriptor | null;
+  /** Routing and execution constraints */
+  constraints?: EvalConstraints | null;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -228,6 +231,27 @@ export function attachTaskDescriptor(
   }
 }
 
+/**
+ * Attach routing constraints to the eval record.
+ */
+export function attachConstraints(
+  record: EvalRecord,
+  constraints: EvalConstraints | null,
+): void {
+  if (!constraints) {
+    return;
+  }
+
+  const normalized: EvalConstraints = {};
+  if (typeof constraints.maxCostUsd === 'number') {
+    normalized.maxCostUsd = constraints.maxCostUsd;
+  }
+
+  if (Object.keys(normalized).length > 0) {
+    record.constraints = normalized;
+  }
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
@@ -255,6 +279,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachRepoContextMetadata(record, metadata.repoContext || null);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
+  attachConstraints(record, metadata.constraints || null);
 
   // Extract stageScores from record metadata (set by evaluateTask)
   const stageScores = record.metadata?.stageScores as

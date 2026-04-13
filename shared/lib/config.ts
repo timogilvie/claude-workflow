@@ -37,6 +37,7 @@ export interface MillConfig {
   maxRetries?: number;
   retryDelay?: number;
   setupCommand?: string;
+  defaultMaxCostUsd?: number;
 }
 
 export interface ExpandConfig {
@@ -491,6 +492,14 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
  */
 export function getMillConfig(repoDir?: string): MillConfig {
   return loadWavemillConfig(repoDir).mill || {};
+}
+
+/**
+ * Get the default routing budget for mill tasks.
+ * Returns undefined when no budget is configured.
+ */
+export function getMaxCostUsd(repoDir?: string): number | undefined {
+  return loadWavemillConfig(repoDir).mill?.defaultMaxCostUsd;
 }
 
 /**
