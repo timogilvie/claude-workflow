@@ -14,7 +14,7 @@ import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type Pro
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
 
-export type PlanDepth = 'light' | 'deep';
+export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
 export type ReviewMode = 'none' | 'static' | 'llm' | 'static+llm';
 
@@ -29,6 +29,7 @@ export interface WorkflowRouteDecision {
   expectedCostPlan: number;
   expectedCostCode: number;
   expectedCostReview: number;
+  confidence?: number;
   reasoning: string[];
   signals: {
     taskType: TaskType;
@@ -85,25 +86,26 @@ const BREADTH_PATTERNS = [
   /\broute\b/i,
 ];
 
-interface StageTokenProfile {
+export interface StageTokenProfile {
   inputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
   outputTokens: number;
 }
 
-const PLAN_TOKENS: Record<PlanDepth, StageTokenProfile> = {
+export const PLAN_TOKENS: Record<PlanDepth, StageTokenProfile> = {
   light: { inputTokens: 35_000, cacheCreationTokens: 10_000, cacheReadTokens: 20_000, outputTokens: 5_000 },
+  medium: { inputTokens: 90_000, cacheCreationTokens: 30_000, cacheReadTokens: 70_000, outputTokens: 10_000 },
   deep: { inputTokens: 180_000, cacheCreationTokens: 60_000, cacheReadTokens: 140_000, outputTokens: 18_000 },
 };
 
-const CODE_TOKENS: Record<CodeDepth, StageTokenProfile> = {
+export const CODE_TOKENS: Record<CodeDepth, StageTokenProfile> = {
   light: { inputTokens: 220_000, cacheCreationTokens: 80_000, cacheReadTokens: 180_000, outputTokens: 12_000 },
   medium: { inputTokens: 850_000, cacheCreationTokens: 260_000, cacheReadTokens: 700_000, outputTokens: 35_000 },
   deep: { inputTokens: 2_800_000, cacheCreationTokens: 950_000, cacheReadTokens: 2_300_000, outputTokens: 110_000 },
 };
 
-const REVIEW_TOKENS: Record<Exclude<ReviewMode, 'none'>, StageTokenProfile> = {
+export const REVIEW_TOKENS: Record<Exclude<ReviewMode, 'none'>, StageTokenProfile> = {
   static: { inputTokens: 18_000, cacheCreationTokens: 4_000, cacheReadTokens: 10_000, outputTokens: 1_500 },
   llm: { inputTokens: 95_000, cacheCreationTokens: 25_000, cacheReadTokens: 80_000, outputTokens: 8_000 },
   'static+llm': { inputTokens: 180_000, cacheCreationTokens: 40_000, cacheReadTokens: 160_000, outputTokens: 12_000 },
@@ -189,7 +191,7 @@ function chooseReviewMode(characteristics: PromptCharacteristics, riskScore: num
   return 'static';
 }
 
-function estimateStageCost(
+export function estimateStageCost(
   modelId: string,
   profile: StageTokenProfile | null,
   repoDir?: string,
