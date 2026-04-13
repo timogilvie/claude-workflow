@@ -1491,7 +1491,104 @@ else
 fi
 
 # ============================================================================
-# TEST 14: Verify sourced libraries exist
+# TEST 14: Next done cycling keybinding
+# ============================================================================
+echo ""
+echo "=== Next Done Cycling ==="
+
+NEXT_DONE_SCRIPT="$LIB_DIR/wavemill-next-done.sh"
+
+if [[ ! -f "$NEXT_DONE_SCRIPT" ]]; then
+  fail "wavemill-next-done.sh not found"
+else
+  EMPTY_SESSION_RUN=$(bash "$NEXT_DONE_SCRIPT" 2>/dev/null; printf 'rc=%s' "$?")
+  if [[ "$EMPTY_SESSION_RUN" == "rc=0" ]]; then
+    pass "next done script exits cleanly outside wavemill"
+  else
+    fail "next done script does not no-op cleanly without a session"
+  fi
+
+  NEXT_DONE_CHECK=$(bash -lc '
+    set -euo pipefail
+    SCRIPT="'"$NEXT_DONE_SCRIPT"'"
+    TEST_SESSION="next-done-check-$$"
+    TEST_BIN=$(mktemp -d)
+    TEST_HOME=$(mktemp -d)
+    IDX_FILE="/tmp/wavemill-${TEST_SESSION}-next-done-idx"
+    LOG_FILE="$TEST_HOME/tmux.log"
+    trap '\''rm -rf "$TEST_BIN" "$TEST_HOME"; rm -f /tmp/wavemill-"${TEST_SESSION}"-*.hook "$IDX_FILE"'\'' EXIT
+
+    cat > "$TEST_BIN/tmux" <<'\''EOF'\''
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  list-windows)
+    printf "%s\n" "control" "HOK-1-first-task" "HOK-2-busy-task" "HOK-3-stale-task" "HOK-4-bad-json" "HOK-5-second-task"
+    ;;
+  select-window)
+    printf "%s\n" "${*: -1}" >> "${NEXT_DONE_TMUX_LOG:?}"
+    ;;
+esac
+EOF
+    chmod +x "$TEST_BIN/tmux"
+
+    now=$(date +%s)
+    cat > "/tmp/wavemill-${TEST_SESSION}-HOK-1.hook" <<EOF
+{"state":"idle","timestamp":$now}
+EOF
+    cat > "/tmp/wavemill-${TEST_SESSION}-HOK-2.hook" <<EOF
+{"state":"working","timestamp":$now}
+EOF
+    cat > "/tmp/wavemill-${TEST_SESSION}-HOK-3.hook" <<EOF
+{"state":"idle","timestamp":$((now - 301))}
+EOF
+    cat > "/tmp/wavemill-${TEST_SESSION}-HOK-4.hook" <<'\''EOF'\''
+{"state":
+EOF
+    cat > "/tmp/wavemill-${TEST_SESSION}-HOK-5.hook" <<EOF
+{"state":"idle","timestamp":$now}
+EOF
+
+    export PATH="$TEST_BIN:$PATH"
+    export NEXT_DONE_TMUX_LOG="$LOG_FILE"
+
+    printf "garbage\n" > "$IDX_FILE"
+    WAVEMILL_SESSION="$TEST_SESSION" bash "$SCRIPT"
+    WAVEMILL_SESSION="$TEST_SESSION" bash "$SCRIPT"
+
+    printf "selects=%s|" "$(paste -sd, "$LOG_FILE")"
+    printf "idx=%s" "$(cat "$IDX_FILE")"
+  ' 2>/dev/null || true)
+
+  if [[ "$NEXT_DONE_CHECK" == *"selects=next-done-check-"*":HOK-1-first-task,next-done-check-"*":HOK-5-second-task|"* ]] \
+    && [[ "$NEXT_DONE_CHECK" == *"idx=1"* ]]; then
+    pass "next done script cycles fresh idle windows in tmux order"
+  else
+    fail "next done script did not cycle the expected idle windows"
+  fi
+
+  NEXT_DONE_BINDING_BLOCK=$(awk '
+    /^create_tmux_session\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' "$MILL_SCRIPT")
+  if grep -q "bind-key -T prefix N run-shell" <<< "$NEXT_DONE_BINDING_BLOCK" \
+    && grep -q "WAVEMILL_SESSION='#{session_name}'" <<< "$NEXT_DONE_BINDING_BLOCK" \
+    && grep -q "wavemill-next-done.sh" <<< "$NEXT_DONE_BINDING_BLOCK"; then
+    pass "mill session setup binds prefix+N to next done helper"
+  else
+    fail "mill session setup is missing the next done keybinding"
+  fi
+
+  if grep -q "Ctrl+B N: next done" "$REPO_DIR/shared/lib/wavemill-status.sh"; then
+    pass "dashboard footer advertises the next done keybinding"
+  else
+    fail "dashboard footer is missing the next done hint"
+  fi
+fi
+
+# ============================================================================
+# TEST 15: Verify sourced libraries exist
 # ============================================================================
 echo ""
 echo "=== Sourced Library Verification ==="
@@ -1518,12 +1615,12 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
 done
 
 # ============================================================================
-# TEST 15: Optional ShellCheck
+# TEST 16: Optional ShellCheck
 # ============================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   echo ""
   echo "=== ShellCheck (error severity) ==="
-  for f in "$LIB_DIR"/wavemill-common.sh "$LIB_DIR"/agent-adapters.sh; do
+  for f in "$LIB_DIR"/wavemill-common.sh "$LIB_DIR"/agent-adapters.sh "$NEXT_DONE_SCRIPT"; do
     [[ -f "$f" ]] || continue
     if shellcheck --severity=error "$f" 2>/dev/null; then
       pass "shellcheck $(basename "$f")"

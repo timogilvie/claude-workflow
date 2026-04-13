@@ -190,7 +190,9 @@ write_shell_assignment() {
 
 create_tmux_session() {
   local tmux_conf
+  local next_done_script
   tmux_conf="$(cd "$SCRIPT_DIR/../.." && pwd)/.tmux.conf"
+  next_done_script="$SCRIPT_DIR/wavemill-next-done.sh"
 
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     local existing_dir
@@ -210,6 +212,9 @@ create_tmux_session() {
   tmux -f "$tmux_conf" new-session -d -s "$SESSION" -c "$REPO_DIR" -n control
   tmux set-environment -t "$SESSION" REPO_DIR "$REPO_DIR"
   tmux set-environment -t "$SESSION" WAVEMILL_MILL_ACTIVE "$REPO_DIR"
+  if [[ -x "$next_done_script" ]]; then
+    tmux bind-key -T prefix N run-shell "WAVEMILL_SESSION='#{session_name}' '$next_done_script'"
+  fi
   tmux send-keys -t "$SESSION:control" "echo 'Control window for $SESSION'" C-m
 }
 
@@ -4776,8 +4781,8 @@ fi
 log "status" "Creating tmux session..."
 create_tmux_session
 
-printf -v STARTUP_CMD '%q %q' "/opt/homebrew/bin/bash" "$STARTUP_RUNNER"
-printf -v STARTUP_CMD '%s %q' "$STARTUP_CMD" "$LAUNCH_PLAN_FILE"
+printf -v STARTUP_CMD '%q %q' "$STARTUP_RUNNER" "$LAUNCH_PLAN_FILE"
+STARTUP_CMD="/opt/homebrew/bin/bash $STARTUP_CMD"
 tmux respawn-pane -k -t "$SESSION:control.0" "$STARTUP_CMD"
 
 

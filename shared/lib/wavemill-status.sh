@@ -377,7 +377,7 @@ while true; do
     fi
   fi
 
-  printf "\n${D}Refreshes every ${REFRESH}s │ Ctrl+B W: switch windows${N}\n" >> "$FRAME"
+  printf "\n${D}Refreshes every ${REFRESH}s │ Ctrl+B W: switch windows │ Ctrl+B N: next done${N}\n" >> "$FRAME"
 
   redraw_dashboard_frame "$FRAME"
 
