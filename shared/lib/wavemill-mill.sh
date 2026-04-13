@@ -2629,7 +2629,7 @@ _ensure_window_exists() {
   local session="$1" win="$2" wt_dir="$3"
   if ! tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
     log_warn "  Window $win missing, recreating..."
-    tmux new-window -t "$session" -n "$win" -c "$wt_dir" 2>/dev/null || true
+    tmux new-window -d -t "$session" -n "$win" -c "$wt_dir" 2>/dev/null || true
     tmux set-option -t "$session:$win" remain-on-exit on 2>/dev/null || true
     sleep 1
   fi
@@ -2850,7 +2850,7 @@ EOF
 
   if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
     log "status" "⚡ $issue → Restoring review window (PR #$pr)"
-    tmux new-window -t "$SESSION" -n "$win" -c "$wt_dir" 2>/dev/null || return 1
+    tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" 2>/dev/null || return 1
     tmux set-option -t "$SESSION:$win" remain-on-exit on 2>/dev/null || true
     restored_window="true"
     sleep 1
@@ -3945,7 +3945,7 @@ launch_task() {
 
   # Create tmux window
   local win="$issue-$slug"
-  tmux new-window -t "$SESSION" -n "$win" -c "$wt_dir"
+  tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir"
   # Prevent window destruction if the pane shell exits (e.g. from a stray Ctrl-D).
   # This lets _pane_is_dead_or_idle detect and respawn dead panes during phase transitions.
   tmux set-option -t "$SESSION:$win" remain-on-exit on 2>/dev/null || true
@@ -4794,7 +4794,7 @@ monitor_issue_state() {
       # immediately — the worktree and branch still have value.
       if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qF "$WIN"; then
         log "status" "⚠ $ISSUE → Window disappeared during $current_phase phase, recreating..."
-        tmux new-window -t "$SESSION" -n "$WIN" -c "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true
+        tmux new-window -d -t "$SESSION" -n "$WIN" -c "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true
         tmux set-option -t "$SESSION:$WIN" remain-on-exit on 2>/dev/null || true
         sleep 1
         active_count=$((active_count + 1))
