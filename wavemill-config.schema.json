@@ -455,7 +455,7 @@
           "type": "string",
           "enum": ["heuristic", "llm", "auto", "stage-aware", "hokusai"],
           "default": "auto",
-          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, 'hokusai' uses the configured Hokusai inference backend, and 'auto' prefers Hokusai when configured before falling back to stage-aware and heuristic."
+          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, 'hokusai' calls the Hokusai API for ML-based routing, and 'auto' prefers Hokusai when configured before falling back to stage-aware and heuristic."
         },
         "llmModel": {
           "type": "string",
@@ -488,22 +488,15 @@
         },
         "hokusai": {
           "type": "object",
-          "description": "Hokusai model backend configuration for ML-based workflow routing.",
+          "description": "Hokusai API configuration for ML-based workflow routing. Hokusai is only available via API.",
           "properties": {
-            "backend": {
-              "type": "string",
-              "enum": ["local", "remote"],
-              "default": "local",
-              "description": "Backend type: 'local' for local inference server, 'remote' for hosted API."
-            },
             "endpoint": {
               "type": "string",
-              "default": "http://localhost:8080/predict",
-              "description": "HTTP endpoint for Hokusai inference."
+              "description": "HTTP endpoint for Hokusai API (e.g., 'https://hokusai-api.example.com/predict')."
             },
-            "modelPath": {
+            "apiKey": {
               "type": "string",
-              "description": "Path to the local Hokusai model file. Used by local backends."
+              "description": "Optional API key for authentication."
             },
             "timeout": {
               "type": "integer",
@@ -512,6 +505,7 @@
               "description": "Request timeout in milliseconds."
             }
           },
+          "required": ["endpoint"],
           "additionalProperties": false
         }
       }

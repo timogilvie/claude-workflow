@@ -91,18 +91,17 @@ export async function routeViaHokusai(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+    };
+    if (config.apiKey) {
+      headers['authorization'] = `Bearer ${config.apiKey}`;
+    }
+
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        ...input,
-        backend: config.backend ?? 'local',
-        ...(config.backend !== 'remote' && config.modelPath
-          ? { model_path: config.modelPath }
-          : {}),
-      }),
+      headers,
+      body: JSON.stringify(input),
       signal: controller.signal,
     });
 

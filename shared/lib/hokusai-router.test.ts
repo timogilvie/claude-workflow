@@ -30,9 +30,7 @@ function makeRepo(): { repoDir: string; cleanup: () => void } {
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     router: {
       hokusai: {
-        backend: 'local',
         endpoint: 'http://localhost:8080/predict',
-        modelPath: '.wavemill/models/hokusai-v1.onnx',
         timeout: 100,
       },
     },

@@ -71,9 +71,8 @@ export interface PricingEntry {
 }
 
 export interface HokusaiRouterConfig {
-  backend?: 'local' | 'remote';
   endpoint?: string;
-  modelPath?: string;
+  apiKey?: string;
   timeout?: number;
 }
 

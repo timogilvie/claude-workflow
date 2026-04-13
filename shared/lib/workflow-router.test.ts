@@ -185,7 +185,6 @@ await test('auto mode uses hokusai first when configured', async () => {
       ...baseConfig().router,
       mode: 'auto',
       hokusai: {
-        backend: 'local',
         endpoint: 'http://localhost:8080/predict',
         timeout: 1000,
       },
@@ -241,7 +240,6 @@ await test('explicit hokusai mode falls back gracefully to stage-aware', async (
       ...baseConfig().router,
       mode: 'hokusai',
       hokusai: {
-        backend: 'remote',
         endpoint: 'http://localhost:8080/predict',
         timeout: 100,
       },
