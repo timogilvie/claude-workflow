@@ -14,7 +14,11 @@ SESSION="${1:?Usage: wavemill-status.sh <session> <worktree_root> [state_file]}"
 WORKTREE_ROOT="${2:?Usage: wavemill-status.sh <session> <worktree_root> [state_file]}"
 STATE_FILE="${3:-}"
 
-REFRESH=3
+# Signal-driven refresh uses USR1 for fast updates and polling as fallback.
+WAVEMILL_REDRAW=0
+trap 'WAVEMILL_REDRAW=1' USR1
+
+REFRESH=10
 PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 PR_TTL=15
 
@@ -377,5 +381,9 @@ while true; do
 
   redraw_dashboard_frame "$FRAME"
 
-  sleep "$REFRESH"
+  # Interruptible wait: USR1 sets WAVEMILL_REDRAW and wakes wait early.
+  WAVEMILL_REDRAW=0
+  sleep "$REFRESH" &
+  SLEEP_PID=$!
+  wait "$SLEEP_PID" 2>/dev/null || true
 done
