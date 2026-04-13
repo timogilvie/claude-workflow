@@ -167,12 +167,18 @@ The dashboard supports immediate updates via `USR1` in addition to polling:
 - `wavemill-status.sh` traps `USR1` and sets `WAVEMILL_REDRAW=1`
 - The dashboard loop uses an interruptible wait (`sleep 10 &; wait`) for fast wakeups
 - A 10-second poll fallback remains in place in case signals are missed
-- Signal delivery is best-effort and never fails hook writes (invalid/stale PID is a no-op)
+- Signal delivery is best-effort with full PID validation (invalid/stale PID is a no-op, never fails hook writes)
 
-PID propagation path:
+**PID propagation architecture (tmux environment-based)**:
 1. `setup_control_dashboard()` in `wavemill-startup-runner.sh` captures the dashboard pane PID after spawn
-2. The PID is exported and written to the monitor env as `WAVEMILL_DASHBOARD_PID`
-3. `configure_agent_hooks()` injects that PID into Claude hook commands when available
+2. The PID is set as a tmux session environment variable: `tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$WAVEMILL_DASHBOARD_PID"`
+3. `agent_resolve_dashboard_pid()` in `agent-adapters.sh` reads the PID from either:
+   - The current shell environment (if already set), or
+   - The tmux session environment via `tmux show-environment`
+4. `agent_launch_autonomous()` and `agent_launch_interactive()` export `WAVEMILL_DASHBOARD_PID` for all agent types (Claude, Codex, generic)
+5. Hook scripts inherit the PID from their environment and call `wavemill_hook_notify()` for validated signal delivery
+
+This architecture ensures complete agent coverage without coupling hook configuration to PID injection.
 
 ### Dependencies
 

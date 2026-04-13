@@ -523,7 +523,6 @@ configure_agent_hooks() {
   local agent_cmd="$1" worktree_dir="$2" repo_dir="$3"
   local hooks_dir="$repo_dir/shared/hooks"
   local claude_hook="$hooks_dir/claude-status-hook.sh"
-  local dashboard_pid="${WAVEMILL_DASHBOARD_PID:-}"
   local tmp config_file
 
   # Gracefully skip if jq is unavailable or worktree is invalid
@@ -551,6 +550,7 @@ configure_agent_hooks() {
       fi
 
       # Merge hook configuration using jq (atomic via tmp + mv)
+      # WAVEMILL_DASHBOARD_PID is available via tmux session environment
       tmp=$(mktemp) || {
         log "warn" "  Failed to allocate temp file for Claude hook config"
         return 0
@@ -558,22 +558,16 @@ configure_agent_hooks() {
 
       if jq \
         --arg hook_cmd "$claude_hook" \
-        --arg dashboard_pid "$dashboard_pid" \
         '
         . as $base |
         ($base.hooks // {}) as $hooks |
-        (if $dashboard_pid != "" then
-          "export WAVEMILL_DASHBOARD_PID=" + ($dashboard_pid | @sh) + "; " + $hook_cmd
-        else
-          $hook_cmd
-        end) as $hook_with_env |
         $base + {
           hooks: ($hooks + {
-            UserPromptSubmit: (($hooks.UserPromptSubmit // []) + [{hooks: [{type: "command", command: $hook_with_env}]}] | unique_by(.hooks[0].command)),
-            PreToolUse: (($hooks.PreToolUse // []) + [{hooks: [{type: "command", command: $hook_with_env}]}] | unique_by(.hooks[0].command)),
-            Stop: (($hooks.Stop // []) + [{hooks: [{type: "command", command: $hook_with_env}]}] | unique_by(.hooks[0].command)),
-            StopFailure: (($hooks.StopFailure // []) + [{hooks: [{type: "command", command: $hook_with_env}]}] | unique_by(.hooks[0].command)),
-            Notification: (($hooks.Notification // []) + [{hooks: [{type: "command", command: $hook_with_env}]}] | unique_by(.hooks[0].command))
+            UserPromptSubmit: (($hooks.UserPromptSubmit // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            PreToolUse: (($hooks.PreToolUse // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            Stop: (($hooks.Stop // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            StopFailure: (($hooks.StopFailure // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command)),
+            Notification: (($hooks.Notification // []) + [{hooks: [{type: "command", command: $hook_cmd}]}] | unique_by(.hooks[0].command))
           })
         }
         ' "$config_file" > "$tmp" 2>/dev/null; then

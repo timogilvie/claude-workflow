@@ -77,6 +77,20 @@ agent_hooks_dir() {
   echo "${script_dir%/lib}/hooks"
 }
 
+agent_resolve_dashboard_pid() {
+  local session="${1:-}"
+
+  if [[ -n "${WAVEMILL_DASHBOARD_PID:-}" ]]; then
+    printf '%s\n' "$WAVEMILL_DASHBOARD_PID"
+    return 0
+  fi
+
+  [[ -n "$session" ]] || return 0
+  tmux show-environment -t "$session" WAVEMILL_DASHBOARD_PID 2>/dev/null \
+    | sed -n 's/^WAVEMILL_DASHBOARD_PID=//p' \
+    | head -1
+}
+
 agent_write_initial_status() {
   local session="$1"
   local issue="$2"
@@ -842,8 +856,9 @@ agent_launch_autonomous() {
   local agent_cmd="$4"
   local model="${5:-}"
   local issue="${6:-}"
-  local hooks_dir
+  local hooks_dir dashboard_pid
   hooks_dir="$(agent_hooks_dir)"
+  dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
 
   local model_flag=""
   if [[ -n "$model" ]]; then
@@ -855,10 +870,10 @@ agent_launch_autonomous() {
   # Wrap agent command so exit status is visible and the shell survives
   case "$agent_cmd" in
     claude)
-      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
+      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
       ;;
     codex)
-      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue'; codex exec${model_flag} --json --dangerously-bypass-approvals-and-sandbox - < '$instr_file' | '$hooks_dir/codex-status-monitor.sh'; echo '[wavemill] Agent exited (\$?)'" C-m
+      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid'; codex exec${model_flag} --json --dangerously-bypass-approvals-and-sandbox - < '$instr_file' | '$hooks_dir/codex-status-monitor.sh'; echo '[wavemill] Agent exited (\$?)'" C-m
       ;;
     *)
       # Generic fallback: start the agent, then paste instructions via tmux buffer.
@@ -867,7 +882,7 @@ agent_launch_autonomous() {
       local pane_pid=""
       pane_pid=$(tmux display-message -t "$session:$window" -p '#{pane_pid}' 2>/dev/null || echo "")
       if [[ -n "$pane_pid" && -n "$issue" ]]; then
-        env WAVEMILL_SESSION="$session" WAVEMILL_ISSUE="$issue" "$hooks_dir/process-status-monitor.sh" "$pane_pid" >/dev/null 2>&1 &
+        env WAVEMILL_SESSION="$session" WAVEMILL_ISSUE="$issue" WAVEMILL_DASHBOARD_PID="$dashboard_pid" "$hooks_dir/process-status-monitor.sh" "$pane_pid" >/dev/null 2>&1 &
       fi
       local instr
       instr="$(cat "$instr_file")"
@@ -903,6 +918,8 @@ agent_launch_interactive() {
   local agent_flags="${6:-}"
   local abort_check_cmd="${7:-}"
   local issue="${8:-}"
+  local dashboard_pid
+  dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
 
   if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
     local fallback_model=""
@@ -953,6 +970,7 @@ agent_launch_interactive() {
 #!/bin/bash
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -965,6 +983,7 @@ LAUNCHEOF
 #!/bin/bash
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -977,6 +996,7 @@ LAUNCHEOF
 #!/bin/bash
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi

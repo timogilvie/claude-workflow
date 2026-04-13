@@ -170,7 +170,7 @@ write_monitor_env() {
     write_shell_assignment "AUTO_EVAL" "$AUTO_EVAL"
     write_shell_assignment "DASHBOARD_VERBOSITY" "$DASHBOARD_VERBOSITY"
     write_shell_assignment "DASHBOARD_LOG_TO_FILE" "$DASHBOARD_LOG_TO_FILE"
-    write_shell_assignment "WAVEMILL_DASHBOARD_PID" "${DASHBOARD_PID:-}"
+    write_shell_assignment "WAVEMILL_DASHBOARD_PID" "${WAVEMILL_DASHBOARD_PID:-}"
     write_shell_assignment "MILL_LOG_FILE" "$MILL_LOG_FILE"
     write_shell_assignment "STATUS_LOG_FILE" "$STATUS_LOG_FILE"
     write_shell_assignment "TASKS_FILE" "$tasks_file"
@@ -189,13 +189,16 @@ setup_control_dashboard() {
   fi
   tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'"
 
-  DASHBOARD_PID=""
+  WAVEMILL_DASHBOARD_PID=""
   for attempt in {1..10}; do
-    DASHBOARD_PID="$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)"
-    [[ -n "$DASHBOARD_PID" ]] && break
+    WAVEMILL_DASHBOARD_PID="$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)"
+    [[ -n "$WAVEMILL_DASHBOARD_PID" ]] && break
     sleep 0.1
   done
-  export WAVEMILL_DASHBOARD_PID="$DASHBOARD_PID"
+
+  if [[ -n "${WAVEMILL_DASHBOARD_PID:-}" ]]; then
+    tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$WAVEMILL_DASHBOARD_PID"
+  fi
 
   tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
   tmux select-pane -t "$SESSION:control.0"
