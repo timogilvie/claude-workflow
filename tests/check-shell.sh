@@ -156,10 +156,10 @@ else
   fail "wavemill-mill.sh is missing write_shell_assignment helper"
 fi
 
-if grep -q 'printf -v STARTUP_CMD '\''%q %q'\''' "$MILL_SCRIPT"; then
-  pass "startup runner tmux launch command uses shell escaping"
+if grep -q 'printf -v monitor_cmd '\''%q -lc %q'\''' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  pass "startup runner monitor launch command uses shell escaping"
 else
-  fail "startup runner tmux launch command is not shell-escaped"
+  fail "startup runner monitor launch command is not shell-escaped"
 fi
 
 # ============================================================================
@@ -529,8 +529,8 @@ else
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
-  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'split-window -t "\$SESSION:control.0" -h -f -p 50' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 35' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'split-window -t "\$SESSION:control.1" -h -p 50' "$LIB_DIR/wavemill-startup-runner.sh" \
   && grep -q 'respawn-pane -k -t "\$SESSION:control.1".*status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
   && grep -q 'respawn-pane -k -t "\$SESSION:control.2".*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
   pass "startup runner builds task, dashboard, and log control panes"
@@ -607,6 +607,15 @@ else
     pass "dashboard clears scrollback without blanking the visible pane"
   else
     fail "dashboard is missing the scrollback-only clear helper"
+  fi
+
+  if grep -q "trap 'true' USR1" "$STATUS_SCRIPT" \
+    && grep -q '^REFRESH=30$' "$STATUS_SCRIPT" \
+    && grep -q 'Signal-driven updates │ Fallback refresh: ${REFRESH}s' "$STATUS_SCRIPT" \
+    && grep -q 'sleep "$REFRESH" || true' "$STATUS_SCRIPT"; then
+    pass "dashboard uses signal-driven refresh with guarded fallback sleep"
+  else
+    fail "dashboard is missing signal-driven refresh wiring"
   fi
 
   if echo "$STATUS_MAIN_LOOP" | grep -qE '^[[:space:]]*clear[[:space:]]*$'; then
@@ -1333,6 +1342,15 @@ elif [[ -f "$REPO_DIR/shared/hooks/claude-status-hook.sh" ]] \
   pass "current hook adapter scripts exist"
 else
   fail "one or more hook adapter scripts are missing"
+fi
+
+HOOK_PROTOCOL="$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh"
+if [[ -f "$HOOK_PROTOCOL" ]] \
+  && grep -q 'kill -USR1 "\$WAVEMILL_DASHBOARD_PID"' "$HOOK_PROTOCOL" \
+  && grep -q 'mv "\$tmp_file" "\$hook_file"' "$HOOK_PROTOCOL"; then
+  pass "hook protocol signals the dashboard after atomic status writes"
+else
+  fail "hook protocol is missing dashboard signal delivery"
 fi
 
 if [[ -f "$REPO_DIR/shared/lib/wavemill-common.sh" ]] \

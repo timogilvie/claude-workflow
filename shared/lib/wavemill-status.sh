@@ -3,7 +3,8 @@
 #
 # Usage: wavemill-status.sh <session> <worktree_root> [state_file]
 #
-# Displays a compact per-task summary refreshing every 3 seconds:
+# Displays a compact per-task summary with signal-driven refreshes and a
+# fallback poll interval:
 #   ISSUE   TASK           TIME   PHASE         AGENT      PR
 #   WAV-42  hero-cta        12m   📋 planning   ● running  —
 #   WAV-55  nav-a11y         8m   🔨 executing  ● running  #147 ✓
@@ -14,7 +15,7 @@ SESSION="${1:?Usage: wavemill-status.sh <session> <worktree_root> [state_file]}"
 WORKTREE_ROOT="${2:?Usage: wavemill-status.sh <session> <worktree_root> [state_file]}"
 STATE_FILE="${3:-}"
 
-REFRESH=3
+REFRESH=30
 PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 PR_TTL=15
 
@@ -246,6 +247,7 @@ redraw_dashboard_frame() {
 
 FRAME=$(mktemp)
 trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT INT TERM
+trap 'true' USR1
 
 while true; do
   # Keep tmux scrollback clean without blanking the visible pane.
@@ -373,9 +375,9 @@ while true; do
     fi
   fi
 
-  printf "\n${D}Refreshes every ${REFRESH}s │ Ctrl+B W: switch windows${N}\n" >> "$FRAME"
+  printf "\n${D}Signal-driven updates │ Fallback refresh: ${REFRESH}s │ Ctrl+B W: switch windows${N}\n" >> "$FRAME"
 
   redraw_dashboard_frame "$FRAME"
 
-  sleep "$REFRESH"
+  sleep "$REFRESH" || true
 done

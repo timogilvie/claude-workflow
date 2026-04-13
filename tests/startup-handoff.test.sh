@@ -22,7 +22,11 @@ set -euo pipefail
 printf 'tmux %s\n' "$*" >> "${MOCK_TMUX_LOG:?}"
 case "${1:-}" in
   list-panes)
-    printf '0\n'
+    if [[ "$*" == *"#{pane_index} #{pane_pid}"* ]]; then
+      printf '0 111\n1 222\n2 333\n'
+    else
+      printf '0\n'
+    fi
     ;;
   *)
     ;;
@@ -34,6 +38,9 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'git %s\n' "$*" >> "${MOCK_GIT_LOG:?}"
+if [[ "${1:-}" == "-C" ]]; then
+  shift 2
+fi
 if [[ "${1:-}" == "show-ref" ]]; then
   exit 1
 fi
@@ -309,6 +316,18 @@ if [[ -f "$SUCCESS_MONITOR_ENV" ]] && grep -q '^TASKS_FILE=' "$SUCCESS_MONITOR_E
   pass "startup runner writes the monitor env inside tmux startup"
 else
   fail "startup runner did not write the monitor env"
+fi
+
+if [[ -f "$SUCCESS_MONITOR_ENV" ]] && grep -q '^WAVEMILL_DASHBOARD_PID=222$' "$SUCCESS_MONITOR_ENV"; then
+  pass "startup runner writes the dashboard pid into the monitor env"
+else
+  fail "startup runner did not persist the dashboard pid in the monitor env"
+fi
+
+if grep -q 'set-environment -t startup-success WAVEMILL_DASHBOARD_PID 222' "$MOCK_TMUX_LOG"; then
+  pass "startup runner exports the dashboard pid into tmux session environment"
+else
+  fail "startup runner did not export the dashboard pid into tmux session environment"
 fi
 
 if grep -q "respawn-pane -k -t startup-success:control.0" "$MOCK_TMUX_LOG"; then

@@ -20,6 +20,9 @@ wavemill_hook_check() {
 #
 # The hook file uses a 300s TTL - consumers should fall back to other signals
 # (pane liveness, process monitoring) if the timestamp is stale.
+#
+# When a dashboard PID is available, hooks also send USR1 after the atomic move
+# completes so the sidebar can redraw immediately without polling.
 wavemill_hook_write() {
   local state="$1"
   local event="$2"
@@ -47,6 +50,9 @@ wavemill_hook_write() {
     '{state: $state, event: $event, agent: $agent, timestamp: $timestamp}
      + (if $detail != "" then {detail: $detail} else {} end)' > "$tmp_file" 2>/dev/null; then
     mv "$tmp_file" "$hook_file" 2>/dev/null || rm -f "$tmp_file"
+    if [[ -n "${WAVEMILL_DASHBOARD_PID:-}" ]]; then
+      kill -USR1 "$WAVEMILL_DASHBOARD_PID" 2>/dev/null || true
+    fi
   else
     rm -f "$tmp_file"
   fi

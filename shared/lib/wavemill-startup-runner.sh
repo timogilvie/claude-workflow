@@ -172,7 +172,13 @@ write_monitor_env() {
     write_shell_assignment "MILL_LOG_FILE" "$MILL_LOG_FILE"
     write_shell_assignment "STATUS_LOG_FILE" "$STATUS_LOG_FILE"
     write_shell_assignment "TASKS_FILE" "$tasks_file"
+    write_shell_assignment "WAVEMILL_DASHBOARD_PID" "${WAVEMILL_DASHBOARD_PID:-}"
   } > "$MONITOR_ENV"
+}
+
+capture_dashboard_pid() {
+  tmux list-panes -t "$SESSION:control" -F '#{pane_index} #{pane_pid}' 2>/dev/null \
+    | awk '$1 == "1" { print $2; exit }'
 }
 
 setup_control_dashboard() {
@@ -187,6 +193,10 @@ setup_control_dashboard() {
   fi
   tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'"
   tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
+  WAVEMILL_DASHBOARD_PID="$(capture_dashboard_pid)"
+  if [[ -n "${WAVEMILL_DASHBOARD_PID:-}" ]]; then
+    tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$WAVEMILL_DASHBOARD_PID"
+  fi
   tmux select-pane -t "$SESSION:control.0"
 }
 
@@ -439,17 +449,17 @@ main() {
     startup_log "No new tasks selected. Resuming $resumed_count in-flight task(s) from previous session."
   fi
 
+  tasks_file="/tmp/${SESSION}-tasks.txt"
+  jq -r '.tasks[] | "\(.issue)|\(.slug)|\(.title)"' "$PLAN_FILE" > "$tasks_file"
+  setup_control_dashboard
+  write_monitor_env "$tasks_file"
+
   idx=0
   while IFS= read -r task_json; do
     [[ -z "$task_json" ]] && continue
     idx=$((idx + 1))
     launch_task_from_plan "$task_json" "$idx" "$task_count" || true
   done < <(jq -c '.tasks[]' "$PLAN_FILE")
-
-  tasks_file="/tmp/${SESSION}-tasks.txt"
-  jq -r '.tasks[] | "\(.issue)|\(.slug)|\(.title)"' "$PLAN_FILE" > "$tasks_file"
-  write_monitor_env "$tasks_file"
-  setup_control_dashboard
 
   launched_count="$(wc -l < "$LAUNCHED_ISSUES_FILE" | tr -d ' ')"
   if [[ "$launched_count" -eq 0 ]]; then
