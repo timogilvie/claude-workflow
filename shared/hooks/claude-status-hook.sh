@@ -27,7 +27,10 @@ case "$event" in
     wavemill_hook_write "idle" "$event" "" "claude"
     ;;
   StopFailure)
-    detail=$(printf '%s' "$payload" | jq -r '.error_type // .errorType // .error.type // .message // empty' 2>/dev/null || true)
+    detail=$(printf '%s' "$payload" | jq -r '.error.message // .message // .error_type // .errorType // .error.type // empty' 2>/dev/null || true)
+    if [[ -z "$detail" ]]; then
+      detail=$(printf '%s' "$payload" | jq -r '. | tostring' 2>/dev/null | head -c 200 || true)
+    fi
     wavemill_hook_write "error" "$event" "$detail" "claude"
     ;;
   Notification)
