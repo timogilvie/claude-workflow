@@ -226,22 +226,22 @@ else
     pass "monitor does not reference update-linear-state.ts"
   fi
 
-  LINEAR_SET_STATE_BLOCK=$(echo "$HEREDOC_CONTENT" | awk '
+  LINEAR_SET_STATE_BLOCK=$(awk '
     /^linear_set_state\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
-  ')
+  ' <<< "$HEREDOC_CONTENT")
   if echo "$LINEAR_SET_STATE_BLOCK" | grep -q 'return 1'; then
     fail "monitor linear_set_state must not return 1 (would exit under set -e)"
   else
     pass "monitor linear_set_state failures are non-fatal"
   fi
 
-  MONITOR_LOOP_BLOCK=$(echo "$HEREDOC_CONTENT" | awk '
+  MONITOR_LOOP_BLOCK=$(awk '
     /^while :; do$/ { in_loop=1 }
     in_loop { print }
     in_loop && /^done$/ { exit }
-  ')
+  ' <<< "$HEREDOC_CONTENT")
   if echo "$MONITOR_LOOP_BLOCK" | grep -qE '^[[:space:]]*local[[:space:]]'; then
     fail "monitor loop contains top-level local declarations (invalid outside functions)"
   else
@@ -257,11 +257,11 @@ else
     fail "monitor loop is missing guarded per-issue processing checks"
   fi
 
-  MONITOR_ISSUE_BLOCK=$(echo "$HEREDOC_CONTENT" | awk '
+  MONITOR_ISSUE_BLOCK=$(awk '
     /^monitor_issue_state\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
-  ')
+  ' <<< "$HEREDOC_CONTENT")
   # HOK-1194: Phase resolution refactored to use resolve_phase() with controller-owned state priority
   RESOLVE_PHASE_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'resolved_phase=$(resolve_phase "\$FEATURE_DIR")' | head -n1 | cut -d: -f1 || true)
   PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - keep controller-owned running stages active' | head -n1 | cut -d: -f1 || true)
@@ -303,11 +303,11 @@ else
     fail "monitor still relies on pane-respawn fallback for phase progression"
   fi
 
-  CLOSED_BLOCK=$(echo "$MONITOR_ISSUE_BLOCK" | awk '
+  CLOSED_BLOCK=$(awk '
     /elif \[\[ "\$\(pr_state "\$PR"\)" == "CLOSED" \]\]; then/ { in_block=1 }
     in_block { print }
     in_block && /^[[:space:]]*else$/ { exit }
-  ')
+  ' <<< "$MONITOR_ISSUE_BLOCK")
 
   if echo "$CLOSED_BLOCK" | grep -q 'log_warn "\$ISSUE → PR #\$PR CLOSED without merge"'; then
     pass "closed PR path preserves warning log"
@@ -380,6 +380,20 @@ else
     pass "monitor_issue_state guards agent and status reads from STATE_FILE"
   else
     fail "monitor_issue_state is missing guarded state-file reads"
+  fi
+
+  if grep -qE '^restore_review_task_window\(\) \{' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor defines review-window restore helper for PR-backed tasks"
+  else
+    fail "monitor is missing review-window restore helper for PR-backed tasks"
+  fi
+
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'current_phase=$(get_task_phase "\$ISSUE")' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$current_phase" == "review" \]\]; then' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'restore_review_task_window "\$ISSUE" "\$SLUG" "\$BRANCH" "\$PR" "\$WT_DIR"'; then
+    pass "monitor restores missing review windows before PR merge checks"
+  else
+    fail "monitor does not restore review windows for resumed PR-backed tasks"
   fi
 
   READ_STATE_VALUE_BLOCK=$(awk '
@@ -529,10 +543,10 @@ else
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
-  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-startup-runner.sh" \
   && grep -q 'split-window -t "\$SESSION:control.0" -h -f -p 50' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'respawn-pane -k -t "\$SESSION:control.1".*status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'respawn-pane -k -t "\$SESSION:control.2".*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 35' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\${dashboard_pane:-\$SESSION:control.1}".*status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\${log_pane:-\$SESSION:control.2}".*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
   pass "startup runner builds task, dashboard, and log control panes"
 else
   fail "startup runner is missing the 3-pane control layout wiring"
@@ -1347,7 +1361,92 @@ else
 fi
 
 # ============================================================================
-# TEST 12: Phase launch failure recovery helper
+# TEST 12: Review window restoration helper
+# ============================================================================
+echo ""
+echo "=== Review Window Restoration ==="
+
+if [[ ! -f "$MILL_SCRIPT" ]]; then
+  fail "wavemill-mill.sh not found for review restoration checks"
+else
+  RESTORE_BLOCK=$(awk '
+    /^restore_review_task_window\(\) \{/ { capture=1 }
+    capture { print }
+    capture && /^\}/ { exit }
+  ' "$MILL_SCRIPT")
+
+  if [[ -z "$RESTORE_BLOCK" ]]; then
+    fail "Could not extract review restoration helper"
+  else
+    RESTORE_DIR=$(mktemp -d)
+    RESTORE_SCRIPT="$RESTORE_DIR/review-restore.sh"
+    printf '%s\n' "$RESTORE_BLOCK" > "$RESTORE_SCRIPT"
+
+    RESTORE_CHECK=$(bash -lc '
+      set -euo pipefail
+      source "'"$RESTORE_SCRIPT"'"
+      TEST_DIR=$(mktemp -d)
+      trap "rm -rf \"$TEST_DIR\"" EXIT
+      SESSION="restore-test"
+      REPO_DIR="$TEST_DIR/repo"
+      WORKTREE_ROOT="$TEST_DIR/worktrees"
+      API_TIMEOUT=5
+      TOOLS_DIR="$TEST_DIR/tools"
+      mkdir -p "$REPO_DIR/.git" "$WORKTREE_ROOT" "$TOOLS_DIR"
+      WT_DIR="$WORKTREE_ROOT/resumed-task"
+      mkdir -p "$WT_DIR"
+      mkdir -p "/tmp"
+      cat > "/tmp/${SESSION}-HOK-1226-issue.json" <<EOF
+{"title":"Restore review window","description":"Bring back the task window after resume."}
+EOF
+      TMUX_LOG="$TEST_DIR/tmux.log"
+      log() { :; }
+      log_warn() { :; }
+      get_linear_issue_id() { echo "HOK-1226"; }
+      read_state_value() { printf "%s\n" "$1"; }
+      _with_timeout() { printf "%s\n" "{}"; }
+      _pane_is_dead_or_idle() { return 0; }
+      tmux() {
+        case "${1:-}" in
+          list-windows)
+            return 1
+            ;;
+          new-window)
+            printf "new-window %s\n" "$*" >> "$TMUX_LOG"
+            return 0
+            ;;
+          set-option)
+            printf "set-option %s\n" "$*" >> "$TMUX_LOG"
+            return 0
+            ;;
+          send-keys)
+            printf "send-keys %s\n" "$*" >> "$TMUX_LOG"
+            return 0
+            ;;
+        esac
+        return 0
+      }
+      restore_review_task_window "HOK-1226" "resumed-task" "task/resumed-task" "267" "$WT_DIR"
+      printf "header=%s details=%s tmux=%s\n" \
+        "$([[ -f "$WT_DIR/features/resumed-task/task-packet-header.md" ]] && echo yes || echo no)" \
+        "$([[ -f "$WT_DIR/features/resumed-task/task-packet-details.md" ]] && echo yes || echo no)" \
+        "$([[ -s "$TMUX_LOG" ]] && echo yes || echo no)"
+    ' 2>/dev/null || true)
+
+    if [[ "$RESTORE_CHECK" == *"header=yes"* ]] \
+      && [[ "$RESTORE_CHECK" == *"details=yes"* ]] \
+      && [[ "$RESTORE_CHECK" == *"tmux=yes"* ]]; then
+      pass "restore_review_task_window rebuilds task context files and tmux window"
+    else
+      fail "restore_review_task_window did not rebuild review context correctly"
+    fi
+
+    rm -rf "$RESTORE_DIR"
+  fi
+fi
+
+# ============================================================================
+# TEST 13: Phase launch failure recovery helper
 # ============================================================================
 echo ""
 echo "=== Phase Launch Recovery ==="
@@ -1430,7 +1529,7 @@ else
 fi
 
 # ============================================================================
-# TEST 13: Pane handoff regression guards
+# TEST 14: Pane handoff regression guards
 # ============================================================================
 echo ""
 echo "=== Pane Handoff Guards ==="
@@ -1491,7 +1590,7 @@ else
 fi
 
 # ============================================================================
-# TEST 14: Next done cycling keybinding
+# TEST 15: Next done cycling keybinding
 # ============================================================================
 echo ""
 echo "=== Next Done Cycling ==="
