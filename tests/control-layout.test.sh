@@ -473,7 +473,7 @@ TEST_SESSION="wm-layout-fresh-$$"
 run_layout_case \
   "fresh-startup" \
   "[$TASK_JSON]" \
-  '{"session":"wm-layout-fresh","started":"2026-04-13T00:00:00Z","tasks":{}}' \
+  "{\"session\":\"wm-layout-fresh-$$\",\"started\":\"2026-04-13T00:00:00Z\",\"tasks\":{}}" \
   "Available tasks" \
   "startup ready" \
   "Available tasks" \
@@ -485,7 +485,7 @@ TEST_SESSION="wm-layout-resume-$$"
 run_layout_case \
   "resume-only" \
   "[]" \
-  '{"session":"wm-layout-resume","started":"2026-04-13T00:00:00Z","tasks":{"HOK-999":{"slug":"in-flight","branch":"task/in-flight","worktree":"'"$TMP_ROOT"'/resume-only/repo/worktrees/in-flight","phase":"executing","status":"","linearIssueId":"HOK-999"}}}' \
+  "{\"session\":\"wm-layout-resume-$$\",\"started\":\"2026-04-13T00:00:00Z\",\"tasks\":{\"HOK-999\":{\"slug\":\"in-flight\",\"branch\":\"task/in-flight\",\"worktree\":\"$TMP_ROOT/resume-only/repo/worktrees/in-flight\",\"phase\":\"executing\",\"status\":\"\",\"linearIssueId\":\"HOK-999\"}}}" \
   "No new tasks selected" \
   "resuming in-flight tasks" \
   "No new tasks selected" \
