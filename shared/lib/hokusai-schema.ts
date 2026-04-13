@@ -131,6 +131,12 @@ function normalizeLanguageValue(language: string | undefined): HokusaiLanguage |
   return lower.length > 0 ? 'unknown-language' : 'unknown';
 }
 
+/**
+ * Maps wavemill complexity (1-5) to Hokusai complexity score (1-10 scale).
+ *
+ * @param complexity - Wavemill complexity value (1-5)
+ * @returns Hokusai complexity score (1=xs, 3=s, 5=m, 7=l, 9=xl), defaults to 5 if invalid
+ */
 export function complexityToHokusaiScore(complexity: number | undefined): number {
   if (typeof complexity !== 'number' || !Number.isFinite(complexity)) {
     return 5;
@@ -139,6 +145,12 @@ export function complexityToHokusaiScore(complexity: number | undefined): number
   return COMPLEXITY_MAP[Math.round(complexity)] || 5;
 }
 
+/**
+ * Maps repository lines of code to a size bucket.
+ *
+ * @param loc - Lines of code in the repository
+ * @returns Size bucket: 'small' (<5K), 'medium' (5K-50K), 'large' (50K-500K), 'xlarge' (≥500K), defaults to 'medium' if invalid
+ */
 export function repoSizeToBucket(loc: number | undefined): HokusaiRepoSizeBucket {
   if (typeof loc !== 'number' || !Number.isFinite(loc) || loc < 0) {
     return 'medium';
@@ -150,6 +162,12 @@ export function repoSizeToBucket(loc: number | undefined): HokusaiRepoSizeBucket
   return 'xlarge';
 }
 
+/**
+ * Maps number of files touched to a bucket.
+ *
+ * @param count - Number of files touched in the task
+ * @returns Files bucket: '1' (1 file), '2_5' (2-5 files), '6_15' (6-15 files), '16_plus' (≥16 files), defaults to '2_5' if invalid
+ */
 export function filesTouchedToBucket(count: number | undefined): HokusaiFilesTouchedBucket {
   if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) {
     return '2_5';
@@ -161,6 +179,12 @@ export function filesTouchedToBucket(count: number | undefined): HokusaiFilesTou
   return '16_plus';
 }
 
+/**
+ * Maps task description length to a bucket.
+ *
+ * @param value - Either token count (number) or raw text (string, estimated as chars/4)
+ * @returns Length bucket: 'short' (<50 tokens), 'medium' (50-200 tokens), 'long' (≥200 tokens), defaults to 'medium' if invalid
+ */
 export function descriptionLengthToBucket(
   value: number | string | undefined,
 ): HokusaiDescriptionLengthBucket {
@@ -181,6 +205,12 @@ export function descriptionLengthToBucket(
   return 'long';
 }
 
+/**
+ * Determines overall risk level from risk flag array.
+ *
+ * @param flags - Array of risk flag strings (e.g., 'schema-migration', 'cross-service')
+ * @returns Risk level: 'high' (≥2 high-risk flags), 'medium' (≥1 high-risk or ≥2 medium-risk flags), 'low' (default)
+ */
 export function riskFlagsToLevel(flags: string[] | undefined): HokusaiRiskLevel {
   if (!Array.isArray(flags) || flags.length === 0) {
     return 'low';
@@ -202,6 +232,12 @@ export function riskFlagsToLevel(flags: string[] | undefined): HokusaiRiskLevel 
   return 'low';
 }
 
+/**
+ * Maps risk flags to boolean feature flags.
+ *
+ * @param flags - Array of risk flag strings
+ * @returns Object with boolean flags: is_greenfield, is_migration, requires_tests, cross_service, ui_heavy
+ */
 export function riskFlagsToBooleans(flags: string[] | undefined): HokusaiBooleanFlags {
   const set = new Set(flags || []);
 
@@ -214,6 +250,13 @@ export function riskFlagsToBooleans(flags: string[] | undefined): HokusaiBoolean
   };
 }
 
+/**
+ * Maps wavemill task type to Hokusai task type.
+ *
+ * @param taskType - Task type string from wavemill descriptor
+ * @param options - Optional configuration, including hasMigration override
+ * @returns Hokusai task type: 'bugfix', 'feature', 'refactor', 'infra', 'tests', 'migration', 'docs', or 'unknown'
+ */
 export function mapTaskType(
   taskType: string | undefined,
   options?: { hasMigration?: boolean },
@@ -241,6 +284,12 @@ export function mapTaskType(
   }
 }
 
+/**
+ * Maps wavemill domain to Hokusai domain.
+ *
+ * @param domain - Domain string from wavemill descriptor
+ * @returns Hokusai domain: 'backend', 'frontend', 'fullstack', 'devops', 'data', 'ml', 'mobile', or 'unknown'
+ */
 export function mapDomain(domain: string | undefined): HokusaiDomain {
   switch ((domain || '').trim().toLowerCase()) {
     case 'backend':
@@ -266,6 +315,13 @@ export function mapDomain(domain: string | undefined): HokusaiDomain {
   }
 }
 
+/**
+ * Maps language array to Hokusai language (with multi-language detection).
+ *
+ * @param languages - Array of language strings from wavemill descriptor
+ * @param primaryLanguage - Optional primary language fallback from repo context
+ * @returns Hokusai language: specific language name, 'multi' (if >1 language), or 'unknown'
+ */
 export function mapLanguage(languages: string[] | undefined, primaryLanguage?: string): HokusaiLanguage {
   const normalized = new Set<HokusaiLanguage>();
 
@@ -309,6 +365,15 @@ function pickAvailableModels(
   };
 }
 
+/**
+ * Converts wavemill TaskDescriptor + RepoContext to Hokusai model input schema.
+ *
+ * @param descriptor - Partial wavemill task descriptor with heuristic and learned signals
+ * @param repoContext - Optional repository context (size, primary language)
+ * @param overrides - Optional constraint/model overrides (max_cost_usd, available_models)
+ * @param taskId - Task identifier, defaults to 'unknown'
+ * @returns Complete HokusaiInput object with all required fields populated
+ */
 export function toHokusaiInput(
   descriptor?: Partial<TaskDescriptor>,
   repoContext?: RepoContext,
