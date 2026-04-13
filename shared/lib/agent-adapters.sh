@@ -529,6 +529,10 @@ build_planning_prompt() {
 - Research multiple approaches and justify your choice
 - Document all architectural decisions
 - Include detailed test scenarios"
+  elif [[ "$plan_depth" == "medium" ]]; then
+    depth_guidance="- Create a detailed plan with key decision points
+- Research the primary approach and document trade-offs
+- Include test scenarios for critical paths"
   else
     depth_guidance="- Create a concise plan focused on the critical path
 - Document key decisions and approach

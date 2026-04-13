@@ -79,14 +79,14 @@ function makeRepo(): { repoDir: string; cleanup: () => void } {
 
 console.log('\n--- workflow-router Tests ---\n');
 
-test('routes broad CLI workflow work to deep planning and medium-or-higher review', () => {
+test('routes broad CLI workflow work to medium-or-deep planning and medium-or-higher review', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
     const decision = routeWorkflow(
       'Create a wavemill route CLI command that extends the router, outputs planner coder and reviewer, prints JSON and stdout, and estimates cost and success.',
       { repoDir },
     );
-    assert.equal(decision.planDepth, 'deep');
+    assert.ok(['medium', 'deep'].includes(decision.planDepth));
     assert.ok(['gpt-5.3-codex', 'claude-sonnet-4-5-20250929', 'claude-opus-4-6'].includes(decision.coder));
     assert.ok(['llm', 'static+llm'].includes(decision.reviewRecommended));
     assert.ok(['medium', 'deep'].includes(decision.codeDepth));
@@ -107,6 +107,32 @@ test('routes documentation work to lighter review', () => {
     );
     assert.equal(decision.reviewRecommended, 'static');
     assert.equal(decision.planDepth, 'light');
+  } finally {
+    cleanup();
+  }
+});
+
+test('routes moderate-risk work to medium planning depth', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Implement async caching in src/router.ts for command routing.',
+      { repoDir },
+    );
+    assert.equal(decision.planDepth, 'medium');
+  } finally {
+    cleanup();
+  }
+});
+
+test('routes high-risk work to deep planning depth', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Fix authentication and authorization race condition in distributed transaction workflow migration config.',
+      { repoDir },
+    );
+    assert.equal(decision.planDepth, 'deep');
   } finally {
     cleanup();
   }

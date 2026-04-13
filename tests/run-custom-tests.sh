@@ -33,6 +33,7 @@ for f in \
   review-context-gatherer.test.ts \
   rule-generator.test.ts \
   stage-aware-router.test.ts \
+  hokusai-adapter.test.ts \
   task-descriptor-backfill.test.ts \
   task-context-analyzer.test.ts \
   post-completion-hook.test.ts \

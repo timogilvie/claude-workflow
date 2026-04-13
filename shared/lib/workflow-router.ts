@@ -14,7 +14,7 @@ import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type Pro
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
 
-export type PlanDepth = 'light' | 'deep';
+export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
 export type ReviewMode = 'none' | 'static' | 'llm' | 'static+llm';
 
@@ -26,6 +26,7 @@ export interface WorkflowRouteDecision {
   codeDepth: CodeDepth;
   reviewRecommended: ReviewMode;
   expectedSuccess: number;
+  confidence?: number;
   expectedCostPlan: number;
   expectedCostCode: number;
   expectedCostReview: number;
@@ -94,6 +95,7 @@ interface StageTokenProfile {
 
 const PLAN_TOKENS: Record<PlanDepth, StageTokenProfile> = {
   light: { inputTokens: 35_000, cacheCreationTokens: 10_000, cacheReadTokens: 20_000, outputTokens: 5_000 },
+  medium: { inputTokens: 90_000, cacheCreationTokens: 30_000, cacheReadTokens: 70_000, outputTokens: 10_000 },
   deep: { inputTokens: 180_000, cacheCreationTokens: 60_000, cacheReadTokens: 140_000, outputTokens: 18_000 },
 };
 
@@ -159,11 +161,14 @@ function computeRiskScore(prompt: string, characteristics: PromptCharacteristics
 
 function choosePlanDepth(characteristics: PromptCharacteristics, riskScore: number): PlanDepth {
   if (
-    riskScore >= 4 ||
+    riskScore >= 6 ||
     characteristics.taskType === 'infrastructure' ||
     characteristics.length === 'long'
   ) {
     return 'deep';
+  }
+  if (riskScore >= 3) {
+    return 'medium';
   }
   return 'light';
 }
