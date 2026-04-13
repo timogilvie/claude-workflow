@@ -704,6 +704,7 @@ cleanup_completed_task() {
   # Clean up state
   execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+  reset_retry_count "$SESSION" "$issue"
   remove_task_state "$issue"
   CLEANED["$issue"]=1
 
@@ -1806,6 +1807,182 @@ source "$LIB_DIR/wavemill-common.sh"
 
 # Ensure gh commands target the correct GitHub repo (not inherited CWD)
 cd "$REPO_DIR"
+
+# Classify API failures conservatively so the monitor only retries errors that
+# are likely to succeed on a later attempt.
+is_transient_error() {
+  local detail="${1:-}"
+
+  [[ -n "$detail" ]] || return 1
+
+  if printf '%s\n' "$detail" | grep -Eiq '(500|502|503|529|internal server error|service unavailable|bad gateway|overloaded)'; then
+    return 0
+  fi
+
+  if printf '%s\n' "$detail" | grep -Eiq '(429|too many requests|rate limit|rate.limit)'; then
+    return 0
+  fi
+
+  if printf '%s\n' "$detail" | grep -Eiq '(timeout|timed out|connection.*reset|connection.*refused|network.*error)'; then
+    return 0
+  fi
+
+  if printf '%s\n' "$detail" | grep -Eiq '(401|403|400|unauthorized|forbidden|bad request|invalid.*key)'; then
+    return 1
+  fi
+
+  return 1
+}
+
+retry_state_file() {
+  local session="$1"
+  local issue="$2"
+  printf '/tmp/wavemill-%s-%s.retry\n' "$session" "$issue"
+}
+
+get_retry_count() {
+  local retry_file
+  retry_file="$(retry_state_file "$1" "$2")"
+
+  if [[ ! -f "$retry_file" ]]; then
+    echo "0"
+    return 0
+  fi
+
+  jq -r '.count // 0' "$retry_file" 2>/dev/null || echo "0"
+}
+
+get_retry_timestamp() {
+  local retry_file
+  retry_file="$(retry_state_file "$1" "$2")"
+
+  if [[ ! -f "$retry_file" ]]; then
+    echo "0"
+    return 0
+  fi
+
+  jq -r '.timestamp // 0' "$retry_file" 2>/dev/null || echo "0"
+}
+
+increment_retry_count() {
+  local session="$1"
+  local issue="$2"
+  local retry_file tmp_file current_count new_count timestamp
+
+  retry_file="$(retry_state_file "$session" "$issue")"
+  tmp_file="${retry_file}.tmp.$$"
+  current_count="$(get_retry_count "$session" "$issue")"
+  new_count=$((current_count + 1))
+  timestamp="$(date +%s)"
+
+  if jq -n \
+    --argjson count "$new_count" \
+    --argjson timestamp "$timestamp" \
+    '{count: $count, timestamp: $timestamp}' > "$tmp_file" 2>/dev/null; then
+    mv "$tmp_file" "$retry_file" 2>/dev/null || rm -f "$tmp_file"
+  else
+    rm -f "$tmp_file"
+  fi
+}
+
+reset_retry_count() {
+  local retry_file
+  retry_file="$(retry_state_file "$1" "$2")"
+  rm -f "$retry_file" 2>/dev/null || true
+}
+
+get_backoff_delay() {
+  local count="${1:-0}"
+  case "$count" in
+    1) echo "30" ;;
+    2) echo "60" ;;
+    3) echo "120" ;;
+    *) echo "240" ;;
+  esac
+}
+
+handle_agent_error_recovery() {
+  local issue="$1"
+  local agent_cmd="$2"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local retry_file hook_state error_detail hook_ts now staleness retry_count last_retry_ts backoff_delay
+  local time_since_last_retry time_since_error next_retry max_retries
+
+  retry_file="$(retry_state_file "$SESSION" "$issue")"
+  [[ -f "$hook_file" ]] || return 0
+
+  hook_state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || echo "")
+  error_detail=$(jq -r '.detail // empty' "$hook_file" 2>/dev/null || echo "")
+  hook_ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo "0")
+
+  now="$(date +%s)"
+  staleness=$(( now - hook_ts ))
+  (( staleness < 300 )) || return 0
+
+  if [[ "$hook_state" != "error" ]]; then
+    if [[ -f "$retry_file" ]] && [[ "$hook_state" == "working" || "$hook_state" == "waiting" || "$hook_state" == "idle" ]]; then
+      last_retry_ts="$(get_retry_timestamp "$SESSION" "$issue")"
+      if (( hook_ts >= last_retry_ts )); then
+        log "info" "Agent recovered for $issue, resetting retry count"
+        reset_retry_count "$SESSION" "$issue"
+      fi
+    fi
+    return 0
+  fi
+
+  if ! is_transient_error "$error_detail"; then
+    return 0
+  fi
+
+  retry_count="$(get_retry_count "$SESSION" "$issue")"
+  max_retries=4
+  if (( retry_count >= max_retries )); then
+    return 0
+  fi
+
+  last_retry_ts="$(get_retry_timestamp "$SESSION" "$issue")"
+  backoff_delay="$(get_backoff_delay $((retry_count + 1)))"
+  time_since_last_retry=$(( now - last_retry_ts ))
+
+  if (( retry_count == 0 )); then
+    time_since_error=$(( now - hook_ts ))
+    (( time_since_error >= backoff_delay )) || return 0
+  else
+    (( time_since_last_retry >= backoff_delay )) || return 0
+  fi
+
+  next_retry=$((retry_count + 1))
+  log "info" "Retrying $issue after transient error (attempt $next_retry/$max_retries, backoff ${backoff_delay}s): $error_detail"
+  increment_retry_count "$SESSION" "$issue"
+
+  if agent_resume_after_error "$SESSION" "$issue" "$agent_cmd"; then
+    log "debug" "  Resume command sent to $issue"
+  else
+    log_error "  Failed to resume $issue after transient error"
+  fi
+}
+
+transient_error_recovery_pending() {
+  local issue="$1"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local hook_state error_detail hook_ts now staleness retry_count
+
+  [[ -f "$hook_file" ]] || return 1
+
+  hook_state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || echo "")
+  [[ "$hook_state" == "error" ]] || return 1
+
+  error_detail=$(jq -r '.detail // empty' "$hook_file" 2>/dev/null || echo "")
+  is_transient_error "$error_detail" || return 1
+
+  hook_ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo "0")
+  now="$(date +%s)"
+  staleness=$(( now - hook_ts ))
+  (( staleness < 300 )) || return 1
+
+  retry_count="$(get_retry_count "$SESSION" "$issue")"
+  (( retry_count < 4 ))
+}
 
 # Close auxiliary panes when monitor exits so quitting control is a single action.
 _AUX_PANES_CLEANED=0
@@ -4018,6 +4195,10 @@ monitor_issue_state() {
     return 0
   fi
 
+  # Recovery runs inside per-issue monitoring so retries share the same task,
+  # phase, and cleanup state as the rest of the controller.
+  handle_agent_error_recovery "$ISSUE" "${current_agent:-$AGENT_CMD}"
+
   # Check if PR exists
   if [[ -z "$PR" ]]; then
     PR="$(find_pr_for_branch "$BRANCH")"
@@ -4587,6 +4768,12 @@ monitor_issue_state() {
         log "status" "⛔ $ISSUE → Workflow aborted (controller state)"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
+        return 0
+      fi
+
+      if transient_error_recovery_pending "$ISSUE"; then
+        set_window_attention_state "$WIN" "clear"
+        active_count=$((active_count + 1))
         return 0
       fi
 
