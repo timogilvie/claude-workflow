@@ -159,6 +159,21 @@ Wavemill tracks agent lifecycle using a JSON status file contract at `/tmp/wavem
 
 **Atomic Writes**: Uses tmp file + mv to prevent partial reads
 
+### Signal-Driven Dashboard Refresh
+
+The dashboard supports immediate updates via `USR1` in addition to polling:
+
+- After each successful atomic hook write, `wavemill_hook_notify()` sends `USR1` to `$WAVEMILL_DASHBOARD_PID`
+- `wavemill-status.sh` traps `USR1` and sets `WAVEMILL_REDRAW=1`
+- The dashboard loop uses an interruptible wait (`sleep 10 &; wait`) for fast wakeups
+- A 10-second poll fallback remains in place in case signals are missed
+- Signal delivery is best-effort and never fails hook writes (invalid/stale PID is a no-op)
+
+PID propagation path:
+1. `setup_control_dashboard()` in `wavemill-startup-runner.sh` captures the dashboard pane PID after spawn
+2. The PID is exported and written to the monitor env as `WAVEMILL_DASHBOARD_PID`
+3. `configure_agent_hooks()` injects that PID into Claude hook commands when available
+
 ### Dependencies
 
 - `jq` (required for all adapters) - JSON parsing and creation

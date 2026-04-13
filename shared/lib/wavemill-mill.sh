@@ -4776,7 +4776,8 @@ fi
 log "status" "Creating tmux session..."
 create_tmux_session
 
-printf -v STARTUP_CMD '%q %q %q' "/opt/homebrew/bin/bash" "$STARTUP_RUNNER" "$LAUNCH_PLAN_FILE"
+printf -v STARTUP_CMD '%q %q' "/opt/homebrew/bin/bash" "$STARTUP_RUNNER"
+printf -v STARTUP_CMD '%s %q' "$STARTUP_CMD" "$LAUNCH_PLAN_FILE"
 tmux respawn-pane -k -t "$SESSION:control.0" "$STARTUP_CMD"
 
 

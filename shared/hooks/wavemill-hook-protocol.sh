@@ -12,6 +12,21 @@ wavemill_hook_check() {
   command -v jq >/dev/null 2>&1 || exit 0
 }
 
+# Send USR1 to dashboard process to trigger an immediate refresh.
+# Best-effort only: never fail, even when PID is stale or invalid.
+wavemill_hook_notify() {
+  local dashboard_pid="${WAVEMILL_DASHBOARD_PID:-}"
+  [[ -n "$dashboard_pid" ]] || return 0
+
+  # Validate PID before signaling.
+  [[ "$dashboard_pid" =~ ^[0-9]+$ ]] || return 0
+  [[ "$dashboard_pid" -eq 0 ]] && return 0
+  kill -0 "$dashboard_pid" 2>/dev/null || return 0
+
+  kill -USR1 "$dashboard_pid" 2>/dev/null || true
+  return 0
+}
+
 # Atomically write the standardized hook status payload.
 # Args: state, event, detail, agent
 #
@@ -46,7 +61,11 @@ wavemill_hook_write() {
     --argjson timestamp "$timestamp" \
     '{state: $state, event: $event, agent: $agent, timestamp: $timestamp}
      + (if $detail != "" then {detail: $detail} else {} end)' > "$tmp_file" 2>/dev/null; then
-    mv "$tmp_file" "$hook_file" 2>/dev/null || rm -f "$tmp_file"
+    if mv "$tmp_file" "$hook_file" 2>/dev/null; then
+      wavemill_hook_notify
+    else
+      rm -f "$tmp_file"
+    fi
   else
     rm -f "$tmp_file"
   fi

@@ -1534,6 +1534,89 @@ if command -v shellcheck >/dev/null 2>&1; then
 fi
 
 # ============================================================================
+# TEST 16: Signal-driven hook refresh guards
+# ============================================================================
+echo ""
+echo "=== Signal-Driven Hook Refresh Guards ==="
+
+HOOK_PROTOCOL_LIB="$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh"
+if [[ ! -f "$HOOK_PROTOCOL_LIB" ]]; then
+  fail "wavemill-hook-protocol.sh not found for signal refresh checks"
+else
+  if bash -lc '
+    set -euo pipefail
+    source "'"$HOOK_PROTOCOL_LIB"'"
+
+    marker=$(mktemp "/tmp/wavemill-signal-marker.XXXXXX")
+    rm -f "$marker"
+    cleanup() {
+      kill "$listener_pid" 2>/dev/null || true
+      wait "$listener_pid" 2>/dev/null || true
+      rm -f "$marker" "$hook_file"
+    }
+
+    (trap "touch \"$marker\"; exit 0" USR1; while :; do :; done) &
+    listener_pid=$!
+    sleep 0.05
+
+    export WAVEMILL_SESSION="signal-valid-$$"
+    export WAVEMILL_ISSUE="TEST-VALID"
+    export WAVEMILL_DASHBOARD_PID="$listener_pid"
+    hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
+
+    wavemill_hook_write "working" "PreToolUse" "Read" "claude"
+
+    for _ in {1..20}; do
+      [[ -f "$marker" ]] && break
+      sleep 0.05
+    done
+
+    [[ -f "$marker" ]] || { cleanup; exit 1; }
+    [[ -s "$hook_file" ]] || { cleanup; exit 1; }
+    cleanup
+  ' >/dev/null 2>&1; then
+    pass "hook notify delivers USR1 for valid dashboard PID"
+  else
+    fail "hook notify did not deliver USR1 for valid dashboard PID"
+  fi
+
+  if bash -lc '
+    set -euo pipefail
+    source "'"$HOOK_PROTOCOL_LIB"'"
+
+    export WAVEMILL_SESSION="signal-invalid-$$"
+    for bad_pid in "" "notanumber" "0" "99999999"; do
+      export WAVEMILL_ISSUE="TEST-${bad_pid:-empty}"
+      export WAVEMILL_DASHBOARD_PID="$bad_pid"
+      hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
+      wavemill_hook_write "working" "UserPromptSubmit" "noop" "claude"
+      [[ -s "$hook_file" ]] || exit 1
+      rm -f "$hook_file"
+    done
+  ' >/dev/null 2>&1; then
+    pass "hook write remains successful with invalid dashboard PID values"
+  else
+    fail "hook write failed for one or more invalid dashboard PID values"
+  fi
+
+  if bash -lc '
+    set -euo pipefail
+    WAVEMILL_REDRAW=0
+    trap "WAVEMILL_REDRAW=1" USR1
+    kill -USR1 $$
+    for _ in {1..10}; do
+      [[ "$WAVEMILL_REDRAW" -eq 1 ]] && exit 0
+      sleep 0.02
+    done
+    exit 1
+  ' >/dev/null 2>&1; then
+    pass "dashboard USR1 trap flips redraw flag"
+  else
+    fail "dashboard USR1 trap did not flip redraw flag"
+  fi
+fi
+
+# ============================================================================
 # RESULTS
 # ============================================================================
 echo ""
