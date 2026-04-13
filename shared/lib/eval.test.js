@@ -26,7 +26,7 @@ describe('evaluateTask', () => {
 
     // Core EvalRecord fields from eval-schema.ts
     assert.ok(result.id, 'should have a UUID id');
-    assert.equal(result.schemaVersion, '1.3.0');
+    assert.equal(result.schemaVersion, '1.5.0');
     assert.equal(result.originalPrompt, 'Add a loading spinner');
     assert.ok(result.modelId);
     assert.ok(result.modelVersion);

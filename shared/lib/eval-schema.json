@@ -597,6 +597,18 @@
       "required": ["repoId", "repoVisibility", "primaryLanguage"],
       "additionalProperties": false
     },
+    "constraints": {
+      "type": "object",
+      "description": "Budget constraints applied during routing and execution.",
+      "properties": {
+        "maxCostUsd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Maximum routing budget in USD."
+        }
+      },
+      "additionalProperties": false
+    },
     "outcomes": {
       "type": "object",
       "description": "Decomposed outcome components for granular eval analysis.",

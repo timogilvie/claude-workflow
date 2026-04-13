@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import type { EvalRecord } from './eval-schema.ts';
 import {
   attachAgentType,
+  attachConstraints,
   attachDifficultyMetadata,
   attachTaskContextMetadata,
   attachRepoContextMetadata,
@@ -174,6 +175,18 @@ describe('eval-record-builder', () => {
     });
   });
 
+  describe('attachConstraints', () => {
+    it('should attach maxCostUsd when provided', () => {
+      attachConstraints(baseRecord, { maxCostUsd: 7.5 });
+      expect(baseRecord.constraints).toEqual({ maxCostUsd: 7.5 });
+    });
+
+    it('should not attach empty constraints', () => {
+      attachConstraints(baseRecord, {});
+      expect(baseRecord.constraints).toBeUndefined();
+    });
+  });
+
   describe('enrichEvalRecord', () => {
     it('should attach all metadata when provided', () => {
       const metadata = {
@@ -204,6 +217,9 @@ describe('eval-record-builder', () => {
           sessionCount: 1,
           turnCount: 5,
         },
+        constraints: {
+          maxCostUsd: 5,
+        },
       };
 
       enrichEvalRecord(baseRecord, metadata);
@@ -214,6 +230,7 @@ describe('eval-record-builder', () => {
       expect(baseRecord.repoContext).toEqual(metadata.repoContext);
       expect(baseRecord.workflowCost).toBe(0.1234);
       expect(baseRecord.workflowCostStatus).toBe('success');
+      expect(baseRecord.constraints).toEqual({ maxCostUsd: 5 });
     });
 
     it('should handle partial metadata gracefully', () => {

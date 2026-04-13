@@ -22,6 +22,7 @@ import {
   getRouterConfig,
   getEvalConfig,
   getMillConfig,
+  getMaxCostUsd,
   getUiConfig,
   getPermissionsConfig,
   getDashboardConfig,
@@ -478,12 +479,41 @@ test('getMillConfig returns mill section', () => {
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
-      mill: { maxParallel: 5, baseBranch: 'develop' }
+      mill: { maxParallel: 5, baseBranch: 'develop', defaultMaxCostUsd: 12.5 }
     }));
 
     const millConfig = getMillConfig(tmp);
     assert.equal(millConfig.maxParallel, 5);
     assert.equal(millConfig.baseBranch, 'develop');
+    assert.equal(millConfig.defaultMaxCostUsd, 12.5);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getMaxCostUsd returns configured budget', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: { defaultMaxCostUsd: 4.25 }
+    }));
+
+    assert.equal(getMaxCostUsd(tmp), 4.25);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getMaxCostUsd returns undefined when unset', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: { maxParallel: 5 }
+    }));
+
+    assert.equal(getMaxCostUsd(tmp), undefined);
   } finally {
     cleanUp(tmp);
   }

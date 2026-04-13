@@ -38,6 +38,9 @@ export interface WorkflowRouteDecision {
     riskScore: number;
   };
   challengeRecommendation?: ChallengeRecommendation;
+  constraints?: {
+    maxCostUsd?: number;
+  };
 }
 
 export interface RouteWorkflowOptions {
@@ -286,6 +289,9 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       fileTypes: characteristics.fileTypes,
       riskScore,
     },
+    constraints: options?.maxCostUsd === undefined
+      ? undefined
+      : { maxCostUsd: options.maxCostUsd },
   };
 }
 
