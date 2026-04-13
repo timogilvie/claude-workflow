@@ -407,7 +407,9 @@ render_dashboard() {
       is_active "$worktree" "$win" || continue
 
       agent_state=""
-      if [[ "$task_status" != "merged" ]]; then
+      if [[ "$task_status" == "merged" ]]; then
+        agent_state="exited"
+      else
         agent_state=$(agent_status "$win")
       fi
 

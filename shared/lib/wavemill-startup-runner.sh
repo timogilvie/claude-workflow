@@ -184,6 +184,9 @@ setup_control_dashboard() {
   log_pane="$SESSION:control.2"
   pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l | tr -d ' ')
   if [[ "$pane_count" -eq 1 ]]; then
+    # Layout: horizontal split (50% width) creates left and right panes.
+    # Left pane is further split vertically to show inbox and active sections.
+    # Right pane shows the full dashboard. This allows vertical layout of sections.
     tmux split-window -t "$SESSION:control.0" -h -f -p 50
     tmux split-window -t "$SESSION:control.0" -v -p 35
   elif [[ "$pane_count" -eq 2 ]]; then
