@@ -27,7 +27,7 @@
  */
 
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { routeWorkflow, routeWorkflowStageAware, readTaskPromptFromFile, summarizeWorkflowRoute } from '../shared/lib/workflow-router.ts';
+import { routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, routeWorkflowStageAware, readTaskPromptFromFile, summarizeWorkflowRoute } from '../shared/lib/workflow-router.ts';
 
 runTool({
   name: 'route-task',
@@ -47,7 +47,7 @@ runTool({
     },
     mode: {
       type: 'string',
-      description: 'Routing mode: auto, stage-aware, or heuristic',
+      description: 'Routing mode: auto, stage-aware, heuristic, or hokusai',
     },
     'max-cost': {
       type: 'string',
@@ -94,7 +94,11 @@ runTool({
     }
     const decision = mode === 'heuristic'
       ? routeWorkflow(prompt, { repoDir, maxCostUsd })
-      : routeWorkflowStageAware(prompt, { repoDir, maxCostUsd });
+      : mode === 'stage-aware'
+        ? routeWorkflowStageAware(prompt, { repoDir, maxCostUsd })
+        : mode === 'hokusai'
+          ? await routeWorkflowHokusai(prompt, { repoDir, maxCostUsd })
+          : await routeWorkflowAuto(prompt, { repoDir, maxCostUsd });
 
     if (args.json) {
       console.log(JSON.stringify(decision, null, 2));

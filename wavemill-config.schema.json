@@ -453,9 +453,9 @@
         },
         "mode": {
           "type": "string",
-          "enum": ["heuristic", "llm", "auto", "stage-aware"],
+          "enum": ["heuristic", "llm", "auto", "stage-aware", "hokusai"],
           "default": "auto",
-          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, and 'auto' prefers stage-aware then falls back."
+          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, 'hokusai' uses the configured Hokusai inference backend, and 'auto' prefers Hokusai when configured before falling back to stage-aware and heuristic."
         },
         "llmModel": {
           "type": "string",
@@ -485,6 +485,34 @@
           "minimum": 0,
           "maximum": 1,
           "description": "Regularization weight blending stage-specific scores with overall eval score during stage-aware routing."
+        },
+        "hokusai": {
+          "type": "object",
+          "description": "Hokusai model backend configuration for ML-based workflow routing.",
+          "properties": {
+            "backend": {
+              "type": "string",
+              "enum": ["local", "remote"],
+              "default": "local",
+              "description": "Backend type: 'local' for local inference server, 'remote' for hosted API."
+            },
+            "endpoint": {
+              "type": "string",
+              "default": "http://localhost:8080/predict",
+              "description": "HTTP endpoint for Hokusai inference."
+            },
+            "modelPath": {
+              "type": "string",
+              "description": "Path to the local Hokusai model file. Used by local backends."
+            },
+            "timeout": {
+              "type": "integer",
+              "default": 5000,
+              "minimum": 100,
+              "description": "Request timeout in milliseconds."
+            }
+          },
+          "additionalProperties": false
         }
       }
     },
