@@ -2572,6 +2572,139 @@ $issue_desc
   return $?
 }
 
+# Restore the operator-facing review window for an in-review task that already
+# has an open PR. On resume we should rebuild the local task context and a
+# usable shell window, but we must not relaunch the review prompt because that
+# prompt includes PR creation instructions and would conflict with the existing
+# PR-backed workflow state.
+restore_review_task_window() {
+  local issue="$1" slug="$2" branch="$3" pr="$4" wt_dir="$5"
+  local win="${issue}-${slug}"
+  local feature_dir="$wt_dir/features/$slug"
+  local issue_json_file="/tmp/${SESSION}-${issue}-issue.json"
+  local task_header_file="$feature_dir/task-packet-header.md"
+  local task_details_file="$feature_dir/task-packet-details.md"
+  local title issue_json issue_desc linear_issue restored_window recreated_worktree
+  local branch_exists=1
+
+  restored_window="false"
+  recreated_worktree="false"
+
+  if [[ ! -d "$wt_dir" ]]; then
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
+      branch_exists=0
+    fi
+
+    if [[ "$branch_exists" -ne 0 ]]; then
+      log_warn "$issue → Cannot restore review task: branch $branch is missing"
+      return 1
+    fi
+
+    log "status" "⚡ $issue → Recreating worktree for review task"
+    if ! git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" >/dev/null 2>&1; then
+      log_warn "$issue → Failed to recreate worktree for review task"
+      return 1
+    fi
+    recreated_worktree="true"
+  fi
+
+  mkdir -p "$feature_dir"
+
+  if [[ -f "$issue_json_file" ]]; then
+    issue_json=$(cat "$issue_json_file" 2>/dev/null || echo "{}")
+  else
+    linear_issue=$(get_linear_issue_id "$issue")
+    issue_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue.ts" "$linear_issue" --json 2>/dev/null || echo "{}")
+    if [[ -n "$issue_json" ]]; then
+      printf '%s\n' "$issue_json" > "$issue_json_file"
+    fi
+  fi
+
+  # Fetch title and description from state or issue data (used for both packet and agent launch)
+  title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')
+  [[ -z "$title" ]] && title=$(printf '%s' "$issue_json" | jq -r '.title // empty' 2>/dev/null || echo "")
+  [[ -z "$title" ]] && title="Task"
+  issue_desc=$(printf '%s' "$issue_json" | jq -r '.description // empty' 2>/dev/null || echo "")
+
+  if [[ ! -f "$task_header_file" ]]; then
+    cat > "$task_header_file" <<EOF
+# $issue - $title
+
+## Resume Context
+
+- Review task restored after session resume
+- Branch: \`$branch\`
+- Open PR: #$pr
+- Worktree: \`$wt_dir\`
+
+## Objective
+
+${issue_desc:-Review the existing PR and complete any follow-up work.}
+EOF
+  fi
+
+  if [[ ! -f "$task_details_file" ]]; then
+    cat > "$task_details_file" <<EOF
+# $issue - Review Resume Details
+
+## Current Status
+
+This task already has an open pull request: **#$pr**.
+
+The original review-phase tmux window was not available during resume, so
+wavemill recreated the local review context here instead of relaunching PR
+creation.
+
+## Review Workspace
+
+- Branch: \`$branch\`
+- Worktree: \`$wt_dir\`
+- Summary file: \`features/$slug/task-packet-header.md\`
+
+## Issue Description
+
+${issue_desc:-No issue description was available from cached or live issue data.}
+EOF
+  fi
+
+  if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
+    log "status" "⚡ $issue → Restoring review window (PR #$pr)"
+    tmux new-window -t "$SESSION" -n "$win" -c "$wt_dir" 2>/dev/null || return 1
+    tmux set-option -t "$SESSION:$win" remain-on-exit on 2>/dev/null || true
+    restored_window="true"
+    sleep 1
+  fi
+
+  if _pane_is_dead_or_idle "$SESSION:$win"; then
+    # Get review phase configuration from state
+    local reviewer_model review_mode reviewer_agent
+    reviewer_model=$(read_state_value "claude-sonnet-4-5-20250929" --arg i "$issue" '.tasks[$i].reviewerModel // "claude-sonnet-4-5-20250929"')
+    review_mode=$(read_state_value "static+llm" --arg i "$issue" '.tasks[$i].reviewMode // "static+llm"')
+
+    # Resolve agent from model
+    reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+
+    # Launch review phase agent
+    log "status" "  → Relaunching review agent for $issue (model: $reviewer_model, mode: $review_mode)"
+    launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
+    if [[ $? -eq 0 ]]; then
+      log "status" "✓ $issue → Review context restored and agent relaunched for PR #$pr"
+    else
+      log_warn "$issue → Failed to relaunch review agent"
+      if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
+        log "status" "✓ $issue → Review context restored for PR #$pr (but agent launch failed)"
+      fi
+      return 1
+    fi
+  fi
+
+  if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
+    log "status" "✓ $issue → Review context restored for PR #$pr"
+  fi
+
+  return 0
+}
+
 ready_state_dir() {
   local wt_dir="$1" slug="$2"
 
@@ -4469,6 +4602,20 @@ monitor_issue_state() {
       log "status" "⚠ $ISSUE → Agent exited without PR - releasing slot"
       cleanup_completed_task "$ISSUE" "$SLUG" "no PR created"
       return 0
+    fi
+  fi
+
+  current_phase=$(get_task_phase "$ISSUE")
+  if [[ "$current_phase" == "review" ]]; then
+    # Only restore window if PR is still open (not merged or closed)
+    local pr_status
+    pr_status=$(pr_state "$PR")
+    if [[ "$pr_status" == "OPEN" ]]; then
+      if ! restore_review_task_window "$ISSUE" "$SLUG" "$BRANCH" "$PR" "$WT_DIR"; then
+        set_window_attention_state "$WIN" "needs-user"
+        active_count=$((active_count + 1))
+        return 0
+      fi
     fi
   fi
 
