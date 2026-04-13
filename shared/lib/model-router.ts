@@ -251,8 +251,8 @@ export interface RouterOptions {
   agentMap?: Record<string, string>;
   /** Fallback agent when no agentMap match (default: 'claude') */
   defaultAgent?: string;
-  /** Routing mode: 'heuristic' (regex), 'llm' (DSPy artifact), 'stage-aware' (historical KNN), 'auto' (best available) */
-  mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware';
+  /** Routing mode: 'heuristic' (regex), 'llm' (DSPy artifact), 'stage-aware' (historical KNN), 'hokusai' (ML endpoint), 'auto' (best available) */
+  mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware' | 'hokusai';
   /** Repository directory (for finding artifacts and config) */
   repoDir?: string;
   /** Repository name (for LLM routing context) */

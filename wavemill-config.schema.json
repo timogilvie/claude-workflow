@@ -453,9 +453,9 @@
         },
         "mode": {
           "type": "string",
-          "enum": ["heuristic", "llm", "auto", "stage-aware"],
+          "enum": ["heuristic", "llm", "auto", "stage-aware", "hokusai"],
           "default": "auto",
-          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, and 'auto' prefers stage-aware then falls back."
+          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, 'hokusai' calls the Hokusai API for ML-based routing, and 'auto' prefers Hokusai when configured before falling back to stage-aware and heuristic."
         },
         "llmModel": {
           "type": "string",
@@ -485,6 +485,28 @@
           "minimum": 0,
           "maximum": 1,
           "description": "Regularization weight blending stage-specific scores with overall eval score during stage-aware routing."
+        },
+        "hokusai": {
+          "type": "object",
+          "description": "Hokusai API configuration for ML-based workflow routing. Hokusai is only available via API.",
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "description": "HTTP endpoint for Hokusai API (e.g., 'https://hokusai-api.example.com/predict')."
+            },
+            "apiKey": {
+              "type": "string",
+              "description": "Optional API key for authentication."
+            },
+            "timeout": {
+              "type": "integer",
+              "default": 5000,
+              "minimum": 100,
+              "description": "Request timeout in milliseconds."
+            }
+          },
+          "required": ["endpoint"],
+          "additionalProperties": false
         }
       }
     },

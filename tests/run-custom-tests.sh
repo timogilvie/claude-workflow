@@ -26,6 +26,7 @@ for f in \
   eval-persistence.test.ts \
   eval-schema.test.ts \
   hokusai-adapter.test.ts \
+  hokusai-router.test.ts \
   context-linter.test.ts \
   llm-router.test.ts \
   issue-expander.test.ts \

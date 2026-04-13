@@ -9,7 +9,8 @@
 
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
-import { getChallengeSchedulerConfig } from './config.ts';
+import { getChallengeSchedulerConfig, getHokusaiRouterConfig } from './config.ts';
+import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
@@ -48,6 +49,45 @@ export interface RouteWorkflowOptions {
   repoDir?: string;
   modelsAvailable?: string[];
   maxCostUsd?: number;
+}
+
+function withSignals(decision: WorkflowRouteDecision, prompt: string): WorkflowRouteDecision {
+  const characteristics = analyzePrompt(prompt);
+  const riskScore = computeRiskScore(prompt, characteristics);
+
+  return {
+    ...decision,
+    signals: {
+      taskType: characteristics.taskType,
+      promptLength: characteristics.length,
+      complexityScore: characteristics.complexityScore,
+      fileTypes: characteristics.fileTypes,
+      riskScore,
+    },
+  };
+}
+
+function withChallengeRecommendation<T extends WorkflowRouteDecision>(decision: T, repoDir?: string): T {
+  const challengeConfig = getChallengeSchedulerConfig(repoDir);
+  if (challengeConfig.enabled === false) {
+    return decision;
+  }
+
+  const recommendation = evaluateChallenge({
+    routingDecision: decision,
+    evalSummary: buildEvalSummary(repoDir),
+    config: challengeConfig,
+    repoDir,
+  });
+
+  if (!recommendation.shouldChallenge) {
+    return decision;
+  }
+
+  return {
+    ...decision,
+    challengeRecommendation: recommendation,
+  };
 }
 
 const DEFAULT_MODEL_POOL = [
@@ -461,26 +501,40 @@ export function routeWorkflowStageAware(
     };
   }
 
-  const challengeConfig = getChallengeSchedulerConfig(repoDir);
-  if (challengeConfig.enabled === false) {
-    return decision;
+  return withChallengeRecommendation(decision, repoDir);
+}
+
+export async function routeWorkflowHokusai(
+  prompt: string,
+  options?: RouteWorkflowOptions,
+): Promise<StageAwareDecision> {
+  const repoDir = options?.repoDir;
+  const decision = await routeViaHokusai(prompt, options);
+  if (!decision) {
+    return routeWorkflowStageAware(prompt, options);
   }
 
-  const recommendation = evaluateChallenge({
-    routingDecision: decision,
-    evalSummary: buildEvalSummary(repoDir),
-    config: challengeConfig,
-    repoDir,
-  });
+  const enriched = withSignals(decision, prompt);
+  return withChallengeRecommendation({
+    ...enriched,
+    routingMode: 'hokusai',
+    neighborCount: 0,
+    neighborSimilarityRange: [0, 0],
+    expectedCost: Number(
+      (enriched.expectedCostPlan + enriched.expectedCostCode + enriched.expectedCostReview).toFixed(2)
+    ),
+  }, repoDir);
+}
 
-  if (recommendation.shouldChallenge) {
-    return {
-      ...decision,
-      challengeRecommendation: recommendation,
-    };
+export async function routeWorkflowAuto(
+  prompt: string,
+  options?: RouteWorkflowOptions,
+): Promise<StageAwareDecision> {
+  const hokusaiConfig = getHokusaiRouterConfig(options?.repoDir);
+  if (hokusaiConfig.endpoint) {
+    return routeWorkflowHokusai(prompt, options);
   }
-
-  return decision;
+  return routeWorkflowStageAware(prompt, options);
 }
 
 export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?: string): string {
