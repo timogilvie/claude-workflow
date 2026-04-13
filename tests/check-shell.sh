@@ -396,6 +396,24 @@ else
     fail "monitor does not restore review windows for resumed PR-backed tasks"
   fi
 
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$current_phase" == "review" \]\]; then' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$_CFG_READY_ENABLED" == "true" \]\]; then' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'set_task_phase "\$ISSUE" "ready"' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'launch_ready_phase "\$ISSUE" "\$SLUG" "\$title" "\${WORKTREE_ROOT}/\${SLUG}" "\$BRANCH" "\$BASE_BRANCH" "\$PR"'; then
+    pass "monitor transitions PR-backed review tasks into ready before merge checks"
+  else
+    fail "monitor does not transition PR-backed review tasks into ready"
+  fi
+
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'elif \[\[ "\$current_phase" == "ready" \]\]; then' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'ready_state_dir_path="$(ready_state_dir "\${WORKTREE_ROOT}/\${SLUG}" "\$SLUG")"' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q '\.conflict-detected' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Conflict remediation complete, ready checks rerun'; then
+    pass "monitor handles PR-backed ready tasks in the PR lifecycle path"
+  else
+    fail "monitor is missing PR-backed ready-phase handling in the PR lifecycle path"
+  fi
+
   READ_STATE_VALUE_BLOCK=$(awk '
     /^read_state_value\(\) \{/ { in_fn=1 }
     in_fn { print }

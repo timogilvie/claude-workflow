@@ -4638,6 +4638,9 @@ monitor_issue_state() {
             return 0
           fi
 
+          # This branch is only reachable when no PR is cached yet. The live
+          # review -> ready transition for PR-backed tasks runs in the PR
+          # lifecycle section below so resumed tasks can still advance.
           # Review is no longer running - check if PR was created and transition to ready phase if enabled
           if [[ -n "$pr_number" ]] && [[ "$_CFG_READY_ENABLED" == "true" ]]; then
             # Mark review as completed with PR artifact (HOK-1177)
@@ -4679,6 +4682,9 @@ monitor_issue_state() {
           ;;
 
         ready)
+          # This branch is only reachable when no PR is cached yet. Normal
+          # ready-phase monitoring runs in the PR lifecycle section below,
+          # because ready always has a known PR.
           if [[ "$resolved_phase" == "aborted" ]]; then
             log "⛔ $ISSUE → Workflow aborted by user during ready phase"
             write_stage_result "$FEATURE_DIR" "ready" "aborted" "$current_agent"
@@ -4812,16 +4818,117 @@ monitor_issue_state() {
 
   current_phase=$(get_task_phase "$ISSUE")
   if [[ "$current_phase" == "review" ]]; then
-    # Only restore window if PR is still open (not merged or closed)
-    local pr_status
+    local pr_status resolved_phase review_status title launch_rc
     pr_status=$(pr_state "$PR")
+
     if [[ "$pr_status" == "OPEN" ]]; then
+      resolved_phase=$(resolve_phase "$FEATURE_DIR")
+      if [[ "$resolved_phase" == "aborted" ]]; then
+        log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
+        write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent"
+        set_task_phase "$ISSUE" "aborted"
+        set_window_attention_state "$WIN" "needs-user"
+        return 0
+      fi
+
+      if [[ "$_CFG_READY_ENABLED" == "true" ]]; then
+        review_status=$(read_stage_status "$FEATURE_DIR" "review")
+        if [[ "$review_status" == "running" || -z "$review_status" || "$review_status" == "completed" ]]; then
+          write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
+          set_task_phase "$ISSUE" "ready"
+          title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+          if [[ -z "$title" ]]; then
+            issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+            title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+          fi
+
+          launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"
+          launch_rc=$?
+          if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+            log "status" "⛔ $ISSUE → Workflow aborted during ready launch"
+            set_task_phase "$ISSUE" "aborted"
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+          if [[ "$launch_rc" -eq 3 ]]; then
+            set_window_attention_state "$WIN" "clear"
+            log "status" "⚠ $ISSUE → Ready detected conflicts, launching remediation"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+          if [[ "$launch_rc" -ne 0 ]]; then
+            log "status" "⚠ $ISSUE → Ready checks failed (PR #$PR)"
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+          set_window_attention_state "$WIN" "needs-user"
+          log "status" "✓ $ISSUE → Ready checks completed for PR #$PR"
+          return 0
+        fi
+      fi
+
       if ! restore_review_task_window "$ISSUE" "$SLUG" "$BRANCH" "$PR" "$WT_DIR"; then
         set_window_attention_state "$WIN" "needs-user"
         active_count=$((active_count + 1))
         return 0
       fi
     fi
+  elif [[ "$current_phase" == "ready" ]]; then
+    local resolved_phase ready_state_dir_path ready_status launch_head current_head title launch_rc
+    resolved_phase=$(resolve_phase "$FEATURE_DIR")
+    if [[ "$resolved_phase" == "aborted" ]]; then
+      log "status" "⛔ $ISSUE → Workflow aborted by user during ready phase"
+      write_stage_result "$FEATURE_DIR" "ready" "aborted" "$current_agent"
+      set_task_phase "$ISSUE" "aborted"
+      set_window_attention_state "$WIN" "needs-user"
+      return 0
+    fi
+
+    ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+    if [[ -f "$ready_state_dir_path/.conflict-detected" ]]; then
+      ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
+      launch_head=$(ready_conflict_launch_head "$ready_state_dir_path")
+      current_head=$(git -C "${WORKTREE_ROOT}/${SLUG}" rev-parse HEAD 2>/dev/null || echo "")
+
+      if [[ "$ready_status" == "running" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
+        set_window_attention_state "$WIN" "clear"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+
+      if [[ "$ready_status" != "running" || -z "$launch_head" || "$launch_head" != "$current_head" ]]; then
+        title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+        if [[ -z "$title" ]]; then
+          issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+          title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+        fi
+
+        launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"
+        launch_rc=$?
+        if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+          log "status" "⛔ $ISSUE → Workflow aborted during conflict remediation"
+          set_task_phase "$ISSUE" "aborted"
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+        fi
+        if [[ "$launch_rc" -eq 3 ]]; then
+          set_window_attention_state "$WIN" "clear"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+        if [[ "$launch_rc" -ne 0 ]]; then
+          log "status" "⚠ $ISSUE → Conflict remediation still needs attention"
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+        fi
+
+        log "status" "✓ $ISSUE → Conflict remediation complete, ready checks rerun"
+        set_window_attention_state "$WIN" "needs-user"
+        return 0
+      fi
+    fi
+    set_window_attention_state "$WIN" "needs-user"
+    return 0
   fi
 
   # Check if merged
