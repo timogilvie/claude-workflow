@@ -218,6 +218,29 @@ WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_ISSUE" \
 EOF
 check_eq "codex hook records api errors" "error|Rate limit exceeded" "$(jq -r '.state + "|" + .detail' "/tmp/wavemill-${TEST_SESSION}-${CODEX_ISSUE}.hook")"
 
+CODEX_CRASH_ISSUE="HOK-7"
+WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_CRASH_ISSUE" \
+  bash "$REPO_DIR/shared/hooks/codex-status-monitor.sh" <<'EOF'
+{"type":"response_item","payload":{"type":"function_call","function":{"name":"read_file"}}}
+EOF
+check_eq "codex unexpected eof writes error state" "error" "$(jq -r '.state' "/tmp/wavemill-${TEST_SESSION}-${CODEX_CRASH_ISSUE}.hook")"
+check_eq "codex unexpected eof writes termination detail" "unexpected termination" "$(jq -r '.detail' "/tmp/wavemill-${TEST_SESSION}-${CODEX_CRASH_ISSUE}.hook")"
+
+CODEX_COMPLETE_ISSUE="HOK-8"
+WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_COMPLETE_ISSUE" \
+  bash "$REPO_DIR/shared/hooks/codex-status-monitor.sh" <<'EOF'
+{"type":"response_item","payload":{"type":"function_call","function":{"name":"read_file"}}}
+{"type":"task_complete"}
+EOF
+check_eq "codex completion writes idle state" "idle" "$(jq -r '.state' "/tmp/wavemill-${TEST_SESSION}-${CODEX_COMPLETE_ISSUE}.hook")"
+check_eq "codex completion ends as stream_end" "stream_end" "$(jq -r '.event' "/tmp/wavemill-${TEST_SESSION}-${CODEX_COMPLETE_ISSUE}.hook")"
+
+CODEX_EMPTY_ISSUE="HOK-9"
+WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_EMPTY_ISSUE" \
+  bash "$REPO_DIR/shared/hooks/codex-status-monitor.sh" < /dev/null
+check_eq "codex empty stream writes error state" "error" "$(jq -r '.state' "/tmp/wavemill-${TEST_SESSION}-${CODEX_EMPTY_ISSUE}.hook")"
+check_eq "codex empty stream writes unexpected eof event" "unexpected_eof" "$(jq -r '.event' "/tmp/wavemill-${TEST_SESSION}-${CODEX_EMPTY_ISSUE}.hook")"
+
 echo ""
 echo "=== Generic Process Monitor ==="
 

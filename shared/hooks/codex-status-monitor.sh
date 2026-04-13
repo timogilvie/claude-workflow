@@ -12,6 +12,7 @@ wavemill_hook_check
 # session as idle so crashed or exited agents do not remain "working" forever.
 
 last_state=""
+completed=false
 while IFS= read -r line; do
   [[ -n "$line" ]] || continue
 
@@ -58,11 +59,18 @@ while IFS= read -r line; do
     task_complete|agent_turn_complete|response.completed|response_complete)
       wavemill_hook_write "idle" "$event" "" "codex"
       last_state="idle"
+      completed=true
       ;;
   esac
 done
 
-# Stream ended - avoid overwriting the final error state.
+# Stream ended. Preserve explicit errors, mark successful completions as idle,
+# and treat unexpected EOF as an error so the dashboard does not show a dead
+# agent as still running or cleanly exited.
 if [[ "$last_state" != "error" ]]; then
-  wavemill_hook_write "idle" "stream_end" "" "codex"
+  if [[ "$completed" == "true" ]]; then
+    wavemill_hook_write "idle" "stream_end" "" "codex"
+  else
+    wavemill_hook_write "error" "unexpected_eof" "unexpected termination" "codex"
+  fi
 fi
