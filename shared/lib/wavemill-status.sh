@@ -227,6 +227,135 @@ is_active() {
   return 1
 }
 
+# Classify dashboard tasks into sections based on agent state.
+is_actionable_state() {
+  local agent_state="$1"
+  case "$agent_state" in
+    exited|waiting|error) echo "actionable" ;;
+    *)                    echo "active" ;;
+  esac
+}
+
+render_section_header() {
+  local title="$1"
+  local count="$2"
+  printf "\n${B}%s${N} ${D}(%s)${N}\n" "$title" "$count" >> "$FRAME"
+  printf "${D}%-10s  %-22s  %6s  %-12s  %-11s  %s${N}\n" \
+    "ISSUE" "TASK" "TIME" "PHASE" "AGENT" "PR" >> "$FRAME"
+  printf "${D}%s${N}\n" \
+    "──────────────────────────────────────────────────────────────────────────" >> "$FRAME"
+}
+
+# Render one task row and any optional follow-up detail line.
+render_task_row() {
+  local issue="$1" slug="$2" branch="$3" worktree="$4"
+  local task_status="$5" task_phase="$6" state_pr="$7" agent_state="$8"
+  local t st_str pr_str pr_info checks phase_str plan_status reported ds
+
+  t=$(elapsed "$worktree")
+  reported=""
+
+  if [[ "$task_status" == "merged" ]]; then
+    st_str="${G}✓ merged${N}"
+  else
+    # Prefer rich hook detail (tool names, errors) over legacy text files.
+    reported=$(agent_hook_detail "$issue")
+    [[ -z "$reported" ]] && reported=$(agent_reported_status "$issue")
+    case "$agent_state:$reported" in
+      waiting:*)       st_str="${Y}⏳ waiting${N}" ;;
+      error:*)         st_str="${R}! error${N}" ;;
+      exited:*)        st_str="${D}○ exited${N}" ;;
+      running:working) st_str="${G}● working${N}" ;;
+      running:waiting) st_str="${Y}⏳ waiting${N}" ;;
+      running:done)    st_str="${D}● idle${N}" ;;
+      running:*)       st_str="${G}● running${N}" ;;
+      *)               st_str="${D}  done${N}" ;;
+    esac
+  fi
+
+  # Only resolve PR cache entries for tasks already tracked with a PR.
+  pr_str="${D}—${N}"
+  pr_info=""
+  if [[ -n "$state_pr" ]]; then
+    pr_info=$(pr_for_branch "$branch")
+  fi
+  if [[ -n "$pr_info" ]]; then
+    IFS='|' read -r pr_num pr_state <<<"$pr_info"
+    case "$pr_state" in
+      MERGED) pr_str="${G}#${pr_num} MERGED${N}" ;;
+      CLOSED) pr_str="${R}#${pr_num} CLOSED${N}" ;;
+      OPEN)
+        checks=$(pr_checks "$branch")
+        case "$checks" in
+          pass)    pr_str="${G}#${pr_num} ✓${N}" ;;
+          fail)    pr_str="${R}#${pr_num} ✗${N}" ;;
+          pending) pr_str="${Y}#${pr_num} …${N}" ;;
+          *)       pr_str="#${pr_num}" ;;
+        esac
+        ;;
+    esac
+  fi
+
+  case "$task_phase" in
+    planning)
+      plan_status=""
+      [[ -n "$worktree" && -n "$slug" ]] && plan_status=$(get_planning_display_status "$worktree" "$slug")
+      case "$plan_status" in
+        awaiting_approval) phase_str="${Y}⏳ awaiting${N}" ;;
+        approved)          phase_str="${G}✅ approved${N}" ;;
+        rejected)          phase_str="${R}❌ rejected${N}" ;;
+        *)                 phase_str="${Y}📋 planning${N}" ;;
+      esac
+      ;;
+    executing) phase_str="${G}🔨 executing${N}" ;;
+    *)         phase_str="${D}$task_phase${N}" ;;
+  esac
+
+  ds="$slug"
+  (( ${#ds} > 22 )) && ds="${ds:0:19}..."
+
+  printf "%-10s  %-22s  %6s  %-12b  %-11b  %b\n" \
+    "$issue" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
+
+  if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
+    reported="Plan ready — waiting for approval"
+  fi
+  case "$reported" in
+    working|waiting|done) reported="" ;;
+  esac
+  if [[ -n "$reported" ]]; then
+    printf "${D}%10s  └─ %s${N}\n" "" "$reported" >> "$FRAME"
+  fi
+}
+
+render_inbox_section() {
+  local count="${#inbox_tasks[@]}"
+  local task_data issue slug branch worktree task_status task_phase state_pr agent_state
+  (( count == 0 )) && return
+
+  render_section_header "📥 INBOX" "$count"
+  for task_data in "${inbox_tasks[@]}"; do
+    IFS='|' read -r issue slug branch worktree task_status task_phase state_pr agent_state <<<"$task_data"
+    render_task_row "$issue" "$slug" "$branch" "$worktree" "$task_status" "$task_phase" "$state_pr" "$agent_state"
+  done
+}
+
+render_active_section() {
+  local count="${#active_tasks[@]}"
+  local task_data issue slug branch worktree task_status task_phase state_pr agent_state
+
+  render_section_header "⚡ ACTIVE" "$count"
+  if (( count == 0 )); then
+    printf "${D}No active tasks${N}\n" >> "$FRAME"
+    return
+  fi
+
+  for task_data in "${active_tasks[@]}"; do
+    IFS='|' read -r issue slug branch worktree task_status task_phase state_pr agent_state <<<"$task_data"
+    render_task_row "$issue" "$slug" "$branch" "$worktree" "$task_status" "$task_phase" "$state_pr" "$agent_state"
+  done
+}
+
 # Clear saved scrollback lines without blanking the visible pane. This keeps
 # tmux history from accumulating stale dashboards while avoiding a full-screen
 # flash on every refresh.
@@ -246,15 +375,11 @@ redraw_dashboard_frame() {
   }
 }
 
-# ── Main render loop ─────────────────────────────────────────────────────
-
-FRAME=$(mktemp)
-trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT INT TERM
-
-while true; do
-  # Keep tmux scrollback clean without blanking the visible pane.
-  clear_dashboard_scrollback
-  refresh_pr_cache
+render_dashboard() {
+  local tasks line issue slug branch worktree task_status task_phase state_pr
+  local win agent_state classification task_data free_slots
+  declare -ga inbox_tasks=()
+  declare -ga active_tasks=()
 
   # Build entire frame into a temp file (avoids $() stripping newlines)
   : > "$FRAME"
@@ -268,122 +393,64 @@ while true; do
   fi
 
   tasks=$(gather_tasks)
-
   if [[ -z "$tasks" ]]; then
     printf "${D}No active tasks${N}\n" >> "$FRAME"
   else
-    # Header
-    printf "${D}%-10s  %-22s  %6s  %-12s  %-11s  %s${N}\n" "ISSUE" "TASK" "TIME" "PHASE" "AGENT" "PR" >> "$FRAME"
-    printf "${D}%s${N}\n" "──────────────────────────────────────────────────────────────────────────" >> "$FRAME"
-
-    count=0
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       IFS='|' read -r issue slug branch worktree task_status task_phase state_pr <<<"$line"
       task_phase="${task_phase:-executing}"
 
-      # Window name
       win="${issue}-${slug}"
       [[ "$issue" == "—" ]] && win="$slug"
 
-      # Skip stale/completed tasks
       is_active "$worktree" "$win" || continue
 
-      count=$((count + 1))
-
-      # Time
-      t=$(elapsed "$worktree")
-
-      # Agent
       agent_state=""
       if [[ "$task_status" == "merged" ]]; then
-        st_str="${G}✓ merged${N}"
+        agent_state="exited"
       else
         agent_state=$(agent_status "$win")
-        # Prefer hook detail (tool names, error messages) over legacy status file
-        reported=$(agent_hook_detail "$issue")
-        [[ -z "$reported" ]] && reported=$(agent_reported_status "$issue")
-        case "$agent_state:$reported" in
-          exited:*)     st_str="${D}○ exited${N}" ;;
-          running:working) st_str="${G}● working${N}" ;;
-          running:waiting) st_str="${Y}⏳ waiting${N}" ;;
-          running:done)    st_str="${D}● idle${N}" ;;
-          running:*)       st_str="${G}● running${N}" ;;
-          *)               st_str="${D}  done${N}" ;;
-        esac
       fi
 
-      # PR – only look up from cache if the state file already records a PR,
-      # otherwise a stale PR on the same branch name could appear.
-      pr_str="${D}—${N}"
-      pr_info=""
-      if [[ -n "$state_pr" ]]; then
-        pr_info=$(pr_for_branch "$branch")
-      fi
-      if [[ -n "$pr_info" ]]; then
-        IFS='|' read -r pr_num pr_state <<<"$pr_info"
-        case "$pr_state" in
-          MERGED) pr_str="${G}#${pr_num} MERGED${N}" ;;
-          CLOSED) pr_str="${R}#${pr_num} CLOSED${N}" ;;
-          OPEN)
-            checks=$(pr_checks "$branch")
-            case "$checks" in
-              pass)    pr_str="${G}#${pr_num} ✓${N}" ;;
-              fail)    pr_str="${R}#${pr_num} ✗${N}" ;;
-              pending) pr_str="${Y}#${pr_num} …${N}" ;;
-              *)       pr_str="#${pr_num}" ;;
-            esac ;;
-        esac
-      fi
+      classification=$(is_actionable_state "$agent_state")
+      task_data="$issue|$slug|$branch|$worktree|$task_status|$task_phase|$state_pr|$agent_state"
 
-      # Phase display — enrich planning with stage result status
-      case "$task_phase" in
-        planning)
-          plan_status=""
-          [[ -n "$worktree" && -n "$slug" ]] && plan_status=$(get_planning_display_status "$worktree" "$slug")
-          case "$plan_status" in
-            awaiting_approval) phase_str="${Y}⏳ awaiting${N}" ;;
-            approved)          phase_str="${G}✅ approved${N}" ;;
-            rejected)          phase_str="${R}❌ rejected${N}" ;;
-            *)                 phase_str="${Y}📋 planning${N}" ;;
-          esac
-          ;;
-        executing) phase_str="${G}🔨 executing${N}" ;;
-        *)         phase_str="${D}$task_phase${N}" ;;
-      esac
-
-      # Truncate slug
-      ds="$slug"
-      (( ${#ds} > 22 )) && ds="${ds:0:19}..."
-
-      printf "%-10s  %-22s  %6s  %-12b  %-11b  %b\n" "$issue" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
-
-      # Show agent-reported status on a second line (if available)
-      if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
-        reported="Plan ready — waiting for approval"
-      fi
-      case "$reported" in
-        working|waiting|done)
-          reported=""
-          ;;
-      esac
-      if [[ -n "$reported" ]]; then
-        printf "${D}%10s  └─ %s${N}\n" "" "$reported" >> "$FRAME"
+      if [[ "$classification" == "actionable" ]]; then
+        inbox_tasks+=("$task_data")
+      else
+        active_tasks+=("$task_data")
       fi
     done <<<"$tasks"
 
-    if (( count == 0 )); then
-      printf "${D}No active tasks${N}\n" >> "$FRAME"
-    fi
+    render_inbox_section
+    render_active_section
   fi
 
   printf "\n${D}Refreshes every ${REFRESH}s │ Ctrl+B W: switch windows │ Ctrl+B N: next done${N}\n" >> "$FRAME"
+}
 
-  redraw_dashboard_frame "$FRAME"
+run_dashboard() {
+  while true; do
+    # Keep tmux scrollback clean without blanking the visible pane.
+    clear_dashboard_scrollback
+    refresh_pr_cache
+    render_dashboard
+    redraw_dashboard_frame "$FRAME"
 
-  # Interruptible wait: USR1 sets WAVEMILL_REDRAW and wakes wait early.
-  WAVEMILL_REDRAW=0
-  sleep "$REFRESH" &
-  SLEEP_PID=$!
-  wait "$SLEEP_PID" 2>/dev/null || true
-done
+    # Interruptible wait: USR1 sets WAVEMILL_REDRAW and wakes wait early.
+    WAVEMILL_REDRAW=0
+    sleep "$REFRESH" &
+    SLEEP_PID=$!
+    wait "$SLEEP_PID" 2>/dev/null || true
+  done
+}
+
+# ── Main render loop ─────────────────────────────────────────────────────
+
+FRAME=$(mktemp)
+trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT INT TERM
+
+if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
+  run_dashboard
+fi

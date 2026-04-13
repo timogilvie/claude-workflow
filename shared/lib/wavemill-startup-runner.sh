@@ -179,9 +179,9 @@ write_monitor_env() {
 
 setup_control_dashboard() {
   local status_script="$LIB_DIR/wavemill-status.sh"
-  local dashboard_pane="${dashboard_pane:-$SESSION:control.1}"
-  local log_pane="${log_pane:-$SESSION:control.2}"
-  local pane_count
+  local pane_count dashboard_pane log_pane
+  dashboard_pane="$SESSION:control.1"
+  log_pane="$SESSION:control.2"
   pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l | tr -d ' ')
   if [[ "$pane_count" -eq 1 ]]; then
     tmux split-window -t "$SESSION:control.0" -h -f -p 50
