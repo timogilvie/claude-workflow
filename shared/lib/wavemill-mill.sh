@@ -4282,19 +4282,31 @@ monitor_issue_state() {
           fi
 
           local review_status
+          local pr_number
           review_status=$(read_stage_status "$FEATURE_DIR" "review")
+          pr_number=$(find_pr_for_branch "$BRANCH")
 
-          # Review phase is complete when PR is created (handled below)
+          # Reconcile legacy/stale review state: once a PR exists, review is effectively complete
+          # and the controller can move into ready even if the stage file is still "running".
+          if [[ "$review_status" == "running" ]]; then
+            if [[ -n "$pr_number" ]]; then
+              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+              review_status="completed"
+            else
+              set_window_attention_state "$WIN" "clear"
+              # Keep review tasks active while the controller-owned stage is running
+              active_count=$((active_count + 1))
+              return 0
+            fi
+          fi
+
           if [[ "$review_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
-            # Keep review tasks active while the controller-owned stage is running
             active_count=$((active_count + 1))
             return 0
           fi
 
           # Review is no longer running - check if PR was created and transition to ready phase if enabled
-          local pr_number
-          pr_number=$(find_pr_for_branch "$BRANCH")
           if [[ -n "$pr_number" ]] && [[ "$_CFG_READY_ENABLED" == "true" ]]; then
             # Mark review as completed with PR artifact (HOK-1177)
             write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"

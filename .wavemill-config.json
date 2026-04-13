@@ -184,5 +184,8 @@
       "enabled": true,
       "autoApproveReadOnly": true
     }
+  },
+  "ready": {
+    "enabled": true
   }
 }
