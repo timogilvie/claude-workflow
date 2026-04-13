@@ -4149,7 +4149,7 @@ log "status" "Monitoring tasks and managing work queue..."
 log "info" "  Max parallel: $MAX_PARALLEL"
 log "info" "  Checking every ${POLL_SECONDS}s"
 log "info" "  Type 'q' to quit, or 'touch $STATE_DIR/.stop-loop' to stop"
-echo ""
+printf '\033[1mTask Backlog\033[0m\n'
 
 QUIT_REQUESTED=false
 LAST_DISPLAY=""       # fingerprint of what was last printed
