@@ -180,10 +180,10 @@ setup_control_dashboard() {
   local pane_count
   pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l | tr -d ' ')
   if [[ "$pane_count" -eq 1 ]]; then
-    tmux split-window -t "$SESSION:control.0" -v -p 35
-    tmux split-window -t "$SESSION:control.1" -h -p 50
+    tmux split-window -t "$SESSION:control.0" -v -p 65
+    tmux split-window -t "$SESSION:control.0" -h -f -p 50
   elif [[ "$pane_count" -eq 2 ]]; then
-    tmux split-window -t "$SESSION:control.1" -h -p 50
+    tmux split-window -t "$SESSION:control.0" -h -f -p 50
   fi
   tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'"
   tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
