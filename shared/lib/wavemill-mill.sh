@@ -2676,25 +2676,31 @@ EOF
   fi
 
   if _pane_is_dead_or_idle "$SESSION:$win"; then
-    # Get review phase configuration from state
-    local reviewer_model review_mode reviewer_agent
-    reviewer_model=$(read_state_value "claude-sonnet-4-5-20250929" --arg i "$issue" '.tasks[$i].reviewerModel // "claude-sonnet-4-5-20250929"')
-    review_mode=$(read_state_value "static+llm" --arg i "$issue" '.tasks[$i].reviewMode // "static+llm"')
+    if declare -F launch_review_phase >/dev/null 2>&1 && declare -F agent_resolve_from_model >/dev/null 2>&1; then
+      # Get review phase configuration from state
+      local reviewer_model review_mode reviewer_agent
+      reviewer_model=$(read_state_value "claude-sonnet-4-5-20250929" --arg i "$issue" '.tasks[$i].reviewerModel // "claude-sonnet-4-5-20250929"')
+      review_mode=$(read_state_value "static+llm" --arg i "$issue" '.tasks[$i].reviewMode // "static+llm"')
 
-    # Resolve agent from model
-    reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+      # Resolve agent from model
+      reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
 
-    # Launch review phase agent
-    log "status" "  → Relaunching review agent for $issue (model: $reviewer_model, mode: $review_mode)"
-    launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
-    if [[ $? -eq 0 ]]; then
-      log "status" "✓ $issue → Review context restored and agent relaunched for PR #$pr"
-    else
-      log_warn "$issue → Failed to relaunch review agent"
-      if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
-        log "status" "✓ $issue → Review context restored for PR #$pr (but agent launch failed)"
+      # Launch review phase agent
+      log "status" "  → Relaunching review agent for $issue (model: $reviewer_model, mode: $review_mode)"
+      launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
+      if [[ $? -eq 0 ]]; then
+        log "status" "✓ $issue → Review context restored and agent relaunched for PR #$pr"
+      else
+        log_warn "$issue → Failed to relaunch review agent"
+        if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
+          log "status" "✓ $issue → Review context restored for PR #$pr (but agent launch failed)"
+        fi
+        return 1
       fi
-      return 1
+    else
+      # Keep the restored window useful in stripped-down test or utility contexts
+      # where the full launch stack has not been sourced yet.
+      tmux send-keys -t "$SESSION:$win" "cd '$wt_dir'" C-m 2>/dev/null || true
     fi
   fi
 
