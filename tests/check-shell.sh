@@ -544,9 +544,9 @@ fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
   && grep -q 'split-window -t "\$SESSION:control.0" -h -f -p 50' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 35' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'respawn-pane -k -t "\${dashboard_pane:-\$SESSION:control.1}".*status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'respawn-pane -k -t "\${log_pane:-\$SESSION:control.2}".*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\$SESSION:control.1" .*\$status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\$SESSION:control.2" .*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
   pass "startup runner builds task, dashboard, and log control panes"
 else
   fail "startup runner is missing the 3-pane control layout wiring"
