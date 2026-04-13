@@ -179,21 +179,24 @@ write_monitor_env() {
 
 setup_control_dashboard() {
   local status_script="$LIB_DIR/wavemill-status.sh"
-  local pane_count dashboard_pane log_pane
-  dashboard_pane="$SESSION:control.2"
-  log_pane="$SESSION:control.1"
+  local pane_count
   pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l | tr -d ' ')
   if [[ "$pane_count" -eq 1 ]]; then
-    tmux split-window -t "$SESSION:control.0" -h -p 50
-    tmux split-window -t "$SESSION:control.0" -v -p 35
+    # Split 1: vertical split — top-left (pane 0, 35%) / bottom-left (pane 1, 65%)
+    tmux split-window -t "$SESSION:control.0" -v -p 65
+    # Split 2: full-height horizontal — right pane (pane 2, 50%) spans full window height
+    tmux split-window -t "$SESSION:control.0" -h -f -p 50
   elif [[ "$pane_count" -eq 2 ]]; then
-    tmux split-window -t "$SESSION:control.0" -v -p 35
+    tmux split-window -t "$SESSION:control.0" -h -f -p 50
   fi
-  tmux respawn-pane -k -t "${dashboard_pane:-$SESSION:control.2}" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'"
+  # Pane 0 = top-left (monitor, set later in main)
+  # Pane 1 = bottom-left (dashboard)
+  # Pane 2 = right full-height (status log)
+  tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'"
 
   WAVEMILL_DASHBOARD_PID=""
   for attempt in {1..10}; do
-    WAVEMILL_DASHBOARD_PID="$(tmux list-panes -t "${dashboard_pane:-$SESSION:control.2}" -F '#{pane_pid}' 2>/dev/null || true)"
+    WAVEMILL_DASHBOARD_PID="$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)"
     [[ -n "$WAVEMILL_DASHBOARD_PID" ]] && break
     sleep 0.1
   done
@@ -202,7 +205,7 @@ setup_control_dashboard() {
     tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$WAVEMILL_DASHBOARD_PID"
   fi
 
-  tmux respawn-pane -k -t "${log_pane:-$SESSION:control.1}" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
+  tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
   tmux select-pane -t "$SESSION:control.0"
 }
 

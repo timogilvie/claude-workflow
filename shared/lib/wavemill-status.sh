@@ -44,7 +44,7 @@ refresh_pr_cache() {
 
 pr_for_branch() {
   local branch="$1"
-  [[ -f "$PR_CACHE" ]] || return
+  [[ -f "$PR_CACHE" ]] || return 0
   jq -r --arg b "$branch" \
     '.[] | select(.headRefName == $b) | "\(.number)|\(.state)"' \
     "$PR_CACHE" 2>/dev/null | head -1
@@ -52,7 +52,7 @@ pr_for_branch() {
 
 pr_checks() {
   local branch="$1"
-  [[ -f "$PR_CACHE" ]] || return
+  [[ -f "$PR_CACHE" ]] || return 0
   jq -r --arg b "$branch" '
     .[] | select(.headRefName == $b) |
     .statusCheckRollup // [] |
@@ -87,13 +87,13 @@ agent_reported_status() {
 agent_hook_detail() {
   local issue="$1"
   local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
-  [[ -f "$hook_file" ]] || return
+  [[ -f "$hook_file" ]] || return 0
 
   local ts now staleness
   ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo 0)
   now=$(date +%s)
   staleness=$(( now - ts ))
-  (( staleness < 300 )) || return
+  (( staleness < 300 )) || return 0
 
   jq -r '.detail // empty' "$hook_file" 2>/dev/null || true
 }
