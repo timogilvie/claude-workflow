@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { confirm } from './cli-prompt.ts';
-import { loadWavemillConfig } from './config.ts';
+import { loadWavemillConfig, clearConfigCache } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -255,6 +255,94 @@ export async function revokeConsent(configDir?: string): Promise<void> {
   config.hokusai.dataSubmission.consentedAt = null;
 
   await saveUserConfig(config, configDir);
+}
+
+// ────────────────────────────────────────────────────────────────
+// Repo Config Modification
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Enable Hokusai data submission in repo config
+ *
+ * Sets hokusai.dataSubmission.enabled = true in .wavemill-config.json
+ *
+ * @param repoDir - Repository directory (default: cwd)
+ */
+export function enableRepoSubmission(repoDir?: string): void {
+  const configPath = resolve(repoDir || process.cwd(), '.wavemill-config.json');
+
+  let config: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      const content = readFileSync(configPath, 'utf-8');
+      config = JSON.parse(content);
+    } catch (err) {
+      throw new Error(`Failed to read repo config: ${errorMessage(err)}`);
+    }
+  }
+
+  // Ensure hokusai section exists
+  if (!config.hokusai || typeof config.hokusai !== 'object') {
+    config.hokusai = {};
+  }
+  const hokusai = config.hokusai as Record<string, unknown>;
+
+  // Ensure dataSubmission section exists
+  if (!hokusai.dataSubmission || typeof hokusai.dataSubmission !== 'object') {
+    hokusai.dataSubmission = {};
+  }
+  const dataSubmission = hokusai.dataSubmission as Record<string, unknown>;
+
+  // Set enabled: true
+  dataSubmission.enabled = true;
+
+  // Write back to file
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+
+  // Clear config cache so next load sees the change
+  clearConfigCache(repoDir);
+}
+
+/**
+ * Disable Hokusai data submission in repo config
+ *
+ * Sets hokusai.dataSubmission.enabled = false in .wavemill-config.json
+ *
+ * @param repoDir - Repository directory (default: cwd)
+ */
+export function disableRepoSubmission(repoDir?: string): void {
+  const configPath = resolve(repoDir || process.cwd(), '.wavemill-config.json');
+
+  let config: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      const content = readFileSync(configPath, 'utf-8');
+      config = JSON.parse(content);
+    } catch (err) {
+      throw new Error(`Failed to read repo config: ${errorMessage(err)}`);
+    }
+  }
+
+  // Ensure hokusai section exists
+  if (!config.hokusai || typeof config.hokusai !== 'object') {
+    config.hokusai = {};
+  }
+  const hokusai = config.hokusai as Record<string, unknown>;
+
+  // Ensure dataSubmission section exists
+  if (!hokusai.dataSubmission || typeof hokusai.dataSubmission !== 'object') {
+    hokusai.dataSubmission = {};
+  }
+  const dataSubmission = hokusai.dataSubmission as Record<string, unknown>;
+
+  // Set enabled: false
+  dataSubmission.enabled = false;
+
+  // Write back to file
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+
+  // Clear config cache so next load sees the change
+  clearConfigCache(repoDir);
 }
 
 // ────────────────────────────────────────────────────────────────

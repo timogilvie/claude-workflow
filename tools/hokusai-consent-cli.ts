@@ -19,6 +19,8 @@ import {
   loadUserConfig,
   isConsentValid,
   revokeConsent,
+  enableRepoSubmission,
+  disableRepoSubmission,
 } from '../shared/lib/hokusai-consent.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
@@ -72,19 +74,33 @@ runTool({
 
 /**
  * Enable data submission (interactive with consent prompt)
+ * Sets enabled: true in repo config and records consent in user config
  */
 async function handleEnable(): Promise<void> {
   console.log('Enabling Hokusai data submission...\n');
 
-  // Get repo consent version
+  // Check if already enabled with valid consent
+  const userConfig = await loadUserConfig();
   const repoConfig = loadWavemillConfig();
+  if (
+    repoConfig.hokusai?.dataSubmission?.enabled &&
+    isConsentValid(userConfig, repoConfig.hokusai?.dataSubmission?.consentVersion ?? '1.0')
+  ) {
+    console.log('✓ Already enabled with valid consent.');
+    return;
+  }
+
+  // Get repo consent version
   const repoConsentVersion = repoConfig.hokusai?.dataSubmission?.consentVersion ?? '1.0';
 
   // Show consent prompt
   const accepted = await promptConsent();
 
   if (accepted) {
+    // Record consent in user config
     await recordConsent(repoConsentVersion);
+    // Enable in repo config
+    enableRepoSubmission();
     console.log('\n✓ Data submission enabled. Thank you for contributing!');
   } else {
     console.log('\n✗ Data submission not enabled (consent declined).');
@@ -93,9 +109,26 @@ async function handleEnable(): Promise<void> {
 
 /**
  * Disable data submission
+ * Sets enabled: false in repo config and clears consent in user config
  */
 async function handleDisable(): Promise<void> {
+  // Check if already disabled
+  const repoConfig = loadWavemillConfig();
+  const userConfig = await loadUserConfig();
+
+  if (
+    !repoConfig.hokusai?.dataSubmission?.enabled &&
+    !userConfig.hokusai?.dataSubmission?.enabled
+  ) {
+    console.log('Already disabled.');
+    return;
+  }
+
+  // Revoke user consent
   await revokeConsent();
+  // Disable in repo config
+  disableRepoSubmission();
+
   console.log('✓ Data submission disabled.');
   console.log('  You can re-enable with: wavemill hokusai enable');
 }
