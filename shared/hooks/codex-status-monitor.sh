@@ -5,7 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=shared/hooks/wavemill-hook-protocol.sh
 source "$SCRIPT_DIR/wavemill-hook-protocol.sh"
 
-wavemill_hook_check
+# Outside a wavemill-launched environment, act as a sink instead of exiting
+# immediately. Exiting here would close the downstream side of the Codex JSON
+# pipeline and can cause Codex to abort with a broken pipe.
+if [[ -z "${WAVEMILL_SESSION:-}" ]] || [[ -z "${WAVEMILL_ISSUE:-}" ]] || ! command -v jq >/dev/null 2>&1; then
+  cat >/dev/null || true
+  exit 0
+fi
 
 # Read Codex JSONL events from stdin and map them onto the shared wavemill
 # status protocol. Unknown events are ignored; end-of-stream marks the
