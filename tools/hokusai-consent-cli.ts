@@ -8,7 +8,7 @@
  * - status:  Show current consent state
  * - check:   Non-interactive consent check (returns "true" or "false")
  *
- * @module hokasai-consent-cli
+ * @module hokusai-consent-cli
  */
 
 import { runTool } from '../shared/lib/tool-runner.ts';
@@ -97,7 +97,7 @@ async function handleEnable(): Promise<void> {
 async function handleDisable(): Promise<void> {
   await revokeConsent();
   console.log('✓ Data submission disabled.');
-  console.log('  You can re-enable with: wavemill hokasai enable');
+  console.log('  You can re-enable with: wavemill hokusai enable');
 }
 
 /**
@@ -106,14 +106,14 @@ async function handleDisable(): Promise<void> {
 async function handleStatus(): Promise<void> {
   const userConfig = await loadUserConfig();
   const repoConfig = loadWavemillConfig();
-  const submission = userConfig.hokasai?.dataSubmission;
-  const repoVersion = repoConfig.hokasai?.dataSubmission?.consentVersion ?? '1.0';
+  const submission = userConfig.hokusai?.dataSubmission;
+  const repoVersion = repoConfig.hokusai?.dataSubmission?.consentVersion ?? '1.0';
 
   console.log('Hokasai Data Submission Status:\n');
 
   if (!submission || !submission.enabled) {
     console.log('  Status:   Disabled');
-    console.log('  To enable, run: wavemill hokasai enable');
+    console.log('  To enable, run: wavemill hokusai enable');
   } else {
     console.log('  Status:         Enabled');
     console.log(`  Consented at:   ${submission.consentedAt || 'unknown'}`);
@@ -124,7 +124,7 @@ async function handleStatus(): Promise<void> {
     console.log(`  Valid:          ${isValid ? 'Yes' : 'No (re-consent may be needed)'}`);
   }
 
-  console.log('\nTo disable, run: wavemill hokasai disable');
+  console.log('\nTo disable, run: wavemill hokusai disable');
 }
 
 /**

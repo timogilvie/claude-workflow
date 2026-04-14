@@ -21,9 +21,9 @@ import {
 } from './hokusai-consent.ts';
 
 /**
- * Test suite for hokasai-consent module
+ * Test suite for hokusai-consent module
  */
-describe('hokasai-consent', () => {
+describe('hokusai-consent', () => {
   // ────────────────────────────────────────────────────────────────
   // Consent Validation Tests
   // ────────────────────────────────────────────────────────────────

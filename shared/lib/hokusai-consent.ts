@@ -7,7 +7,7 @@
  * - Interactive consent prompting with disclosure text
  * - Recording and revoking consent with timestamps
  *
- * @module hokasai-consent
+ * @module hokusai-consent
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -218,16 +218,16 @@ For more details, visit: https://hokusai.dev/privacy
 export async function recordConsent(consentVersion: string, configDir?: string): Promise<void> {
   const config = await loadUserConfig(configDir);
 
-  if (!config.hokasai) {
-    config.hokasai = {};
+  if (!config.hokusai) {
+    config.hokusai = {};
   }
-  if (!config.hokasai.dataSubmission) {
-    config.hokasai.dataSubmission = {};
+  if (!config.hokusai.dataSubmission) {
+    config.hokusai.dataSubmission = {};
   }
 
-  config.hokasai.dataSubmission.enabled = true;
-  config.hokasai.dataSubmission.consentedAt = new Date().toISOString();
-  config.hokasai.dataSubmission.consentVersion = consentVersion;
+  config.hokusai.dataSubmission.enabled = true;
+  config.hokusai.dataSubmission.consentedAt = new Date().toISOString();
+  config.hokusai.dataSubmission.consentVersion = consentVersion;
 
   await saveUserConfig(config, configDir);
 }
@@ -244,15 +244,15 @@ export async function recordConsent(consentVersion: string, configDir?: string):
 export async function revokeConsent(configDir?: string): Promise<void> {
   const config = await loadUserConfig(configDir);
 
-  if (!config.hokasai) {
-    config.hokasai = {};
+  if (!config.hokusai) {
+    config.hokusai = {};
   }
-  if (!config.hokasai.dataSubmission) {
-    config.hokasai.dataSubmission = {};
+  if (!config.hokusai.dataSubmission) {
+    config.hokusai.dataSubmission = {};
   }
 
-  config.hokasai.dataSubmission.enabled = false;
-  config.hokasai.dataSubmission.consentedAt = null;
+  config.hokusai.dataSubmission.enabled = false;
+  config.hokusai.dataSubmission.consentedAt = null;
 
   await saveUserConfig(config, configDir);
 }
@@ -289,13 +289,13 @@ export async function ensureConsent(
   try {
     // Load repo config to get consent version requirement
     const repoConfig = loadWavemillConfig(repoDir);
-    const repoConsentVersion = repoConfig.hokasai?.dataSubmission?.consentVersion ?? '1.0';
+    const repoConsentVersion = repoConfig.hokusai?.dataSubmission?.consentVersion ?? '1.0';
 
     // Load user config
     const userConfig = await loadUserConfig(configDir);
 
     // If submission is not enabled, no prompt needed - return false
-    const submission = userConfig.hokasai?.dataSubmission;
+    const submission = userConfig.hokusai?.dataSubmission;
     if (!submission?.enabled) {
       return false;
     }
@@ -344,7 +344,7 @@ export async function checkConsentQuiet(
 ): Promise<boolean> {
   try {
     const repoConfig = loadWavemillConfig(repoDir);
-    const repoConsentVersion = repoConfig.hokasai?.dataSubmission?.consentVersion ?? '1.0';
+    const repoConsentVersion = repoConfig.hokusai?.dataSubmission?.consentVersion ?? '1.0';
     const userConfig = await loadUserConfig(configDir);
     return isConsentValid(userConfig, repoConsentVersion);
   } catch {
