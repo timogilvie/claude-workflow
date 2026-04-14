@@ -1843,6 +1843,14 @@ is_transient_error() {
     return 0
   fi
 
+  if printf '%s\n' "$detail" | grep -Eiq '(unexpected termination|unexpected_eof|apply_patch.*failed|verification failed)'; then
+    return 0
+  fi
+
+  if printf '%s\n' "$detail" | grep -Eiq '(codex exited with code [1-9]|missing_instructions|empty_instructions)'; then
+    return 0
+  fi
+
   if printf '%s\n' "$detail" | grep -Eiq '(401|403|400|unauthorized|forbidden|bad request|invalid.*key)'; then
     return 1
   fi
@@ -1923,6 +1931,7 @@ handle_agent_error_recovery() {
   local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
   local retry_file hook_state error_detail hook_ts now staleness retry_count last_retry_ts backoff_delay
   local time_since_last_retry time_since_error next_retry max_retries
+  local stderr_log stderr_tail
 
   retry_file="$(retry_state_file "$SESSION" "$issue")"
   [[ -f "$hook_file" ]] || return 0
@@ -1930,6 +1939,17 @@ handle_agent_error_recovery() {
   hook_state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || echo "")
   error_detail=$(jq -r '.detail // empty' "$hook_file" 2>/dev/null || echo "")
   hook_ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo "0")
+
+  if [[ "$error_detail" == "unexpected termination" || "$error_detail" == unexpected\ termination\ \(* || "$error_detail" == "unexpected_eof" ]]; then
+    stderr_log="/tmp/${SESSION}-${issue}-codex-stderr.log"
+    if [[ -s "$stderr_log" ]]; then
+      stderr_tail="$(tail -5 "$stderr_log" | tr '\n' ' ' | head -c 200)"
+      if [[ -n "$stderr_tail" ]]; then
+        error_detail="$stderr_tail"
+        log "debug" "  Codex stderr: $error_detail"
+      fi
+    fi
+  fi
 
   now="$(date +%s)"
   staleness=$(( now - hook_ts ))

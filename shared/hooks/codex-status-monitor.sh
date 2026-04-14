@@ -71,6 +71,7 @@ if [[ "$last_state" != "error" ]]; then
   if [[ "$completed" == "true" ]]; then
     wavemill_hook_write "idle" "stream_end" "" "codex"
   else
-    wavemill_hook_write "error" "unexpected_eof" "unexpected termination" "codex"
+    eof_detail="unexpected termination (last_state=${last_state:-none})"
+    wavemill_hook_write "error" "unexpected_eof" "$eof_detail" "codex"
   fi
 fi

@@ -84,6 +84,7 @@ RECOVERY_FUNCS="$TEST_TMP/recovery-funcs.sh"
     increment_retry_count \
     reset_retry_count \
     get_backoff_delay \
+    handle_agent_error_recovery \
     transient_error_recovery_pending \
   ; do
     extract_function "$MONITOR_BODY" "$fn"
@@ -98,6 +99,9 @@ echo "=== Error Recovery Helpers ==="
 
 check_true "classifies 500 as transient" is_transient_error 'API Error: 500 Internal server error'
 check_true "classifies 429 as transient" is_transient_error 'Rate limit: 429 Too Many Requests'
+check_true "classifies codex eof as transient" is_transient_error 'unexpected termination (last_state=working)'
+check_true "classifies apply_patch verification failures as transient" is_transient_error 'apply_patch verification failed: Failed to find expected lines'
+check_true "classifies missing instructions as transient" is_transient_error 'missing_instructions'
 check_false "classifies 401 as permanent" is_transient_error 'API Error: 401 Unauthorized'
 check_false "classifies empty detail as permanent" is_transient_error ''
 
@@ -201,6 +205,20 @@ check_true "busy agent resume succeeds" agent_resume_after_error "sess" "HOK-3" 
 check_true "busy agent gets continuation prompt" grep -q 'Please continue working on the task from where you left off' "$TMUX_LOG"
 check_false "busy agent does not inject shell resume command" grep -q 'claude --resume' "$TMUX_LOG"
 
+TMUX_LOG="$TEST_TMP/tmux-codex-relaunch.log"
+TMUX_CURRENT_COMMAND="bash"
+TMUX_CHILD_COUNT=0
+export TMUX_LOG TMUX_CURRENT_COMMAND TMUX_CHILD_COUNT
+: > "$TMUX_LOG"
+mkdir -p /tmp/sess-HOK-3-instructions-dir 2>/dev/null || true
+printf 'continue\n' > /tmp/sess-HOK-3-instructions.txt
+check_true "codex shell resume relaunches autonomous command" agent_resume_after_error "sess" "HOK-3" "codex"
+check_true "codex relaunch uses codex exec" grep -q 'codex exec' "$TMUX_LOG"
+check_true "codex relaunch captures stderr" grep -q "2>'/tmp/sess-HOK-3-codex-stderr.log'" "$TMUX_LOG"
+
+rm -f /tmp/sess-HOK-404-instructions.txt
+check_false "codex shell resume fails without instructions" agent_resume_after_error "sess" "HOK-404" "codex"
+
 echo ""
 echo "=== Hook Scripts ==="
 
@@ -224,7 +242,7 @@ WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_CRASH_ISSUE" \
 {"type":"response_item","payload":{"type":"function_call","function":{"name":"read_file"}}}
 EOF
 check_eq "codex unexpected eof writes error state" "error" "$(jq -r '.state' "/tmp/wavemill-${TEST_SESSION}-${CODEX_CRASH_ISSUE}.hook")"
-check_eq "codex unexpected eof writes termination detail" "unexpected termination" "$(jq -r '.detail' "/tmp/wavemill-${TEST_SESSION}-${CODEX_CRASH_ISSUE}.hook")"
+check_eq "codex unexpected eof writes termination detail" "unexpected termination (last_state=working)" "$(jq -r '.detail' "/tmp/wavemill-${TEST_SESSION}-${CODEX_CRASH_ISSUE}.hook")"
 
 CODEX_COMPLETE_ISSUE="HOK-8"
 WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_COMPLETE_ISSUE" \
@@ -240,6 +258,28 @@ WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_EMPTY_ISSUE" \
   bash "$REPO_DIR/shared/hooks/codex-status-monitor.sh" < /dev/null
 check_eq "codex empty stream writes error state" "error" "$(jq -r '.state' "/tmp/wavemill-${TEST_SESSION}-${CODEX_EMPTY_ISSUE}.hook")"
 check_eq "codex empty stream writes unexpected eof event" "unexpected_eof" "$(jq -r '.event' "/tmp/wavemill-${TEST_SESSION}-${CODEX_EMPTY_ISSUE}.hook")"
+check_eq "codex empty stream includes last state in eof detail" "unexpected termination (last_state=none)" "$(jq -r '.detail' "/tmp/wavemill-${TEST_SESSION}-${CODEX_EMPTY_ISSUE}.hook")"
+
+echo ""
+echo "=== Recovery Flow ==="
+
+agent_resume_after_error() {
+  printf '%s|%s|%s\n' "$1" "$2" "$3" > "$TEST_TMP/recovery-resume.txt"
+}
+
+RECOVERY_ISSUE="HOK-10"
+cat > "/tmp/wavemill-${TEST_SESSION}-${RECOVERY_ISSUE}.hook" <<EOF
+{"state":"error","detail":"unexpected termination (last_state=working)","timestamp":$(( $(date +%s) - 31 ))}
+EOF
+cat > "/tmp/${TEST_SESSION}-${RECOVERY_ISSUE}-codex-stderr.log" <<'EOF'
+2026-04-14T16:39:27.699574Z ERROR codex_core::tools::router: apply_patch verification failed
+EOF
+cat > "$(retry_state_file "$TEST_SESSION" "$RECOVERY_ISSUE")" <<EOF
+{"count":0,"timestamp":$(( $(date +%s) - 31 ))}
+EOF
+handle_agent_error_recovery "$RECOVERY_ISSUE" "codex"
+check_eq "recovery relaunches codex after eof" "${TEST_SESSION}|${RECOVERY_ISSUE}|codex" "$(cat "$TEST_TMP/recovery-resume.txt")"
+check_eq "recovery increments retry count after relaunch" "1" "$(get_retry_count "$TEST_SESSION" "$RECOVERY_ISSUE")"
 
 echo ""
 echo "=== Generic Process Monitor ==="

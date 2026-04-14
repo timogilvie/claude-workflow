@@ -1361,6 +1361,72 @@ else
   rm -f "$prompt_file" "$launcher_file"
 fi
 
+echo ""
+echo "=== Autonomous Launcher Validation ==="
+
+if [[ ! -f "$ADAPTER_LIB" ]]; then
+  fail "agent-adapters.sh not found"
+else
+  TOOLS_DIR="$REPO_DIR/tools"
+  export TOOLS_DIR REPO_DIR
+  # shellcheck source=/dev/null
+  source "$ADAPTER_LIB"
+
+  tmux_log="/tmp/check-shell-autonomous-$$.log"
+  tmux() {
+    if [[ "${1:-}" == "send-keys" ]]; then
+      printf '%s\n' "$*" >> "$tmux_log"
+    fi
+  }
+
+  launch_session="check-shell-auto-$$"
+  instr_file="/tmp/${launch_session}-instructions.txt"
+  hook_file="/tmp/wavemill-${launch_session}-HOK-2001.hook"
+  stderr_log="/tmp/${launch_session}-HOK-2001-codex-stderr.log"
+  trap 'rm -f "$instr_file" "$hook_file" "$stderr_log" "$tmux_log"' EXIT
+
+  rm -f "$instr_file" "$hook_file" "$stderr_log" "$tmux_log"
+  if agent_launch_autonomous "$launch_session" "window" "$instr_file" "codex" "gpt-5.4" "HOK-2001"; then
+    fail "autonomous launcher succeeded without instructions"
+  elif [[ -f "$hook_file" ]] && [[ "$(jq -r '.event' "$hook_file")" == "missing_instructions" ]]; then
+    pass "autonomous launcher reports missing instructions via hook"
+  else
+    fail "autonomous launcher did not report missing instructions"
+  fi
+
+  : > "$instr_file"
+  rm -f "$hook_file"
+  if agent_launch_autonomous "$launch_session" "window" "$instr_file" "codex" "gpt-5.4" "HOK-2001"; then
+    fail "autonomous launcher succeeded with empty instructions"
+  elif [[ -f "$hook_file" ]] && [[ "$(jq -r '.event' "$hook_file")" == "empty_instructions" ]]; then
+    pass "autonomous launcher reports empty instructions via hook"
+  else
+    fail "autonomous launcher did not report empty instructions"
+  fi
+
+  printf 'test\n' > "$instr_file"
+  rm -f "$tmux_log"
+  if agent_launch_autonomous "$launch_session" "window" "$instr_file" "codex" "gpt-5.4" "HOK-2001"; then
+    if grep -q "2>'$stderr_log'" "$tmux_log"; then
+      pass "autonomous launcher captures codex stderr"
+    else
+      fail "autonomous launcher did not wire codex stderr capture"
+    fi
+  else
+    fail "autonomous launcher failed with valid instructions"
+  fi
+
+  missing_prompt="/tmp/${launch_session}-missing-prompt.txt"
+  rm -f "$missing_prompt"
+  if agent_launch_interactive "$launch_session" "window" "$missing_prompt" "codex" "gpt-5.4" "" ""; then
+    fail "interactive launcher succeeded without prompt file"
+  else
+    pass "interactive launcher rejects missing prompt file"
+  fi
+
+  rm -f "$instr_file" "$hook_file" "$stderr_log" "$tmux_log" "$missing_prompt"
+fi
+
 # ============================================================================
 # TEST 12A: Hook adapter files
 # ============================================================================

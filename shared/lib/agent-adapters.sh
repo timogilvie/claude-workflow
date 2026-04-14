@@ -98,6 +98,20 @@ agent_write_initial_status() {
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 }
 
+agent_write_error_status() {
+  local session="$1"
+  local issue="$2"
+  local event="$3"
+  local detail="$4"
+  local hooks_dir
+
+  [[ -n "$session" && -n "$issue" && -n "$event" ]] || return 0
+
+  hooks_dir="$(agent_hooks_dir)"
+  env WAVEMILL_SESSION="$session" WAVEMILL_ISSUE="$issue" \
+    bash -c "source '$hooks_dir/wavemill-hook-protocol.sh' && wavemill_hook_write 'error' '$event' '$detail' 'codex'"
+}
+
 # ============================================================================
 # AGENT VALIDATION
 # ============================================================================
@@ -865,6 +879,18 @@ agent_launch_autonomous() {
   hooks_dir="$(agent_hooks_dir)"
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
 
+  if [[ ! -f "$instr_file" ]]; then
+    _agent_log_warn "Instructions file missing: $instr_file"
+    agent_write_error_status "$session" "$issue" "missing_instructions" "Instructions file not found: $instr_file"
+    return 1
+  fi
+
+  if [[ ! -s "$instr_file" ]]; then
+    _agent_log_warn "Instructions file empty: $instr_file"
+    agent_write_error_status "$session" "$issue" "empty_instructions" "Instructions file is empty: $instr_file"
+    return 1
+  fi
+
   local model_flag=""
   if [[ -n "$model" ]]; then
     model_flag=" --model $model"
@@ -878,7 +904,8 @@ agent_launch_autonomous() {
       tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
       ;;
     codex)
-      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid'; codex exec${model_flag} --json --dangerously-bypass-approvals-and-sandbox - < '$instr_file' | '$hooks_dir/codex-status-monitor.sh'; codex_rc=\${PIPESTATUS[0]}; monitor_rc=\${PIPESTATUS[1]}; if [[ \$codex_rc -ne 0 && -n '$issue' ]]; then source '$hooks_dir/wavemill-hook-protocol.sh'; wavemill_hook_write 'error' 'pipeline_exit' \"codex exited with code \$codex_rc\" 'codex'; fi; echo \"[wavemill] Agent exited (codex=\$codex_rc monitor=\$monitor_rc)\"" C-m
+      local stderr_log="/tmp/${session}-${issue}-codex-stderr.log"
+      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid'; codex exec${model_flag} --json --dangerously-bypass-approvals-and-sandbox - < '$instr_file' 2>'$stderr_log' | '$hooks_dir/codex-status-monitor.sh'; codex_rc=\${PIPESTATUS[0]}; monitor_rc=\${PIPESTATUS[1]}; if [[ \$codex_rc -ne 0 && -n '$issue' ]]; then source '$hooks_dir/wavemill-hook-protocol.sh'; wavemill_hook_write 'error' 'pipeline_exit' \"codex exited with code \$codex_rc\" 'codex'; fi; echo \"[wavemill] Agent exited (codex=\$codex_rc monitor=\$monitor_rc)\"" C-m
       ;;
     *)
       # Generic fallback: start the agent, then paste instructions via tmux buffer.
@@ -954,7 +981,13 @@ agent_resume_after_error() {
         fi
         ;;
       codex)
-        tmux send-keys -t "$target" "$resume_prompt" C-m
+        local instr_file="/tmp/${session}-${issue}-instructions.txt"
+        if [[ ! -s "$instr_file" ]]; then
+          _agent_log_warn "Cannot relaunch codex for $issue: instructions file missing or empty: $instr_file"
+          return 1
+        fi
+        _agent_log_warn "Relaunching codex for $issue after transient failure"
+        agent_launch_autonomous "$session" "$window" "$instr_file" "codex" "" "$issue"
         ;;
       *)
         tmux send-keys -t "$target" "$resume_prompt" C-m
@@ -994,6 +1027,11 @@ agent_launch_interactive() {
   local issue="${8:-}"
   local dashboard_pid
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
+
+  if [[ ! -s "$prompt_file" ]]; then
+    _agent_log_warn "Prompt file missing or empty: $prompt_file"
+    return 1
+  fi
 
   if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
     local fallback_model=""
