@@ -53,6 +53,11 @@ run_render() {
       esac
     }
 
+    window_index() {
+      local win="$1"
+      jq -r --arg win "$win" '.pane[$win] // "—"' "$behavior_file"
+    }
+
     agent_hook_detail() {
       local issue="$1"
       jq -r --arg issue "$issue" '.hook[$issue] // empty' "$behavior_file"
@@ -134,6 +139,11 @@ cat > "$BEHAVIOR_ONE" <<'EOF'
   "hook": {
     "HOK-1221": "Waiting on tests"
   },
+  "pane": {
+    "HOK-1220-plan-task": "3",
+    "HOK-1221-waiting-task": "7",
+    "HOK-1222-active-task": "12"
+  },
   "reported": {},
   "planning": {
     "plan-task": "awaiting_approval"
@@ -154,6 +164,15 @@ if grep -q '📥 INBOX (2)' "$OUTPUT_ONE" && grep -q '⚡ ACTIVE (1)' "$OUTPUT_O
   pass "renders inbox and active sections with counts"
 else
   fail "missing inbox or active section counts"
+fi
+
+if grep -q 'ISSUE       PANE  TASK' "$OUTPUT_ONE" \
+  && grep -Eq 'HOK-1220 +3 +plan-task' "$OUTPUT_ONE" \
+  && grep -Eq 'HOK-1221 +7 +waiting-task' "$OUTPUT_ONE" \
+  && grep -Eq 'HOK-1222 +12 +active-task' "$OUTPUT_ONE"; then
+  pass "renders pane column and per-task tmux window indices"
+else
+  fail "pane column or window indices are missing"
 fi
 
 if [[ $(grep -n '📥 INBOX' "$OUTPUT_ONE" | cut -d: -f1) -lt $(grep -n '⚡ ACTIVE' "$OUTPUT_ONE" | cut -d: -f1) ]]; then
@@ -177,6 +196,12 @@ else
   fail "active row is missing expected PR or status details"
 fi
 
+if grep -q 'Ctrl+B <PANE>: switch task' "$OUTPUT_ONE"; then
+  pass "footer advertises pane-number switching"
+else
+  fail "footer is missing pane-number switching hint"
+fi
+
 STATE_FILE_TWO="$TMP_DIR/state-two.json"
 cat > "$STATE_FILE_TWO" <<EOF
 {
@@ -196,6 +221,9 @@ EOF
 BEHAVIOR_TWO="$TMP_DIR/behavior-two.json"
 cat > "$BEHAVIOR_TWO" <<'EOF'
 {
+  "pane": {
+    "HOK-1222-active-task": "12"
+  },
   "hook": {},
   "reported": {},
   "planning": {},

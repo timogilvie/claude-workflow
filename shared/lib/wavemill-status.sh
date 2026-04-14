@@ -236,21 +236,27 @@ is_actionable_state() {
   esac
 }
 
+window_index() {
+  local win="$1"
+  # Windows can disappear between discovery and render; keep the dashboard stable.
+  tmux display-message -t "$SESSION:$win" -p '#{window_index}' 2>/dev/null || echo "—"
+}
+
 render_section_header() {
   local title="$1"
   local count="$2"
   printf "\n${B}%s${N} ${D}(%s)${N}\n" "$title" "$count" >> "$FRAME"
-  printf "${D}%-10s  %-22s  %6s  %-12s  %-11s  %s${N}\n" \
-    "ISSUE" "TASK" "TIME" "PHASE" "AGENT" "PR" >> "$FRAME"
+  printf "${D}%-10s  %4s  %-22s  %6s  %-12s  %-11s  %s${N}\n" \
+    "ISSUE" "PANE" "TASK" "TIME" "PHASE" "AGENT" "PR" >> "$FRAME"
   printf "${D}%s${N}\n" \
-    "──────────────────────────────────────────────────────────────────────────" >> "$FRAME"
+    "────────────────────────────────────────────────────────────────────────────────" >> "$FRAME"
 }
 
 # Render one task row and any optional follow-up detail line.
 render_task_row() {
-  local issue="$1" slug="$2" branch="$3" worktree="$4"
-  local task_status="$5" task_phase="$6" state_pr="$7" agent_state="$8"
-  local t st_str pr_str pr_info checks phase_str plan_status reported ds
+  local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
+  local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
+  local t st_str pr_str pr_info checks phase_str plan_status reported ds pane
 
   t=$(elapsed "$worktree")
   reported=""
@@ -313,9 +319,10 @@ render_task_row() {
 
   ds="$slug"
   (( ${#ds} > 22 )) && ds="${ds:0:19}..."
+  pane=$(window_index "$win")
 
-  printf "%-10s  %-22s  %6s  %-12b  %-11b  %b\n" \
-    "$issue" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
+  printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b\n" \
+    "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
   if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
     reported="Plan ready — waiting for approval"
@@ -324,7 +331,7 @@ render_task_row() {
     working|waiting|done) reported="" ;;
   esac
   if [[ -n "$reported" ]]; then
-    printf "${D}%10s  └─ %s${N}\n" "" "$reported" >> "$FRAME"
+    printf "${D}%10s  %4s  └─ %s${N}\n" "" "" "$reported" >> "$FRAME"
   fi
 }
 
@@ -335,8 +342,8 @@ render_inbox_section() {
 
   render_section_header "📥 INBOX" "$count"
   for task_data in "${inbox_tasks[@]}"; do
-    IFS='|' read -r issue slug branch worktree task_status task_phase state_pr agent_state <<<"$task_data"
-    render_task_row "$issue" "$slug" "$branch" "$worktree" "$task_status" "$task_phase" "$state_pr" "$agent_state"
+    IFS='|' read -r issue slug branch worktree win task_status task_phase state_pr agent_state <<<"$task_data"
+    render_task_row "$issue" "$slug" "$branch" "$worktree" "$win" "$task_status" "$task_phase" "$state_pr" "$agent_state"
   done
 }
 
@@ -351,8 +358,8 @@ render_active_section() {
   fi
 
   for task_data in "${active_tasks[@]}"; do
-    IFS='|' read -r issue slug branch worktree task_status task_phase state_pr agent_state <<<"$task_data"
-    render_task_row "$issue" "$slug" "$branch" "$worktree" "$task_status" "$task_phase" "$state_pr" "$agent_state"
+    IFS='|' read -r issue slug branch worktree win task_status task_phase state_pr agent_state <<<"$task_data"
+    render_task_row "$issue" "$slug" "$branch" "$worktree" "$win" "$task_status" "$task_phase" "$state_pr" "$agent_state"
   done
 }
 
@@ -414,7 +421,7 @@ render_dashboard() {
       fi
 
       classification=$(is_actionable_state "$agent_state")
-      task_data="$issue|$slug|$branch|$worktree|$task_status|$task_phase|$state_pr|$agent_state"
+      task_data="$issue|$slug|$branch|$worktree|$win|$task_status|$task_phase|$state_pr|$agent_state"
 
       if [[ "$classification" == "actionable" ]]; then
         inbox_tasks+=("$task_data")
@@ -427,7 +434,7 @@ render_dashboard() {
     render_active_section
   fi
 
-  printf "\n${D}Refreshes every ${REFRESH}s │ Ctrl+B W: switch windows │ Ctrl+B N: next done${N}\n" >> "$FRAME"
+  printf "\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}\n" >> "$FRAME"
 }
 
 run_dashboard() {
