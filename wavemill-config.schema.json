@@ -437,6 +437,28 @@
           "default": [],
           "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data."
         },
+        "availableModels": {
+          "type": "object",
+          "description": "Per-stage model availability lists. Stages without a list fall back to router.models.",
+          "properties": {
+            "planner": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Models available for the planning stage."
+            },
+            "coder": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Models available for the coding stage."
+            },
+            "reviewer": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Models available for the review stage."
+            }
+          },
+          "additionalProperties": false
+        },
         "defaultAgent": {
           "type": "string",
           "default": "claude",

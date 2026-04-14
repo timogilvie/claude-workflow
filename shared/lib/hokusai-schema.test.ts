@@ -373,6 +373,41 @@ describe('hokusai-schema', () => {
         reviewer_models: ['gpt-5.4'],
       });
     });
+
+    it('falls back stage-by-stage to a shared model list when some overrides are missing', () => {
+      const result = toHokusaiInput(
+        {} as Partial<TaskDescriptor>,
+        undefined,
+        {
+          availableModels: ['shared-a', 'shared-b'],
+          plannerModels: ['planner-a'],
+          reviewerModels: [],
+        },
+        'task-2',
+      );
+
+      assert.deepEqual(result.available_models, {
+        planner_models: ['planner-a'],
+        coder_models: ['shared-a', 'shared-b'],
+        reviewer_models: ['shared-a', 'shared-b'],
+      });
+    });
+
+    it('uses descriptor constraints when no overrides are provided', () => {
+      const result = toHokusaiInput(makeDescriptor({
+        constraints: {
+          max_cost_usd: 12.5,
+          models_available: ['shared-from-descriptor'],
+          objective: 'balanced',
+        },
+      }));
+
+      assert.deepEqual(result.available_models, {
+        planner_models: ['shared-from-descriptor'],
+        coder_models: ['shared-from-descriptor'],
+        reviewer_models: ['shared-from-descriptor'],
+      });
+    });
   });
 
   describe('toHokusaiSubmission', () => {
