@@ -882,20 +882,29 @@ agent_launch_autonomous() {
       local launcher_cmd=""
       cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
+set -o pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 stderr_log="/tmp/wavemill-${issue}-codex-stderr.log"
+stdout_log="/tmp/wavemill-${issue}-codex-stdout.jsonl"
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
-CODEX_STDERR_LOG="\$stderr_log" codex exec${model_flag} --json --dangerously-bypass-approvals-and-sandbox - < '$instr_file' 2>"\$stderr_log" | CODEX_STDERR_LOG="\$stderr_log" '$hooks_dir/codex-status-monitor.sh'
-codex_rc=\${PIPESTATUS[0]}
-monitor_rc=\${PIPESTATUS[1]}
+: > "\$stdout_log"
+CODEX_STDERR_LOG="\$stderr_log" codex exec${model_flag} --json --dangerously-bypass-approvals-and-sandbox - < '$instr_file' 2>"\$stderr_log" | tee "\$stdout_log" | CODEX_STDERR_LOG="\$stderr_log" '$hooks_dir/codex-status-monitor.sh'
+codex_rc=\${PIPESTATUS[0]:-}
+tee_rc=\${PIPESTATUS[1]:-}
+monitor_rc=\${PIPESTATUS[2]:-}
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
-  printf '%s\n' "[wavemill] codex pipeline exit codes codex=\$codex_rc monitor=\$monitor_rc issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+  printf '%s\n' "[wavemill] codex pipeline exit codes codex=\${codex_rc:-missing} tee=\${tee_rc:-missing} monitor=\${monitor_rc:-missing} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
 fi
-if [[ \$codex_rc -ne 0 ]]; then
+if [[ -n '$issue' && "\$codex_rc" -eq 0 && ! -s "\$stdout_log" ]]; then
+  source '$hooks_dir/wavemill-hook-protocol.sh'
+  wavemill_hook_write 'error' 'no_codex_output' "codex exited 0 without JSON output" 'codex'
+  echo "[wavemill] codex emitted no JSON events; see \$stdout_log and \$stderr_log"
+fi
+if [[ "\$codex_rc" -ne 0 ]]; then
   if [[ -n '$issue' ]]; then
     source '$hooks_dir/wavemill-hook-protocol.sh'
     wavemill_hook_write 'error' 'pipeline_exit' "codex exited with code \$codex_rc" 'codex'
@@ -907,7 +916,7 @@ if [[ \$codex_rc -ne 0 ]]; then
     echo "[wavemill] codex stderr log empty: \$stderr_log"
   fi
 fi
-echo "[wavemill] Agent exited (codex=\$codex_rc monitor=\$monitor_rc)"
+echo "[wavemill] Agent exited (codex=\${codex_rc:-missing} tee=\${tee_rc:-missing} monitor=\${monitor_rc:-missing})"
 LAUNCHEOF
       chmod +x "$launcher"
       printf -v launcher_cmd '%q' "$launcher"

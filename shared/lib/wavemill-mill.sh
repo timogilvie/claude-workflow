@@ -4791,8 +4791,9 @@ monitor_issue_state() {
           ;;
 
         executing)
-          # Legacy autonomous mode - no phase transitions
-          if tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+          # Legacy autonomous mode - treat an idle shell as exited so stalled
+          # autonomous panes do not occupy a slot forever.
+          if ! _pane_is_dead_or_idle "$SESSION:$WIN"; then
             set_window_attention_state "$WIN" "clear"
             active_count=$((active_count + 1))
             return 0

@@ -66,6 +66,42 @@ startup_step() {
   startup_log "  $message"
 }
 
+write_stage_result_local() {
+  local feature_dir="$1" stage="$2" status="$3"
+  local agent="${4:-}" model="${5:-}" notes="${6:-}"
+  local result_file="$feature_dir/.${stage}-result.json"
+  local now started_at finished_at tmp
+
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  mkdir -p "$feature_dir"
+
+  started_at="$now"
+  if [[ -f "$result_file" ]]; then
+    local prev_start
+    prev_start=$(jq -r '.startedAt // empty' "$result_file" 2>/dev/null || echo "")
+    [[ -n "$prev_start" ]] && started_at="$prev_start"
+  fi
+
+  finished_at="null"
+  if [[ "$status" == "completed" || "$status" == "aborted" || "$status" == "failed" ]]; then
+    finished_at="\"$now\""
+  fi
+
+  tmp=$(mktemp) || return 1
+  cat > "$tmp" <<EOF
+{
+  "stage": "$stage",
+  "status": "$status",
+  "startedAt": "$started_at",
+  "finishedAt": $finished_at,
+  "agent": "$agent",
+  "model": "$model",
+  "notes": "$notes"
+}
+EOF
+  mv "$tmp" "$result_file"
+}
+
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
@@ -382,6 +418,8 @@ $details_context"
         model: $model,
         notes: ""
       }' > "$feature_dir/.planning-result.json"
+  else
+    write_stage_result_local "$feature_dir" "coding" "running" "$task_agent" "${coder_model:-}" "Autonomous launch started" || true
   fi
   startup_step "[4/7] Writing task artifacts...  ✓"
 
@@ -391,7 +429,12 @@ $details_context"
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     return 1
   fi
-  if ! set_task_phase_local "$issue" "$INITIAL_PHASE"; then
+  local persisted_phase="$INITIAL_PHASE"
+  if [[ "$PLANNING_MODE" != "interactive" ]]; then
+    persisted_phase="coding"
+  fi
+
+  if ! set_task_phase_local "$issue" "$persisted_phase"; then
     remove_task_state "$issue" >/dev/null 2>&1 || true
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED at step [5/7]: setting phase"
@@ -434,7 +477,7 @@ $details_context"
   startup_step "[7/7] Setting Linear → In Progress... ✓"
 
   printf '%s\n' "$issue" >> "$LAUNCHED_ISSUES_FILE"
-  startup_log "✓ $issue launched (${coder_model:-$planner_model}, phase: $INITIAL_PHASE)"
+  startup_log "✓ $issue launched (${coder_model:-$planner_model}, phase: $persisted_phase)"
   return 0
 }
 
