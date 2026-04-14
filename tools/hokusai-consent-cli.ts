@@ -13,26 +13,27 @@
 
 import { runTool } from '../shared/lib/tool-runner.ts';
 import {
-  ensureConsent,
+  promptConsent,
+  recordConsent,
   checkConsentQuiet,
   loadUserConfig,
   isConsentValid,
   revokeConsent,
-} from '../shared/lib/hokasai-consent.ts';
+} from '../shared/lib/hokusai-consent.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 
 runTool({
-  name: 'hokasai-consent-cli',
-  description: 'Manage Hokasai data submission consent',
+  name: 'hokusai-consent-cli',
+  description: 'Manage Hokusai data submission consent',
   options: {
     quiet: { type: 'boolean', description: 'Suppress output (used by mill)' },
   },
   examples: [
-    'npx tsx tools/hokasai-consent-cli.ts enable',
-    'npx tsx tools/hokasai-consent-cli.ts disable',
-    'npx tsx tools/hokasai-consent-cli.ts status',
-    'npx tsx tools/hokasai-consent-cli.ts check --quiet',
+    'npx tsx tools/hokusai-consent-cli.ts enable',
+    'npx tsx tools/hokusai-consent-cli.ts disable',
+    'npx tsx tools/hokusai-consent-cli.ts status',
+    'npx tsx tools/hokusai-consent-cli.ts check --quiet',
   ],
   async run({ positional, args }) {
     const subcommand = positional[0];
@@ -58,7 +59,7 @@ runTool({
 
         default:
           console.error(`Unknown subcommand: ${subcommand}`);
-          console.error('Usage: hokasai-consent-cli <enable|disable|status|check>');
+          console.error('Usage: hokusai-consent-cli <enable|disable|status|check>');
           process.exitCode = 1;
       }
     } catch (err) {
@@ -73,11 +74,17 @@ runTool({
  * Enable data submission (interactive with consent prompt)
  */
 async function handleEnable(): Promise<void> {
-  console.log('Enabling Hokasai data submission...\n');
+  console.log('Enabling Hokusai data submission...\n');
 
-  const accepted = await ensureConsent();
+  // Get repo consent version
+  const repoConfig = loadWavemillConfig();
+  const repoConsentVersion = repoConfig.hokusai?.dataSubmission?.consentVersion ?? '1.0';
+
+  // Show consent prompt
+  const accepted = await promptConsent();
 
   if (accepted) {
+    await recordConsent(repoConsentVersion);
     console.log('\n✓ Data submission enabled. Thank you for contributing!');
   } else {
     console.log('\n✗ Data submission not enabled (consent declined).');

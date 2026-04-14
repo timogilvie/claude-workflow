@@ -569,9 +569,9 @@ export function getPermissionsConfig(repoDir?: string): PermissionsConfig {
 }
 
 /**
- * Get the Hokasai data submission config section.
+ * Get the Hokusai data submission config section.
  * Returns empty object if not configured.
  */
 export function getHokusaiSubmissionConfig(repoDir?: string): HokusaiDataSubmissionConfig {
-  return loadWavemillConfig(repoDir).hokasai?.dataSubmission || {};
+  return loadWavemillConfig(repoDir).hokusai?.dataSubmission || {};
 }
