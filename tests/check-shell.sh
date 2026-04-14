@@ -397,7 +397,8 @@ else
   fi
 
   if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$current_phase" == "review" \]\]; then' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$_CFG_READY_ENABLED" == "true" \]\]; then' \
+    && (echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$_CFG_READY_ENABLED" == "true" \]\]; then' \
+      || echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\${_CFG_READY_ENABLED:-false}" == "true" \]\]; then') \
     && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'set_task_phase "\$ISSUE" "ready"' \
     && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'launch_ready_phase "\$ISSUE" "\$SLUG" "\$title" "\${WORKTREE_ROOT}/\${SLUG}" "\$BRANCH" "\$BASE_BRANCH" "\$PR"'; then
     pass "monitor transitions PR-backed review tasks into ready before merge checks"

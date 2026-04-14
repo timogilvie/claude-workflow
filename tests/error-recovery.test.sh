@@ -201,6 +201,22 @@ check_true "busy agent resume succeeds" agent_resume_after_error "sess" "HOK-3" 
 check_true "busy agent gets continuation prompt" grep -q 'Please continue working on the task from where you left off' "$TMUX_LOG"
 check_false "busy agent does not inject shell resume command" grep -q 'claude --resume' "$TMUX_LOG"
 
+AUTONOMOUS_ISSUE="HOK-10"
+AUTONOMOUS_INSTR="$TEST_TMP/autonomous-instructions.txt"
+AUTONOMOUS_LAUNCHER="/tmp/sess-${AUTONOMOUS_ISSUE}-autonomous-launcher.sh"
+printf 'test instructions\n' > "$AUTONOMOUS_INSTR"
+rm -f "$AUTONOMOUS_LAUNCHER"
+TMUX_LOG="$TEST_TMP/tmux-autonomous.log"
+export TMUX_LOG
+: > "$TMUX_LOG"
+check_true "codex autonomous launch succeeds" agent_launch_autonomous "sess" "window" "$AUTONOMOUS_INSTR" "codex" "gpt-5.4" "$AUTONOMOUS_ISSUE"
+check_true "codex autonomous writes launcher script" test -f "$AUTONOMOUS_LAUNCHER"
+check_true "codex autonomous launcher captures stderr" grep -q '2>"\$stderr_log"' "$AUTONOMOUS_LAUNCHER"
+check_true "codex autonomous launcher passes CODEX_STDERR_LOG to monitor" grep -q 'CODEX_STDERR_LOG="\$stderr_log".*codex-status-monitor\.sh' "$AUTONOMOUS_LAUNCHER"
+check_true "codex autonomous launcher logs exit codes to status log" grep -q 'STATUS_LOG_FILE' "$AUTONOMOUS_LAUNCHER"
+check_true "codex autonomous dispatches launcher path via tmux -l" grep -q 'send-keys .* -l -- /tmp/sess-HOK-10-autonomous-launcher\.sh' "$TMUX_LOG"
+check_true "codex autonomous dispatches enter key after launcher" grep -q 'send-keys .* C-m' "$TMUX_LOG"
+
 echo ""
 echo "=== Hook Scripts ==="
 
@@ -240,6 +256,14 @@ WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_EMPTY_ISSUE" \
   bash "$REPO_DIR/shared/hooks/codex-status-monitor.sh" < /dev/null
 check_eq "codex empty stream writes error state" "error" "$(jq -r '.state' "/tmp/wavemill-${TEST_SESSION}-${CODEX_EMPTY_ISSUE}.hook")"
 check_eq "codex empty stream writes unexpected eof event" "unexpected_eof" "$(jq -r '.event' "/tmp/wavemill-${TEST_SESSION}-${CODEX_EMPTY_ISSUE}.hook")"
+
+CODEX_EOF_STDERR_ISSUE="HOK-11"
+CODEX_EOF_STDERR_LOG="$TEST_TMP/codex-eof-stderr.log"
+printf '%s\n' 'apply_patch verification failed: expected lines not found' > "$CODEX_EOF_STDERR_LOG"
+WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_EOF_STDERR_ISSUE" CODEX_STDERR_LOG="$CODEX_EOF_STDERR_LOG" \
+  bash "$REPO_DIR/shared/hooks/codex-status-monitor.sh" < /dev/null
+check_eq "codex eof with stderr keeps error state" "error" "$(jq -r '.state' "/tmp/wavemill-${TEST_SESSION}-${CODEX_EOF_STDERR_ISSUE}.hook")"
+check_true "codex eof with stderr appends snippet to detail" grep -q 'unexpected termination: apply_patch verification failed' "/tmp/wavemill-${TEST_SESSION}-${CODEX_EOF_STDERR_ISSUE}.hook"
 
 echo ""
 echo "=== Generic Process Monitor ==="
