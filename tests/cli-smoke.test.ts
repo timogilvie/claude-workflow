@@ -8,8 +8,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WAVEMILL = resolve(__dirname, '..', 'wavemill');
@@ -56,6 +58,7 @@ describe('wavemill CLI', () => {
       assert.match(out, /review/);
       assert.match(out, /eval/);
       assert.match(out, /route/);
+      assert.match(out, /hokusai/);
     });
 
     it('shows help with --help flag', () => {
@@ -104,6 +107,19 @@ describe('wavemill CLI', () => {
       assert.match(out, /Coder:/);
       assert.match(out, /Reviewer:/);
       assert.match(out, /Success:/);
+    });
+  });
+
+  describe('hokusai command', () => {
+    it('shows disabled status by default in an isolated HOME', () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-home-'));
+      try {
+        const out = run(['hokusai', 'status'], { HOME: fakeHome });
+        assert.match(out, /Hokusai data submission: disabled/);
+        assert.match(out, /Submission allowed: no/);
+      } finally {
+        rmSync(fakeHome, { recursive: true, force: true });
+      }
     });
   });
 });

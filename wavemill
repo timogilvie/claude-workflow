@@ -113,6 +113,15 @@ ${GREEN}Commands:${NC}
                ${CYAN}wavemill context check${NC}
                ${CYAN}wavemill context search "error handling"${NC}
 
+  ${CYAN}hokusai${NC}   Manage Hokusai data submission opt-in
+             - enable: show consent flow and opt in
+             - disable: stop future submissions
+             - status: show current consent state
+             Usage:
+               ${CYAN}wavemill hokusai status${NC}
+               ${CYAN}wavemill hokusai enable${NC}
+               ${CYAN}wavemill hokusai disable${NC}
+
   ${CYAN}version${NC}   Show version information
   ${CYAN}help${NC}      Show this help message
 
@@ -158,6 +167,9 @@ ${GREEN}Examples:${NC}
 
   # Route a task packet to planner/coder/reviewer models
   wavemill route --file features/my-feature/selected-task.json
+
+  # Opt in to Hokusai data submission
+  wavemill hokusai enable
 
 ${GREEN}Configuration:${NC}
   Settings are loaded in this order (later wins):
@@ -391,6 +403,13 @@ run_init() {
     }
   },
   "autoEval": true,
+  "hokusai": {
+    "dataSubmission": {
+      "enabled": false,
+      "consentVersion": "1.0",
+      "endpoint": "https://api.hokusai.dev/v1/submit"
+    }
+  },
   "review": {
     "maxIterations": 3,
     "enabled": true,
@@ -674,6 +693,17 @@ run_context() {
   exec "$context_script" "$@"
 }
 
+run_hokusai() {
+  local hokusai_tool="$TOOLS_DIR/hokusai-manage.ts"
+
+  if [[ ! -f "$hokusai_tool" ]]; then
+    echo -e "${RED}Error:${NC} Hokusai tool not found at: $hokusai_tool" >&2
+    exit 1
+  fi
+
+  exec npx tsx "$hokusai_tool" "$@"
+}
+
 # Main command dispatcher
 case "${1:-}" in
   mill)
@@ -713,6 +743,10 @@ case "${1:-}" in
     run_preflight_checks
     shift
     run_context "$@"
+    ;;
+  hokusai)
+    shift
+    run_hokusai "$@"
     ;;
   eval)
     shift

@@ -57,6 +57,13 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     },
   },
   autoEval: true,
+  hokusai: {
+    dataSubmission: {
+      enabled: false,
+      consentVersion: '1.0',
+      endpoint: 'https://api.hokusai.dev/v1/submit',
+    },
+  },
   challenge: {
     enabled: true,
     rate: 0.1,
