@@ -30,7 +30,7 @@ export interface WorkflowRouteDecision {
   expectedCostPlan: number;
   expectedCostCode: number;
   expectedCostReview: number;
-  confidence?: number;
+  confidence: number;
   reasoning: string[];
   signals: {
     taskType: TaskType;
@@ -156,6 +156,28 @@ export const REVIEW_TOKENS: Record<Exclude<ReviewMode, 'none'>, StageTokenProfil
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function roundToHundredths(value: number): number {
+  return Number(value.toFixed(2));
+}
+
+function normalizeDecisionConfidence(confidence: number | undefined, fallback = 0.5): number {
+  return roundToHundredths(
+    clamp(Number.isFinite(confidence) ? confidence as number : fallback, 0.1, 0.95),
+  );
+}
+
+function computeHeuristicConfidence(
+  categoricalConfidence: 'high' | 'medium' | 'low',
+  riskScore: number,
+): number {
+  const baseConfidence =
+    categoricalConfidence === 'high' ? 0.85 :
+    categoricalConfidence === 'medium' ? 0.65 :
+    0.45;
+
+  return roundToHundredths(clamp(baseConfidence - riskScore * 0.02, 0.1, 0.95));
 }
 
 function roundMoney(value: number): number {
@@ -400,6 +422,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       0.97,
     ).toFixed(2)
   );
+  const confidence = computeHeuristicConfidence(coderRecommendation.confidence, riskScore);
 
   const reasoning = [
     `Task classified as ${characteristics.taskType} with ${characteristics.length} prompt length.`,
@@ -420,6 +443,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     codeDepth,
     reviewRecommended,
     expectedSuccess,
+    confidence,
     expectedCostPlan: estimateStageCost(finalPlanner, PLAN_TOKENS[planDepth], repoDir),
     expectedCostCode: estimateStageCost(finalCoder, CODE_TOKENS[codeDepth], repoDir),
     expectedCostReview: reviewRecommended === 'none'
@@ -464,6 +488,7 @@ export function routeWorkflowStageAware(
     const fallback = routeWorkflow(prompt, options);
     decision = {
       ...fallback,
+      confidence: roundToHundredths(Math.max(0.1, fallback.confidence - 0.1)),
       routingMode: 'heuristic-fallback',
       neighborCount: 0,
       neighborSimilarityRange: [0, 0],
@@ -480,6 +505,7 @@ export function routeWorkflowStageAware(
       planner: fallback.planner,
       coder: fallback.coder,
       reviewer: fallback.reviewer,
+      confidence: normalizeDecisionConfidence(stageAwareDecision.confidence),
       signals: {
         taskType: characteristics.taskType,
         promptLength: characteristics.length,
@@ -491,6 +517,7 @@ export function routeWorkflowStageAware(
   } else {
     decision = {
       ...stageAwareDecision,
+      confidence: normalizeDecisionConfidence(stageAwareDecision.confidence),
       signals: {
         taskType: characteristics.taskType,
         promptLength: characteristics.length,
@@ -550,7 +577,7 @@ export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?
     `Planner:  ${decision.planner} (${plannerAgent})  depth=${decision.planDepth}  cost=$${decision.expectedCostPlan.toFixed(2)}`,
     `Coder:    ${decision.coder} (${coderAgent})  depth=${decision.codeDepth}  cost=$${decision.expectedCostCode.toFixed(2)}`,
     `Reviewer: ${decision.reviewer} (${reviewerAgent})  mode=${decision.reviewRecommended}  cost=$${decision.expectedCostReview.toFixed(2)}`,
-    `Success:  ${(decision.expectedSuccess * 100).toFixed(0)}%  task=${decision.signals.taskType}  risk=${decision.signals.riskScore}`,
+    `Success:  ${(decision.expectedSuccess * 100).toFixed(0)}%  confidence=${decision.confidence.toFixed(2)}  task=${decision.signals.taskType}  risk=${decision.signals.riskScore}`,
     `Signals:  ${decision.reasoning[0]} ${decision.reasoning[1]}`,
   ];
 
