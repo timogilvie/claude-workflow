@@ -108,6 +108,7 @@ await test('routes broad CLI workflow work to deep planning and medium-or-higher
     assert.ok(decision.expectedCostCode >= 0);
     assert.ok(decision.expectedCostPlan >= 0);
     assert.ok(decision.expectedSuccess <= 0.97 && decision.expectedSuccess >= 0.35);
+    assert.ok(decision.confidence >= 0.1 && decision.confidence <= 0.95);
   } finally {
     cleanup();
   }
@@ -135,6 +136,19 @@ await test('includes budget constraints in heuristic routing decisions when prov
       { repoDir, maxCostUsd: 3.5 },
     );
     assert.deepEqual(decision.constraints, { maxCostUsd: 3.5 });
+  } finally {
+    cleanup();
+  }
+});
+
+await test('heuristic routing confidence varies across prompts instead of staying constant', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const featureDecision = routeWorkflow('Implement a feature for the workflow router.', { repoDir });
+    const bugfixDecision = routeWorkflow('Fix the auth migration router bug in config.ts.', { repoDir });
+    assert.notEqual(featureDecision.confidence, bugfixDecision.confidence);
+    assert.ok(featureDecision.confidence >= 0.1 && featureDecision.confidence <= 0.95);
+    assert.ok(bugfixDecision.confidence >= 0.1 && bugfixDecision.confidence <= 0.95);
   } finally {
     cleanup();
   }
@@ -174,6 +188,7 @@ await test('summary output includes stage lines and success', () => {
     assert.match(summary, /Coder:/);
     assert.match(summary, /Reviewer:/);
     assert.match(summary, /Success:/);
+    assert.match(summary, /confidence=\d+\.\d{2}/);
   } finally {
     cleanup();
   }
