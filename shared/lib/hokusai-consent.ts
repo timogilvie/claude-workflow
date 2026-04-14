@@ -86,13 +86,14 @@ export async function saveUserConfig(config: UserConfig, configDir?: string): Pr
   mkdirSync(dir, { recursive: true });
 
   const configPath = resolve(dir, 'config.json');
-  const tmpPath = resolve(tmpdir(), `wavemill-config-${randomBytes(8).toString('hex')}.json`);
+  // Use same directory as target for atomic rename (avoid cross-filesystem errors)
+  const tmpPath = resolve(dir, `.config.json.${randomBytes(8).toString('hex')}.tmp`);
 
   try {
     // Write to temp file first
     writeFileSync(tmpPath, JSON.stringify(config, null, 2), 'utf-8');
 
-    // Atomic rename
+    // Atomic rename (works because both files are in same directory)
     const fs = await import('node:fs/promises');
     await fs.rename(tmpPath, configPath);
   } catch (err) {
