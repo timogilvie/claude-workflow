@@ -579,7 +579,7 @@ configure_agent_hooks() {
         }
         ' "$config_file" > "$tmp" 2>/dev/null; then
         mv "$tmp" "$config_file"
-        log "info" "  Configured Claude hook status in $config_file"
+        log "debug" "  Configured Claude hook status in $config_file"
       else
         rm -f "$tmp"
         log "warn" "  Failed to write Claude hook config at $config_file"
@@ -588,12 +588,12 @@ configure_agent_hooks() {
 
     codex)
       # Codex uses event stream piped through monitor - no config file needed
-      log "info" "  Codex status tracking via JSONL event stream"
+      log "debug" "  Codex status tracking via JSONL event stream"
       ;;
 
     *)
       # Generic agents use process monitoring - no config needed
-      log "info" "  Generic agent status tracking via process monitor"
+      log "debug" "  Generic agent status tracking via process monitor"
       ;;
   esac
 }
