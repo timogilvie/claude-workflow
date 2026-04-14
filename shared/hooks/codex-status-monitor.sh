@@ -64,6 +64,11 @@ while IFS= read -r line; do
   esac
 done
 
+stderr_snippet=""
+if [[ -n "${CODEX_STDERR_LOG:-}" ]] && [[ -s "$CODEX_STDERR_LOG" ]]; then
+  stderr_snippet="$(head -c 200 "$CODEX_STDERR_LOG" 2>/dev/null | tr '\n' ' ' | tr '\r' ' ' || true)"
+fi
+
 # Stream ended. Preserve explicit errors, mark successful completions as idle,
 # and treat unexpected EOF as an error so the dashboard does not show a dead
 # agent as still running or cleanly exited.
@@ -71,6 +76,10 @@ if [[ "$last_state" != "error" ]]; then
   if [[ "$completed" == "true" ]]; then
     wavemill_hook_write "idle" "stream_end" "" "codex"
   else
-    wavemill_hook_write "error" "unexpected_eof" "unexpected termination" "codex"
+    detail="unexpected termination"
+    if [[ -n "$stderr_snippet" ]]; then
+      detail="${detail}: ${stderr_snippet}"
+    fi
+    wavemill_hook_write "error" "unexpected_eof" "$detail" "codex"
   fi
 fi
