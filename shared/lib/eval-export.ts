@@ -8,6 +8,8 @@
  */
 
 import type { EvalRecord } from './eval-schema.ts';
+import { redactText } from './text-redaction.ts';
+export { redactText } from './text-redaction.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Export Row Schema
@@ -92,35 +94,6 @@ const COLUMNS: (keyof ExportRow)[] = [
   'lines_removed',
   'routing_decision',
 ];
-
-// ────────────────────────────────────────────────────────────────
-// Redaction
-// ────────────────────────────────────────────────────────────────
-
-/** Replace sensitive patterns in text with placeholders. */
-export function redactText(text: string): string {
-  let result = text;
-
-  // Email addresses
-  result = result.replace(
-    /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-    '[EMAIL]',
-  );
-
-  // URLs (http/https)
-  result = result.replace(
-    /https?:\/\/[^\s"'<>)}\]]+/g,
-    '[URL]',
-  );
-
-  // Absolute file paths
-  result = result.replace(
-    /(?:\/[a-zA-Z0-9._-]+){2,}/g,
-    '[PATH]',
-  );
-
-  return result;
-}
 
 // ────────────────────────────────────────────────────────────────
 // Flatten

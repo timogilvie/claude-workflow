@@ -33,6 +33,7 @@ export interface HokusaiUserConfig {
     consentedAt?: string | null;
     consentVersion?: string | null;
     apiKey?: string | null;
+    redactionSalt?: string | null;
   };
   [key: string]: unknown;
 }
