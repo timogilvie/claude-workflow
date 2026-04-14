@@ -113,6 +113,11 @@ ${GREEN}Commands:${NC}
                ${CYAN}wavemill context check${NC}
                ${CYAN}wavemill context search "error handling"${NC}
 
+  ${CYAN}hokasai${NC}   Manage Hokasai data submission opt-in
+             - enable:  Enable data submission (shows consent prompt)
+             - disable: Disable data submission
+             - status:  Show current consent state
+
   ${CYAN}version${NC}   Show version information
   ${CYAN}help${NC}      Show this help message
 
@@ -725,6 +730,28 @@ case "${1:-}" in
   init)
     shift
     run_init "$@"
+    ;;
+  hokasai)
+    shift
+    case "${1:-}" in
+      enable)
+        npx tsx "$TOOLS_DIR/hokasai-consent-cli.ts" enable
+        ;;
+      disable)
+        npx tsx "$TOOLS_DIR/hokasai-consent-cli.ts" disable
+        ;;
+      status)
+        npx tsx "$TOOLS_DIR/hokasai-consent-cli.ts" status
+        ;;
+      check)
+        shift
+        npx tsx "$TOOLS_DIR/hokasai-consent-cli.ts" check "$@"
+        ;;
+      *)
+        echo "Usage: wavemill hokasai <enable|disable|status|check>" >&2
+        exit 1
+        ;;
+    esac
     ;;
   version|--version|-v)
     show_version

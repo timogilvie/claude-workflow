@@ -150,6 +150,15 @@ log_warn() {
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 
+# Check if Hokasai data submission is allowed (non-interactive check)
+# Returns 0 (success) if consent is valid, 1 (failure) otherwise
+# Used to gate data submission calls in the mill workflow
+hokasai_submission_allowed() {
+  local result
+  result=$(npx tsx "$TOOLS_DIR/hokasai-consent-cli.ts" check --quiet 2>/dev/null) || return 1
+  [[ "$result" == "true" ]]
+}
+
 # Kept local to this script because the generated monitor script below runs as a
 # standalone shell and must carry its own copy of any helpers it calls.
 render_prompt_template() {

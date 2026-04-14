@@ -668,6 +668,35 @@
         }
       },
       "additionalProperties": false
+    },
+    "hokusai": {
+      "type": "object",
+      "description": "Hokusai platform integration settings.",
+      "properties": {
+        "dataSubmission": {
+          "type": "object",
+          "description": "Opt-in data submission to Hokusai for model routing improvements. Strictly opt-in; defaults to disabled.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Whether data submission is enabled. First enable triggers a consent prompt."
+            },
+            "consentVersion": {
+              "type": "string",
+              "default": "1.0",
+              "description": "Version of the consent text the user agreed to. Version bump triggers re-consent."
+            },
+            "endpoint": {
+              "type": "string",
+              "default": "https://api.hokusai.dev/v1/submit",
+              "description": "HTTP endpoint for data submission."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
