@@ -174,6 +174,8 @@ write_monitor_env() {
     write_shell_assignment "MILL_LOG_FILE" "$MILL_LOG_FILE"
     write_shell_assignment "STATUS_LOG_FILE" "$STATUS_LOG_FILE"
     write_shell_assignment "TASKS_FILE" "$tasks_file"
+    write_shell_assignment "_CFG_READY_ENABLED" "${_CFG_READY_ENABLED:-false}"
+    write_shell_assignment "_CFG_CHALLENGE_AUTO_MERGE" "${_CFG_CHALLENGE_AUTO_MERGE:-false}"
   } > "$MONITOR_ENV"
 }
 

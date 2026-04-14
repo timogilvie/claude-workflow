@@ -4654,7 +4654,7 @@ monitor_issue_state() {
           # review -> ready transition for PR-backed tasks runs in the PR
           # lifecycle section below so resumed tasks can still advance.
           # Review is no longer running - check if PR was created and transition to ready phase if enabled
-          if [[ -n "$pr_number" ]] && [[ "$_CFG_READY_ENABLED" == "true" ]]; then
+          if [[ -n "$pr_number" ]] && [[ "${_CFG_READY_ENABLED:-false}" == "true" ]]; then
             # Mark review as completed with PR artifact (HOK-1177)
             write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
 
@@ -4843,7 +4843,7 @@ monitor_issue_state() {
         return 0
       fi
 
-      if [[ "$_CFG_READY_ENABLED" == "true" ]]; then
+      if [[ "${_CFG_READY_ENABLED:-false}" == "true" ]]; then
         review_status=$(read_stage_status "$FEATURE_DIR" "review")
         if [[ "$review_status" == "running" || -z "$review_status" || "$review_status" == "completed" ]]; then
           write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
