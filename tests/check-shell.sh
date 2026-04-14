@@ -623,6 +623,19 @@ else
     fail "dashboard is missing free slot count rendering"
   fi
 
+  if grep -qE '^window_index\(\) \{' "$STATUS_SCRIPT" \
+    && grep -q "tmux display-message -t \"\\\$SESSION:\\\$win\" -p '#{window_index}'" "$STATUS_SCRIPT"; then
+    pass "dashboard resolves tmux window indices for pane column"
+  else
+    fail "dashboard is missing tmux window index lookup"
+  fi
+
+  if grep -q '"ISSUE" "PANE" "TASK" "TIME" "PHASE" "AGENT" "PR"' "$STATUS_SCRIPT"; then
+    pass "dashboard header includes pane column"
+  else
+    fail "dashboard header is missing pane column"
+  fi
+
   STATUS_MAIN_LOOP=$(awk '
     /while true; do/ { in_loop=1 }
     in_loop { print }
@@ -1697,10 +1710,11 @@ EOF
     fail "mill session setup is missing the next done keybinding"
   fi
 
-  if grep -q "Ctrl+B N: next done" "$REPO_DIR/shared/lib/wavemill-status.sh"; then
-    pass "dashboard footer advertises the next done keybinding"
+  if grep -q "Ctrl+B <PANE>: switch task" "$REPO_DIR/shared/lib/wavemill-status.sh" \
+    && grep -q "Ctrl+B N: next done" "$REPO_DIR/shared/lib/wavemill-status.sh"; then
+    pass "dashboard footer advertises pane switching and next done keybindings"
   else
-    fail "dashboard footer is missing the next done hint"
+    fail "dashboard footer is missing pane switching or next done hint"
   fi
 fi
 
