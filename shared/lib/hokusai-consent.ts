@@ -1,5 +1,5 @@
 /**
- * Hokasai data submission consent management.
+ * Hokusai data submission consent management.
  *
  * Handles:
  * - User-level consent state (stored in ~/.wavemill/config.json)
@@ -170,7 +170,7 @@ export async function promptConsent(): Promise<boolean> {
   console.log('='.repeat(72));
 
   console.log(`
-This project has enabled optional data submission to Hokasai, an AI model
+This project has enabled optional data submission to Hokusai, an AI model
 routing service that improves task execution quality over time.
 
 DATA COLLECTED:
@@ -262,18 +262,20 @@ export async function revokeConsent(configDir?: string): Promise<void> {
 // ────────────────────────────────────────────────────────────────
 
 /**
- * Ensure user consent is valid for Hokasai data submission
+ * Ensure user consent is valid for Hokusai data submission
  *
  * Flow:
- * 1. Load repo config to get required consent version
+ * 1. Load repo config - if repo hasn't enabled submission, return false
  * 2. Load user config
- * 3. If submission not enabled, return false (no prompt needed)
+ * 3. If user submission not enabled, return false (no prompt needed)
  * 4. If consent is valid, return true
  * 5. If consent is stale (version mismatch):
  *    a. Display re-consent prompt
  *    b. If user confirms, record new consent
  *    c. If user declines, revoke consent
  * 6. Return whether consent is now valid
+ *
+ * Requires BOTH repo-level opt-in AND user-level consent.
  *
  * Errors during file I/O are caught and logged. Consent is treated as
  * invalid on any error.
@@ -289,12 +291,18 @@ export async function ensureConsent(
   try {
     // Load repo config to get consent version requirement
     const repoConfig = loadWavemillConfig(repoDir);
+
+    // Require repo-level opt-in (enabled defaults to false per schema)
+    if (!repoConfig.hokusai?.dataSubmission?.enabled) {
+      return false;
+    }
+
     const repoConsentVersion = repoConfig.hokusai?.dataSubmission?.consentVersion ?? '1.0';
 
     // Load user config
     const userConfig = await loadUserConfig(configDir);
 
-    // If submission is not enabled, no prompt needed - return false
+    // If user submission is not enabled, no prompt needed - return false
     const submission = userConfig.hokusai?.dataSubmission;
     if (!submission?.enabled) {
       return false;
@@ -323,7 +331,7 @@ export async function ensureConsent(
     }
   } catch (err) {
     // On any error, treat as invalid consent and log warning
-    console.warn(`Hokasai consent check failed: ${errorMessage(err)}`);
+    console.warn(`Hokusai consent check failed: ${errorMessage(err)}`);
     return false;
   }
 }
@@ -333,6 +341,8 @@ export async function ensureConsent(
  *
  * Used by mill workflow to check if submission should proceed.
  * Never displays prompts - only reads config and returns boolean.
+ *
+ * Requires BOTH repo-level opt-in AND user-level consent.
  *
  * @param repoDir - Repository directory for config lookup
  * @param configDir - User config directory for testing
@@ -344,6 +354,12 @@ export async function checkConsentQuiet(
 ): Promise<boolean> {
   try {
     const repoConfig = loadWavemillConfig(repoDir);
+
+    // Require repo-level opt-in (enabled defaults to false per schema)
+    if (!repoConfig.hokusai?.dataSubmission?.enabled) {
+      return false;
+    }
+
     const repoConsentVersion = repoConfig.hokusai?.dataSubmission?.consentVersion ?? '1.0';
     const userConfig = await loadUserConfig(configDir);
     return isConsentValid(userConfig, repoConsentVersion);

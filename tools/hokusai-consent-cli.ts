@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 /**
- * CLI for managing Hokasai data submission consent.
+ * CLI for managing Hokusai data submission consent.
  *
  * Subcommands:
  * - enable:  Enable data submission (shows consent prompt)
@@ -109,7 +109,7 @@ async function handleStatus(): Promise<void> {
   const submission = userConfig.hokusai?.dataSubmission;
   const repoVersion = repoConfig.hokusai?.dataSubmission?.consentVersion ?? '1.0';
 
-  console.log('Hokasai Data Submission Status:\n');
+  console.log('Hokusai Data Submission Status:\n');
 
   if (!submission || !submission.enabled) {
     console.log('  Status:   Disabled');
