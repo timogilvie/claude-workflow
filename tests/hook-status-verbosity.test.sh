@@ -56,7 +56,8 @@ exit 0
 EOF
   chmod +x "$TMP_DIR/repo/shared/hooks/claude-status-hook.sh"
 
-  mkdir -p "$TMP_DIR/worktree"
+  mkdir -p "$TMP_DIR/worktree/.claude"
+  echo '{}' > "$TMP_DIR/worktree/.claude/settings.local.json"
   configure_agent_hooks "claude" "$TMP_DIR/worktree" "$TMP_DIR/repo"
   assert_last_log "claude hook setup logs at debug" "debug" "Configured Claude hook status in"
 
