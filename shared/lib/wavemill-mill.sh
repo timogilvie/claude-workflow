@@ -2196,6 +2196,25 @@ mark_eval_failed() {
   fi
 }
 
+eval_record_exists_for_issue_pr() {
+  local issue="$1" pr="$2"
+  local pr_url evals_dir evals_file
+
+  [[ -z "$issue" || -z "$pr" ]] && return 1
+
+  pr_url=$(gh pr view "$pr" --json url --jq .url 2>/dev/null || true)
+  [[ -z "$pr_url" ]] && return 1
+
+  evals_dir=$(jq -r '.eval.evalsDir // ".wavemill/evals"' "$REPO_DIR/.wavemill-config.json" 2>/dev/null || echo ".wavemill/evals")
+  [[ "$evals_dir" != /* ]] && evals_dir="$REPO_DIR/$evals_dir"
+  evals_file="$evals_dir/evals.jsonl"
+  [[ -r "$evals_file" ]] || return 1
+
+  jq -e --arg issue "$issue" --arg pr_url "$pr_url" '
+    select(.issueId == $issue and .prUrl == $pr_url)
+  ' "$evals_file" >/dev/null 2>&1
+}
+
 validate_agent_set() {
   local issue="$1"
   local agent
@@ -3183,7 +3202,7 @@ maybe_run_challenge_eval() {
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
 
   local eval_log="/tmp/${SESSION}-eval-${issue}.log"
-  if _with_timeout 180 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+  if _with_timeout 420 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
     --issue "$linear_issue" --pr "$pr" --branch "$branch" \
     --worktree "${WORKTREE_ROOT}/${slug}" \
     --workflow-type mill --repo-dir "$REPO_DIR" \
@@ -3199,6 +3218,9 @@ maybe_run_challenge_eval() {
   while IFS= read -r line; do log "debug" "  [challenge-eval] $line"; done < "$eval_log"
   rm -f "$eval_log"
   if [[ "$rc" -eq 0 ]]; then
+    mark_eval_completed "$issue"
+  elif eval_record_exists_for_issue_pr "$linear_issue" "$pr"; then
+    log_warn "challenge eval for $issue exited $rc but a persisted eval record exists; marking evalCompleted=true"
     mark_eval_completed "$issue"
   else
     log_warn "challenge eval failed for $issue (exit $rc); setting evalFailed=true"
