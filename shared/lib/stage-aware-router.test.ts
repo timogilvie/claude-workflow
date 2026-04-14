@@ -247,6 +247,7 @@ test('routeStageAware returns a stage-aware decision from backfilled evals', () 
     assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
     assert.equal(decision?.neighborCount, 3);
     assert.ok((decision?.expectedCost || 0) > 0);
+    assert.ok((decision?.confidence || 0) >= 0.6);
   } finally {
     cleanup();
   }
@@ -320,6 +321,7 @@ test('routeWorkflowStageAware falls back to heuristic when data is insufficient'
     const decision = routeWorkflowStageAware('Create a CLI command with JSON output.', { repoDir });
     assert.equal(decision.routingMode, 'heuristic-fallback');
     assert.equal(decision.neighborCount, 0);
+    assert.ok(decision.confidence >= 0.1 && decision.confidence <= 0.85);
     const summary = summarizeWorkflowRoute(decision, repoDir);
     assert.match(summary, /Router:\s+heuristic-fallback/);
   } finally {
@@ -468,6 +470,7 @@ test('routeWorkflowStageAware uses partial routing when neighbors lack model div
     // Stage calibration comes from neighbors — verify depths are set
     assert.ok(['light', 'deep'].includes(decision.planDepth));
     assert.ok(['light', 'medium', 'deep'].includes(decision.codeDepth));
+    assert.ok(decision.confidence >= 0.1 && decision.confidence < 0.8);
     const summary = summarizeWorkflowRoute(decision, repoDir);
     assert.match(summary, /Router:\s+stage-aware-partial/);
   } finally {
@@ -493,6 +496,7 @@ test('routeStageAware returns stage-aware-partial when neighbors have single mod
     assert.ok(decision);
     assert.equal(decision?.routingMode, 'stage-aware-partial');
     assert.equal(decision?.neighborCount, 3);
+    assert.ok((decision?.confidence || 0) < 0.8);
   } finally {
     cleanup();
   }

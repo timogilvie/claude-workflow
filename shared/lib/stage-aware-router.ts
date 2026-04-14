@@ -510,12 +510,20 @@ function estimateFallbackStageCost(
 function buildStageAwareDecision(
   selection: CombinationDecision,
   neighbors: ScoredNeighbor[],
+  kNeighbors: number,
   repoDir?: string,
 ): StageAwareDecision {
   const similarities = neighbors.map((neighbor) => neighbor.similarity);
   const similarityRange: [number, number] = similarities.length > 0
     ? [Math.min(...similarities), Math.max(...similarities)]
     : [0, 0];
+  const meanSimilarity = similarities.length > 0
+    ? similarities.reduce((sum, similarity) => sum + similarity, 0) / similarities.length
+    : 0.5;
+  const neighborFactor = kNeighbors > 0
+    ? clamp(neighbors.length / kNeighbors, 0, 1)
+    : 0.5;
+  const confidence = clamp(neighborFactor * 0.4 + meanSimilarity * 0.6, 0.1, 0.95);
 
   const expectedCostPlan = selection.planner.cost || estimateFallbackStageCost(selection.planner.modelId, 'plan', repoDir);
   const expectedCostCode = selection.coder.cost || estimateFallbackStageCost(selection.coder.modelId, 'code', repoDir);
@@ -529,6 +537,7 @@ function buildStageAwareDecision(
     codeDepth: chooseCodeDepthFromSuccess(selection.coder.score),
     reviewRecommended: chooseReviewModeFromSuccess(selection.reviewer.score),
     expectedSuccess: Number(selection.expectedSuccess.toFixed(2)),
+    confidence: Number(confidence.toFixed(2)),
     expectedCostPlan: Number(expectedCostPlan.toFixed(2)),
     expectedCostCode: Number(expectedCostCode.toFixed(2)),
     expectedCostReview: Number(expectedCostReview.toFixed(2)),
@@ -602,7 +611,7 @@ export function routeStageAware(
     return null;
   }
 
-  const decision = buildStageAwareDecision(selection, neighbors, repoDir);
+  const decision = buildStageAwareDecision(selection, neighbors, kNeighbors, repoDir);
   if (options.maxCostUsd !== undefined) {
     decision.constraints = { maxCostUsd: options.maxCostUsd };
   }
@@ -612,6 +621,7 @@ export function routeStageAware(
   // caller can overlay heuristic model selection.
   if (!hasModelDiversity) {
     decision.routingMode = 'stage-aware-partial';
+    decision.confidence = Number((clamp(decision.confidence * 0.8, 0.1, 0.95)).toFixed(2));
   }
 
   return decision;

@@ -148,9 +148,9 @@ function checkLowConfidence(
   availableModels: string[],
   repoDir?: string,
 ): ChallengeRecommendation | null {
-  const confidence = Number.isFinite(routingDecision.expectedSuccess)
-    ? clamp(routingDecision.expectedSuccess, 0, 1)
-    : 0;
+  const confidence = Number.isFinite(routingDecision.confidence)
+    ? clamp(routingDecision.confidence, 0, 1)
+    : 0.5;
 
   if (confidence >= threshold) {
     return null;
