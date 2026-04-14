@@ -76,6 +76,16 @@ export interface HokusaiRouterConfig {
   timeout?: number;
 }
 
+export interface HokusaiDataSubmissionConfig {
+  enabled?: boolean;
+  consentVersion?: string;
+  endpoint?: string;
+}
+
+export interface HokusaiConfig {
+  dataSubmission?: HokusaiDataSubmissionConfig;
+}
+
 export interface AggregationConfig {
   repos?: string[];
   outputPath?: string;
@@ -192,6 +202,7 @@ export interface WavemillConfig {
   dashboard?: DashboardConfig;
   eval?: EvalConfig;
   autoEval?: boolean;
+  hokusai?: HokusaiConfig;
   router?: RouterConfig;
   challenge?: ChallengeConfig;
   challengeScheduler?: ChallengeSchedulerConfig;
@@ -462,6 +473,14 @@ export function getRouterConfig(repoDir?: string): RouterConfig {
  */
 export function getHokusaiRouterConfig(repoDir?: string): HokusaiRouterConfig {
   return loadWavemillConfig(repoDir).router?.hokusai || {};
+}
+
+/**
+ * Get the Hokusai data submission config subsection.
+ * Returns empty object if not configured.
+ */
+export function getHokusaiSubmissionConfig(repoDir?: string): HokusaiDataSubmissionConfig {
+  return loadWavemillConfig(repoDir).hokusai?.dataSubmission || {};
 }
 
 /**
