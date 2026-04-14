@@ -7,7 +7,7 @@
  * @module hokusai-redaction
  */
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { loadUserConfig, saveUserConfig, type HokusaiUserConfig } from './hokusai-consent.ts';
 import type { HokusaiSubmission } from './hokusai-schema.ts';
 
@@ -28,8 +28,8 @@ function isNonEmptySalt(value: unknown): value is string {
 }
 
 function hashIdentifier(value: string, salt: string): string {
-  const digest = createHash('sha256')
-    .update(`${salt}:${value}`)
+  const digest = createHmac('sha256', salt)
+    .update(value)
     .digest('hex')
     .slice(0, 16);
 
