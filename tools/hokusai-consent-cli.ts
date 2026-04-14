@@ -134,12 +134,9 @@ async function handleStatus(): Promise<void> {
 async function handleCheck(quiet: boolean): Promise<void> {
   const isValid = await checkConsentQuiet();
 
-  if (!quiet) {
-    console.log(isValid ? 'true' : 'false');
-  } else {
-    // In quiet mode, still output but suppress other logging
-    console.log(isValid ? 'true' : 'false');
-  }
+  // Always output result for shell script consumption
+  // (checkConsentQuiet already suppresses warnings internally)
+  console.log(isValid ? 'true' : 'false');
 
   process.exitCode = isValid ? 0 : 1;
 }

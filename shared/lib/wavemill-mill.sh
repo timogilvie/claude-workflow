@@ -152,7 +152,13 @@ log_warn() {
 
 # Check if Hokusai data submission is allowed (non-interactive check)
 # Returns 0 (success) if consent is valid, 1 (failure) otherwise
-# Used to gate data submission calls in the mill workflow
+#
+# TODO: Integrate this gate before Hokusai submission calls. Example usage:
+#   if hokusai_submission_allowed; then
+#     submit_to_hokusai "$data"
+#   else
+#     log_debug "Hokusai submission skipped (consent not valid)"
+#   fi
 hokusai_submission_allowed() {
   local result
   result=$(npx tsx "$TOOLS_DIR/hokusai-consent-cli.ts" check --quiet 2>/dev/null) || return 1
