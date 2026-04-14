@@ -50,7 +50,7 @@ test('canRunChallenge requires at least two distinct models', () => {
 });
 
 test('derive challenge identifiers and branches', () => {
-  assert.equal(deriveChallengerKey('HOK-970'), 'HOK-970__challenger');
+  assert.equal(deriveChallengerKey('HOK-970'), 'HOK-970_c');
   assert.equal(deriveChallengeSlug('feature-name', 'primary'), 'feature-name');
   assert.equal(deriveChallengeSlug('feature-name', 'challenger'), 'feature-name-challenger');
   assert.equal(deriveChallengeBranch('feature-name', 'primary'), 'task/feature-name');
@@ -85,7 +85,7 @@ test('pickChallengeModels uses the router-selected primary model', () => {
   assert.equal(pair!.primary.agent, 'claude');
   assert.notEqual(pair!.challenger.model, pair!.primary.model);
   assert.equal(pair!.challenger.agent, 'codex');
-  assert.equal(pair!.challenger.key, 'HOK-970__challenger');
+  assert.equal(pair!.challenger.key, 'HOK-970_c');
 });
 
 test('pickChallengeModels allows a router-selected primary model outside the configured pool', () => {

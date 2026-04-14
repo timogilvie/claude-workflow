@@ -3120,7 +3120,7 @@ get_challenge_sibling_pr() {
   [[ -z "$pair_id" || -z "$role" ]] && return 1
 
   if [[ "$role" == "primary" ]]; then
-    sibling_key="${pair_id}__challenger"
+    sibling_key="${pair_id}_c"
   elif [[ "$role" == "challenger" ]]; then
     sibling_key="$pair_id"
   else
@@ -3253,7 +3253,7 @@ maybe_run_challenge_comparison() {
   pair_id=$(get_task_meta "$issue" "challengePairId")
   [[ -z "$pair_id" ]] && return 0
   primary_key="$pair_id"
-  challenger_key="${pair_id}__challenger"
+  challenger_key="${pair_id}_c"
   compared=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].challengeCompared // false')
   [[ "$compared" == "true" ]] && return 0
 

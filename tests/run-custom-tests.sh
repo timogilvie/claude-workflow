@@ -18,6 +18,7 @@ if [[ ! -f "$TSX_LOADER" ]]; then
 fi
 
 for f in \
+  challenge-mode.test.ts \
   challenge-scheduler.test.ts \
   constraint-parser.test.ts \
   constraint-storage.test.ts \
