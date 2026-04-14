@@ -15,10 +15,13 @@ import { readJsonlFile } from './jsonl-utils.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { computeModelCost, loadPricingTable } from './workflow-cost.ts';
 import type { WorkflowRouteDecision, PlanDepth, CodeDepth, ReviewMode } from './workflow-router.ts';
-import { getRouterConfig } from './config.ts';
+import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 
 export interface StageAwareConstraints {
   modelsAvailable?: string[];
+  plannerModelsAvailable?: string[];
+  coderModelsAvailable?: string[];
+  reviewerModelsAvailable?: string[];
   maxCostUsd?: number;
 }
 
@@ -369,6 +372,30 @@ function stageCostFromRecord(
   return 0;
 }
 
+function resolveModelsForRole(
+  constraints: StageAwareConstraints,
+  role: 'planner' | 'coder' | 'reviewer',
+): Set<string> | null {
+  // Preserve historical behavior for runtime/API allowlist overrides:
+  // a flat `modelsAvailable` constraint applies to every stage and wins
+  // over repo-configured per-stage defaults.
+  if (constraints.modelsAvailable && constraints.modelsAvailable.length > 0) {
+    return new Set(constraints.modelsAvailable);
+  }
+
+  const stageModels = role === 'planner'
+    ? constraints.plannerModelsAvailable
+    : role === 'coder'
+      ? constraints.coderModelsAvailable
+      : constraints.reviewerModelsAvailable;
+
+  if (stageModels && stageModels.length > 0) {
+    return new Set(stageModels);
+  }
+
+  return null;
+}
+
 function aggregateRoleRanking(
   neighbors: ScoredNeighbor[],
   role: 'planner' | 'coder' | 'reviewer',
@@ -376,9 +403,7 @@ function aggregateRoleRanking(
   constraints: StageAwareConstraints,
   stageBlendWeight: number,
 ): RoleRanking {
-  const allowedModels = constraints.modelsAvailable && constraints.modelsAvailable.length > 0
-    ? new Set(constraints.modelsAvailable)
-    : null;
+  const allowedModels = resolveModelsForRole(constraints, role);
 
   const byModel = new Map<string, { scoreWeight: number; weightedScore: number; costWeight: number; weightedCost: number; support: number }>();
 
@@ -570,6 +595,9 @@ export function routeStageAware(
 ): StageAwareDecision | null {
   const repoDir = options.repoDir || process.cwd();
   const routerConfig = getRouterConfig(repoDir);
+  const plannerModels = getAvailableModelsForStage(routerConfig, 'planner');
+  const coderModels = getAvailableModelsForStage(routerConfig, 'coder');
+  const reviewerModels = getAvailableModelsForStage(routerConfig, 'reviewer');
   const kNeighbors = options.kNeighbors || routerConfig.kNeighbors || DEFAULT_K_NEIGHBORS;
   const minRecords = options.minRecords || routerConfig.minRecords || DEFAULT_MIN_RECORDS;
   const minModels = options.minModels || routerConfig.minModels || DEFAULT_MIN_MODELS;
@@ -604,6 +632,9 @@ export function routeStageAware(
 
   const { selection } = rankModelsPerStage(neighbors, {
     modelsAvailable: options.modelsAvailable,
+    plannerModelsAvailable: plannerModels,
+    coderModelsAvailable: coderModels,
+    reviewerModelsAvailable: reviewerModels,
     maxCostUsd: options.maxCostUsd,
   }, stageBlendWeight);
 

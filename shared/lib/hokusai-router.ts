@@ -4,7 +4,7 @@
  * @module hokusai-router
  */
 
-import { getHokusaiRouterConfig } from './config.ts';
+import { getAvailableModelsForStage, getHokusaiRouterConfig, getRouterConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 import { fromHokusaiOutput } from './hokusai-adapter.ts';
 import {
@@ -65,6 +65,7 @@ export async function routeViaHokusai(
 ): Promise<WorkflowRouteDecision | null> {
   const repoDir = options.repoDir;
   const config = getHokusaiRouterConfig(repoDir);
+  const routerConfig = getRouterConfig(repoDir);
   const endpoint = config.endpoint;
 
   if (!endpoint) {
@@ -81,6 +82,15 @@ export async function routeViaHokusai(
     descriptor.repoContext,
     {
       modelsAvailable: options.modelsAvailable,
+      plannerModels: options.modelsAvailable
+        ? undefined
+        : getAvailableModelsForStage(routerConfig, 'planner'),
+      coderModels: options.modelsAvailable
+        ? undefined
+        : getAvailableModelsForStage(routerConfig, 'coder'),
+      reviewerModels: options.modelsAvailable
+        ? undefined
+        : getAvailableModelsForStage(routerConfig, 'reviewer'),
       maxCostUsd: options.maxCostUsd,
     },
     'workflow-route',

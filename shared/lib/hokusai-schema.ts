@@ -427,10 +427,13 @@ function pickAvailableModels(
     || descriptor?.constraints?.models_available
     || [];
 
+  const pickStageModels = (models: string[] | undefined): string[] =>
+    models && models.length > 0 ? models : sharedModels;
+
   return {
-    planner_models: overrides?.plannerModels || sharedModels,
-    coder_models: overrides?.coderModels || sharedModels,
-    reviewer_models: overrides?.reviewerModels || sharedModels,
+    planner_models: pickStageModels(overrides?.plannerModels),
+    coder_models: pickStageModels(overrides?.coderModels),
+    reviewer_models: pickStageModels(overrides?.reviewerModels),
   };
 }
 
