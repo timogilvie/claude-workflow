@@ -27,6 +27,7 @@ import {
   getUiConfig,
   getPermissionsConfig,
   getDashboardConfig,
+  getHokusaiSubmissionConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -578,6 +579,29 @@ test('getDashboardConfig returns dashboard section', () => {
   }
 });
 
+test('getHokusaiSubmissionConfig returns hokusai section', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      hokusai: {
+        dataSubmission: {
+          enabled: false,
+          consentVersion: '2.0',
+          endpoint: 'https://example.com/hokusai',
+        },
+      },
+    }));
+
+    const hokusaiConfig = getHokusaiSubmissionConfig(tmp);
+    assert.equal(hokusaiConfig.enabled, false);
+    assert.equal(hokusaiConfig.consentVersion, '2.0');
+    assert.equal(hokusaiConfig.endpoint, 'https://example.com/hokusai');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('getUiConfig returns ui section', () => {
   const tmp = makeTempRepo();
   try {
@@ -654,6 +678,7 @@ test('all top-level sections can coexist', () => {
       plan: { maxDisplay: 5 },
       eval: { evalsDir: '.wavemill/evals' },
       autoEval: true,
+      hokusai: { dataSubmission: { enabled: false, consentVersion: '1.0' } },
       router: { enabled: true },
       validation: { enabled: true },
       constraints: { enabled: false },
@@ -669,6 +694,7 @@ test('all top-level sections can coexist', () => {
     assert.equal(config.plan?.maxDisplay, 5);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
     assert.equal(config.autoEval, true);
+    assert.equal(config.hokusai?.dataSubmission?.enabled, false);
     assert.equal(config.router?.enabled, true);
     assert.equal(config.validation?.enabled, true);
     assert.equal(config.constraints?.enabled, false);

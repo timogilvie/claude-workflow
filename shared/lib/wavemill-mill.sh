@@ -150,6 +150,15 @@ log_warn() {
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 
+# Future submission hook for Hokusai data export. This is intentionally kept
+# lightweight so the mill can gate outbound submission without duplicating the
+# consent/version logic that lives in TypeScript.
+hokusai_submission_allowed() {
+  local hokusai_tool="$SCRIPT_DIR/../../tools/hokusai-manage.ts"
+  [[ -f "$hokusai_tool" ]] || return 1
+  npx tsx "$hokusai_tool" check-consent >/dev/null 2>&1
+}
+
 # Kept local to this script because the generated monitor script below runs as a
 # standalone shell and must carry its own copy of any helpers it calls.
 render_prompt_template() {
