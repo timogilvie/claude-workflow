@@ -438,13 +438,20 @@ run_dashboard() {
   # no safety here — only fragility.
   set +e
   while true; do
+    # Block USR1 during rendering to prevent partial frame output.
+    # Signals received during this window set WAVEMILL_REDRAW via the trap
+    # but are deferred until the interruptible wait below.
+    trap '' USR1
+
     # Keep tmux scrollback clean without blanking the visible pane.
     clear_dashboard_scrollback
     refresh_pr_cache
     render_dashboard
     redraw_dashboard_frame "$FRAME"
 
-    # Interruptible wait: USR1 sets WAVEMILL_REDRAW and wakes wait early.
+    # Re-enable USR1 for the interruptible wait. Any signal received while
+    # blocked above will have been queued and will fire the trap now.
+    trap 'WAVEMILL_REDRAW=1' USR1
     WAVEMILL_REDRAW=0
     sleep "$REFRESH" &
     SLEEP_PID=$!
