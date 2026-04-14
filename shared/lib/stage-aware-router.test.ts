@@ -230,6 +230,43 @@ test('rankModelsPerStage picks the best model combination under constraints', ()
   assert.equal(allowlist.selection?.reviewer.modelId, 'claude-opus-4-6');
 });
 
+test('rankModelsPerStage supports per-stage model allowlists', () => {
+  const neighbors = [
+    { record: makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.95, implementation: 0.82, review: 0.93 }), descriptor: makeDescriptor(), similarity: 0.99 },
+    { record: makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
+    { record: makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.65, implementation: 0.6, review: 0.94 }), descriptor: makeDescriptor(), similarity: 0.97 },
+  ];
+
+  const constrained = rankModelsPerStage(neighbors, {
+    plannerModelsAvailable: ['gpt-5.3-codex'],
+    coderModelsAvailable: ['claude-opus-4-6'],
+    reviewerModelsAvailable: ['claude-opus-4-6', 'gpt-5.3-codex'],
+  });
+
+  assert.equal(constrained.selection?.planner.modelId, 'gpt-5.3-codex');
+  assert.equal(constrained.selection?.coder.modelId, 'claude-opus-4-6');
+  assert.equal(constrained.selection?.reviewer.modelId, 'claude-opus-4-6');
+});
+
+test('rankModelsPerStage gives runtime flat allowlist precedence over per-stage defaults', () => {
+  const neighbors = [
+    { record: makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.95, implementation: 0.82, review: 0.93 }), descriptor: makeDescriptor(), similarity: 0.99 },
+    { record: makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
+    { record: makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.65, implementation: 0.6, review: 0.94 }), descriptor: makeDescriptor(), similarity: 0.97 },
+  ];
+
+  const constrained = rankModelsPerStage(neighbors, {
+    modelsAvailable: ['claude-haiku-4-5-20251001'],
+    plannerModelsAvailable: ['claude-opus-4-6'],
+    coderModelsAvailable: ['gpt-5.3-codex'],
+    reviewerModelsAvailable: ['claude-opus-4-6'],
+  });
+
+  assert.equal(constrained.selection?.planner.modelId, 'claude-haiku-4-5-20251001');
+  assert.equal(constrained.selection?.coder.modelId, 'claude-haiku-4-5-20251001');
+  assert.equal(constrained.selection?.reviewer.modelId, 'claude-haiku-4-5-20251001');
+});
+
 test('routeStageAware returns a stage-aware decision from backfilled evals', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
@@ -247,6 +284,71 @@ test('routeStageAware returns a stage-aware decision from backfilled evals', () 
     assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
     assert.equal(decision?.neighborCount, 3);
     assert.ok((decision?.expectedCost || 0) > 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('routeStageAware reads per-stage model constraints from router config', () => {
+  const records = [
+    makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
+    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 3,
+      models: ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-haiku-4-5-20251001'],
+      availableModels: {
+        planner: ['gpt-5.3-codex'],
+        coder: ['claude-opus-4-6'],
+      },
+      defaultAgent: 'claude',
+    },
+  });
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir });
+    assert.ok(decision);
+    assert.equal(decision?.planner, 'gpt-5.3-codex');
+    assert.equal(decision?.coder, 'claude-opus-4-6');
+    assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
+  } finally {
+    cleanup();
+  }
+});
+
+test('routeStageAware falls back to router.models when a stage list is empty', () => {
+  const records = [
+    makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
+    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 3,
+      models: ['gpt-5.3-codex', 'claude-haiku-4-5-20251001'],
+      availableModels: {
+        planner: [],
+      },
+      defaultAgent: 'claude',
+    },
+  });
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir });
+    assert.ok(decision);
+    assert.equal(decision?.planner, 'gpt-5.3-codex');
+    assert.equal(decision?.coder, 'gpt-5.3-codex');
+    assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
   } finally {
     cleanup();
   }

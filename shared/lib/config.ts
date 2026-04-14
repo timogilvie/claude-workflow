@@ -76,6 +76,12 @@ export interface HokusaiRouterConfig {
   timeout?: number;
 }
 
+export interface AvailableModelsConfig {
+  planner?: string[];
+  coder?: string[];
+  reviewer?: string[];
+}
+
 export interface AggregationConfig {
   repos?: string[];
   outputPath?: string;
@@ -103,6 +109,7 @@ export interface RouterConfig {
   minRecords?: number;
   minModels?: number;
   models?: string[];
+  availableModels?: AvailableModelsConfig;
   defaultAgent?: string;
   agentMap?: Record<string, string>;
   mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware' | 'hokusai';
@@ -454,6 +461,31 @@ export function clearConfigCache(repoDir?: string): void {
  */
 export function getRouterConfig(repoDir?: string): RouterConfig {
   return loadWavemillConfig(repoDir).router || {};
+}
+
+/**
+ * Resolve the model allowlist for a single workflow stage.
+ *
+ * Resolution order:
+ * 1. `router.availableModels.<stage>` when non-empty
+ * 2. `router.models` when non-empty
+ * 3. `undefined` when no config-based restriction exists
+ */
+export function getAvailableModelsForStage(
+  routerConfig: RouterConfig,
+  stage: keyof AvailableModelsConfig,
+): string[] | undefined {
+  const stageModels = routerConfig.availableModels?.[stage];
+  if (stageModels && stageModels.length > 0) {
+    return stageModels;
+  }
+
+  const sharedModels = routerConfig.models;
+  if (sharedModels && sharedModels.length > 0) {
+    return sharedModels;
+  }
+
+  return undefined;
 }
 
 /**
