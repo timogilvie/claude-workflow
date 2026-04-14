@@ -70,6 +70,7 @@ function makeDecision(overrides: Partial<WorkflowRouteDecision> = {}): WorkflowR
     codeDepth: 'medium',
     reviewRecommended: 'llm',
     expectedSuccess: 0.82,
+    confidence: 0.82,
     expectedCostPlan: 1,
     expectedCostCode: 2,
     expectedCostReview: 1,
@@ -109,7 +110,7 @@ test('recommends challenge when confidence is below threshold', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
     const result = evaluateChallenge({
-      routingDecision: makeDecision({ expectedSuccess: 0.6 }),
+      routingDecision: makeDecision({ expectedSuccess: 0.9, confidence: 0.6 }),
       evalSummary: makeDenseSummary(),
       config: { enabled: true, confidenceThreshold: 0.7 },
       repoDir,
@@ -128,7 +129,7 @@ test('skips challenge when forceModel is set', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
     const result = evaluateChallenge({
-      routingDecision: makeDecision({ expectedSuccess: 0.2 }),
+      routingDecision: makeDecision({ expectedSuccess: 0.95, confidence: 0.2 }),
       evalSummary: makeDenseSummary({
         recordsByModel: {
           'claude-sonnet-4-5-20250929': 12,
@@ -158,7 +159,7 @@ test('does not trigger low-confidence challenge at threshold', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
     const result = evaluateChallenge({
-      routingDecision: makeDecision({ expectedSuccess: 0.7 }),
+      routingDecision: makeDecision({ expectedSuccess: 0.2, confidence: 0.7 }),
       evalSummary: makeDenseSummary(),
       config: { enabled: true, confidenceThreshold: 0.7, newModelChallengeCount: 1, minEvalRecordsPerStage: 1 },
       repoDir,
@@ -234,7 +235,7 @@ test('prioritizes low-confidence over new-model and low-data-stage triggers', ()
   const { repoDir, cleanup } = makeRepo();
   try {
     const result = evaluateChallenge({
-      routingDecision: makeDecision({ expectedSuccess: 0.3 }),
+      routingDecision: makeDecision({ expectedSuccess: 0.95, confidence: 0.3 }),
       evalSummary: makeDenseSummary({
         recordsByModel: {
           'claude-sonnet-4-5-20250929': 10,
@@ -253,6 +254,23 @@ test('prioritizes low-confidence over new-model and low-data-stage triggers', ()
 
     assert.equal(result.reason, 'low-confidence');
     assert.equal(result.priority, 300);
+  } finally {
+    cleanup();
+  }
+});
+
+test('uses routing confidence instead of expected success as the low-confidence signal', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const result = evaluateChallenge({
+      routingDecision: makeDecision({ expectedSuccess: 0.95, confidence: 0.4 }),
+      evalSummary: makeDenseSummary(),
+      config: { enabled: true, confidenceThreshold: 0.7, newModelChallengeCount: 5, minEvalRecordsPerStage: 10 },
+      repoDir,
+    });
+
+    assert.equal(result.shouldChallenge, true);
+    assert.equal(result.reason, 'low-confidence');
   } finally {
     cleanup();
   }

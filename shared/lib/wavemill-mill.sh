@@ -219,6 +219,9 @@ create_tmux_session() {
   fi
 
   tmux -f "$tmux_conf" new-session -d -s "$SESSION" -c "$REPO_DIR" -n control
+  # Prevent control panes from being destroyed if their process crashes.
+  # Without this, a dashboard crash collapses the entire control layout.
+  tmux set-option -t "$SESSION:control" remain-on-exit on 2>/dev/null || true
   tmux set-environment -t "$SESSION" REPO_DIR "$REPO_DIR"
   tmux set-environment -t "$SESSION" WAVEMILL_MILL_ACTIVE "$REPO_DIR"
   if [[ -x "$next_done_script" ]]; then
@@ -3126,7 +3129,7 @@ get_challenge_sibling_pr() {
   [[ -z "$pair_id" || -z "$role" ]] && return 1
 
   if [[ "$role" == "primary" ]]; then
-    sibling_key="${pair_id}__challenger"
+    sibling_key="${pair_id}_c"
   elif [[ "$role" == "challenger" ]]; then
     sibling_key="$pair_id"
   else
@@ -3259,7 +3262,7 @@ maybe_run_challenge_comparison() {
   pair_id=$(get_task_meta "$issue" "challengePairId")
   [[ -z "$pair_id" ]] && return 0
   primary_key="$pair_id"
-  challenger_key="${pair_id}__challenger"
+  challenger_key="${pair_id}_c"
   compared=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].challengeCompared // false')
   [[ "$compared" == "true" ]] && return 0
 
@@ -5029,8 +5032,83 @@ monitor_issue_state() {
   return 0
 }
 
+# ── Control pane health watchdog ──────────────────────────────────────
+# Respawns dead control panes (dashboard, log) to prevent layout collapse.
+# Called each monitor cycle. Relies on remain-on-exit keeping dead panes
+# visible so we can detect and respawn them without losing the layout.
+LAST_DASHBOARD_HEALTH_CHECK=0
+DASHBOARD_HEALTH_INTERVAL=30  # seconds between checks
+
+check_control_pane_health() {
+  local now
+  now=$(date +%s)
+  (( now - LAST_DASHBOARD_HEALTH_CHECK < DASHBOARD_HEALTH_INTERVAL )) && return 0
+  LAST_DASHBOARD_HEALTH_CHECK=$now
+
+  local pane_count
+  pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
+
+  # If panes were destroyed (layout collapsed), rebuild from scratch.
+  if (( pane_count < 3 )); then
+    log_warn "Control window has $pane_count pane(s) (expected 3). Rebuilding layout..."
+    local status_script="$LIB_DIR/wavemill-status.sh"
+
+    if (( pane_count == 1 )); then
+      # Single pane remaining — recreate both missing panes
+      tmux split-window -t "$SESSION:control.0" -hb -p 50 "exec bash" 2>/dev/null || true
+      tmux split-window -t "$SESSION:control.0" -v -p 65 "exec bash" 2>/dev/null || true
+    elif (( pane_count == 2 )); then
+      # Two panes — add the missing one
+      tmux split-window -t "$SESSION:control.0" -v -p 65 "exec bash" 2>/dev/null || true
+    fi
+
+    # Re-count after splits
+    pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
+    if (( pane_count >= 3 )); then
+      # Respawn dashboard (pane 1) and log (pane 2)
+      tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
+      tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
+      # Update dashboard PID
+      sleep 0.3
+      local new_pid
+      new_pid=$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)
+      [[ -n "$new_pid" ]] && tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$new_pid" 2>/dev/null || true
+      log "status" "Control panes rebuilt successfully"
+    else
+      log_warn "Failed to rebuild control panes (got $pane_count)"
+    fi
+    return 0
+  fi
+
+  # All 3 panes exist — check for dead ones and respawn in place.
+  local dead_panes
+  dead_panes=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index} #{pane_dead}' 2>/dev/null || true)
+
+  while IFS=' ' read -r idx is_dead; do
+    [[ "$is_dead" == "1" ]] || continue
+    case "$idx" in
+      1)
+        log_warn "Dashboard pane (control.1) is dead. Respawning..."
+        local status_script="$LIB_DIR/wavemill-status.sh"
+        tmux respawn-pane -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
+        sleep 0.3
+        local new_pid
+        new_pid=$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)
+        [[ -n "$new_pid" ]] && tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$new_pid" 2>/dev/null || true
+        log "status" "Dashboard pane respawned"
+        ;;
+      2)
+        log_warn "Log pane (control.2) is dead. Respawning..."
+        tmux respawn-pane -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
+        log "status" "Log pane respawned"
+        ;;
+    esac
+  done <<<"$dead_panes"
+}
+
 while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
+  check_control_pane_health
   active_count=0
   active_challenger_count=0
 

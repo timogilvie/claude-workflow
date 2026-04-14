@@ -53,7 +53,7 @@ export function canRunChallenge(pool: string[]): boolean {
 }
 
 export function deriveChallengerKey(issueId: string): string {
-  return `${issueId}__challenger`;
+  return `${issueId}_c`;
 }
 
 export function deriveChallengeSlug(baseSlug: string, role: ChallengeRole): string {

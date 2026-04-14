@@ -19,6 +19,7 @@ import {
   clearConfigCache,
   getChallengeConfig,
   getChallengeSchedulerConfig,
+  getAvailableModelsForStage,
   getRouterConfig,
   getEvalConfig,
   getMillConfig,
@@ -136,7 +137,15 @@ test('valid config passes validation', () => {
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
-      router: { enabled: true, defaultModel: 'claude-sonnet-4-5-20250929' },
+      router: {
+        enabled: true,
+        defaultModel: 'claude-sonnet-4-5-20250929',
+        models: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
+        availableModels: {
+          planner: ['claude-sonnet-4-5-20250929'],
+          coder: ['gpt-5.4'],
+        },
+      },
       challenge: { enabled: true, rate: 0.25, models: ['claude-opus-4-6', 'gpt-5.3-codex'] },
       challengeScheduler: { enabled: true, confidenceThreshold: 0.65, newModelChallengeCount: 4 },
       eval: { evalsDir: '.wavemill/evals' },
@@ -149,6 +158,8 @@ test('valid config passes validation', () => {
     assert.equal(config.challengeScheduler?.confidenceThreshold, 0.65);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
     assert.equal(config.mill?.maxParallel, 5);
+    assert.deepEqual(config.router?.availableModels?.planner, ['claude-sonnet-4-5-20250929']);
+    assert.deepEqual(config.router?.availableModels?.coder, ['gpt-5.4']);
   } finally {
     cleanUp(tmp);
   }
@@ -431,6 +442,35 @@ test('getRouterConfig returns router section', () => {
   } finally {
     cleanUp(tmp);
   }
+});
+
+test('getAvailableModelsForStage prefers stage-specific models over router.models', () => {
+  const routerConfig = {
+    models: ['shared-model'],
+    availableModels: {
+      planner: ['planner-only'],
+      coder: ['coder-only'],
+    },
+  };
+
+  assert.deepEqual(getAvailableModelsForStage(routerConfig, 'planner'), ['planner-only']);
+  assert.deepEqual(getAvailableModelsForStage(routerConfig, 'coder'), ['coder-only']);
+  assert.deepEqual(getAvailableModelsForStage(routerConfig, 'reviewer'), ['shared-model']);
+});
+
+test('getAvailableModelsForStage treats empty stage lists as unspecified', () => {
+  const routerConfig = {
+    models: ['shared-model'],
+    availableModels: {
+      planner: [],
+    },
+  };
+
+  assert.deepEqual(getAvailableModelsForStage(routerConfig, 'planner'), ['shared-model']);
+});
+
+test('getAvailableModelsForStage returns undefined when no model constraints exist', () => {
+  assert.equal(getAvailableModelsForStage({}, 'planner'), undefined);
 });
 
 test('getChallengeConfig returns challenge section', () => {

@@ -15,10 +15,13 @@ import { readJsonlFile } from './jsonl-utils.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { computeModelCost, loadPricingTable } from './workflow-cost.ts';
 import type { WorkflowRouteDecision, PlanDepth, CodeDepth, ReviewMode } from './workflow-router.ts';
-import { getRouterConfig } from './config.ts';
+import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 
 export interface StageAwareConstraints {
   modelsAvailable?: string[];
+  plannerModelsAvailable?: string[];
+  coderModelsAvailable?: string[];
+  reviewerModelsAvailable?: string[];
   maxCostUsd?: number;
 }
 
@@ -369,6 +372,30 @@ function stageCostFromRecord(
   return 0;
 }
 
+function resolveModelsForRole(
+  constraints: StageAwareConstraints,
+  role: 'planner' | 'coder' | 'reviewer',
+): Set<string> | null {
+  // Preserve historical behavior for runtime/API allowlist overrides:
+  // a flat `modelsAvailable` constraint applies to every stage and wins
+  // over repo-configured per-stage defaults.
+  if (constraints.modelsAvailable && constraints.modelsAvailable.length > 0) {
+    return new Set(constraints.modelsAvailable);
+  }
+
+  const stageModels = role === 'planner'
+    ? constraints.plannerModelsAvailable
+    : role === 'coder'
+      ? constraints.coderModelsAvailable
+      : constraints.reviewerModelsAvailable;
+
+  if (stageModels && stageModels.length > 0) {
+    return new Set(stageModels);
+  }
+
+  return null;
+}
+
 function aggregateRoleRanking(
   neighbors: ScoredNeighbor[],
   role: 'planner' | 'coder' | 'reviewer',
@@ -376,9 +403,7 @@ function aggregateRoleRanking(
   constraints: StageAwareConstraints,
   stageBlendWeight: number,
 ): RoleRanking {
-  const allowedModels = constraints.modelsAvailable && constraints.modelsAvailable.length > 0
-    ? new Set(constraints.modelsAvailable)
-    : null;
+  const allowedModels = resolveModelsForRole(constraints, role);
 
   const byModel = new Map<string, { scoreWeight: number; weightedScore: number; costWeight: number; weightedCost: number; support: number }>();
 
@@ -510,12 +535,20 @@ function estimateFallbackStageCost(
 function buildStageAwareDecision(
   selection: CombinationDecision,
   neighbors: ScoredNeighbor[],
+  kNeighbors: number,
   repoDir?: string,
 ): StageAwareDecision {
   const similarities = neighbors.map((neighbor) => neighbor.similarity);
   const similarityRange: [number, number] = similarities.length > 0
     ? [Math.min(...similarities), Math.max(...similarities)]
     : [0, 0];
+  const meanSimilarity = similarities.length > 0
+    ? similarities.reduce((sum, similarity) => sum + similarity, 0) / similarities.length
+    : 0.5;
+  const neighborFactor = kNeighbors > 0
+    ? clamp(neighbors.length / kNeighbors, 0, 1)
+    : 0.5;
+  const confidence = clamp(neighborFactor * 0.4 + meanSimilarity * 0.6, 0.1, 0.95);
 
   const expectedCostPlan = selection.planner.cost || estimateFallbackStageCost(selection.planner.modelId, 'plan', repoDir);
   const expectedCostCode = selection.coder.cost || estimateFallbackStageCost(selection.coder.modelId, 'code', repoDir);
@@ -529,6 +562,7 @@ function buildStageAwareDecision(
     codeDepth: chooseCodeDepthFromSuccess(selection.coder.score),
     reviewRecommended: chooseReviewModeFromSuccess(selection.reviewer.score),
     expectedSuccess: Number(selection.expectedSuccess.toFixed(2)),
+    confidence: Number(confidence.toFixed(2)),
     expectedCostPlan: Number(expectedCostPlan.toFixed(2)),
     expectedCostCode: Number(expectedCostCode.toFixed(2)),
     expectedCostReview: Number(expectedCostReview.toFixed(2)),
@@ -561,6 +595,9 @@ export function routeStageAware(
 ): StageAwareDecision | null {
   const repoDir = options.repoDir || process.cwd();
   const routerConfig = getRouterConfig(repoDir);
+  const plannerModels = getAvailableModelsForStage(routerConfig, 'planner');
+  const coderModels = getAvailableModelsForStage(routerConfig, 'coder');
+  const reviewerModels = getAvailableModelsForStage(routerConfig, 'reviewer');
   const kNeighbors = options.kNeighbors || routerConfig.kNeighbors || DEFAULT_K_NEIGHBORS;
   const minRecords = options.minRecords || routerConfig.minRecords || DEFAULT_MIN_RECORDS;
   const minModels = options.minModels || routerConfig.minModels || DEFAULT_MIN_MODELS;
@@ -595,6 +632,9 @@ export function routeStageAware(
 
   const { selection } = rankModelsPerStage(neighbors, {
     modelsAvailable: options.modelsAvailable,
+    plannerModelsAvailable: plannerModels,
+    coderModelsAvailable: coderModels,
+    reviewerModelsAvailable: reviewerModels,
     maxCostUsd: options.maxCostUsd,
   }, stageBlendWeight);
 
@@ -602,7 +642,7 @@ export function routeStageAware(
     return null;
   }
 
-  const decision = buildStageAwareDecision(selection, neighbors, repoDir);
+  const decision = buildStageAwareDecision(selection, neighbors, kNeighbors, repoDir);
   if (options.maxCostUsd !== undefined) {
     decision.constraints = { maxCostUsd: options.maxCostUsd };
   }
@@ -612,6 +652,7 @@ export function routeStageAware(
   // caller can overlay heuristic model selection.
   if (!hasModelDiversity) {
     decision.routingMode = 'stage-aware-partial';
+    decision.confidence = Number((clamp(decision.confidence * 0.8, 0.1, 0.95)).toFixed(2));
   }
 
   return decision;
