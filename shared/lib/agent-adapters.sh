@@ -585,6 +585,9 @@ When you receive user feedback:
 - DO NOT: Create the phase completion marker if the user wants to stop
 - DO: After the user explicitly approves, create the approval marker: touch features/$slug/.plan-approved
 - DO NOT: $exit_guard_text
+- DO NOT: Edit any files outside of features/$slug/
+- DO NOT: Create git commits with source code changes
+- DO NOT: Start implementing the plan before or after approval
 
 After the user approves your plan, create features/$slug/.plan-approved and then $approved_completion_text
 _WVML_PROMPT_
@@ -674,6 +677,8 @@ When you receive user feedback:
 - DO NOT: Create the phase completion marker if the user wants to stop
 - DO NOT: Create .coding-complete just because you received feedback
 - DO NOT: $exit_guard_text
+- DO NOT: Create a PR or run gh pr create
+- DO NOT: Run the self-review tool
 
 ### Pre-Completion Checklist
 

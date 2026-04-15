@@ -41,6 +41,22 @@ The implementation plan is ready at: features/{{SLUG}}/plan.md
 - Do NOT run self-review or create PR - that's the next phase
 - Do NOT ask questions - implement your best judgment and document decisions
 
+### CRITICAL: Phase Boundary Rules
+
+You are ONLY allowed to:
+- Edit source code files to implement the plan
+- Run tests and linters
+- Create git commits
+- Create/edit files in features/{{SLUG}}/ (markers only)
+
+You are FORBIDDEN from:
+- Creating a PR or running gh pr create
+- Running the self-review tool (tools/review-changes.ts)
+- Modifying plan.md or task-packet files
+- Starting work on features not covered by the plan
+
+The REVIEW PHASE agent will handle self-review and PR creation.
+
 ### Handling User Abort Requests
 
 If the user asks you to stop work, close the issue, abort, or otherwise discontinue this workflow:

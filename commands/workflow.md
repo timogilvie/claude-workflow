@@ -110,6 +110,8 @@ Ready to proceed with implementation? (yes/no)
 
 **Wait for user approval before proceeding**
 
+**Phase Boundary**: Do not implement any code during planning. Only create plan.md and markers.
+
 **Context Handoff**: Plan saved to `features/<feature-name>/plan.md`
 
 ### 2D. Clear Context
@@ -132,6 +134,8 @@ I'll execute the plan phase-by-phase with checkpoints.
 ```
 
 ### 3B. Execute Implementation
+**Phase Boundary**: Do not create PRs or run self-review during implementation. Only implement and test.
+
 Follow the `/implement-plan` workflow:
 1. Read plan from `features/<feature-name>/plan.md`
 2. Create todo list from plan phases
