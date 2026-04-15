@@ -91,6 +91,20 @@ Before creating the PR, determine whether you are the principal author:
 - Make targeted fixes only - no scope creep
 - If review tool fails with exit code 2, document the failure and proceed
 
+### CRITICAL: Phase Boundary Rules
+
+You are ONLY allowed to:
+- Run the self-review tool
+- Fix issues identified by self-review (targeted fixes only)
+- Create the PR via gh pr create
+- Create git commits for review fixes
+
+You are FORBIDDEN from:
+- Implementing new features or enhancements beyond what's already coded
+- Refactoring code that wasn't flagged by the review tool
+- Modifying plan.md or task-packet files
+- Re-running the planning or coding phases
+
 ### Handling User Abort Requests
 
 If the user asks you to stop work, close the issue, abort, or otherwise discontinue this workflow:
