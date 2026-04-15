@@ -440,11 +440,9 @@ else
 
   # TEMPORARILY SKIPPED: Fails in CI but passes locally - needs investigation
   if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$current_phase" == "review" ]]; then' \
-    && (echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$_CFG_READY_ENABLED" == "true" ]]; then' \
-      || echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "${_CFG_READY_ENABLED:-true}" == "true" ]]; then') \
     && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'set_task_phase "$ISSUE" "ready"' \
     && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"'; then
-    pass "monitor transitions PR-backed review tasks into ready before merge checks"
+    pass "monitor unconditionally transitions PR-backed review tasks into ready before merge checks"
   else
     skip "monitor does not transition PR-backed review tasks into ready (CI investigation needed)"
   fi

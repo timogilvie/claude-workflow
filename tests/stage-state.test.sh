@@ -38,7 +38,6 @@ export GIT_COMMITTER_EMAIL="test@wavemill.test"
 # Stub out dependencies used by the functions under test
 WORKTREE_ROOT="$TEST_DIR"
 SESSION="test-session"
-_CFG_READY_ENABLED="true"
 
 log() { :; }
 log_warn() { :; }
@@ -219,9 +218,6 @@ write_phase_config() {
     "model": "$reviewer_model",
     "agent": "$reviewer_agent",
     "mode": "$review_mode"
-  },
-  "ready": {
-    "enabled": ${_CFG_READY_ENABLED:-false}
   },
   "resolvedAt": "$now",
   "forceModel": $force_model_json
@@ -632,7 +628,7 @@ check "phase config valid JSON" "0" "$(jq empty "$FD12/.phase-config.json" 2>/de
 check "read planning model" "claude-opus-4-6" "$(read_phase_config "$FD12" "planning" "model")"
 check "read coding depth" "medium" "$(read_phase_config "$FD12" "coding" "depth")"
 check "read review mode" "static" "$(read_phase_config "$FD12" "review" "mode")"
-check "read ready enabled" "true" "$(jq -r '.ready.enabled' "$FD12/.phase-config.json")"
+check "phase config omits ready config block" "false" "$(jq -r 'has("ready")' "$FD12/.phase-config.json")"
 check "forceModel null" "null" "$(jq -r '.forceModel' "$FD12/.phase-config.json")"
 
 # Test 17: with force model

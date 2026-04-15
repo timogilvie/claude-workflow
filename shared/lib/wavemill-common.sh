@@ -107,8 +107,7 @@ load_config() {
       "_CFG_ROUTER_DEFAULT_MODEL=\($c.router.defaultModel // "claude-sonnet-4-5-20250929" | @sh)",
       "_CFG_AUTO_EVAL=\($c.autoEval // true)",
       "_CFG_SETUP_CMD=\($c.mill.setupCommand // "" | @sh)",
-      "_CFG_DEFAULT_MAX_COST_USD=\(($c.mill.defaultMaxCostUsd // null) | if . == null then "" else tostring end | @sh)",
-      "_CFG_READY_ENABLED=\($c.ready.enabled // true)"
+      "_CFG_DEFAULT_MAX_COST_USD=\(($c.mill.defaultMaxCostUsd // null) | if . == null then "" else tostring end | @sh)"
     ] | .[]
     '
   ) || {

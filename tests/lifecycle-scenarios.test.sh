@@ -154,7 +154,6 @@ run_lifecycle_scenario() {
       AUTO_EVAL="false"
       REQUIRE_CONFIRM="false"
       QUIT_REQUESTED="false"
-      _CFG_READY_ENABLED="true"
       FORCE_MODEL=""
       TOOLS_DIR="$SCENARIO_DIR/tools"
       LIB_DIR="$SCENARIO_DIR/lib"

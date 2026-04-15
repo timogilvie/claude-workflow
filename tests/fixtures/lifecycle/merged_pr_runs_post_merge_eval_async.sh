@@ -12,9 +12,14 @@ setup_merged_pr_runs_post_merge_eval_async() {
   AUTO_EVAL="true"
   EVAL_COMPLETED="false"
   REQUIRE_CONFIRM="false"
-  _CFG_READY_ENABLED="false"
   LINEAR_UPDATES="true"
   write_stage_result "$FEATURE_DIR" "review" "completed" "$CURRENT_AGENT"
+  local ready_dir
+  ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+  mkdir -p "$ready_dir"
+  cat > "$ready_dir/.ready-result.json" <<JSON
+{"stage":"ready","status":"completed","artifacts":{"verdict":"pass"}}
+JSON
 }
 
 assert_merged_pr_runs_post_merge_eval_async() {

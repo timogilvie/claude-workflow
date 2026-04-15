@@ -730,29 +730,34 @@ test('getPermissionsConfig returns permissions section', () => {
   }
 });
 
-test('getReadyConfig enables ready stage by default', () => {
+test('getReadyConfig returns empty check lists by default', () => {
   const tmp = makeTempRepo();
   try {
     clearConfigCache();
     writeConfig(tmp, '{}');
 
     const readyConfig = getReadyConfig(tmp);
-    assert.equal(readyConfig.enabled, true);
+    assert.deepEqual(readyConfig.checks, []);
+    assert.deepEqual(readyConfig.requiredChecks, []);
   } finally {
     cleanUp(tmp);
   }
 });
 
-test('getReadyConfig honors explicit disable', () => {
+test('getReadyConfig honors explicit check lists', () => {
   const tmp = makeTempRepo();
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
-      ready: { enabled: false }
+      ready: {
+        checks: ['ci-status', 'merge-conflicts'],
+        requiredChecks: ['merge-conflicts']
+      }
     }));
 
     const readyConfig = getReadyConfig(tmp);
-    assert.equal(readyConfig.enabled, false);
+    assert.deepEqual(readyConfig.checks, ['ci-status', 'merge-conflicts']);
+    assert.deepEqual(readyConfig.requiredChecks, ['merge-conflicts']);
   } finally {
     cleanUp(tmp);
   }
