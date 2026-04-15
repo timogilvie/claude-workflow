@@ -41,7 +41,16 @@ run_lifecycle_test "stage state shell helpers" bash tests/stage-state.test.sh
 run_lifecycle_test "stage state TypeScript helpers" node --test tests/stage-state.test.ts
 run_lifecycle_test "monitor ready transition" bash tests/monitor-ready-transition.test.sh
 run_lifecycle_test "error recovery" bash tests/error-recovery.test.sh
-run_lifecycle_test "control layout" bash tests/control-layout.test.sh
+
+# Skip control layout test in CI - tmux session creation fails in containerized environments
+if [[ -z "${CI:-}" ]]; then
+  run_lifecycle_test "control layout" bash tests/control-layout.test.sh
+else
+  echo ""
+  echo "=== control layout ==="
+  echo "  SKIP  control layout (requires interactive tmux, not available in CI)"
+fi
+
 run_lifecycle_test "wavemill status" bash tests/wavemill-status.test.sh
 
 echo ""
