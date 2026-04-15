@@ -629,7 +629,12 @@ run_eval_aggregate() {
 run_route() {
   local route_tool="$TOOLS_DIR/route-task.ts"
   local tsx_loader
-  tsx_loader="$(npm root -g)/tsx/dist/loader.mjs"
+
+  # Try local tsx first, fall back to global
+  tsx_loader="$(npm root)/tsx/dist/loader.mjs"
+  if [[ ! -f "$tsx_loader" ]]; then
+    tsx_loader="$(npm root -g)/tsx/dist/loader.mjs"
+  fi
 
   if [[ ! -f "$route_tool" ]]; then
     echo -e "${RED}Error:${NC} Route tool not found at: $route_tool" >&2
@@ -638,6 +643,7 @@ run_route() {
 
   if [[ ! -f "$tsx_loader" ]]; then
     echo -e "${RED}Error:${NC} tsx loader not found at: $tsx_loader" >&2
+    echo -e "${RED}Error:${NC} Install tsx: npm install --save-dev tsx" >&2
     exit 1
   fi
 
