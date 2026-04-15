@@ -230,6 +230,18 @@ is_active() {
   return 1
 }
 
+# Truncate detail string to fit within available terminal width.
+# Format "%-10s  %4s  └─ %s" uses ~20 chars of prefix, leaving ~60 for content on 80-char terminal.
+truncate_detail() {
+  local detail="$1"
+  local max_len=55
+  if (( ${#detail} > max_len )); then
+    echo "${detail:0:52}..."
+  else
+    echo "$detail"
+  fi
+}
+
 # Classify dashboard tasks into sections based on agent state.
 is_actionable_state() {
   local agent_state="$1"
@@ -334,6 +346,7 @@ render_task_row() {
     working|waiting|done) reported="" ;;
   esac
   if [[ -n "$reported" ]]; then
+    reported=$(truncate_detail "$reported")
     printf "${D}%10s  %4s  └─ %s${N}${EL}\n" "" "" "$reported" >> "$FRAME"
   fi
 }

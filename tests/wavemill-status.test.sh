@@ -209,6 +209,56 @@ else
   fail "footer is missing pane-number switching hint"
 fi
 
+# Test truncation of long detail strings
+STATE_FILE_LONG="$TMP_DIR/state-long.json"
+cat > "$STATE_FILE_LONG" <<EOF
+{
+  "tasks": {
+    "HOK-1223": {
+      "slug": "long-detail-task",
+      "branch": "task/long-detail-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "executing",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_LONG="$TMP_DIR/behavior-long.json"
+cat > "$BEHAVIOR_LONG" <<'EOF'
+{
+  "pane": {
+    "HOK-1223-long-detail-task": "8"
+  },
+  "hook": {
+    "HOK-1223": "This is a very long detail string that should be truncated to prevent overflow beyond the terminal width and causing text bleeding into adjacent cells"
+  },
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_LONG="$TMP_DIR/output-long.txt"
+run_render "$STATE_FILE_LONG" "$WORKTREES_DIR" "$BEHAVIOR_LONG" "$OUTPUT_LONG"
+
+# Check that truncated detail string is present and doesn't exceed reasonable length
+if grep -q '└─.*\.\.\.' "$OUTPUT_LONG"; then
+  # Find the detail line and check its length
+  detail_line=$(grep '└─' "$OUTPUT_LONG" | head -1)
+  line_len=${#detail_line}
+  if (( line_len <= 85 )); then
+    pass "truncates very long detail strings to prevent overflow"
+  else
+    fail "truncated detail line is still too long ($line_len chars)"
+  fi
+else
+  fail "very long detail string was not truncated"
+fi
+
 STATE_FILE_TWO="$TMP_DIR/state-two.json"
 cat > "$STATE_FILE_TWO" <<EOF
 {
