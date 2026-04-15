@@ -5442,7 +5442,7 @@ while :; do
             echo ""
             tput sc 2>/dev/null || true
           fi
-          log "status" "Next tasks:"
+          echo "Next tasks:"
           if [[ -n "$avail_unblocked" ]]; then
             echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
           else
