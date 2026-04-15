@@ -91,14 +91,6 @@ export interface ReadyResult {
  */
 export interface ReadyStageConfig {
   /**
-   * Enable the ready stage.
-   *
-   * Defaults to `true`. Set to `false` only for repositories that intentionally
-   * do not want the pre-merge readiness gate.
-   */
-  enabled?: boolean;
-
-  /**
    * List of check names to run.
    *
    * Empty array means run all available checks.
@@ -740,24 +732,6 @@ export async function runReadyStage(options: {
 
   // Load ready config
   const config = getReadyConfig(repoDir);
-
-  // Check if ready stage is enabled
-  if (!config.enabled) {
-    return {
-      prNumber,
-      branch: undefined,
-      verdict: 'warn',
-      checks: [{
-        name: 'ready-stage',
-        status: 'warn',
-        message: 'Ready stage not enabled in config',
-        details: {},
-      }],
-      timestamp: new Date().toISOString(),
-      summary: 'Ready stage not enabled - set ready.enabled=true in .wavemill-config.json',
-      mergeConflict: undefined,
-    };
-  }
 
   // 1. Gather context
   const prContext = await gatherPRContext(prNumber, repoDir);

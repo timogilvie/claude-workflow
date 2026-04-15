@@ -195,7 +195,6 @@ export interface PermissionsConfig {
 }
 
 export interface ReadyConfig {
-  enabled?: boolean;
   checks?: string[];
   requiredChecks?: string[];
 }
@@ -541,12 +540,11 @@ export function getEvalConfig(repoDir?: string): EvalConfig {
 
 /**
  * Get the ready stage config section.
- * Returns defaults if not configured (enabled by default).
+ * Returns defaults if not configured.
  */
 export function getReadyConfig(repoDir?: string): ReadyConfig {
   const config = loadWavemillConfig(repoDir);
   return {
-    enabled: config.ready?.enabled ?? true,
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
   };

@@ -414,11 +414,6 @@
       "type": "object",
       "description": "Settings for the ready stage (merge-readiness checks)",
       "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable the ready stage. Set to false only to explicitly disable the pre-merge gate."
-        },
         "checks": {
           "type": "array",
           "items": { "type": "string" },

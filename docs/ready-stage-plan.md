@@ -504,7 +504,7 @@ After HOK-1174 (PR `#208`) shipped and HOK-1176 (PR `#213`) merged, the revised 
 | CLI surface (`wavemill ready <pr>`) | Shipped | HOK-1174 |
 | Planning metadata (`database_change_risk`, env/config/manual-step fields) | Shipped | HOK-1175 |
 | Shared readiness engine (`runReadyStage`, deterministic checks, verdict) | Shipped | HOK-1176 |
-| Config schema (`ready.enabled`, `ready.checks`, `ready.requiredChecks`) | Shipped | HOK-1174 |
+| Config schema (`ready.checks`, `ready.requiredChecks`) | Shipped | HOK-1174 |
 | Mill integration (`launch_ready_phase` shell function) | Shipped | HOK-1176 |
 | Controller-owned readiness check (`controllerCheckReadiness`) | Backfilled | HOK-1183 |
 | Legacy marker compatibility (`checkLegacyMarkers`) | Backfilled, deprecated for phase resolution | HOK-1183 |

@@ -240,7 +240,6 @@ harness_run_tick() {
     AUTO_EVAL="false"
     REQUIRE_CONFIRM="false"
     QUIT_REQUESTED="false"
-    _CFG_READY_ENABLED="true"
     FORCE_MODEL="test-model"
     CURRENT_PHASE="planning"
     CURRENT_AGENT="codex"

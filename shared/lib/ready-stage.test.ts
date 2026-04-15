@@ -75,13 +75,13 @@ describe('ready-stage', () => {
 
     it('accepts skipped check objects', () => {
       const check = {
-        name: 'compatibility-mode',
+        name: 'manual-steps',
         status: 'skip',
-        message: 'Ready stage is disabled for this repository',
+        message: 'No manual steps detected',
       } satisfies ReadyCheck;
 
       assert.equal(check.status, 'skip');
-      assert.equal(check.name, 'compatibility-mode');
+      assert.equal(check.name, 'manual-steps');
     });
   });
 
@@ -152,25 +152,8 @@ describe('ready-stage', () => {
   });
 
   describe('ReadyStageConfig contract', () => {
-    it('supports explicit enablement', () => {
-      const config = {
-        enabled: true,
-      } satisfies ReadyStageConfig;
-
-      assert.equal(config.enabled, true);
-    });
-
-    it('supports explicit disablement', () => {
-      const config = {
-        enabled: false,
-      } satisfies ReadyStageConfig;
-
-      assert.equal(config.enabled, false);
-    });
-
     it('supports specific checks lists', () => {
       const config = {
-        enabled: true,
         checks: ['ci-status', 'approvals', 'merge-conflicts'],
       } satisfies ReadyStageConfig;
 
@@ -179,7 +162,6 @@ describe('ready-stage', () => {
 
     it('supports required checks as a subset', () => {
       const config = {
-        enabled: true,
         checks: ['ci-status', 'approvals', 'release-notes'],
         requiredChecks: ['ci-status', 'approvals'],
       } satisfies ReadyStageConfig;
@@ -191,7 +173,6 @@ describe('ready-stage', () => {
       const config = {} satisfies ReadyStageConfig;
 
       assert.deepEqual(config, {});
-      assert.equal(config.enabled, undefined);
     });
   });
 
@@ -571,7 +552,7 @@ describe('ready-stage', () => {
       const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
       await fs.writeFile(
         path.join(repoDir, '.wavemill-config.json'),
-        JSON.stringify({ ready: { enabled: true } }),
+        JSON.stringify({ ready: { checks: [], requiredChecks: [] } }),
         'utf-8'
       );
 

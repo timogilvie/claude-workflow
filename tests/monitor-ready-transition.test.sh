@@ -72,7 +72,6 @@ run_monitor_case() {
     AUTO_EVAL="false"
     REQUIRE_CONFIRM="false"
     QUIT_REQUESTED="false"
-    _CFG_READY_ENABLED="true"
     active_count=0
     CURRENT_PHASE="review"
     CURRENT_AGENT="codex"
@@ -105,9 +104,6 @@ run_monitor_case() {
 
     case "$CASE_NAME" in
       review_to_ready)
-        ;;
-      review_ready_disabled)
-        _CFG_READY_ENABLED="false"
         ;;
       ready_conflict_rerun)
         CURRENT_PHASE="ready"
@@ -233,11 +229,6 @@ check_contains "review with open PR transitions to ready" "$review_to_ready_outp
 check_contains "review with open PR launches ready checks" "$review_to_ready_output" "ready_launches=1"
 check_contains "review with open PR does not only restore review window" "$review_to_ready_output" "restore_calls=0"
 check_contains "review with open PR records completed review stage" "$review_to_ready_output" "|review|completed|"
-
-review_disabled_output="$(run_monitor_case review_ready_disabled)"
-check_contains "review keeps phase when ready disabled" "$review_disabled_output" "phase=review"
-check_contains "review restores window when ready disabled" "$review_disabled_output" "restore_calls=1"
-check_contains "review does not launch ready when disabled" "$review_disabled_output" "ready_launches=0"
 
 ready_conflict_output="$(run_monitor_case ready_conflict_rerun)"
 check_contains "ready conflict rerun keeps task in ready" "$ready_conflict_output" "phase=ready"

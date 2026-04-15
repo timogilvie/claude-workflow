@@ -295,19 +295,18 @@ Recommended merge rule once real checks are live:
 - `warn`: merge allowed only with explicit operator handling of the warning
 - `fail`: merge blocked
 
-## Compatibility Mode
+## Ready Configuration
 
-The ready stage runs by default for mill-managed repositories. Repositories can explicitly disable it only when they intentionally do not want a pre-merge release-readiness gate.
+The ready stage always runs for mill-managed repositories. The `ready` config section controls which checks run and which checks are required; it does not disable the ready phase itself.
 
-Compatibility cases:
+Configuration cases:
 
-- `ready` missing from `.wavemill-config.json`: ready stage is enabled by default
-- `"enabled": false`: ready stage stays disabled
-- `"enabled": true`: ready stage is active and the monitor/CLI should use the ready contract
+- `ready` missing from `.wavemill-config.json`: all available ready checks can run
+- `ready.checks`: restricts the set of checks to run
+- `ready.requiredChecks`: marks a subset of checks as merge-blocking
 
-Backwards-compatibility expectations:
+Workflow expectations:
 
-- repositories that need the legacy workflow can set `ready.enabled: false`
 - the ready contract remains stable even as checks are added
 - existing review and merge workflows continue after the ready gate reports `pass` or `warn`
 
@@ -316,7 +315,8 @@ Minimal explicit configuration:
 ```json
 {
   "ready": {
-    "enabled": true
+    "checks": [],
+    "requiredChecks": []
   }
 }
 ```
@@ -432,7 +432,6 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
 ```json
 {
   "ready": {
-    "enabled": false,
     "checks": [],
     "requiredChecks": []
   }
@@ -443,7 +442,6 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
 
 | Setting | Type | Default | Meaning |
 |---------|------|---------|---------|
-| `ready.enabled` | `boolean` | `true` | Master switch. Set to `false` only to disable the pre-merge gate. |
 | `ready.checks` | `string[]` | `[]` | Checks to run. Empty means all available checks. |
 | `ready.requiredChecks` | `string[]` | `[]` | Subset of checks that must pass for merge approval. |
 
@@ -452,7 +450,8 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
 ```json
 {
   "ready": {
-    "enabled": true
+    "checks": [],
+    "requiredChecks": []
   }
 }
 ```
@@ -462,7 +461,6 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
 ```json
 {
   "ready": {
-    "enabled": true,
     "checks": ["ci-status", "approvals", "merge-conflicts", "manual-steps"],
     "requiredChecks": ["ci-status", "approvals", "merge-conflicts"]
   }
