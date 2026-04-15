@@ -385,6 +385,13 @@ else
     fail "closed challenge PRs do not defer Linear updates for unresolved sibling outcomes"
   fi
 
+  if grep -Fq 'local feature_dir="$wt_dir/features/$slug"' <<< "$HEREDOC_CONTENT" \
+    && ! grep -Fq 'local feature_dir="${feature_dir:-$wt_dir/features/$slug}"' <<< "$HEREDOC_CONTENT"; then
+    pass "launch_task derives feature_dir from the current task scope"
+  else
+    fail "launch_task may inherit feature_dir across recursive challenger launches"
+  fi
+
   if grep -qE '^read_state_value\(\) \{' <<< "$HEREDOC_CONTENT"; then
     pass "monitor defines read_state_value helper for non-fatal state reads"
   else
