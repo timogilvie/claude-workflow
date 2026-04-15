@@ -225,6 +225,25 @@ detect_project_name() {
   echo "$project_name"
 }
 
+# ============================================================================
+# GITHUB HELPERS
+# ============================================================================
+
+# Check whether a branch has any PR in GitHub, including closed or merged PRs.
+# Returns 0 when a PR exists and 1 when no PR is found or GitHub cannot be
+# queried. Callers use this as a guard before taking destructive cleanup paths.
+check_pr_exists() {
+  local branch="$1"
+  local pr_number=""
+
+  if [[ -z "$branch" ]]; then
+    return 1
+  fi
+
+  pr_number=$(gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+  [[ -n "$pr_number" ]]
+}
+
 # Read a field from the canonical startup routing artifact.
 # Fallback chain: route.json -> model-suggestion.json shim -> default value.
 #

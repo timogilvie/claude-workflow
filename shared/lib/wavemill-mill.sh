@@ -4222,6 +4222,11 @@ monitor_issue_state() {
   current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
   needs_attention="false"
 
+  # Critical invariant: controller-owned tasks must produce a PR before
+  # completion cleanup. If an agent exits without one, preserve the worktree
+  # and mark the task for attention so committed or uncommitted work is not
+  # silently lost.
+
   # If already merged or completed-external (requireConfirm), wait for window close then cleanup
   task_status=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].status // empty')
   if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
@@ -4238,6 +4243,22 @@ monitor_issue_state() {
 
     # Prune worktrees after cleanup
     execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+    return 0
+  fi
+
+  if [[ "$task_status" == "error" ]]; then
+    if check_pr_exists "$BRANCH"; then
+      local recovered_pr
+      recovered_pr=$(find_pr_for_branch "$BRANCH")
+      if [[ -n "$recovered_pr" ]]; then
+        PR_BY_ISSUE["$ISSUE"]="$recovered_pr"
+        log "status" "✓ $ISSUE → Found PR #$recovered_pr for errored task (updating state)"
+        save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$recovered_pr" "" "$current_agent"
+        set_task_phase "$ISSUE" "review"
+      fi
+    fi
+    set_window_attention_state "$WIN" "needs-user"
+    active_count=$((active_count + 1))
     return 0
   fi
 
@@ -4843,10 +4864,38 @@ monitor_issue_state() {
         return 0
       fi
 
-      # Agent exited without creating a PR - clean up the slot
-      set_window_attention_state "$WIN" "clear"
-      log "status" "⚠ $ISSUE → Agent exited without PR - releasing slot"
-      cleanup_completed_task "$ISSUE" "$SLUG" "no PR created"
+      # Agent exited without creating a PR. This is an error condition, not
+      # normal completion: preserve the worktree and branch for recovery.
+      if check_pr_exists "$BRANCH"; then
+        local pr_number
+        pr_number=$(find_pr_for_branch "$BRANCH")
+        if [[ -n "$pr_number" ]]; then
+          PR_BY_ISSUE["$ISSUE"]="$pr_number"
+          log "status" "✓ $ISSUE → Found PR #$pr_number (updating state)"
+          save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$pr_number" "" "$current_agent"
+          set_task_phase "$ISSUE" "review"
+          set_window_attention_state "$WIN" "needs-user"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+      fi
+
+      log_error "⚠ $ISSUE → Agent exited without creating PR on branch $BRANCH"
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "" "error" "$current_agent"
+      set_task_phase "$ISSUE" "error"
+
+      local hook_protocol="$LIB_DIR/../hooks/wavemill-hook-protocol.sh"
+      if [[ -f "$hook_protocol" ]]; then
+        # Surface the controller-detected lifecycle error through the same
+        # hook file dashboard readers use for agent-reported failures.
+        source "$hook_protocol" || true
+        WAVEMILL_SESSION="$SESSION" WAVEMILL_ISSUE="$ISSUE" \
+          wavemill_hook_write "error" "NoPR" "Agent exited without creating PR on branch $BRANCH" "${current_agent:-unknown}" || true
+      fi
+
+      set_window_attention_state "$WIN" "needs-user"
+      log "status" "⛔ $ISSUE → Task requires attention: No PR created (worktree preserved)"
+      active_count=$((active_count + 1))
       return 0
     fi
   fi
