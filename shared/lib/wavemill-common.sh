@@ -606,8 +606,9 @@ configure_agent_hooks() {
       ;;
 
     codex)
-      # Codex uses event stream piped through monitor - no config file needed
-      log "debug" "  Codex status tracking via JSONL event stream"
+      # Codex autonomous launches report completion from their wrapper; while
+      # running, the dashboard falls back to pane/process liveness.
+      log "debug" "  Codex status tracking via launcher exit hook"
       ;;
 
     *)

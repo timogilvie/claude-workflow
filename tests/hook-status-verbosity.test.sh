@@ -62,7 +62,7 @@ EOF
   assert_last_log "claude hook setup logs at debug" "debug" "Configured Claude hook status in"
 
   configure_agent_hooks "codex" "$TMP_DIR/worktree" "$TMP_DIR/repo"
-  assert_last_log "codex hook setup logs at debug" "debug" "Codex status tracking via JSONL event stream"
+  assert_last_log "codex hook setup logs at debug" "debug" "Codex status tracking via launcher exit hook"
 
   configure_agent_hooks "cursor" "$TMP_DIR/worktree" "$TMP_DIR/repo"
   assert_last_log "generic hook setup logs at debug" "debug" "Generic agent status tracking via process monitor"
