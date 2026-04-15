@@ -57,7 +57,8 @@ write_shell_assignment() {
 
 startup_log() {
   local line="$*"
-  printf '%s\n' "$line"
+  # DO NOT add printf to stdout here - causes [1/7] messages to bleed into monitor pane (HOK-1282)
+  # Startup messages are already displayed in pane 2 via tail -f of STATUS_LOG_FILE
   [[ -n "${STATUS_LOG_FILE:-}" ]] && printf '%s\n' "$line" >> "$STATUS_LOG_FILE" 2>/dev/null || true
 }
 
