@@ -28,6 +28,13 @@ check() {
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
+# Configure git identity for tests that create repos
+# Use environment variables for better CI compatibility
+export GIT_AUTHOR_NAME="Wavemill Test"
+export GIT_AUTHOR_EMAIL="test@wavemill.test"
+export GIT_COMMITTER_NAME="Wavemill Test"
+export GIT_COMMITTER_EMAIL="test@wavemill.test"
+
 # Stub out dependencies used by the functions under test
 WORKTREE_ROOT="$TEST_DIR"
 SESSION="test-session"

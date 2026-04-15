@@ -11,6 +11,7 @@
     "check:review": "npx tsx tools/check-review-setup.ts",
     "test": "npm run test:shell && npm run test:unit && npm run test:smoke && npm run test:config",
     "test:shell": "bash tests/check-shell.sh && bash tests/monitor-ready-transition.test.sh && bash tests/lifecycle-scenarios.test.sh && bash tests/lifecycle-harness.test.sh && bash tests/cleanup-branch.test.sh && bash tests/error-recovery.test.sh && bash tests/planning-validation.test.sh && bash tests/wavemill-status.test.sh && bash tests/control-layout.test.sh",
+    "test:lifecycle": "bash tests/run-lifecycle-tests.sh",
     "test:layout": "bash tests/control-layout.test.sh",
     "test:unit": "npm run test:node-test && npm run test:custom",
     "test:node-test": "node --test shared/lib/session.test.js shared/lib/session-timer.test.js shared/lib/eval.test.js shared/lib/intervention-detector.test.ts shared/lib/session-adapters.test.ts shared/lib/outcome-collectors.test.ts shared/lib/context-analyzer.test.ts shared/lib/review-runner.test.ts shared/lib/review-progress.test.ts shared/lib/review-formatter.test.ts shared/lib/pr-comparison.test.ts shared/lib/llm-cli.test.ts shared/lib/challenge-analyzer.test.ts shared/lib/config.test.ts shared/lib/hokusai-consent.test.ts shared/lib/hokusai-redaction.test.ts shared/lib/text-redaction.test.ts shared/lib/shell-utils.test.ts shared/lib/jsonl-utils.test.ts shared/lib/cli-prompt.test.ts shared/lib/cli-utils.test.ts shared/lib/linear-update-error-log.test.ts tests/drift-detector.test.ts tests/check-drift-tool.test.ts",
@@ -35,5 +36,8 @@
   },
   "dependencies": {
     "ajv": "^8.18.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
   }
 }

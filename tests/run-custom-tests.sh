@@ -6,7 +6,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../shared/lib"
-TSX_LOADER="$(npm root -g)/tsx/dist/loader.mjs"
+
+# Try local tsx first, fall back to global
+TSX_LOADER="$(npm root)/tsx/dist/loader.mjs"
+if [[ ! -f "$TSX_LOADER" ]]; then
+  TSX_LOADER="$(npm root -g)/tsx/dist/loader.mjs"
+fi
 
 PASS=0
 FAIL=0
@@ -14,6 +19,7 @@ SKIP=0
 
 if [[ ! -f "$TSX_LOADER" ]]; then
   echo "tsx loader not found at: $TSX_LOADER" >&2
+  echo "Install tsx: npm install --save-dev tsx" >&2
   exit 1
 fi
 
