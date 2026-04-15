@@ -4189,7 +4189,7 @@ Implement from the issue description plus direct codebase analysis."
 
   if [[ "$PLANNING_MODE" == "interactive" ]]; then
     # Launch in routing phase - monitor will handle phase transitions
-    local feature_dir="${feature_dir:-$wt_dir/features/$slug}"
+    local feature_dir="$wt_dir/features/$slug"
     mkdir -p "$feature_dir"
     local labels_json="[]"
     labels_json=$(echo "$issue_json" | jq '[.labels.nodes[]?.name // empty]' 2>/dev/null || echo "[]")

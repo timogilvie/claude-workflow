@@ -99,6 +99,8 @@ mkdir -p \
   "$WORKTREES_DIR/plan-task/features/plan-task" \
   "$WORKTREES_DIR/waiting-task/features/waiting-task" \
   "$WORKTREES_DIR/active-task/features/active-task" \
+  "$WORKTREES_DIR/coding-task/features/coding-task" \
+  "$WORKTREES_DIR/review-task/features/review-task" \
   "$WORKTREES_DIR/stale-task/features/stale-task"
 
 STATE_FILE_ONE="$TMP_DIR/state-one.json"
@@ -321,6 +323,60 @@ if grep -q '⚡ ACTIVE (0)' "$OUTPUT_THREE" && grep -q 'No active tasks' "$OUTPU
   pass "shows empty active section after filtering stale tasks"
 else
   fail "empty active state after stale filtering is wrong"
+fi
+
+STATE_FILE_PHASES="$TMP_DIR/state-phases.json"
+cat > "$STATE_FILE_PHASES" <<EOF
+{
+  "tasks": {
+    "HOK-1300": {
+      "slug": "coding-task",
+      "branch": "task/coding-task",
+      "worktree": "$WORKTREES_DIR/coding-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    },
+    "HOK-1301": {
+      "slug": "review-task",
+      "branch": "task/review-task",
+      "worktree": "$WORKTREES_DIR/review-task",
+      "status": "",
+      "phase": "review",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_PHASES="$TMP_DIR/behavior-phases.json"
+cat > "$BEHAVIOR_PHASES" <<'EOF'
+{
+  "pane": {
+    "HOK-1300-coding-task": "4",
+    "HOK-1301-review-task": "5"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_PHASES="$TMP_DIR/output-phases.txt"
+run_render "$STATE_FILE_PHASES" "$WORKTREES_DIR" "$BEHAVIOR_PHASES" "$OUTPUT_PHASES"
+
+if grep -q 'HOK-1300.*coding-task.*💻 coding.*● running' "$OUTPUT_PHASES"; then
+  pass "shows coding phase with emoji"
+else
+  fail "coding phase row is missing emoji"
+fi
+
+if grep -q 'HOK-1301.*review-task.*🔍 review.*● running' "$OUTPUT_PHASES"; then
+  pass "shows review phase with emoji"
+else
+  fail "review phase row is missing emoji"
 fi
 
 echo ""
