@@ -12,9 +12,11 @@ LIB_DIR="$REPO_DIR/shared/lib"
 
 PASS=0
 FAIL=0
+SKIP=0
 
 pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
+skip() { echo "  SKIP  $1"; SKIP=$((SKIP + 1)); }
 
 # ============================================================================
 # TEST 1: Bash syntax check on all shell scripts
@@ -1891,7 +1893,11 @@ fi
 # RESULTS
 # ============================================================================
 echo ""
-echo "--- Results: $PASS passed, $FAIL failed ---"
+if [[ $SKIP -gt 0 ]]; then
+  echo "--- Results: $PASS passed, $FAIL failed, $SKIP skipped ---"
+else
+  echo "--- Results: $PASS passed, $FAIL failed ---"
+fi
 
 if (( FAIL > 0 )); then
   exit 1

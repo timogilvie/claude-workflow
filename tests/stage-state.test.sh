@@ -28,6 +28,10 @@ check() {
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
+# Configure git identity for tests that create repos
+git config --global user.email "test@wavemill.test" 2>/dev/null || true
+git config --global user.name "Wavemill Test" 2>/dev/null || true
+
 # Stub out dependencies used by the functions under test
 WORKTREE_ROOT="$TEST_DIR"
 SESSION="test-session"
