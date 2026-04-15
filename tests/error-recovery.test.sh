@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 ADAPTERS_SCRIPT="$REPO_DIR/shared/lib/agent-adapters.sh"
 
 PASS=0
@@ -122,6 +123,40 @@ for _ in 1 2 3 4; do
 done
 check_false "no pending recovery after max retries" transient_error_recovery_pending "HOK-2"
 reset_retry_count "$TEST_SESSION" "HOK-2"
+
+echo ""
+echo "=== No-PR Guard Helpers ==="
+
+# shellcheck source=/dev/null
+source "$COMMON_SCRIPT"
+
+gh() {
+  if [[ "${1:-}" == "pr" && "${2:-}" == "list" ]]; then
+    printf '123\n'
+    return 0
+  fi
+  return 1
+}
+export -f gh
+check_true "PR exists when gh returns a PR number" check_pr_exists "task/my-branch"
+
+gh() {
+  if [[ "${1:-}" == "pr" && "${2:-}" == "list" ]]; then
+    printf '\n'
+    return 0
+  fi
+  return 1
+}
+export -f gh
+check_false "No PR when gh returns empty result" check_pr_exists "task/my-branch"
+
+gh() {
+  return 1
+}
+export -f gh
+check_false "PR check gracefully handles gh failure" check_pr_exists "task/my-branch"
+check_false "PR check rejects empty branch" check_pr_exists ""
+unset -f gh
 
 echo ""
 echo "=== Resume Adapter ==="

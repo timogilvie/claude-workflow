@@ -126,7 +126,7 @@ else
     CRITICAL_FUNCTIONS=(
       log log_error log_warn
       save_task_state remove_task_state set_task_phase get_task_phase
-      find_pr_for_branch pr_state validate_pr_merge
+      find_pr_for_branch check_pr_exists pr_state validate_pr_merge
       linear_set_state linear_is_completed
       check_routing_complete
       fetch_candidates filter_active_issues
@@ -182,6 +182,15 @@ else
     pass "monitor find_pr_for_branch queries all PR states"
   else
     fail "monitor find_pr_for_branch is missing --state all"
+  fi
+
+  if grep -qF 'check_pr_exists "$BRANCH"' <<< "$HEREDOC_CONTENT" \
+    && grep -qF 'Agent exited without creating PR on branch $BRANCH' <<< "$HEREDOC_CONTENT" \
+    && grep -qF 'worktree preserved' <<< "$HEREDOC_CONTENT" \
+    && ! grep -qF 'cleanup_completed_task "$ISSUE" "$SLUG" "no PR created"' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor preserves worktree when agent exits without PR"
+  else
+    fail "monitor still risks cleanup when agent exits without PR"
   fi
 
   if grep -qE '^pr_state\(\) \{' <<< "$HEREDOC_CONTENT"; then
@@ -258,12 +267,12 @@ else
   fi
 
   MONITOR_ISSUE_BLOCK=$(awk '
-    /^monitor_issue_state\(\) \{/ { in_fn=1 }
+    /^[[:space:]]*monitor_issue_state\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
   ' <<< "$HEREDOC_CONTENT")
   # HOK-1194: Phase resolution refactored to use resolve_phase() with controller-owned state priority
-  RESOLVE_PHASE_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'resolved_phase=$(resolve_phase "\$FEATURE_DIR")' | head -n1 | cut -d: -f1 || true)
+  RESOLVE_PHASE_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -Fn 'resolved_phase=$(resolve_phase "$FEATURE_DIR")' | head -n1 | cut -d: -f1 || true)
   PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - keep controller-owned running stages active' | head -n1 | cut -d: -f1 || true)
   if [[ -n "$RESOLVE_PHASE_LINE" && -n "$PANE_EARLY_RETURN_LINE" ]] && (( RESOLVE_PHASE_LINE < PANE_EARLY_RETURN_LINE )); then
     pass "monitor checks planning approval before controller-state keepalive"
@@ -272,11 +281,11 @@ else
   fi
 
   # HOK-1210: Monitor must NOT auto-approve on idle pane. It should log and wait.
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$resolved_phase" == "awaiting_user" \]\]; then' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q '_pane_is_dead_or_idle "\$SESSION:\$WIN"' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Plan ready — awaiting user approval' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q '_approval_wait_logged_' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'printf -v "\$approval_wait_var"'; then
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$resolved_phase" == "awaiting_user" ]]; then' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq '_pane_is_dead_or_idle "$SESSION:$WIN"' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Plan ready — awaiting user approval' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq '_approval_wait_logged_' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'printf -v "$approval_wait_var"'; then
     pass "monitor logs idle pane without auto-approving (HOK-1210)"
   else
     fail "monitor is missing HOK-1210 idle-pane-without-approval guard"
@@ -289,27 +298,27 @@ else
     fail "monitor abort check does not take precedence over completion markers"
   fi
 
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -qE '^[[:space:]]*aborted\)$' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Workflow aborted (controller state)'; then
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$resolved_phase" == "aborted" ]]; then' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Workflow aborted (controller state)'; then
     pass "monitor handles aborted state and controller-state abort fallback"
   else
     fail "monitor is missing aborted-state handling or controller-state abort fallback"
   fi
 
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'phase_should_remain_active_without_pr "\$FEATURE_DIR" "\$current_phase" "\$SLUG"' \
-    && ! echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Pane died during \$current_phase phase, respawning'; then
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'phase_should_remain_active_without_pr "$FEATURE_DIR" "$current_phase" "$SLUG"' \
+    && ! echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Pane died during $current_phase phase, respawning'; then
     pass "monitor keepalive and fallback logic uses controller state instead of pane respawn"
   else
     fail "monitor still relies on pane-respawn fallback for phase progression"
   fi
 
   CLOSED_BLOCK=$(awk '
-    /elif \[\[ "\$\(pr_state "\$PR"\)" == "CLOSED" \]\]; then/ { in_block=1 }
+    index($0, "elif [[ \"$(pr_state \"$PR\")\" == \"CLOSED\" ]]; then") { in_block=1 }
     in_block { print }
     in_block && /^[[:space:]]*else$/ { exit }
   ' <<< "$MONITOR_ISSUE_BLOCK")
 
-  if echo "$CLOSED_BLOCK" | grep -q 'log_warn "\$ISSUE → PR #\$PR CLOSED without merge"'; then
+  if echo "$CLOSED_BLOCK" | grep -Fq 'log_warn "$ISSUE → PR #$PR CLOSED without merge"'; then
     pass "closed PR path preserves warning log"
   else
     fail "closed PR path is missing warning log"
@@ -331,28 +340,28 @@ else
     fail "monitor is missing challenge sibling helpers for closed-PR resolution"
   fi
 
-  if echo "$CLOSED_BLOCK" | grep -q 'if should_cleanup_closed_pr "\$ISSUE"; then' \
-    && echo "$CLOSED_BLOCK" | grep -q 'cleanup_completed_task "\$ISSUE" "\$SLUG" "closed without merge"' \
-    && echo "$CLOSED_BLOCK" | grep -q 'Auto-cleaning closed challenger pane/worktree'; then
+  if echo "$CLOSED_BLOCK" | grep -Fq 'if should_cleanup_closed_pr "$ISSUE"; then' \
+    && echo "$CLOSED_BLOCK" | grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' \
+    && echo "$CLOSED_BLOCK" | grep -Fq 'Auto-cleaning closed challenger pane/worktree'; then
     pass "closed challenger PRs trigger automatic pane/worktree cleanup"
   else
     fail "closed challenger PRs do not trigger automatic cleanup"
   fi
 
-  if echo "$CLOSED_BLOCK" | grep -q 'local linear_status="Backlog"' \
-    && echo "$CLOSED_BLOCK" | grep -q 'if is_challenge_task "\$ISSUE"; then' \
-    && echo "$CLOSED_BLOCK" | grep -q 'check_challenge_sibling_merged "\$ISSUE"' \
-    && echo "$CLOSED_BLOCK" | grep -q 'linear_status="Done"' \
-    && echo "$CLOSED_BLOCK" | grep -q 'Challenge sibling merged → marking Linear as Done' \
-    && echo "$CLOSED_BLOCK" | grep -q 'linear_set_state "\$(get_linear_issue_id "\$ISSUE")" "\$linear_status"'; then
+  if echo "$CLOSED_BLOCK" | grep -Fq 'local linear_status="Backlog"' \
+    && echo "$CLOSED_BLOCK" | grep -Fq 'if is_challenge_task "$ISSUE"; then' \
+    && echo "$CLOSED_BLOCK" | grep -Fq 'check_challenge_sibling_merged "$ISSUE"' \
+    && echo "$CLOSED_BLOCK" | grep -Fq 'linear_status="Done"' \
+    && echo "$CLOSED_BLOCK" | grep -Fq 'Challenge sibling merged → marking Linear as Done' \
+    && echo "$CLOSED_BLOCK" | grep -Fq 'linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"'; then
     pass "closed challenge PRs mark Linear Done when the sibling PR was merged"
   else
     fail "closed challenge PRs do not promote Linear to Done when sibling merged"
   fi
 
-  if echo "$CLOSED_BLOCK" | grep -q 'linear_status=""' \
-    && echo "$CLOSED_BLOCK" | grep -q 'Challenge sibling still active or unknown, deferring Linear state update' \
-    && echo "$CLOSED_BLOCK" | grep -q 'Challenge sibling PR not found yet, deferring Linear state update'; then
+  if echo "$CLOSED_BLOCK" | grep -Fq 'linear_status=""' \
+    && echo "$CLOSED_BLOCK" | grep -Fq 'Challenge sibling still active or unknown, deferring Linear state update' \
+    && echo "$CLOSED_BLOCK" | grep -Fq 'Challenge sibling PR not found yet, deferring Linear state update'; then
     pass "closed challenge PRs defer Linear updates until the sibling outcome is known"
   else
     fail "closed challenge PRs do not defer Linear updates for unresolved sibling outcomes"
@@ -375,8 +384,8 @@ else
     fail "monitor get_task_phase is not using read_state_value"
   fi
 
-  if grep -q 'current_agent=$(read_state_value ""' <<< "$MONITOR_ISSUE_BLOCK" \
-    && grep -q 'task_status=$(read_state_value ""' <<< "$MONITOR_ISSUE_BLOCK"; then
+  if grep -Fq 'current_agent=$(read_state_value ""' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'task_status=$(read_state_value ""' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor_issue_state guards agent and status reads from STATE_FILE"
   else
     fail "monitor_issue_state is missing guarded state-file reads"
@@ -388,28 +397,28 @@ else
     fail "monitor is missing review-window restore helper for PR-backed tasks"
   fi
 
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'current_phase=$(get_task_phase "\$ISSUE")' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$current_phase" == "review" \]\]; then' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'restore_review_task_window "\$ISSUE" "\$SLUG" "\$BRANCH" "\$PR" "\$WT_DIR"'; then
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'current_phase=$(get_task_phase "$ISSUE")' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$current_phase" == "review" ]]; then' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'restore_review_task_window "$ISSUE" "$SLUG" "$BRANCH" "$PR" "$WT_DIR"'; then
     pass "monitor restores missing review windows before PR merge checks"
   else
     fail "monitor does not restore review windows for resumed PR-backed tasks"
   fi
 
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$current_phase" == "review" \]\]; then' \
-    && (echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\$_CFG_READY_ENABLED" == "true" \]\]; then' \
-      || echo "$MONITOR_ISSUE_BLOCK" | grep -q 'if \[\[ "\${_CFG_READY_ENABLED:-false}" == "true" \]\]; then') \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'set_task_phase "\$ISSUE" "ready"' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'launch_ready_phase "\$ISSUE" "\$SLUG" "\$title" "\${WORKTREE_ROOT}/\${SLUG}" "\$BRANCH" "\$BASE_BRANCH" "\$PR"'; then
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$current_phase" == "review" ]]; then' \
+    && (echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$_CFG_READY_ENABLED" == "true" ]]; then' \
+      || echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "${_CFG_READY_ENABLED:-false}" == "true" ]]; then') \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'set_task_phase "$ISSUE" "ready"' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"'; then
     pass "monitor transitions PR-backed review tasks into ready before merge checks"
   else
     fail "monitor does not transition PR-backed review tasks into ready"
   fi
 
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -q 'elif \[\[ "\$current_phase" == "ready" \]\]; then' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'ready_state_dir_path="$(ready_state_dir "\${WORKTREE_ROOT}/\${SLUG}" "\$SLUG")"' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q '\.conflict-detected' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -q 'Conflict remediation complete, ready checks rerun'; then
+  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'elif [[ "$current_phase" == "ready" ]]; then' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq '.conflict-detected' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Conflict remediation complete, ready checks rerun'; then
     pass "monitor handles PR-backed ready tasks in the PR lifecycle path"
   else
     fail "monitor is missing PR-backed ready-phase handling in the PR lifecycle path"
