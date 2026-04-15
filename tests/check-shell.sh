@@ -1082,13 +1082,14 @@ echo "=== Dashboard Log Filtering ==="
 if [[ ! -f "$MILL_SCRIPT" ]]; then
   fail "wavemill-mill.sh not found for log filtering checks"
 else
-  if grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT" \
+  if ! grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT" \
+    && grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" \
     && grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT" \
     && ! grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" \
     && ! grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT"; then
-    pass "monitor logs task headers without slot counts"
+    pass "monitor uses echo for interactive prompts, not log"
   else
-    fail "monitor still logs slot counts in task selection prompts"
+    fail "monitor should use echo (not log) for task selection prompt"
   fi
 
   LOG_FUNCTION_BLOCK=$(awk '
