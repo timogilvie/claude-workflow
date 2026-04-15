@@ -27,6 +27,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq shellcheck tmux
 
+      - name: Configure git for tests
+        run: |
+          git config --global user.email "ci@wavemill.test"
+          git config --global user.name "Wavemill CI"
+
       - name: Install dependencies
         run: npm install
 
@@ -97,6 +102,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq tmux
+
+      - name: Configure git for tests
+        run: |
+          git config --global user.email "ci@wavemill.test"
+          git config --global user.name "Wavemill CI"
 
       - name: Install dependencies
         run: npm install
