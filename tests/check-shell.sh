@@ -291,6 +291,23 @@ else
     fail "monitor is missing HOK-1210 idle-pane-without-approval guard"
   fi
 
+  if grep -qE '^validate_planning_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Planning phase modified source code, reverted changes and blocked transition' \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'write_stage_result "$FEATURE_DIR" "planning" "awaiting_user"'; then
+    pass "monitor validates planning output before coding transition"
+  else
+    fail "monitor is missing planning phase-boundary validation"
+  fi
+
+  if grep -qE '^validate_coding_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'validate_coding_phase_output "$BRANCH"' \
+    && grep -Fq 'WARNING: Coding phase created PR #' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor warns when coding creates a PR before review"
+  else
+    fail "monitor is missing coding phase-boundary validation"
+  fi
+
   # resolve_phase() checks abort first internally, so we verify it's called
   if [[ -n "$RESOLVE_PHASE_LINE" ]]; then
     pass "monitor checks workflow abort before phase completion markers"

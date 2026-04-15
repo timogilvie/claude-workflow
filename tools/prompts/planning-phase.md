@@ -54,6 +54,29 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
    - Create the approval marker: touch features/{{SLUG}}/.plan-approved
    - Then stop working — the orchestrator detects this marker and launches the coding phase automatically
 
+### CRITICAL: Phase Boundary Rules
+
+You are ONLY allowed to:
+- Read files (for research)
+- Create/edit files in features/{{SLUG}}/ (plan.md, task-packet files, markers)
+- Run router/expansion tools
+
+You are FORBIDDEN from:
+- Editing any source code files (shared/, src/, lib/, tools/, tests/, commands/)
+- Running tests or linters
+- Creating git commits with code changes
+- Implementing any part of the plan
+- Creating a PR
+
+The CODING PHASE agent will handle all implementation. The REVIEW PHASE agent will handle PR creation.
+
+### After User Approves Your Plan
+
+Your ONLY remaining actions are:
+1. Create the approval marker: touch features/{{SLUG}}/.plan-approved
+2. Output: "Plan approved. Stopping for orchestrator to launch coding phase."
+3. STOP IMMEDIATELY — do not respond further, do not implement anything
+
 ### Planning Depth: {{PLAN_DEPTH}}
 
 {{DEPTH_GUIDANCE}}
@@ -65,6 +88,7 @@ Task context is pre-seeded at: features/{{SLUG}}/selected-task.json
 - [ ] Codebase research completed
 - [ ] Implementation plan created at features/{{SLUG}}/plan.md
 - [ ] User has approved the plan
+- [ ] **NO source code files modified** (only plan.md, task-packet files, and markers)
 
 ### Important Notes
 - Do NOT implement anything in this phase - only plan

@@ -2409,6 +2409,80 @@ approve_plan() {
   write_stage_result "$feature_dir" "planning" "completed" "$agent" "$model" "Plan approved by user" '{"type":"planning","planFile":"plan.md"}'
 }
 
+# Validate that planning stayed within its phase boundary before coding starts.
+# Usage: validate_planning_phase_output <wt_dir>
+# Returns non-zero after reverting out-of-scope changes and removing approval.
+validate_planning_phase_output() {
+  local wt_dir="$1"
+  local feature_dir="$wt_dir/features/$(basename "$wt_dir")"
+  local changed_file
+  local -a out_of_scope_files=()
+  local -a tracked_out_of_scope=()
+  local -a untracked_out_of_scope=()
+
+  [[ -d "$wt_dir/.git" || -f "$wt_dir/.git" ]] || return 0
+
+  while IFS= read -r changed_file; do
+    [[ -n "$changed_file" ]] || continue
+    case "$changed_file" in
+      features/*) ;;
+      *)
+        out_of_scope_files+=("$changed_file")
+        if git -C "$wt_dir" ls-files --error-unmatch -- "$changed_file" >/dev/null 2>&1; then
+          tracked_out_of_scope+=("$changed_file")
+        else
+          untracked_out_of_scope+=("$changed_file")
+        fi
+        ;;
+    esac
+  done < <(
+    {
+      git -C "$wt_dir" diff --name-only HEAD -- 2>/dev/null || true
+      git -C "$wt_dir" ls-files --others --exclude-standard 2>/dev/null || true
+    } | sort -u
+  )
+
+  if [[ ${#out_of_scope_files[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  log_warn "WARNING: Planning phase modified source code files: ${out_of_scope_files[*]}"
+
+  if [[ ${#tracked_out_of_scope[@]} -gt 0 ]]; then
+    git -C "$wt_dir" reset -q HEAD -- "${tracked_out_of_scope[@]}" 2>/dev/null || true
+    git -C "$wt_dir" checkout -- "${tracked_out_of_scope[@]}" 2>/dev/null || {
+      log_warn "Planning phase validation could not revert tracked source changes"
+      rm -f "$feature_dir/.plan-approved"
+      return 1
+    }
+  fi
+
+  if [[ ${#untracked_out_of_scope[@]} -gt 0 ]]; then
+    rm -f -- "${untracked_out_of_scope[@]/#/$wt_dir/}" 2>/dev/null || {
+      log_warn "Planning phase validation could not remove untracked source changes"
+      rm -f "$feature_dir/.plan-approved"
+      return 1
+    }
+  fi
+
+  rm -f "$feature_dir/.plan-approved"
+  return 1
+}
+
+# Warn if coding already created a PR before the review phase can run.
+# Usage: validate_coding_phase_output <branch>
+validate_coding_phase_output() {
+  local branch="$1"
+  local pr_number
+
+  pr_number=$(gh pr list --head "$branch" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+  if [[ -n "$pr_number" ]]; then
+    log_warn "WARNING: Coding phase created PR #$pr_number before review phase"
+  fi
+
+  return 0
+}
+
 # Reject a plan: transition planning from awaiting_user to failed.
 # Usage: reject_plan <feature_dir> [agent] [model]
 reject_plan() {
@@ -4470,6 +4544,14 @@ monitor_issue_state() {
 
           if [[ "$resolved_phase" == "coding" ]]; then
             unset "$approval_wait_var" 2>/dev/null || true
+            # Before launching coding, validate planning did not overreach.
+            if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
+              log_warn "$ISSUE → Planning phase modified source code, reverted changes and blocked transition"
+              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Planning modified files outside features/, reverted and awaiting re-approval"
+              set_window_attention_state "$WIN" "needs-user"
+              active_count=$((active_count + 1))
+              return 0
+            fi
             # Record approval via approve_plan (HOK-1193: controller-owned stage result)
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
@@ -4523,6 +4605,13 @@ monitor_issue_state() {
           if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
+              if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
+                log_warn "$ISSUE → Planning phase modified source code, reverted changes and blocked transition"
+                write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Planning modified files outside features/, reverted and awaiting re-approval"
+                set_window_attention_state "$WIN" "needs-user"
+                active_count=$((active_count + 1))
+                return 0
+              fi
               log "status" "✓ $ISSUE → Plan approved (via .plan-approved marker), marking as completed"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
               # Next iteration will detect resolved_phase == "coding" and launch coding
@@ -4548,6 +4637,13 @@ monitor_issue_state() {
             # Check if user signaled approval by creating .plan-approved marker
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
+              if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
+                log_warn "$ISSUE → Planning phase modified source code, reverted changes and blocked transition"
+                write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Planning modified files outside features/, reverted and awaiting re-approval"
+                set_window_attention_state "$WIN" "needs-user"
+                active_count=$((active_count + 1))
+                return 0
+              fi
               log "status" "✓ $ISSUE → User approved plan (via .plan-approved marker)"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
               # Now completed — next poll iteration will pick up and launch coding
@@ -4591,6 +4687,7 @@ monitor_issue_state() {
           fi
 
           if [[ "$resolved_phase" == "review" ]]; then
+            validate_coding_phase_output "$BRANCH"
             # Mark coding as completed (HOK-1177)
             write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
 
@@ -4638,6 +4735,7 @@ monitor_issue_state() {
           coding_status=$(read_stage_status "$FEATURE_DIR" "coding")
           if [[ "$coding_status" == "running" ]]; then
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
+              validate_coding_phase_output "$BRANCH"
               log "status" "✓ $ISSUE → .coding-complete detected, marking coding as completed"
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
               # Next iteration will detect resolved_phase == "review" and launch review
