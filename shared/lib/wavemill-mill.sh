@@ -928,6 +928,11 @@ cleanup_on_exit() {
   local exit_code=$?
   local launched_issue_file="/tmp/${SESSION}-launched-issues.txt"
 
+  # Enhanced error context for debugging forced exit issues (HOK-1297)
+  if [[ -n "${DEBUG_CLEANUP:-}" ]]; then
+    log_warn "cleanup_on_exit: Starting cleanup (exit_code=$exit_code, session=${SESSION:-unknown})"
+  fi
+
   if [[ ${#ISSUES_IN_PROGRESS[@]} -eq 0 && -f "$launched_issue_file" ]]; then
     while IFS= read -r issue; do
       [[ -n "$issue" ]] && ISSUES_IN_PROGRESS+=("$issue")
@@ -941,11 +946,19 @@ cleanup_on_exit() {
       role=$(jq -r --arg issue "$issue" '.tasks[$issue].challengeRole // empty' "$STATE_FILE" 2>/dev/null)
       linear_issue=$(jq -r --arg issue "$issue" '.tasks[$issue].linearIssueId // .tasks[$issue].challengePairId // $issue' "$STATE_FILE" 2>/dev/null)
       if [[ "$role" != "challenger" ]]; then
-        linear_set_state "${linear_issue:-$issue}" "Backlog" 2>/dev/null || true
+        linear_set_state "${linear_issue:-$issue}" "Backlog" 2>/dev/null || {
+          [[ -n "${DEBUG_CLEANUP:-}" ]] && log_warn "cleanup_on_exit: Failed to reset Linear state for $issue"
+          true
+        }
       fi
-      remove_task_state "$issue" 2>/dev/null || true
+      remove_task_state "$issue" 2>/dev/null || {
+        [[ -n "${DEBUG_CLEANUP:-}" ]] && log_warn "cleanup_on_exit: Failed to remove task state for $issue"
+        true
+      }
     done
   fi
+
+  [[ -n "${DEBUG_CLEANUP:-}" ]] && log_warn "cleanup_on_exit: Cleanup complete"
   exit $exit_code
 }
 trap cleanup_on_exit INT TERM
@@ -5580,6 +5593,16 @@ while :; do
 done
 MONITOR_EOF
 
+# Validate generated monitor script syntax before execution (HOK-1297)
+# This catches any syntax errors that could occur from heredoc expansion issues,
+# variable substitution errors, or transient file corruption during forced exits.
+if ! bash -n "$MONITOR_SCRIPT" 2>/dev/null; then
+  log_error "Generated monitor script has syntax errors:"
+  bash -n "$MONITOR_SCRIPT" 2>&1 | sed 's/^/  /' >&2
+  log_error "Monitor script saved at: $MONITOR_SCRIPT"
+  log_error "This may indicate a bug in the monitor script generation."
+  exit 1
+fi
 
 chmod +x "$MONITOR_SCRIPT"
 
