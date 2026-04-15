@@ -2448,21 +2448,41 @@ validate_planning_phase_output() {
 
   log_warn "WARNING: Planning phase modified source code files: ${out_of_scope_files[*]}"
 
+  local cleanup_failed=0
+
+  # Attempt tracked file cleanup
   if [[ ${#tracked_out_of_scope[@]} -gt 0 ]]; then
     git -C "$wt_dir" reset -q HEAD -- "${tracked_out_of_scope[@]}" 2>/dev/null || true
-    git -C "$wt_dir" checkout -- "${tracked_out_of_scope[@]}" 2>/dev/null || {
-      log_warn "Planning phase validation could not revert tracked source changes"
-      rm -f "$feature_dir/.plan-approved"
-      return 1
-    }
+
+    # Try to checkout each file individually to handle files that don't exist in HEAD
+    local file
+    for file in "${tracked_out_of_scope[@]}"; do
+      if ! git -C "$wt_dir" checkout -- "$file" 2>/dev/null; then
+        # If checkout failed, check if file is now untracked and delete it
+        if ! git -C "$wt_dir" ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+          rm -f "$wt_dir/$file" 2>/dev/null || {
+            log_warn "Planning phase validation could not remove untracked file: $file"
+            cleanup_failed=1
+          }
+        else
+          log_warn "Planning phase validation could not revert tracked file: $file"
+          cleanup_failed=1
+        fi
+      fi
+    done
   fi
 
+  # Always attempt untracked file cleanup (don't skip if tracked cleanup failed)
   if [[ ${#untracked_out_of_scope[@]} -gt 0 ]]; then
     rm -f -- "${untracked_out_of_scope[@]/#/$wt_dir/}" 2>/dev/null || {
       log_warn "Planning phase validation could not remove untracked source changes"
-      rm -f "$feature_dir/.plan-approved"
-      return 1
+      cleanup_failed=1
     }
+  fi
+
+  # Report overall cleanup status
+  if [[ $cleanup_failed -eq 1 ]]; then
+    log_warn "Planning phase validation encountered cleanup errors"
   fi
 
   rm -f "$feature_dir/.plan-approved"
