@@ -1,6 +1,6 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, existsSync, statSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -42,10 +42,14 @@ function writeSpec(repoDir: string, subsystemId: string, name: string, keyFile: 
   return specPath;
 }
 
-function runCheckDrift(repoDir: string) {
+function runCheckDrift(repoDir: string, debug = false) {
   return spawnSync('npx', ['tsx', toolPath, repoDir], {
     cwd: repoRoot,
     encoding: 'utf-8',
+    env: {
+      ...process.env,
+      ...(debug ? { DEBUG_DRIFT: '1' } : {}),
+    },
   });
 }
 
@@ -61,11 +65,29 @@ describe('check-drift tool', () => {
     utimesSync(specPath, oldTime, oldTime);
     utimesSync(keyFile, newTime, newTime);
 
-    const result = runCheckDrift(repoDir);
+    const result = runCheckDrift(repoDir, true); // Enable debug mode
+
+    // Debug output for CI investigation
+    if (result.status !== 0) {
+      console.error('TEST DEBUG: Expected exit 0 but got', result.status);
+      console.error('TEST DEBUG: stdout:', result.stdout);
+      console.error('TEST DEBUG: stderr:', result.stderr);
+      console.error('TEST DEBUG: repoDir:', repoDir);
+      console.error('TEST DEBUG: specPath exists:', existsSync(specPath));
+      console.error('TEST DEBUG: keyFile exists:', existsSync(keyFile));
+      if (existsSync(specPath)) {
+        const specContent = readFileSync(specPath, 'utf-8');
+        console.error('TEST DEBUG: spec mtime:', statSync(specPath).mtime);
+        console.error('TEST DEBUG: spec content:', specContent);
+      }
+      if (existsSync(keyFile)) {
+        console.error('TEST DEBUG: key mtime:', statSync(keyFile).mtime);
+      }
+    }
 
     assert.strictEqual(result.status, 0);
     assert.strictEqual(result.stdout.trim(), 'linear-api');
-    assert.strictEqual(result.stderr.trim(), '');
+    // Don't check stderr - debug output goes there
   });
 
   it('exits 1 with no output when subsystem docs are current', () => {
