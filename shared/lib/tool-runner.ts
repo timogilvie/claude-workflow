@@ -28,7 +28,6 @@
  * @module tool-runner
  */
 
-import dotenv from 'dotenv';
 import { parseArgs } from 'node:util';
 import type { ParseArgsConfig } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
@@ -36,7 +35,15 @@ import { fileURLToPath } from 'node:url';
 import { errorMessage } from './error-utils.ts';
 
 // Load environment variables once (replaces former ./env.js side-effect import)
-dotenv.config({ quiet: true });
+// dotenv is optional - only load if installed (gracefully degrade in test environments)
+(async () => {
+  try {
+    const { default: dotenv } = await import('dotenv');
+    dotenv.config({ quiet: true });
+  } catch {
+    // dotenv not installed, skip .env loading
+  }
+})();
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
