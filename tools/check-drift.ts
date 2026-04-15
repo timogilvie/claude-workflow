@@ -57,40 +57,16 @@ runTool({
     const repoDir = resolveRepoDir(positional[0]);
     const subsystems = loadContextSubsystems(repoDir);
 
-    // Debug logging for CI investigation
-    const debugMode = process.env.DEBUG_DRIFT === '1';
-    if (debugMode) {
-      console.error(`DEBUG: Loaded ${subsystems.length} subsystems from ${repoDir}`);
-      for (const sub of subsystems) {
-        console.error(`DEBUG: Subsystem ${sub.id}: ${sub.keyFiles.length} key files:`, sub.keyFiles);
-      }
-    }
-
     if (subsystems.length === 0) {
-      if (debugMode) console.error('DEBUG: No subsystems found, exiting 1');
       process.exitCode = 1;
       return;
     }
 
     const staleSubsystemIds = subsystems
-      .filter((subsystem) => {
-        const drift = checkSubsystemDrift(subsystem, repoDir);
-        if (debugMode) {
-          console.error(`DEBUG: ${subsystem.id} drift check:`, {
-            isStale: drift.isStale,
-            daysSinceUpdate: drift.daysSinceUpdate,
-            specLastModified: drift.specLastModified,
-            filesLastModified: drift.filesLastModified,
-          });
-        }
-        return drift.isStale;
-      })
+      .filter((subsystem) => checkSubsystemDrift(subsystem, repoDir).isStale)
       .map((subsystem) => subsystem.id);
 
-    if (debugMode) console.error(`DEBUG: Found ${staleSubsystemIds.length} stale subsystems:`, staleSubsystemIds);
-
     if (staleSubsystemIds.length === 0) {
-      if (debugMode) console.error('DEBUG: No stale subsystems, exiting 1');
       process.exitCode = 1;
       return;
     }
