@@ -292,6 +292,7 @@ else
   fi
 
   if grep -qE '^validate_planning_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
     && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' \
     && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Planning phase modified source code, reverted changes and blocked transition' \
     && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'write_stage_result "$FEATURE_DIR" "planning" "awaiting_user"'; then
