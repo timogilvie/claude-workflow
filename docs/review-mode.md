@@ -30,7 +30,7 @@ After implementation completes, the agent:
 4. Repeats up to `maxIterations` (default: 3).
 5. Any remaining issues are surfaced in the validation phase.
 
-If review passes, the branch can proceed to PR creation. When the ready stage is enabled, merge should still wait for `wavemill ready <pr>` or the mill monitor to confirm merge-readiness.
+If review passes, the branch can proceed to PR creation. Merge should still wait for `wavemill ready <pr>` or the mill monitor to confirm merge-readiness unless the repo explicitly disables `ready.enabled`.
 
 ## Standalone Usage
 

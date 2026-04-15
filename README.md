@@ -87,7 +87,7 @@ Auto-approve read-only commands in worktrees to reduce friction during autonomou
 
 ### Ready Stage - Merge Readiness Checks
 
-The ready stage validates whether a reviewed PR is safe to merge right now, covering the phase boundary between review and merge. Use `wavemill ready <pr>` for manual checks, or enable the `ready` phase in `wavemill mill` for monitor-driven gating. The stage is opt-in and disabled by default. See [docs/ready-stage.md](docs/ready-stage.md) for CLI details, monitor behavior, merge policy, and recovery paths.
+The ready stage validates whether a reviewed PR is safe to merge right now, covering the phase boundary between review and merge. Use `wavemill ready <pr>` for manual checks; `wavemill mill` runs the `ready` phase by default before treating a PR as merge-safe. Set `ready.enabled: false` only for repositories that intentionally skip this gate. See [docs/ready-stage.md](docs/ready-stage.md) for CLI details, monitor behavior, merge policy, and recovery paths.
 
 ### `wavemill mill` - Continuous Task Execution
 

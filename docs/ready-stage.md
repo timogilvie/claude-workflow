@@ -297,21 +297,21 @@ Recommended merge rule once real checks are live:
 
 ## Compatibility Mode
 
-The ready stage is opt-in. Existing repositories remain compatible if they do not configure it.
+The ready stage runs by default for mill-managed repositories. Repositories can explicitly disable it only when they intentionally do not want a pre-merge release-readiness gate.
 
 Compatibility cases:
 
-- `ready` missing from `.wavemill-config.json`: ready stage is disabled by default
+- `ready` missing from `.wavemill-config.json`: ready stage is enabled by default
 - `"enabled": false`: ready stage stays disabled
 - `"enabled": true`: ready stage is active and the monitor/CLI should use the ready contract
 
 Backwards-compatibility expectations:
 
-- repositories that have not opted in should not see workflow regressions
+- repositories that need the legacy workflow can set `ready.enabled: false`
 - the ready contract remains stable even as checks are added
-- existing review and merge workflows can continue while teams adopt the ready phase incrementally
+- existing review and merge workflows continue after the ready gate reports `pass` or `warn`
 
-Minimal opt-in example:
+Minimal explicit configuration:
 
 ```json
 {
@@ -443,7 +443,7 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
 
 | Setting | Type | Default | Meaning |
 |---------|------|---------|---------|
-| `ready.enabled` | `boolean` | `false` | Master switch. Must be explicitly enabled. |
+| `ready.enabled` | `boolean` | `true` | Master switch. Set to `false` only to disable the pre-merge gate. |
 | `ready.checks` | `string[]` | `[]` | Checks to run. Empty means all available checks. |
 | `ready.requiredChecks` | `string[]` | `[]` | Subset of checks that must pass for merge approval. |
 

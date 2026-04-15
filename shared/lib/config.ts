@@ -541,12 +541,12 @@ export function getEvalConfig(repoDir?: string): EvalConfig {
 
 /**
  * Get the ready stage config section.
- * Returns defaults if not configured (disabled by default).
+ * Returns defaults if not configured (enabled by default).
  */
 export function getReadyConfig(repoDir?: string): ReadyConfig {
   const config = loadWavemillConfig(repoDir);
   return {
-    enabled: config.ready?.enabled ?? false,
+    enabled: config.ready?.enabled ?? true,
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
   };

@@ -2706,7 +2706,7 @@ write_phase_config() {
     "mode": "$review_mode"
   },
   "ready": {
-    "enabled": ${_CFG_READY_ENABLED:-false}
+    "enabled": ${_CFG_READY_ENABLED:-true}
   },
   "resolvedAt": "$now",
   "forceModel": $force_model_json
@@ -3029,6 +3029,20 @@ ready_state_dir() {
   done
 
   echo "$wt_dir/features/$slug"
+}
+
+ready_stage_allows_merge() {
+  local state_dir="$1"
+  local result_file="$state_dir/.ready-result.json"
+  local status verdict
+
+  [[ "${_CFG_READY_ENABLED:-true}" != "true" ]] && return 0
+  [[ -f "$result_file" ]] || return 1
+
+  status=$(jq -r '.status // empty' "$result_file" 2>/dev/null || echo "")
+  verdict=$(jq -r '.artifacts.verdict // empty' "$result_file" 2>/dev/null || echo "")
+
+  [[ "$status" == "completed" && ( "$verdict" == "pass" || "$verdict" == "warn" ) ]]
 }
 
 write_ready_attention_file() {
@@ -4325,6 +4339,18 @@ monitor_issue_state() {
   # If already merged or completed-external (requireConfirm), wait for window close then cleanup
   task_status=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].status // empty')
   if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
+    if [[ "$task_status" == "merged" && "${_CFG_READY_ENABLED:-true}" == "true" ]]; then
+      local merged_ready_dir
+      merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+      if ! ready_stage_allows_merge "$merged_ready_dir"; then
+        log "status" "⛔ $ISSUE → PR #$PR was merged before ready checks passed"
+        write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
+        set_window_attention_state "$WIN" "needs-user"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+    fi
+
     set_window_attention_state "$WIN" "clear"
     # When quit is requested, force-clean merged tasks instead of waiting for the
     # user to close the review window (which blocks shutdown indefinitely).
@@ -4384,9 +4410,40 @@ monitor_issue_state() {
         log "info" "$pr_details"
       fi
 
-      if is_challenge_task "$ISSUE"; then
-        maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
-        maybe_run_challenge_comparison "$ISSUE"
+      write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
+      set_task_phase "$ISSUE" "review"
+
+      if [[ "${_CFG_READY_ENABLED:-true}" == "true" ]]; then
+        local title launch_rc
+        set_task_phase "$ISSUE" "ready"
+        title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+        if [[ -z "$title" ]]; then
+          issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+          title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+        fi
+
+        launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"
+        launch_rc=$?
+        if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+          log "status" "⛔ $ISSUE → Workflow aborted during ready launch"
+          set_task_phase "$ISSUE" "aborted"
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+        fi
+        if [[ "$launch_rc" -eq 3 ]]; then
+          set_window_attention_state "$WIN" "clear"
+          log "status" "⚠ $ISSUE → Ready detected conflicts, launching remediation"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+        if [[ "$launch_rc" -ne 0 ]]; then
+          log "status" "⚠ $ISSUE → Ready checks failed (PR #$PR)"
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+        fi
+        set_window_attention_state "$WIN" "needs-user"
+        log "status" "✓ $ISSUE → Ready checks completed for PR #$PR"
+        return 0
       fi
     else
       # No PR in current repo - check Linear issue state for cross-repo completion
@@ -4816,7 +4873,7 @@ monitor_issue_state() {
           # review -> ready transition for PR-backed tasks runs in the PR
           # lifecycle section below so resumed tasks can still advance.
           # Review is no longer running - check if PR was created and transition to ready phase if enabled
-          if [[ -n "$pr_number" ]] && [[ "${_CFG_READY_ENABLED:-false}" == "true" ]]; then
+          if [[ -n "$pr_number" ]] && [[ "${_CFG_READY_ENABLED:-true}" == "true" ]]; then
             # Mark review as completed with PR artifact (HOK-1177)
             write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
 
@@ -5034,7 +5091,7 @@ monitor_issue_state() {
         return 0
       fi
 
-      if [[ "${_CFG_READY_ENABLED:-false}" == "true" ]]; then
+      if [[ "${_CFG_READY_ENABLED:-true}" == "true" ]]; then
         review_status=$(read_stage_status "$FEATURE_DIR" "review")
         if [[ "$review_status" == "running" || -z "$review_status" || "$review_status" == "completed" ]]; then
           write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
@@ -5137,6 +5194,18 @@ monitor_issue_state() {
   # Check if merged
   if validate_pr_merge "$PR"; then
     log "status" "✓ $ISSUE → PR #$PR MERGED"
+    if [[ "${_CFG_READY_ENABLED:-true}" == "true" ]]; then
+      local merged_ready_dir
+      merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+      if ! ready_stage_allows_merge "$merged_ready_dir"; then
+        log "status" "⛔ $ISSUE → PR #$PR was merged before ready checks passed"
+        write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
+        set_window_attention_state "$WIN" "needs-user"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+    fi
+
     set_window_attention_state "$WIN" "clear"
 
     # Post-merge eval (non-blocking: always exits 0)

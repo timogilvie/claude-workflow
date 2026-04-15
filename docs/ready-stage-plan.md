@@ -368,7 +368,7 @@ In `.wavemill-config.json`:
 ```json
 {
   "ready": {
-    "enabled": false,  // Must be explicitly enabled
+    "enabled": true,   // Default; set false only to disable the gate
     "checks": [],      // Empty = run all available checks
     "requiredChecks": []  // Subset that must pass
   }

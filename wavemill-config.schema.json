@@ -416,8 +416,8 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Enable the ready stage. Must be explicitly enabled."
+          "default": true,
+          "description": "Enable the ready stage. Set to false only to explicitly disable the pre-merge gate."
         },
         "checks": {
           "type": "array",
