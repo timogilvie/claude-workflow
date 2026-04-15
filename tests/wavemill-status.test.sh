@@ -11,7 +11,7 @@ pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 
 strip_ansi() {
-  perl -pe 's/\e\[[0-9;]*m//g'
+  perl -pe 's/\e\[[0-9;]*[A-Za-z]//g'
 }
 
 run_render() {
@@ -84,6 +84,7 @@ run_render() {
     }
 
     render_dashboard
+    cp "$FRAME" "${output_file}.raw"
     strip_ansi < "$FRAME" > "$output_file"
   )
 }
@@ -159,6 +160,12 @@ EOF
 
 OUTPUT_ONE="$TMP_DIR/output-one.txt"
 run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ONE"
+
+if grep -q $'\033\\[K' "${OUTPUT_ONE}.raw"; then
+  pass "includes end-of-line clearing in raw dashboard frame"
+else
+  fail "raw dashboard frame is missing end-of-line clearing"
+fi
 
 if grep -q '📥 INBOX (2)' "$OUTPUT_ONE" && grep -q '⚡ ACTIVE (1)' "$OUTPUT_ONE"; then
   pass "renders inbox and active sections with counts"

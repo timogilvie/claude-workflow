@@ -24,6 +24,9 @@ PR_TTL=15
 
 # Colors
 G='\033[32m'; Y='\033[33m'; R='\033[31m'; D='\033[90m'; B='\033[1m'; N='\033[0m'
+# Erase from cursor to end-of-line after each rendered row so shorter redraws
+# cannot leave stale terminal cells behind.
+EL='\033[K'
 
 # Hide cursor during rendering
 tput civis 2>/dev/null || true
@@ -245,10 +248,10 @@ window_index() {
 render_section_header() {
   local title="$1"
   local count="$2"
-  printf "\n${B}%s${N} ${D}(%s)${N}\n" "$title" "$count" >> "$FRAME"
-  printf "${D}%-10s  %4s  %-22s  %6s  %-12s  %-11s  %s${N}\n" \
+  printf "${EL}\n${B}%s${N} ${D}(%s)${N}${EL}\n" "$title" "$count" >> "$FRAME"
+  printf "${D}%-10s  %4s  %-22s  %6s  %-12s  %-11s  %s${N}${EL}\n" \
     "ISSUE" "PANE" "TASK" "TIME" "PHASE" "AGENT" "PR" >> "$FRAME"
-  printf "${D}%s${N}\n" \
+  printf "${D}%s${N}${EL}\n" \
     "────────────────────────────────────────────────────────────────────────────────" >> "$FRAME"
 }
 
@@ -321,7 +324,7 @@ render_task_row() {
   (( ${#ds} > 22 )) && ds="${ds:0:19}..."
   pane=$(window_index "$win")
 
-  printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b\n" \
+  printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
     "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
   if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
@@ -331,7 +334,7 @@ render_task_row() {
     working|waiting|done) reported="" ;;
   esac
   if [[ -n "$reported" ]]; then
-    printf "${D}%10s  %4s  └─ %s${N}\n" "" "" "$reported" >> "$FRAME"
+    printf "${D}%10s  %4s  └─ %s${N}${EL}\n" "" "" "$reported" >> "$FRAME"
   fi
 }
 
@@ -353,7 +356,7 @@ render_active_section() {
 
   render_section_header "⚡ ACTIVE" "$count"
   if (( count == 0 )); then
-    printf "${D}No active tasks${N}\n" >> "$FRAME"
+    printf "${D}No active tasks${N}${EL}\n" >> "$FRAME"
     return
   fi
 
@@ -390,18 +393,18 @@ render_dashboard() {
 
   # Build entire frame into a temp file (avoids $() stripping newlines)
   : > "$FRAME"
-  printf "${B}Wavemill Dashboard${N}  ${D}%s${N}\n" "$(date '+%H:%M:%S')" >> "$FRAME"
+  printf "${B}Wavemill Dashboard${N}  ${D}%s${N}${EL}\n" "$(date '+%H:%M:%S')" >> "$FRAME"
   free_slots=""
   if [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]]; then
     free_slots=$(jq -r '.freeSlots // empty' "$STATE_FILE" 2>/dev/null || echo "")
   fi
   if [[ -n "$free_slots" ]]; then
-    printf "${D}├─ %b${N}\n" "${G}${free_slots} slot(s) available${N}" >> "$FRAME"
+    printf "${D}├─ %b${N}${EL}\n" "${G}${free_slots} slot(s) available${N}" >> "$FRAME"
   fi
 
   tasks=$(gather_tasks)
   if [[ -z "$tasks" ]]; then
-    printf "${D}No active tasks${N}\n" >> "$FRAME"
+    printf "${D}No active tasks${N}${EL}\n" >> "$FRAME"
   else
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
@@ -434,7 +437,7 @@ render_dashboard() {
     render_active_section
   fi
 
-  printf "\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}\n" >> "$FRAME"
+  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
 }
 
 run_dashboard() {
