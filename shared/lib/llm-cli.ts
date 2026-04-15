@@ -1121,6 +1121,7 @@ async function callLLMWithRetry(
  */
 export function parseJsonFromLLM<T = any>(text: string): T {
   let cleaned = text.trim();
+  let cleanedBeforeJsonExtraction = cleaned;
 
   // Strategy 1: Strip markdown code fences
   if (cleaned.startsWith('```json')) {
@@ -1135,6 +1136,7 @@ export function parseJsonFromLLM<T = any>(text: string): T {
     /<\/?(?:tool_name|parameters|prompt|command|subagent_type|pattern|file_path|include|path|output_mode|context)[^>]*>/g,
     ''
   );
+  cleanedBeforeJsonExtraction = cleaned;
 
   // Strategy 3: Find first complete JSON object using brace-depth tracking
   // This is the most robust approach for extracting JSON from mixed content
@@ -1163,14 +1165,49 @@ export function parseJsonFromLLM<T = any>(text: string): T {
     cleaned = cleaned.substring(jsonStart, jsonEnd);
   }
 
+  if (hasJavaScriptAssignmentWrapper(cleanedBeforeJsonExtraction, jsonStart)) {
+    throw new Error(
+      `LLM returned JavaScript code instead of JSON.\n\nFirst 500 chars:\n${cleaned.substring(0, 500)}`
+    );
+  }
+
   // Strategy 4: Fallback to raw JSON.parse
   try {
     return JSON.parse(cleaned) as T;
   } catch (error) {
     const errorMsg = (error as Error).message;
     const preview = cleaned.substring(0, 500);
+    if (looksLikeJavaScriptInsteadOfJson(cleaned, cleanedBeforeJsonExtraction, jsonStart)) {
+      throw new Error(
+        `LLM returned JavaScript code instead of JSON.\n\nFirst 500 chars:\n${preview}`
+      );
+    }
     throw new Error(
       `Failed to parse JSON from LLM output: ${errorMsg}\n\nFirst 500 chars:\n${preview}`
     );
   }
+}
+
+function looksLikeJavaScriptInsteadOfJson(jsonCandidate: string, originalText: string, jsonStart: number): boolean {
+  const identifier = '[a-zA-Z_$][a-zA-Z0-9_$]*';
+  const jsObjectPatterns = [
+    new RegExp(`\\{\\s*${identifier}\\s*[,}]`),       // { identifier } or { identifier,
+    new RegExp(`[{,]\\s*${identifier}\\s*:`),         // { identifier: value
+    new RegExp(`[{,]\\s*\\.\\.\\.${identifier}`),     // { ...rest } or , ...rest
+    /=>/,                                             // arrow function
+  ];
+
+  return (
+    jsObjectPatterns.some((pattern) => pattern.test(jsonCandidate)) ||
+    hasJavaScriptAssignmentWrapper(originalText, jsonStart)
+  );
+}
+
+function hasJavaScriptAssignmentWrapper(text: string, jsonStart: number): boolean {
+  if (jsonStart === 0) {
+    return false;
+  }
+
+  const prefix = jsonStart > 0 ? text.substring(0, jsonStart) : text;
+  return /\b(?:const|let|var)\s+[a-zA-Z_$][a-zA-Z0-9_$]*\s*=/.test(prefix);
 }

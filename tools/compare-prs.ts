@@ -22,6 +22,7 @@ import {
   tryGh,
   validateComparisonJson,
   withBodyFile,
+  type ValidatedComparisonResult,
 } from '../shared/lib/pr-comparison.ts';
 
 runTool({
@@ -129,14 +130,39 @@ runTool({
       primaryRouting,
       challengerRouting,
     });
-    const response = await callClaude(prompt, {
+    let response = await callClaude(prompt, {
       mode: 'sync',
       model: comparisonModel,
       timeout: 180_000,
       retry: true,
       maxRetries: 2,
     });
-    const verdict = validateComparisonJson(parseJsonFromLLM(response.text));
+    let verdict: ValidatedComparisonResult;
+    try {
+      verdict = validateComparisonJson(parseJsonFromLLM(response.text));
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('JavaScript code instead of JSON')) {
+        throw error;
+      }
+
+      console.warn('LLM returned JavaScript syntax. Retrying with stricter JSON instructions...');
+      const stricterPrompt = `${prompt}
+
+IMPORTANT: Return ONLY valid JSON. Do NOT use:
+- JavaScript shorthand properties (use "key": value, not key)
+- Spread syntax (...rest)
+- Unquoted property names
+- Code comments or explanations
+
+Return a raw JSON object with no code fences, no comments, and no JavaScript syntax.`;
+      response = await callClaude(stricterPrompt, {
+        mode: 'sync',
+        model: comparisonModel,
+        timeout: 180_000,
+        retry: false,
+      });
+      verdict = validateComparisonJson(parseJsonFromLLM(response.text));
+    }
     const winnerModel = verdict.winner === 'primary' ? primaryModel : challengerModel;
 
     // Compute enrichment fields
