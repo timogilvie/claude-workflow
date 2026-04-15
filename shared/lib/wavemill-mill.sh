@@ -928,6 +928,11 @@ cleanup_on_exit() {
   local exit_code=$?
   local launched_issue_file="/tmp/${SESSION}-launched-issues.txt"
 
+  # Enhanced error context for debugging forced exit issues (HOK-1297)
+  if [[ -n "${DEBUG_CLEANUP:-}" ]]; then
+    log_warn "cleanup_on_exit: Starting cleanup (exit_code=$exit_code, session=${SESSION:-unknown})"
+  fi
+
   if [[ ${#ISSUES_IN_PROGRESS[@]} -eq 0 && -f "$launched_issue_file" ]]; then
     while IFS= read -r issue; do
       [[ -n "$issue" ]] && ISSUES_IN_PROGRESS+=("$issue")
@@ -941,11 +946,19 @@ cleanup_on_exit() {
       role=$(jq -r --arg issue "$issue" '.tasks[$issue].challengeRole // empty' "$STATE_FILE" 2>/dev/null)
       linear_issue=$(jq -r --arg issue "$issue" '.tasks[$issue].linearIssueId // .tasks[$issue].challengePairId // $issue' "$STATE_FILE" 2>/dev/null)
       if [[ "$role" != "challenger" ]]; then
-        linear_set_state "${linear_issue:-$issue}" "Backlog" 2>/dev/null || true
+        linear_set_state "${linear_issue:-$issue}" "Backlog" 2>/dev/null || {
+          [[ -n "${DEBUG_CLEANUP:-}" ]] && log_warn "cleanup_on_exit: Failed to reset Linear state for $issue"
+          true
+        }
       fi
-      remove_task_state "$issue" 2>/dev/null || true
+      remove_task_state "$issue" 2>/dev/null || {
+        [[ -n "${DEBUG_CLEANUP:-}" ]] && log_warn "cleanup_on_exit: Failed to remove task state for $issue"
+        true
+      }
     done
   fi
+
+  [[ -n "${DEBUG_CLEANUP:-}" ]] && log_warn "cleanup_on_exit: Cleanup complete"
   exit $exit_code
 }
 trap cleanup_on_exit INT TERM
@@ -5580,6 +5593,49 @@ while :; do
 done
 MONITOR_EOF
 
+# HOK-1297: Fix bash syntax error reported during forced exit
+#
+# INVESTIGATION SUMMARY (Plan Phase 3: Fix Identified Issues)
+# ============================================================
+# Bug Report: "syntax error near unexpected token `(' at line 5572"
+# Trigger: Forced exit after challenge panes failed to exit when issues lost their challenge
+# Date: April 15, 2026
+#
+# Investigation Steps Performed:
+# 1. ✓ Ran `bash -n shared/lib/wavemill-mill.sh` → PASS (no syntax errors found)
+# 2. ✓ Examined line 5572: `sleep "$POLL_SECONDS"` (syntactically correct)
+# 3. ✓ Checked git history: No syntax fixes between bug report and current HEAD
+# 4. ✓ Verified current file: 5621 lines, all syntax checks pass
+# 5. ✓ Searched for invalid 'local' keywords outside function context → NONE FOUND
+#    (Previous bugs: fc198c8, d45ea00 fixed similar runtime errors with 'local')
+# 6. ✓ Checked heredoc terminator (line 5594: MONITOR_EOF) → CORRECT
+#
+# Conclusion: SCENARIO C - Issue Not Reproducible (per Plan Phase 3)
+# - Syntax error was likely transient (file corruption during forced exit)
+# - OR error message showed misleading line number
+# - Current codebase is syntactically valid
+#
+# DEFENSIVE SAFEGUARDS (Plan Phase 4)
+# ====================================
+# Since direct fix isn't possible, adding validation to prevent similar issues:
+#
+# 1. Monitor script syntax validation (below)
+#    - Catches syntax errors from heredoc expansion or variable substitution
+#    - Provides diagnostic output if validation fails
+#    - Prevents cryptic runtime errors during forced exit scenarios
+#
+# 2. Enhanced cleanup trap handler (line 928)
+#    - Optional DEBUG_CLEANUP=1 for detailed error context
+#    - Non-fatal error handling preserved
+#
+validate_output=$(bash -n "$MONITOR_SCRIPT" 2>&1)
+if [[ -n "$validate_output" ]]; then
+  log_error "Generated monitor script has syntax errors:"
+  echo "$validate_output" | sed 's/^/  /' >&2
+  log_error "Monitor script saved at: $MONITOR_SCRIPT"
+  log_error "This may indicate a bug in the monitor script generation."
+  exit 1
+fi
 
 chmod +x "$MONITOR_SCRIPT"
 
