@@ -93,7 +93,8 @@ export interface ReadyStageConfig {
   /**
    * Enable the ready stage.
    *
-   * Must be explicitly set to `true`. Default is `false`.
+   * Defaults to `true`. Set to `false` only for repositories that intentionally
+   * do not want the pre-merge readiness gate.
    */
   enabled?: boolean;
 

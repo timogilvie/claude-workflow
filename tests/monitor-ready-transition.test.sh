@@ -35,7 +35,8 @@ extract_function() {
 }
 
 MONITOR_FUNC_FILE="$TEST_TMP/monitor_issue_state.sh"
-extract_function "$MILL_SCRIPT" "monitor_issue_state" > "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_stage_allows_merge" > "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then
   echo "Could not extract monitor_issue_state()"
@@ -60,10 +61,12 @@ run_monitor_case() {
     SLUG="monitor-ready"
     BRANCH="task/monitor-ready"
     PR="321"
+    FOUND_PR=""
     SESSION="ready-transition-test"
     WORKTREE_ROOT="$CASE_DIR/worktrees"
     REPO_DIR="$CASE_DIR/repo"
     BASE_BRANCH="main"
+    AGENT_CMD="codex"
     STATE_FILE="$CASE_DIR/state.json"
     API_TIMEOUT=5
     AUTO_EVAL="false"
@@ -77,6 +80,7 @@ run_monitor_case() {
     REVIEW_STATUS="running"
     READY_STATUS="completed"
     PR_STATUS="OPEN"
+    VALIDATE_MERGED="false"
     RESTORE_SHOULD_FAIL="false"
     READY_LAUNCH_RC=0
     ABORTED="false"
@@ -84,6 +88,7 @@ run_monitor_case() {
     SET_PHASE_TO=""
     READY_LAUNCH_COUNT=0
     RESTORE_COUNT=0
+    CLEANUP_COUNT=0
     WRITE_STAGE_CALLS=""
     WRITE_READY_ATTENTION_CALLS=""
     LOG_OUTPUT=""
@@ -109,6 +114,21 @@ run_monitor_case() {
         READY_STATUS="completed"
         touch "$READY_DIR/.conflict-detected"
         ;;
+      merged_without_ready)
+        PR_STATUS="MERGED"
+        VALIDATE_MERGED="true"
+        ;;
+      merged_after_ready)
+        PR_STATUS="MERGED"
+        VALIDATE_MERGED="true"
+        printf "%s\n" "{\"status\":\"completed\",\"artifacts\":{\"verdict\":\"pass\"}}" > "$READY_DIR/.ready-result.json"
+        ;;
+      discovered_pr_from_coding)
+        unset "PR_BY_ISSUE[$ISSUE]"
+        PR=""
+        FOUND_PR="321"
+        CURRENT_PHASE="coding"
+        ;;
       *)
         echo "unknown case: $CASE_NAME" >&2
         exit 1
@@ -120,16 +140,20 @@ run_monitor_case() {
     read_state_value() { printf "%s\n" "${1-}"; }
     set_window_attention_state() { ATTENTION_STATE="$2"; }
     handle_agent_error_recovery() { :; }
-    cleanup_completed_task() { :; }
+    cleanup_completed_task() { CLEANUP_COUNT=$((CLEANUP_COUNT + 1)); }
     execute() { :; }
     tmux() { return 1; }
     get_linear_issue_id() { printf "%s\n" "$ISSUE"; }
     should_update_linear_state() { return 1; }
     linear_set_state() { :; }
+    get_task_meta() { :; }
+    save_task_state() { :; }
+    _with_timeout() { shift; "$@"; }
+    gh() { return 1; }
     is_challenge_task() { return 1; }
     maybe_run_challenge_eval() { :; }
     maybe_run_challenge_comparison() { :; }
-    find_pr_for_branch() { printf "%s\n" "$PR"; }
+    find_pr_for_branch() { printf "%s\n" "${FOUND_PR:-$PR}"; }
     get_task_phase() { printf "%s\n" "$CURRENT_PHASE"; }
     pr_state() { printf "%s\n" "$PR_STATUS"; }
     resolve_phase() { printf "%s\n" "$RESOLVED_PHASE"; }
@@ -162,7 +186,7 @@ run_monitor_case() {
       RESTORE_COUNT=$((RESTORE_COUNT + 1))
       [[ "$RESTORE_SHOULD_FAIL" != "true" ]]
     }
-    validate_pr_merge() { return 1; }
+    validate_pr_merge() { [[ "$VALIDATE_MERGED" == "true" ]]; }
     write_ready_attention_file() {
       printf -v WRITE_READY_ATTENTION_CALLS '%s%s\n' "$WRITE_READY_ATTENTION_CALLS" "$*"
     }
@@ -189,14 +213,16 @@ run_monitor_case() {
     monitor_issue_state "$ISSUE"
 
     stage_summary=$(printf "%s" "$WRITE_STAGE_CALLS" | tr "\n" ";")
-    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\n" \
+    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\n" \
       "$CURRENT_PHASE" \
       "$ATTENTION_STATE" \
       "$READY_LAUNCH_COUNT" \
       "$RESTORE_COUNT" \
+      "$CLEANUP_COUNT" \
       "$active_count" \
       "$stage_summary" \
-      "${READY_LAUNCH_ARGS:-}"
+      "${READY_LAUNCH_ARGS:-}" \
+      "$WRITE_READY_ATTENTION_CALLS"
   '
 }
 
@@ -217,6 +243,19 @@ ready_conflict_output="$(run_monitor_case ready_conflict_rerun)"
 check_contains "ready conflict rerun keeps task in ready" "$ready_conflict_output" "phase=ready"
 check_contains "ready conflict rerun launches ready checks again" "$ready_conflict_output" "ready_launches=1"
 check_contains "ready conflict rerun leaves attention on task" "$ready_conflict_output" "attention=needs-user"
+
+merged_without_ready_output="$(run_monitor_case merged_without_ready)"
+check_contains "merged PR without ready pass is blocked" "$merged_without_ready_output" "attention=needs-user"
+check_contains "merged PR without ready pass is not cleaned up" "$merged_without_ready_output" "cleanup_count=0"
+check_contains "merged PR without ready pass writes attention" "$merged_without_ready_output" "Release Readiness Check passed"
+
+merged_after_ready_output="$(run_monitor_case merged_after_ready)"
+check_contains "merged PR after ready pass can clean up" "$merged_after_ready_output" "cleanup_count=1"
+
+discovered_pr_from_coding_output="$(run_monitor_case discovered_pr_from_coding)"
+check_contains "newly discovered PR moves stale coding phase to ready" "$discovered_pr_from_coding_output" "phase=ready"
+check_contains "newly discovered PR launches ready immediately" "$discovered_pr_from_coding_output" "ready_launches=1"
+check_contains "newly discovered PR does not restore review window first" "$discovered_pr_from_coding_output" "restore_calls=0"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

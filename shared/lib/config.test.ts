@@ -28,6 +28,7 @@ import {
   getPermissionsConfig,
   getDashboardConfig,
   getHokusaiSubmissionConfig,
+  getReadyConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -724,6 +725,34 @@ test('getPermissionsConfig returns permissions section', () => {
     assert.equal(permissionsConfig.autoApprovePatterns?.[1], 'gh pr view*');
     assert.equal(permissionsConfig.worktreeMode?.enabled, true);
     assert.equal(permissionsConfig.worktreeMode?.autoApproveReadOnly, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getReadyConfig enables ready stage by default', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, '{}');
+
+    const readyConfig = getReadyConfig(tmp);
+    assert.equal(readyConfig.enabled, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getReadyConfig honors explicit disable', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: { enabled: false }
+    }));
+
+    const readyConfig = getReadyConfig(tmp);
+    assert.equal(readyConfig.enabled, false);
   } finally {
     cleanUp(tmp);
   }

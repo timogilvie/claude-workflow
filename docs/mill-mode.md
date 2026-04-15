@@ -37,7 +37,7 @@ AGENT_CMD=codex wavemill mill
 
 ## Ready Phase
 
-When the ready stage is enabled, `wavemill mill` inserts a merge-readiness phase after PR creation and before merge completion:
+By default, `wavemill mill` inserts a merge-readiness phase after PR creation and before merge completion:
 
 ```text
 review -> ready -> merge
