@@ -419,6 +419,11 @@ if [[ ! -f "$RUNNER_SCRIPT" ]]; then
   exit 1
 fi
 
+# Skip in CI environments - tmux session creation fails in containers
+if [[ -n "${CI:-}" ]]; then
+  skip "tmux layout test requires interactive terminal (not available in CI)"
+fi
+
 for required_cmd in bash jq tmux; do
   command -v "$required_cmd" >/dev/null 2>&1 || skip "$required_cmd is required for the tmux layout integration test"
 done

@@ -293,7 +293,7 @@ write_plan "$SUCCESS_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-succ
 SUCCESS_OUTPUT="$TMP_ROOT/success-output.txt"
 bash "$RUNNER_SCRIPT" "$SUCCESS_PLAN" > "$SUCCESS_OUTPUT" 2>&1
 
-if jq -e '.tasks["HOK-1001"].phase == "executing"' "$STATE_FILE" >/dev/null 2>&1; then
+if jq -e '.tasks["HOK-1001"].phase == "coding"' "$STATE_FILE" >/dev/null 2>&1; then
   pass "startup runner writes workflow state only after in-tmux startup succeeds"
 else
   fail "startup runner did not persist workflow state for the launched task"
@@ -337,7 +337,7 @@ else
   fail "startup runner did not write the monitor env for resume-only startup"
 fi
 
-if grep -q 'No new tasks selected. Resuming 1 in-flight task(s) from previous session.' "$EMPTY_OUTPUT"; then
+if grep -q 'No new tasks selected. Resuming 1 in-flight task(s) from previous session.' "$EMPTY_STATUS_LOG"; then
   pass "startup runner logs resume-only startup when launch plan is empty"
 else
   fail "startup runner did not report resume-only startup"
@@ -379,7 +379,7 @@ else
   fail "startup runner updated Linear for a failed task launch"
 fi
 
-if grep -q 'FAILED at step' "$FAIL_OUTPUT" && grep -q '── Task 2/2: HOK-1002' "$FAIL_OUTPUT"; then
+if grep -q 'FAILED at step' "$FAIL_STATUS_LOG" && grep -q '── Task 2/2: HOK-1002' "$FAIL_STATUS_LOG"; then
   pass "startup failures stay visible in the tmux startup log output"
 else
   fail "startup failure logging is missing from the control-pane output"
