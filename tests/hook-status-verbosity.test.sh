@@ -22,6 +22,16 @@ assert_last_log() {
   fi
 }
 
+assert_no_log_since_last() {
+  local name="$1" previous_count="$2"
+
+  if (( ${#LOG_MESSAGES[@]} == previous_count )); then
+    pass "$name"
+  else
+    fail "$name"
+  fi
+}
+
 echo "=== Hook Status Verbosity ==="
 
 if [[ ! -f "$COMMON_LIB" ]]; then
@@ -31,7 +41,7 @@ else
   source "$COMMON_LIB"
 
   TMP_DIR="$(mktemp -d)"
-  trap 'rm -rf "$TMP_DIR"' EXIT
+  trap 'rm -rf "$TMP_DIR"; rm -f "/tmp/wavemill-${SESSION:-}-hook-warnings.txt"' EXIT
 
   declare -a LOG_LEVELS=()
   declare -a LOG_MESSAGES=()
@@ -49,23 +59,28 @@ else
     LOG_MESSAGES+=("$message")
   }
 
-  mkdir -p "$TMP_DIR/repo/shared/hooks"
-  cat > "$TMP_DIR/repo/shared/hooks/claude-status-hook.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$TMP_DIR/repo/shared/hooks/claude-status-hook.sh"
-
   mkdir -p "$TMP_DIR/worktree/.claude"
   echo '{}' > "$TMP_DIR/worktree/.claude/settings.local.json"
-  configure_agent_hooks "claude" "$TMP_DIR/worktree" "$TMP_DIR/repo"
+  export TOOLS_DIR="$REPO_DIR/tools"
+  export SESSION="hook-status-test-$$"
+  rm -f "/tmp/wavemill-${SESSION}-hook-warnings.txt"
+
+  configure_agent_hooks "claude" "$TMP_DIR/worktree"
   assert_last_log "claude hook setup logs at debug" "debug" "Configured Claude hook status in"
 
-  configure_agent_hooks "codex" "$TMP_DIR/worktree" "$TMP_DIR/repo"
+  configure_agent_hooks "codex" "$TMP_DIR/worktree"
   assert_last_log "codex hook setup logs at debug" "debug" "Codex status tracking via launcher exit hook"
 
-  configure_agent_hooks "cursor" "$TMP_DIR/worktree" "$TMP_DIR/repo"
+  configure_agent_hooks "cursor" "$TMP_DIR/worktree"
   assert_last_log "generic hook setup logs at debug" "debug" "Generic agent status tracking via process monitor"
+
+  export TOOLS_DIR="$TMP_DIR/missing-tools"
+  warning_count=${#LOG_MESSAGES[@]}
+  configure_agent_hooks "claude" "$TMP_DIR/worktree"
+  assert_last_log "missing install hook warns once" "warn" "Hook status unavailable"
+
+  configure_agent_hooks "claude" "$TMP_DIR/worktree"
+  assert_no_log_since_last "missing install hook is silent after first warning" $((warning_count + 1))
 fi
 
 echo ""

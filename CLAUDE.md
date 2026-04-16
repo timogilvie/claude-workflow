@@ -138,8 +138,10 @@ Wavemill tracks agent lifecycle using a JSON status file contract at `/tmp/wavem
 
 **Hook Configuration** ([wavemill-common.sh](shared/lib/wavemill-common.sh)):
 - `configure_agent_hooks()` dynamically writes `.claude/settings.local.json` per-worktree
+- Claude hook adapters are always loaded from the wavemill installation at `$TOOLS_DIR/../shared/hooks/`
 - Only affects wavemill-launched agents, not standalone Claude usage
 - Called before each phase launch (planning, coding, review)
+- Missing wavemill hook adapters warn once per session via `/tmp/wavemill-${SESSION}-hook-warnings.txt`
 
 ### JSON Status Format
 
