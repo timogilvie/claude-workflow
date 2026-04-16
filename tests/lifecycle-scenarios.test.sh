@@ -104,6 +104,7 @@ for fn in \
   resolve_phase \
   _persist_phase \
   ready_stage_allows_merge \
+  ready_stage_pending_verdict \
   monitor_issue_state
 do
   extract_function "$MILL_SCRIPT" "$fn" >> "$MONITOR_FUNC_FILE"

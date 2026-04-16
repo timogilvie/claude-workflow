@@ -36,6 +36,7 @@ extract_function() {
 
 MONITOR_FUNC_FILE="$TEST_TMP/monitor_issue_state.sh"
 extract_function "$MILL_SCRIPT" "ready_stage_allows_merge" > "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then
@@ -111,6 +112,30 @@ run_monitor_case() {
         CURRENT_PHASE="ready"
         READY_STATUS="completed"
         touch "$READY_DIR/.conflict-detected"
+        ;;
+      ready_pending_repolls_ci)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=4
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"pending"}}
+JSON
+        ;;
+      ready_pending_transitions_to_pass)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=0
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"pending"}}
+JSON
+        ;;
+      ready_pending_failure_needs_user)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=1
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"pending"}}
+JSON
         ;;
       ready_conflict_merged)
         CURRENT_PHASE="ready"
@@ -252,6 +277,21 @@ ready_conflict_output="$(run_monitor_case ready_conflict_rerun)"
 check_contains "ready conflict rerun keeps task in ready" "$ready_conflict_output" "phase=ready"
 check_contains "ready conflict rerun launches ready checks again" "$ready_conflict_output" "ready_launches=1"
 check_contains "ready conflict rerun leaves attention on task" "$ready_conflict_output" "attention=needs-user"
+
+ready_pending_repolls_ci_output="$(run_monitor_case ready_pending_repolls_ci)"
+check_contains "pending ready re-polls CI" "$ready_pending_repolls_ci_output" "ready_launches=1"
+check_contains "pending ready stays in ready phase" "$ready_pending_repolls_ci_output" "phase=ready"
+check_contains "pending ready does not flag user" "$ready_pending_repolls_ci_output" "attention=clear"
+check_contains "pending ready holds slot active" "$ready_pending_repolls_ci_output" "active_count=1"
+
+ready_pending_transitions_to_pass_output="$(run_monitor_case ready_pending_transitions_to_pass)"
+check_contains "pending ready passes on re-poll" "$ready_pending_transitions_to_pass_output" "ready_launches=1"
+check_contains "pending ready pass keeps attention clear" "$ready_pending_transitions_to_pass_output" "attention=clear"
+check_contains "pending ready pass holds slot active" "$ready_pending_transitions_to_pass_output" "active_count=1"
+
+ready_pending_failure_needs_user_output="$(run_monitor_case ready_pending_failure_needs_user)"
+check_contains "pending ready failure relaunches once" "$ready_pending_failure_needs_user_output" "ready_launches=1"
+check_contains "pending ready failure needs user" "$ready_pending_failure_needs_user_output" "attention=needs-user"
 
 ready_conflict_merged_output="$(run_monitor_case ready_conflict_merged)"
 check_contains "ready merge wins over conflict rerun" "$ready_conflict_merged_output" "cleanup_count=1"
