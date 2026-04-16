@@ -2397,6 +2397,65 @@ ready_conflict_launch_head() {
   fi
 }
 
+ready_remediation_attempts() {
+  local feature_dir="$1"
+  local result_file="$feature_dir/.ready-result.json"
+  if [[ -f "$result_file" ]]; then
+    jq -r '.artifacts.remediationAttempts // 0' "$result_file" 2>/dev/null || echo "0"
+  else
+    echo "0"
+  fi
+}
+
+ready_remediation_launch_head() {
+  local feature_dir="$1"
+  local result_file="$feature_dir/.ready-result.json"
+  if [[ -f "$result_file" ]]; then
+    jq -r '.artifacts.remediationLaunchHead // empty' "$result_file" 2>/dev/null || echo ""
+  else
+    echo ""
+  fi
+}
+
+ready_remediation_config_json() {
+  local wt_dir="$1"
+  local user_config="$HOME/.wavemill/config.json"
+  local repo_config="$wt_dir/.wavemill-config.json"
+  local user_json='{}'
+  local repo_json='{}'
+
+  [[ -f "$user_config" ]] && user_json=$(cat "$user_config" 2>/dev/null || echo '{}')
+  [[ -f "$repo_config" ]] && repo_json=$(cat "$repo_config" 2>/dev/null || echo '{}')
+
+  jq -n -c \
+    --argjson user "$user_json" \
+    --argjson repo "$repo_json" \
+    '
+    ({ready:{remediation:{enabled:true,maxAttempts:3,agentCmd:""}}} * $user * $repo).ready.remediation
+    ' 2>/dev/null || echo '{"enabled":true,"maxAttempts":3,"agentCmd":""}'
+}
+
+ready_remediation_enabled() {
+  local wt_dir="$1"
+  local remediation_json
+  remediation_json=$(ready_remediation_config_json "$wt_dir")
+  jq -r '.enabled // true' <<< "$remediation_json" 2>/dev/null || echo "true"
+}
+
+ready_remediation_max_attempts() {
+  local wt_dir="$1"
+  local remediation_json
+  remediation_json=$(ready_remediation_config_json "$wt_dir")
+  jq -r '.maxAttempts // 3' <<< "$remediation_json" 2>/dev/null || echo "3"
+}
+
+ready_remediation_agent_cmd() {
+  local wt_dir="$1"
+  local remediation_json
+  remediation_json=$(ready_remediation_config_json "$wt_dir")
+  jq -r '.agentCmd // empty' <<< "$remediation_json" 2>/dev/null || echo ""
+}
+
 phase_should_remain_active_without_pr() {
   local feature_dir="$1" phase="$2" slug="$3"
 
@@ -3090,6 +3149,9 @@ launch_ready_phase() {
   local win="${issue}-${slug}"
   local state_dir status_file result ready_rc merge_status verdict
   local current_agent current_model prompt_file launch_rc launch_head checks_run checks_passed
+  local remediation_attempts remediation_launch_head remediation_enabled remediation_max_attempts
+  local remediation_agent failed_check_names failed_check_summary current_head ready_status
+  local remediation_artifacts_json ci_failed_checks_json ready_result_file
 
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
@@ -3110,6 +3172,10 @@ launch_ready_phase() {
   verdict=$(printf '%s' "$result" | jq -r '.verdict // empty' 2>/dev/null || echo "")
   checks_run=$(printf '%s' "$result" | jq -r '.checks | if type == "array" then length else 0 end' 2>/dev/null || echo "0")
   checks_passed=$(printf '%s' "$result" | jq -r '[.checks[]? | select(.status == "pass")] | length' 2>/dev/null || echo "0")
+  remediation_attempts=$(ready_remediation_attempts "$state_dir")
+  remediation_launch_head=$(ready_remediation_launch_head "$state_dir")
+  ready_status=$(read_stage_status "$state_dir" "ready")
+  ready_result_file="$state_dir/.ready-result.json"
 
   if [[ -z "$merge_status" ]]; then
     log_error "  Ready checks produced unparseable output for $issue"
@@ -3169,11 +3235,116 @@ launch_ready_phase() {
   fi
 
   if [[ "$ready_rc" -eq 2 ]]; then
+    local pending_artifacts_json
+    pending_artifacts_json=$(jq -cn \
+      --arg merge_status "${merge_status:-UNKNOWN}" \
+      --argjson checks_run "${checks_run:-0}" \
+      --argjson checks_passed "${checks_passed:-0}" \
+      --argjson pr_number "${pr_number}" \
+      --argjson attempts "${remediation_attempts:-0}" \
+      '{
+        type: "ready",
+        verdict: "pending",
+        checksRun: $checks_run,
+        checksPassed: $checks_passed,
+        mergeConflict: $merge_status,
+        prNumber: $pr_number
+      } + (if $attempts > 0 then {remediationAttempts: $attempts, remediationFailures: ["ci-status"]} else {} end)')
     write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
       "CI checks pending for PR #$pr_number" \
-      "{\"type\":\"ready\",\"verdict\":\"pending\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\"}"
+      "$pending_artifacts_json"
     log "  CI checks pending for $issue (PR #$pr_number) - will retry"
     return 4
+  fi
+
+  failed_check_names=$(printf '%s' "$result" | jq -r '[.checks[]? | select(.status == "fail") | .name] | join(",")' 2>/dev/null || echo "")
+  remediation_enabled=$(ready_remediation_enabled "$wt_dir")
+  remediation_max_attempts=$(ready_remediation_max_attempts "$wt_dir")
+  current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
+
+  if [[ "$verdict" == "fail" ]] && [[ "$remediation_enabled" == "true" ]] && [[ "$failed_check_names" == "ci-status" ]]; then
+    if [[ "$ready_status" == "running" ]] && [[ -n "$remediation_launch_head" ]] && [[ "$remediation_launch_head" == "$current_head" ]]; then
+      return 5
+    fi
+
+    if (( remediation_attempts >= remediation_max_attempts )); then
+      write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+        "Ready remediation exhausted after ${remediation_attempts} attempt(s)" \
+        "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}"
+      write_ready_attention_file "$state_dir" "Remediation exhausted after ${remediation_attempts} attempt(s) for PR #$pr_number."
+      log_error "  Ready remediation exhausted for $issue (failed checks: ci-status)"
+      return 1
+    fi
+
+    remediation_agent=$(ready_remediation_agent_cmd "$wt_dir")
+    [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
+    [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
+
+    ci_failed_checks_json=$(printf '%s' "$result" | jq -c '
+      [.checks[]? | select(.name == "ci-status") | .details.failedChecks // [] | .[]]
+    ' 2>/dev/null || echo '[]')
+    failed_check_summary=$(printf '%s' "$result" | jq -r '
+      .checks[]?
+      | select(.name == "ci-status")
+      | "ci-status: " + (.message // "CI checks failing")
+        + (if ((.details.failedChecks // []) | length) > 0
+            then " (" + ((.details.failedChecks // []) | map(.name) | join(", ")) + ")"
+            else ""
+          end)
+    ' 2>/dev/null || echo "ci-status: CI checks failing")
+
+    prompt_file="/tmp/${SESSION}-${issue}-ready-remediation-prompt.txt"
+    build_ready_remediation_prompt \
+      "$pr_number" \
+      "$branch" \
+      "$wt_dir" \
+      "$status_file" \
+      "$base_branch" \
+      "$(( remediation_attempts + 1 ))" \
+      "$remediation_max_attempts" \
+      "$failed_check_summary" \
+      "$ready_result_file" > "$prompt_file"
+
+    _launch_agent_in_pane "$SESSION:$win" "$remediation_agent" "$current_model" "$prompt_file" "$slug" "$issue"
+    launch_rc=$?
+
+    if [[ "$launch_rc" -eq 0 ]]; then
+      remediation_artifacts_json=$(jq -cn \
+        --arg merge_status "${merge_status:-UNKNOWN}" \
+        --arg launch_head "$current_head" \
+        --argjson pr_number "${pr_number}" \
+        --argjson checks_run "${checks_run:-0}" \
+        --argjson checks_passed "${checks_passed:-0}" \
+        --argjson attempts "$(( remediation_attempts + 1 ))" \
+        '{
+          type: "ready",
+          verdict: "fail",
+          checksRun: $checks_run,
+          checksPassed: $checks_passed,
+          mergeConflict: $merge_status,
+          prNumber: $pr_number,
+          remediationAttempts: $attempts,
+          remediationLaunchHead: $launch_head,
+          remediationFailures: ["ci-status"]
+        }')
+      write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$current_model" \
+        "Ready remediation in progress for PR #$pr_number" \
+        "$remediation_artifacts_json"
+      rm -f "$state_dir/.needs-attention"
+      log "status" "⚙ $issue → Launched ready remediation (attempt $(( remediation_attempts + 1 ))/$remediation_max_attempts) for PR #$pr_number"
+      return 5
+    fi
+
+    if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+      return 2
+    fi
+
+    write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+      "Could not launch ready remediation agent" \
+      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}"
+    write_ready_attention_file "$state_dir" "Could not launch remediation agent for PR #$pr_number."
+    log_error "  Failed to launch ready remediation agent for $issue"
+    return 1
   fi
 
   write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" "Ready checks failed"
@@ -4593,6 +4764,12 @@ monitor_issue_state() {
         active_count=$((active_count + 1))
         return 0
       fi
+      if [[ "$launch_rc" -eq 5 ]]; then
+        set_window_attention_state "$WIN" "clear"
+        log "status" "⚙ $ISSUE → Ready remediation launched (PR #$PR)"
+        active_count=$((active_count + 1))
+        return 0
+      fi
       if [[ "$launch_rc" -eq 4 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
@@ -5062,6 +5239,12 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
+            if [[ "$launch_rc" -eq 5 ]]; then
+              set_window_attention_state "$WIN" "clear"
+              log "status" "⚙ $ISSUE → Ready remediation launched (PR #$pr_number)"
+              active_count=$((active_count + 1))
+              return 0
+            fi
             if [[ "$launch_rc" -eq 4 ]]; then
               set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
@@ -5135,6 +5318,11 @@ monitor_issue_state() {
                 return 0
               fi
               if [[ "$launch_rc" -eq 3 ]]; then
+                set_window_attention_state "$WIN" "clear"
+                active_count=$((active_count + 1))
+                return 0
+              fi
+              if [[ "$launch_rc" -eq 5 ]]; then
                 set_window_attention_state "$WIN" "clear"
                 active_count=$((active_count + 1))
                 return 0
@@ -5389,6 +5577,12 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
+        if [[ "$launch_rc" -eq 5 ]]; then
+          set_window_attention_state "$WIN" "clear"
+          log "status" "⚙ $ISSUE → Ready remediation launched (PR #$PR)"
+          active_count=$((active_count + 1))
+          return 0
+        fi
         if [[ "$launch_rc" -eq 4 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
@@ -5457,6 +5651,11 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
+        if [[ "$launch_rc" -eq 5 ]]; then
+          set_window_attention_state "$WIN" "clear"
+          active_count=$((active_count + 1))
+          return 0
+        fi
         if [[ "$launch_rc" -eq 4 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
@@ -5475,6 +5674,14 @@ monitor_issue_state() {
     fi
 
     ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
+    launch_head=$(ready_remediation_launch_head "$ready_state_dir_path")
+    current_head=$(git -C "${WORKTREE_ROOT}/${SLUG}" rev-parse HEAD 2>/dev/null || echo "")
+    if [[ "$ready_status" == "running" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
+      set_window_attention_state "$WIN" "clear"
+      active_count=$((active_count + 1))
+      return 0
+    fi
+
     ready_verdict=$(ready_stage_pending_verdict "$ready_state_dir_path")
     if [[ "$ready_status" == "running" && "$ready_verdict" == "pending" ]]; then
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -5495,6 +5702,11 @@ monitor_issue_state() {
         return 0
       fi
       if [[ "$launch_rc" -eq 3 ]]; then
+        set_window_attention_state "$WIN" "clear"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+      if [[ "$launch_rc" -eq 5 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0

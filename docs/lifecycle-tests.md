@@ -37,6 +37,8 @@ Current categories:
 - Lifecycle test definitions: `tests/run-lifecycle-tests.sh`, `tests/planning-validation.test.sh`, `tests/startup-handoff.test.sh`, `tests/stage-state.test.sh`, `tests/stage-state.test.ts`, `tests/monitor-ready-transition.test.sh`, `tests/error-recovery.test.sh`, `tests/control-layout.test.sh`, `tests/wavemill-status.test.sh`
 - Stage result CLI: `tools/stage-result-cli.ts`
 
+The ready-stage lifecycle coverage also includes automatic remediation transitions. When a fixable ready failure launches remediation, lifecycle tests should verify that the monitor keeps the task active, clears operator attention, and avoids repeated relaunch while the remediation head is still in flight.
+
 ## Adding A High-Risk Path
 
 Add the path or glob to the `lifecycle` filter in `.github/workflows/ci.yml`. Keep the entry in the category that explains why the path can affect lifecycle behavior. If the path starts a new category, add a short YAML comment above it.

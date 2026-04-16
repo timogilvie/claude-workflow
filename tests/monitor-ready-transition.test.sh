@@ -38,6 +38,7 @@ MONITOR_FUNC_FILE="$TEST_TMP/monitor_issue_state.sh"
 extract_function "$MILL_SCRIPT" "ready_stage_allows_merge" > "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_remediation_launch_head" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then
@@ -138,6 +139,21 @@ JSON
         READY_LAUNCH_RC=1
         cat > "$READY_DIR/.ready-result.json" <<JSON
 {"stage":"ready","status":"running","artifacts":{"verdict":"pending"}}
+JSON
+        ;;
+      ready_remediation_repolls_active)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=5
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"pending","remediationAttempts":1,"remediationLaunchHead":"old-head"}}
+JSON
+        ;;
+      ready_remediation_inflight_same_head)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"fail","remediationAttempts":1,"remediationLaunchHead":"current-head"}}
 JSON
         ;;
       ready_conflict_merged)
@@ -311,6 +327,16 @@ check_contains "pending ready pass holds slot active" "$ready_pending_transition
 ready_pending_failure_needs_user_output="$(run_monitor_case ready_pending_failure_needs_user)"
 check_contains "pending ready failure relaunches once" "$ready_pending_failure_needs_user_output" "ready_launches=1"
 check_contains "pending ready failure needs user" "$ready_pending_failure_needs_user_output" "attention=needs-user"
+
+ready_remediation_repolls_active_output="$(run_monitor_case ready_remediation_repolls_active)"
+check_contains "ready remediation rc 5 relaunches once" "$ready_remediation_repolls_active_output" "ready_launches=1"
+check_contains "ready remediation rc 5 clears attention" "$ready_remediation_repolls_active_output" "attention=clear"
+check_contains "ready remediation rc 5 holds slot active" "$ready_remediation_repolls_active_output" "active_count=1"
+
+ready_remediation_inflight_same_head_output="$(run_monitor_case ready_remediation_inflight_same_head)"
+check_contains "ready remediation in-flight keeps task active" "$ready_remediation_inflight_same_head_output" "active_count=1"
+check_contains "ready remediation in-flight does not relaunch ready" "$ready_remediation_inflight_same_head_output" "ready_launches=0"
+check_contains "ready remediation in-flight clears attention" "$ready_remediation_inflight_same_head_output" "attention=clear"
 
 ready_conflict_merged_output="$(run_monitor_case ready_conflict_merged)"
 check_contains "ready merge wins over conflict rerun" "$ready_conflict_merged_output" "cleanup_count=1"

@@ -744,6 +744,23 @@ test('getReadyConfig returns empty check lists by default', () => {
   }
 });
 
+test('getReadyConfig returns remediation defaults when unset', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, '{}');
+
+    const readyConfig = getReadyConfig(tmp);
+    assert.deepEqual(readyConfig.remediation, {
+      enabled: true,
+      maxAttempts: 3,
+      agentCmd: '',
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('getReadyConfig honors explicit check lists', () => {
   const tmp = makeTempRepo();
   try {
@@ -758,6 +775,56 @@ test('getReadyConfig honors explicit check lists', () => {
     const readyConfig = getReadyConfig(tmp);
     assert.deepEqual(readyConfig.checks, ['ci-status', 'merge-conflicts']);
     assert.deepEqual(readyConfig.requiredChecks, ['merge-conflicts']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getReadyConfig respects explicit remediation overrides', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        remediation: {
+          enabled: false,
+          maxAttempts: 5,
+          agentCmd: 'claude',
+        }
+      }
+    }));
+
+    const readyConfig = getReadyConfig(tmp);
+    assert.deepEqual(readyConfig.remediation, {
+      enabled: false,
+      maxAttempts: 5,
+      agentCmd: 'claude',
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready remediation maxAttempts must be at least 1', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        remediation: {
+          maxAttempts: 0,
+        }
+      }
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      const config = loadWavemillConfig(tmp);
+      assert.equal(config.ready?.remediation?.maxAttempts, 0);
+    }
   } finally {
     cleanUp(tmp);
   }

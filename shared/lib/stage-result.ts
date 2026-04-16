@@ -68,6 +68,11 @@ export interface ReadyArtifacts {
   checksRun?: number;
   checksPassed?: number;
   mergeConflict?: string;
+  prNumber?: number;
+  launchHead?: string;
+  remediationAttempts?: number;
+  remediationLaunchHead?: string;
+  remediationFailures?: string[];
 }
 
 /** Discriminated union of all stage artifact types. */
