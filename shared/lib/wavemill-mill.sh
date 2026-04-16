@@ -3775,6 +3775,7 @@ launch_task() {
   local issue="$1" slug="$2" title="$3" remaining_slots="${4:-1}"
   local branch="task/${slug}"
   local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local feature_dir="${wt_dir}/features/${slug}"
   local linear_issue="$issue"
   local challenge_model=""
   LAST_LAUNCHED_SLOTS=1
@@ -3876,6 +3877,7 @@ launch_task() {
     git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH"
     created_new=true
   fi
+  mkdir -p "$feature_dir"
 
   # Set Linear state
   if should_update_linear_state "$issue"; then
@@ -3926,14 +3928,136 @@ launch_task() {
     log "info" "  FORCE_MODEL: $task_agent_cmd --model $task_model"
   elif [[ "${AGENT_CMD_EXPLICIT:-}" != "true" ]]; then
     local route_tool="$TOOLS_DIR/route-task.ts"
-    if [[ "${ROUTER_ENABLED:-true}" == "true" ]] && [[ -f "$route_tool" ]] && [[ -f "$packet_file" ]]; then
-      local route_json
+    if [[ "${ROUTER_ENABLED:-true}" == "true" ]] && [[ -f "$route_tool" ]]; then
+      local selected_task_file="$feature_dir/selected-task.json"
+      local saved_route="/tmp/${SESSION}-${issue}-route.json"
+      local routing_log_file="$feature_dir/.routing-debug.log"
+      local routing_failure_file="$feature_dir/.routing-failure"
+      local route_input_file="$packet_file"
+      local route_json=""
+      local route_rc=0
+      local route_attempt=1
+      local route_reason=""
+      local route_source=""
       local route_max_cost_args=()
+      local route_mode_args=()
+      local route_debug_enabled="false"
+      : > "$routing_log_file"
+      rm -f "$routing_failure_file"
+
       if [[ -n "${DEFAULT_MAX_COST_USD:-}" ]]; then
         route_max_cost_args=(--max-cost "$DEFAULT_MAX_COST_USD")
       fi
-      route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$packet_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2>/dev/null || echo "")
-      if [[ -n "$route_json" ]] && echo "$route_json" | jq -e '.planner' >/dev/null 2>&1; then
+      if [[ "${WAVEMILL_ROUTING_DEBUG:-0}" == "1" ]]; then
+        route_debug_enabled="true"
+      fi
+
+      if [[ ! -s "$route_input_file" ]]; then
+        if [[ -f "$selected_task_file" ]] && jq -e '.title or .description' "$selected_task_file" >/dev/null 2>&1; then
+          jq -r '[(.title // ""), (.description // "")] | map(select(length > 0)) | join("\n\n")' \
+            "$selected_task_file" > "$route_input_file" 2>/dev/null || true
+          if [[ -s "$route_input_file" ]]; then
+            packet_content=$(cat "$route_input_file" 2>/dev/null || echo "")
+            log "info" "  Created minimal routing packet from selected-task.json"
+          fi
+        fi
+
+        if [[ ! -s "$route_input_file" ]]; then
+          printf '%s\n\n%s\n' "$title" "$issue_desc" > "$route_input_file"
+          packet_content=$(cat "$route_input_file" 2>/dev/null || echo "")
+          log "info" "  Created minimal routing packet from title and description"
+        fi
+      fi
+
+      printf 'issue=%s\npacket=%s\nsaved_route=%s\n' "$issue" "$route_input_file" "$saved_route" >> "$routing_log_file"
+
+      if [[ ! -s "$route_input_file" ]]; then
+        route_reason="missing_packet"
+        log_warn "  Workflow routing skipped: no packet content available"
+      else
+        while (( route_attempt <= 3 )); do
+          printf '\n[attempt %d] live route\n' "$route_attempt" >> "$routing_log_file"
+          if [[ "$route_debug_enabled" == "true" ]]; then
+            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2> >(tee -a "$routing_log_file" >&2)); then
+              route_rc=0
+            else
+              route_rc=$?
+            fi
+          else
+            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>>"$routing_log_file"); then
+              route_rc=0
+            else
+              route_rc=$?
+            fi
+          fi
+
+          if [[ -n "$route_json" ]]; then
+            printf '%s\n' "$route_json" >> "$routing_log_file"
+          fi
+
+          if [[ -n "$route_json" ]] && echo "$route_json" | jq -e '.planner and .coder and .reviewer' >/dev/null 2>&1; then
+            route_source="live"
+            break
+          fi
+
+          if [[ -n "$route_json" ]]; then
+            route_reason="invalid_json"
+          elif (( route_rc == 124 )); then
+            route_reason="timeout"
+          else
+            route_reason="command_failed"
+          fi
+
+          log_warn "  Workflow routing attempt $route_attempt failed (${route_reason}, exit=${route_rc:-0})"
+          if (( route_attempt < 3 )); then
+            local route_backoff=$(( 1 << (route_attempt - 1) ))
+            sleep "$route_backoff"
+          fi
+          route_attempt=$((route_attempt + 1))
+        done
+      fi
+
+      if [[ -z "$route_source" ]] && [[ -f "$saved_route" ]] && jq -e '.planner and .coder and .reviewer' "$saved_route" >/dev/null 2>&1; then
+        route_json=$(cat "$saved_route" 2>/dev/null || echo "")
+        route_source="startup-cache"
+        log "info" "  Workflow route recovered from startup cache"
+      fi
+
+      if [[ -z "$route_source" ]] && [[ -s "$route_input_file" ]]; then
+        printf '\n[heuristic fallback]\n' >> "$routing_log_file"
+        if [[ "$route_debug_enabled" == "true" ]]; then
+          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2> >(tee -a "$routing_log_file" >&2)); then
+            route_rc=0
+          else
+            route_rc=$?
+          fi
+        else
+          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2>>"$routing_log_file"); then
+            route_rc=0
+          else
+            route_rc=$?
+          fi
+        fi
+
+        if [[ -n "$route_json" ]]; then
+          printf '%s\n' "$route_json" >> "$routing_log_file"
+        fi
+
+        if [[ -n "$route_json" ]] && echo "$route_json" | jq -e '.planner and .coder and .reviewer' >/dev/null 2>&1; then
+          route_source="heuristic-fallback"
+          log "info" "  Workflow route recovered via heuristic fallback"
+        else
+          if [[ -n "$route_json" ]]; then
+            route_reason="invalid_json"
+          elif (( route_rc == 124 )); then
+            route_reason="timeout"
+          else
+            route_reason="command_failed"
+          fi
+        fi
+      fi
+
+      if [[ -n "$route_source" ]] && [[ -n "$route_json" ]] && echo "$route_json" | jq -e '.planner and .coder and .reviewer' >/dev/null 2>&1; then
         # Extract stage-specific models from workflow routing decision
         planner_model=$(echo "$route_json" | jq -r '.planner // empty' 2>/dev/null)
         task_model=$(echo "$route_json" | jq -r '.coder // empty' 2>/dev/null)
@@ -3953,32 +4077,23 @@ launch_task() {
           reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
         fi
 
-        log "info" "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
-      else
-        # Workflow routing returned invalid output — try saved route from startup
-        local saved_route="/tmp/${SESSION}-${issue}-route.json"
-        if [[ -f "$saved_route" ]] && jq -e '.planner' "$saved_route" >/dev/null 2>&1; then
-          planner_model=$(jq -r '.planner // empty' "$saved_route" 2>/dev/null)
-          task_model=$(jq -r '.coder // empty' "$saved_route" 2>/dev/null)
-          reviewer_model=$(jq -r '.reviewer // empty' "$saved_route" 2>/dev/null)
-          plan_depth=$(jq -r '.planDepth // "light"' "$saved_route" 2>/dev/null)
-          code_depth=$(jq -r '.codeDepth // "medium"' "$saved_route" 2>/dev/null)
-          review_mode=$(jq -r '.reviewRecommended // "static"' "$saved_route" 2>/dev/null)
-
-          if [[ -n "$planner_model" ]]; then
-            planner_agent="$(agent_resolve_from_model "$planner_model")"
-          fi
-          if [[ -n "$task_model" ]]; then
-            task_agent_cmd="$(agent_resolve_from_model "$task_model")"
-          fi
-          if [[ -n "$reviewer_model" ]]; then
-            reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
-          fi
-
+        if [[ "$route_source" == "live" ]]; then
+          log "info" "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+        elif [[ "$route_source" == "startup-cache" ]]; then
           log "info" "  Workflow route (from startup cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         else
-          log "info" "  Workflow routing unavailable, using default agent"
+          log "info" "  Workflow route (heuristic fallback): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         fi
+      else
+        cat > "$routing_failure_file" <<EOF
+issue=$issue
+packet=$route_input_file
+saved_route=$saved_route
+reason=${route_reason:-unknown}
+exit_code=${route_rc:-0}
+debug_log=$routing_log_file
+EOF
+        log "info" "  Workflow routing unavailable (${route_reason:-unknown}), using default agent"
       fi
     fi
   fi
@@ -4193,7 +4308,6 @@ Implement from the issue description plus direct codebase analysis."
 
   if [[ "$PLANNING_MODE" == "interactive" ]]; then
     # Launch in routing phase - monitor will handle phase transitions
-    local feature_dir="$wt_dir/features/$slug"
     mkdir -p "$feature_dir"
     local labels_json="[]"
     labels_json=$(echo "$issue_json" | jq '[.labels.nodes[]?.name // empty]' 2>/dev/null || echo "[]")

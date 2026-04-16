@@ -24,6 +24,7 @@ if [[ ! -f "$TSX_LOADER" ]]; then
 fi
 
 for f in \
+  check-routing.test.ts \
   challenge-mode.test.ts \
   challenge-scheduler.test.ts \
   constraint-parser.test.ts \
