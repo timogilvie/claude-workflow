@@ -21,6 +21,8 @@ describe('model-validator', () => {
       assert.ok(all.includes('gpt-5.3-codex'), 'Should include gpt-5.3-codex');
       assert.ok(all.includes('gpt-5.4'), 'Should include gpt-5.4');
       assert.ok(all.includes('claude-opus-4-6'), 'Should include claude-opus-4-6');
+      assert.ok(all.includes('claude-opus-4-7'), 'Should include claude-opus-4-7');
+      assert.ok(all.includes('claude-sonnet-4-6'), 'Should include claude-sonnet-4-6');
     });
 
     it('groups models by agent', () => {
@@ -31,6 +33,7 @@ describe('model-validator', () => {
 
       assert.ok(codexModels.includes('gpt-5.3-codex'), 'Codex should include gpt-5.3-codex');
       assert.ok(claudeModels.includes('claude-opus-4-6'), 'Claude should include claude-opus-4-6');
+      assert.ok(claudeModels.includes('claude-opus-4-7'), 'Claude should include claude-opus-4-7');
     });
 
     it('deduplicates models from pricing and agentMap', () => {
@@ -47,6 +50,8 @@ describe('model-validator', () => {
       assert.strictEqual(isValidModel('gpt-5.3-codex', '.'), true);
       assert.strictEqual(isValidModel('gpt-5.4', '.'), true);
       assert.strictEqual(isValidModel('claude-opus-4-6', '.'), true);
+      assert.strictEqual(isValidModel('claude-opus-4-7', '.'), true);
+      assert.strictEqual(isValidModel('claude-sonnet-4-6', '.'), true);
     });
 
     it('returns false for unknown models', () => {
@@ -95,6 +100,9 @@ describe('model-validator', () => {
       });
       assert.doesNotThrow(() => {
         validateModelOrThrow('claude-opus-4-6', '.');
+      });
+      assert.doesNotThrow(() => {
+        validateModelOrThrow('claude-opus-4-7', '.');
       });
     });
 

@@ -125,7 +125,7 @@
         },
         "model": {
           "type": "string",
-          "default": "claude-opus-4-6",
+          "default": "claude-opus-4-7",
           "description": "Claude model to use for plan decomposition and research. Can be overridden with PLAN_MODEL env var."
         },
         "interactive": {
@@ -191,9 +191,9 @@
           "properties": {
             "model": {
               "type": "string",
-              "default": "claude-sonnet-4-5-20250929",
+              "default": "claude-sonnet-4-6",
               "minLength": 1,
-              "description": "Model ID for the eval judge (e.g. 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001')."
+              "description": "Model ID for the eval judge (e.g. 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001')."
             },
             "provider": {
               "type": "string",
@@ -361,7 +361,7 @@
         },
         "comparisonModel": {
           "type": "string",
-          "default": "claude-opus-4-6",
+          "default": "claude-opus-4-7",
           "minLength": 1,
           "description": "Model used as the LLM judge for challenge PR comparison."
         },
@@ -440,7 +440,7 @@
         },
         "defaultModel": {
           "type": "string",
-          "default": "claude-sonnet-4-5-20250929",
+          "default": "claude-sonnet-4-6",
           "description": "Fallback model when insufficient eval data exists for routing."
         },
         "minRecords": {

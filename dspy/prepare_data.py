@@ -135,6 +135,8 @@ def is_greenfield(prompt: str) -> bool:
 
 # Agent resolution: model prefix -> agent CLI
 AGENT_MAP = {
+    "claude-opus-4-7": "claude",
+    "claude-sonnet-4-6": "claude",
     "claude-opus-4-6": "claude",
     "claude-sonnet-4-5-20250929": "claude",
     "claude-haiku-4-5-20251001": "claude",
@@ -142,8 +144,8 @@ AGENT_MAP = {
     "gpt-5.4": "codex",
 }
 
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
-AVAILABLE_MODELS = "claude-sonnet-4-5-20250929,gpt-5.3-codex,gpt-5.4"
+DEFAULT_MODEL = "claude-sonnet-4-6"
+AVAILABLE_MODELS = "claude-sonnet-4-6,claude-opus-4-7,claude-sonnet-4-5-20250929,claude-opus-4-6,gpt-5.3-codex,gpt-5.4"
 
 
 def resolve_agent(model_id: str) -> str:

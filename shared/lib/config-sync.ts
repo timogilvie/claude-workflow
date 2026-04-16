@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { CURRENT_CONFIG_VERSION, loadWavemillConfig, type WavemillConfig } from './config.ts';
 
 export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
-  configVersion: '1.2.0',
+  configVersion: '1.3.0',
   linear: {
     project: '',
   },
@@ -26,7 +26,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
   plan: {
     maxDisplay: 9,
     research: false,
-    model: 'claude-opus-4-6',
+    model: 'claude-opus-4-7',
     interactive: true,
   },
   eval: {
@@ -36,11 +36,13 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     },
     evalsDir: '.wavemill/evals',
     judge: {
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'claude-sonnet-4-6',
       provider: 'anthropic',
     },
     pricing: {
-      'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
+      'claude-opus-4-6': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
+      'claude-opus-4-7': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
+      'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
       'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
       'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
       'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheReadCostPerMTok: 0.44 },
@@ -68,13 +70,15 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     enabled: true,
     rate: 0.1,
     models: [
+      'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
+      'claude-opus-4-7',
       'claude-opus-4-6',
       'claude-haiku-4-5-20251001',
       'gpt-5.3-codex',
       'gpt-5.4',
     ],
-    comparisonModel: 'claude-opus-4-6',
+    comparisonModel: 'claude-opus-4-7',
     autoMergeWinner: false,
   },
   review: {
@@ -85,12 +89,14 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
   } as WavemillConfig['review'] & { metricsLog: string; personas: string[] },
   router: {
     enabled: true,
-    defaultModel: 'claude-sonnet-4-5-20250929',
+    defaultModel: 'claude-sonnet-4-6',
     minRecords: 20,
     minModels: 2,
     models: [],
     defaultAgent: 'claude',
     agentMap: {
+      'claude-opus-4-7': 'claude',
+      'claude-sonnet-4-6': 'claude',
       'claude-opus-4-6': 'claude',
       'claude-sonnet-4-5-20250929': 'claude',
       'claude-haiku-4-5-20251001': 'claude',

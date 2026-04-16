@@ -12,7 +12,7 @@ When starting plan execution, create a session:
 SESSION_ID=$(npx tsx tools/session.ts start \
   --workflow implement-plan \
   --prompt "<plan title or feature description>" \
-  --model "<current model, e.g. claude-opus-4-6>" \
+  --model "<current model, e.g. claude-opus-4-7>" \
   --issue "<Linear issue ID if available>")
 SESSION_START_MS=$(date +%s%3N)
 ```

@@ -172,7 +172,7 @@ ${GREEN}Examples:${NC}
   wavemill eval report
 
   # Filter report by model and date range
-  wavemill eval report --model claude-opus-4-6 --from 2026-01-01
+  wavemill eval report --model claude-opus-4-7 --from 2026-01-01
 
   # Export eval records for ML training
   wavemill eval export --format csv --redact -o dataset.csv
@@ -376,7 +376,7 @@ run_init() {
   # Create config file
   cat > "$target" <<'INIT_EOF'
 {
-  "configVersion": "1.1.0",
+  "configVersion": "1.3.0",
   "linear": {
     "project": ""
   },
@@ -399,7 +399,7 @@ run_init() {
   "plan": {
     "maxDisplay": 9,
     "research": false,
-    "model": "claude-opus-4-6",
+    "model": "claude-opus-4-7",
     "interactive": true
   },
   "eval": {
@@ -409,11 +409,13 @@ run_init() {
     },
     "evalsDir": ".wavemill/evals",
     "judge": {
-      "model": "claude-sonnet-4-5-20250929",
+      "model": "claude-sonnet-4-6",
       "provider": "anthropic"
     },
     "pricing": {
-      "claude-opus-4-6": { "inputCostPerMTok": 15, "outputCostPerMTok": 75, "cacheWriteCostPerMTok": 18.75, "cacheReadCostPerMTok": 1.50 },
+      "claude-opus-4-6": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
+      "claude-opus-4-7": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
+      "claude-sonnet-4-6": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
       "claude-sonnet-4-5-20250929": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
       "claude-haiku-4-5-20251001": { "inputCostPerMTok": 0.80, "outputCostPerMTok": 4, "cacheWriteCostPerMTok": 1.00, "cacheReadCostPerMTok": 0.08 },
       "gpt-5.3-codex": { "inputCostPerMTok": 1.75, "outputCostPerMTok": 14, "cacheReadCostPerMTok": 0.44 },
@@ -447,23 +449,27 @@ run_init() {
     "enabled": true,
     "rate": 0.10,
     "models": [
+      "claude-sonnet-4-6",
       "claude-sonnet-4-5-20250929",
+      "claude-opus-4-7",
       "claude-opus-4-6",
       "claude-haiku-4-5-20251001",
       "gpt-5.3-codex",
       "gpt-5.4"
     ],
-    "comparisonModel": "claude-opus-4-6",
+    "comparisonModel": "claude-opus-4-7",
     "autoMergeWinner": false
   },
   "router": {
     "enabled": true,
-    "defaultModel": "claude-sonnet-4-5-20250929",
+    "defaultModel": "claude-sonnet-4-6",
     "minRecords": 20,
     "minModels": 2,
     "models": [],
     "defaultAgent": "claude",
     "agentMap": {
+      "claude-opus-4-7": "claude",
+      "claude-sonnet-4-6": "claude",
       "claude-opus-4-6": "claude",
       "claude-sonnet-4-5-20250929": "claude",
       "claude-haiku-4-5-20251001": "claude",

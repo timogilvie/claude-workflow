@@ -22,7 +22,7 @@ runTool({
   examples: [
     'npx tsx tools/eval-export.ts',
     'npx tsx tools/eval-export.ts --format csv --redact -o dataset.csv',
-    'npx tsx tools/eval-export.ts --model claude-opus-4-6 --from 2026-01-01',
+    'npx tsx tools/eval-export.ts --model claude-opus-4-7 --from 2026-01-01',
   ],
   additionalHelp: `Exports eval records in ML-training-ready formats (CSV, JSONL).
 
