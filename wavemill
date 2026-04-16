@@ -110,6 +110,15 @@ ${GREEN}Commands:${NC}
                ${CYAN}wavemill route --file features/my-feature/selected-task.json${NC}
                ${CYAN}wavemill route --json --file features/my-feature/selected-task.json${NC}
 
+  ${CYAN}check-routing${NC}  Validate routing inputs and preview a route
+             - Verifies route tool and local eval inputs are present
+             - Reports record counts, model diversity, and data staleness
+             - Prints a sample route using the best local fallback
+             Usage:
+               ${CYAN}wavemill check-routing${NC}
+               ${CYAN}wavemill check-routing --json${NC}
+               ${CYAN}wavemill check-routing --repo-dir ~/src/wavemill${NC}
+
   ${CYAN}init${NC}      Initialize wavemill in current directory
              - Creates .wavemill-config.json
              - Optionally initializes project context (.wavemill/project-context.md)
@@ -182,6 +191,9 @@ ${GREEN}Examples:${NC}
 
   # Route a task packet to planner/coder/reviewer models
   wavemill route --file features/my-feature/selected-task.json
+
+  # Check whether workflow routing has enough local data
+  wavemill check-routing
 
   # Opt in to Hokusai data submission
   wavemill hokusai enable
@@ -666,6 +678,18 @@ run_route() {
   exec node --import "$tsx_loader" "$route_tool" "$@"
 }
 
+run_check_routing() {
+  local check_tool="$TOOLS_DIR/check-routing.ts"
+
+  if [[ ! -f "$check_tool" ]]; then
+    echo -e "${RED}Error:${NC} Routing check tool not found at: $check_tool" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Routing Check...${NC}"
+  exec npx tsx "$check_tool" "$@"
+}
+
 run_plan() {
   local plan_script="$LIB_DIR/wavemill-plan.sh"
 
@@ -792,6 +816,10 @@ case "${1:-}" in
   route)
     shift
     run_route "$@"
+    ;;
+  check-routing)
+    shift
+    run_check_routing "$@"
     ;;
   init)
     shift

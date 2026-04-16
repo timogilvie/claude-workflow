@@ -1903,6 +1903,42 @@ else
 fi
 
 # ============================================================================
+# TEST 6: Routing resilience regression guards
+# ============================================================================
+echo ""
+echo "=== Routing Resilience Guards ==="
+
+if grep -q 'WAVEMILL_ROUTING_DEBUG' "$MILL_SCRIPT"; then
+  pass "routing debug flag is wired into mill launch"
+else
+  fail "routing debug flag is missing from wavemill-mill.sh"
+fi
+
+if grep -q '\.routing-failure' "$MILL_SCRIPT"; then
+  pass "routing failure marker is persisted"
+else
+  fail "routing failure marker is missing"
+fi
+
+if grep -q 'selected-task.json' "$MILL_SCRIPT" && grep -q 'Created minimal routing packet from selected-task.json' "$MILL_SCRIPT"; then
+  pass "routing can rebuild a packet from selected-task metadata"
+else
+  fail "routing packet fallback from selected-task.json is missing"
+fi
+
+if grep -q -- '--mode heuristic' "$MILL_SCRIPT"; then
+  pass "routing retries fall back to heuristic mode"
+else
+  fail "heuristic routing fallback is missing"
+fi
+
+if grep -q 'Workflow routing attempt \$route_attempt failed' "$MILL_SCRIPT"; then
+  pass "routing attempts are logged with retry context"
+else
+  fail "routing retry logging is missing"
+fi
+
+# ============================================================================
 # RESULTS
 # ============================================================================
 echo ""
