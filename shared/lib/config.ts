@@ -197,6 +197,13 @@ export interface PermissionsConfig {
 export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
+  remediation?: ReadyRemediationConfig;
+}
+
+export interface ReadyRemediationConfig {
+  enabled?: boolean;
+  maxAttempts?: number;
+  agentCmd?: string;
 }
 
 export interface WavemillConfig {
@@ -547,6 +554,11 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
   return {
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
+    remediation: {
+      enabled: config.ready?.remediation?.enabled ?? true,
+      maxAttempts: config.ready?.remediation?.maxAttempts ?? 3,
+      agentCmd: config.ready?.remediation?.agentCmd ?? '',
+    },
   };
 }
 

@@ -760,6 +760,68 @@ Failure handling:
 _WVML_PROMPT_
 }
 
+# Build a narrow prompt for automatic remediation of a fixable ready-check failure.
+#
+# Args:
+#   $1 = pr_number
+#   $2 = branch
+#   $3 = wt_dir
+#   $4 = status_file
+#   $5 = base_branch
+#   $6 = attempt_number
+#   $7 = max_attempts
+#   $8 = failed_checks_summary
+#   $9 = ready_result_path
+build_ready_remediation_prompt() {
+  local pr_number="$1" branch="$2" wt_dir="$3" status_file="$4" base_branch="${5:-main}"
+  local attempt_number="$6" max_attempts="$7" failed_checks_summary="$8" ready_result_path="$9"
+
+  cat <<_WVML_PROMPT_
+You are remediating a ready-check failure for open PR #$pr_number.
+
+Repo worktree: $wt_dir
+Branch: $branch
+Base branch: $base_branch
+Attempt: $attempt_number/$max_attempts
+Failing checks: $failed_checks_summary
+Ready result JSON: $ready_result_path
+
+Scope:
+- Fix only the ready-check failure.
+- Keep changes narrow and directly tied to the failing CI signal.
+- Do not do broad refactors or unrelated cleanup.
+
+Status Reporting:
+Throughout your work, periodically update your status by running:
+  echo '<short description of what you are doing right now>' > $status_file
+Keep it under 50 chars. Update it at each major step.
+
+Required process:
+1. Inspect the PR checks:
+   gh pr checks $pr_number
+2. Inspect the failing workflow logs:
+   gh run list -L 1 --branch $branch
+   gh run view --log-failed
+3. Reproduce the failure locally by running the exact failing test or lint command from the repo.
+4. Fix the problem with the smallest safe code change.
+5. Run relevant validation for the touched code.
+6. Commit with this exact message:
+   fix: Resolve ready-check failure (attempt $attempt_number/$max_attempts)
+7. Push the branch to update PR #$pr_number.
+
+Do not:
+- Create a new PR or run gh pr create
+- Create workflow markers
+- Run the self-review tool
+- Edit the task packet
+
+Failure handling:
+- If you cannot safely fix the issue, stop without broad code changes.
+- Leave a short explanation of the blocker in your final response.
+- Do not create markers or a PR. Workflow automation will handle follow-up.
+_WVML_PROMPT_
+}
+
 # Build the review phase prompt.
 # This phase runs self-review and creates the PR.
 #
