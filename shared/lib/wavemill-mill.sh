@@ -3316,7 +3316,6 @@ launch_ready_phase() {
         --argjson checks_run "${checks_run:-0}" \
         --argjson checks_passed "${checks_passed:-0}" \
         --argjson attempts "$(( remediation_attempts + 1 ))" \
-        --argjson failures "$ci_failed_checks_json" \
         '{
           type: "ready",
           verdict: "fail",
