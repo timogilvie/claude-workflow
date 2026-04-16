@@ -45,6 +45,8 @@ runTool({
     // Exit code based on verdict
     if (result.verdict === 'fail') {
       process.exit(1);
+    } else if (result.verdict === 'pending') {
+      process.exit(2);
     }
   },
 });

@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   runReadyStage,
   checkMergeConflicts,
+  checkCIStatus,
   checkSchemaMigrations,
   checkDeployPaths,
   computeVerdict,
@@ -83,6 +84,17 @@ describe('ready-stage', () => {
       assert.equal(check.status, 'skip');
       assert.equal(check.name, 'manual-steps');
     });
+
+    it('accepts pending check objects', () => {
+      const check = {
+        name: 'ci-status',
+        status: 'pending',
+        message: 'CI checks are still running',
+      } satisfies ReadyCheck;
+
+      assert.equal(check.status, 'pending');
+      assert.equal(check.name, 'ci-status');
+    });
   });
 
   describe('ReadyResult contract', () => {
@@ -148,6 +160,25 @@ describe('ready-stage', () => {
 
       assert.equal(result.verdict, 'warn');
       assert.equal(result.summary, 'Ready with manual follow-up');
+    });
+
+    it('accepts pending results', () => {
+      const result = {
+        prNumber: 100,
+        verdict: 'pending',
+        checks: [
+          {
+            name: 'ci-status',
+            status: 'pending',
+            message: 'CI checks are still running',
+          },
+        ],
+        timestamp: '2026-04-08T12:00:00.000Z',
+        summary: 'CI checks still in progress - will retry',
+      } satisfies ReadyResult;
+
+      assert.equal(result.verdict, 'pending');
+      assert.equal(result.checks[0]?.status, 'pending');
     });
   });
 
@@ -258,6 +289,15 @@ describe('ready-stage', () => {
       assert.equal(result, 'warn');
     });
 
+    it('returns pending when checks are still running', () => {
+      const checks: ReadyCheck[] = [
+        { name: 'check1', status: 'pass', message: 'ok' },
+        { name: 'check2', status: 'pending', message: 'still running' },
+      ];
+      const result = computeVerdict(checks);
+      assert.equal(result, 'pending');
+    });
+
     it('returns fail when any check fails', () => {
       const checks: ReadyCheck[] = [
         { name: 'check1', status: 'pass', message: 'ok' },
@@ -274,6 +314,92 @@ describe('ready-stage', () => {
       ];
       const result = computeVerdict(checks);
       assert.equal(result, 'fail');
+    });
+
+    it('returns fail even when pending checks are present', () => {
+      const checks: ReadyCheck[] = [
+        { name: 'check1', status: 'pending', message: 'still running' },
+        { name: 'check2', status: 'fail', message: 'failed' },
+      ];
+      const result = computeVerdict(checks);
+      assert.equal(result, 'fail');
+    });
+  });
+
+  describe('checkCIStatus', () => {
+    it('returns pending for queued checks', () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
+        JSON.stringify([{ name: 'Shell and Unit Tests', state: 'QUEUED' }])
+      );
+
+      try {
+        const result = checkCIStatus(42, '/tmp/test');
+        assert.equal(result.status, 'pending');
+        assert.match(result.message, /still running/);
+        assert.deepEqual(result.details, {
+          pendingChecks: [{ name: 'Shell and Unit Tests', state: 'QUEUED' }],
+          totalChecks: 1,
+        });
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('returns pending for in-progress checks', () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
+        JSON.stringify([{ name: 'Check Lifecycle Paths', state: 'IN_PROGRESS' }])
+      );
+
+      try {
+        const result = checkCIStatus(42, '/tmp/test');
+        assert.equal(result.status, 'pending');
+        assert.deepEqual(result.details, {
+          pendingChecks: [{ name: 'Check Lifecycle Paths', state: 'IN_PROGRESS' }],
+          totalChecks: 1,
+        });
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('returns fail for failed checks', () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
+        JSON.stringify([{ name: 'Shell and Unit Tests', state: 'FAILURE' }])
+      );
+
+      try {
+        const result = checkCIStatus(42, '/tmp/test');
+        assert.equal(result.status, 'fail');
+        assert.match(result.message, /failing/);
+        assert.deepEqual(result.details, {
+          failedChecks: [{ name: 'Shell and Unit Tests', state: 'FAILURE' }],
+          pendingChecks: [],
+          totalChecks: 1,
+        });
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('returns fail when failed and queued checks are mixed', () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
+        JSON.stringify([
+          { name: 'Shell and Unit Tests', state: 'FAILURE' },
+          { name: 'Check Lifecycle Paths', state: 'QUEUED' },
+        ])
+      );
+
+      try {
+        const result = checkCIStatus(42, '/tmp/test');
+        assert.equal(result.status, 'fail');
+        assert.deepEqual(result.details, {
+          failedChecks: [{ name: 'Shell and Unit Tests', state: 'FAILURE' }],
+          pendingChecks: [{ name: 'Check Lifecycle Paths', state: 'QUEUED' }],
+          totalChecks: 2,
+        });
+      } finally {
+        execMock.mock.restore();
+      }
     });
   });
 
@@ -595,13 +721,62 @@ describe('ready-stage', () => {
         // Verify structure
         assert.equal(typeof result.prNumber, 'number');
         assert.equal(result.prNumber, 42);
-        assert.ok(['pass', 'fail', 'warn'].includes(result.verdict));
+        assert.ok(['pass', 'fail', 'warn', 'pending'].includes(result.verdict));
         assert.ok(Array.isArray(result.checks));
         assert.equal(typeof result.timestamp, 'string');
         assert.equal(typeof result.summary, 'string');
         assert.equal(result.branch, 'feature-branch');
         assert.equal(result.verdict, 'warn');
         assert.equal(result.mergeConflict?.status, 'CONFLICTED');
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns pending when CI checks are queued but nothing failed', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
+      await fs.writeFile(
+        path.join(repoDir, '.wavemill-config.json'),
+        JSON.stringify({ ready: { checks: ['ci-status'], requiredChecks: ['ci-status'] } }),
+        'utf-8'
+      );
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'UNSTABLE',
+            });
+          }
+
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return '';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'QUEUED' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({
+          prNumber: 42,
+          repoDir,
+        });
+
+        assert.equal(result.verdict, 'pending');
+        assert.equal(result.summary, 'CI checks still in progress - will retry');
+        assert.equal(result.checks[0]?.status, 'pending');
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });
