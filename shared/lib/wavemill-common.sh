@@ -539,14 +539,37 @@ set_task_phase() {
 # Hook Configuration
 # ============================================================================
 
+# Log a hook warning once per session to avoid repeated noise for the same
+# broken installation state across planning/coding/review launches.
+warn_once_per_session() {
+  local warning_key="$1" message="$2"
+  local session="${SESSION:-}"
+  local warning_file
+
+  if [[ -z "$session" ]]; then
+    log "warn" "$message"
+    return 0
+  fi
+
+  warning_file="/tmp/wavemill-${session}-hook-warnings.txt"
+  if [[ -f "$warning_file" ]] && grep -qxF "$warning_key" "$warning_file" 2>/dev/null; then
+    return 0
+  fi
+
+  log "warn" "$message"
+  printf '%s\n' "$warning_key" >> "$warning_file" 2>/dev/null || true
+}
+
 # Configure agent hooks for status tracking in a worktree-specific settings file.
 # This writes to .claude/settings.local.json (gitignored) so hooks only affect
 # wavemill-launched agents, not standalone Claude usage.
 #
-# Args: $1 = agent_cmd (claude|codex), $2 = worktree_dir, $3 = repo_dir
+# Args: $1 = agent_cmd (claude|codex), $2 = worktree_dir
 configure_agent_hooks() {
-  local agent_cmd="$1" worktree_dir="$2" repo_dir="$3"
-  local hooks_dir="$repo_dir/shared/hooks"
+  local agent_cmd="$1" worktree_dir="$2"
+  local tools_dir="${TOOLS_DIR:-}"
+  local wavemill_root="${tools_dir%/tools}"
+  local hooks_dir="$wavemill_root/shared/hooks"
   local claude_hook="$hooks_dir/claude-status-hook.sh"
   local tmp config_file
 
@@ -556,9 +579,12 @@ configure_agent_hooks() {
 
   case "$agent_cmd" in
     claude)
-      # Verify hook script exists and is executable
+      # Claude hooks are part of the wavemill installation, so every repo uses
+      # the same canonical adapter.
       if [[ ! -x "$claude_hook" ]]; then
-        log "warn" "  Hook status unavailable (missing $claude_hook)"
+        warn_once_per_session \
+          "claude-hook-unavailable:$claude_hook" \
+          "  Hook status unavailable (missing wavemill hook $claude_hook)"
         return 0
       fi
 
