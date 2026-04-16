@@ -77,9 +77,6 @@ function printMergeConflictStatus(result: Awaited<ReturnType<typeof runReadyStag
     case 'UNKNOWN':
       console.error(`⏳ MERGE STATUS UNKNOWN: PR #${result.prNumber} - GitHub computing mergeability`);
       break;
-    case 'CLEAN':
-      console.error('✓ MERGE CLEAN: No conflicts detected');
-      break;
     case 'ERROR':
       console.error(`⚠️  MERGE STATUS ERROR: PR #${result.prNumber} - ${result.mergeConflict?.message}`);
       break;
