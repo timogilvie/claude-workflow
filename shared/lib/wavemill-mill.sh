@@ -5230,10 +5230,101 @@ monitor_issue_state() {
   fi
 
   current_phase=$(get_task_phase "$ISSUE")
-  if [[ "$current_phase" == "review" ]]; then
-    local pr_status resolved_phase review_status title launch_rc
-    pr_status=$(pr_state "$PR")
+  local pr_status=""
+  pr_status=$(pr_state "$PR")
 
+  # Check completion before phase-specific OPEN handling so merged/closed PRs
+  # still trigger eval, cleanup, and Linear updates after the ready stage was added.
+  if validate_pr_merge "$PR"; then
+    log "status" "✓ $ISSUE → PR #$PR MERGED"
+    local merged_ready_dir
+    merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+    if ! ready_stage_allows_merge "$merged_ready_dir"; then
+      log "status" "⛔ $ISSUE → PR #$PR was merged before ready checks passed"
+      write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
+      set_window_attention_state "$WIN" "needs-user"
+      active_count=$((active_count + 1))
+      return 0
+    fi
+
+    set_window_attention_state "$WIN" "clear"
+
+    # Post-merge eval (non-blocking: always exits 0)
+    if [[ "$AUTO_EVAL" == "true" ]]; then
+      eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
+      if [[ "$eval_completed" == "false" ]]; then
+        log "info" "  📊 Running post-merge eval..."
+        launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
+      else
+        log "debug" "  ✓ Eval already completed for $ISSUE"
+      fi
+    fi
+
+    if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
+      log "status" "  → Window stays open for review - close it when ready"
+      if should_update_linear_state "$ISSUE"; then
+        linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
+      fi
+      # Preserve agent when marking as merged
+      current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged" "$current_agent"
+      active_count=$((active_count + 1))
+      return 0
+    fi
+
+    if should_update_linear_state "$ISSUE"; then
+      linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
+    fi
+    cleanup_completed_task "$ISSUE" "$SLUG"
+    return 0
+  elif [[ "$pr_status" == "CLOSED" ]]; then
+    log_warn "$ISSUE → PR #$PR CLOSED without merge"
+    local linear_status="Backlog"
+    if is_challenge_task "$ISSUE"; then
+      local sibling_pr sibling_state
+      sibling_pr=$(get_challenge_sibling_pr "$ISSUE")
+      sibling_state=""
+
+      # Challenge tasks should only move once the sibling outcome is definitive.
+      if check_challenge_sibling_merged "$ISSUE"; then
+        linear_status="Done"
+        log "status" "  ✓ Challenge sibling merged → marking Linear as Done"
+      fi
+
+      if [[ "$linear_status" != "Done" && -n "$sibling_pr" ]]; then
+        sibling_state=$(pr_state "$sibling_pr")
+      fi
+
+      case "$linear_status:$sibling_pr:$sibling_state" in
+        Done:*) ;;
+        Backlog::*)
+          linear_status=""
+          log "debug" "  ↳ Challenge sibling PR not found yet, deferring Linear state update"
+          ;;
+        Backlog:*:CLOSED)
+          log "status" "  ↺ Challenge sibling also closed → returning Linear to Backlog"
+          ;;
+        Backlog:*)
+          linear_status=""
+          log "debug" "  ↳ Challenge sibling still active or unknown, deferring Linear state update"
+          ;;
+      esac
+    fi
+    if [[ -n "$linear_status" ]] && should_update_linear_state "$ISSUE"; then
+      linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
+    fi
+    if should_cleanup_closed_pr "$ISSUE"; then
+      log "debug" "  ↳ Auto-cleaning closed challenger pane/worktree"
+      set_window_attention_state "$WIN" "clear"
+      cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
+    else
+      CLEANED["$ISSUE"]=1
+    fi
+    return 0
+  fi
+
+  if [[ "$current_phase" == "review" ]]; then
+    local resolved_phase review_status title launch_rc
     if [[ "$pr_status" == "OPEN" ]]; then
       resolved_phase=$(resolve_phase "$FEATURE_DIR")
       if [[ "$resolved_phase" == "aborted" ]]; then
@@ -5358,101 +5449,14 @@ monitor_issue_state() {
     return 0
   fi
 
-  # Check if merged
-  if validate_pr_merge "$PR"; then
-    log "status" "✓ $ISSUE → PR #$PR MERGED"
-    local merged_ready_dir
-    merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
-    if ! ready_stage_allows_merge "$merged_ready_dir"; then
-      log "status" "⛔ $ISSUE → PR #$PR was merged before ready checks passed"
-      write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
-      set_window_attention_state "$WIN" "needs-user"
-      active_count=$((active_count + 1))
-      return 0
-    fi
-
-    set_window_attention_state "$WIN" "clear"
-
-    # Post-merge eval (non-blocking: always exits 0)
-    if [[ "$AUTO_EVAL" == "true" ]]; then
-      eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
-      if [[ "$eval_completed" == "false" ]]; then
-        log "info" "  📊 Running post-merge eval..."
-        launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
-      else
-        log "debug" "  ✓ Eval already completed for $ISSUE"
-      fi
-    fi
-
-    if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-      log "status" "  → Window stays open for review - close it when ready"
-      if should_update_linear_state "$ISSUE"; then
-        linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
-      fi
-      # Preserve agent when marking as merged
-      current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
-      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged" "$current_agent"
-      active_count=$((active_count + 1))
-      return 0
-    fi
-
-    if should_update_linear_state "$ISSUE"; then
-      linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
-    fi
-    cleanup_completed_task "$ISSUE" "$SLUG"
-  elif [[ "$(pr_state "$PR")" == "CLOSED" ]]; then
-    log_warn "$ISSUE → PR #$PR CLOSED without merge"
-    local linear_status="Backlog"
-    if is_challenge_task "$ISSUE"; then
-      local sibling_pr sibling_state
-      sibling_pr=$(get_challenge_sibling_pr "$ISSUE")
-      sibling_state=""
-
-      # Challenge tasks should only move once the sibling outcome is definitive.
-      if check_challenge_sibling_merged "$ISSUE"; then
-        linear_status="Done"
-        log "status" "  ✓ Challenge sibling merged → marking Linear as Done"
-      fi
-
-      if [[ "$linear_status" != "Done" && -n "$sibling_pr" ]]; then
-        sibling_state=$(pr_state "$sibling_pr")
-      fi
-
-      case "$linear_status:$sibling_pr:$sibling_state" in
-        Done:*) ;;
-        Backlog::*)
-          linear_status=""
-          log "debug" "  ↳ Challenge sibling PR not found yet, deferring Linear state update"
-          ;;
-        Backlog:*:CLOSED)
-          log "status" "  ↺ Challenge sibling also closed → returning Linear to Backlog"
-          ;;
-        Backlog:*)
-          linear_status=""
-          log "debug" "  ↳ Challenge sibling still active or unknown, deferring Linear state update"
-          ;;
-      esac
-    fi
-    if [[ -n "$linear_status" ]] && should_update_linear_state "$ISSUE"; then
-      linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
-    fi
-    if should_cleanup_closed_pr "$ISSUE"; then
-      log "debug" "  ↳ Auto-cleaning closed challenger pane/worktree"
-      set_window_attention_state "$WIN" "clear"
-      cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
-    else
-      CLEANED["$ISSUE"]=1
-    fi
-  else
-    # PR open but not merged — re-check challenge eval and comparison
-    # in case the eval was missed on initial PR detection (e.g. challenge
-    # flag was incorrect when PR was first found)
-    if is_challenge_task "$ISSUE"; then
-      maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
-      maybe_run_challenge_comparison "$ISSUE"
-    fi
-    active_count=$((active_count + 1))
+  # PR open but not merged — re-check challenge eval and comparison
+  # in case the eval was missed on initial PR detection (e.g. challenge
+  # flag was incorrect when PR was first found)
+  if is_challenge_task "$ISSUE"; then
+    maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
+    maybe_run_challenge_comparison "$ISSUE"
   fi
+  active_count=$((active_count + 1))
 
   return 0
 }

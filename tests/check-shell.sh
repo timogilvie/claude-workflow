@@ -332,9 +332,9 @@ else
   fi
 
   CLOSED_BLOCK=$(awk '
-    index($0, "elif [[ \"$(pr_state \"$PR\")\" == \"CLOSED\" ]]; then") { in_block=1 }
+    index($0, "log_warn \"$ISSUE → PR #$PR CLOSED without merge\"") { in_block=1 }
     in_block { print }
-    in_block && /^[[:space:]]*else$/ { exit }
+    in_block && /^[[:space:]]*return 0$/ { exit }
   ' <<< "$MONITOR_ISSUE_BLOCK")
 
   if grep -Fq 'log_warn "$ISSUE → PR #$PR CLOSED without merge"' <<< "$CLOSED_BLOCK"; then
