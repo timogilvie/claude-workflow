@@ -34,6 +34,14 @@ export interface PullRequestViewOptions {
 }
 
 /**
+ * Options for PR label mutations.
+ */
+export interface PullRequestLabelOptions {
+  /** Repository in 'owner/name' format (defaults to current repo) */
+  repo?: string;
+}
+
+/**
  * Pull request metadata.
  */
 export interface PullRequest {
@@ -93,6 +101,16 @@ export interface PullRequestDiff {
  */
 const buildShellCommand = (args: Array<string | number>): string => {
   return args.map((arg) => escapeShellArg(String(arg))).join(' ');
+};
+
+/**
+ * Shared dependencies to allow focused unit tests without live gh calls.
+ */
+export const githubDeps = {
+  execShellCommand,
+  resolveOwnerRepo,
+  getPullRequest: (prNumber: number | string, options: PullRequestViewOptions = {}) =>
+    getPullRequest(prNumber, options),
 };
 
 /**
@@ -331,6 +349,169 @@ export const getPullRequestDiff = (prNumber: number | string, options: PullReque
 };
 
 /**
+ * Add labels to a pull request using GitHub's REST API.
+ *
+ * GitHub exposes pull requests as issues for label mutations. This path avoids
+ * the deprecated GraphQL field used by `gh pr edit --add-label`.
+ *
+ * GitHub will create repository labels that do not already exist when the
+ * authenticated user has permission to do so.
+ *
+ * @param prNumber - PR number to label
+ * @param labels - Label names to add
+ * @param options - Optional repo override
+ * @returns Updated pull request metadata after labels are added
+ * @throws {Error} If the PR cannot be found, the repo cannot be resolved, or the API call fails
+ */
+export const addLabelsToPullRequest = (
+  prNumber: number | string,
+  labels: string[],
+  options: PullRequestLabelOptions = {},
+): PullRequest => {
+  const { repo } = options;
+
+  if (!prNumber) {
+    throw new Error('PR number is required');
+  }
+
+  const normalizedLabels = normalizePullRequestLabels(labels);
+  const ownerRepo = repo || githubDeps.resolveOwnerRepo();
+
+  if (!ownerRepo) {
+    throw new Error('Unable to determine GitHub repository. Pass --repo owner/name or run from a GitHub checkout.');
+  }
+
+  try {
+    const payload = JSON.stringify(normalizedLabels);
+    const args: Array<string> = [
+      'gh',
+      'api',
+      '--method',
+      'POST',
+      `repos/${ownerRepo}/issues/${prNumber.toString()}/labels`,
+      '--input',
+      '-',
+    ];
+
+    githubDeps.execShellCommand(
+      `printf '%s' ${escapeShellArg(payload)} | ${buildShellCommand(args)}`,
+      { encoding: 'utf-8' },
+    );
+
+    return githubDeps.getPullRequest(prNumber, { repo: ownerRepo });
+  } catch (error) {
+    throw wrapPullRequestLabelError(error, prNumber, 'add');
+  }
+};
+
+/**
+ * Remove a label from a pull request using GitHub's REST API.
+ *
+ * Missing labels are treated as a no-op so callers can safely retry cleanup.
+ *
+ * @param prNumber - PR number to update
+ * @param label - Label name to remove
+ * @param options - Optional repo override
+ * @returns Updated pull request metadata after the removal attempt
+ * @throws {Error} If the PR cannot be found, the repo cannot be resolved, or the API call fails
+ */
+export const removeLabelFromPullRequest = (
+  prNumber: number | string,
+  label: string,
+  options: PullRequestLabelOptions = {},
+): PullRequest => {
+  const { repo } = options;
+
+  if (!prNumber) {
+    throw new Error('PR number is required');
+  }
+
+  const normalizedLabel = normalizePullRequestLabel(label);
+  const ownerRepo = repo || githubDeps.resolveOwnerRepo();
+
+  if (!ownerRepo) {
+    throw new Error('Unable to determine GitHub repository. Pass --repo owner/name or run from a GitHub checkout.');
+  }
+
+  try {
+    const encodedLabel = encodeURIComponent(normalizedLabel);
+    const args: Array<string> = [
+      'gh',
+      'api',
+      '--method',
+      'DELETE',
+      `repos/${ownerRepo}/issues/${prNumber.toString()}/labels/${encodedLabel}`,
+    ];
+
+    githubDeps.execShellCommand(buildShellCommand(args), { encoding: 'utf-8' });
+  } catch (error) {
+    const err = error as Error;
+    if (!isMissingPullRequestLabelError(err.message)) {
+      throw wrapPullRequestLabelError(error, prNumber, 'remove');
+    }
+  }
+
+  return githubDeps.getPullRequest(prNumber, { repo: ownerRepo });
+};
+
+function normalizePullRequestLabels(labels: string[]): string[] {
+  if (!Array.isArray(labels) || labels.length === 0) {
+    throw new Error('At least one label name is required');
+  }
+
+  const normalized = labels
+    .map(normalizePullRequestLabel)
+    .filter((label, index, all) => all.indexOf(label) === index);
+
+  if (normalized.length === 0) {
+    throw new Error('At least one label name is required');
+  }
+
+  return normalized;
+}
+
+function normalizePullRequestLabel(label: string): string {
+  const normalized = String(label).trim();
+  if (!normalized) {
+    throw new Error('Label name is required');
+  }
+  return normalized;
+}
+
+function wrapPullRequestLabelError(
+  error: unknown,
+  prNumber: number | string,
+  action: 'add' | 'remove',
+): Error {
+  const err = error as Error;
+  const prefix = action === 'add' ? 'add labels to' : 'remove label from';
+
+  if (err.message.includes('HTTP 404') ||
+      err.message.includes('Could not resolve to an Issue') ||
+      err.message.includes('Could not resolve to a PullRequest') ||
+      err.message.includes('Not Found')) {
+    return new Error(`Pull request #${prNumber} not found`);
+  }
+
+  if (err.message.includes('HTTP 403') || err.message.includes('Resource not accessible')) {
+    return new Error(`Failed to ${prefix} pull request #${prNumber}: GitHub access denied. Check repository write permissions and gh auth status.`);
+  }
+
+  if (err.message.includes('gh:')) {
+    return new Error('GitHub CLI (gh) is not available or not authenticated. Please install and authenticate with: gh auth login');
+  }
+
+  return new Error(`Failed to ${prefix} pull request #${prNumber}: ${err.message}`);
+}
+
+function isMissingPullRequestLabelError(message: string): boolean {
+  return message.includes('HTTP 404') ||
+    message.includes('Label does not exist') ||
+    message.includes('label does not exist') ||
+    message.includes('Not Found');
+}
+
+/**
  * Resolve the GitHub owner/repo string (e.g. "timogilvie/wavemill") from
  * the git remote in the given directory.
  */
@@ -375,7 +556,7 @@ export function fetchPrReviews(
     return [];
   }
 
-  const reviewsRaw = execShellCommand(
+  const reviewsRaw = githubDeps.execShellCommand(
     `gh api repos/${escapeShellArg(repo)}/pulls/${escapeShellArg(prNumber)}/reviews --jq '[.[] | {author: .user.login, state: .state, body: (.body // ""), submittedAt: (.submitted_at // "")}]'`,
     { encoding: 'utf-8', cwd, timeout: 15_000 },
   ).trim();
