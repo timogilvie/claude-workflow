@@ -274,8 +274,9 @@ check_config_version() {
 
   # Check version (exit code 1 = needs upgrade)
   # Note: must use `|| true` to prevent set -e from exiting on non-zero
+  # Redirect stderr to /dev/null so npx warnings don't corrupt the JSON output
   local check_output check_status
-  check_output=$(npx tsx "$check_tool" --json 2>&1) && check_status=0 || check_status=$?
+  check_output=$(npx tsx "$check_tool" --json 2>/dev/null) && check_status=0 || check_status=$?
 
   # 0 = current, 1 = needs upgrade, 2 = error
   if [[ $check_status -eq 0 ]]; then
