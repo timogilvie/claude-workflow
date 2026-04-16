@@ -710,7 +710,7 @@ fi
 echo ""
 echo "=== Abort Prompt Guidance Guards ==="
 
-if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/planning-phase.md" \
+if grep -q 'touch "{{FEATURE_DIR}}/.workflow-aborted"' "$REPO_DIR/tools/prompts/planning-phase.md" \
   && grep -q 'Do NOT create any phase completion or approval markers' "$REPO_DIR/tools/prompts/planning-phase.md" \
   && grep -q 'Stop after creating the marker and reporting the abort.' "$REPO_DIR/tools/prompts/planning-phase.md"; then
   pass "planning template documents abort marker flow"
@@ -718,7 +718,7 @@ else
   fail "planning template is missing abort marker guidance"
 fi
 
-if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/coding-phase.md" \
+if grep -q 'touch "{{FEATURE_DIR}}/.workflow-aborted"' "$REPO_DIR/tools/prompts/coding-phase.md" \
   && grep -q 'Do NOT create the phase completion marker (.coding-complete)' "$REPO_DIR/tools/prompts/coding-phase.md" \
   && grep -q 'Stop after creating the marker and reporting the abort.' "$REPO_DIR/tools/prompts/coding-phase.md"; then
   pass "coding template documents abort marker flow"
@@ -726,7 +726,7 @@ else
   fail "coding template is missing abort marker guidance"
 fi
 
-if grep -q 'touch features/{{SLUG}}/.workflow-aborted' "$REPO_DIR/tools/prompts/review-phase.md" \
+if grep -q 'touch "{{FEATURE_DIR}}/.workflow-aborted"' "$REPO_DIR/tools/prompts/review-phase.md" \
   && grep -q 'Do NOT create additional completion output or a PR' "$REPO_DIR/tools/prompts/review-phase.md" \
   && grep -q 'Stop after creating the marker and reporting the abort.' "$REPO_DIR/tools/prompts/review-phase.md"; then
   pass "review template documents abort marker flow"
@@ -771,6 +771,14 @@ build_review_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
   "Issue Description:
 Test
 " "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "claude-sonnet" "static" "claude" > "$PROMPT_RENDER_DIR/review-claude.txt"
+build_routing_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" > "$PROMPT_RENDER_DIR/routing.txt"
+build_interactive_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" > "$PROMPT_RENDER_DIR/interactive.txt"
 
 if grep -q '/exit' "$PROMPT_RENDER_DIR/planning-codex.txt" \
   || grep -q '/exit' "$PROMPT_RENDER_DIR/coding-codex.txt" \
@@ -800,6 +808,8 @@ for template in planning-phase.md coding-phase.md review-phase.md; do
 done
 
 for rendered in \
+  "$PROMPT_RENDER_DIR/routing.txt" \
+  "$PROMPT_RENDER_DIR/interactive.txt" \
   "$PROMPT_RENDER_DIR/planning-codex.txt" \
   "$PROMPT_RENDER_DIR/planning-claude.txt" \
   "$PROMPT_RENDER_DIR/coding-codex.txt" \
@@ -813,6 +823,19 @@ for rendered in \
     pass "$(basename "$rendered") omits agent-managed exit semantics"
   fi
 done
+
+if grep -q "$REPO_DIR/features/test-slug/selected-task.json" "$PROMPT_RENDER_DIR/routing.txt" \
+  && grep -q "$REPO_DIR/features/test-slug/.routing-complete" "$PROMPT_RENDER_DIR/routing.txt" \
+  && grep -q "$REPO_DIR/features/test-slug/selected-task.json" "$PROMPT_RENDER_DIR/interactive.txt" \
+  && grep -q "$REPO_DIR/features/test-slug/plan.md" "$PROMPT_RENDER_DIR/interactive.txt" \
+  && grep -q "$REPO_DIR/features/test-slug/plan.md" "$PROMPT_RENDER_DIR/planning-codex.txt" \
+  && grep -q "$REPO_DIR/features/test-slug/.plan-approved" "$PROMPT_RENDER_DIR/planning-codex.txt" \
+  && grep -q "$REPO_DIR/features/test-slug/.coding-complete" "$PROMPT_RENDER_DIR/coding-codex.txt" \
+  && grep -q "$REPO_DIR/features/test-slug/.workflow-aborted" "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "rendered prompts use absolute canonical feature paths"
+else
+  fail "rendered prompts still rely on cwd-relative feature paths"
+fi
 
 TMUX_CAPTURE=()
 tmux() {

@@ -213,8 +213,9 @@ build_autonomous_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8"
   local reviewer_model="${9:-}" review_mode="${10:-}" agent_cmd="${11:-claude}"
-  local abort_exit_instruction
+  local abort_exit_instruction feature_dir
   abort_exit_instruction="$(agent_exit_followup_text "$agent_cmd")"
+  feature_dir="$wt_dir/features/$(basename "$wt_dir")"
 
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
@@ -252,7 +253,7 @@ Process:
 2. Make minimal, high-quality changes
 3. Run tests/lint
    If workflow automation explicitly tells you to stop, abort, close the issue, or discontinue work:
-   - Create the abort marker: touch "$wt_dir/features/$(basename "$wt_dir")/.workflow-aborted"
+   - Create the abort marker: touch "$feature_dir/.workflow-aborted"
    - Do NOT create additional completion markers or a PR
    - Report that the workflow is stopping
    - $abort_exit_instruction
@@ -315,6 +316,9 @@ _WVML_PROMPT_
 build_interactive_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
+  local feature_dir="$wt_dir/features/$slug"
+  local selected_task_path="$feature_dir/selected-task.json"
+  local plan_path="$feature_dir/plan.md"
 
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
@@ -336,12 +340,12 @@ Keep it under 50 chars. Update it at each major step (e.g. "reading codebase", "
 You have THREE phases. Do them in order.
 
 ### Phase 1: Planning (interactive)
-Task context is pre-seeded at: features/$slug/selected-task.json
+Task context is pre-seeded at: $selected_task_path
 
 1. Read the task context
 2. Research the codebase to understand relevant code and patterns
 3. Create a detailed implementation plan with phases
-4. Save the plan to: features/$slug/plan.md
+4. Save the plan to: $plan_path
 5. Present the plan summary to the user and wait for approval
 
 Do NOT proceed to Phase 2 until the user has approved the plan.
@@ -436,6 +440,9 @@ _WVML_PROMPT_
 build_routing_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
+  local feature_dir="$wt_dir/features/$slug"
+  local selected_task_path="$feature_dir/selected-task.json"
+  local routing_path="$feature_dir/.routing-complete"
 
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
@@ -467,9 +474,9 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 
 1. Read the task context above and understand the requirements
 2. Run the routing tool to get recommendations:
-   npx tsx $tools_dir/route-task.ts --json --file features/$slug/selected-task.json --repo-dir $wt_dir
+   npx tsx $tools_dir/route-task.ts --json --file "$selected_task_path" --repo-dir "$wt_dir"
 
-3. Save the routing results to features/$slug/.routing-complete as JSON:
+3. Save the routing results to $routing_path as JSON:
    {
      "planner": "claude-sonnet-4-5-20250929",
      "coder": "claude-opus-4-6",
@@ -483,7 +490,7 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 
 ### Success Criteria
 - [ ] Routing tool executed successfully
-- [ ] Results saved to features/$slug/.routing-complete
+- [ ] Results saved to $routing_path
 - [ ] JSON is valid and contains all required fields
 
 ### Important Notes
@@ -519,8 +526,11 @@ build_planning_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
   local plan_depth="${10:-light}" agent_cmd="${11:-claude}"
+  local feature_dir="$wt_dir/features/$slug"
+  local task_context_path="$feature_dir/selected-task.json"
+  local plan_path="$feature_dir/plan.md"
   local abort_feedback_instruction exit_guard_text approved_completion_text
-  abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "features/$slug/.workflow-aborted")"
+  abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "$feature_dir/.workflow-aborted")"
   exit_guard_text="$(agent_exit_guard_text "$agent_cmd" "the user has explicitly approved your plan")"
   approved_completion_text="$(agent_completion_text "$agent_cmd" "The next phase will be launched automatically.")"
 
@@ -551,6 +561,10 @@ build_planning_prompt() {
     template_content="${template_content//\{\{SLUG\}\}/$slug}"
     template_content="${template_content//\{\{TOOLS_DIR\}\}/$tools_dir}"
     template_content="${template_content//\{\{ISSUE\}\}/$issue}"
+    template_content="${template_content//\{\{WT_DIR\}\}/$wt_dir}"
+    template_content="${template_content//\{\{FEATURE_DIR\}\}/$feature_dir}"
+    template_content="${template_content//\{\{TASK_CONTEXT_PATH\}\}/$task_context_path}"
+    template_content="${template_content//\{\{PLAN_PATH\}\}/$plan_path}"
     template_content="${template_content//\{\{DEPTH_GUIDANCE\}\}/$depth_guidance}"
   else
     template_content="[ERROR: Planning template not found at $template_file]"
@@ -585,13 +599,13 @@ When you receive user feedback:
 - DO: If the user asks to stop, abort, close the issue, or discontinue work, $abort_feedback_instruction
 - DO NOT: Interpret feedback as "wrap up now" or "move to next phase"
 - DO NOT: Create the phase completion marker if the user wants to stop
-- DO: After the user explicitly approves, create the approval marker: touch features/$slug/.plan-approved
+- DO: After the user explicitly approves, create the approval marker: touch "$feature_dir/.plan-approved"
 - DO NOT: $exit_guard_text
-- DO NOT: Edit any files outside of features/$slug/
+- DO NOT: Edit any files outside of $feature_dir/
 - DO NOT: Create git commits with source code changes
 - DO NOT: Start implementing the plan before or after approval
 
-After the user approves your plan, create features/$slug/.plan-approved and then $approved_completion_text
+After the user approves your plan, create "$feature_dir/.plan-approved" and then $approved_completion_text
 _WVML_PROMPT_
 }
 
@@ -614,8 +628,10 @@ build_coding_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
   local code_depth="${10:-medium}" agent_cmd="${11:-claude}"
+  local feature_dir="$wt_dir/features/$slug"
+  local plan_path="$feature_dir/plan.md"
   local abort_feedback_instruction exit_guard_text coding_completion_text
-  abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "features/$slug/.workflow-aborted")"
+  abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "$feature_dir/.workflow-aborted")"
   exit_guard_text="$(agent_exit_guard_text "$agent_cmd" "ALL phase requirements are met")"
   coding_completion_text="$(agent_completion_text "$agent_cmd" "The next phase will be launched automatically.")"
 
@@ -643,6 +659,8 @@ build_coding_prompt() {
     template_content=$(cat "$template_file")
     template_content="${template_content//\{\{CODE_DEPTH\}\}/$code_depth}"
     template_content="${template_content//\{\{SLUG\}\}/$slug}"
+    template_content="${template_content//\{\{FEATURE_DIR\}\}/$feature_dir}"
+    template_content="${template_content//\{\{PLAN_PATH\}\}/$plan_path}"
     template_content="${template_content//\{\{DEPTH_GUIDANCE\}\}/$depth_guidance}"
   else
     template_content="[ERROR: Coding template not found at $template_file]"
@@ -691,7 +709,7 @@ Before creating .coding-complete, verify ALL of these are true:
 - Changes are committed to git
 If ANY item is false, continue working. Do NOT create the marker.
 
-After implementation is complete and tests pass, create the .coding-complete file, then $coding_completion_text
+After implementation is complete and tests pass, create "$feature_dir/.coding-complete", then $coding_completion_text
 _WVML_PROMPT_
 }
 
@@ -762,8 +780,9 @@ build_review_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
   local reviewer_model="${10:-}" review_mode="${11:-static}" agent_cmd="${12:-claude}"
+  local feature_dir="$wt_dir/features/$slug"
   local abort_feedback_instruction exit_guard_text review_completion_text
-  abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "$wt_dir/features/$(basename "$wt_dir")/.workflow-aborted")"
+  abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "$feature_dir/.workflow-aborted")"
   exit_guard_text="$(agent_exit_guard_text "$agent_cmd" "the PR is created and all review steps are done")"
   review_completion_text="$(agent_completion_text "$agent_cmd")"
 
@@ -803,6 +822,7 @@ build_review_prompt() {
     template_content="${template_content//\{\{BASE_BRANCH\}\}/$base_branch}"
     template_content="${template_content//\{\{ISSUE\}\}/$issue}"
     template_content="${template_content//\{\{SLUG\}\}/$slug}"
+    template_content="${template_content//\{\{FEATURE_DIR\}\}/$feature_dir}"
     template_content="${template_content//\{\{REVIEWER_NOTE\}\}/$reviewer_note}"
     template_content="${template_content//\{\{MODE_GUIDANCE\}\}/$mode_guidance}"
   else
