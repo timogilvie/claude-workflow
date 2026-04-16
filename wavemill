@@ -245,26 +245,58 @@ check_config_version() {
     return 0
   fi
 
+  extract_json_field() {
+    local json="$1"
+    local field="$2"
+
+    if command -v jq >/dev/null 2>&1; then
+      printf '%s' "$json" | jq -r --arg field "$field" '.[$field] // empty' 2>/dev/null
+      return
+    fi
+
+    printf '%s' "$json" | node -e '
+      let input = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (chunk) => {
+        input += chunk;
+      });
+      process.stdin.on("end", () => {
+        try {
+          const parsed = JSON.parse(input);
+          const value = parsed?.[process.argv[1]];
+          process.stdout.write(value == null ? "" : String(value));
+        } catch {
+          process.exit(0);
+        }
+      });
+    ' "$field" 2>/dev/null
+  }
+
   # Check version (exit code 1 = needs upgrade)
   # Note: must use `|| true` to prevent set -e from exiting on non-zero
   local check_output check_status
-  check_output=$(npx tsx "$check_tool" 2>&1) && check_status=0 || check_status=$?
+  check_output=$(npx tsx "$check_tool" --json 2>&1) && check_status=0 || check_status=$?
 
   # 0 = current, 1 = needs upgrade, 2 = error
   if [[ $check_status -eq 0 ]]; then
     return 0
   fi
 
-  if [[ $check_status -eq 2 ]]; then
-    echo -e "${YELLOW}Warning:${NC} Config version check failed: $check_output"
+  local check_message current_version prompt_version
+  check_message=$(extract_json_field "$check_output" "message")
+  current_version=$(extract_json_field "$check_output" "currentVersion")
+  prompt_version="${current_version:-$(extract_json_field "$check_output" "configVersion")}"
+
+  if [[ $check_status -eq 2 || $check_status -ne 1 ]]; then
+    echo -e "${YELLOW}Warning:${NC} Config version check failed: ${check_message:-$check_output}"
     return 0
   fi
 
   # Needs upgrade
-  echo -e "${YELLOW}Notice:${NC} $check_output"
+  echo -e "${YELLOW}Notice:${NC} ${check_message:-$check_output}"
   echo -e "  The latest config includes features like eval, review, router, and permissions."
   echo ""
-  echo -e "Upgrade config to version ${VERSION}? This will preserve your existing settings."
+  echo -e "Upgrade config to version ${prompt_version:-$VERSION}? This will preserve your existing settings."
   read -p "[Y/n] " -n 1 -r
   echo
 

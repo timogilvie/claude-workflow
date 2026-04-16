@@ -24,12 +24,17 @@ function run(args: string[], env?: Record<string, string>): string {
   });
 }
 
-function runExpectFail(args: string[], env?: Record<string, string>): { stdout: string; stderr: string; status: number } {
+function runExpectFail(
+  args: string[],
+  env?: Record<string, string>,
+  cwd?: string,
+): { stdout: string; stderr: string; status: number } {
   try {
     const stdout = execFileSync(WAVEMILL, args, {
       encoding: 'utf-8',
       timeout: 10_000,
       env: { ...process.env, ...env },
+      cwd,
     });
     return { stdout, stderr: '', status: 0 };
   } catch (err: any) {
@@ -87,15 +92,22 @@ describe('wavemill CLI', () => {
 
   describe('dependency checks', () => {
     it('mill reports missing tmux when not on PATH', () => {
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-cli-smoke-'));
       // Use a minimal PATH that excludes tmux
-      const result = runExpectFail(['mill'], {
-        PATH: '/usr/bin:/bin',
-        SKIP_CONTEXT_CHECK: 'true',
-        HOME: process.env.HOME ?? '',
-      });
-      assert.notEqual(result.status, 0);
-      const output = result.stdout + result.stderr;
-      assert.match(output, /tmux|required|not found/i);
+      try {
+        const result = runExpectFail(['mill'], {
+          PATH: '/usr/bin:/bin',
+          SKIP_CONTEXT_CHECK: 'true',
+          SKIP_CONFIG_CHECK: 'true',
+          WAVEMILL_MILL_ACTIVE: '',
+          HOME: process.env.HOME ?? '',
+        }, repoDir);
+        assert.notEqual(result.status, 0);
+        const output = result.stdout + result.stderr;
+        assert.match(output, /tmux|required|not found/i);
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
     });
   });
 

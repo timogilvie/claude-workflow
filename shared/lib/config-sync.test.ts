@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { clearConfigCache } from './config.ts';
+import { clearConfigCache, CURRENT_CONFIG_VERSION } from './config.ts';
 import {
   CANONICAL_CONFIG_TEMPLATE,
   deepMergeConfig,
@@ -76,6 +76,22 @@ test('prepareConfigSync merges current config with canonical template', () => {
   } finally {
     cleanUp(repoDir);
   }
+});
+
+test('CANONICAL_CONFIG_TEMPLATE.configVersion matches CURRENT_CONFIG_VERSION', () => {
+  assert.equal(CANONICAL_CONFIG_TEMPLATE.configVersion, CURRENT_CONFIG_VERSION);
+});
+
+test('wavemill init heredoc configVersion matches CURRENT_CONFIG_VERSION', () => {
+  const script = readFileSync(join(import.meta.dirname, '..', '..', 'wavemill'), 'utf-8');
+  const match = script.match(/"configVersion":\s*"([^"]+)"/);
+
+  assert.ok(match, 'expected wavemill init template to contain configVersion');
+  assert.equal(
+    match[1],
+    CURRENT_CONFIG_VERSION,
+    `wavemill init heredoc configVersion (${match[1]}) has drifted from CURRENT_CONFIG_VERSION (${CURRENT_CONFIG_VERSION}). Update wavemill init template.`,
+  );
 });
 
 process.on('exit', () => {
