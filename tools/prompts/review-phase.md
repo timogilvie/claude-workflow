@@ -108,7 +108,7 @@ You are FORBIDDEN from:
 ### Handling User Abort Requests
 
 If the user asks you to stop work, close the issue, abort, or otherwise discontinue this workflow:
-- Create the abort marker: touch features/{{SLUG}}/.workflow-aborted
+- Create the abort marker: touch "{{FEATURE_DIR}}/.workflow-aborted"
 - Do NOT create additional completion output or a PR
 - Inform the user that the workflow is being stopped
 - Stop after creating the marker and reporting the abort.
