@@ -28,8 +28,9 @@ import path from 'node:path';
  * - `fail`: Check failed (blocks merge)
  * - `warn`: Check has concerns but doesn't block
  * - `skip`: Check was skipped (not applicable or disabled)
+ * - `pending`: Check is still running and should be retried later
  */
-export type ReadyCheckStatus = 'pass' | 'fail' | 'warn' | 'skip';
+export type ReadyCheckStatus = 'pass' | 'fail' | 'warn' | 'skip' | 'pending';
 
 /**
  * Result of an individual ready check.
@@ -68,8 +69,9 @@ export interface ReadyResult {
    * - `pass`: All required checks passed, safe to merge
    * - `fail`: One or more required checks failed, blocked
    * - `warn`: All required checks passed but warnings present
+   * - `pending`: Blocking checks are still running, retry later
    */
-  verdict: 'pass' | 'fail' | 'warn';
+  verdict: 'pass' | 'fail' | 'warn' | 'pending';
 
   /** Individual check results */
   checks: ReadyCheck[];
@@ -532,12 +534,12 @@ function checkReleaseRequirements(
  * @param repoDir - Repository directory
  * @returns Check result
  */
-function checkCIStatus(prNumber: number, repoDir: string): ReadyCheck {
+export function checkCIStatus(prNumber: number, repoDir: string): ReadyCheck {
   try {
-      const checksJson = readyStageDeps.execShellCommand(
-        `gh pr checks ${escapeShellArg(String(prNumber))} --json state,name`,
-        { encoding: 'utf-8', cwd: repoDir }
-      );
+    const checksJson = readyStageDeps.execShellCommand(
+      `gh pr checks ${escapeShellArg(String(prNumber))} --json state,name`,
+      { encoding: 'utf-8', cwd: repoDir }
+    );
     const checks = JSON.parse(checksJson.toString());
 
     if (checks.length === 0) {
@@ -549,16 +551,32 @@ function checkCIStatus(prNumber: number, repoDir: string): ReadyCheck {
       };
     }
 
-    // Check if all checks are SUCCESS
-    const failedChecks = checks.filter((check: any) => check.state !== 'SUCCESS');
+    const passedStates = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+    const pendingStates = new Set(['QUEUED', 'IN_PROGRESS', 'PENDING', 'REQUESTED', 'WAITING', 'STARTUP_FAILURE']);
+    const failedChecks = checks.filter((check: any) => !passedStates.has(check.state));
+    const blockingFailures = failedChecks.filter((check: any) => !pendingStates.has(check.state));
+    const pendingChecks = failedChecks.filter((check: any) => pendingStates.has(check.state));
 
-    if (failedChecks.length > 0) {
+    if (blockingFailures.length > 0) {
       return {
         name: 'ci-status',
         status: 'fail',
-        message: `${failedChecks.length} CI check(s) failing`,
+        message: `${blockingFailures.length} CI check(s) failing`,
         details: {
-          failedChecks: failedChecks.map((c: any) => ({ name: c.name, state: c.state })),
+          failedChecks: blockingFailures.map((c: any) => ({ name: c.name, state: c.state })),
+          pendingChecks: pendingChecks.map((c: any) => ({ name: c.name, state: c.state })),
+          totalChecks: checks.length,
+        },
+      };
+    }
+
+    if (pendingChecks.length > 0) {
+      return {
+        name: 'ci-status',
+        status: 'pending',
+        message: `${pendingChecks.length} CI check(s) still running`,
+        details: {
+          pendingChecks: pendingChecks.map((c: any) => ({ name: c.name, state: c.state })),
           totalChecks: checks.length,
         },
       };
@@ -680,6 +698,7 @@ export async function checkMergeConflicts(
  *
  * Conservative approach:
  * - Any 'fail' → verdict is 'fail'
+ * - No fails but any 'pending' → verdict is 'pending'
  * - No fails but any 'warn' → verdict is 'warn'
  * - Otherwise → verdict is 'pass'
  *
@@ -687,7 +706,7 @@ export async function checkMergeConflicts(
  * @returns Overall verdict
  * @internal Exported for testing purposes
  */
-export function computeVerdict(checks: ReadyCheck[]): 'pass' | 'fail' | 'warn' {
+export function computeVerdict(checks: ReadyCheck[]): 'pass' | 'fail' | 'warn' | 'pending' {
   // Empty checks array means nothing failed
   if (checks.length === 0) {
     return 'pass';
@@ -697,6 +716,11 @@ export function computeVerdict(checks: ReadyCheck[]): 'pass' | 'fail' | 'warn' {
   const hasFail = checks.some(check => check.status === 'fail');
   if (hasFail) {
     return 'fail';
+  }
+
+  const hasPending = checks.some(check => check.status === 'pending');
+  if (hasPending) {
+    return 'pending';
   }
 
   // No failures, but warnings present
@@ -761,6 +785,8 @@ export async function runReadyStage(options: {
   let summary: string;
   if (verdict === 'pass') {
     summary = 'All checks passed - safe to merge';
+  } else if (verdict === 'pending') {
+    summary = 'CI checks still in progress - will retry';
   } else if (verdict === 'warn') {
     summary = 'Checks passed with warnings - review before merge';
   } else {
@@ -1010,11 +1036,13 @@ export async function controllerCheckReadiness(
       phase = 'ready';
       checks.push({
         name: 'ready-outcome',
-        status: verdict === 'fail' ? 'fail' : verdict === 'warn' ? 'warn' : 'pass',
+        status: verdict === 'fail' ? 'fail' : verdict === 'warn' || verdict === 'pending' ? 'warn' : 'pass',
         message: verdict === 'fail'
           ? 'Ready stage failed - merge is blocked'
           : verdict === 'warn'
             ? 'Ready stage passed with warnings - merge may require manual follow-up'
+            : verdict === 'pending'
+              ? 'Ready stage is still waiting on CI checks'
             : 'Ready stage passed - merge is allowed',
         details: { verdict },
       });

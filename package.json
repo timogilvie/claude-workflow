@@ -10,7 +10,7 @@
   "scripts": {
     "check:review": "npx tsx tools/check-review-setup.ts",
     "test": "npm run test:shell && npm run test:unit && npm run test:smoke && npm run test:config",
-    "test:shell": "bash tests/check-shell.sh && bash tests/monitor-ready-transition.test.sh && bash tests/lifecycle-scenarios.test.sh && bash tests/lifecycle-harness.test.sh && bash tests/cleanup-branch.test.sh && bash tests/error-recovery.test.sh && bash tests/planning-validation.test.sh && bash tests/wavemill-status.test.sh && bash tests/control-layout.test.sh",
+    "test:shell": "bash tests/check-shell.sh && bash tests/monitor-ready-transition.test.sh && bash tests/launch-ready-phase.test.sh && bash tests/lifecycle-scenarios.test.sh && bash tests/lifecycle-harness.test.sh && bash tests/cleanup-branch.test.sh && bash tests/error-recovery.test.sh && bash tests/planning-validation.test.sh && bash tests/wavemill-status.test.sh && bash tests/control-layout.test.sh",
     "test:lifecycle": "bash tests/run-lifecycle-tests.sh",
     "test:layout": "bash tests/control-layout.test.sh",
     "test:unit": "npm run test:node-test && npm run test:custom",

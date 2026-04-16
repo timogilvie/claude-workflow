@@ -3144,6 +3144,14 @@ launch_ready_phase() {
     return 0
   fi
 
+  if [[ "$ready_rc" -eq 2 ]]; then
+    write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
+      "CI checks pending for PR #$pr_number" \
+      "{\"type\":\"ready\",\"verdict\":\"pending\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\"}"
+    log "  CI checks pending for $issue (PR #$pr_number) - will retry"
+    return 4
+  fi
+
   write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" "Ready checks failed"
   write_ready_attention_file "$state_dir" "Ready checks failed for PR #$pr_number."
   log_error "  Ready checks failed for $issue"
@@ -4430,8 +4438,11 @@ monitor_issue_state() {
         title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
       fi
 
-      launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"
-      launch_rc=$?
+      if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+        launch_rc=0
+      else
+        launch_rc=$?
+      fi
       if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
         log "status" "⛔ $ISSUE → Workflow aborted during ready launch"
         set_task_phase "$ISSUE" "aborted"
@@ -4441,6 +4452,11 @@ monitor_issue_state() {
       if [[ "$launch_rc" -eq 3 ]]; then
         set_window_attention_state "$WIN" "clear"
         log "status" "⚠ $ISSUE → Ready detected conflicts, launching remediation"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+      if [[ "$launch_rc" -eq 4 ]]; then
+        set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
       fi
@@ -4891,8 +4907,11 @@ monitor_issue_state() {
               issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
               title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
             fi
-            launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"
-            local launch_rc=$?
+            if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"; then
+              local launch_rc=0
+            else
+              local launch_rc=$?
+            fi
             if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
               log "⛔ $ISSUE → Workflow aborted during ready launch"
               set_task_phase "$ISSUE" "aborted"
@@ -4902,6 +4921,11 @@ monitor_issue_state() {
             if [[ "$launch_rc" -eq 3 ]]; then
               set_window_attention_state "$WIN" "clear"
               log "status" "⚠ $ISSUE → Ready detected conflicts, launching remediation"
+              active_count=$((active_count + 1))
+              return 0
+            fi
+            if [[ "$launch_rc" -eq 4 ]]; then
+              set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
               return 0
             fi
@@ -4961,8 +4985,11 @@ monitor_issue_state() {
                 title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
               fi
 
-              launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"
-              local launch_rc=$?
+              if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"; then
+                local launch_rc=0
+              else
+                local launch_rc=$?
+              fi
               if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
                 log "⛔ $ISSUE → Workflow aborted during conflict remediation"
                 set_task_phase "$ISSUE" "aborted"
@@ -4970,6 +4997,11 @@ monitor_issue_state() {
                 return 0
               fi
               if [[ "$launch_rc" -eq 3 ]]; then
+                set_window_attention_state "$WIN" "clear"
+                active_count=$((active_count + 1))
+                return 0
+              fi
+              if [[ "$launch_rc" -eq 4 ]]; then
                 set_window_attention_state "$WIN" "clear"
                 active_count=$((active_count + 1))
                 return 0
@@ -5108,8 +5140,11 @@ monitor_issue_state() {
           title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
         fi
 
-        launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"
-        launch_rc=$?
+        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+          launch_rc=0
+        else
+          launch_rc=$?
+        fi
         if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
           log "status" "⛔ $ISSUE → Workflow aborted during ready launch"
           set_task_phase "$ISSUE" "aborted"
@@ -5119,6 +5154,11 @@ monitor_issue_state() {
         if [[ "$launch_rc" -eq 3 ]]; then
           set_window_attention_state "$WIN" "clear"
           log "status" "⚠ $ISSUE → Ready detected conflicts, launching remediation"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+        if [[ "$launch_rc" -eq 4 ]]; then
+          set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
         fi
@@ -5168,8 +5208,11 @@ monitor_issue_state() {
           title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
         fi
 
-        launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"
-        launch_rc=$?
+        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+          launch_rc=0
+        else
+          launch_rc=$?
+        fi
         if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
           log "status" "⛔ $ISSUE → Workflow aborted during conflict remediation"
           set_task_phase "$ISSUE" "aborted"
@@ -5177,6 +5220,11 @@ monitor_issue_state() {
           return 0
         fi
         if [[ "$launch_rc" -eq 3 ]]; then
+          set_window_attention_state "$WIN" "clear"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+        if [[ "$launch_rc" -eq 4 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0

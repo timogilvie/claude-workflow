@@ -110,6 +110,9 @@ run_monitor_case() {
         READY_STATUS="completed"
         touch "$READY_DIR/.conflict-detected"
         ;;
+      review_to_ready_pending)
+        READY_LAUNCH_RC=4
+        ;;
       merged_without_ready)
         PR_STATUS="MERGED"
         VALIDATE_MERGED="true"
@@ -234,6 +237,11 @@ ready_conflict_output="$(run_monitor_case ready_conflict_rerun)"
 check_contains "ready conflict rerun keeps task in ready" "$ready_conflict_output" "phase=ready"
 check_contains "ready conflict rerun launches ready checks again" "$ready_conflict_output" "ready_launches=1"
 check_contains "ready conflict rerun leaves attention on task" "$ready_conflict_output" "attention=needs-user"
+
+review_to_ready_pending_output="$(run_monitor_case review_to_ready_pending)"
+check_contains "pending ready checks keep task in ready" "$review_to_ready_pending_output" "phase=ready"
+check_contains "pending ready checks clear attention" "$review_to_ready_pending_output" "attention=clear"
+check_contains "pending ready checks count as active work" "$review_to_ready_pending_output" "active_count=1"
 
 merged_without_ready_output="$(run_monitor_case merged_without_ready)"
 check_contains "merged PR without ready pass is blocked" "$merged_without_ready_output" "attention=needs-user"
