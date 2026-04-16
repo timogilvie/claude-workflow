@@ -18,7 +18,7 @@ npx tsx tools/eval-workflow.ts --issue HOK-123 --pr 456
 
 ### Override the judge model
 ```bash
-npx tsx tools/eval-workflow.ts --issue HOK-123 --pr 456 --model claude-opus-4-6
+npx tsx tools/eval-workflow.ts --issue HOK-123 --pr 456 --model claude-opus-4-7
 ```
 
 ## How It Works

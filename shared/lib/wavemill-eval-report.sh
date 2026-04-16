@@ -66,7 +66,7 @@ ${GREEN}Options:${NC}
 
 ${GREEN}Examples:${NC}
   wavemill eval report
-  wavemill eval report --model claude-opus-4-6
+  wavemill eval report --model claude-opus-4-7
   wavemill eval report --from 2026-01-01 --to 2026-02-15
   wavemill eval report --json | jq .overall_average
 

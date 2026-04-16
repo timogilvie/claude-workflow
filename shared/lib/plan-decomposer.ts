@@ -151,7 +151,7 @@ export interface DecomposeOptions {
   systemPrompt: string;
   /** Initiative details (name, description, projects) */
   initiativeContext: string;
-  /** LLM model to use (default: PLAN_MODEL env or claude-opus-4-6) */
+  /** LLM model to use (default: PLAN_MODEL env or claude-opus-4-7) */
   model?: string;
   /**
    * Enable interactive mode (allows Claude to use tools).
@@ -236,7 +236,7 @@ export async function decomposeWithClaude(
 
   const result = await callClaude(fullPrompt, {
     mode: 'stream',
-    model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-6',
+    model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-7',
     cliFlags,
     timeout,
   });
@@ -252,7 +252,7 @@ export interface ResearchOptions {
   researchPrompt: string;
   /** Initiative details (name, description, projects) */
   initiativeContext: string;
-  /** LLM model to use (default: PLAN_MODEL env or claude-opus-4-6) */
+  /** LLM model to use (default: PLAN_MODEL env or claude-opus-4-7) */
   model?: string;
   /**
    * Enable interactive mode (allows Claude to use tools).
@@ -341,7 +341,7 @@ export async function runResearch(
 
   const result = await callClaude(fullPrompt, {
     mode: 'stream',
-    model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-6',
+    model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-7',
     cliFlags,
     timeout,
   });

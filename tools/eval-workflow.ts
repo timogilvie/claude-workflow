@@ -19,7 +19,7 @@ runTool({
   examples: [
     'npx tsx tools/eval-workflow.ts',
     'npx tsx tools/eval-workflow.ts --issue HOK-123 --pr 456',
-    'npx tsx tools/eval-workflow.ts --model claude-sonnet-4-5-20250929',
+    'npx tsx tools/eval-workflow.ts --model claude-sonnet-4-6',
   ],
   additionalHelp: `Context Resolution:
   1. Explicit arguments (--issue, --pr) take priority
@@ -27,7 +27,7 @@ runTool({
   3. Falls back to current branch's open PR
 
 Environment Variables:
-  EVAL_MODEL         Override judge model (default: claude-sonnet-4-5-20250929)
+  EVAL_MODEL         Override judge model (default: claude-sonnet-4-6)
   LINEAR_API_KEY     Required for fetching issue details from Linear
 
 Requires:
