@@ -73,7 +73,7 @@ else
     fail "Could not extract MONITOR_EOF heredoc from wavemill-mill.sh"
   else
     # Extract function definitions from the heredoc (name followed by () with optional space and {)
-    HEREDOC_FUNCS=$(echo "$HEREDOC_CONTENT" | grep -oE '^[a-z_][a-z0-9_]*\(\)' | sed 's/()//' | sort -u)
+    HEREDOC_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' <<< "$HEREDOC_CONTENT" | sed 's/()//' | sort -u)
 
     # Extract function definitions from agent-adapters.sh (sourced by the heredoc)
     ADAPTER_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/agent-adapters.sh" | sed 's/()//' | sort -u)
@@ -91,8 +91,7 @@ else
     # Extract function calls from the heredoc
     # Look for word-boundary function-like names that appear as commands
     # (start of line after optional whitespace, or after $(), ||, &&, if, then, etc.)
-    CALLED_FUNCS=$(echo "$HEREDOC_CONTENT" \
-      | grep -oE '\b[a-z_][a-z0-9_]{2,}\b' \
+    CALLED_FUNCS=$(grep -oE '\b[a-z_][a-z0-9_]{2,}\b' <<< "$HEREDOC_CONTENT" \
       | sort -u \
       | grep -vE "^($KNOWN_EXTERNALS)$" \
       | grep -vE '^(done|else|elif|esac|fi|for|function|if|in|then|until|while|do|case)$' \
@@ -100,18 +99,18 @@ else
       | grep -vE '^(pipefail|euo|noglob|errexit|nounset)$' \
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
-      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting)$')
+      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting)$' \
+      | grep -vE '^(bad|internal|marking|rate|service|timed|too|using|wavemill)$')
 
     # Check which called names look like they could be custom functions
     # and verify they're defined
     MISSING=""
     while IFS= read -r name; do
       [[ -z "$name" ]] && continue
-      # Check if this name is defined in our known functions
-      if ! echo "$ALL_DEFINED" | grep -qx "$name"; then
+      if ! grep -qx "$name" <<< "$ALL_DEFINED"; then
         # Only flag names that are actually used as function calls in the heredoc
         # (appear at start of a line after whitespace, or after || or && or $( )
-        if echo "$HEREDOC_CONTENT" | grep -qE "(^|[;&|] *|\$\( *)$name " 2>/dev/null; then
+        if grep -qE "(^|[;&|] *|\$\( *)$name " <<< "$HEREDOC_CONTENT" 2>/dev/null; then
           MISSING="$MISSING $name"
         fi
       fi
@@ -137,7 +136,7 @@ else
     )
 
     for func in "${CRITICAL_FUNCTIONS[@]}"; do
-      if echo "$ALL_DEFINED" | grep -qx "$func"; then
+      if grep -qx "$func" <<< "$ALL_DEFINED"; then
         pass "Critical function '$func' is defined in monitor scope"
       else
         fail "Critical function '$func' is NOT defined in monitor scope"
@@ -242,7 +241,7 @@ else
     in_fn { print }
     in_fn && /^\}/ { exit }
   ' <<< "$HEREDOC_CONTENT")
-  if echo "$LINEAR_SET_STATE_BLOCK" | grep -q 'return 1'; then
+  if grep -q 'return 1' <<< "$LINEAR_SET_STATE_BLOCK"; then
     fail "monitor linear_set_state must not return 1 (would exit under set -e)"
   else
     pass "monitor linear_set_state failures are non-fatal"
@@ -253,16 +252,16 @@ else
     in_loop { print }
     in_loop && /^done$/ { exit }
   ' <<< "$HEREDOC_CONTENT")
-  if echo "$MONITOR_LOOP_BLOCK" | grep -qE '^[[:space:]]*local[[:space:]]'; then
+  if grep -qE '^[[:space:]]*local[[:space:]]' <<< "$MONITOR_LOOP_BLOCK"; then
     fail "monitor loop contains top-level local declarations (invalid outside functions)"
   else
     pass "monitor loop has no top-level local declarations"
   fi
 
-  if echo "$MONITOR_LOOP_BLOCK" | grep -q 'monitor_issue_state "$ISSUE"' \
-    && echo "$MONITOR_LOOP_BLOCK" | grep -q 'issue_rc=$?' \
-    && echo "$MONITOR_LOOP_BLOCK" | grep -q 'set +e' \
-    && echo "$MONITOR_LOOP_BLOCK" | grep -q 'set -e'; then
+  if grep -q 'monitor_issue_state "$ISSUE"' <<< "$MONITOR_LOOP_BLOCK" \
+    && grep -q 'issue_rc=$?' <<< "$MONITOR_LOOP_BLOCK" \
+    && grep -q 'set +e' <<< "$MONITOR_LOOP_BLOCK" \
+    && grep -q 'set -e' <<< "$MONITOR_LOOP_BLOCK"; then
     pass "monitor loop guards per-issue processing with explicit error handling"
   else
     fail "monitor loop is missing guarded per-issue processing checks"
@@ -274,8 +273,8 @@ else
     in_fn && /^\}/ { exit }
   ' <<< "$HEREDOC_CONTENT")
   # HOK-1194: Phase resolution refactored to use resolve_phase() with controller-owned state priority
-  RESOLVE_PHASE_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -Fn 'resolved_phase=$(resolve_phase "$FEATURE_DIR")' | head -n1 | cut -d: -f1 || true)
-  PANE_EARLY_RETURN_LINE=$(echo "$MONITOR_ISSUE_BLOCK" | grep -n 'Not completed externally - keep controller-owned running stages active' | head -n1 | cut -d: -f1 || true)
+  RESOLVE_PHASE_LINE=$(grep -Fn 'resolved_phase=$(resolve_phase "$FEATURE_DIR")' <<< "$MONITOR_ISSUE_BLOCK" | head -n1 | cut -d: -f1 || true)
+  PANE_EARLY_RETURN_LINE=$(grep -n 'Not completed externally - keep controller-owned running stages active' <<< "$MONITOR_ISSUE_BLOCK" | head -n1 | cut -d: -f1 || true)
   if [[ -n "$RESOLVE_PHASE_LINE" && -n "$PANE_EARLY_RETURN_LINE" ]] && (( RESOLVE_PHASE_LINE < PANE_EARLY_RETURN_LINE )); then
     pass "monitor checks planning approval before controller-state keepalive"
   else
@@ -283,36 +282,32 @@ else
   fi
 
   # HOK-1210: Monitor must NOT auto-approve on idle pane. It should log and wait.
-  # TEMPORARILY SKIPPED: Fails in CI but passes locally - needs investigation
-  # TODO: Debug why pattern matching fails in Ubuntu CI environment
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$resolved_phase" == "awaiting_user" ]]; then' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq '_pane_is_dead_or_idle "$SESSION:$WIN"' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Plan ready — awaiting user approval' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq '_approval_wait_logged_' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'printf -v "$approval_wait_var"'; then
+  if grep -Fq 'if [[ "$resolved_phase" == "awaiting_user" ]]; then' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq '_pane_is_dead_or_idle "$SESSION:$WIN"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'Plan ready — awaiting user approval' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq '_approval_wait_logged_' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'printf -v "$approval_wait_var"' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor logs idle pane without auto-approving (HOK-1210)"
   else
-    skip "monitor is missing HOK-1210 idle-pane-without-approval guard (CI investigation needed)"
+    fail "monitor is missing HOK-1210 idle-pane-without-approval guard"
   fi
 
-  # TEMPORARILY SKIPPED: Fails in CI but passes locally - needs investigation
   if grep -qE '^validate_planning_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Planning phase modified source code, reverted changes and blocked transition' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'write_stage_result "$FEATURE_DIR" "planning" "awaiting_user"'; then
+    && grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'Planning phase modified source code, reverted changes and blocked transition' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'write_stage_result "$FEATURE_DIR" "planning" "awaiting_user"' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor validates planning output before coding transition"
   else
-    skip "monitor is missing planning phase-boundary validation (CI investigation needed)"
+    fail "monitor is missing planning phase-boundary validation"
   fi
 
-  # TEMPORARILY SKIPPED: Fails in CI but passes locally - needs investigation
   if grep -qE '^validate_coding_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'validate_coding_phase_output "$BRANCH"' \
+    && grep -Fq 'validate_coding_phase_output "$BRANCH"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'WARNING: Coding phase created PR #' <<< "$HEREDOC_CONTENT"; then
     pass "monitor warns when coding creates a PR before review"
   else
-    skip "monitor is missing coding phase-boundary validation (CI investigation needed)"
+    fail "monitor is missing coding phase-boundary validation"
   fi
 
   # resolve_phase() checks abort first internally, so we verify it's called
@@ -322,16 +317,15 @@ else
     fail "monitor abort check does not take precedence over completion markers"
   fi
 
-  # TEMPORARILY SKIPPED: Fails in CI but passes locally - needs investigation
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$resolved_phase" == "aborted" ]]; then' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Workflow aborted (controller state)'; then
+  if grep -Fq 'if [[ "$resolved_phase" == "aborted" ]]; then' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'Workflow aborted (controller state)' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor handles aborted state and controller-state abort fallback"
   else
-    skip "monitor is missing aborted-state handling or controller-state abort fallback (CI investigation needed)"
+    fail "monitor is missing aborted-state handling or controller-state abort fallback"
   fi
 
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'phase_should_remain_active_without_pr "$FEATURE_DIR" "$current_phase" "$SLUG"' \
-    && ! echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Pane died during $current_phase phase, respawning'; then
+  if grep -Fq 'phase_should_remain_active_without_pr "$FEATURE_DIR" "$current_phase" "$SLUG"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && ! grep -Fq 'Pane died during $current_phase phase, respawning' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor keepalive and fallback logic uses controller state instead of pane respawn"
   else
     fail "monitor still relies on pane-respawn fallback for phase progression"
@@ -343,7 +337,7 @@ else
     in_block && /^[[:space:]]*else$/ { exit }
   ' <<< "$MONITOR_ISSUE_BLOCK")
 
-  if echo "$CLOSED_BLOCK" | grep -Fq 'log_warn "$ISSUE → PR #$PR CLOSED without merge"'; then
+  if grep -Fq 'log_warn "$ISSUE → PR #$PR CLOSED without merge"' <<< "$CLOSED_BLOCK"; then
     pass "closed PR path preserves warning log"
   else
     fail "closed PR path is missing warning log"
@@ -365,28 +359,28 @@ else
     fail "monitor is missing challenge sibling helpers for closed-PR resolution"
   fi
 
-  if echo "$CLOSED_BLOCK" | grep -Fq 'if should_cleanup_closed_pr "$ISSUE"; then' \
-    && echo "$CLOSED_BLOCK" | grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' \
-    && echo "$CLOSED_BLOCK" | grep -Fq 'Auto-cleaning closed challenger pane/worktree'; then
+  if grep -Fq 'if should_cleanup_closed_pr "$ISSUE"; then' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'Auto-cleaning closed challenger pane/worktree' <<< "$CLOSED_BLOCK"; then
     pass "closed challenger PRs trigger automatic pane/worktree cleanup"
   else
     fail "closed challenger PRs do not trigger automatic cleanup"
   fi
 
-  if echo "$CLOSED_BLOCK" | grep -Fq 'local linear_status="Backlog"' \
-    && echo "$CLOSED_BLOCK" | grep -Fq 'if is_challenge_task "$ISSUE"; then' \
-    && echo "$CLOSED_BLOCK" | grep -Fq 'check_challenge_sibling_merged "$ISSUE"' \
-    && echo "$CLOSED_BLOCK" | grep -Fq 'linear_status="Done"' \
-    && echo "$CLOSED_BLOCK" | grep -Fq 'Challenge sibling merged → marking Linear as Done' \
-    && echo "$CLOSED_BLOCK" | grep -Fq 'linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"'; then
+  if grep -Fq 'local linear_status="Backlog"' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'if is_challenge_task "$ISSUE"; then' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'check_challenge_sibling_merged "$ISSUE"' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'linear_status="Done"' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'Challenge sibling merged → marking Linear as Done' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"' <<< "$CLOSED_BLOCK"; then
     pass "closed challenge PRs mark Linear Done when the sibling PR was merged"
   else
     fail "closed challenge PRs do not promote Linear to Done when sibling merged"
   fi
 
-  if echo "$CLOSED_BLOCK" | grep -Fq 'linear_status=""' \
-    && echo "$CLOSED_BLOCK" | grep -Fq 'Challenge sibling still active or unknown, deferring Linear state update' \
-    && echo "$CLOSED_BLOCK" | grep -Fq 'Challenge sibling PR not found yet, deferring Linear state update'; then
+  if grep -Fq 'linear_status=""' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'Challenge sibling still active or unknown, deferring Linear state update' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'Challenge sibling PR not found yet, deferring Linear state update' <<< "$CLOSED_BLOCK"; then
     pass "closed challenge PRs defer Linear updates until the sibling outcome is known"
   else
     fail "closed challenge PRs do not defer Linear updates for unresolved sibling outcomes"
@@ -429,32 +423,29 @@ else
     fail "monitor is missing review-window restore helper for PR-backed tasks"
   fi
 
-  # TEMPORARILY SKIPPED: Fails in CI but passes locally - needs investigation
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'current_phase=$(get_task_phase "$ISSUE")' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$current_phase" == "review" ]]; then' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'restore_review_task_window "$ISSUE" "$SLUG" "$BRANCH" "$PR" "$WT_DIR"'; then
+  if grep -Fq 'current_phase=$(get_task_phase "$ISSUE")' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'if [[ "$current_phase" == "review" ]]; then' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'restore_review_task_window "$ISSUE" "$SLUG" "$BRANCH" "$PR" "$WT_DIR"' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor restores missing review windows before PR merge checks"
   else
-    skip "monitor does not restore review windows for resumed PR-backed tasks (CI investigation needed)"
+    fail "monitor does not restore review windows for resumed PR-backed tasks"
   fi
 
-  # TEMPORARILY SKIPPED: Fails in CI but passes locally - needs investigation
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'if [[ "$current_phase" == "review" ]]; then' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'set_task_phase "$ISSUE" "ready"' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"'; then
+  if grep -Fq 'if [[ "$current_phase" == "review" ]]; then' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'set_task_phase "$ISSUE" "ready"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor unconditionally transitions PR-backed review tasks into ready before merge checks"
   else
-    skip "monitor does not transition PR-backed review tasks into ready (CI investigation needed)"
+    fail "monitor does not transition PR-backed review tasks into ready"
   fi
 
-  # TEMPORARILY SKIPPED: Fails in CI but passes locally - needs investigation
-  if echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'elif [[ "$current_phase" == "ready" ]]; then' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq '.conflict-detected' \
-    && echo "$MONITOR_ISSUE_BLOCK" | grep -Fq 'Conflict remediation complete, ready checks rerun'; then
+  if grep -Fq 'elif [[ "$current_phase" == "ready" ]]; then' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq '.conflict-detected' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'Conflict remediation complete, ready checks rerun' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor handles PR-backed ready tasks in the PR lifecycle path"
   else
-    skip "monitor is missing PR-backed ready-phase handling in the PR lifecycle path (CI investigation needed)"
+    fail "monitor is missing PR-backed ready-phase handling in the PR lifecycle path"
   fi
 
   READ_STATE_VALUE_BLOCK=$(awk '
@@ -566,13 +557,13 @@ MERGED_BLOCK=$(awk '
   in_block { print }
   in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
-if echo "$MERGED_BLOCK" | grep -q 'launch_background_post_merge_eval "\$ISSUE" "\$PR"'; then
+if grep -q 'launch_background_post_merge_eval "\$ISSUE" "\$PR"' <<< "$MERGED_BLOCK"; then
   pass "merged PR path launches eval asynchronously"
 else
   fail "merged PR path does not launch detached eval"
 fi
 
-if ! echo "$MERGED_BLOCK" | grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"'; then
+if ! grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"' <<< "$MERGED_BLOCK"; then
   pass "merged PR path no longer runs eval inline"
 else
   fail "merged PR path still runs eval inline"
@@ -583,13 +574,13 @@ EXTERNAL_BLOCK=$(awk '
   in_block { print }
   in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
-if echo "$EXTERNAL_BLOCK" | grep -q 'launch_background_post_merge_eval "\$ISSUE" ""'; then
+if grep -q 'launch_background_post_merge_eval "\$ISSUE" ""' <<< "$EXTERNAL_BLOCK"; then
   pass "external completion path launches eval asynchronously"
 else
   fail "external completion path does not launch detached eval"
 fi
 
-if ! echo "$EXTERNAL_BLOCK" | grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"'; then
+if ! grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"' <<< "$EXTERNAL_BLOCK"; then
   pass "external completion path no longer runs eval inline"
 else
   fail "external completion path still runs eval inline"
@@ -684,7 +675,7 @@ else
     in_loop { print }
     in_loop && /^[[:space:]]*done[[:space:]]*$/ { exit }
   ' "$STATUS_SCRIPT")
-  if echo "$STATUS_MAIN_LOOP" | grep -qE '^[[:space:]]*local[[:space:]]'; then
+  if grep -qE '^[[:space:]]*local[[:space:]]' <<< "$STATUS_MAIN_LOOP"; then
     fail "dashboard main loop contains local declarations"
   else
     pass "dashboard main loop avoids local declarations"
@@ -697,7 +688,7 @@ else
     fail "dashboard is missing the scrollback-only clear helper"
   fi
 
-  if echo "$STATUS_MAIN_LOOP" | grep -qE '^[[:space:]]*clear[[:space:]]*$'; then
+  if grep -qE '^[[:space:]]*clear[[:space:]]*$' <<< "$STATUS_MAIN_LOOP"; then
     fail "dashboard main loop still performs a full clear each refresh"
   else
     pass "dashboard main loop avoids full-screen clears"
