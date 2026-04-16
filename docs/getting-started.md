@@ -2,6 +2,8 @@
 title: Getting Started
 ---
 
+Wavemill is designed to be run primarily through `wavemill mill`. The other commands help you prepare work, inspect results, or step in manually when needed.
+
 ## Prerequisites
 
 - Node.js 18+
@@ -58,6 +60,33 @@ Edit `.wavemill-config.json` and set:
 - Parallelism and agent defaults as needed
 - Enable/disable features like autoEval, router, review, etc.
 
+## 4) Run Mill Mode
+
+Start with the default workflow:
+
+```bash
+cd <your-project>
+wavemill mill
+```
+
+What happens next:
+
+- Wavemill reads the configured backlog
+- expands thin tasks when needed
+- routes work to the best available models
+- launches parallel worktrees and agents
+- evaluates outcomes so future routing improves
+
+## 5) Optional: Opt Into Hokusai
+
+If you want routing to benefit from collective intelligence in addition to your own local history:
+
+```bash
+wavemill hokusai enable
+```
+
+Hokusai is optional. Wavemill still improves from your own repository data without it.
+
 ### Config Versioning
 
 The config includes a `configVersion` field to track format compatibility. When running `wavemill mill`, `expand`, or `plan`, you'll be prompted to upgrade if your config is outdated.
@@ -76,12 +105,15 @@ SKIP_CONFIG_CHECK=true wavemill mill
 
 ## Next Steps
 
-- For guided feature execution: [Feature Workflow](feature-workflow.md)
-- For autonomous backlog processing: [Mill Mode](mill-mode.md)
+- For the default operating model: [Mill Mode](mill-mode.md)
+- For the routing and learning loop: [Routing & Hokusai](routing-and-hokusai.md)
+- For every available command: [CLI Reference](cli-reference.md)
 
 ## See Also
 
 - [Mill Mode](mill-mode.md) — autonomous parallel backlog processing
+- [Routing & Hokusai](routing-and-hokusai.md) — how Wavemill gets better over time
+- [CLI Reference](cli-reference.md) — full command surface
 - [Plan Mode](plan-mode.md) — decompose epics into well-scoped sub-issues
 - [Expand Mode](expand-mode.md) — batch expand issues into task packets
 - [Eval Mode](eval-mode.md) — evaluate LLM performance on workflows

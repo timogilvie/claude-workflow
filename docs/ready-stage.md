@@ -46,7 +46,7 @@ Current implementation details:
 wavemill ready <pr>
 ```
 
-Direct tool invocation during development uses the TypeScript entrypoint:
+Direct tool invocation during development also works:
 
 ```bash
 npx tsx tools/ready.ts <pr>

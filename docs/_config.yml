@@ -1,10 +1,10 @@
 title: Wavemill
-description: Wavemill helps developers build software more effectively with LLMs.
+description: Wavemill is a self-improving software factory for LLM-driven development.
 markdown: kramdown
 theme: minima
 github_username: timogilvie
 header_pages:
   - getting-started.md
   - mill-mode.md
-  - plan-mode.md
-  - review-mode.md
+  - routing-and-hokusai.md
+  - cli-reference.md

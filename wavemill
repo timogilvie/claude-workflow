@@ -89,6 +89,18 @@ ${GREEN}Commands:${NC}
                ${CYAN}--json${NC}                     Output stats as JSON
                ${CYAN}--limit${NC} N                  Number of recent reviews to show (default: 5)
 
+  ${CYAN}ready${NC}     Check whether a PR is safe to merge right now
+             - Runs merge-readiness checks for a PR number or URL
+             - Reports CI, approvals, release-readiness, and merge conflicts
+             - Prints human-readable mergeability status to stderr
+             - Outputs structured JSON for scripts and automation
+             Usage:
+               ${CYAN}wavemill ready 42${NC}
+               ${CYAN}wavemill ready https://github.com/org/repo/pull/42${NC}
+               ${CYAN}wavemill ready 42 --repo-dir ~/src/my-repo${NC}
+             Options:
+               ${CYAN}--repo-dir${NC} <path>          Repository directory to inspect
+
   ${CYAN}route${NC}     Recommend planner/coder/reviewer workflow
              - Reads task text or a task file
              - Chooses stage-specific models and execution depth
@@ -164,6 +176,9 @@ ${GREEN}Examples:${NC}
 
   # Review a specific PR
   wavemill review 42
+
+  # Check whether a PR is merge-ready
+  wavemill ready 42
 
   # Route a task packet to planner/coder/reviewer models
   wavemill route --file features/my-feature/selected-task.json
@@ -683,6 +698,18 @@ run_review() {
   exec "$review_script" "$@"
 }
 
+run_ready() {
+  local ready_tool="$TOOLS_DIR/ready.ts"
+
+  if [[ ! -f "$ready_tool" ]]; then
+    echo -e "${RED}Error:${NC} Ready tool not found at: $ready_tool" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Ready...${NC}"
+  exec npx tsx "$ready_tool" "$@"
+}
+
 run_context() {
   local context_script="$LIB_DIR/wavemill-context.sh"
 
@@ -744,6 +771,10 @@ case "${1:-}" in
     run_preflight_checks
     shift
     run_review "$@"
+    ;;
+  ready)
+    shift
+    run_ready "$@"
     ;;
   context)
     run_preflight_checks

@@ -2,7 +2,7 @@
 title: Expand Mode
 ---
 
-Use `wavemill expand` to expand descriptions of technical tasks into well structured task packets that are well suited for LLM execution.
+Use `wavemill expand` when you want to prepare backlog items outside of `wavemill mill`. Mill mode can do this automatically, but `expand` is useful when you want to curate task packets ahead of time.
 
 ## What It Does
 

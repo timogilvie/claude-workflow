@@ -1,20 +1,20 @@
 # Wavemill
 
-**Wavemill** is a self-improving AI software development pipeline. It offers a CLI tool for autonomous AI-powered software development workflows to automatically process backlogs, expand issues, and ship features in parallel. It works across multiple models and includes eval functionality to understand which models are most effective at each type of task, routing tasks to the right model automatically.
+**Wavemill** is a self-improving software factory for LLM-driven development. Its default operating mode is `wavemill mill`: pull work from the backlog, expand thin tasks, route each task to the right model, build in parallel, evaluate outcomes, and improve future routing.
 
 ```
-Linear Backlog → Expand → Route → Build (parallel) → Eval → Learn
-                                      ↑                       |
-                                      └── routing improves ───┘
+Linear Backlog → Expand → Route → Build → Review → Ready → Eval → Learn
+                              ↑                                   |
+                              └──── routing improves over time ───┘
 ```
 
 ### How it works
 
-1. **`wavemill expand`** — enriches Linear issues into detailed task packets with context, constraints, and validation steps
-2. **`wavemill mill`** — continuously pulls from your backlog, launches parallel AI agents in tmux worktrees, monitors PRs, and auto-completes tasks
-3. **Eval** — scores every completed task on a 0–1 scale measuring autonomy and quality
+1. **`wavemill mill`** — runs the autonomous software factory loop end to end
+2. **Task expansion** — fills in missing implementation detail automatically when needed
+3. **Eval** — scores completed work on autonomy and quality
 4. **Router** — uses eval history to pick the best model for each task type
-5. **Challenge mode** — periodically runs the same task with two models head-to-head, building the dataset that makes routing smarter over time
+5. **Challenge mode** — runs head-to-head comparisons that improve routing over time
 
 ## Requirements
 
@@ -62,12 +62,26 @@ The comprehensive config includes all features with sensible defaults. The confi
 ### Run Wavemill
 
 ```bash
-# Start continuous autonomous loop
+# Default workflow
 wavemill mill
 
-# Or expand issues interactively
+# Supporting tool: curate task packets ahead of time
 wavemill expand
 ```
+
+## Default Workflow And Supporting Tools
+
+Use `wavemill mill` as the primary workflow.
+
+Use the other commands around it when needed:
+
+- `wavemill expand` to prepare issue descriptions and task packets
+- `wavemill plan` to break down epics before milling them
+- `wavemill review` to inspect a PR directly
+- `wavemill eval` to inspect or export performance data
+- `wavemill route` to inspect model-selection decisions
+- `wavemill context` to manage agent-readable project memory
+- `wavemill hokusai` to manage collective-intelligence opt-in
 
 ### Configuration
 
@@ -87,7 +101,7 @@ Auto-approve read-only commands in worktrees to reduce friction during autonomou
 
 ### Ready Stage - Merge Readiness Checks
 
-The ready stage validates whether a reviewed PR is safe to merge right now, covering the phase boundary between review and merge. Use `wavemill ready <pr>` for manual checks; `wavemill mill` runs the `ready` phase by default before treating a PR as merge-safe. Set `ready.enabled: false` only for repositories that intentionally skip this gate. See [docs/ready-stage.md](docs/ready-stage.md) for CLI details, monitor behavior, merge policy, and recovery paths.
+The ready stage validates whether a reviewed PR is safe to merge right now, covering the phase boundary between review and merge. `wavemill mill` runs the `ready` phase by default before treating a PR as merge-safe. The readiness engine also has a development entrypoint at `npx tsx tools/ready.ts <pr>`. See [docs/ready-stage.md](docs/ready-stage.md) for details.
 
 ### `wavemill mill` - Continuous Task Execution
 
@@ -269,6 +283,20 @@ Configure in `.wavemill-config.json`:
 }
 ```
 
+## Hokusai
+
+Wavemill can improve routing from your own eval history alone. If you opt into Hokusai, it can also draw on collective intelligence built from many teams' routing and outcome data.
+
+Use:
+
+```bash
+wavemill hokusai status
+wavemill hokusai enable
+wavemill hokusai disable
+```
+
+This keeps the default posture straightforward: local learning first, shared learning only when explicitly enabled.
+
 ## Challenge Mode
 
 Challenge mode runs the same task with two different models in parallel to generate head-to-head comparison data. This builds the dataset that makes routing increasingly accurate.
@@ -330,8 +358,10 @@ wavemill/
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
+- [Mill mode](docs/mill-mode.md)
+- [Routing and Hokusai](docs/routing-and-hokusai.md)
+- [CLI reference](docs/cli-reference.md)
 - [Feature workflow](docs/feature-workflow.md)
-- [Autonomous mode (mill)](docs/mill-mode.md)
 - [Eval system](docs/eval-mode.md)
 - [Permissions](docs/permissions.md)
 
