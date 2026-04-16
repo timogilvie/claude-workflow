@@ -64,7 +64,7 @@ export interface ReviewArtifacts {
 /** Artifacts produced during the ready stage. */
 export interface ReadyArtifacts {
   type: 'ready';
-  verdict?: 'pass' | 'fail' | 'warn';
+  verdict?: 'pass' | 'fail' | 'warn' | 'pending';
   checksRun?: number;
   checksPassed?: number;
   mergeConflict?: string;
