@@ -101,6 +101,7 @@ mkdir -p \
   "$WORKTREES_DIR/active-task/features/active-task" \
   "$WORKTREES_DIR/coding-task/features/coding-task" \
   "$WORKTREES_DIR/review-task/features/review-task" \
+  "$WORKTREES_DIR/ready-task/features/ready-task" \
   "$WORKTREES_DIR/stale-task/features/stale-task"
 
 STATE_FILE_ONE="$TMP_DIR/state-one.json"
@@ -377,6 +378,45 @@ if grep -q 'HOK-1301.*review-task.*🔍 review.*● running' "$OUTPUT_PHASES"; t
   pass "shows review phase with emoji"
 else
   fail "review phase row is missing emoji"
+fi
+
+STATE_FILE_READY="$TMP_DIR/state-ready.json"
+cat > "$STATE_FILE_READY" <<EOF
+{
+  "tasks": {
+    "HOK-1302": {
+      "slug": "ready-task",
+      "branch": "task/ready-task",
+      "worktree": "$WORKTREES_DIR/ready-task",
+      "status": "",
+      "phase": "ready",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_READY="$TMP_DIR/behavior-ready.json"
+cat > "$BEHAVIOR_READY" <<'EOF'
+{
+  "pane": {
+    "HOK-1302-ready-task": "6"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_READY="$TMP_DIR/output-ready.txt"
+run_render "$STATE_FILE_READY" "$WORKTREES_DIR" "$BEHAVIOR_READY" "$OUTPUT_READY"
+
+if grep -q 'HOK-1302.*ready-task.*🚦 ready.*● running' "$OUTPUT_READY"; then
+  pass "shows ready phase with emoji"
+else
+  fail "ready phase row is missing emoji"
 fi
 
 echo ""

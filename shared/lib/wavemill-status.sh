@@ -331,6 +331,7 @@ render_task_row() {
     executing) phase_str="${G}🔨 executing${N}" ;;
     coding)    phase_str="${G}💻 coding${N}" ;;
     review)    phase_str="${Y}🔍 review${N}" ;;
+    ready)     phase_str="${G}🚦 ready${N}" ;;
     *)         phase_str="${D}$task_phase${N}" ;;
   esac
 
