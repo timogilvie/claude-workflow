@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { CURRENT_CONFIG_VERSION, loadWavemillConfig, type WavemillConfig } from './config.ts';
 
 export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
-  configVersion: '1.3.0',
+  configVersion: CURRENT_CONFIG_VERSION,
   linear: {
     project: '',
   },
