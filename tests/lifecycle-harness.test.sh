@@ -130,6 +130,7 @@ harness_extract_real_functions() {
   : > "$REAL_FUNC_FILE"
   for func in \
     ready_stage_allows_merge \
+    ready_stage_pending_verdict \
     monitor_issue_state \
     validate_planning_phase_output \
     validate_coding_phase_output \

@@ -3054,6 +3054,14 @@ ready_stage_allows_merge() {
   [[ "$status" == "completed" && ( "$verdict" == "pass" || "$verdict" == "warn" ) ]]
 }
 
+ready_stage_pending_verdict() {
+  local state_dir="$1"
+  local result_file="$state_dir/.ready-result.json"
+
+  [[ -f "$result_file" ]] || { echo ""; return 0; }
+  jq -r '.artifacts.verdict // empty' "$result_file" 2>/dev/null || echo ""
+}
+
 write_ready_attention_file() {
   local state_dir="$1" message="$2"
   mkdir -p "$state_dir"
@@ -5384,7 +5392,8 @@ monitor_issue_state() {
       fi
     fi
   elif [[ "$current_phase" == "ready" ]]; then
-    local resolved_phase ready_state_dir_path ready_status launch_head current_head title launch_rc
+    local resolved_phase ready_state_dir_path ready_status ready_verdict
+    local launch_head current_head title launch_rc
     resolved_phase=$(resolve_phase "$FEATURE_DIR")
     if [[ "$resolved_phase" == "aborted" ]]; then
       log "status" "⛔ $ISSUE → Workflow aborted by user during ready phase"
@@ -5445,6 +5454,49 @@ monitor_issue_state() {
         return 0
       fi
     fi
+
+    ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
+    ready_verdict=$(ready_stage_pending_verdict "$ready_state_dir_path")
+    if [[ "$ready_status" == "running" && "$ready_verdict" == "pending" ]]; then
+      title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+      if [[ -z "$title" ]]; then
+        issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+        title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+      fi
+
+      if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+        launch_rc=0
+      else
+        launch_rc=$?
+      fi
+      if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+        log "status" "⛔ $ISSUE → Workflow aborted during ready re-check"
+        set_task_phase "$ISSUE" "aborted"
+        set_window_attention_state "$WIN" "needs-user"
+        return 0
+      fi
+      if [[ "$launch_rc" -eq 3 ]]; then
+        set_window_attention_state "$WIN" "clear"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+      if [[ "$launch_rc" -eq 4 ]]; then
+        set_window_attention_state "$WIN" "clear"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+      if [[ "$launch_rc" -ne 0 ]]; then
+        log "status" "⚠ $ISSUE → Ready checks failed (PR #$PR)"
+        set_window_attention_state "$WIN" "needs-user"
+        return 0
+      fi
+
+      log "status" "✓ $ISSUE → Ready checks completed for PR #$PR"
+      set_window_attention_state "$WIN" "clear"
+      active_count=$((active_count + 1))
+      return 0
+    fi
+
     set_window_attention_state "$WIN" "needs-user"
     return 0
   fi
