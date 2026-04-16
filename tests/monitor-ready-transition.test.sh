@@ -56,6 +56,7 @@ run_monitor_case() {
     declare -Ag BRANCH_BY_ISSUE=()
     declare -Ag SLUG_BY_ISSUE=()
     declare -Ag PR_BY_ISSUE=()
+    declare -Ag CLEANED=()
 
     ISSUE="HOK-1249"
     SLUG="monitor-ready"
@@ -83,6 +84,7 @@ run_monitor_case() {
     RESTORE_SHOULD_FAIL="false"
     READY_LAUNCH_RC=0
     ABORTED="false"
+    CLEANUP_CLOSED_PR="false"
     ATTENTION_STATE=""
     SET_PHASE_TO=""
     READY_LAUNCH_COUNT=0
@@ -109,6 +111,19 @@ run_monitor_case() {
         CURRENT_PHASE="ready"
         READY_STATUS="completed"
         touch "$READY_DIR/.conflict-detected"
+        ;;
+      ready_conflict_merged)
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        PR_STATUS="MERGED"
+        VALIDATE_MERGED="true"
+        touch "$READY_DIR/.conflict-detected"
+        printf "%s\n" "{\"status\":\"completed\",\"artifacts\":{\"verdict\":\"pass\"}}" > "$READY_DIR/.ready-result.json"
+        ;;
+      ready_closed_cleanup)
+        CURRENT_PHASE="ready"
+        PR_STATUS="CLOSED"
+        CLEANUP_CLOSED_PR="true"
         ;;
       review_to_ready_pending)
         READY_LAUNCH_RC=4
@@ -202,7 +217,7 @@ run_monitor_case() {
       fi
       return 1
     }
-    should_cleanup_closed_pr() { return 1; }
+    should_cleanup_closed_pr() { [[ "$CLEANUP_CLOSED_PR" == "true" ]]; }
     get_challenge_sibling_pr() { :; }
     check_challenge_sibling_merged() { return 1; }
     transient_error_recovery_pending() { return 1; }
@@ -237,6 +252,16 @@ ready_conflict_output="$(run_monitor_case ready_conflict_rerun)"
 check_contains "ready conflict rerun keeps task in ready" "$ready_conflict_output" "phase=ready"
 check_contains "ready conflict rerun launches ready checks again" "$ready_conflict_output" "ready_launches=1"
 check_contains "ready conflict rerun leaves attention on task" "$ready_conflict_output" "attention=needs-user"
+
+ready_conflict_merged_output="$(run_monitor_case ready_conflict_merged)"
+check_contains "ready merge wins over conflict rerun" "$ready_conflict_merged_output" "cleanup_count=1"
+check_contains "ready merge does not relaunch ready" "$ready_conflict_merged_output" "ready_launches=0"
+check_contains "ready merge clears attention" "$ready_conflict_merged_output" "attention=clear"
+
+ready_closed_cleanup_output="$(run_monitor_case ready_closed_cleanup)"
+check_contains "ready closed PR cleans up" "$ready_closed_cleanup_output" "cleanup_count=1"
+check_contains "ready closed PR clears attention" "$ready_closed_cleanup_output" "attention=clear"
+check_contains "ready closed PR avoids ready relaunch" "$ready_closed_cleanup_output" "ready_launches=0"
 
 review_to_ready_pending_output="$(run_monitor_case review_to_ready_pending)"
 check_contains "pending ready checks keep task in ready" "$review_to_ready_pending_output" "phase=ready"
