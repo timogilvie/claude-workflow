@@ -3054,6 +3054,22 @@ ready_stage_allows_merge() {
   [[ "$status" == "completed" && ( "$verdict" == "pass" || "$verdict" == "warn" ) ]]
 }
 
+# Keep the merged-before-ready warning one-shot per task instance so the
+# attention signal persists without spamming every monitor tick.
+ready_stage_warn_bypass_once() {
+  local state_dir="$1" issue="$2" pr="$3"
+  local sentinel="$state_dir/.ready-bypass-warned"
+
+  mkdir -p "$state_dir"
+  if [[ -f "$sentinel" ]]; then
+    return 1
+  fi
+
+  log "status" "⛔ $issue → PR #$pr was merged before ready checks passed"
+  : > "$sentinel"
+  return 0
+}
+
 ready_stage_pending_verdict() {
   local state_dir="$1"
   local result_file="$state_dir/.ready-result.json"
@@ -4482,7 +4498,7 @@ monitor_issue_state() {
       local merged_ready_dir
       merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
       if ! ready_stage_allows_merge "$merged_ready_dir"; then
-        log "status" "⛔ $ISSUE → PR #$PR was merged before ready checks passed"
+        ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
         write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
         set_window_attention_state "$WIN" "needs-user"
         active_count=$((active_count + 1))
@@ -5244,17 +5260,20 @@ monitor_issue_state() {
   # Check completion before phase-specific OPEN handling so merged/closed PRs
   # still trigger eval, cleanup, and Linear updates after the ready stage was added.
   if validate_pr_merge "$PR"; then
-    log "status" "✓ $ISSUE → PR #$PR MERGED"
     local merged_ready_dir
     merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
     if ! ready_stage_allows_merge "$merged_ready_dir"; then
-      log "status" "⛔ $ISSUE → PR #$PR was merged before ready checks passed"
+      ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
       write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
       set_window_attention_state "$WIN" "needs-user"
+      # Persist merged status so later polls do not keep re-checking GitHub.
+      current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged" "$current_agent"
       active_count=$((active_count + 1))
       return 0
     fi
 
+    log "status" "✓ $ISSUE → PR #$PR MERGED"
     set_window_attention_state "$WIN" "clear"
 
     # Post-merge eval (non-blocking: always exits 0)
