@@ -53,7 +53,16 @@ All business logic lives in `shared/lib/` for reusability across CLI tools, comm
 - `string-utils.ts` - String manipulation (kebab-case, etc.)
 - `shell-utils.ts` - Safe shell command execution
 - `linear.js` - Linear API client
+- `github.ts` - GitHub PR read utilities plus REST-based PR label helpers (`addLabelsToPr`, `removeLabelFromPr`, `setLabelsOnPr`)
 - `config.ts` - Centralized config loading
+
+### GitHub PR Labeling
+
+For PR label writes, prefer REST API paths to avoid GitHub GraphQL Projects (classic) deprecation failures from `gh pr edit --add-label`.
+
+- Manual CLI: `gh api repos/{owner}/{repo}/issues/{pr_number}/labels -f labels[]="LabelName"`
+- Programmatic: use `addLabelsToPr` from `shared/lib/github.ts`
+- Reference: [docs/github-pr-labels.md](docs/github-pr-labels.md)
 
 ### Refactoring Pattern
 
