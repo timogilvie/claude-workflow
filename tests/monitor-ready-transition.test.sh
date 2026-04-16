@@ -36,6 +36,7 @@ extract_function() {
 
 MONITOR_FUNC_FILE="$TEST_TMP/monitor_issue_state.sh"
 extract_function "$MILL_SCRIPT" "ready_stage_allows_merge" > "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
@@ -91,8 +92,10 @@ run_monitor_case() {
     READY_LAUNCH_COUNT=0
     RESTORE_COUNT=0
     CLEANUP_COUNT=0
+    INVOKE_COUNT=1
     WRITE_STAGE_CALLS=""
     WRITE_READY_ATTENTION_CALLS=""
+    SAVE_TASK_STATE_CALLS=""
     LOG_OUTPUT=""
 
     mkdir -p "$WORKTREE_ROOT/$SLUG/features/$SLUG" "$REPO_DIR"
@@ -157,6 +160,11 @@ JSON
         PR_STATUS="MERGED"
         VALIDATE_MERGED="true"
         ;;
+      merged_without_ready_twice)
+        PR_STATUS="MERGED"
+        VALIDATE_MERGED="true"
+        INVOKE_COUNT=2
+        ;;
       merged_after_ready)
         PR_STATUS="MERGED"
         VALIDATE_MERGED="true"
@@ -186,7 +194,9 @@ JSON
     should_update_linear_state() { return 1; }
     linear_set_state() { :; }
     get_task_meta() { :; }
-    save_task_state() { :; }
+    save_task_state() {
+      printf -v SAVE_TASK_STATE_CALLS '%s%s\n' "$SAVE_TASK_STATE_CALLS" "$*"
+    }
     _with_timeout() { shift; "$@"; }
     gh() { return 1; }
     is_challenge_task() { return 1; }
@@ -249,10 +259,17 @@ JSON
     phase_should_remain_active_without_pr() { return 1; }
     codex_has_pending_approval() { return 1; }
 
-    monitor_issue_state "$ISSUE"
+    for ((i = 0; i < INVOKE_COUNT; i++)); do
+      monitor_issue_state "$ISSUE"
+    done
 
     stage_summary=$(printf "%s" "$WRITE_STAGE_CALLS" | tr "\n" ";")
-    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\n" \
+    bypass_warn_count=$(printf "%s" "$LOG_OUTPUT" | grep -c "was merged before ready checks passed" || true)
+    save_task_state_status=""
+    if printf "%s" "$SAVE_TASK_STATE_CALLS" | grep -q " merged "; then
+      save_task_state_status="merged"
+    fi
+    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\nbypass_warn_count=%s\nsave_task_state_status=%s\n" \
       "$CURRENT_PHASE" \
       "$ATTENTION_STATE" \
       "$READY_LAUNCH_COUNT" \
@@ -261,7 +278,9 @@ JSON
       "$active_count" \
       "$stage_summary" \
       "${READY_LAUNCH_ARGS:-}" \
-      "$WRITE_READY_ATTENTION_CALLS"
+      "$WRITE_READY_ATTENTION_CALLS" \
+      "$bypass_warn_count" \
+      "$save_task_state_status"
   '
 }
 
@@ -312,6 +331,12 @@ merged_without_ready_output="$(run_monitor_case merged_without_ready)"
 check_contains "merged PR without ready pass is blocked" "$merged_without_ready_output" "attention=needs-user"
 check_contains "merged PR without ready pass is not cleaned up" "$merged_without_ready_output" "cleanup_count=0"
 check_contains "merged PR without ready pass writes attention" "$merged_without_ready_output" "Release Readiness Check passed"
+check_contains "merged PR without ready pass persists merged state" "$merged_without_ready_output" "save_task_state_status=merged"
+
+merged_without_ready_twice_output="$(run_monitor_case merged_without_ready_twice)"
+check_contains "merged-before-ready warning logs only once across ticks" "$merged_without_ready_twice_output" "bypass_warn_count=1"
+check_contains "merged-before-ready stays blocked after repeat tick" "$merged_without_ready_twice_output" "attention=needs-user"
+check_contains "merged-before-ready persists merged task status on repeat tick" "$merged_without_ready_twice_output" "save_task_state_status=merged"
 
 merged_after_ready_output="$(run_monitor_case merged_after_ready)"
 check_contains "merged PR after ready pass can clean up" "$merged_after_ready_output" "cleanup_count=1"

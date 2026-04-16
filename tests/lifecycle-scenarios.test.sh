@@ -104,6 +104,7 @@ for fn in \
   resolve_phase \
   _persist_phase \
   ready_stage_allows_merge \
+  ready_stage_warn_bypass_once \
   ready_stage_pending_verdict \
   monitor_issue_state
 do
