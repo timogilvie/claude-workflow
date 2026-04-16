@@ -349,6 +349,7 @@ wavemill/
 ├── tools/                      # TypeScript wrappers for Linear API
 │   ├── expand-issue.ts        # Expand single issue with Claude CLI
 │   ├── add-issue-label.ts     # Add labels to Linear issues
+│   ├── add-pr-label.ts        # Add labels to GitHub PRs via REST API
 │   ├── list-backlog-json.ts   # Fetch backlog as JSON
 │   └── get-issue.ts           # Fetch single issue (use --json for JSON output)
 ├── commands/                   # Claude slash commands (symlinked)
@@ -368,3 +369,19 @@ wavemill/
 ## Troubleshooting
 
 - Linear errors: confirm `LINEAR_API_KEY` is exported and the project name in config exists.
+- GitHub PR labels: `gh pr edit --add-label` can fail because GitHub deprecated the GraphQL field it uses for Projects (Classic). Use `npx tsx tools/add-pr-label.ts <pr-number> "<label>"` instead.
+
+## GitHub PR Labels
+
+Use the REST API-based helper when you need to label a pull request without triggering the deprecated GraphQL path behind `gh pr edit --add-label`.
+
+```bash
+# Add one label
+npx tsx tools/add-pr-label.ts 229 "HOK-1305"
+
+# Add multiple labels at once
+npx tsx tools/add-pr-label.ts 42 "bug" "high-priority"
+
+# Target a different repository
+npx tsx tools/add-pr-label.ts 15 "feature" --repo owner/repo
+```
