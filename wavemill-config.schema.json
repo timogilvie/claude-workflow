@@ -425,6 +425,29 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Checks that must pass for merge approval (subset of checks)"
+        },
+        "remediation": {
+          "type": "object",
+          "description": "Automatic remediation settings for fixable ready-check failures.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Launch a remediation agent when a fixable ready check fails."
+            },
+            "maxAttempts": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "Maximum remediation launches allowed before ready falls back to operator attention."
+            },
+            "agentCmd": {
+              "type": "string",
+              "default": "",
+              "description": "Optional agent command override for ready remediation launches."
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
