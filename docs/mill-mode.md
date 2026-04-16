@@ -2,17 +2,18 @@
 title: Mill Mode
 ---
 
-Use `wavemill mill` when you want continuous execution of backlog tasks with parallel agents.
+`wavemill mill` is the default way to run Wavemill. It is the factory loop: backlog in, routed agent work out, with evaluation data feeding the next round of model selection.
 
 ## What It Does
 
-- Fetches and ranks backlog tasks from Linear and prompts you for what's next.
-- Expands issues that are missing implementation detail into effective plans.
-- Assesses the task and chooses the best model
+- Fetches and ranks backlog tasks from Linear.
+- Expands issues that are missing implementation detail into task packets.
+- Assesses each task and chooses the best planner, coder, and reviewer models.
 - Launches parallel worktrees/agents via `tmux`.
 - Monitors PR, ready-stage, and merge status.
 - Cleans up completed tasks and updates issue state.
-- **Auto-updates project context** after each PR merge with a summary of changes.
+- Auto-updates project context after each PR merge with a summary of changes.
+- Writes eval data that improves future routing decisions.
 
 ## Run It
 
@@ -27,6 +28,19 @@ Common overrides:
 MAX_PARALLEL=5 wavemill mill
 AGENT_CMD=codex wavemill mill
 ```
+
+## Why Mill Mode Is The Core Workflow
+
+Mill mode combines the pieces that make Wavemill useful as a software factory:
+
+- backlog intake
+- task expansion
+- model routing
+- parallel execution
+- review and readiness gates
+- eval-driven learning
+
+If you only document one command first, document `mill`.
 
 ## Safety Defaults
 
@@ -105,6 +119,20 @@ This ensures that agent #5 knows what agents #1-4 built, leading to more consist
 - Other sections (Architecture, Conventions) can be manually edited
 - Agents receive this context when expanding Linear issues
 
+## Routing And Learning
+
+At startup, `wavemill mill` runs routing for each task so different task types can use different models and execution depths. Routing decisions are based on historical eval records and fallback heuristics.
+
+The loop is:
+
+1. route a task
+2. execute it
+3. evaluate the result
+4. store the outcome
+5. improve the next routing decision
+
+Challenge mode can also run head-to-head comparisons to generate stronger routing data over time. For the broader model-selection story and Hokusai opt-in, see [Routing & Hokusai](routing-and-hokusai.md).
+
 ## Routing Artifact Contract
 
 At startup, `wavemill mill` runs `route-task.ts --json` per task and persists the result
@@ -147,7 +175,8 @@ been confirmed to work with `route.json`.
 
 ## See Also
 
-- [Feature Workflow](feature-workflow.md) — guided single-issue execution with plan and validate gates
+- [Routing & Hokusai](routing-and-hokusai.md) — self-improving routing and collective intelligence
+- [CLI Reference](cli-reference.md) — all commands and when to use them
 - [Plan Mode](plan-mode.md) — decompose epics into mill-ready sub-issues
 - [Review Mode](review-mode.md) — LLM-powered code review (runs automatically in each agent's workflow)
 - [Ready Stage](ready-stage.md) — merge-readiness checks and operator policy

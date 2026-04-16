@@ -2,7 +2,7 @@
 title: Eval Mode
 ---
 
-Use `wavemill eval` to evaluate LLM performance on completed workflows by analyzing task outcomes, interventions, and quality metrics.
+Use `wavemill eval` when you want to inspect or export the data that makes Wavemill self-improving. Mill mode records this automatically; the standalone command is for analysis and reporting.
 
 ## What It Does
 

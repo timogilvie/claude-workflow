@@ -2,7 +2,7 @@
 title: Feature Workflow
 ---
 
-Tools for more explicit planning, implementation checkpoints, and reviewable outputs for each issue. It's helpful when issues tend to have more nuance that benefits from back-and-forth with the LLM, you're exploring different potential paths, etc. 
+Tools for more explicit planning, implementation checkpoints, and reviewable outputs for each issue. Use this when you want a more hands-on workflow than `wavemill mill`, or when a task needs deliberate back-and-forth before you hand it back to the factory.
 
 ## Recommended Path
 

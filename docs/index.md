@@ -2,41 +2,56 @@
 title: Wavemill
 ---
 
-**Wavemill** is a self-improving AI software development pipeline. It offers a CLI tool for autonomous AI-powered software development workflows to automatically process backlogs, expand issues, and ship features in parallel. It works across multiple models and includes eval functionality to understand which models are most effective at each type of task, routing tasks to the right model automatically.
+**Wavemill** is a self-improving software factory for LLM-driven development. Run `wavemill mill` to pull work from your backlog, expand thin tasks, route each task to the right model, build in parallel, evaluate outcomes, and improve future routing.
+
+Wavemill learns from your own workflow data by default. If you opt into Hokusai, it can also benefit from collective routing intelligence built from many teams' results.
 
 ```
-Linear Backlog → Expand → Route → Build (parallel) → Eval → Learn
-                                      ↑                       |
-                                      └── routing improves ───┘
+Backlog → Expand → Route → Build → Review → Ready → Eval → Learn
+                        ↑                                   |
+                        └──── routing improves over time ───┘
 ```
 
-### How it works
+## Default Workflow
 
-1. **`wavemill expand`** — enriches Linear issues into detailed task packets with context, constraints, and validation steps
-2. **`wavemill mill`** — continuously pulls from your backlog, launches parallel AI agents in tmux worktrees, monitors PRs, and auto-completes tasks
-3. **Eval** — scores every completed task on a 0–1 scale measuring autonomy and quality
-4. **Router** — uses eval history to pick the best model for each task type
-5. **Challenge mode** — periodically runs the same task with two models head-to-head, building the dataset that makes routing smarter over time
+1. **`wavemill mill`** pulls prioritized work and runs the factory loop.
+2. **Task expansion** fills in missing implementation detail automatically when needed.
+3. **Routing** picks planner, coder, and reviewer models based on historical outcomes.
+4. **Parallel execution** launches isolated worktrees and monitors PR progress.
+5. **Eval and challenge data** feed the router so future tasks are assigned better.
 
-## Quick Command Reference
+## Use Wavemill In Two Ways
+
+### 1) Run the factory
+
+Use [`wavemill mill`](mill-mode.md) as the default operating mode for continuous automated software development.
+
+### 2) Use targeted tools when needed
+
+Use supporting commands when you need to prepare work, inspect outcomes, or intervene manually:
+
+- [`wavemill expand`](expand-mode.md) for task-packet generation
+- [`wavemill plan`](plan-mode.md) for breaking down larger epics
+- [`wavemill review`](review-mode.md) for targeted PR review
+- [`wavemill eval`](eval-mode.md) for performance analysis
+- [`wavemill route`](routing-and-hokusai.md) for inspecting routing decisions
+- [`wavemill context`](cli-reference.md) for maintaining agent-readable project memory
+
+## Quick Start
 
 ```bash
-# install + verify
+# install
 ./install.sh
-wavemill help
 
-# configure repo
+# configure a repo
 wavemill init
 
-# autonomous backlog loop
+# run the factory
 wavemill mill
-
-# expand backlog issues into task packets
-wavemill expand
 ```
 
-For full setup, go to [Getting Started](getting-started.md).
+For setup and first-run details, start with [Getting Started](getting-started.md).
 
-For agent instruction ownership and prompt update points, see [Prompt Locations](prompt-locations.md).
+To understand the self-improving loop, see [Routing & Hokusai](routing-and-hokusai.md). For the full command surface, see [CLI Reference](cli-reference.md).
 
 Wavemill is open source under the [MIT License](https://github.com/timogilvie/wavemill/blob/main/LICENSE).

@@ -1,0 +1,72 @@
+---
+title: Routing & Hokusai
+---
+
+Wavemill gets better over time by learning which models perform best on which kinds of work. That learning loop is what turns `wavemill mill` from simple automation into a self-improving software factory.
+
+## Routing
+
+For each task, Wavemill can choose different models and execution depths for planning, coding, and review.
+
+Routing considers:
+
+- task type and risk signals
+- historical eval performance on similar work
+- expected success rate
+- expected cost
+
+The goal is not to pick one best model globally. The goal is to pick the best workflow for this task.
+
+## Where The Data Comes From
+
+By default, routing improves from your own repositories:
+
+1. Wavemill executes work.
+2. `eval` scores the outcome.
+3. The eval record is stored locally.
+4. Future tasks use that history for routing.
+
+This means Wavemill can become more effective and more cost-efficient over time without requiring any shared dataset.
+
+## Challenge Mode
+
+Challenge mode periodically runs the same task with two different model configurations. That produces direct comparison data instead of relying only on independent scores.
+
+Challenge data helps answer questions like:
+
+- which model handles refactors better
+- which model is cheaper for low-risk tasks
+- which model needs fewer review iterations on UI work
+
+That comparison data makes routing more reliable over time.
+
+## Hokusai
+
+Hokusai is the collective-intelligence layer for routing.
+
+If you opt in, Wavemill can supplement your local eval history with shared signals gathered across many teams and tasks. This helps with cold starts and can improve routing quality before you have a large local dataset.
+
+Use:
+
+```bash
+wavemill hokusai status
+wavemill hokusai enable
+wavemill hokusai disable
+```
+
+Hokusai is optional. The default model is:
+
+- local learning from your own data
+- collective learning only when explicitly enabled
+
+## Related Commands
+
+- `wavemill mill` runs routing as part of the main factory loop
+- `wavemill route` shows the recommended planner, coder, and reviewer workflow for a task
+- `wavemill eval` inspects the outcome data that routing learns from
+
+## See Also
+
+- [Mill Mode](mill-mode.md) — the default workflow
+- [CLI Reference](cli-reference.md) — all commands and command groups
+- [Eval Mode](eval-mode.md) — how outcomes are scored

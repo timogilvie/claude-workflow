@@ -2,7 +2,7 @@
 title: Plan Mode
 ---
 
-Use `wavemill plan` to decompose a broad epic or initiative into well-scoped sub-issues and push them to Linear with dependencies and milestones. These are then well suited for mill mode. 
+Use `wavemill plan` when work is still too large or ambiguous for `wavemill mill`. It decomposes a broad epic or initiative into well-scoped sub-issues that can be milled later.
 
 ## What It Does
 

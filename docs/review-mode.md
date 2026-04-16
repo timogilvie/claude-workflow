@@ -2,7 +2,7 @@
 title: Review Mode
 ---
 
-Wavemill includes an LLM-powered code review system that catches major issues before PRs are created. It runs automatically as part of the feature workflow and can also be invoked standalone on branches or existing PRs.
+Wavemill includes an LLM-powered code review system that catches major issues before PRs are created. It runs automatically inside the factory workflow and can also be invoked standalone on branches or existing PRs when you want targeted inspection.
 
 Review is not the final merge gate. After review passes and a PR is opened, the workflow can enter the separate `ready` stage, which judges merge-readiness, release-readiness, and operator follow-up requirements before merge. See [Ready Stage](ready-stage.md).
 
