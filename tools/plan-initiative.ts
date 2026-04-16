@@ -6,7 +6,7 @@ import { listInitiatives } from '../shared/lib/initiative-lister.ts';
 import { decomposeInitiative } from '../shared/lib/initiative-decomposer.ts';
 import { getPlanConfig } from '../shared/lib/config.ts';
 
-const PLAN_MODEL = process.env.PLAN_MODEL || 'claude-opus-4-6';
+const PLAN_MODEL = process.env.PLAN_MODEL || 'claude-opus-4-7';
 
 /**
  * Get interactive mode setting from CLI args and config.
@@ -168,7 +168,7 @@ Interactive Mode:
 Environment Variables:
   LINEAR_API_KEY   Required: Linear API key
   CLAUDE_CMD       Optional: Claude CLI command (default: 'claude')
-  PLAN_MODEL       Optional: LLM model for planning (default: claude-opus-4-6)`,
+  PLAN_MODEL       Optional: LLM model for planning (default: claude-opus-4-7)`,
   async run({ args, positional }) {
     const subCommand = positional[0];
 

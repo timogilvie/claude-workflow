@@ -389,9 +389,9 @@ $details_context"
       }' > "$feature_dir/selected-task.json"
 
     jq -n \
-      --arg planner "${planner_model:-claude-sonnet-4-5-20250929}" \
-      --arg coder "${coder_model:-claude-opus-4-6}" \
-      --arg reviewer "${reviewer_model:-claude-sonnet-4-5-20250929}" \
+      --arg planner "${planner_model:-claude-sonnet-4-6}" \
+      --arg coder "${coder_model:-claude-opus-4-7}" \
+      --arg reviewer "${reviewer_model:-claude-sonnet-4-6}" \
       --arg planDepth "$plan_depth" \
       --arg codeDepth "$code_depth" \
       --arg reviewMode "$review_mode" \
@@ -407,8 +407,8 @@ $details_context"
 
     jq -n \
       --arg startedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-      --arg agent "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")" \
-      --arg model "${planner_model:-claude-sonnet-4-5-20250929}" \
+      --arg agent "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" \
+      --arg model "${planner_model:-claude-sonnet-4-6}" \
       '{
         stage: "planning",
         status: "running",
@@ -446,8 +446,8 @@ $details_context"
   if [[ "$PLANNING_MODE" == "interactive" ]]; then
     planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
     build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")" > "$planning_prompt"
-    if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")" "${planner_model:-claude-sonnet-4-5-20250929}"; then
+      "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" > "$planning_prompt"
+    if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" "${planner_model:-claude-sonnet-4-6}"; then
       [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
       tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
       startup_log "✗ $issue FAILED at step [6/7]: launching planning agent"

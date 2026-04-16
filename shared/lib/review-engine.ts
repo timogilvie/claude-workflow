@@ -89,7 +89,7 @@ interface Config {
 // Constants
 // ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const DEFAULT_TIMEOUT_MS = 300_000; // 5 minutes (claude -p with JSON output is slow)
 const DEFAULT_MAX_RETRIES = 1;
@@ -589,7 +589,7 @@ async function runReviewWithRetry(
         `  - Context is too large for the model\n\n` +
         `Troubleshooting:\n` +
         `  - Run with --verbose to see full LLM response\n` +
-        `  - Try a different model: REVIEW_MODEL=claude-opus-4-6 npx tsx tools/review-changes.ts\n` +
+        `  - Try a different model: REVIEW_MODEL=claude-opus-4-7 npx tsx tools/review-changes.ts\n` +
         `  - Break changes into smaller PRs if diff is very large\n` +
         `  - Check your network connection and retry`
       );

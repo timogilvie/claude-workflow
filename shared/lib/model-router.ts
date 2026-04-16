@@ -273,7 +273,7 @@ const DEFAULT_ROUTER_OPTIONS = {
   evalsDir: '',
   minRecords: 20,
   minModels: 2,
-  defaultModel: 'claude-sonnet-4-5-20250929',
+  defaultModel: 'claude-sonnet-4-6',
   models: [] as string[],
   agentMap: {} as Record<string, string>,
   defaultAgent: 'claude',

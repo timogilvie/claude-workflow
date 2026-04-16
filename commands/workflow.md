@@ -16,7 +16,7 @@ After the task is selected and context is saved, start a session:
 SESSION_ID=$(npx tsx tools/session.ts start \
   --workflow feature \
   --prompt "<task title and description from selected-task.json>" \
-  --model "<current model, e.g. claude-opus-4-6>" \
+  --model "<current model, e.g. claude-opus-4-7>" \
   --issue "<Linear issue ID, e.g. HOK-701>")
 ```
 Save the printed `SESSION_ID` value — you'll need it for updates.

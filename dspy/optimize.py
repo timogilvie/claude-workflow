@@ -7,7 +7,7 @@ then exports the result as a JSON artifact for the TypeScript runtime.
 Usage:
     cd dspy && python optimize.py
     cd dspy && python optimize.py --evals ../path/to/aggregated-evals.jsonl
-    cd dspy && python optimize.py --teacher claude-sonnet-4-5-20250929
+    cd dspy && python optimize.py --teacher claude-sonnet-4-6
 """
 
 import argparse
@@ -130,6 +130,8 @@ def export_artifact(
         "system_prompt": system_prompt,
         "few_shot_examples": few_shot_examples,
         "model_candidates": [
+            "claude-sonnet-4-6",
+            "claude-opus-4-7",
             "claude-sonnet-4-5-20250929",
             "gpt-5.3-codex",
             "gpt-5.4",
@@ -158,7 +160,7 @@ def main():
     )
     parser.add_argument(
         "--teacher",
-        default="claude-sonnet-4-5-20250929",
+        default="claude-sonnet-4-6",
         help="Teacher model for optimization (default: sonnet)",
     )
     parser.add_argument(

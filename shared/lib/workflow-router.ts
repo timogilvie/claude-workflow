@@ -91,6 +91,8 @@ function withChallengeRecommendation<T extends WorkflowRouteDecision>(decision: 
 }
 
 const DEFAULT_MODEL_POOL = [
+  'claude-opus-4-7',
+  'claude-sonnet-4-6',
   'claude-opus-4-6',
   'claude-sonnet-4-5-20250929',
   'claude-haiku-4-5-20251001',
@@ -282,19 +284,19 @@ function downgradeModelsForBudget(params: {
 
   // Define downgrade tiers for each role (most expensive to cheapest)
   const coderTiers = [
-    ['claude-opus-4-6', 'gpt-5.4'],
-    ['gpt-5.3-codex', 'claude-sonnet-4-5-20250929'],
+    ['claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
+    ['gpt-5.3-codex', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
     ['claude-haiku-4-5-20251001'],
   ];
 
   const plannerTiers = [
-    ['claude-opus-4-6'],
-    ['claude-sonnet-4-5-20250929'],
+    ['claude-opus-4-7', 'claude-opus-4-6'],
+    ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
     ['claude-haiku-4-5-20251001'],
   ];
 
   const reviewerTiers = [
-    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'],
+    ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
     ['claude-haiku-4-5-20251001'],
   ];
 
@@ -355,20 +357,20 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   });
 
   const planner = planDepth === 'deep'
-    ? pickAvailableModel(pool, ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel)
-    : pickAvailableModel(pool, ['claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel);
+    ? pickAvailableModel(pool, ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel)
+    : pickAvailableModel(pool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel);
 
   const coder = codeDepth === 'deep'
-    ? pickAvailableModel(pool, [coderRecommendation.recommendedModel, 'claude-opus-4-6', 'gpt-5.4'], coderRecommendation.recommendedModel)
+    ? pickAvailableModel(pool, [coderRecommendation.recommendedModel, 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'], coderRecommendation.recommendedModel)
     : codeDepth === 'medium'
-      ? pickAvailableModel(pool, [coderRecommendation.recommendedModel, 'gpt-5.3-codex', 'claude-sonnet-4-5-20250929'], coderRecommendation.recommendedModel)
+      ? pickAvailableModel(pool, [coderRecommendation.recommendedModel, 'gpt-5.3-codex', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'], coderRecommendation.recommendedModel)
       : pickAvailableModel(pool, [coderRecommendation.recommendedModel, 'gpt-5.3-codex', 'claude-haiku-4-5-20251001'], coderRecommendation.recommendedModel);
 
   const reviewer = reviewRecommended === 'static+llm'
-    ? pickAvailableModel(pool, ['claude-sonnet-4-5-20250929', 'claude-opus-4-6', planner], planner)
+    ? pickAvailableModel(pool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-opus-4-7', 'claude-opus-4-6', planner], planner)
     : reviewRecommended === 'llm'
-      ? pickAvailableModel(pool, ['claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', planner], planner)
-      : pickAvailableModel(pool, ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929', planner], planner);
+      ? pickAvailableModel(pool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', planner], planner)
+      : pickAvailableModel(pool, ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', planner], planner);
 
   // Enforce budget constraint if provided
   let finalPlanner = planner;

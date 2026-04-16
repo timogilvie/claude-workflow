@@ -2996,7 +2996,7 @@ EOF
     if declare -F launch_review_phase >/dev/null 2>&1 && declare -F agent_resolve_from_model >/dev/null 2>&1; then
       # Get review phase configuration from state
       local reviewer_model review_mode reviewer_agent
-      reviewer_model=$(read_state_value "claude-sonnet-4-5-20250929" --arg i "$issue" '.tasks[$i].reviewerModel // "claude-sonnet-4-5-20250929"')
+      reviewer_model=$(read_state_value "claude-sonnet-4-6" --arg i "$issue" '.tasks[$i].reviewerModel // "claude-sonnet-4-6"')
       review_mode=$(read_state_value "static+llm" --arg i "$issue" '.tasks[$i].reviewMode // "static+llm"')
 
       # Resolve agent from model
@@ -4335,9 +4335,9 @@ Implement from the issue description plus direct codebase analysis."
     # We just need to write the .routing-complete file and launch planning.
     local routing_file="$feature_dir/.routing-complete"
     jq -n \
-      --arg planner "${planner_model:-claude-sonnet-4-5-20250929}" \
-      --arg coder "${task_model:-claude-opus-4-6}" \
-      --arg reviewer "${reviewer_model:-claude-sonnet-4-5-20250929}" \
+      --arg planner "${planner_model:-claude-sonnet-4-6}" \
+      --arg coder "${task_model:-claude-opus-4-7}" \
+      --arg reviewer "${reviewer_model:-claude-sonnet-4-6}" \
       --arg planDepth "${plan_depth:-light}" \
       --arg codeDepth "${code_depth:-medium}" \
       --arg reviewMode "${review_mode:-static}" \
@@ -4356,20 +4356,20 @@ Implement from the issue description plus direct codebase analysis."
 
     # Launch planning phase directly with the routed model (skip routing agent)
     local resolved_planner_agent
-    resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-5-20250929}")"
+    resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")"
 
     # Record planning stage as running before the first launch so the monitor
     # keeps the task active even before any planning artifacts exist.
-    write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-5-20250929}"
+    write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"
 
     launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "${planner_model:-claude-sonnet-4-5-20250929}" "$resolved_planner_agent" "${plan_depth:-light}"
+      "${planner_model:-claude-sonnet-4-6}" "$resolved_planner_agent" "${plan_depth:-light}"
     local launch_rc=$?
     if ! handle_phase_launch_result "$issue" "$feature_dir" "planning" "routing" "$launch_rc" "$win" \
-      "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-5-20250929}"; then
+      "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
       return 0
     fi
-    log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-5-20250929}"
+    log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
@@ -4656,24 +4656,24 @@ monitor_issue_state() {
                 fi
               elif ! jq empty "$routing_file" 2>/dev/null; then
                 log_warn "$ISSUE → Routing file contains invalid JSON, using defaults"
-                planner_model="claude-sonnet-4-5-20250929"
-                coder_model="claude-opus-4-6"
-                reviewer_model="claude-sonnet-4-5-20250929"
+                planner_model="claude-sonnet-4-6"
+                coder_model="claude-opus-4-7"
+                reviewer_model="claude-sonnet-4-6"
                 plan_depth="light"
                 code_depth="medium"
                 review_mode="static"
               else
-                planner_model=$(jq -r '.planner // "claude-sonnet-4-5-20250929"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-5-20250929")
-                coder_model=$(jq -r '.coder // "claude-opus-4-6"' "$routing_file" 2>/dev/null || echo "claude-opus-4-6")
-                reviewer_model=$(jq -r '.reviewer // "claude-sonnet-4-5-20250929"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-5-20250929")
+                planner_model=$(jq -r '.planner // "claude-sonnet-4-6"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-6")
+                coder_model=$(jq -r '.coder // "claude-opus-4-7"' "$routing_file" 2>/dev/null || echo "claude-opus-4-7")
+                reviewer_model=$(jq -r '.reviewer // "claude-sonnet-4-6"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-6")
                 plan_depth=$(jq -r '.planDepth // "light"' "$routing_file" 2>/dev/null || echo "light")
                 code_depth=$(jq -r '.codeDepth // "medium"' "$routing_file" 2>/dev/null || echo "medium")
                 review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
               fi
 
-              planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-4-5-20250929")"
-              coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-6")"
-              reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-5-20250929")"
+              planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-4-6")"
+              coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
+              reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
 
               # Save routing results to state
               current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
@@ -4782,7 +4782,7 @@ monitor_issue_state() {
                 coder_model="$challenge_coder"
               fi
             fi
-            coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-6")"
+            coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
             code_depth=$(read_phase_config "$FEATURE_DIR" "coding" "depth")
             [[ -z "$code_depth" ]] && code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
@@ -4913,7 +4913,7 @@ monitor_issue_state() {
               reviewer_model=$(read_phase_config "$FEATURE_DIR" "review" "model")
               [[ -z "$reviewer_model" ]] && reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
             fi
-            reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-5-20250929")"
+            reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
             review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
             [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")
             [[ -z "$review_mode" ]] && review_mode="static"

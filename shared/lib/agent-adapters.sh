@@ -68,7 +68,7 @@ agent_default_model_for_cmd() {
   local agent_cmd="$1"
   case "$agent_cmd" in
     codex) echo "gpt-5.4" ;;
-    claude) echo "claude-sonnet-4-5-20250929" ;;
+    claude) echo "claude-sonnet-4-6" ;;
     *) echo "" ;;
   esac
 }
@@ -478,9 +478,9 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 
 3. Save the routing results to $routing_path as JSON:
    {
-     "planner": "claude-sonnet-4-5-20250929",
-     "coder": "claude-opus-4-6",
-     "reviewer": "claude-sonnet-4-5-20250929",
+     "planner": "claude-sonnet-4-6",
+     "coder": "claude-opus-4-7",
+     "reviewer": "claude-sonnet-4-6",
      "planDepth": "light",
      "codeDepth": "medium",
      "reviewMode": "static"
@@ -496,9 +496,9 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 ### Important Notes
 - Use the routing tool's recommendations directly - don't override them
 - If the routing tool fails, use sensible defaults:
-  - planner: claude-sonnet-4-5-20250929
-  - coder: claude-opus-4-6
-  - reviewer: claude-sonnet-4-5-20250929
+  - planner: claude-sonnet-4-6
+  - coder: claude-opus-4-7
+  - reviewer: claude-sonnet-4-6
   - planDepth: light
   - codeDepth: medium
   - reviewMode: static
@@ -1060,8 +1060,13 @@ agent_launch_interactive() {
     fi
 
     if [[ -n "$fallback_model" ]]; then
-      _agent_log_warn "Falling back to $fallback_model"
-      model="$fallback_model"
+      if agent_validate_model "$fallback_model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
+        _agent_log_warn "Falling back to $fallback_model"
+        model="$fallback_model"
+      else
+        _agent_log_warn "Configured fallback '$fallback_model' is invalid; launching without explicit --model override"
+        model=""
+      fi
     else
       _agent_log_warn "Launching without explicit --model override"
       model=""
