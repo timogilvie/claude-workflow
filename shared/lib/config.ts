@@ -206,6 +206,27 @@ export interface ReadyRemediationConfig {
   agentCmd?: string;
 }
 
+export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
+export type ModelTaskProfile = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
+
+export interface ModelCapabilityConfig {
+  vendor?: string;
+  class?: ModelClass;
+  strengths?: string[];
+  weaknesses?: string[];
+  taskScores?: Partial<Record<ModelTaskProfile, number>>;
+  deprecated?: boolean;
+}
+
+export interface TaskProfileConfigShape {
+  ladder?: string[];
+}
+
+export interface ModelRegistryConfig {
+  models?: Record<string, ModelCapabilityConfig>;
+  taskProfiles?: Partial<Record<ModelTaskProfile, TaskProfileConfigShape>>;
+}
+
 export interface WavemillConfig {
   configVersion?: string;
   linear?: LinearConfig;
@@ -225,6 +246,7 @@ export interface WavemillConfig {
   review?: ReviewConfig;
   ready?: ReadyConfig;
   permissions?: PermissionsConfig;
+  modelRegistry?: ModelRegistryConfig;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -616,4 +638,12 @@ export function getDashboardConfig(repoDir?: string): DashboardConfig {
  */
 export function getPermissionsConfig(repoDir?: string): PermissionsConfig {
   return loadWavemillConfig(repoDir).permissions || {};
+}
+
+/**
+ * Get the model registry config section.
+ * Returns empty object if not configured.
+ */
+export function getModelRegistryConfig(repoDir?: string): ModelRegistryConfig {
+  return loadWavemillConfig(repoDir).modelRegistry || {};
 }

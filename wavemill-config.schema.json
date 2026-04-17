@@ -737,6 +737,64 @@
         }
       },
       "additionalProperties": false
+    },
+    "modelRegistry": {
+      "type": "object",
+      "description": "Canonical model capability registry. Overrides seed defaults in shared/lib/model-registry.ts.",
+      "properties": {
+        "models": {
+          "type": "object",
+          "description": "Per-model capability overrides. Keys are model IDs.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "vendor": { "type": "string", "minLength": 1 },
+              "class": { "type": "string", "enum": ["frontier","strong_generalist","fast_economy"] },
+              "strengths": { "type": "array", "items": { "type": "string" } },
+              "weaknesses": { "type": "array", "items": { "type": "string" } },
+              "taskScores": {
+                "type": "object",
+                "properties": {
+                  "routing": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "planning": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "coding": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "review": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "classify": { "type": "number", "minimum": 0, "maximum": 1 }
+                },
+                "additionalProperties": false
+              },
+              "deprecated": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "taskProfiles": {
+          "type": "object",
+          "properties": {
+            "routing":  { "$ref": "#/definitions/TaskProfileConfig" },
+            "planning": { "$ref": "#/definitions/TaskProfileConfig" },
+            "coding":   { "$ref": "#/definitions/TaskProfileConfig" },
+            "review":   { "$ref": "#/definitions/TaskProfileConfig" },
+            "classify": { "$ref": "#/definitions/TaskProfileConfig" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "TaskProfileConfig": {
+      "type": "object",
+      "description": "Task profile configuration (per-task ranking ladder).",
+      "properties": {
+        "ladder": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Explicit model ordering for this task profile."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
