@@ -103,6 +103,8 @@ for fn in \
   check_stage_awaiting_user \
   resolve_phase \
   _persist_phase \
+  ready_base_sha \
+  get_main_head_sha \
   ready_stage_allows_merge \
   ready_stage_warn_bypass_once \
   ready_stage_pending_verdict \
@@ -189,6 +191,7 @@ run_lifecycle_scenario() {
       SET_PHASE_CALLS=""
       READY_LAUNCH_COUNT=0
       READY_LAUNCH_ARGS=""
+      MAIN_SHA_RETURN=""
       CODING_LAUNCH_COUNT=0
       REVIEW_LAUNCH_COUNT=0
       RESTORE_COUNT=0
@@ -344,6 +347,7 @@ JSON
     should_cleanup_closed_pr() { [[ "$CLEANUP_CLOSED_PR" == "true" ]]; }
     get_challenge_sibling_pr() { printf "%s\n" "$CHALLENGE_SIBLING_PR"; }
     check_challenge_sibling_merged() { [[ "$CHALLENGE_SIBLING_MERGED" == "true" ]]; }
+    get_main_head_sha() { printf "%s\n" "$MAIN_SHA_RETURN"; }
     transient_error_recovery_pending() { return 1; }
     phase_should_remain_active_without_pr() { return 1; }
     codex_has_pending_approval() { return 1; }
