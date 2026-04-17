@@ -129,6 +129,13 @@ export interface EvalConfig {
   interventionPenalties?: InterventionPenaltiesConfig;
 }
 
+export interface DifficultyClassifierConfig {
+  enabled?: boolean;
+  classifierModel?: string;
+  cacheTtlDays?: number;
+  skipLlm?: boolean;
+}
+
 export interface RouterConfig {
   enabled?: boolean;
   defaultModel?: string;
@@ -145,6 +152,7 @@ export interface RouterConfig {
   backfilledEvalsPath?: string;
   stageBlendWeight?: number;
   hokusai?: HokusaiRouterConfig;
+  difficulty?: DifficultyClassifierConfig;
 }
 
 export interface ChallengeConfig {
@@ -641,4 +649,12 @@ export function getPermissionsConfig(repoDir?: string): PermissionsConfig {
  */
 export function getModelRegistryConfig(repoDir?: string): ModelRegistryConfig {
   return loadWavemillConfig(repoDir).modelRegistry || {};
+}
+
+/**
+ * Get the difficulty classifier config section from router config.
+ * Returns defaults if not configured.
+ */
+export function getDifficultyClassifierConfig(repoDir?: string): DifficultyClassifierConfig {
+  return loadWavemillConfig(repoDir).router?.difficulty || {};
 }
