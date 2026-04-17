@@ -238,3 +238,7 @@ export function mergeModelRegistry(
 export function getEffectiveRegistry(repoDir?: string): ModelRegistry {
   return mergeModelRegistry(DEFAULT_MODEL_REGISTRY, getModelRegistryConfig(repoDir));
 }
+
+export function resetWarningState(): void {
+  warnedUnknownLadders.clear();
+}
