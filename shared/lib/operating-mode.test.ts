@@ -177,15 +177,15 @@ describe('operating-mode', () => {
     assert.equal(mode, 'normal');
   });
 
-  it('reads constrained mode from quota snapshot on disk', async () => {
+  it('reads constrained mode from quota snapshot on disk', () => {
     recordLimitError({ modelId: 'claude-opus-4-7', reason: '429 rate_limit' }, repoDir);
 
-    const mode = await getCurrentOperatingMode(repoDir);
+    const mode = getCurrentOperatingMode(repoDir);
     assert.equal(mode, 'constrained');
   });
 
-  it('returns normal when quota snapshot file is missing', async () => {
-    const mode = await getCurrentOperatingMode(repoDir);
+  it('returns normal when quota snapshot file is missing', () => {
+    const mode = getCurrentOperatingMode(repoDir);
     assert.equal(mode, 'normal');
   });
 });

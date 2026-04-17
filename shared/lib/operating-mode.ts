@@ -36,7 +36,7 @@ export function deriveOperatingMode(
   return hasConstrainedFrontier ? 'constrained' : 'normal';
 }
 
-export async function getCurrentOperatingMode(repoDir?: string): Promise<OperatingMode> {
+export function getCurrentOperatingMode(repoDir?: string): OperatingMode {
   const snapshot = readQuotaSnapshot(repoDir);
   return deriveOperatingMode(snapshot);
 }
