@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from './config.ts';
-import { readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute } from './workflow-router.ts';
+import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute } from './workflow-router.ts';
 
 let passed = 0;
 let failed = 0;
@@ -276,6 +276,136 @@ await test('explicit hokusai mode falls back gracefully to stage-aware', async (
     assert.notEqual(decision.routingMode, 'hokusai');
   } finally {
     globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
+// Difficulty integration tests
+// ────────────────────────────────────────────────────────────────
+
+await test('routeWorkflow with taskDifficulty=hard never returns haiku as coder', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Fix a small UI bug.',
+      {
+        repoDir,
+        taskDifficulty: 'hard',
+        skipDifficultyClassification: true,
+      },
+    );
+    assert.ok(
+      !decision.coder.toLowerCase().includes('haiku'),
+      `Expected non-haiku coder for hard task, got ${decision.coder}`,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+await test('routeWorkflow with taskDifficulty=critical includes difficulty in reasoning', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Update the payment processing module.',
+      {
+        repoDir,
+        taskDifficulty: 'critical',
+        skipDifficultyClassification: true,
+      },
+    );
+    const hasDifficultyReasoning = decision.reasoning.some(
+      (r) => r.includes('critical'),
+    );
+    assert.ok(hasDifficultyReasoning, `Expected difficulty in reasoning, got: ${decision.reasoning.join(' | ')}`);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('routeWorkflow with taskDifficulty=trivial does not add floor restriction to reasoning', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Fix a typo.',
+      {
+        repoDir,
+        taskDifficulty: 'trivial',
+        skipDifficultyClassification: true,
+      },
+    );
+    // Trivial difficulty should mention the floor in reasoning (floor applied = true for trivial)
+    const hasTrivialReasoning = decision.reasoning.some((r) => r.includes('trivial'));
+    assert.ok(hasTrivialReasoning, `Expected trivial in reasoning: ${decision.reasoning.join(' | ')}`);
+    // Trivial difficulty floor allows haiku — no upgrade warnings, coder can be any model
+    assert.equal(decision.signals.taskDifficulty, 'trivial');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('routeWorkflow with taskDifficulty=hard includes taskDifficulty in signals', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Refactor the database layer.',
+      {
+        repoDir,
+        taskDifficulty: 'hard',
+        skipDifficultyClassification: true,
+      },
+    );
+    assert.equal(decision.signals.taskDifficulty, 'hard');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('summarizeWorkflowRoute includes difficulty when present in signals', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Update critical payment service.',
+      {
+        repoDir,
+        taskDifficulty: 'critical',
+        skipDifficultyClassification: true,
+      },
+    );
+    const summary = summarizeWorkflowRoute(decision, repoDir);
+    assert.match(summary, /difficulty=critical/);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('applyDifficultyFloor upgrades haiku to opus for critical difficulty (not sonnet)', () => {
+  const pool = ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'];
+  const criticalFloor = { allowHaiku: false, preferSonnet: false, preferOpus: true };
+  const result = applyDifficultyFloor('claude-haiku-4-5-20251001', criticalFloor, pool, 'coder');
+  assert.ok(
+    result.toLowerCase().includes('opus'),
+    `Expected opus upgrade for critical+haiku, got ${result}`,
+  );
+  assert.ok(
+    !result.toLowerCase().includes('sonnet'),
+    `Critical floor should prefer opus over sonnet, got ${result}`,
+  );
+});
+
+await test('routeWorkflow without difficulty options has no taskDifficulty in signals', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Simple feature implementation.',
+      {
+        repoDir,
+        skipDifficultyClassification: true,
+      },
+    );
+    assert.equal(decision.signals.taskDifficulty, undefined);
+  } finally {
     cleanup();
   }
 });
