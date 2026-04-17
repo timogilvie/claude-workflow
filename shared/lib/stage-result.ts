@@ -68,6 +68,8 @@ export interface ReadyArtifacts {
   checksRun?: number;
   checksPassed?: number;
   mergeConflict?: string;
+  baseSha?: string;
+  mergeableState?: string;
   prNumber?: number;
   launchHead?: string;
   remediationAttempts?: number;
@@ -254,6 +256,25 @@ export async function updateStageResult(
   };
 
   await writeStageResult(featureDir, merged);
+}
+
+/**
+ * Determine whether a previously passing ready result is stale due to base drift.
+ *
+ * A ready pass is stale only when:
+ * - previous artifacts exist and include a recorded base SHA
+ * - previous verdict was "pass"
+ * - current base SHA differs from recorded base SHA
+ * - current mergeable state is DIRTY
+ */
+export function isReadyPassStale(
+  prevArtifacts: ReadyArtifacts | undefined,
+  currentBaseSha: string,
+  currentMergeableState: string,
+): boolean {
+  if (!prevArtifacts || !prevArtifacts.baseSha) return false;
+  if (prevArtifacts.verdict !== 'pass') return false;
+  return currentBaseSha !== prevArtifacts.baseSha && currentMergeableState === 'DIRTY';
 }
 
 // ────────────────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ import {
   readAllStageResults,
   updateStageResult,
   getResultFilePath,
+  isReadyPassStale,
   isValidStage,
   isValidStatus,
 } from './stage-result.ts';
@@ -416,5 +417,36 @@ describe('isValidStatus', () => {
     assert.ok(!isValidStatus('pending'));
     assert.ok(!isValidStatus(''));
     assert.ok(!isValidStatus('RUNNING'));
+  });
+});
+
+describe('isReadyPassStale', () => {
+  it('returns true when base drifted and merge state is DIRTY', () => {
+    const prev: ReadyArtifacts = { type: 'ready', verdict: 'pass', baseSha: 'abc' };
+    assert.equal(isReadyPassStale(prev, 'def', 'DIRTY'), true);
+  });
+
+  it('returns false when base is unchanged and merge state is DIRTY', () => {
+    const prev: ReadyArtifacts = { type: 'ready', verdict: 'pass', baseSha: 'abc' };
+    assert.equal(isReadyPassStale(prev, 'abc', 'DIRTY'), false);
+  });
+
+  it('returns false when base drifted but merge state is CLEAN', () => {
+    const prev: ReadyArtifacts = { type: 'ready', verdict: 'pass', baseSha: 'abc' };
+    assert.equal(isReadyPassStale(prev, 'def', 'CLEAN'), false);
+  });
+
+  it('returns false for legacy records without baseSha', () => {
+    const prev: ReadyArtifacts = { type: 'ready', verdict: 'pass' };
+    assert.equal(isReadyPassStale(prev, 'def', 'DIRTY'), false);
+  });
+
+  it('returns false when previous verdict is fail', () => {
+    const prev: ReadyArtifacts = { type: 'ready', verdict: 'fail', baseSha: 'abc' };
+    assert.equal(isReadyPassStale(prev, 'def', 'DIRTY'), false);
+  });
+
+  it('returns false when previous artifacts are undefined', () => {
+    assert.equal(isReadyPassStale(undefined, 'def', 'DIRTY'), false);
   });
 });

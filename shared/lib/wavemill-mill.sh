@@ -2400,6 +2400,27 @@ ready_conflict_launch_head() {
   fi
 }
 
+ready_pass_base_sha() {
+  local state_dir="$1"
+  jq -r '.artifacts.baseSha // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo ""
+}
+
+# Returns 0 when a prior passing ready result is stale:
+# base SHA changed and merge state is now DIRTY.
+ready_pass_is_stale() {
+  local state_dir="$1" pr_number="$2" wt_dir="$3"
+  local saved_base_sha pr_info current_base_sha current_merge_state
+  : "$wt_dir"
+  saved_base_sha=$(ready_pass_base_sha "$state_dir")
+  [[ -n "$saved_base_sha" ]] || return 1
+  pr_info=$(gh pr view "$pr_number" --json baseRefOid,mergeStateStatus 2>/dev/null || echo "{}")
+  current_base_sha=$(echo "$pr_info" | jq -r '.baseRefOid // empty')
+  current_merge_state=$(echo "$pr_info" | jq -r '.mergeStateStatus // empty')
+  [[ "$current_base_sha" != "$saved_base_sha" ]] || return 1
+  [[ "$current_merge_state" == "DIRTY" ]] || return 1
+  return 0
+}
+
 ready_remediation_attempts() {
   local feature_dir="$1"
   local result_file="$feature_dir/.ready-result.json"
@@ -3152,6 +3173,7 @@ launch_ready_phase() {
   local win="${issue}-${slug}"
   local state_dir status_file result ready_rc merge_status verdict
   local current_agent current_model prompt_file launch_rc launch_head checks_run checks_passed
+  local base_sha_json base_sha_val merge_state_val
   local remediation_attempts remediation_launch_head remediation_enabled remediation_max_attempts
   local remediation_agent failed_check_names failed_check_summary current_head ready_status
   local remediation_artifacts_json ci_failed_checks_json ready_result_file
@@ -3229,10 +3251,20 @@ launch_ready_phase() {
   rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention"
 
   if [[ "$ready_rc" -eq 0 ]]; then
+    base_sha_json=$(gh pr view "$pr_number" --json baseRefOid,mergeStateStatus 2>/dev/null || echo "{}")
+    base_sha_val=$(echo "$base_sha_json" | jq -r '.baseRefOid // empty')
+    merge_state_val=$(echo "$base_sha_json" | jq -r '.mergeStateStatus // empty')
     # Record ready stage result (HOK-1177)
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
-      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\"}"
+      "$(jq -cn \
+        --arg verdict "${verdict:-unknown}" \
+        --argjson checks_run "${checks_run:-0}" \
+        --argjson checks_passed "${checks_passed:-0}" \
+        --arg merge_conflict "${merge_status:-UNKNOWN}" \
+        --arg base_sha "$base_sha_val" \
+        --arg mergeable_state "$merge_state_val" \
+        '{type:"ready",verdict:$verdict,checksRun:$checks_run,checksPassed:$checks_passed,mergeConflict:$merge_conflict,baseSha:$base_sha,mergeableState:$mergeable_state}')"
     log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
     return 0
   fi
@@ -5693,6 +5725,59 @@ monitor_issue_state() {
         maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
         maybe_run_challenge_comparison "$ISSUE"
       fi
+
+      if ready_pass_is_stale "$ready_state_dir_path" "$PR" "${WORKTREE_ROOT}/${SLUG}"; then
+        local invalidation_warned="/tmp/${SESSION}-${ISSUE}-ready-invalidation-warned"
+        if [[ ! -f "$invalidation_warned" ]]; then
+          log "status" "⚠ $ISSUE → [READY] prior pass invalidated: base advanced and PR now conflicts"
+          touch "$invalidation_warned"
+        fi
+        rm -f "$ready_state_dir_path/.ready-result.json"
+        rm -f "$invalidation_warned"
+
+        title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+        if [[ -z "$title" ]]; then
+          issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+          title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+        fi
+
+        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+          launch_rc=0
+        else
+          launch_rc=$?
+        fi
+        if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+          log "status" "⛔ $ISSUE → Workflow aborted during ready re-check (invalidation)"
+          set_task_phase "$ISSUE" "aborted"
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+        fi
+        if [[ "$launch_rc" -eq 3 ]]; then
+          set_window_attention_state "$WIN" "clear"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+        if [[ "$launch_rc" -eq 4 ]]; then
+          set_window_attention_state "$WIN" "clear"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+        if [[ "$launch_rc" -eq 5 ]]; then
+          set_window_attention_state "$WIN" "clear"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+        if [[ "$launch_rc" -ne 0 ]]; then
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+        fi
+
+        set_window_attention_state "$WIN" "needs-user"
+        log "status" "✓ $ISSUE → Ready re-check completed after invalidation"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0

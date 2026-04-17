@@ -49,6 +49,14 @@ function runCheckDrift(repoDir: string) {
   });
 }
 
+function stripNpmConfigNoise(stderr: string): string {
+  return stderr
+    .split('\n')
+    .filter(line => !line.includes('npm warn Unknown env config'))
+    .join('\n')
+    .trim();
+}
+
 describe('check-drift tool', () => {
   it('prints stale subsystem ids and exits 0 when drift is detected', () => {
     const repoDir = makeRepo();
@@ -65,7 +73,7 @@ describe('check-drift tool', () => {
 
     assert.strictEqual(result.status, 0);
     assert.strictEqual(result.stdout.trim(), 'linear-api');
-    assert.strictEqual(result.stderr.trim(), '');
+    assert.strictEqual(stripNpmConfigNoise(result.stderr), '');
   });
 
   it('exits 1 with no output when subsystem docs are current', () => {

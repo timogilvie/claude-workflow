@@ -38,6 +38,8 @@ MONITOR_FUNC_FILE="$TEST_TMP/monitor_issue_state.sh"
 extract_function "$MILL_SCRIPT" "ready_stage_allows_merge" > "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_pass_base_sha" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_pass_is_stale" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_remediation_launch_head" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
@@ -82,6 +84,7 @@ run_monitor_case() {
     RESOLVED_PHASE="review"
     REVIEW_STATUS="running"
     READY_STATUS="completed"
+    READY_PASS_STALE="false"
     PR_STATUS="OPEN"
     VALIDATE_MERGED="false"
     RESTORE_SHOULD_FAIL="false"
@@ -104,6 +107,7 @@ run_monitor_case() {
     READY_DIR="$FEATURE_DIR/ready"
     mkdir -p "$READY_DIR"
     printf "{\"title\":\"Monitor ready transition\"}\n" > "/tmp/${SESSION}-${ISSUE}-issue.json"
+    rm -f "/tmp/${SESSION}-${ISSUE}-ready-invalidation-warned"
 
     BRANCH_BY_ISSUE["$ISSUE"]="$BRANCH"
     SLUG_BY_ISSUE["$ISSUE"]="$SLUG"
@@ -116,6 +120,14 @@ run_monitor_case() {
         CURRENT_PHASE="ready"
         READY_STATUS="completed"
         touch "$READY_DIR/.conflict-detected"
+        ;;
+      ready_stale_pass_reruns_on_conflict)
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        READY_PASS_STALE="true"
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"completed","artifacts":{"verdict":"pass","baseSha":"abc123","mergeableState":"CLEAN"}}
+JSON
         ;;
       ready_pending_repolls_ci)
         CURRENT_PHASE="ready"
@@ -261,6 +273,8 @@ JSON
         printf "%s\n" "old-head"
       fi
     }
+    ready_pass_base_sha() { printf "%s\n" "abc123"; }
+    ready_pass_is_stale() { [[ "$READY_PASS_STALE" == "true" ]]; }
     git() {
       if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]; then
         printf "%s\n" "current-head"
@@ -280,12 +294,13 @@ JSON
     done
 
     stage_summary=$(printf "%s" "$WRITE_STAGE_CALLS" | tr "\n" ";")
+    log_summary=$(printf "%s" "$LOG_OUTPUT" | tr "\n" ";")
     bypass_warn_count=$(printf "%s" "$LOG_OUTPUT" | grep -c "was merged before ready checks passed" || true)
     save_task_state_status=""
     if printf "%s" "$SAVE_TASK_STATE_CALLS" | grep -q " merged "; then
       save_task_state_status="merged"
     fi
-    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\nbypass_warn_count=%s\nsave_task_state_status=%s\n" \
+    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\nlogs=%s\nbypass_warn_count=%s\nsave_task_state_status=%s\n" \
       "$CURRENT_PHASE" \
       "$ATTENTION_STATE" \
       "$READY_LAUNCH_COUNT" \
@@ -295,6 +310,7 @@ JSON
       "$stage_summary" \
       "${READY_LAUNCH_ARGS:-}" \
       "$WRITE_READY_ATTENTION_CALLS" \
+      "$log_summary" \
       "$bypass_warn_count" \
       "$save_task_state_status"
   '
@@ -312,6 +328,12 @@ ready_conflict_output="$(run_monitor_case ready_conflict_rerun)"
 check_contains "ready conflict rerun keeps task in ready" "$ready_conflict_output" "phase=ready"
 check_contains "ready conflict rerun launches ready checks again" "$ready_conflict_output" "ready_launches=1"
 check_contains "ready conflict rerun leaves attention on task" "$ready_conflict_output" "attention=needs-user"
+
+ready_stale_pass_reruns_on_conflict_output="$(run_monitor_case ready_stale_pass_reruns_on_conflict)"
+check_contains "stale ready-pass triggers re-run" "$ready_stale_pass_reruns_on_conflict_output" "ready_launches=1"
+check_contains "stale ready logs invalidation" "$ready_stale_pass_reruns_on_conflict_output" "prior pass invalidated"
+check_contains "stale ready stays in ready phase" "$ready_stale_pass_reruns_on_conflict_output" "phase=ready"
+check_contains "stale ready holds slot active" "$ready_stale_pass_reruns_on_conflict_output" "active_count=1"
 
 ready_pending_repolls_ci_output="$(run_monitor_case ready_pending_repolls_ci)"
 check_contains "pending ready re-polls CI" "$ready_pending_repolls_ci_output" "ready_launches=1"

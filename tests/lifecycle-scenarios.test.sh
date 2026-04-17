@@ -106,6 +106,8 @@ for fn in \
   ready_stage_allows_merge \
   ready_stage_warn_bypass_once \
   ready_stage_pending_verdict \
+  ready_pass_base_sha \
+  ready_pass_is_stale \
   ready_remediation_launch_head \
   monitor_issue_state
 do
@@ -332,6 +334,8 @@ JSON
     validate_pr_merge() { [[ "$VALIDATE_MERGED" == "true" ]]; }
     ready_state_dir() { printf "%s\n" "$1/features/$2/ready"; }
     ready_conflict_launch_head() { printf "\n"; }
+    ready_pass_base_sha() { printf "\n"; }
+    ready_pass_is_stale() { [[ "${READY_PASS_STALE:-false}" == "true" ]]; }
     ready_remediation_launch_head() { printf "\n"; }
     write_ready_attention_file() {
       printf -v READY_ATTENTION_CALLS "%s%s|%s\n" "$READY_ATTENTION_CALLS" "$1" "$2"
