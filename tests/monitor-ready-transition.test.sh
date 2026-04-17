@@ -35,7 +35,9 @@ extract_function() {
 }
 
 MONITOR_FUNC_FILE="$TEST_TMP/monitor_issue_state.sh"
-extract_function "$MILL_SCRIPT" "ready_stage_allows_merge" > "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_base_sha" > "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "get_main_head_sha" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_stage_allows_merge" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_remediation_launch_head" >> "$MONITOR_FUNC_FILE"
@@ -98,6 +100,7 @@ run_monitor_case() {
     WRITE_READY_ATTENTION_CALLS=""
     SAVE_TASK_STATE_CALLS=""
     LOG_OUTPUT=""
+    MAIN_SHA_RETURN="current-main-sha"
 
     mkdir -p "$WORKTREE_ROOT/$SLUG/features/$SLUG" "$REPO_DIR"
     FEATURE_DIR="$WORKTREE_ROOT/$SLUG/features/$SLUG"
@@ -192,6 +195,38 @@ JSON
         FOUND_PR="321"
         CURRENT_PHASE="coding"
         ;;
+      ready_stale_main_advanced)
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        MAIN_SHA_RETURN="new-main-sha"
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"completed","artifacts":{"verdict":"pass","readyBaseSha":"old-main-sha"}}
+JSON
+        ;;
+      ready_fresh_base_sha)
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        MAIN_SHA_RETURN="same-sha"
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"completed","artifacts":{"verdict":"pass","readyBaseSha":"same-sha"}}
+JSON
+        ;;
+      ready_empty_base_sha_treated_as_stale)
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        MAIN_SHA_RETURN="current-main-sha"
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"completed","artifacts":{"verdict":"pass"}}
+JSON
+        ;;
+      ready_main_sha_fetch_fails)
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        MAIN_SHA_RETURN=""
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"completed","artifacts":{"verdict":"pass","readyBaseSha":"old-sha"}}
+JSON
+        ;;
       *)
         echo "unknown case: $CASE_NAME" >&2
         exit 1
@@ -268,6 +303,7 @@ JSON
       fi
       return 1
     }
+    get_main_head_sha() { printf "%s\n" "$MAIN_SHA_RETURN"; }
     should_cleanup_closed_pr() { [[ "$CLEANUP_CLOSED_PR" == "true" ]]; }
     get_challenge_sibling_pr() { :; }
     check_challenge_sibling_merged() { return 1; }
@@ -371,6 +407,23 @@ discovered_pr_from_coding_output="$(run_monitor_case discovered_pr_from_coding)"
 check_contains "newly discovered PR moves stale coding phase to ready" "$discovered_pr_from_coding_output" "phase=ready"
 check_contains "newly discovered PR launches ready immediately" "$discovered_pr_from_coding_output" "ready_launches=1"
 check_contains "newly discovered PR does not restore review window first" "$discovered_pr_from_coding_output" "restore_calls=0"
+
+ready_stale_main_advanced_output="$(run_monitor_case ready_stale_main_advanced)"
+check_contains "stale ready (main advanced) re-runs ready checks" "$ready_stale_main_advanced_output" "ready_launches=1"
+check_contains "stale ready (main advanced) clears attention on pass" "$ready_stale_main_advanced_output" "attention=clear"
+check_contains "stale ready (main advanced) holds slot active" "$ready_stale_main_advanced_output" "active_count=1"
+
+ready_fresh_base_sha_output="$(run_monitor_case ready_fresh_base_sha)"
+check_contains "fresh base SHA does not re-run ready" "$ready_fresh_base_sha_output" "ready_launches=0"
+check_contains "fresh base SHA keeps task active" "$ready_fresh_base_sha_output" "active_count=1"
+check_contains "fresh base SHA clears attention" "$ready_fresh_base_sha_output" "attention=clear"
+
+ready_empty_base_sha_output="$(run_monitor_case ready_empty_base_sha_treated_as_stale)"
+check_contains "empty baseSha (legacy record) treated as stale" "$ready_empty_base_sha_output" "ready_launches=1"
+
+ready_main_sha_fetch_fails_output="$(run_monitor_case ready_main_sha_fetch_fails)"
+check_contains "main SHA fetch failure skips re-check" "$ready_main_sha_fetch_fails_output" "ready_launches=0"
+check_contains "main SHA fetch failure keeps task active" "$ready_main_sha_fetch_fails_output" "active_count=1"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
