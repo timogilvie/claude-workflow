@@ -17,6 +17,7 @@ import {
   PREMIUM_MODEL_CLASS,
   SURVIVAL_TRIGGER_STATUS,
 } from './operating-mode.ts';
+import { resetWarningState } from './model-registry.ts';
 
 let tempRoot: string;
 let repoDir: string;
@@ -80,6 +81,7 @@ function writeQuotaState(models: Record<string, QuotaStatus>): void {
 
 describe('operating-mode', () => {
   beforeEach(() => {
+    resetWarningState();
     tempRoot = join(
       tmpdir(),
       `operating-mode-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
