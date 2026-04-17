@@ -2080,6 +2080,7 @@ save_task_state() {
      '(.tasks[$issue].agent // "") as $old_agent |
       (.tasks[$issue].phase // "executing") as $old_phase |
       (.tasks[$issue].evalCompleted // false) as $old_eval |
+      (.tasks[$issue].challengeCompared // false) as $old_challenge_compared |
       (.tasks[$issue].challenge // false) as $old_challenge |
       (.tasks[$issue].challengePairId // "") as $old_challenge_pair |
       (.tasks[$issue].challengeRole // "") as $old_challenge_role |
@@ -2111,6 +2112,7 @@ save_task_state() {
         reviewMode: (if $reviewMode != "" then $reviewMode else $old_reviewMode end),
         phase: $old_phase,
         evalCompleted: $old_eval,
+        challengeCompared: $old_challenge_compared,
         updated: (now | todate)
       }' "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
