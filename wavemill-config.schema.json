@@ -452,6 +452,77 @@
       },
       "additionalProperties": false
     },
+    "modelRegistry": {
+      "type": "object",
+      "description": "Overrides for the canonical model capability registry. Models merge over defaults while ladders replace the default ladder for each task type.",
+      "properties": {
+        "models": {
+          "type": "object",
+          "description": "Map of model IDs to partial capability overrides.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "vendor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "class": {
+                "type": "string",
+                "enum": ["frontier", "strong_generalist", "fast_economy"]
+              },
+              "strengths": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "weaknesses": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "qualityScores": {
+                "type": "object",
+                "properties": {
+                  "routing": { "type": "number", "minimum": 0, "maximum": 100 },
+                  "planning": { "type": "number", "minimum": 0, "maximum": 100 },
+                  "coding": { "type": "number", "minimum": 0, "maximum": 100 },
+                  "review": { "type": "number", "minimum": 0, "maximum": 100 },
+                  "classify": { "type": "number", "minimum": 0, "maximum": 100 }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "ladders": {
+          "type": "object",
+          "description": "Ordered fallback ladders for each task type.",
+          "properties": {
+            "routing": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "planning": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "coding": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "review": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "classify": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "router": {
       "type": "object",
       "description": "Settings for the prompt-to-model router that suggests the best LLM for a task based on historical eval data.",
