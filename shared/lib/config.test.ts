@@ -10,7 +10,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -630,6 +630,12 @@ test('getMaxCostUsd returns undefined when unset', () => {
   } finally {
     cleanUp(tmp);
   }
+});
+
+test('shell defaults define a 25 USD mill budget', () => {
+  const commonLib = join(process.cwd(), 'shared', 'lib', 'wavemill-common.sh');
+  const content = readFileSync(commonLib, 'utf-8');
+  assert.match(content, /"defaultMaxCostUsd": 25(?:\.00)?/);
 });
 
 test('getDashboardConfig returns dashboard section', () => {

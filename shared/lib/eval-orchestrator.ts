@@ -21,7 +21,7 @@ import {
   gatherEvalContext,
   gatherStageArtifacts,
   fetchIssueData,
-  fetchRoutingCompleteRaw,
+  fetchRoutingCompleteRawWithArchive,
   type EvalContext,
 } from './eval-context-gatherer.ts';
 import {
@@ -323,7 +323,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
 
     // Fetch raw routing data
     const routingComplete = slug
-      ? fetchRoutingCompleteRaw(repoDir, slug, worktreePath)
+      ? fetchRoutingCompleteRawWithArchive(repoDir, slug, issueId, worktreePath)
       : null;
     evalConstraints = resolveEvalConstraints(routingComplete, repoDir);
 

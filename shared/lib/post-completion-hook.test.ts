@@ -147,6 +147,45 @@ await test('runPostCompletionEval returns false when no issue or PR is provided'
   assert.equal(persisted, false);
 });
 
+await test('enrichPostCompletionRecord falls back to archived routing-complete data', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-archive-'));
+  const archiveDir = join(repoDir, '.wavemill', 'evals', 'artifacts', 'HOK-1123');
+  mkdirSync(archiveDir, { recursive: true });
+  writeFileSync(
+    join(archiveDir, 'routing-complete.json'),
+    JSON.stringify({
+      planner: 'claude-opus-4-6',
+      coder: 'gpt-5.3-codex',
+      reviewer: 'claude-sonnet-4-5-20250929',
+      maxCostUsd: 6.5,
+    }),
+  );
+
+  try {
+    const record = makeRecord();
+    enrichPostCompletionRecord(record, {
+      repoDir,
+      issueId: 'HOK-1123',
+      branchName: 'task/enrich-task',
+      worktreePath: join(repoDir, 'missing-worktree'),
+      originalPrompt: 'Re-run post-completion eval after cleanup',
+      prDiff: '+++ src/auth.ts',
+      record,
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+      costOutcome: null,
+      interventionRecords: [],
+    });
+
+    assert.equal(record.taskDescriptor?.stages.planner?.model, 'claude-opus-4-6');
+    assert.equal(record.taskDescriptor?.stages.coder?.model, 'gpt-5.3-codex');
+    assert.equal(record.constraints?.maxCostUsd, 6.5);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 
 if (failed > 0) {

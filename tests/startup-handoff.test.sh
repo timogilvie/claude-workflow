@@ -229,7 +229,8 @@ TASK_ONE_JSON="$(jq -n \
       reviewer: "claude-sonnet-4-5-20250929",
       planDepth: "deep",
       codeDepth: "medium",
-      reviewMode: "static"
+      reviewMode: "static",
+      maxCostUsd: 12.5
     },
     challenge: false,
     challengePairId: null,
@@ -315,6 +316,29 @@ if grep -q "respawn-pane -k -t startup-success:control.0" "$MOCK_TMUX_LOG"; then
   pass "startup runner hands control-pane startup off to the monitor"
 else
   fail "startup runner did not launch the monitor in the control pane"
+fi
+
+printf '{"session":"startup-test","started":"2026-04-12T00:00:00Z","tasks":{}}\n' > "$STATE_FILE"
+: > "$MOCK_TMUX_LOG"
+INTERACTIVE_PLAN="$TMP_ROOT/interactive-plan.json"
+INTERACTIVE_MONITOR_ENV="$TMP_ROOT/interactive-monitor.env"
+INTERACTIVE_MONITOR_SCRIPT="$TMP_ROOT/interactive-monitor.sh"
+INTERACTIVE_STATUS_LOG="$TMP_ROOT/interactive-status.log"
+INTERACTIVE_LAUNCHED="$TMP_ROOT/interactive-launched.txt"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$INTERACTIVE_MONITOR_SCRIPT"
+chmod +x "$INTERACTIVE_MONITOR_SCRIPT"
+write_plan "$INTERACTIVE_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-interactive" "$INTERACTIVE_MONITOR_ENV" "$INTERACTIVE_MONITOR_SCRIPT" "$INTERACTIVE_STATUS_LOG" "$INTERACTIVE_LAUNCHED" "[$TASK_ONE_JSON]"
+jq '.planningMode = "interactive"' "$INTERACTIVE_PLAN" > "$INTERACTIVE_PLAN.tmp"
+mv "$INTERACTIVE_PLAN.tmp" "$INTERACTIVE_PLAN"
+
+INTERACTIVE_OUTPUT="$TMP_ROOT/interactive-output.txt"
+bash "$RUNNER_SCRIPT" "$INTERACTIVE_PLAN" > "$INTERACTIVE_OUTPUT" 2>&1
+
+INTERACTIVE_ROUTING_FILE="$TEST_REPO/worktrees/alpha-task/features/alpha-task/.routing-complete"
+if jq -e '.maxCostUsd == 12.5' "$INTERACTIVE_ROUTING_FILE" >/dev/null 2>&1; then
+  pass "startup runner preserves route.maxCostUsd in interactive .routing-complete"
+else
+  fail "startup runner did not persist route.maxCostUsd in interactive .routing-complete"
 fi
 
 printf '{"session":"startup-test","started":"2026-04-12T00:00:00Z","tasks":{"HOK-1999":{"slug":"resumed-task","branch":"task/resumed-task","phase":"executing"}}}\n' > "$STATE_FILE"

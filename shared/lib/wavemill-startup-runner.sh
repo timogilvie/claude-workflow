@@ -255,7 +255,7 @@ should_update_linear_for_task() {
 launch_task_from_plan() {
   local task_json="$1" ordinal="$2" total="$3"
   local issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file
-  local planner_model coder_model reviewer_model plan_depth code_depth review_mode
+  local planner_model coder_model reviewer_model plan_depth code_depth review_mode route_max_cost_usd
   local challenge challenge_pair challenge_role challenge_model task_agent win
   local packet_content issue_json issue_description issue_context details_context labels_json
   local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false
@@ -275,6 +275,7 @@ launch_task_from_plan() {
   plan_depth="$(echo "$task_json" | jq -r '.route.planDepth // "light"')"
   code_depth="$(echo "$task_json" | jq -r '.route.codeDepth // "medium"')"
   review_mode="$(echo "$task_json" | jq -r '.route.reviewMode // "static"')"
+  route_max_cost_usd="$(echo "$task_json" | jq -r '.route.maxCostUsd // empty')"
   challenge="$(echo "$task_json" | jq -r '.challenge // false')"
   challenge_pair="$(echo "$task_json" | jq -r '.challengePairId // empty')"
   challenge_role="$(echo "$task_json" | jq -r '.challengeRole // empty')"
@@ -395,6 +396,7 @@ $details_context"
       --arg planDepth "$plan_depth" \
       --arg codeDepth "$code_depth" \
       --arg reviewMode "$review_mode" \
+      --argjson maxCostUsd "${route_max_cost_usd:-null}" \
       '{
         planner: $planner,
         coder: $coder,
@@ -402,7 +404,7 @@ $details_context"
         planDepth: $planDepth,
         codeDepth: $codeDepth,
         reviewMode: $reviewMode
-      }' > "$feature_dir/.routing-complete"
+      } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$feature_dir/.routing-complete"
     cp "$feature_dir/.routing-complete" "$feature_dir/.initial-route.json"
 
     jq -n \

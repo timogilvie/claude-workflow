@@ -22,7 +22,7 @@ import { formatLintResults, lintSubsystemSpecs } from './context-linter.ts';
 import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
-import { fetchRoutingCompleteRaw } from './eval-context-gatherer.ts';
+import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
 import { attachStageOutcomes, enrichEvalRecord } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
@@ -76,7 +76,7 @@ export function buildTaskDescriptorForPostCompletion(
 
   const slug = input.branchName?.replace(/^(task|bug)\//, '') || input.issueId?.toLowerCase() || '';
   const routingComplete = slug
-    ? fetchRoutingCompleteRaw(input.repoDir, slug, input.worktreePath)
+    ? fetchRoutingCompleteRawWithArchive(input.repoDir, slug, input.issueId || '', input.worktreePath)
     : null;
   const workflowCost = input.costOutcome?.status === 'success'
     ? input.costOutcome.totalCostUsd
@@ -134,7 +134,7 @@ export function enrichPostCompletionRecord(
       : (() => {
           const slug = input.branchName?.replace(/^(task|bug)\//, '') || input.issueId?.toLowerCase() || '';
           const routingComplete = slug
-            ? fetchRoutingCompleteRaw(input.repoDir, slug, input.worktreePath)
+            ? fetchRoutingCompleteRawWithArchive(input.repoDir, slug, input.issueId || '', input.worktreePath)
             : null;
           const maxCostUsd = routingComplete?.maxCostUsd ?? getMaxCostUsd(input.repoDir);
           return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
