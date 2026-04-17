@@ -41,6 +41,8 @@ epics/*/
 
 # Wavemill runtime state (per-repo, not committed)
 .wavemill/workflow-state.json
+.wavemill/quota-state.json
+.wavemill/quota-state.lock
 .wavemill/project-context.md
 .wavemill/evals/
 .wavemill/context/
