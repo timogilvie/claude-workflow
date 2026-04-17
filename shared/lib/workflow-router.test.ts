@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from './config.ts';
-import { readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute } from './workflow-router.ts';
+import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute } from './workflow-router.ts';
 
 let passed = 0;
 let failed = 0;
@@ -372,6 +372,20 @@ await test('summarizeWorkflowRoute includes difficulty when present in signals',
   } finally {
     cleanup();
   }
+});
+
+await test('applyDifficultyFloor upgrades haiku to opus for critical difficulty (not sonnet)', () => {
+  const pool = ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'];
+  const criticalFloor = { allowHaiku: false, preferSonnet: false, preferOpus: true };
+  const result = applyDifficultyFloor('claude-haiku-4-5-20251001', criticalFloor, pool, 'coder');
+  assert.ok(
+    result.toLowerCase().includes('opus'),
+    `Expected opus upgrade for critical+haiku, got ${result}`,
+  );
+  assert.ok(
+    !result.toLowerCase().includes('sonnet'),
+    `Critical floor should prefer opus over sonnet, got ${result}`,
+  );
 });
 
 await test('routeWorkflow without difficulty options has no taskDifficulty in signals', () => {

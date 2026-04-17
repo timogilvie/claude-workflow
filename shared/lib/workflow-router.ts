@@ -353,27 +353,27 @@ export function applyDifficultyFloor(
   const isSonnetOrBelow = isHaiku || model.toLowerCase().includes('sonnet');
 
   if (!floor.allowHaiku && isHaiku) {
-    // Upgrade haiku to sonnet
+    // When opus is preferred (e.g. critical), try opus before sonnet
+    if (floor.preferOpus) {
+      const opus = pickAvailableModel(
+        pool,
+        ['claude-opus-4-7', 'claude-opus-4-6'],
+        model,
+      );
+      if (!opus.toLowerCase().includes('haiku')) {
+        console.warn(
+          `[workflow-router] Haiku rejected for ${role} (difficulty floor). Upgraded to ${opus}.`,
+        );
+        return opus;
+      }
+    }
+
+    // Fall back to sonnet upgrade
     const upgraded = pickAvailableModel(
       pool,
       ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
       model,
     );
-
-    // If sonnet not available and opus is preferred, try opus
-    const stillHaiku = upgraded.toLowerCase().includes('haiku');
-    if (stillHaiku && floor.preferOpus) {
-      const opusUpgraded = pickAvailableModel(
-        pool,
-        ['claude-opus-4-7', 'claude-opus-4-6'],
-        model,
-      );
-      console.warn(
-        `[workflow-router] Haiku rejected for ${role} (difficulty floor). Upgraded to ${opusUpgraded}.`,
-      );
-      return opusUpgraded;
-    }
-
     console.warn(
       `[workflow-router] Haiku rejected for ${role} (difficulty floor). Upgraded to ${upgraded}.`,
     );
