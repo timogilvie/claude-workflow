@@ -29,6 +29,7 @@ import {
   getDashboardConfig,
   getHokusaiSubmissionConfig,
   getReadyConfig,
+  getModelRegistryConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -138,6 +139,16 @@ test('valid config passes validation', () => {
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-opus-4-7': {
+            qualityScores: { coding: 99 },
+          },
+        },
+        ladders: {
+          review: ['claude-opus-4-7', 'claude-sonnet-4-6'],
+        },
+      },
       router: {
         enabled: true,
         defaultModel: 'claude-sonnet-4-5-20250929',
@@ -157,10 +168,38 @@ test('valid config passes validation', () => {
     assert.equal(config.challenge?.enabled, true);
     assert.equal(config.challenge?.rate, 0.25);
     assert.equal(config.challengeScheduler?.confidenceThreshold, 0.65);
+    assert.equal(config.modelRegistry?.models?.['claude-opus-4-7']?.qualityScores?.coding, 99);
+    assert.deepEqual(config.modelRegistry?.ladders?.review, ['claude-opus-4-7', 'claude-sonnet-4-6']);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
     assert.equal(config.mill?.maxParallel, 5);
     assert.deepEqual(config.router?.availableModels?.planner, ['claude-sonnet-4-5-20250929']);
     assert.deepEqual(config.router?.availableModels?.coder, ['gpt-5.4']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid model registry shape throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        ladders: {
+          coding: 'claude-sonnet-4-6',
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
   } finally {
     cleanUp(tmp);
   }
@@ -271,6 +310,38 @@ test('unknown fields are allowed (schema additionalProperties: false)', () => {
         loadWavemillConfig(tmp);
       });
     }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getModelRegistryConfig returns configured overrides', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-haiku-4-5-20251001': {
+            strengths: ['speed', 'triage'],
+          },
+        },
+        ladders: {
+          classify: ['claude-haiku-4-5-20251001'],
+        },
+      },
+    }));
+
+    assert.deepEqual(getModelRegistryConfig(tmp), {
+      models: {
+        'claude-haiku-4-5-20251001': {
+          strengths: ['speed', 'triage'],
+        },
+      },
+      ladders: {
+        classify: ['claude-haiku-4-5-20251001'],
+      },
+    });
   } finally {
     cleanUp(tmp);
   }
