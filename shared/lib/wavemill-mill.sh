@@ -5676,6 +5676,21 @@ monitor_issue_state() {
     ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
     launch_head=$(ready_remediation_launch_head "$ready_state_dir_path")
     current_head=$(git -C "${WORKTREE_ROOT}/${SLUG}" rev-parse HEAD 2>/dev/null || echo "")
+
+    # Ready stage finished — run challenge eval/comparison before dropping out.
+    # Without this, challenge tasks sit in phase=ready forever (resolve_phase
+    # keeps them there until merge), and the eval call at the bottom of this
+    # function is unreachable.
+    if [[ "$ready_status" == "completed" ]]; then
+      if is_challenge_task "$ISSUE"; then
+        maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
+        maybe_run_challenge_comparison "$ISSUE"
+      fi
+      set_window_attention_state "$WIN" "clear"
+      active_count=$((active_count + 1))
+      return 0
+    fi
+
     if [[ "$ready_status" == "running" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
@@ -5683,7 +5698,11 @@ monitor_issue_state() {
     fi
 
     ready_verdict=$(ready_stage_pending_verdict "$ready_state_dir_path")
-    if [[ "$ready_status" == "running" && "$ready_verdict" == "pending" ]]; then
+    # Re-run ready checks when CI is still computing (verdict=pending) OR when
+    # a remediation agent has pushed new commits past the launch head — without
+    # the second case, a successful remediation leaves status=running/verdict=fail
+    # and the controller never re-evaluates CI.
+    if [[ "$ready_status" == "running" ]] && { [[ "$ready_verdict" == "pending" ]] || [[ -n "$launch_head" && "$launch_head" != "$current_head" ]]; }; then
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
       if [[ -z "$title" ]]; then
         issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
