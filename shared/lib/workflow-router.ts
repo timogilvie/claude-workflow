@@ -9,9 +9,10 @@
 
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
-import { getChallengeSchedulerConfig, getHokusaiRouterConfig } from './config.ts';
+import { getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig } from './config.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
+import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
 
@@ -38,6 +39,7 @@ export interface WorkflowRouteDecision {
     complexityScore: number;
     fileTypes: string[];
     riskScore: number;
+    taskDifficulty?: RoutingDifficulty;
   };
   challengeRecommendation?: ChallengeRecommendation;
   constraints?: {
@@ -49,6 +51,11 @@ export interface RouteWorkflowOptions {
   repoDir?: string;
   modelsAvailable?: string[];
   maxCostUsd?: number;
+  taskDifficulty?: RoutingDifficulty;
+  taskTitle?: string;
+  taskDescription?: string;
+  packetContent?: string;
+  skipDifficultyClassification?: boolean;
 }
 
 function withSignals(decision: WorkflowRouteDecision, prompt: string): WorkflowRouteDecision {
@@ -330,6 +337,106 @@ function downgradeModelsForBudget(params: {
   return null;
 }
 
+/**
+ * Enforce a difficulty floor on a selected model.
+ *
+ * If the floor disallows haiku, upgrades to sonnet or opus from the pool.
+ * If the floor prefers opus, upgrades when opus is available.
+ */
+export function applyDifficultyFloor(
+  model: string,
+  floor: DifficultyFloor,
+  pool: string[],
+  role: 'planner' | 'coder' | 'reviewer',
+): string {
+  const isHaiku = model.toLowerCase().includes('haiku');
+  const isSonnetOrBelow = isHaiku || model.toLowerCase().includes('sonnet');
+
+  if (!floor.allowHaiku && isHaiku) {
+    // When opus is preferred (e.g. critical), try opus before sonnet
+    if (floor.preferOpus) {
+      const opus = pickAvailableModel(
+        pool,
+        ['claude-opus-4-7', 'claude-opus-4-6'],
+        model,
+      );
+      if (!opus.toLowerCase().includes('haiku')) {
+        console.warn(
+          `[workflow-router] Haiku rejected for ${role} (difficulty floor). Upgraded to ${opus}.`,
+        );
+        return opus;
+      }
+    }
+
+    // Fall back to sonnet upgrade
+    const upgraded = pickAvailableModel(
+      pool,
+      ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
+      model,
+    );
+    console.warn(
+      `[workflow-router] Haiku rejected for ${role} (difficulty floor). Upgraded to ${upgraded}.`,
+    );
+    return upgraded;
+  }
+
+  if (floor.preferOpus && isSonnetOrBelow) {
+    const opus = pickAvailableModel(
+      pool,
+      ['claude-opus-4-7', 'claude-opus-4-6'],
+      model,
+    );
+    // Only upgrade if opus is actually in the pool
+    if (!opus.toLowerCase().includes('haiku') && !opus.toLowerCase().includes('sonnet')) {
+      return opus;
+    }
+  }
+
+  return model;
+}
+
+/**
+ * Resolve task difficulty for routing, using pre-classified, auto-classified, or skipped value.
+ */
+function resolveTaskDifficulty(options: RouteWorkflowOptions, repoDir?: string): RoutingDifficulty | undefined {
+  if (options.taskDifficulty) {
+    return options.taskDifficulty;
+  }
+
+  if (options.skipDifficultyClassification) {
+    return undefined;
+  }
+
+  const hasClassificationInput =
+    options.taskTitle || options.taskDescription || options.packetContent;
+
+  if (!hasClassificationInput) {
+    return undefined;
+  }
+
+  const difficultyConfig = getDifficultyClassifierConfig(repoDir);
+
+  if (difficultyConfig.enabled === false) {
+    return undefined;
+  }
+
+  try {
+    const result = classifyTaskDifficulty({
+      title: options.taskTitle,
+      description: options.taskDescription,
+      packetContent: options.packetContent,
+      repoDir,
+      model: difficultyConfig.classifierModel,
+      skipLlm: difficultyConfig.skipLlm,
+      cacheTtlDays: difficultyConfig.cacheTtlDays,
+    });
+    return result.difficulty;
+  } catch {
+    console.warn('[workflow-router] Difficulty classification failed, routing without floor');
+    return undefined;
+  }
+}
+
 export function readTaskPromptFromFile(filePath: string): string {
   const content = readFileSync(filePath, 'utf-8');
   if (filePath.endsWith('.json')) {
@@ -372,10 +479,29 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       ? pickAvailableModel(pool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', planner], planner)
       : pickAvailableModel(pool, ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', planner], planner);
 
-  // Enforce budget constraint if provided
+  // Enforce difficulty floor
+  const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
   let finalPlanner = planner;
   let finalCoder = coder;
   let finalReviewer = reviewer;
+  let difficultyFloorApplied = false;
+
+  if (taskDifficulty) {
+    const floor = getAllowedModelFloor(taskDifficulty);
+    const newPlanner = applyDifficultyFloor(planner, floor, pool, 'planner');
+    const newCoder = applyDifficultyFloor(coder, floor, pool, 'coder');
+    const newReviewer = applyDifficultyFloor(reviewer, floor, pool, 'reviewer');
+
+    if (newPlanner !== planner || newCoder !== coder || newReviewer !== reviewer) {
+      difficultyFloorApplied = true;
+    }
+
+    finalPlanner = newPlanner;
+    finalCoder = newCoder;
+    finalReviewer = newReviewer;
+  }
+
+  // Enforce budget constraint if provided
   let budgetAdjustmentApplied = false;
 
   if (typeof options?.maxCostUsd === 'number') {
@@ -433,6 +559,16 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     `Review mode ${reviewRecommended} chosen to match expected change risk.`,
   ];
 
+  if (taskDifficulty) {
+    const floor = getAllowedModelFloor(taskDifficulty);
+    const floorSummary = floor.preferOpus
+      ? 'opus preferred, never haiku alone'
+      : floor.allowHaiku
+        ? `sonnet preferred${floor.preferSonnet ? ', haiku allowed' : ''}`
+        : 'sonnet floor, haiku rejected';
+    reasoning.push(`Task classified as ${taskDifficulty} — model floor applied: ${floorSummary}.`);
+  }
+
   if (budgetAdjustmentApplied) {
     reasoning.push(`Models downgraded to fit within $${options!.maxCostUsd} budget constraint.`);
   }
@@ -458,6 +594,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       complexityScore: characteristics.complexityScore,
       fileTypes: characteristics.fileTypes,
       riskScore,
+      ...(taskDifficulty ? { taskDifficulty } : {}),
     },
     constraints: options?.maxCostUsd === undefined
       ? undefined
@@ -473,6 +610,9 @@ export function routeWorkflowStageAware(
   const characteristics = analyzePrompt(prompt);
   const riskScore = computeRiskScore(prompt, characteristics);
 
+  // Resolve difficulty before stage-aware routing so floor can be applied
+  const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
+
   let stageAwareDecision;
   try {
     stageAwareDecision = routeStageAware(prompt, {
@@ -484,6 +624,15 @@ export function routeWorkflowStageAware(
     console.warn('[workflow-router] Stage-aware routing failed, falling back to heuristic:', error);
     stageAwareDecision = null;
   }
+
+  const baseSignals = {
+    taskType: characteristics.taskType,
+    promptLength: characteristics.length,
+    complexityScore: characteristics.complexityScore,
+    fileTypes: characteristics.fileTypes,
+    riskScore,
+    ...(taskDifficulty ? { taskDifficulty } : {}),
+  } as const;
 
   let decision: StageAwareDecision;
   if (!stageAwareDecision) {
@@ -502,31 +651,47 @@ export function routeWorkflowStageAware(
     // Neighbors lacked model diversity — use neighbor-calibrated stage depths
     // and cost estimates, but overlay heuristic model selection.
     const fallback = routeWorkflow(prompt, options);
+
+    // Apply difficulty floors to stage-aware partial models
+    let finalPlanner = fallback.planner;
+    let finalCoder = fallback.coder;
+    let finalReviewer = fallback.reviewer;
+    if (taskDifficulty) {
+      const floor = getAllowedModelFloor(taskDifficulty);
+      const pool = getModelPool(repoDir);
+      finalPlanner = applyDifficultyFloor(fallback.planner, floor, pool, 'planner');
+      finalCoder = applyDifficultyFloor(fallback.coder, floor, pool, 'coder');
+      finalReviewer = applyDifficultyFloor(fallback.reviewer, floor, pool, 'reviewer');
+    }
+
     decision = {
       ...stageAwareDecision,
-      planner: fallback.planner,
-      coder: fallback.coder,
-      reviewer: fallback.reviewer,
+      planner: finalPlanner,
+      coder: finalCoder,
+      reviewer: finalReviewer,
       confidence: normalizeDecisionConfidence(stageAwareDecision.confidence),
-      signals: {
-        taskType: characteristics.taskType,
-        promptLength: characteristics.length,
-        complexityScore: characteristics.complexityScore,
-        fileTypes: characteristics.fileTypes,
-        riskScore,
-      },
+      signals: baseSignals,
     };
   } else {
+    // Apply difficulty floors to fully stage-aware models
+    let saPlanner = stageAwareDecision.planner;
+    let saCoder = stageAwareDecision.coder;
+    let saReviewer = stageAwareDecision.reviewer;
+    if (taskDifficulty) {
+      const floor = getAllowedModelFloor(taskDifficulty);
+      const pool = getModelPool(repoDir);
+      saPlanner = applyDifficultyFloor(stageAwareDecision.planner, floor, pool, 'planner');
+      saCoder = applyDifficultyFloor(stageAwareDecision.coder, floor, pool, 'coder');
+      saReviewer = applyDifficultyFloor(stageAwareDecision.reviewer, floor, pool, 'reviewer');
+    }
+
     decision = {
       ...stageAwareDecision,
+      planner: saPlanner,
+      coder: saCoder,
+      reviewer: saReviewer,
       confidence: normalizeDecisionConfidence(stageAwareDecision.confidence),
-      signals: {
-        taskType: characteristics.taskType,
-        promptLength: characteristics.length,
-        complexityScore: characteristics.complexityScore,
-        fileTypes: characteristics.fileTypes,
-        riskScore,
-      },
+      signals: baseSignals,
     };
   }
 
@@ -575,11 +740,15 @@ export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?
   const coderAgent = resolveAgent(decision.coder, agentMap, defaultAgent);
   const reviewerAgent = resolveAgent(decision.reviewer, agentMap, defaultAgent);
 
+  const difficultySuffix = decision.signals.taskDifficulty
+    ? `  difficulty=${decision.signals.taskDifficulty}`
+    : '';
+
   const lines = [
     `Planner:  ${decision.planner} (${plannerAgent})  depth=${decision.planDepth}  cost=$${decision.expectedCostPlan.toFixed(2)}`,
     `Coder:    ${decision.coder} (${coderAgent})  depth=${decision.codeDepth}  cost=$${decision.expectedCostCode.toFixed(2)}`,
     `Reviewer: ${decision.reviewer} (${reviewerAgent})  mode=${decision.reviewRecommended}  cost=$${decision.expectedCostReview.toFixed(2)}`,
-    `Success:  ${(decision.expectedSuccess * 100).toFixed(0)}%  confidence=${decision.confidence.toFixed(2)}  task=${decision.signals.taskType}  risk=${decision.signals.riskScore}`,
+    `Success:  ${(decision.expectedSuccess * 100).toFixed(0)}%  confidence=${decision.confidence.toFixed(2)}  task=${decision.signals.taskType}  risk=${decision.signals.riskScore}${difficultySuffix}`,
     `Signals:  ${decision.reasoning[0]} ${decision.reasoning[1]}`,
   ];
 

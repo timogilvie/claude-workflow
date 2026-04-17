@@ -647,6 +647,34 @@
           },
           "required": ["endpoint"],
           "additionalProperties": false
+        },
+        "difficulty": {
+          "type": "object",
+          "description": "Settings for the task difficulty classifier that enforces model quality floors before routing.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable difficulty-based model floor enforcement."
+            },
+            "classifierModel": {
+              "type": "string",
+              "default": "claude-haiku-4-5-20251001",
+              "description": "Model used for LLM-based task classification (defaults to cheapest available)."
+            },
+            "cacheTtlDays": {
+              "type": "integer",
+              "default": 7,
+              "minimum": 1,
+              "description": "Number of days to cache difficulty classification results."
+            },
+            "skipLlm": {
+              "type": "boolean",
+              "default": false,
+              "description": "Use heuristic classification only (skip LLM call). Useful for offline or cost-sensitive environments."
+            }
+          },
+          "additionalProperties": false
         }
       }
     },
