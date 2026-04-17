@@ -19,6 +19,8 @@
  * - **1.4.0**: Added `taskDescriptor` field (HOK-1120) to capture generalizable
  *   task features for router training, including heuristic signals, learned
  *   signals, constraints, per-stage model assignments, and outcomes
+ * - **1.5.0**: `timeSeconds` now records actual wall-clock duration computed
+ *   from task-branch git history instead of always remaining `0` (HOK-1329)
  *
  * @module eval-schema
  */

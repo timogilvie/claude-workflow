@@ -8,6 +8,7 @@ import * as os from 'node:os';
 import * as nodePath from 'node:path';
 import * as shellUtils from './shell-utils.ts';
 import {
+  computeWallClockSeconds,
   fetchIssueData,
   formatIssueAsPrompt,
   fetchPrContext,
@@ -232,6 +233,58 @@ describe('eval-context-gatherer', () => {
       expect(result.prDiff).toBe('(PR diff unavailable)');
       expect(result.prUrl).toBe('');
       expect(result.issueData).toBeNull();
+    });
+  });
+
+  describe('computeWallClockSeconds', () => {
+    it('should return null when git log is empty', () => {
+      vi.mocked(shellUtils.execShellCommand).mockReturnValue('');
+
+      const result = computeWallClockSeconds('/repo', 'task/test');
+
+      expect(result).toBeNull();
+      expect(shellUtils.execShellCommand).toHaveBeenCalledWith(
+        expect.stringContaining("git log 'main'..'task/test' --format=\"%ct\" --reverse"),
+        expect.objectContaining({ cwd: '/repo' })
+      );
+    });
+
+    it('should return null for a single commit timestamp', () => {
+      vi.mocked(shellUtils.execShellCommand).mockReturnValue('1710000000');
+
+      const result = computeWallClockSeconds('/repo', 'task/test');
+
+      expect(result).toBeNull();
+    });
+
+    it('should return the elapsed seconds for multiple commits', () => {
+      vi.mocked(shellUtils.execShellCommand).mockReturnValue(
+        '1710000000\n1710000015\n1710000120'
+      );
+
+      const result = computeWallClockSeconds('/repo', 'task/test');
+
+      expect(result).toBe(120);
+    });
+
+    it('should ignore malformed timestamps when valid endpoints remain', () => {
+      vi.mocked(shellUtils.execShellCommand).mockReturnValue(
+        '1710000000\nnot-a-number\n1710000060\n0'
+      );
+
+      const result = computeWallClockSeconds('/repo', 'task/test');
+
+      expect(result).toBe(60);
+    });
+
+    it('should return null on git errors', () => {
+      vi.mocked(shellUtils.execShellCommand).mockImplementation(() => {
+        throw new Error('git failed');
+      });
+
+      const result = computeWallClockSeconds('/repo', 'missing-branch');
+
+      expect(result).toBeNull();
     });
   });
 
