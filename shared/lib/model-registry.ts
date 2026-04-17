@@ -227,6 +227,12 @@ const DEFAULT_TASK_PROFILES: Record<ModelTaskProfile, TaskProfileConfig> = {
 };
 
 // ────────────────────────────────────────────────────────────────
+// Module-level deduplication state
+// ────────────────────────────────────────────────────────────────
+
+const _unknownLadderModelWarnings = new Set<string>();
+
+// ────────────────────────────────────────────────────────────────
 // Cache
 // ────────────────────────────────────────────────────────────────
 
@@ -511,15 +517,15 @@ export function getRankedLadder(
     return a.modelId.localeCompare(b.modelId);
   });
 
-  // Warn once about unknown models in ladder config
-  const seenWarnings = new Set<string>();
+  // Warn once per process about unknown models in ladder config
   for (const modelId of defaultLadder) {
-    if (!registry.models.has(modelId) && !seenWarnings.has(modelId)) {
+    const warnKey = `${profile}:${modelId}`;
+    if (!registry.models.has(modelId) && !_unknownLadderModelWarnings.has(warnKey)) {
       console.warn(
         `Model "${modelId}" specified in default ladder for profile "${profile}" ` +
         `is unknown (not in seed or config models).`
       );
-      seenWarnings.add(modelId);
+      _unknownLadderModelWarnings.add(warnKey);
     }
   }
 
