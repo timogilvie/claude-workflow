@@ -18,6 +18,7 @@ import { errorMessage } from './error-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import {
   autoDetectContext,
+  computeWallClockSeconds,
   gatherEvalContext,
   gatherStageArtifacts,
   fetchIssueData,
@@ -188,6 +189,10 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     }
   }
 
+  const wallClockSeconds = branch
+    ? computeWallClockSeconds(repoDir, branch) ?? 0
+    : 0;
+
   const runInterventionAnalysis = () =>
     Promise.resolve().then(() => {
       const interventionSummary = detectAllInterventions({
@@ -300,6 +305,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       interventionText,
       issueId: issueId || undefined,
       prUrl: prUrl || undefined,
+      timeSeconds: wallClockSeconds,
       routingDecision: effectiveRoutingDecision,
       taskPacket: stageArtifacts.taskPacket,
       planContent: stageArtifacts.planContent,

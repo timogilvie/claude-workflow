@@ -116,6 +116,51 @@ export function fetchPrContext(prNumber: string, repoDir: string): { diff: strin
   return { diff, url };
 }
 
+/**
+ * Compute wall-clock time in seconds for a task branch.
+ *
+ * Uses commit timestamps from the branch's history relative to the base branch.
+ * Returns null when duration cannot be determined reliably, including branches
+ * with fewer than two commits or when git history cannot be read.
+ *
+ * @param repoDir - Repository directory
+ * @param branch - Branch to inspect
+ * @param baseBranch - Base branch used to define branch-local commits
+ * @returns Duration in seconds, or null when indeterminate
+ */
+export function computeWallClockSeconds(
+  repoDir: string,
+  branch: string,
+  baseBranch = 'main',
+): number | null {
+  try {
+    const raw = execShellCommand(
+      `git log ${escapeShellArg(baseBranch)}..${escapeShellArg(branch)} --format="%ct" --reverse`,
+      { encoding: 'utf-8', cwd: repoDir }
+    ).trim();
+
+    if (!raw) {
+      return null;
+    }
+
+    const timestamps = raw
+      .split('\n')
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isFinite(value) && value > 0);
+
+    if (timestamps.length < 2) {
+      return null;
+    }
+
+    const firstTimestamp = timestamps[0];
+    const lastTimestamp = timestamps[timestamps.length - 1];
+
+    return Math.max(0, lastTimestamp - firstTimestamp);
+  } catch {
+    return null;
+  }
+}
+
 // ────────────────────────────────────────────────────────────────
 // Orchestrator
 // ────────────────────────────────────────────────────────────────
