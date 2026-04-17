@@ -73,6 +73,8 @@ export interface ReadyArtifacts {
   remediationAttempts?: number;
   remediationLaunchHead?: string;
   remediationFailures?: string[];
+  /** Main branch HEAD SHA at the time readiness passed; used to detect staleness. */
+  readyBaseSha?: string;
 }
 
 /** Discriminated union of all stage artifact types. */

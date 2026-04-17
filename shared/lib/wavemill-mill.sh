@@ -3105,6 +3105,18 @@ ready_state_dir() {
   echo "$wt_dir/features/$slug"
 }
 
+ready_base_sha() {
+  local state_dir="$1"
+  local result_file="$state_dir/.ready-result.json"
+  [[ -f "$result_file" ]] || { echo ""; return 0; }
+  jq -r '.artifacts.readyBaseSha // empty' "$result_file" 2>/dev/null || echo ""
+}
+
+get_main_head_sha() {
+  local wt_dir="$1" base_branch="$2"
+  git -C "$wt_dir" ls-remote origin "refs/heads/${base_branch}" 2>/dev/null | awk '{print $1}' || echo ""
+}
+
 ready_stage_allows_merge() {
   local state_dir="$1"
   local result_file="$state_dir/.ready-result.json"
@@ -3232,9 +3244,11 @@ launch_ready_phase() {
 
   if [[ "$ready_rc" -eq 0 ]]; then
     # Record ready stage result (HOK-1177)
+    local main_sha
+    main_sha=$(get_main_head_sha "$wt_dir" "$base_branch")
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
-      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\"}"
+      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"readyBaseSha\":\"${main_sha}\"}"
     log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
     return 0
   fi
@@ -5695,6 +5709,46 @@ monitor_issue_state() {
         maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
         maybe_run_challenge_comparison "$ISSUE"
       fi
+
+      # Re-run ready if main has advanced since the pass was recorded (HOK-1359)
+      local stored_base_sha current_main_sha
+      stored_base_sha=$(ready_base_sha "$ready_state_dir_path")
+      current_main_sha=$(get_main_head_sha "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH")
+
+      if [[ -n "$current_main_sha" && "$stored_base_sha" != "$current_main_sha" ]]; then
+        log "status" "⚠ $ISSUE → Ready result stale (main advanced); re-running ready checks for PR #$PR"
+        title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+        if [[ -z "$title" ]]; then
+          issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+          title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+        fi
+        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+          launch_rc=0
+        else
+          launch_rc=$?
+        fi
+        if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+          log "status" "⛔ $ISSUE → Workflow aborted during stale-ready re-check"
+          set_task_phase "$ISSUE" "aborted"
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+        fi
+        if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+          set_window_attention_state "$WIN" "clear"
+          active_count=$((active_count + 1))
+          return 0
+        fi
+        if [[ "$launch_rc" -ne 0 ]]; then
+          log "status" "⚠ $ISSUE → Ready re-check failed after main advanced (PR #$PR)"
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+        fi
+        log "status" "✓ $ISSUE → Ready re-check passed after main advanced (PR #$PR)"
+        set_window_attention_state "$WIN" "clear"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0
