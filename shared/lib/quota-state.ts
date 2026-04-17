@@ -226,6 +226,8 @@ function saveFile(state: QuotaStateFile, repoDir?: string): void {
 }
 
 function sleepMs(ms: number): void {
+  // Note: Atomics.wait blocks the event loop, so this is only suitable for
+  // short-lived lock-acquisition spin-waits. Not suitable for browsers or worker contexts.
   const buffer = new SharedArrayBuffer(4);
   const view = new Int32Array(buffer);
   Atomics.wait(view, 0, 0, ms);

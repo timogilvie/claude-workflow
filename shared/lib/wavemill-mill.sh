@@ -5688,6 +5688,9 @@ monitor_issue_state() {
     # Without this, challenge tasks sit in phase=ready forever (resolve_phase
     # keeps them there until merge), and the eval call at the bottom of this
     # function is unreachable.
+    # Note: Both functions are idempotent (check completion flags and return early
+    # if already done), so repeated calls on subsequent monitor_issue_state iterations
+    # are safe no-ops.
     if [[ "$ready_status" == "completed" ]]; then
       if is_challenge_task "$ISSUE"; then
         maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"

@@ -11,6 +11,7 @@ import {
   getModel,
   mergeModelRegistry,
   rankCandidates,
+  __resetModelRegistryTestState,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
 
@@ -276,6 +277,7 @@ describe('model-registry', () => {
   });
 
   it('filters unknown ladder IDs while warning once', () => {
+    __resetModelRegistryTestState();
     const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
       ladders: {
         review: ['claude-opus-4-7', 'missing-model', 'claude-sonnet-4-6'],
