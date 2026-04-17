@@ -21,7 +21,7 @@ _WAVEMILL_DEFAULTS='{
     "maxRetries": 3,
     "retryDelay": 2,
     "setupCommand": "",
-    "defaultMaxCostUsd": null
+    "defaultMaxCostUsd": 25.00
   },
   "expand": {
     "maxSelect": 3,

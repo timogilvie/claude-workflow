@@ -14,6 +14,7 @@ import {
   gatherEvalContext,
   convertToRoutingDecision,
   fetchRoutingDecision,
+  fetchRoutingCompleteRawWithArchive,
 } from './eval-context-gatherer.ts';
 
 // Mock shell-utils
@@ -379,6 +380,106 @@ describe('eval-context-gatherer', () => {
 
       expect(result).toBeNull();
       fs.rmSync(tmpDir, { recursive: true });
+    });
+  });
+
+  describe('fetchRoutingCompleteRawWithArchive', () => {
+    function makeTmpDir(): string {
+      return fs.mkdtempSync(nodePath.join(os.tmpdir(), 'routing-complete-'));
+    }
+
+    it('returns worktree routing data when present', () => {
+      const repoDir = makeTmpDir();
+      const worktreeDir = nodePath.join(repoDir, 'worktree');
+      const slug = 'my-feature';
+      const issueId = 'HOK-1328';
+      const featureDir = nodePath.join(worktreeDir, 'features', slug);
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.routing-complete'),
+        JSON.stringify({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+        }),
+      );
+
+      try {
+        expect(fetchRoutingCompleteRawWithArchive(repoDir, slug, issueId, worktreeDir)).toEqual({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to archived routing data when worktree is missing', () => {
+      const repoDir = makeTmpDir();
+      const slug = 'my-feature';
+      const issueId = 'HOK-1328';
+      const archiveDir = nodePath.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId);
+      fs.mkdirSync(archiveDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(archiveDir, 'routing-complete.json'),
+        JSON.stringify({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+        }),
+      );
+
+      try {
+        expect(fetchRoutingCompleteRawWithArchive(repoDir, slug, issueId)).toEqual({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns null for malformed archived routing data', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-1328';
+      const archiveDir = nodePath.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId);
+      fs.mkdirSync(archiveDir, { recursive: true });
+      fs.writeFileSync(nodePath.join(archiveDir, 'routing-complete.json'), '{"planner":true}');
+
+      try {
+        expect(fetchRoutingCompleteRawWithArchive(repoDir, 'my-feature', issueId)).toBeNull();
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('preserves maxCostUsd from archived routing data', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-1328';
+      const archiveDir = nodePath.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId);
+      fs.mkdirSync(archiveDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(archiveDir, 'routing-complete.json'),
+        JSON.stringify({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+          maxCostUsd: 7.5,
+        }),
+      );
+
+      try {
+        expect(fetchRoutingCompleteRawWithArchive(repoDir, 'my-feature', issueId)).toEqual({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+          maxCostUsd: 7.5,
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
     });
   });
 });
