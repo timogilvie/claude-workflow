@@ -92,6 +92,22 @@ export interface AvailableModelsConfig {
   reviewer?: string[];
 }
 
+export type ModelRegistryClass = 'frontier' | 'strong_generalist' | 'fast_economy';
+export type ModelRegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
+
+export interface ModelCapabilitiesOverride {
+  vendor?: string;
+  class?: ModelRegistryClass;
+  strengths?: string[];
+  weaknesses?: string[];
+  qualityScores?: Partial<Record<ModelRegistryTaskType, number>>;
+}
+
+export interface ModelRegistryConfig {
+  models?: Record<string, ModelCapabilitiesOverride>;
+  ladders?: Partial<Record<ModelRegistryTaskType, string[]>>;
+}
+
 export interface AggregationConfig {
   repos?: string[];
   outputPath?: string;
@@ -225,6 +241,7 @@ export interface WavemillConfig {
   review?: ReviewConfig;
   ready?: ReadyConfig;
   permissions?: PermissionsConfig;
+  modelRegistry?: ModelRegistryConfig;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -616,4 +633,12 @@ export function getDashboardConfig(repoDir?: string): DashboardConfig {
  */
 export function getPermissionsConfig(repoDir?: string): PermissionsConfig {
   return loadWavemillConfig(repoDir).permissions || {};
+}
+
+/**
+ * Get the model registry override config section.
+ * Returns empty object if not configured.
+ */
+export function getModelRegistryConfig(repoDir?: string): ModelRegistryConfig {
+  return loadWavemillConfig(repoDir).modelRegistry || {};
 }
