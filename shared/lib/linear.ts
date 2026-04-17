@@ -180,6 +180,7 @@ export interface IssueCreateParams {
   priority?: number;
   estimate?: number;
   projectMilestoneId?: string;
+  labelIds?: string[];
 }
 
 /**
@@ -498,6 +499,7 @@ export async function createIssue(params: IssueCreateParams): Promise<LinearIssu
   if (params.priority !== undefined) input.priority = params.priority;
   if (params.estimate !== undefined) input.estimate = params.estimate;
   if (params.projectMilestoneId) input.projectMilestoneId = params.projectMilestoneId;
+  if (params.labelIds && params.labelIds.length > 0) input.labelIds = params.labelIds;
 
   const data = await request(
     `
