@@ -238,7 +238,7 @@ write_launch_plan() {
 
   local tasks_json='[]'
   local t issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file route_file
-  local route_json route_planner route_coder route_reviewer route_plan_depth route_code_depth route_review_mode
+  local route_json route_planner route_coder route_reviewer route_plan_depth route_code_depth route_review_mode route_max_cost_usd
   local route_payload challenge_flag challenge_pair challenge_role challenge_model migration_number task_agent
 
   for t in "${LAUNCH_ARGS[@]}"; do
@@ -259,6 +259,8 @@ write_launch_plan() {
     route_plan_depth="${TASK_PLAN_DEPTH_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.planDepth // "light"' 2>/dev/null)}"
     route_code_depth="${TASK_CODE_DEPTH_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.codeDepth // "medium"' 2>/dev/null)}"
     route_review_mode="${TASK_REVIEW_MODE_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.reviewRecommended // .reviewMode // "static"' 2>/dev/null)}"
+    route_max_cost_usd="$(echo "$route_json" | jq -r '.constraints.maxCostUsd // empty' 2>/dev/null)"
+    [[ -z "$route_max_cost_usd" ]] && route_max_cost_usd="${DEFAULT_MAX_COST_USD:-}"
     challenge_flag="${TASK_CHALLENGE_BY_ISSUE[$issue]:-false}"
     challenge_pair="${TASK_CHALLENGE_PAIR_BY_ISSUE[$issue]:-}"
     challenge_role="${TASK_CHALLENGE_ROLE_BY_ISSUE[$issue]:-}"
@@ -273,6 +275,7 @@ write_launch_plan() {
       --arg planDepth "$route_plan_depth" \
       --arg codeDepth "$route_code_depth" \
       --arg reviewMode "$route_review_mode" \
+      --argjson maxCostUsd "${route_max_cost_usd:-null}" \
       '{
         planner: $planner,
         coder: $coder,
@@ -280,7 +283,7 @@ write_launch_plan() {
         planDepth: $planDepth,
         codeDepth: $codeDepth,
         reviewMode: $reviewMode
-      }')"
+      } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)')"
 
     tasks_json="$(jq -n \
       --argjson tasks "$tasks_json" \
@@ -4529,6 +4532,10 @@ Implement from the issue description plus direct codebase analysis."
     # The routing tool was already called at lines above (route-task.ts).
     # We just need to write the .routing-complete file and launch planning.
     local routing_file="$feature_dir/.routing-complete"
+    local routing_max_cost_usd
+    routing_max_cost_usd="$(read_route_json "$SESSION" "$issue" "constraints.maxCostUsd" "")"
+    [[ -z "$routing_max_cost_usd" ]] && routing_max_cost_usd="${DEFAULT_MAX_COST_USD:-}"
+
     jq -n \
       --arg planner "${planner_model:-claude-sonnet-4-6}" \
       --arg coder "${task_model:-claude-opus-4-7}" \
@@ -4536,7 +4543,7 @@ Implement from the issue description plus direct codebase analysis."
       --arg planDepth "${plan_depth:-light}" \
       --arg codeDepth "${code_depth:-medium}" \
       --arg reviewMode "${review_mode:-static}" \
-      --argjson maxCostUsd "$(read_route_json "$SESSION" "$issue" "constraints.maxCostUsd" "null")" \
+      --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
       '{
         planner: $planner,
         coder: $coder,

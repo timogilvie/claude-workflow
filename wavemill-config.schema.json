@@ -86,7 +86,7 @@
         "defaultMaxCostUsd": {
           "type": "number",
           "minimum": 0,
-          "description": "Default per-task cost budget in USD. When set, the router filters model combinations whose expected cost exceeds this budget. Null or omitted means no cost constraint."
+          "description": "Default per-task cost budget guideline in USD. When unset, the built-in default is 25.00. Repository config can still override the value, and omitting the field from routing data means no explicit cost constraint for that run."
         }
       }
     },

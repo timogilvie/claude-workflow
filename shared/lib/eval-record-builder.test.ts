@@ -185,6 +185,11 @@ describe('eval-record-builder', () => {
       attachConstraints(baseRecord, {});
       expect(baseRecord.constraints).toBeUndefined();
     });
+
+    it('enrichEvalRecord attaches maxCostUsd from metadata constraints', () => {
+      enrichEvalRecord(baseRecord, { constraints: { maxCostUsd: 10 } });
+      expect(baseRecord.constraints).toEqual({ maxCostUsd: 10 });
+    });
   });
 
   describe('enrichEvalRecord', () => {

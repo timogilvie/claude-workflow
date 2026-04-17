@@ -345,6 +345,23 @@ export function fetchRoutingDecision(
   return null;
 }
 
+function parseRoutingCompleteData(raw: string): RoutingCompleteData | null {
+  try {
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    if (
+      typeof data.planner !== 'string' ||
+      typeof data.coder !== 'string' ||
+      typeof data.reviewer !== 'string' ||
+      (data.maxCostUsd !== undefined && typeof data.maxCostUsd !== 'number')
+    ) {
+      return null;
+    }
+    return data as RoutingCompleteData;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetch raw routing decision data from .routing-complete file.
  *
@@ -373,20 +390,7 @@ export function fetchRoutingCompleteRaw(
       if (!existsSync(routingPath)) continue;
 
       try {
-        const raw = readFileSync(routingPath, 'utf-8');
-        const data = JSON.parse(raw) as Record<string, unknown>;
-
-        // Validate required fields
-        if (
-          typeof data.planner !== 'string' ||
-          typeof data.coder !== 'string' ||
-          typeof data.reviewer !== 'string' ||
-          (data.maxCostUsd !== undefined && typeof data.maxCostUsd !== 'number')
-        ) {
-          return null;
-        }
-
-        return data as RoutingCompleteData;
+        return parseRoutingCompleteData(readFileSync(routingPath, 'utf-8'));
       } catch {
         return null;
       }
@@ -394,6 +398,27 @@ export function fetchRoutingCompleteRaw(
   }
 
   return null;
+}
+
+function loadRoutingCompleteRawFromArchive(
+  repoDir: string,
+  issueId: string,
+): RoutingCompleteData | null {
+  const content = loadFromArchive(repoDir, issueId, 'routing-complete.json');
+  if (!content) {
+    return null;
+  }
+  return parseRoutingCompleteData(content);
+}
+
+export function fetchRoutingCompleteRawWithArchive(
+  repoDir: string,
+  slug: string,
+  issueId: string,
+  worktreePath?: string,
+): RoutingCompleteData | null {
+  return fetchRoutingCompleteRaw(repoDir, slug, worktreePath)
+    ?? loadRoutingCompleteRawFromArchive(repoDir, issueId);
 }
 
 // ────────────────────────────────────────────────────────────────

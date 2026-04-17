@@ -315,6 +315,25 @@ describe('task-descriptor-builder', () => {
       assert.equal(stages.reviewer.cost_usd, 0.6);
     });
 
+    it('should derive stages from archive-rehydrated routing data', () => {
+      const archivedRoutingComplete: RoutingCompleteData = {
+        planner: 'claude-opus-4-6',
+        coder: 'claude-sonnet-4-5-20250929',
+        reviewer: 'claude-haiku-4-5-20251001',
+        maxCostUsd: 7.5,
+      };
+
+      const descriptor = buildTaskDescriptor({
+        originalPrompt: 'Re-run eval after worktree cleanup',
+        routingComplete: archivedRoutingComplete,
+      });
+
+      assert.equal(descriptor.stages.planner.model, 'claude-opus-4-6');
+      assert.equal(descriptor.stages.coder.model, 'claude-sonnet-4-5-20250929');
+      assert.equal(descriptor.stages.reviewer.model, 'claude-haiku-4-5-20251001');
+      assert.equal(descriptor.constraints.max_cost_usd, undefined);
+    });
+
     it('should populate outcome when score is available (post-eval)', () => {
       const input: TaskDescriptorInput = {
         originalPrompt: 'Test task',
