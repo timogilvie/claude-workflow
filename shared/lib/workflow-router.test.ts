@@ -102,7 +102,14 @@ await test('routes broad CLI workflow work to deep planning and medium-or-higher
       { repoDir },
     );
     assert.equal(decision.planDepth, 'deep');
-    assert.ok(['gpt-5.3-codex', 'claude-sonnet-4-5-20250929', 'claude-opus-4-6'].includes(decision.coder));
+    assert.ok([
+      'gpt-5.3-codex',
+      'gpt-5.4',
+      'claude-sonnet-4-5-20250929',
+      'claude-sonnet-4-6',
+      'claude-opus-4-6',
+      'claude-opus-4-7',
+    ].includes(decision.coder));
     assert.ok(['llm', 'static+llm'].includes(decision.reviewRecommended));
     assert.ok(['medium', 'deep'].includes(decision.codeDepth));
     assert.ok(decision.expectedCostCode >= 0);
