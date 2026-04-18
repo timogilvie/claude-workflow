@@ -17,7 +17,7 @@ _WAVEMILL_DEFAULTS='{
     "worktreeRoot": "worktrees",
     "agentCmd": "claude",
     "requireConfirm": true,
-    "planningMode": "skip",
+    "planningMode": "interactive",
     "maxRetries": 3,
     "retryDelay": 2,
     "setupCommand": "",
