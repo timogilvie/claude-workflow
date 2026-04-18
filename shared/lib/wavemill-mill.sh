@@ -1811,6 +1811,33 @@ indent_block() {
   done
 }
 
+_global_operating_mode() {
+  npx tsx "$TOOLS_DIR/get-operating-mode.ts" global --repo-dir "$REPO_DIR" 2>/dev/null || echo "normal"
+}
+
+_update_effective_max_parallel() {
+  EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
+
+  if has_any_healthy_model "$REPO_DIR"; then
+    return 0
+  fi
+
+  local global_mode
+  global_mode="$(_global_operating_mode)"
+  case "$global_mode" in
+    survival)
+      if (( MAX_PARALLEL > 1 )); then
+        EFFECTIVE_MAX_PARALLEL=1
+      fi
+      ;;
+    constrained)
+      if (( MAX_PARALLEL > 3 )); then
+        EFFECTIVE_MAX_PARALLEL=3
+      fi
+      ;;
+  esac
+}
+
 # Timeout for external API calls (Linear, GitHub) to prevent monitor freeze.
 # If an API call hangs, the entire monitoring loop blocks and the user cannot
 # type 'q' or select tasks.  This value caps individual calls.
