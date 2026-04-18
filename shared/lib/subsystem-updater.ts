@@ -151,6 +151,7 @@ async function generateSubsystemUpdate(opts: {
     mode: 'stream',
     cliCmd: claudeCmd,
     model: 'claude-haiku-4-5-20251001',
+    taskType: 'classify',
     timeout: 300_000,
     activityTimeout: 60_000,
     retry: true,
