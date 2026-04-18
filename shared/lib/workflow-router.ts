@@ -12,6 +12,9 @@ import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } fro
 import { getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig } from './config.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
+import { getEffectiveRegistry } from './model-registry.ts';
+import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
+import { resolveModel, topViableCandidate } from './routing-policy.ts';
 import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
@@ -58,7 +61,11 @@ export interface RouteWorkflowOptions {
   skipDifficultyClassification?: boolean;
 }
 
-function withSignals(decision: WorkflowRouteDecision, prompt: string): WorkflowRouteDecision {
+function withSignals(
+  decision: WorkflowRouteDecision,
+  prompt: string,
+  taskDifficulty?: RoutingDifficulty,
+): WorkflowRouteDecision {
   const characteristics = analyzePrompt(prompt);
   const riskScore = computeRiskScore(prompt, characteristics);
 
@@ -70,6 +77,7 @@ function withSignals(decision: WorkflowRouteDecision, prompt: string): WorkflowR
       complexityScore: characteristics.complexityScore,
       fileTypes: characteristics.fileTypes,
       riskScore,
+      ...(taskDifficulty ? { taskDifficulty } : {}),
     },
   };
 }
@@ -265,6 +273,40 @@ function chooseReviewMode(characteristics: PromptCharacteristics, riskScore: num
   return 'static';
 }
 
+function readRoutingQuotaState(repoDir?: string): QuotaSnapshot | null {
+  try {
+    return readQuotaSnapshot(repoDir);
+  } catch {
+    console.warn('[workflow-router] Could not read quota snapshot; skipping policy resolution');
+    return null;
+  }
+}
+
+function buildPolicyStagePools(params: {
+  difficulty: RoutingDifficulty;
+  pool: string[];
+  quotaState: QuotaSnapshot;
+  repoDir?: string;
+}): { plannerModels: string[]; coderModels: string[]; reviewerModels: string[] } {
+  const basePolicy = {
+    difficulty: params.difficulty,
+    quotaState: params.quotaState,
+    repoDir: params.repoDir,
+  } as const;
+  const poolSet = new Set(params.pool);
+
+  const toPoolModels = (taskType: 'planning' | 'coding' | 'review'): string[] =>
+    resolveModel({ ...basePolicy, taskType })
+      .filter((candidate) => candidate.viable && poolSet.has(candidate.modelId))
+      .map((candidate) => candidate.modelId);
+
+  return {
+    plannerModels: toPoolModels('planning'),
+    coderModels: toPoolModels('coding'),
+    reviewerModels: toPoolModels('review'),
+  };
+}
+
 export function estimateStageCost(
   modelId: string,
   profile: StageTokenProfile | null,
@@ -435,6 +477,54 @@ function resolveTaskDifficulty(options: RouteWorkflowOptions, repoDir?: string):
     console.warn('[workflow-router] Difficulty classification failed, routing without floor');
     return undefined;
   }
+}
+
+function computePolicyExpectedSuccess(params: {
+  plannerModel: string;
+  coderModel: string;
+  reviewerModel: string;
+  reviewRecommended: ReviewMode;
+  riskScore: number;
+  repoDir?: string;
+}): number {
+  const registry = getEffectiveRegistry(params.repoDir);
+  const qualityScores = [
+    registry.models[params.plannerModel]?.qualityScores.planning ?? 0,
+    registry.models[params.coderModel]?.qualityScores.coding ?? 0,
+    registry.models[params.reviewerModel]?.qualityScores.review ?? 0,
+  ];
+  const averageScore = qualityScores.reduce((sum, score) => sum + score, 0) / qualityScores.length;
+  const reviewBoost = params.reviewRecommended === 'static+llm'
+    ? 0.04
+    : params.reviewRecommended === 'llm'
+      ? 0.02
+      : 0;
+
+  return roundToHundredths(
+    clamp(0.45 + averageScore / 200 + reviewBoost - params.riskScore * 0.02, 0.35, 0.97),
+  );
+}
+
+function computePolicyConfidence(params: {
+  plannerModel: string;
+  coderModel: string;
+  reviewerModel: string;
+  difficulty: RoutingDifficulty;
+  quotaState: QuotaSnapshot;
+  riskScore: number;
+}): number {
+  const degradedCount = [params.plannerModel, params.coderModel, params.reviewerModel]
+    .filter((modelId) => params.quotaState.models[modelId]?.status === 'degrading')
+    .length;
+  const difficultyPenalty =
+    params.difficulty === 'critical' ? 0.12 :
+    params.difficulty === 'hard' ? 0.08 :
+    params.difficulty === 'moderate' ? 0.04 :
+    0;
+
+  return roundToHundredths(
+    clamp(0.82 - difficultyPenalty - params.riskScore * 0.015 - degradedCount * 0.05, 0.1, 0.95),
+  );
 }
 
 export function readTaskPromptFromFile(filePath: string): string {
@@ -698,19 +788,132 @@ export function routeWorkflowStageAware(
   return withChallengeRecommendation(decision, repoDir);
 }
 
+export function tryPolicyResolution(
+  prompt: string,
+  options?: RouteWorkflowOptions,
+): StageAwareDecision | null {
+  const repoDir = options?.repoDir;
+  const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
+  if (!taskDifficulty) {
+    return null;
+  }
+
+  const quotaState = readRoutingQuotaState(repoDir);
+  if (!quotaState) {
+    return null;
+  }
+
+  const pool = getModelPool(repoDir);
+  const characteristics = analyzePrompt(prompt);
+  const riskScore = computeRiskScore(prompt, characteristics);
+  const planDepth = choosePlanDepth(characteristics, riskScore);
+  const codeDepth = chooseCodeDepth(characteristics, riskScore);
+  const reviewRecommended = chooseReviewMode(characteristics, riskScore);
+  const basePolicy = {
+    difficulty: taskDifficulty,
+    quotaState,
+    repoDir,
+  } as const;
+
+  const plannerModel = topViableCandidate({ ...basePolicy, taskType: 'planning' }, pool);
+  const coderModel = topViableCandidate({ ...basePolicy, taskType: 'coding' }, pool);
+  const reviewerModel = topViableCandidate({ ...basePolicy, taskType: 'review' }, pool);
+
+  if (!plannerModel || !coderModel || !reviewerModel) {
+    console.warn(
+      '[workflow-router] Policy resolver found no viable candidate for one or more roles; falling through to stage-aware',
+    );
+    return null;
+  }
+
+  const expectedCostPlan = estimateStageCost(plannerModel, PLAN_TOKENS[planDepth], repoDir);
+  const expectedCostCode = estimateStageCost(coderModel, CODE_TOKENS[codeDepth], repoDir);
+  const expectedCostReview = reviewRecommended === 'none'
+    ? 0
+    : estimateStageCost(reviewerModel, REVIEW_TOKENS[reviewRecommended as Exclude<ReviewMode, 'none'>], repoDir);
+  const expectedSuccess = computePolicyExpectedSuccess({
+    plannerModel,
+    coderModel,
+    reviewerModel,
+    reviewRecommended,
+    riskScore,
+    repoDir,
+  });
+  const confidence = computePolicyConfidence({
+    plannerModel,
+    coderModel,
+    reviewerModel,
+    difficulty: taskDifficulty,
+    quotaState,
+    riskScore,
+  });
+
+  return {
+    planner: plannerModel,
+    coder: coderModel,
+    reviewer: reviewerModel,
+    planDepth,
+    codeDepth,
+    reviewRecommended,
+    expectedSuccess,
+    confidence,
+    expectedCostPlan,
+    expectedCostCode,
+    expectedCostReview,
+    reasoning: [
+      'Policy resolver selected models using registry capability scores and quota state.',
+      `Task difficulty ${taskDifficulty} applied the routing floor before ranking candidates.`,
+      `Planner=${plannerModel}, coder=${coderModel}, reviewer=${reviewerModel} are the top viable in-pool candidates.`,
+      `Risk score ${riskScore} from complexity, scope, and repo-surface keywords.`,
+    ],
+    signals: {
+      taskType: characteristics.taskType,
+      promptLength: characteristics.length,
+      complexityScore: characteristics.complexityScore,
+      fileTypes: characteristics.fileTypes,
+      riskScore,
+      taskDifficulty,
+    },
+    routingMode: 'policy',
+    neighborCount: 0,
+    neighborSimilarityRange: [0, 0],
+    expectedCost: Number((expectedCostPlan + expectedCostCode + expectedCostReview).toFixed(2)),
+    constraints: options?.maxCostUsd === undefined
+      ? undefined
+      : { maxCostUsd: options.maxCostUsd },
+  };
+}
+
 export async function routeWorkflowHokusai(
   prompt: string,
   options?: RouteWorkflowOptions,
 ): Promise<StageAwareDecision> {
   const repoDir = options?.repoDir;
-  const decision = await routeViaHokusai(prompt, options);
+  const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
+  const quotaState = taskDifficulty ? readRoutingQuotaState(repoDir) : null;
+  const pool = getModelPool(repoDir);
+  const policyStagePools = taskDifficulty && quotaState
+    ? buildPolicyStagePools({ difficulty: taskDifficulty, quotaState, pool, repoDir })
+    : null;
+  const decision = await routeViaHokusai(prompt, {
+    ...options,
+    plannerModels: policyStagePools?.plannerModels,
+    coderModels: policyStagePools?.coderModels,
+    reviewerModels: policyStagePools?.reviewerModels,
+  });
   if (!decision) {
     return routeWorkflowStageAware(prompt, options);
   }
 
-  const enriched = withSignals(decision, prompt);
+  const enriched = withSignals(decision, prompt, taskDifficulty);
   return withChallengeRecommendation({
     ...enriched,
+    reasoning: policyStagePools
+      ? [
+          ...enriched.reasoning,
+          `Hokusai input used policy-filtered candidate pools for ${taskDifficulty} difficulty.`,
+        ]
+      : enriched.reasoning,
     routingMode: 'hokusai',
     neighborCount: 0,
     neighborSimilarityRange: [0, 0],
@@ -728,6 +931,12 @@ export async function routeWorkflowAuto(
   if (hokusaiConfig.endpoint) {
     return routeWorkflowHokusai(prompt, options);
   }
+
+  const policyDecision = tryPolicyResolution(prompt, options);
+  if (policyDecision) {
+    return withChallengeRecommendation(policyDecision, options?.repoDir);
+  }
+
   return routeWorkflowStageAware(prompt, options);
 }
 
