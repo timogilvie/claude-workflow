@@ -208,14 +208,42 @@ agent_completion_text() {
 #   $8 = tools_dir    (path to wavemill tools/)
 #   $9 = reviewer_model (optional: recommended reviewer model)
 #   $10 = review_mode  (optional: recommended review mode)
+#   $11 = agent_cmd    (optional: agent command, default: claude)
+#   $12 = operating_mode (optional: normal|constrained|survival, default: normal)
 # Prints: the complete prompt to stdout
 build_autonomous_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8"
-  local reviewer_model="${9:-}" review_mode="${10:-}" agent_cmd="${11:-claude}"
+  local reviewer_model="${9:-}" review_mode="${10:-}" agent_cmd="${11:-claude}" operating_mode="${12:-normal}"
   local abort_exit_instruction feature_dir
   abort_exit_instruction="$(agent_exit_followup_text "$agent_cmd")"
   feature_dir="$wt_dir/features/$(basename "$wt_dir")"
+
+  # Build mode guidance
+  local mode_guidance=""
+  case "$operating_mode" in
+    constrained)
+      mode_guidance="## ⚠️  CONSTRAINED MODE (quota degrading)
+
+Apply tighter scope to conserve model capacity:
+- Limit implementation to files directly required (aim for 10 files or fewer).
+- Commit after each logical checkpoint before moving to the next step.
+- If scope grows beyond plan, stop at the safest checkpoint and document remaining work.
+- Success is a focused PR, not a perfect implementation."
+      ;;
+    survival)
+      mode_guidance="## ⚠️  SURVIVAL MODE (quota exhausted)
+
+Apply minimal scope. A small focused PR is better than an incomplete large one:
+- Limit changes to at most 5 files. If more are needed, implement only the critical path.
+- Commit frequently (after every 1-2 files).
+- When implementation is complete, record your self-confidence:
+  echo 'confidence=high' > \"$feature_dir/.coding-complete\"
+  echo 'confidence=low' > \"$feature_dir/.coding-complete\"
+- Use the low-confidence marker if correctness is uncertain even after validation.
+- The review phase will stop after a draft PR if confidence is low."
+      ;;
+  esac
 
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
@@ -225,6 +253,8 @@ Branch: $branch
 Base branch: $base_branch
 
 $issue_context
+
+$mode_guidance
 
 Goal:
 - Implement the feature/fix described by the issue and title.
