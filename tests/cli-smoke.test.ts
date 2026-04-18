@@ -227,4 +227,20 @@ describe('wavemill CLI', () => {
       }
     });
   });
+
+  describe('quota command', () => {
+    it('shows quota status from an isolated repo', () => {
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-quota-cli-'));
+      try {
+        const out = execFileSync(WAVEMILL, ['quota', 'status', '--repo-dir', repoDir], {
+          encoding: 'utf-8',
+          timeout: 10_000,
+          env: { ...process.env },
+        });
+        assert.match(out, /Snapshot:/);
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

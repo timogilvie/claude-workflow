@@ -836,6 +836,62 @@
         }
       },
       "additionalProperties": false
+    },
+    "quota": {
+      "type": "object",
+      "description": "Configuration for proactive model quota health detection and manual status overrides.",
+      "properties": {
+        "manualOverrides": {
+          "type": "object",
+          "description": "Manual status overrides per model (e.g. set sonnet degrading during known high-usage windows).",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["healthy", "degrading", "exhausted"]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "expiresAt": {
+                "type": "string",
+                "description": "ISO-8601 date/time when this manual override expires."
+              }
+            },
+            "required": ["status"],
+            "additionalProperties": false
+          }
+        },
+        "thresholds": {
+          "type": "object",
+          "description": "Tunable thresholds for proactive quota degradation heuristics.",
+          "properties": {
+            "volumeThresholdPercent": {
+              "type": "number",
+              "default": 70,
+              "minimum": 0,
+              "maximum": 100,
+              "description": "Percent of baseline rolling request volume (5-minute window) that triggers degrading."
+            },
+            "budgetThresholdPercent": {
+              "type": "number",
+              "default": 25,
+              "minimum": 0,
+              "maximum": 100,
+              "description": "Remaining budget percentage threshold for proactive degrading."
+            },
+            "nearLimitCount": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "description": "Number of near-limit warning signals inside the decay window before marking degrading."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
