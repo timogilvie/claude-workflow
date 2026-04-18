@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 import {
   pickInitiativePrompt,
   planPromptSelectorDeps,
@@ -53,7 +56,7 @@ describe('plan-prompt-selector', () => {
     });
 
     const selection = await pickInitiativePrompt(repoDir);
-    const expected = readFileSync(join(process.cwd(), 'tools', 'prompts', 'initiative-planner.md'), 'utf-8');
+    const expected = readFileSync(join(REPO_ROOT, 'tools', 'prompts', 'initiative-planner.md'), 'utf-8');
 
     assert.equal(selection.mode, 'normal');
     assert.equal(selection.templateName, 'initiative-planner.md');
@@ -133,8 +136,8 @@ describe('plan-prompt-selector', () => {
   });
 
   it('keeps the compressed template at least 30 percent shorter than the standard template', () => {
-    const standard = readFileSync(join(process.cwd(), 'tools', 'prompts', 'initiative-planner.md'), 'utf-8');
-    const compressed = readFileSync(join(process.cwd(), 'tools', 'prompts', 'initiative-planner-compressed.md'), 'utf-8');
+    const standard = readFileSync(join(REPO_ROOT, 'tools', 'prompts', 'initiative-planner.md'), 'utf-8');
+    const compressed = readFileSync(join(REPO_ROOT, 'tools', 'prompts', 'initiative-planner-compressed.md'), 'utf-8');
 
     assert.ok(
       compressed.length <= standard.length * 0.7,

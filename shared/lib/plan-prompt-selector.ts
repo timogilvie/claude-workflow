@@ -33,7 +33,7 @@ export async function pickInitiativePrompt(repoDir: string): Promise<InitiativeP
   let mode: OperatingMode = 'normal';
 
   try {
-    const candidateMode = planPromptSelectorDeps.getCurrentOperatingMode(repoDir) as OperatingMode | string;
+    const candidateMode: unknown = planPromptSelectorDeps.getCurrentOperatingMode(repoDir);
     if (isOperatingMode(candidateMode)) {
       mode = candidateMode;
     } else {
