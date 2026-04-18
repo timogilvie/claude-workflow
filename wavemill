@@ -143,6 +143,17 @@ ${GREEN}Commands:${NC}
                ${CYAN}wavemill hokusai enable${NC}
                ${CYAN}wavemill hokusai disable${NC}
 
+  ${CYAN}quota${NC}     Manage model quota state and overrides
+             - status: show current quota snapshot and manual overrides
+             - set <model> <status>: set a manual status override
+             - clear <model>: remove a manual override
+             - estimate <model>: show proactive quota-health estimate
+             Usage:
+               ${CYAN}wavemill quota status${NC}
+               ${CYAN}wavemill quota set sonnet degrading --reason "peak load"${NC}
+               ${CYAN}wavemill quota clear sonnet${NC}
+               ${CYAN}wavemill quota estimate claude-sonnet-4-6${NC}
+
   ${CYAN}version${NC}   Show version information
   ${CYAN}help${NC}      Show this help message
 
@@ -800,6 +811,17 @@ run_hokusai() {
   exec npx tsx "$hokusai_tool" "$@"
 }
 
+run_quota() {
+  local quota_tool="$TOOLS_DIR/quota-control.ts"
+
+  if [[ ! -f "$quota_tool" ]]; then
+    echo -e "${RED}Error:${NC} Quota tool not found at: $quota_tool" >&2
+    exit 1
+  fi
+
+  exec npx tsx "$quota_tool" "$@"
+}
+
 # Main command dispatcher
 case "${1:-}" in
   mill)
@@ -847,6 +869,10 @@ case "${1:-}" in
   hokusai)
     shift
     run_hokusai "$@"
+    ;;
+  quota)
+    shift
+    run_quota "$@"
     ;;
   eval)
     shift
