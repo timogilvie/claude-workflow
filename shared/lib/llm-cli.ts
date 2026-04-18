@@ -20,9 +20,13 @@ import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { attachFallbackEvent } from './eval-record-builder.ts';
+import { appendEvalRecord } from './eval-persistence.ts';
+import { resolveEvalsDir } from './evals-paths.ts';
+import { getScoreBand, type DifficultyBand, type EvalRecord, type FallbackEventMetadata, type FallbackOutcome } from './eval-schema.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getEffectiveRegistry, getLadder, rankCandidates, type RegistryTaskType } from './model-registry.ts';
-import { getModelStatus, markExhausted, recordSuccess } from './quota-state.ts';
+import { getModelStatus, markExhausted, readQuotaSnapshot, recordSuccess } from './quota-state.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -68,8 +72,12 @@ export interface LLMCallOptions {
   cliCmd?: string;
   /** Task type used to select a task-specific fallback ladder */
   taskType?: RegistryTaskType;
+  /** Difficulty classification for downstream eval attribution */
+  difficulty?: DifficultyBand;
   /** Override fallback candidates instead of consulting the registry */
   fallbackModels?: string[];
+  /** Disable best-effort eval emission for fallback events */
+  logFallbackEvents?: boolean;
   /** Lifecycle hooks for progress reporting */
   observer?: LLMCallObserver;
 }
@@ -171,6 +179,8 @@ const DEFAULT_MAX_RETRIES = 2;
 const SLOW_CALL_WARNING_MS = 30_000;
 const SLOW_CALL_REPEAT_MS = 15_000;
 const FALLBACK_DEFAULT_TASK_TYPE: RegistryTaskType = 'classify';
+const FALLBACK_EVAL_SCHEMA_VERSION = '1.6.0';
+const FALLBACK_EVENT_SCHEMA_VERSION = '1.0';
 const warnedMissingTaskType = new Set<string>();
 
 function withElapsed(error: Error, elapsedMs: number): ObservedError {
@@ -257,6 +267,100 @@ function uniqueModels(models: string[]): string[] {
     deduped.push(model);
   }
   return deduped;
+}
+
+function summarizePrompt(prompt: string, maxLength = 200): string {
+  const singleLine = prompt.replace(/\s+/g, ' ').trim();
+  if (singleLine.length <= maxLength) {
+    return singleLine;
+  }
+  return `${singleLine.slice(0, Math.max(0, maxLength - 1))}...`;
+}
+
+function safeQuotaSnapshot(repoDir: string): FallbackEventMetadata['quota_snapshot'] {
+  try {
+    const snapshot = readQuotaSnapshot(repoDir);
+    return {
+      snapshotAt: snapshot.snapshotAt,
+      models: Object.fromEntries(
+        Object.entries(snapshot.models).map(([modelId, entry]) => [
+          modelId,
+          {
+            status: entry.status,
+            resetAt: entry.resetAt,
+            remainingEstimate: entry.remainingEstimate,
+            confidence: entry.confidence,
+          },
+        ]),
+      ),
+    };
+  } catch {
+    return {
+      snapshotAt: new Date().toISOString(),
+      models: {},
+    };
+  }
+}
+
+function buildFallbackEventRecord(input: {
+  prompt: string;
+  preferredModel: string;
+  fallbackModel: string | null;
+  taskType: RegistryTaskType | null;
+  difficulty?: DifficultyBand;
+  repoDir: string;
+  outcome: FallbackOutcome;
+  fallbackChain: Array<{ model: string; reason: string }>;
+  startedAt: number;
+  endedAt: number;
+  costUsd: number | null;
+}): EvalRecord {
+  const score = input.outcome === 'success' ? 1.0 : 0.0;
+  const fallbackEvent: FallbackEventMetadata = {
+    schema_version: FALLBACK_EVENT_SCHEMA_VERSION,
+    preferred_model: input.preferredModel,
+    fallback_model: input.fallbackModel,
+    task_type: input.taskType,
+    difficulty: input.difficulty ?? null,
+    quota_snapshot: safeQuotaSnapshot(input.repoDir),
+    human_intervention: false,
+    outcome: input.outcome,
+    latency_ms: Math.max(0, input.endedAt - input.startedAt),
+    cost_usd: typeof input.costUsd === 'number' ? input.costUsd : null,
+    fallback_chain: [...input.fallbackChain],
+  };
+
+  const record: EvalRecord = {
+    id: randomUUID(),
+    schemaVersion: FALLBACK_EVAL_SCHEMA_VERSION,
+    originalPrompt: summarizePrompt(input.prompt),
+    modelId: input.fallbackModel ?? input.preferredModel,
+    modelVersion: '',
+    score,
+    scoreBand: getScoreBand(score).label,
+    timeSeconds: Math.max(0, input.endedAt - input.startedAt) / 1000,
+    timestamp: new Date(input.endedAt).toISOString(),
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: `Cross-model fallback: ${input.preferredModel} -> ${input.fallbackModel ?? 'none'} (${input.outcome})`,
+    agentType: 'llm-cli',
+  };
+
+  attachFallbackEvent(record, fallbackEvent);
+  return record;
+}
+
+function emitFallbackEvent(input: Parameters<typeof buildFallbackEventRecord>[0]): void {
+  try {
+    const record = buildFallbackEventRecord(input);
+    const evalsDir = resolveEvalsDir(undefined, input.repoDir).dir;
+    appendEvalRecord(record, { dir: evalsDir });
+  } catch (error) {
+    console.warn(
+      `[llm-cli] failed to persist fallback eval: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 function resolveCandidateModels(
@@ -1263,9 +1367,12 @@ async function callLLMWithFallback(
   provider: LLMProvider,
   maxRetries: number
 ): Promise<LLMCallResult> {
+  const startedAt = Date.now();
   const repoDir = repoDirForOptions(options);
   const { taskType, candidates } = resolveCandidateModels(provider, options);
   const retry = options.retry ?? false;
+  const shouldLogFallbackEvents = options.logFallbackEvents !== false;
+  const preferredModel = candidates[0] ?? options.model ?? '(unknown)';
 
   if (candidates.length === 0) {
     return retry
@@ -1286,6 +1393,21 @@ async function callLLMWithFallback(
         : await callLLMOnce(prompt, candidateOptions, provider);
 
       recordSuccess({ modelId: candidate }, repoDir);
+      if (fallbackChain.length > 0 && shouldLogFallbackEvents) {
+        emitFallbackEvent({
+          prompt,
+          preferredModel,
+          fallbackModel: candidate,
+          taskType,
+          difficulty: options.difficulty,
+          repoDir,
+          outcome: 'success',
+          fallbackChain,
+          startedAt,
+          endedAt: Date.now(),
+          costUsd: result.costUsd ?? null,
+        });
+      }
       return {
         ...result,
         model: candidate,
@@ -1294,6 +1416,21 @@ async function callLLMWithFallback(
     } catch (error) {
       const classified = classifyLLMError(error);
       if (classified.kind !== 'quota') {
+        if (fallbackChain.length > 0 && shouldLogFallbackEvents) {
+          emitFallbackEvent({
+            prompt,
+            preferredModel,
+            fallbackModel: null,
+            taskType,
+            difficulty: options.difficulty,
+            repoDir,
+            outcome: 'non_quota_error',
+            fallbackChain,
+            startedAt,
+            endedAt: Date.now(),
+            costUsd: null,
+          });
+        }
         throw error;
       }
 
@@ -1319,6 +1456,22 @@ async function callLLMWithFallback(
         );
       }
     }
+  }
+
+  if (fallbackChain.length > 0 && shouldLogFallbackEvents) {
+    emitFallbackEvent({
+      prompt,
+      preferredModel,
+      fallbackModel: null,
+      taskType,
+      difficulty: options.difficulty,
+      repoDir,
+      outcome: 'all_exhausted',
+      fallbackChain,
+      startedAt,
+      endedAt: Date.now(),
+      costUsd: null,
+    });
   }
 
   throw new LLMQuotaError(

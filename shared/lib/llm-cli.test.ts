@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
+import { readEvalRecords } from './eval-persistence.ts';
 import { callLLM, LLMQuotaError, parseJsonFromLLM } from './llm-cli.ts';
 import { markExhausted, readQuotaSnapshot } from './quota-state.ts';
 
@@ -84,7 +85,11 @@ process.stdin.on('end', () => {
   appendFileSync(logPath, JSON.stringify({ model, args, stdin: Buffer.concat(stdinChunks).toString('utf-8') }) + '\\n');
 
   if (action.type === 'success') {
-    process.stdout.write(JSON.stringify({ result: action.text }));
+    process.stdout.write(JSON.stringify({
+      result: action.text,
+      usage: action.usage,
+      total_cost_usd: action.costUsd,
+    }));
     process.exit(0);
   }
 
@@ -109,6 +114,12 @@ function readInvocations(logPath: string): Array<{ model: string }> {
     .split('\n')
     .filter(Boolean)
     .map((line) => JSON.parse(line) as { model: string });
+}
+
+function readFallbackRecords() {
+  return readEvalRecords({ dir: join(repoDir, '.wavemill', 'evals') }).filter(
+    (record) => record.agentType === 'llm-cli' && record.fallbackEvent,
+  );
 }
 
 beforeEach(() => {
@@ -222,7 +233,7 @@ describe('quota fallback', () => {
   it('falls back to the next model, marks exhaustion, and returns the successful model', async () => {
     const { cliPath } = createMockCli('quota-to-success', {
       'model-a': { type: 'quota', message: 'Error: 429 rate_limit_exceeded', code: 1 },
-      'model-b': { type: 'success', text: 'ok from b' },
+      'model-b': { type: 'success', text: 'ok from b', costUsd: 0.12 },
     });
 
     const result = await callLLM('test prompt', {
@@ -231,6 +242,7 @@ describe('quota fallback', () => {
       cliCmd: cliPath,
       repoDir,
       taskType: 'coding',
+      difficulty: 'hard',
       fallbackModels: ['model-a', 'model-b'],
     });
 
@@ -241,6 +253,19 @@ describe('quota fallback', () => {
     const snapshot = readQuotaSnapshot(repoDir);
     assert.equal(snapshot.models['model-a']?.status, 'exhausted');
     assert.equal(snapshot.models['model-b']?.status, 'healthy');
+
+    const records = readFallbackRecords();
+    assert.equal(records.length, 1);
+    assert.equal(records[0].schemaVersion, '1.6.0');
+    assert.equal(records[0].modelId, 'model-b');
+    assert.equal(records[0].score, 1);
+    assert.equal(records[0].fallbackEvent?.preferred_model, 'model-a');
+    assert.equal(records[0].fallbackEvent?.fallback_model, 'model-b');
+    assert.equal(records[0].fallbackEvent?.task_type, 'coding');
+    assert.equal(records[0].fallbackEvent?.difficulty, 'hard');
+    assert.equal(records[0].fallbackEvent?.outcome, 'success');
+    assert.equal(records[0].fallbackEvent?.cost_usd, 0.12);
+    assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [{ model: 'model-a', reason: 'quota' }]);
   });
 
   it('uses task-specific ladders from the registry', async () => {
@@ -324,6 +349,63 @@ describe('quota fallback', () => {
         return true;
       }
     );
+
+    const records = readFallbackRecords();
+    assert.equal(records.length, 1);
+    assert.equal(records[0].modelId, 'model-a');
+    assert.equal(records[0].score, 0);
+    assert.equal(records[0].fallbackEvent?.outcome, 'all_exhausted');
+    assert.equal(records[0].fallbackEvent?.fallback_model, null);
+    assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [
+      { model: 'model-a', reason: 'quota' },
+      { model: 'model-b', reason: 'quota' },
+    ]);
+  });
+
+  it('persists a non_quota_error fallback event when a later candidate fails for another reason', async () => {
+    const { cliPath } = createMockCli('quota-then-other-error', {
+      'model-a': { type: 'quota', message: '429 quota exceeded', code: 1 },
+      'model-b': { type: 'other', message: 'syntax explosion', code: 1 },
+    });
+
+    await assert.rejects(
+      () => callLLM('mixed failure', {
+        provider: 'claude',
+        mode: 'stream',
+        cliCmd: cliPath,
+        repoDir,
+        taskType: 'review',
+        fallbackModels: ['model-a', 'model-b'],
+      }),
+      /syntax explosion/,
+    );
+
+    const records = readFallbackRecords();
+    assert.equal(records.length, 1);
+    assert.equal(records[0].score, 0);
+    assert.equal(records[0].fallbackEvent?.outcome, 'non_quota_error');
+    assert.equal(records[0].fallbackEvent?.task_type, 'review');
+    assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [{ model: 'model-a', reason: 'quota' }]);
+  });
+
+  it('does not persist fallback evals when logFallbackEvents is false', async () => {
+    const { cliPath } = createMockCli('fallback-opt-out', {
+      'model-a': { type: 'quota', message: '429 quota exceeded', code: 1 },
+      'model-b': { type: 'success', text: 'ok from b' },
+    });
+
+    const result = await callLLM('opt-out prompt', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      taskType: 'coding',
+      fallbackModels: ['model-a', 'model-b'],
+      logFallbackEvents: false,
+    });
+
+    assert.equal(result.model, 'model-b');
+    assert.deepEqual(readFallbackRecords(), []);
   });
 
   it('bypasses exponential backoff for quota fallbacks', async () => {

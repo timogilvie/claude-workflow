@@ -23,7 +23,7 @@ const __dirname = dirname(__filename);
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
-const SCHEMA_VERSION = '1.5.0';
+const SCHEMA_VERSION = '1.6.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 

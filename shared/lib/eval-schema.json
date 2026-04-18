@@ -991,6 +991,129 @@
       "required": ["schema_version", "signals", "constraints", "stages"],
       "additionalProperties": false
     },
+    "fallbackEvent": {
+      "type": "object",
+      "description": "Cross-model fallback telemetry for quota-aware training attribution.",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "enum": ["1.0"],
+          "description": "Schema version for the fallback event payload."
+        },
+        "preferred_model": {
+          "type": "string",
+          "description": "Model preferred before any fallback occurred."
+        },
+        "fallback_model": {
+          "type": ["string", "null"],
+          "description": "Model that ultimately produced the response, or null if none succeeded."
+        },
+        "task_type": {
+          "type": ["string", "null"],
+          "enum": ["routing", "planning", "coding", "review", "classify", null],
+          "description": "Task type used to select the fallback ladder."
+        },
+        "difficulty": {
+          "type": ["string", "null"],
+          "enum": ["trivial", "easy", "medium", "hard", "very_hard", null],
+          "description": "Difficulty classification supplied by the caller, when known."
+        },
+        "quota_snapshot": {
+          "type": "object",
+          "description": "Quota-state snapshot captured near the fallback event.",
+          "properties": {
+            "snapshotAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Timestamp when the quota snapshot was read."
+            },
+            "models": {
+              "type": "object",
+              "description": "Per-model quota entries at snapshot time.",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": ["healthy", "degrading", "exhausted"],
+                    "description": "Current quota status for the model."
+                  },
+                  "resetAt": {
+                    "type": ["string", "null"],
+                    "description": "When quota is expected to recover, if known."
+                  },
+                  "remainingEstimate": {
+                    "type": ["number", "null"],
+                    "description": "Estimated remaining capacity, if available."
+                  },
+                  "confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Confidence in the quota estimate."
+                  }
+                },
+                "required": ["status", "resetAt", "remainingEstimate", "confidence"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["snapshotAt", "models"],
+          "additionalProperties": false
+        },
+        "human_intervention": {
+          "type": "boolean",
+          "description": "Whether a human manually intervened in the fallback path."
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["success", "all_exhausted", "non_quota_error"],
+          "description": "Final outcome of the fallback sequence."
+        },
+        "latency_ms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "End-to-end wall-clock duration across the fallback sequence."
+        },
+        "cost_usd": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Observed cost in USD across the fallback sequence, if surfaced."
+        },
+        "fallback_chain": {
+          "type": "array",
+          "description": "Ordered list of models that failed before success or terminal exit.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "description": "Failed model identifier."
+              },
+              "reason": {
+                "type": "string",
+                "description": "Reason that the model was skipped or failed."
+              }
+            },
+            "required": ["model", "reason"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "preferred_model",
+        "fallback_model",
+        "task_type",
+        "quota_snapshot",
+        "human_intervention",
+        "outcome",
+        "latency_ms",
+        "cost_usd",
+        "fallback_chain"
+      ],
+      "additionalProperties": false
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
