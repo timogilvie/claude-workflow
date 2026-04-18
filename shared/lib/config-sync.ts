@@ -15,7 +15,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     worktreeRoot: '../worktrees',
     agentCmd: 'claude',
     requireConfirm: true,
-    planningMode: 'skip',
+    planningMode: 'interactive',
     maxRetries: 3,
     retryDelay: 2,
   },
