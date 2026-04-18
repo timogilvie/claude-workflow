@@ -29,6 +29,30 @@ source "$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/agent-adapters.sh"
 load_config "$REPO_DIR"
 
+# Derive effective operating mode and apply degraded-mode slot limits
+WAVEMILL_OPERATING_MODE=$(get_operating_mode "$REPO_DIR")
+export WAVEMILL_OPERATING_MODE
+
+_orig_parallel=""
+case "$WAVEMILL_OPERATING_MODE" in
+  survival)
+    if (( MAX_PARALLEL > 1 )); then
+      _orig_parallel="$MAX_PARALLEL"
+      MAX_PARALLEL=1
+      export MAX_PARALLEL
+    fi
+    ;;
+  constrained)
+    _constrained_max=$(( (MAX_PARALLEL + 1) / 2 ))
+    (( _constrained_max < 1 )) && _constrained_max=1
+    if (( _constrained_max < MAX_PARALLEL )); then
+      _orig_parallel="$MAX_PARALLEL"
+      MAX_PARALLEL="$_constrained_max"
+      export MAX_PARALLEL
+    fi
+    ;;
+esac
+
 # ── Nested invocation guards (HOK-1214) ──────────────────────────
 
 # Guard 1: Detect if running inside a git worktree
@@ -1230,6 +1254,8 @@ log "info" "  Project: ${PROJECT_NAME:-(all projects)}"
 log "info" "  Agent: $AGENT_CMD ($(agent_name "$AGENT_CMD"))${AGENT_CMD_EXPLICIT:+ [explicit override]}"
 log "info" "  Router: ${ROUTER_ENABLED:-true} (per-task agent+model selection)"
 log "info" "  Max parallel: $MAX_PARALLEL"
+log "info" "  Operating mode: $WAVEMILL_OPERATING_MODE"
+[[ -n "${_orig_parallel:-}" ]] && log "status" "  ⚠️  Max parallel reduced from $_orig_parallel → $MAX_PARALLEL ($WAVEMILL_OPERATING_MODE mode)"
 log "info" "  Planning mode: $PLANNING_MODE"
 log "info" "  Dashboard verbosity: ${DASHBOARD_VERBOSITY:-info}"
 [[ -n "${SETUP_CMD:-}" ]] && log "info" "  Setup command: $SETUP_CMD"
@@ -2876,6 +2902,7 @@ _launch_agent_in_pane() {
 launch_planning_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local planner_model="$7" planner_agent="$8" plan_depth="$9"
+  local operating_mode="${10:-${WAVEMILL_OPERATING_MODE:-normal}}"
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
@@ -2892,7 +2919,7 @@ $issue_desc
   # Build planning prompt
   local prompt_file="/tmp/${SESSION}-${issue}-planning-prompt.txt"
   build_planning_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" "$operating_mode" > "$prompt_file"
 
   log "status" "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
   _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug" "$issue"
@@ -2903,6 +2930,7 @@ $issue_desc
 launch_coding_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local coder_model="$7" coder_agent="$8" code_depth="$9"
+  local operating_mode="${10:-${WAVEMILL_OPERATING_MODE:-normal}}"
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
@@ -2919,7 +2947,7 @@ $issue_desc
   # Build coding prompt
   local prompt_file="/tmp/${SESSION}-${issue}-coding-prompt.txt"
   build_coding_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" "$operating_mode" > "$prompt_file"
 
   log "status" "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
   _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug" "$issue"
@@ -2930,6 +2958,7 @@ $issue_desc
 launch_review_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local reviewer_model="$7" reviewer_agent="$8" review_mode="$9"
+  local operating_mode="${10:-${WAVEMILL_OPERATING_MODE:-normal}}"
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
@@ -2946,7 +2975,7 @@ $issue_desc
   # Build review prompt
   local prompt_file="/tmp/${SESSION}-${issue}-review-prompt.txt"
   build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" "$operating_mode" > "$prompt_file"
 
   log "status" "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug" "$issue"
@@ -3068,7 +3097,7 @@ EOF
 
       # Launch review phase agent
       log "status" "  → Relaunching review agent for $issue (model: $reviewer_model, mode: $review_mode)"
-      launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
+      launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode" "${WAVEMILL_OPERATING_MODE:-normal}"
       if [[ $? -eq 0 ]]; then
         log "status" "✓ $issue → Review context restored and agent relaunched for PR #$pr"
       else
@@ -4581,7 +4610,7 @@ Implement from the issue description plus direct codebase analysis."
     write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"
 
     launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "${planner_model:-claude-sonnet-4-6}" "$resolved_planner_agent" "${plan_depth:-light}"
+      "${planner_model:-claude-sonnet-4-6}" "$resolved_planner_agent" "${plan_depth:-light}" "${WAVEMILL_OPERATING_MODE:-normal}"
     local launch_rc=$?
     if ! handle_phase_launch_result "$issue" "$feature_dir" "planning" "routing" "$launch_rc" "$win" \
       "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
@@ -4591,7 +4620,7 @@ Implement from the issue description plus direct codebase analysis."
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" > "$instr_file"
+      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" "" "${WAVEMILL_OPERATING_MODE:-normal}" > "$instr_file"
 
     # Use coder model for implementation phase
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model" "$issue"
@@ -4648,6 +4677,7 @@ done < "$TASKS_FILE"
 log "status" "Monitoring tasks and managing work queue..."
 [[ "$PLANNING_MODE" == "interactive" ]] && log "info" "  Planning mode: interactive (watching for plan approval)"
 log "info" "  Max parallel: $MAX_PARALLEL"
+log "info" "  Operating mode: $WAVEMILL_OPERATING_MODE"
 log "info" "  Checking every ${POLL_SECONDS}s"
 log "info" "  Type 'q' to quit, or 'touch $STATE_DIR/.stop-loop' to stop"
 printf '\033[1mTask Backlog\033[0m\n'
@@ -4921,7 +4951,7 @@ monitor_issue_state() {
               # Record planning stage as running (HOK-1177)
               write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_model"
 
-              launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth"
+              launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth" "${WAVEMILL_OPERATING_MODE:-normal}"
               local launch_rc=$?
               if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "planning" "routing" "$launch_rc" "$WIN" "$planner_agent" "$planner_model"; then
                 return 0
@@ -5025,7 +5055,7 @@ monitor_issue_state() {
             # Record coding stage as running (HOK-1177)
             write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_model"
 
-            launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth"
+            launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth" "${WAVEMILL_OPERATING_MODE:-normal}"
             local launch_rc=$?
             if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "coding" "planning" "$launch_rc" "$WIN" "$coder_agent" "$coder_model"; then
                 return 0
@@ -5156,7 +5186,7 @@ monitor_issue_state() {
             # Record review stage as running (HOK-1177)
             write_stage_result "$FEATURE_DIR" "review" "running" "$reviewer_agent" "$reviewer_model"
 
-            launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
+            launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode" "${WAVEMILL_OPERATING_MODE:-normal}"
             local launch_rc=$?
             if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "review" "coding" "$launch_rc" "$WIN" "$reviewer_agent" "$reviewer_model"; then
               return 0

@@ -212,10 +212,26 @@ agent_completion_text() {
 build_autonomous_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8"
-  local reviewer_model="${9:-}" review_mode="${10:-}" agent_cmd="${11:-claude}"
+  local reviewer_model="${9:-}" review_mode="${10:-}" agent_cmd="${11:-claude}" operating_mode="${12:-normal}"
   local abort_exit_instruction feature_dir
   abort_exit_instruction="$(agent_exit_followup_text "$agent_cmd")"
   feature_dir="$wt_dir/features/$(basename "$wt_dir")"
+
+  # Build degraded-mode guidance
+  local degraded_mode_guidance=""
+  if [[ "$operating_mode" == "constrained" ]]; then
+    degraded_mode_guidance="### Operating Mode: Constrained
+Resources are limited. Apply tighter discipline throughout:
+- Keep commits to ≤5 files changed
+- Run tests between major units of work"
+  elif [[ "$operating_mode" == "survival" ]]; then
+    degraded_mode_guidance="### Operating Mode: Survival (Degraded)
+Resources are severely limited. Apply maximum discipline:
+- Keep commits to ≤3 files changed
+- Commit every 2–3 steps
+- Rate your confidence (1–10) before creating the PR
+- Create a **draft** PR if confidence < 7, noting uncertainties in the PR body"
+  fi
 
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
@@ -247,6 +263,8 @@ Success criteria:
 - [ ] Self-review tool executed (npx tsx $tools_dir/review-changes.ts)
 - [ ] No regressions in existing functionality
 - [ ] PR created with clear description and linked to $issue
+
+$degraded_mode_guidance
 
 Process:
 1. Inspect repo and find relevant code
@@ -525,7 +543,7 @@ _WVML_PROMPT_
 build_planning_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
-  local plan_depth="${10:-light}" agent_cmd="${11:-claude}"
+  local plan_depth="${10:-light}" agent_cmd="${11:-claude}" operating_mode="${12:-normal}"
   local feature_dir="$wt_dir/features/$slug"
   local task_context_path="$feature_dir/selected-task.json"
   local plan_path="$feature_dir/plan.md"
@@ -552,6 +570,23 @@ build_planning_prompt() {
 - Include basic test coverage"
   fi
 
+  # Build degraded-mode guidance
+  local degraded_mode_guidance=""
+  if [[ "$operating_mode" == "constrained" ]]; then
+    degraded_mode_guidance="### Operating Mode: Constrained
+Resources are limited. Create a narrower implementation plan:
+- Limit each phase to changes in ≤5 files
+- Prefer focused changes over comprehensive refactors
+- Break large changes into separate phases that can be individually committed and verified"
+  elif [[ "$operating_mode" == "survival" ]]; then
+    degraded_mode_guidance="### Operating Mode: Survival (Degraded)
+Resources are severely limited. Create a minimal implementation plan:
+- Limit each phase to changes in ≤3 files
+- Implement only the core requirements; defer enhancements
+- Each phase must be independently committable and verifiable
+- Add a 'Confidence Rating' section at the end of the plan (expected confidence 1–10 in the approach)"
+  fi
+
   # Load template and fill placeholders
   local template_file="$tools_dir/prompts/planning-phase.md"
   local template_content
@@ -566,6 +601,7 @@ build_planning_prompt() {
     template_content="${template_content//\{\{TASK_CONTEXT_PATH\}\}/$task_context_path}"
     template_content="${template_content//\{\{PLAN_PATH\}\}/$plan_path}"
     template_content="${template_content//\{\{DEPTH_GUIDANCE\}\}/$depth_guidance}"
+    template_content="${template_content//\{\{DEGRADED_MODE_GUIDANCE\}\}/$degraded_mode_guidance}"
   else
     template_content="[ERROR: Planning template not found at $template_file]"
   fi
@@ -627,7 +663,7 @@ _WVML_PROMPT_
 build_coding_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
-  local code_depth="${10:-medium}" agent_cmd="${11:-claude}"
+  local code_depth="${10:-medium}" agent_cmd="${11:-claude}" operating_mode="${12:-normal}"
   local feature_dir="$wt_dir/features/$slug"
   local plan_path="$feature_dir/plan.md"
   local abort_feedback_instruction exit_guard_text coding_completion_text
@@ -652,6 +688,24 @@ build_coding_prompt() {
 - Handle common edge cases"
   fi
 
+  # Build degraded-mode guidance
+  local degraded_mode_guidance=""
+  if [[ "$operating_mode" == "constrained" ]]; then
+    degraded_mode_guidance="### Operating Mode: Constrained
+Resources are limited. Apply tighter edit discipline:
+- Keep each commit to ≤5 files changed
+- Commit after completing each plan phase
+- Run tests before starting the next phase"
+  elif [[ "$operating_mode" == "survival" ]]; then
+    degraded_mode_guidance="### Operating Mode: Survival (Degraded)
+Resources are severely limited. Apply maximum edit discipline:
+- Keep each commit to ≤3 files changed
+- Commit after every 2 plan steps
+- Run tests after every commit; fix failures before continuing
+- After all phases complete, write your self-confidence score (1–10) to \`features/$slug/.coder-confidence\`
+  (10 = fully confident, 1 = significant uncertainty remains)"
+  fi
+
   # Load template and fill placeholders
   local template_file="$tools_dir/prompts/coding-phase.md"
   local template_content
@@ -662,6 +716,7 @@ build_coding_prompt() {
     template_content="${template_content//\{\{FEATURE_DIR\}\}/$feature_dir}"
     template_content="${template_content//\{\{PLAN_PATH\}\}/$plan_path}"
     template_content="${template_content//\{\{DEPTH_GUIDANCE\}\}/$depth_guidance}"
+    template_content="${template_content//\{\{DEGRADED_MODE_GUIDANCE\}\}/$degraded_mode_guidance}"
   else
     template_content="[ERROR: Coding template not found at $template_file]"
   fi
@@ -841,7 +896,7 @@ _WVML_PROMPT_
 build_review_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
-  local reviewer_model="${10:-}" review_mode="${11:-static}" agent_cmd="${12:-claude}"
+  local reviewer_model="${10:-}" review_mode="${11:-static}" agent_cmd="${12:-claude}" operating_mode="${13:-normal}"
   local feature_dir="$wt_dir/features/$slug"
   local abort_feedback_instruction exit_guard_text review_completion_text
   abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "$feature_dir/.workflow-aborted")"
@@ -874,6 +929,26 @@ build_review_prompt() {
       ;;
   esac
 
+  # Build degraded-mode guidance
+  local degraded_mode_guidance=""
+  if [[ "$operating_mode" == "constrained" ]]; then
+    degraded_mode_guidance="### Operating Mode: Constrained
+Resources are limited. Apply extra caution during review:
+- Fix all blockers before creating the PR
+- Prefer targeted fixes; avoid scope creep"
+  elif [[ "$operating_mode" == "survival" ]]; then
+    degraded_mode_guidance="### Operating Mode: Survival (Degraded)
+Resources are severely limited. Check coder confidence before creating the PR:
+1. Read the confidence score: cat \"$feature_dir/.coder-confidence\" (if it exists)
+2. If the score is < 7 (or the file is missing), create the PR as a **draft**:
+   gh pr create --draft --title \"$issue: <summary>\" --body \"<body>\"
+   Then add a section to the PR body:
+   ## ⚠️ Coder Confidence
+   Score: <N>/10
+   Uncertainties: <describe areas of low confidence or missing validation>
+3. If the score is ≥ 7, create a standard (non-draft) PR"
+  fi
+
   # Load template and fill placeholders
   local template_file="$tools_dir/prompts/review-phase.md"
   local template_content
@@ -887,6 +962,7 @@ build_review_prompt() {
     template_content="${template_content//\{\{FEATURE_DIR\}\}/$feature_dir}"
     template_content="${template_content//\{\{REVIEWER_NOTE\}\}/$reviewer_note}"
     template_content="${template_content//\{\{MODE_GUIDANCE\}\}/$mode_guidance}"
+    template_content="${template_content//\{\{DEGRADED_MODE_GUIDANCE\}\}/$degraded_mode_guidance}"
   else
     template_content="[ERROR: Review template not found at $template_file]"
   fi

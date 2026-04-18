@@ -96,6 +96,8 @@ Your ONLY remaining actions are:
 - Focus on understanding and planning
 - If anything is unclear, ask the user for clarification before finalizing the plan
 
+{{DEGRADED_MODE_GUIDANCE}}
+
 ### Handling User Abort Requests
 
 If the user asks you to stop work, close the issue, abort, or otherwise discontinue this workflow:

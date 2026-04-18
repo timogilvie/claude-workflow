@@ -203,6 +203,20 @@ load_config() {
   _WAVEMILL_CONFIG_LOADED=1
 }
 
+# Read current operating mode via TypeScript module.
+# Outputs: normal | constrained | survival
+# Falls back to "normal" on any error.
+get_operating_mode() {
+  local repo_dir="${1:-${REPO_DIR:-$PWD}}"
+  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local mode
+  mode=$(npx tsx "$tools_dir/get-operating-mode.ts" --repo-dir "$repo_dir" 2>/dev/null) || mode=""
+  case "$mode" in
+    normal|constrained|survival) echo "$mode" ;;
+    *) echo "normal" ;;
+  esac
+}
+
 # Backwards-compatible wrapper for callers that haven't migrated to load_config()
 detect_project_name() {
   local repo_dir="${1:-$PWD}"
