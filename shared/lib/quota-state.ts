@@ -775,16 +775,7 @@ export function recordSuccess(input: SuccessInput, repoDir?: string): void {
 export function markExhausted(input: ExhaustedInput, repoDir?: string): void {
   try {
     mutateWithLock(repoDir, (state) => {
-      const current = state.models[input.modelId] ?? {
-        status: 'healthy',
-        remainingEstimate: null,
-        resetAt: null,
-        confidence: 1,
-        lastLimitErrorAt: null,
-        lastSuccessAt: null,
-        lastReason: null,
-        consecutiveLimitErrors: 0,
-      };
+      const current = state.models[input.modelId] ?? emptyStoredEntry();
       const effective = project(current, now());
 
       state.models[input.modelId] = {
@@ -796,6 +787,10 @@ export function markExhausted(input: ExhaustedInput, repoDir?: string): void {
         lastSuccessAt: effective.lastSuccessAt,
         lastReason: input.reason ?? effective.lastReason,
         consecutiveLimitErrors: Math.max(2, effective.consecutiveLimitErrors),
+        requestHistory: effective.requestHistory,
+        consecutiveNearLimitSignals: effective.consecutiveNearLimitSignals,
+        lastNearLimitAt: effective.lastNearLimitAt,
+        budgetSignal: effective.budgetSignal,
       };
       return true;
     });
