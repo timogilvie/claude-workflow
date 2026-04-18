@@ -11,13 +11,18 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { clearConfigCache } from './config.ts';
+import { getCurrentOperatingMode } from './operating-mode.ts';
 import {
   __resetQuotaStateTestState,
   __setClock,
   QUOTA_STATE_TIMINGS,
   compactQuotaState,
+  estimateQuotaHealth,
   getModelStatus,
   markExhausted,
+  recordNearLimit,
+  recordRequest,
   readQuotaSnapshot,
   recordLimitError,
   recordSuccess,
@@ -58,6 +63,11 @@ function rawQuotaState(targetRepoDir = repoDir): Record<string, unknown> {
   return JSON.parse(readFileSync(quotaStatePath(targetRepoDir), 'utf-8')) as Record<string, unknown>;
 }
 
+function writeRepoConfig(targetRepoDir: string, value: Record<string, unknown>): void {
+  writeFileSync(join(targetRepoDir, '.wavemill-config.json'), `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+  clearConfigCache(targetRepoDir);
+}
+
 function withCapturedWarnings(fn: () => void): string[] {
   const warnings: string[] = [];
   const originalWarn = console.warn;
@@ -82,10 +92,12 @@ describe('quota-state', () => {
     );
     repoDir = createRepoDir('repo');
     __resetQuotaStateTestState();
+    clearConfigCache();
   });
 
   afterEach(() => {
     __resetQuotaStateTestState();
+    clearConfigCache();
 
     if (existsSync(tempRoot)) {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -355,5 +367,132 @@ describe('quota-state', () => {
     assert.equal(firstSnapshot.models['repo-two-model'], undefined);
     assert.equal(secondSnapshot.models['repo-two-model']?.status, 'degrading');
     assert.equal(secondSnapshot.models['repo-one-model'], undefined);
+  });
+
+  it('tracks rolling request history and proactively degrades before first 429', () => {
+    const baseTime = Date.parse('2026-04-17T19:00:00.000Z');
+    __setClock(() => baseTime);
+
+    for (let index = 0; index < 150; index += 1) {
+      recordRequest({ modelId: 'claude-sonnet-4-6' }, repoDir);
+    }
+
+    const snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.status, 'degrading');
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.lastLimitErrorAt, null);
+
+    const rawModels = rawQuotaState(repoDir).models as Record<string, Record<string, unknown>>;
+    const history = rawModels['claude-sonnet-4-6']?.requestHistory as Array<{ timestamp: string }>;
+    assert.equal(history.length, 100);
+  });
+
+  it('respects configured volume threshold override', () => {
+    writeRepoConfig(repoDir, {
+      quota: {
+        thresholds: {
+          volumeThresholdPercent: 95,
+        },
+      },
+    });
+
+    const baseTime = Date.parse('2026-04-17T19:05:00.000Z');
+    __setClock(() => baseTime);
+    for (let index = 0; index < 70; index += 1) {
+      recordRequest({ modelId: 'claude-sonnet-4-6' }, repoDir);
+    }
+
+    let snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.status, 'healthy');
+
+    for (let index = 0; index < 30; index += 1) {
+      recordRequest({ modelId: 'claude-sonnet-4-6' }, repoDir);
+    }
+    snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.status, 'degrading');
+  });
+
+  it('transitions to degrading after repeated near-limit signals and resets on success', () => {
+    const baseTime = Date.parse('2026-04-17T20:00:00.000Z');
+    __setClock(() => baseTime);
+
+    recordNearLimit({ modelId: 'claude-sonnet-4-6', reason: 'header warning' }, repoDir);
+    __setClock(() => baseTime + 30_000);
+    recordNearLimit({ modelId: 'claude-sonnet-4-6', reason: 'header warning' }, repoDir);
+    __setClock(() => baseTime + 60_000);
+    recordNearLimit({ modelId: 'claude-sonnet-4-6', reason: 'header warning' }, repoDir);
+
+    let snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.status, 'degrading');
+
+    recordSuccess({ modelId: 'claude-sonnet-4-6' }, repoDir);
+    snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.status, 'healthy');
+    assert.equal(estimateQuotaHealth('claude-sonnet-4-6', repoDir), 'healthy');
+  });
+
+  it('proactively degrades from low budget signals', () => {
+    const baseTime = Date.parse('2026-04-17T20:10:00.000Z');
+    __setClock(() => baseTime);
+    recordRequest({
+      modelId: 'claude-sonnet-4-6',
+      budgetSignal: {
+        remaining: 20,
+        limit: 100,
+        window: 'minute',
+      },
+    }, repoDir);
+
+    const snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.status, 'degrading');
+  });
+
+  it('applies manual overrides and ignores expired overrides', () => {
+    const nowMs = Date.parse('2026-04-17T21:00:00.000Z');
+    __setClock(() => nowMs);
+    recordRequest({ modelId: 'claude-sonnet-4-6' }, repoDir);
+
+    writeRepoConfig(repoDir, {
+      quota: {
+        manualOverrides: {
+          'claude-sonnet-4-6': {
+            status: 'degrading',
+            reason: 'planned maintenance',
+            expiresAt: '2026-04-17T22:00:00.000Z',
+          },
+          'claude-opus-4-7': {
+            status: 'exhausted',
+            reason: 'expired override',
+            expiresAt: '2026-04-17T20:00:00.000Z',
+          },
+        },
+      },
+    });
+
+    const snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.status, 'degrading');
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.lastReason, 'planned maintenance');
+    assert.equal(snapshot.models['claude-opus-4-7'], undefined);
+  });
+
+  it('drives constrained operating mode before 429 via proactive degradation', () => {
+    writeRepoConfig(repoDir, {
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            class: 'frontier',
+          },
+        },
+      },
+    });
+
+    const baseTime = Date.parse('2026-04-17T22:00:00.000Z');
+    __setClock(() => baseTime);
+    for (let index = 0; index < 100; index += 1) {
+      recordRequest({ modelId: 'claude-sonnet-4-6' }, repoDir);
+    }
+
+    const snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['claude-sonnet-4-6']?.lastLimitErrorAt, null);
+    assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
   });
 });

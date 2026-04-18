@@ -46,3 +46,18 @@ Decision table:
 ## Current Scope
 
 This milestone only surfaces and documents operating mode. Individual command behavior does not yet change based on mode; that wiring is deferred to the next milestone.
+
+## Proactive Degradation Detection
+
+Operating mode now includes proactive quota-state transitions, not just reactive 429-driven state.
+
+`readQuotaSnapshot()` can mark a model `degrading` before hard-stop if any heuristic triggers:
+- Rolling request volume in the last 5 minutes crosses configured threshold
+- Repeated near-limit warnings accumulate inside the healthy decay window
+- Provider-surfaced budget signal reports low remaining percentage
+- Remaining estimate drops below near-limit ratio threshold relative to known limit
+
+Manual per-model overrides in `.wavemill-config.json` are applied after projection and can force
+`healthy`, `degrading`, or `exhausted` status for known high-usage windows.
+
+See [Quota Tracking](/Users/timothyogilvie/Dropbox/wavemill/worktrees/proactive-quota-degradation-before-hard-stop/.wavemill/context/quota-tracking.md) for full signal definitions, thresholds, and CLI override flow.
