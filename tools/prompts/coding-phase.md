@@ -28,6 +28,8 @@ The implementation plan is ready at: {{PLAN_PATH}}
 
 {{DEPTH_GUIDANCE}}
 
+{{MODE_GUIDANCE}}
+
 ### Success Criteria
 - [ ] Implementation matches the plan
 - [ ] All tests pass

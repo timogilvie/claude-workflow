@@ -62,12 +62,42 @@ STATE_FILE="$STATE_DIR/workflow-state.json"
 MILL_LOG_DIR="$REPO_DIR/.wavemill/logs"
 mkdir -p "$MILL_LOG_DIR"
 MILL_LOG_FILE="$MILL_LOG_DIR/mill-${SESSION}.log"
+TOOLS_DIR="${TOOLS_DIR:-$REPO_DIR/tools}"
+LIB_DIR="${LIB_DIR:-$REPO_DIR/shared/lib}"
+EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
 
 trim_outer_whitespace() {
   local value="${1-}"
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
+}
+
+_global_operating_mode() {
+  npx tsx "$TOOLS_DIR/get-operating-mode.ts" global --repo-dir "$REPO_DIR" 2>/dev/null || echo "normal"
+}
+
+_update_effective_max_parallel() {
+  EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
+
+  if has_any_healthy_model "$REPO_DIR"; then
+    return 0
+  fi
+
+  local global_mode
+  global_mode="$(_global_operating_mode)"
+  case "$global_mode" in
+    survival)
+      if (( MAX_PARALLEL > 1 )); then
+        EFFECTIVE_MAX_PARALLEL=1
+      fi
+      ;;
+    constrained)
+      if (( MAX_PARALLEL > 3 )); then
+        EFFECTIVE_MAX_PARALLEL=3
+      fi
+      ;;
+  esac
 }
 
 FORCE_MODEL="$(trim_outer_whitespace "${FORCE_MODEL:-}")"
@@ -1124,12 +1154,12 @@ if (( stale_count > 0 )); then
 fi
 
 SKIP_BACKLOG_SELECTION=false
-STARTUP_SLOT_LIMIT="$MAX_PARALLEL"
+STARTUP_SLOT_LIMIT="$EFFECTIVE_MAX_PARALLEL"
 inflight_tasks="$(detect_inflight_tasks)"
 if [[ -n "$inflight_tasks" ]]; then
   inflight_count=$(printf '%s\n' "$inflight_tasks" | grep -c .)
   inflight_primary_count=$(count_inflight_primary_tasks "$inflight_tasks")
-  available_startup_slots=$((MAX_PARALLEL - inflight_primary_count))
+  available_startup_slots=$((EFFECTIVE_MAX_PARALLEL - inflight_primary_count))
   (( available_startup_slots < 0 )) && available_startup_slots=0
 
   echo ""
@@ -1160,7 +1190,7 @@ if [[ -n "$inflight_tasks" ]]; then
   if (( available_startup_slots > 0 )); then
     log "info" "Resume impact: $inflight_primary_count slot(s) already in use, $available_startup_slots slot(s) available for new work"
   else
-    log "info" "Resume impact: all $MAX_PARALLEL startup slot(s) are already occupied by in-flight primary tasks"
+    log "info" "Resume impact: all $EFFECTIVE_MAX_PARALLEL startup slot(s) are already occupied by in-flight primary tasks"
   fi
   echo ""
   echo "Options:"
@@ -1195,7 +1225,7 @@ if [[ -n "$inflight_tasks" ]]; then
           inflight_tasks=""
           inflight_count=0
           inflight_primary_count=0
-          STARTUP_SLOT_LIMIT="$MAX_PARALLEL"
+          STARTUP_SLOT_LIMIT="$EFFECTIVE_MAX_PARALLEL"
         else
           log_error "Failed to clear in-flight task state."
           exit 1
@@ -1229,7 +1259,11 @@ log "info" "  Worktree root: $WORKTREE_ROOT"
 log "info" "  Project: ${PROJECT_NAME:-(all projects)}"
 log "info" "  Agent: $AGENT_CMD ($(agent_name "$AGENT_CMD"))${AGENT_CMD_EXPLICIT:+ [explicit override]}"
 log "info" "  Router: ${ROUTER_ENABLED:-true} (per-task agent+model selection)"
-log "info" "  Max parallel: $MAX_PARALLEL"
+if (( EFFECTIVE_MAX_PARALLEL < MAX_PARALLEL )); then
+  log "status" "  Max parallel: $EFFECTIVE_MAX_PARALLEL (reduced from $MAX_PARALLEL - all models degraded)"
+else
+  log "info" "  Max parallel: $MAX_PARALLEL"
+fi
 log "info" "  Planning mode: $PLANNING_MODE"
 log "info" "  Dashboard verbosity: ${DASHBOARD_VERBOSITY:-info}"
 [[ -n "${SETUP_CMD:-}" ]] && log "info" "  Setup command: $SETUP_CMD"
@@ -1836,6 +1870,7 @@ if [[ ! -f "$LIB_DIR/wavemill-common.sh" ]]; then
   exit 1
 fi
 source "$LIB_DIR/wavemill-common.sh"
+_update_effective_max_parallel
 
 # Ensure gh commands target the correct GitHub repo (not inherited CWD)
 cd "$REPO_DIR"
@@ -2876,6 +2911,7 @@ _launch_agent_in_pane() {
 launch_planning_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local planner_model="$7" planner_agent="$8" plan_depth="$9"
+  local operating_mode="normal"
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
@@ -2888,13 +2924,14 @@ launch_planning_phase() {
   issue_context="Issue Description:
 $issue_desc
 "
+  operating_mode="$(get_model_operating_mode "$planner_model" "$REPO_DIR")"
 
   # Build planning prompt
   local prompt_file="/tmp/${SESSION}-${issue}-planning-prompt.txt"
   build_planning_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" "$operating_mode" > "$prompt_file"
 
-  log "status" "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth)"
+  log "status" "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth, mode: $operating_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
@@ -2903,6 +2940,7 @@ $issue_desc
 launch_coding_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local coder_model="$7" coder_agent="$8" code_depth="$9"
+  local operating_mode="normal"
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
@@ -2915,13 +2953,14 @@ launch_coding_phase() {
   issue_context="Issue Description:
 $issue_desc
 "
+  operating_mode="$(get_model_operating_mode "$coder_model" "$REPO_DIR")"
 
   # Build coding prompt
   local prompt_file="/tmp/${SESSION}-${issue}-coding-prompt.txt"
   build_coding_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" "$operating_mode" > "$prompt_file"
 
-  log "status" "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth)"
+  log "status" "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth, mode: $operating_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
@@ -2930,6 +2969,7 @@ $issue_desc
 launch_review_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local reviewer_model="$7" reviewer_agent="$8" review_mode="$9"
+  local operating_mode="normal"
   local win="${issue}-${slug}"
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
@@ -2942,13 +2982,14 @@ launch_review_phase() {
   issue_context="Issue Description:
 $issue_desc
 "
+  operating_mode="$(get_model_operating_mode "$reviewer_model" "$REPO_DIR")"
 
   # Build review prompt
   local prompt_file="/tmp/${SESSION}-${issue}-review-prompt.txt"
   build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" > "$prompt_file"
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" "$operating_mode" > "$prompt_file"
 
-  log "status" "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode)"
+  log "status" "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode, operating mode: $operating_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
@@ -4590,8 +4631,11 @@ Implement from the issue description plus direct codebase analysis."
     log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
+    local task_operating_mode="normal"
+    task_operating_mode="$(get_model_operating_mode "$task_model" "$REPO_DIR")"
+
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" > "$instr_file"
+      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" "$task_agent_cmd" "$task_operating_mode" > "$instr_file"
 
     # Use coder model for implementation phase
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model" "$issue"
@@ -4647,7 +4691,11 @@ done < "$TASKS_FILE"
 
 log "status" "Monitoring tasks and managing work queue..."
 [[ "$PLANNING_MODE" == "interactive" ]] && log "info" "  Planning mode: interactive (watching for plan approval)"
-log "info" "  Max parallel: $MAX_PARALLEL"
+if (( EFFECTIVE_MAX_PARALLEL < MAX_PARALLEL )); then
+  log "status" "  Max parallel: $EFFECTIVE_MAX_PARALLEL (reduced from $MAX_PARALLEL - all models degraded)"
+else
+  log "info" "  Max parallel: $MAX_PARALLEL"
+fi
 log "info" "  Checking every ${POLL_SECONDS}s"
 log "info" "  Type 'q' to quit, or 'touch $STATE_DIR/.stop-loop' to stop"
 printf '\033[1mTask Backlog\033[0m\n'
@@ -5902,6 +5950,7 @@ check_control_pane_health() {
 
 while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
+  _update_effective_max_parallel
   check_control_pane_health
   active_count=0
   active_challenger_count=0
@@ -5949,7 +5998,7 @@ while :; do
 
   # ── Phase C: Offer new tasks if slots available ─────────────────────
   # Challengers are free overhead — don't count them against MAX_PARALLEL
-  free_slots=$((MAX_PARALLEL - (active_count - active_challenger_count)))
+  free_slots=$((EFFECTIVE_MAX_PARALLEL - (active_count - active_challenger_count)))
   update_free_slots_state "$free_slots"
 
   if (( free_slots > 0 )); then
