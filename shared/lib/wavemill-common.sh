@@ -224,6 +224,23 @@ detect_project_name() {
   echo "$project_name"
 }
 
+# Returns the operating mode for a specific model: normal|constrained|survival
+get_model_operating_mode() {
+  local model_id="$1"
+  local repo_dir="${2:-${REPO_DIR:-$PWD}}"
+  local tools_dir="${TOOLS_DIR:-${repo_dir%/}/tools}"
+
+  npx tsx "$tools_dir/get-operating-mode.ts" model "$model_id" --repo-dir "$repo_dir" 2>/dev/null || echo "normal"
+}
+
+# Returns exit code 0 if any model is healthy, 1 if all are degraded/exhausted.
+has_any_healthy_model() {
+  local repo_dir="${1:-${REPO_DIR:-$PWD}}"
+  local tools_dir="${TOOLS_DIR:-${repo_dir%/}/tools}"
+
+  npx tsx "$tools_dir/get-operating-mode.ts" any-healthy --repo-dir "$repo_dir" 2>/dev/null
+}
+
 # ============================================================================
 # GITHUB HELPERS
 # ============================================================================

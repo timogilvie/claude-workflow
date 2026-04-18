@@ -79,6 +79,8 @@ Before creating the PR, determine whether you are the principal author:
 
 {{MODE_GUIDANCE}}
 
+{{DRAFT_PR_INSTRUCTION}}
+
 ### Success Criteria
 - [ ] Self-review tool executed (unless mode is 'none')
 - [ ] Blockers fixed (if any were found)

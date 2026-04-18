@@ -521,11 +521,13 @@ _WVML_PROMPT_
 #   $8 = tools_dir
 #   $9 = slug
 #   $10 = plan_depth
+#   $11 = agent_cmd
+#   $12 = operating_mode
 # Prints: the complete prompt to stdout
 build_planning_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
-  local plan_depth="${10:-light}" agent_cmd="${11:-claude}"
+  local plan_depth="${10:-light}" agent_cmd="${11:-claude}" operating_mode="${12:-normal}"
   local feature_dir="$wt_dir/features/$slug"
   local task_context_path="$feature_dir/selected-task.json"
   local plan_path="$feature_dir/plan.md"
@@ -552,6 +554,25 @@ build_planning_prompt() {
 - Include basic test coverage"
   fi
 
+  local plan_mode_guidance=""
+  case "$operating_mode" in
+    constrained)
+      plan_mode_guidance="## ⚠️  CONSTRAINED MODE
+
+Scope the plan conservatively:
+- Prefer phased plans where Phase 1 is a standalone shippable unit.
+- Flag any step that touches more than 10 files as a stretch goal."
+      ;;
+    survival)
+      plan_mode_guidance="## ⚠️  SURVIVAL MODE
+
+Scope the plan to the minimum viable change:
+- Plan for at most 5 files changed.
+- Prefer a single narrow implementation phase plus validation.
+- Explicitly mark non-critical follow-up work as deferred."
+      ;;
+  esac
+
   # Load template and fill placeholders
   local template_file="$tools_dir/prompts/planning-phase.md"
   local template_content
@@ -566,6 +587,7 @@ build_planning_prompt() {
     template_content="${template_content//\{\{TASK_CONTEXT_PATH\}\}/$task_context_path}"
     template_content="${template_content//\{\{PLAN_PATH\}\}/$plan_path}"
     template_content="${template_content//\{\{DEPTH_GUIDANCE\}\}/$depth_guidance}"
+    template_content="${template_content//\{\{PLAN_MODE_GUIDANCE\}\}/$plan_mode_guidance}"
   else
     template_content="[ERROR: Planning template not found at $template_file]"
   fi
@@ -623,11 +645,13 @@ _WVML_PROMPT_
 #   $8 = tools_dir
 #   $9 = slug
 #   $10 = code_depth
+#   $11 = agent_cmd
+#   $12 = operating_mode
 # Prints: the complete prompt to stdout
 build_coding_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
-  local code_depth="${10:-medium}" agent_cmd="${11:-claude}"
+  local code_depth="${10:-medium}" agent_cmd="${11:-claude}" operating_mode="${12:-normal}"
   local feature_dir="$wt_dir/features/$slug"
   local plan_path="$feature_dir/plan.md"
   local abort_feedback_instruction exit_guard_text coding_completion_text
@@ -652,6 +676,31 @@ build_coding_prompt() {
 - Handle common edge cases"
   fi
 
+  local mode_guidance=""
+  case "$operating_mode" in
+    constrained)
+      mode_guidance="## ⚠️  CONSTRAINED MODE (quota degrading)
+
+Apply tighter scope to conserve model capacity:
+- Limit changes to files directly required by the plan (aim for 10 files or fewer).
+- Commit after each plan phase before moving to the next phase.
+- Run tests/lint after each plan phase, not just at the end.
+- If a phase grows beyond the stated scope, stop at the safest checkpoint and document the remaining work in your commit message."
+      ;;
+    survival)
+      mode_guidance="## ⚠️  SURVIVAL MODE (quota exhausted)
+
+Apply minimal scope. A focused small PR is better than a large incomplete one:
+- Limit changes to at most 5 files. If more are needed, implement only the critical path and document deferrals.
+- Commit after every 1-2 file changes; do not batch large edit sets.
+- Run tests/lint after every commit to catch regressions early.
+- When implementation is complete, record your self-confidence in the completion marker:
+  echo 'confidence=high' > \"$feature_dir/.coding-complete\"
+  echo 'confidence=low' > \"$feature_dir/.coding-complete\"
+- Use the low-confidence marker if correctness is uncertain even after validation."
+      ;;
+  esac
+
   # Load template and fill placeholders
   local template_file="$tools_dir/prompts/coding-phase.md"
   local template_content
@@ -662,6 +711,7 @@ build_coding_prompt() {
     template_content="${template_content//\{\{FEATURE_DIR\}\}/$feature_dir}"
     template_content="${template_content//\{\{PLAN_PATH\}\}/$plan_path}"
     template_content="${template_content//\{\{DEPTH_GUIDANCE\}\}/$depth_guidance}"
+    template_content="${template_content//\{\{MODE_GUIDANCE\}\}/$mode_guidance}"
   else
     template_content="[ERROR: Coding template not found at $template_file]"
   fi
@@ -837,11 +887,13 @@ _WVML_PROMPT_
 #   $9 = slug
 #   $10 = reviewer_model (optional: recommended reviewer model)
 #   $11 = review_mode (optional: recommended review mode)
+#   $12 = agent_cmd
+#   $13 = operating_mode
 # Prints: the complete prompt to stdout
 build_review_prompt() {
   local title="$1" issue="$2" wt_dir="$3" branch="$4" base_branch="$5"
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
-  local reviewer_model="${10:-}" review_mode="${11:-static}" agent_cmd="${12:-claude}"
+  local reviewer_model="${10:-}" review_mode="${11:-static}" agent_cmd="${12:-claude}" operating_mode="${13:-normal}"
   local feature_dir="$wt_dir/features/$slug"
   local abort_feedback_instruction exit_guard_text review_completion_text
   abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "$feature_dir/.workflow-aborted")"
@@ -874,6 +926,21 @@ build_review_prompt() {
       ;;
   esac
 
+  local draft_pr_instruction=""
+  if [[ "$operating_mode" == "survival" ]]; then
+    draft_pr_instruction="## ⚠️  SURVIVAL MODE - Draft PR fallback
+
+Read the coding confidence signal from the completion marker:
+\`\`\`bash
+coding_confidence=\$(grep '^confidence=' \"$feature_dir/.coding-complete\" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')
+\`\`\`
+
+If \`\$coding_confidence\` is \`low\`, or if the initial self-review run exits 1:
+- Create the PR as a draft by adding \`--draft\` to \`gh pr create\`.
+- Do not iterate through more than one review-fix cycle before opening the draft.
+- Note the low-confidence or failed-review reason in the PR description."
+  fi
+
   # Load template and fill placeholders
   local template_file="$tools_dir/prompts/review-phase.md"
   local template_content
@@ -887,6 +954,7 @@ build_review_prompt() {
     template_content="${template_content//\{\{FEATURE_DIR\}\}/$feature_dir}"
     template_content="${template_content//\{\{REVIEWER_NOTE\}\}/$reviewer_note}"
     template_content="${template_content//\{\{MODE_GUIDANCE\}\}/$mode_guidance}"
+    template_content="${template_content//\{\{DRAFT_PR_INSTRUCTION\}\}/$draft_pr_instruction}"
   else
     template_content="[ERROR: Review template not found at $template_file]"
   fi

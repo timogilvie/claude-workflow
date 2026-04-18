@@ -81,6 +81,8 @@ Your ONLY remaining actions are:
 
 {{DEPTH_GUIDANCE}}
 
+{{PLAN_MODE_GUIDANCE}}
+
 ### Success Criteria
 - [ ] Task packet is complete (either existing or expanded)
 - [ ] Post-expansion route saved (if task was expanded)

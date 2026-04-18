@@ -45,3 +45,36 @@ export function getCurrentOperatingMode(repoDir?: string): OperatingMode {
 
   return deriveOperatingMode(snapshot, premiumModelIds);
 }
+
+export function hasAnyHealthyModel(repoDir?: string): boolean {
+  const snapshot = readQuotaSnapshot(repoDir);
+  const registry = getEffectiveRegistry(repoDir);
+
+  for (const modelId of Object.keys(registry.models)) {
+    const entry = snapshot.models[modelId];
+    if (!entry || entry.status === 'healthy') {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function getModelOperatingMode(modelId: string, repoDir?: string): OperatingMode {
+  const snapshot = readQuotaSnapshot(repoDir);
+  const entry = snapshot.models[modelId];
+
+  if (!entry) {
+    return 'normal';
+  }
+
+  if (entry.status === SURVIVAL_TRIGGER_STATUS) {
+    return 'survival';
+  }
+
+  if (entry.status === CONSTRAINED_TRIGGER_STATUS) {
+    return 'constrained';
+  }
+
+  return 'normal';
+}
