@@ -8,6 +8,7 @@ import {
   attachAgentType,
   attachConstraints,
   attachDifficultyMetadata,
+  attachFallbackEvent,
   attachTaskContextMetadata,
   attachRepoContextMetadata,
   attachWorkflowCostMetadata,
@@ -192,6 +193,43 @@ describe('eval-record-builder', () => {
     });
   });
 
+  describe('attachFallbackEvent', () => {
+    it('should attach fallback telemetry when provided', () => {
+      const fallbackEvent = {
+        schema_version: '1.0' as const,
+        preferred_model: 'model-a',
+        fallback_model: 'model-b',
+        task_type: 'coding' as const,
+        difficulty: 'hard' as const,
+        quota_snapshot: {
+          snapshotAt: '2026-04-18T12:00:00Z',
+          models: {
+            'model-a': {
+              status: 'exhausted' as const,
+              resetAt: null,
+              remainingEstimate: null,
+              confidence: 0.9,
+            },
+          },
+        },
+        human_intervention: false,
+        outcome: 'success' as const,
+        latency_ms: 1234,
+        cost_usd: 0.42,
+        fallback_chain: [{ model: 'model-a', reason: 'quota' }],
+      };
+
+      attachFallbackEvent(baseRecord, fallbackEvent);
+      expect(baseRecord.fallbackEvent).toEqual(fallbackEvent);
+    });
+
+    it('should not modify record when fallback event is null', () => {
+      const before = { ...baseRecord };
+      attachFallbackEvent(baseRecord, null);
+      expect(baseRecord).toEqual(before);
+    });
+  });
+
   describe('enrichEvalRecord', () => {
     it('should attach all metadata when provided', () => {
       const metadata = {
@@ -222,6 +260,22 @@ describe('eval-record-builder', () => {
           sessionCount: 1,
           turnCount: 5,
         },
+        fallbackEvent: {
+          schema_version: '1.0' as const,
+          preferred_model: 'model-a',
+          fallback_model: 'model-b',
+          task_type: 'coding' as const,
+          difficulty: 'medium' as const,
+          quota_snapshot: {
+            snapshotAt: '2026-04-18T12:00:00Z',
+            models: {},
+          },
+          human_intervention: false,
+          outcome: 'success' as const,
+          latency_ms: 900,
+          cost_usd: 0.1234,
+          fallback_chain: [{ model: 'model-a', reason: 'quota' }],
+        },
         constraints: {
           maxCostUsd: 5,
         },
@@ -235,6 +289,7 @@ describe('eval-record-builder', () => {
       expect(baseRecord.repoContext).toEqual(metadata.repoContext);
       expect(baseRecord.workflowCost).toBe(0.1234);
       expect(baseRecord.workflowCostStatus).toBe('success');
+      expect(baseRecord.fallbackEvent).toEqual(metadata.fallbackEvent);
       expect(baseRecord.constraints).toEqual({ maxCostUsd: 5 });
     });
 

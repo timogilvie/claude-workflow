@@ -18,9 +18,7 @@ import type {
   TaskContext,
   RepoContext,
   StageOutcomes,
-  StageScore,
-  RoutingOutcome,
-  RoutingDecision,
+  FallbackEventMetadata,
   TaskDescriptor,
   EvalConstraints,
 } from './eval-schema.ts';
@@ -50,6 +48,8 @@ export interface EvalRecordMetadata {
   workflowCost?: WorkflowCostOutcome | null;
   /** Task descriptor for router training */
   taskDescriptor?: TaskDescriptor | null;
+  /** Cross-model fallback telemetry */
+  fallbackEvent?: FallbackEventMetadata | null;
   /** Routing and execution constraints */
   constraints?: EvalConstraints | null;
 }
@@ -232,6 +232,18 @@ export function attachTaskDescriptor(
 }
 
 /**
+ * Attach fallback event telemetry to the eval record.
+ */
+export function attachFallbackEvent(
+  record: EvalRecord,
+  fallbackEvent: FallbackEventMetadata | null,
+): void {
+  if (fallbackEvent) {
+    record.fallbackEvent = fallbackEvent;
+  }
+}
+
+/**
  * Attach routing constraints to the eval record.
  */
 export function attachConstraints(
@@ -279,6 +291,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachRepoContextMetadata(record, metadata.repoContext || null);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
+  attachFallbackEvent(record, metadata.fallbackEvent || null);
   attachConstraints(record, metadata.constraints || null);
 
   // Extract stageScores from record metadata (set by evaluateTask)

@@ -997,6 +997,48 @@ test('Record with minimal outcomes (only required fields) validates', () => {
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
+test('Record with fallbackEvent validates and round-trips through JSON serialization', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.6.0',
+    fallbackEvent: {
+      schema_version: '1.0',
+      preferred_model: 'model-a',
+      fallback_model: 'model-b',
+      task_type: 'coding',
+      difficulty: 'hard',
+      quota_snapshot: {
+        snapshotAt: '2026-04-18T12:00:00Z',
+        models: {
+          'model-a': {
+            status: 'exhausted',
+            resetAt: null,
+            remainingEstimate: null,
+            confidence: 0.9,
+          },
+        },
+      },
+      human_intervention: false,
+      outcome: 'success',
+      latency_ms: 3210,
+      cost_usd: 0.45,
+      fallback_chain: [{ model: 'model-a', reason: 'quota' }],
+    },
+  };
+
+  const serialized = JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
+  const result = validateAgainstSchema(serialized);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+  assert.deepEqual(serialized, record);
+});
+
+test('Record without fallbackEvent still validates and parses unchanged', () => {
+  const record = JSON.parse(JSON.stringify(scenarios[0].record)) as Record<string, unknown>;
+  assert.ok(!('fallbackEvent' in record));
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
 // ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────
