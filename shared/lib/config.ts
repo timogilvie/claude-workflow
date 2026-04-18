@@ -218,6 +218,23 @@ export interface PermissionsConfig {
   worktreeMode?: WorktreeModeConfig;
 }
 
+export interface QuotaManualOverride {
+  status: 'healthy' | 'degrading' | 'exhausted';
+  reason?: string;
+  expiresAt?: string;
+}
+
+export interface QuotaThresholdsConfig {
+  volumeThresholdPercent?: number;
+  budgetThresholdPercent?: number;
+  nearLimitCount?: number;
+}
+
+export interface QuotaConfig {
+  manualOverrides?: Record<string, QuotaManualOverride>;
+  thresholds?: QuotaThresholdsConfig;
+}
+
 export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
@@ -250,6 +267,7 @@ export interface WavemillConfig {
   ready?: ReadyConfig;
   permissions?: PermissionsConfig;
   modelRegistry?: ModelRegistryConfig;
+  quota?: QuotaConfig;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -657,4 +675,12 @@ export function getModelRegistryConfig(repoDir?: string): ModelRegistryConfig {
  */
 export function getDifficultyClassifierConfig(repoDir?: string): DifficultyClassifierConfig {
   return loadWavemillConfig(repoDir).router?.difficulty || {};
+}
+
+/**
+ * Get the quota health configuration.
+ * Returns empty object when not configured.
+ */
+export function getQuotaConfig(repoDir?: string): QuotaConfig {
+  return loadWavemillConfig(repoDir).quota || {};
 }
