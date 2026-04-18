@@ -289,6 +289,7 @@ async function invokeLLMWithRetry(
   const result = await callClaude(prompt, {
     mode: 'stream',
     model,
+    taskType: 'review',
     timeout,
     maxBuffer: 50 * 1024 * 1024, // 50MB for large diffs
     retry: true,

@@ -8,6 +8,7 @@
  * - Configurable timeout, buffer limits, model
  * - JSON envelope unwrapping (data.result, usage extraction)
  * - Optional retry with exponential backoff
+ * - Task-specific cross-model fallback for hard quota errors
  * - Tool-call/XML tag stripping
  * - Provider-specific env injection
  *
@@ -20,6 +21,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { getEffectiveRegistry, getLadder, rankCandidates, type RegistryTaskType } from './model-registry.ts';
+import { getModelStatus, markExhausted, recordSuccess } from './quota-state.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -59,8 +62,14 @@ export interface LLMCallOptions {
   cliFlags?: string[];
   /** Working directory for command execution */
   cwd?: string;
+  /** Repo root used for registry/quota-state resolution */
+  repoDir?: string;
   /** Override CLI command (e.g., 'claude', 'codex', 'openai') */
   cliCmd?: string;
+  /** Task type used to select a task-specific fallback ladder */
+  taskType?: RegistryTaskType;
+  /** Override fallback candidates instead of consulting the registry */
+  fallbackModels?: string[];
   /** Lifecycle hooks for progress reporting */
   observer?: LLMCallObserver;
 }
@@ -80,6 +89,10 @@ export interface LLMCallResult {
   rawOutput: string;
   /** Provider that was used */
   provider: LLMProvider;
+  /** Model that actually produced the response */
+  model: string;
+  /** Models skipped due to quota exhaustion before success */
+  fallbackChain?: Array<{ model: string; reason: string }>;
 }
 
 export interface CliHealthCheck {
@@ -117,10 +130,35 @@ export interface LLMCallObserver {
   onAttemptComplete?: (event: LLMCallObserverEvent) => void | Promise<void>;
   onAttemptError?: (event: LLMCallObserverEvent) => void | Promise<void>;
   onRetry?: (event: LLMCallObserverEvent) => void | Promise<void>;
+  onQuotaFallback?: (
+    event: { failedModel: string; nextModel?: string; reason: string; resetAt?: string | null }
+  ) => void | Promise<void>;
 }
 
 interface ObservedError extends Error {
   elapsedMs?: number;
+}
+
+export class LLMQuotaError extends Error {
+  readonly modelId: string;
+  readonly reason: string;
+  readonly resetAt?: string | null;
+
+  constructor(message: string, details: { modelId: string; reason: string; resetAt?: string | null }) {
+    super(message);
+    this.name = 'LLMQuotaError';
+    this.modelId = details.modelId;
+    this.reason = details.reason;
+    this.resetAt = details.resetAt;
+  }
+}
+
+type LLMErrorKind = 'quota' | 'auth' | 'timeout' | 'transient' | 'other';
+
+interface ClassifiedLLMError {
+  kind: LLMErrorKind;
+  reason: string;
+  resetAt: string | null;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -132,6 +170,8 @@ const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10MB
 const DEFAULT_MAX_RETRIES = 2;
 const SLOW_CALL_WARNING_MS = 30_000;
 const SLOW_CALL_REPEAT_MS = 15_000;
+const FALLBACK_DEFAULT_TASK_TYPE: RegistryTaskType = 'classify';
+const warnedMissingTaskType = new Set<string>();
 
 function withElapsed(error: Error, elapsedMs: number): ObservedError {
   const observed = error as ObservedError;
@@ -143,6 +183,115 @@ function getElapsed(error: unknown): number {
   return typeof (error as ObservedError)?.elapsedMs === 'number'
     ? (error as ObservedError).elapsedMs!
     : 0;
+}
+
+function extractResetAt(message: string): string | null {
+  const retryAfterMatch = message.match(/retry-after[:=]\s*(\d+)/i);
+  if (retryAfterMatch) {
+    const seconds = Number.parseInt(retryAfterMatch[1], 10);
+    if (Number.isFinite(seconds)) {
+      return new Date(Date.now() + seconds * 1000).toISOString();
+    }
+  }
+
+  const resetAtMatch = message.match(/(?:reset[_ -]?at|retry[_ -]?at)[:=]\s*([0-9TZ:.\-+]+)/i);
+  if (resetAtMatch) {
+    const parsed = Date.parse(resetAtMatch[1]);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+  }
+
+  return null;
+}
+
+function classifyLLMError(error: unknown): ClassifiedLLMError {
+  const message = error instanceof Error ? error.message : String(error);
+  const lowered = message.toLowerCase();
+  const resetAt = extractResetAt(message);
+
+  if (
+    /\b(429|rate[_ -]?limit|quota|resource_exhausted|insufficient_quota|too many requests)\b/i.test(message)
+    || /exited with code 429/i.test(message)
+  ) {
+    return { kind: 'quota', reason: 'quota', resetAt };
+  }
+
+  if (/\b(401|403|authentication|unauthorized|forbidden|invalid api key|permission denied)\b/i.test(lowered)) {
+    return { kind: 'auth', reason: 'auth', resetAt };
+  }
+
+  if (/\b(etimedout|timed out|timeout|inactivity)\b/i.test(lowered)) {
+    return { kind: 'timeout', reason: 'timeout', resetAt };
+  }
+
+  if (/\b(econnreset|econnrefused|enotfound|socket hang up|temporar(?:y|ily)|overloaded|unavailable|5\d\d)\b/i.test(lowered)) {
+    return { kind: 'transient', reason: 'transient', resetAt };
+  }
+
+  return { kind: 'other', reason: 'other', resetAt };
+}
+
+function repoDirForOptions(options: LLMCallOptions): string {
+  return options.repoDir ?? options.cwd ?? process.cwd();
+}
+
+function warnMissingTaskType(provider: LLMProvider): void {
+  if (warnedMissingTaskType.has(provider)) {
+    return;
+  }
+  warnedMissingTaskType.add(provider);
+  console.warn(
+    `[llm-cli] missing taskType for provider=${provider}; defaulting quota fallback ladder to ${FALLBACK_DEFAULT_TASK_TYPE}`,
+  );
+}
+
+function uniqueModels(models: string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const model of models) {
+    if (!model || seen.has(model)) {
+      continue;
+    }
+    seen.add(model);
+    deduped.push(model);
+  }
+  return deduped;
+}
+
+function resolveCandidateModels(
+  provider: LLMProvider,
+  options: LLMCallOptions,
+): { taskType: RegistryTaskType; candidates: string[] } {
+  const repoDir = repoDirForOptions(options);
+
+  if (options.fallbackModels && options.fallbackModels.length > 0) {
+    const initial = options.model ? [options.model, ...options.fallbackModels] : options.fallbackModels;
+    const deduped = uniqueModels(initial);
+    const available = deduped.filter((modelId) => getModelStatus(modelId, repoDir) !== 'exhausted');
+    return {
+      taskType: options.taskType ?? FALLBACK_DEFAULT_TASK_TYPE,
+      candidates: available.length > 0 ? available : deduped,
+    };
+  }
+
+  const registry = getEffectiveRegistry(repoDir);
+  const taskType = options.taskType ?? FALLBACK_DEFAULT_TASK_TYPE;
+  if (!options.taskType) {
+    warnMissingTaskType(provider);
+  }
+
+  let ladder = getLadder(registry, taskType);
+  if (ladder.length === 0) {
+    ladder = rankCandidates(registry, taskType);
+  }
+
+  const deduped = uniqueModels(options.model ? [options.model, ...ladder] : ladder);
+  const available = deduped.filter((modelId) => getModelStatus(modelId, repoDir) !== 'exhausted');
+  return {
+    taskType,
+    candidates: available.length > 0 ? available : deduped,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -355,6 +504,7 @@ function executeSync(
     // Enhanced error handling with specific diagnostics
     const errorMsg = (error as Error).message;
     const promptSize = existsSync(tmpFile) ? readFileSync(tmpFile, 'utf-8').length : 0;
+    const classified = classifyLLMError(error);
 
     // ENOENT - command not found
     if (errorMsg.includes('ENOENT') || errorMsg.includes('not found')) {
@@ -372,7 +522,7 @@ function executeSync(
     }
 
     // ETIMEDOUT or timeout in message - timeout error
-    if (errorMsg.includes('ETIMEDOUT') || errorMsg.includes('timed out') || errorMsg.includes('timeout')) {
+    if (classified.kind === 'timeout') {
       throw new Error(
         `${provider} CLI timed out after ${timeout}ms\n\n` +
         `Command: ${command}\n` +
@@ -390,7 +540,7 @@ function executeSync(
     }
 
     // 401 or authentication - auth failure
-    if (errorMsg.includes('401') || errorMsg.includes('authentication') || errorMsg.includes('unauthorized')) {
+    if (classified.kind === 'auth') {
       throw new Error(
         `${provider} CLI authentication failed\n\n` +
         `Troubleshooting:\n` +
@@ -402,7 +552,7 @@ function executeSync(
     }
 
     // Rate limit or quota exceeded
-    if (errorMsg.includes('429') || errorMsg.includes('rate limit') || errorMsg.includes('quota')) {
+    if (classified.kind === 'quota') {
       throw new Error(
         `${provider} CLI rate limit or quota exceeded\n\n` +
         `Troubleshooting:\n` +
@@ -896,7 +1046,7 @@ export async function ensureClaudeAvailable(
  *
  * @param prompt - The prompt to send to the LLM
  * @param options - Configuration options
- * @returns Result with cleaned text, usage, and cost
+ * @returns Result with cleaned text, usage, cost, and the model that actually answered
  *
  * @example
  * ```typescript
@@ -936,6 +1086,11 @@ export async function callLLM(
   const provider = options.provider || 'claude';
   const retry = options.retry ?? false;
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const useFallback = Boolean(options.taskType || options.fallbackModels?.length);
+
+  if (useFallback) {
+    return callLLMWithFallback(prompt, options, provider, maxRetries);
+  }
 
   if (retry) {
     return callLLMWithRetry(prompt, options, provider, maxRetries);
@@ -1022,6 +1177,7 @@ async function callLLMOnce(
       costUsd,
       rawOutput,
       provider,
+      model: options.model || '(default)',
     };
   } catch (error) {
     throw withElapsed(error as Error, getElapsed(error) || Date.now() - startedAt);
@@ -1054,6 +1210,8 @@ async function callLLMWithRetry(
       return await callLLMOnce(prompt, options, provider, attempt + 1, totalAttempts);
     } catch (error) {
       lastError = error as Error;
+      const classified = classifyLLMError(lastError);
+      const willRetry = attempt < maxRetries && (classified.kind === 'transient' || classified.kind === 'timeout');
       await options.observer?.onAttemptError?.({
         provider,
         model: options.model,
@@ -1061,10 +1219,14 @@ async function callLLMWithRetry(
         maxAttempts: totalAttempts,
         elapsedMs: getElapsed(lastError),
         error: lastError.message.split('\n')[0],
-        willRetry: attempt < maxRetries,
+        willRetry,
       });
 
-      if (attempt < maxRetries) {
+      if (classified.kind === 'quota') {
+        throw lastError;
+      }
+
+      if (willRetry) {
         // Exponential backoff: 2s, 4s, 8s, ...
         const delay = Math.pow(2, attempt + 1) * 1000;
         await options.observer?.onRetry?.({
@@ -1079,6 +1241,8 @@ async function callLLMWithRetry(
           willRetry: true,
         });
         await new Promise((resolve) => setTimeout(resolve, delay));
+      } else {
+        break;
       }
     }
   }
@@ -1090,6 +1254,82 @@ async function callLLMWithRetry(
     `  - Run health check: npm run check:review\n` +
     `  - Enable verbose mode: npx tsx tools/review-changes.ts main --verbose\n` +
     `  - Check if service is experiencing issues: https://status.anthropic.com\n`
+  );
+}
+
+async function callLLMWithFallback(
+  prompt: string,
+  options: LLMCallOptions,
+  provider: LLMProvider,
+  maxRetries: number
+): Promise<LLMCallResult> {
+  const repoDir = repoDirForOptions(options);
+  const { taskType, candidates } = resolveCandidateModels(provider, options);
+  const retry = options.retry ?? false;
+
+  if (candidates.length === 0) {
+    return retry
+      ? callLLMWithRetry(prompt, options, provider, maxRetries)
+      : callLLMOnce(prompt, options, provider);
+  }
+
+  const fallbackChain: Array<{ model: string; reason: string }> = [];
+  const exhausted: Array<{ model: string; resetAt: string | null }> = [];
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const candidateOptions: LLMCallOptions = { ...options, model: candidate, repoDir };
+
+    try {
+      const result = retry
+        ? await callLLMWithRetry(prompt, candidateOptions, provider, maxRetries)
+        : await callLLMOnce(prompt, candidateOptions, provider);
+
+      recordSuccess({ modelId: candidate }, repoDir);
+      return {
+        ...result,
+        model: candidate,
+        fallbackChain: fallbackChain.length > 0 ? fallbackChain : undefined,
+      };
+    } catch (error) {
+      const classified = classifyLLMError(error);
+      if (classified.kind !== 'quota') {
+        throw error;
+      }
+
+      markExhausted({
+        modelId: candidate,
+        reason: classified.reason,
+        resetAt: classified.resetAt,
+      }, repoDir);
+      fallbackChain.push({ model: candidate, reason: classified.reason });
+      exhausted.push({ model: candidate, resetAt: classified.resetAt });
+
+      const nextModel = candidates[index + 1];
+      await options.observer?.onQuotaFallback?.({
+        failedModel: candidate,
+        nextModel,
+        reason: classified.reason,
+        resetAt: classified.resetAt,
+      });
+
+      if (!options.observer?.onQuotaFallback) {
+        console.warn(
+          `[llm-cli] model ${candidate} quota-exhausted, falling back to ${nextModel ?? 'none'} for task=${taskType}`,
+        );
+      }
+    }
+  }
+
+  throw new LLMQuotaError(
+    `All fallback models were quota exhausted: ${
+      exhausted.map(({ model, resetAt }) => `${model}${resetAt ? ` (resetAt=${resetAt})` : ''}`).join(', ')
+    }`,
+    {
+      modelId: exhausted[exhausted.length - 1]?.model ?? options.model ?? '(unknown)',
+      reason: 'quota',
+      resetAt: exhausted[exhausted.length - 1]?.resetAt ?? null,
+    },
   );
 }
 

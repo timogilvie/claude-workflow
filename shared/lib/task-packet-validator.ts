@@ -472,6 +472,7 @@ async function callClaudeCLI(prompt: string, model: string): Promise<string> {
   const result = await callClaude(prompt, {
     mode: 'sync',
     model,
+    taskType: 'classify',
     timeout: TIMEOUT_MS, // 30000
     maxBuffer: 5 * 1024 * 1024,
   });
