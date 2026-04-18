@@ -98,10 +98,11 @@ export async function generateConceptPage(
 
   // Call LLM
   console.log(`Generating concept page for "${conceptName}"...`);
-  const content = await callClaude(filledTemplate, {
+  const result = await callClaude(filledTemplate, {
     model: 'claude-opus-4-6',
-    maxTokens: 4000,
+    taskType: 'planning',
   });
+  const content = result.text;
 
   // Write output
   writeFileSync(conceptPath, content, 'utf-8');

@@ -200,17 +200,14 @@ async function callClaudeWithRetry(prompt: string, model: string): Promise<LLMCa
   const result = await callClaude(prompt, {
     mode: 'sync',
     model,
+    taskType: 'classify',
     timeout: TIMEOUT_MS,
     maxBuffer: 10 * 1024 * 1024,
     retry: true,
     maxRetries: MAX_RETRIES,
   });
 
-  return {
-    text: result.text,
-    usage: result.usage,
-    costUsd: result.costUsd,
-  };
+  return result;
 }
 
 /**

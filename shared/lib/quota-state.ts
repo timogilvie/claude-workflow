@@ -41,6 +41,10 @@ export interface SuccessInput {
   modelId: string;
 }
 
+export interface ExhaustedInput extends LimitErrorInput {
+  confidence?: number;
+}
+
 interface StoredQuotaEntry extends QuotaEntry {
   consecutiveLimitErrors: number;
 }
@@ -474,6 +478,38 @@ export function recordSuccess(input: SuccessInput, repoDir?: string): void {
     });
   } catch (error) {
     warnWriteFailure('record success', error);
+  }
+}
+
+export function markExhausted(input: ExhaustedInput, repoDir?: string): void {
+  try {
+    mutateWithLock(repoDir, (state) => {
+      const current = state.models[input.modelId] ?? {
+        status: 'healthy',
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+        consecutiveLimitErrors: 0,
+      };
+      const effective = project(current, now());
+
+      state.models[input.modelId] = {
+        status: 'exhausted',
+        remainingEstimate: normalizeRemainingEstimate(input.remainingEstimate),
+        resetAt: normalizeIsoDate(input.resetAt ?? null),
+        confidence: typeof input.confidence === 'number' ? normalizeConfidence(input.confidence) : 0.9,
+        lastLimitErrorAt: new Date(now()).toISOString(),
+        lastSuccessAt: effective.lastSuccessAt,
+        lastReason: input.reason ?? effective.lastReason,
+        consecutiveLimitErrors: Math.max(2, effective.consecutiveLimitErrors),
+      };
+      return true;
+    });
+  } catch (error) {
+    warnWriteFailure('mark exhausted', error);
   }
 }
 

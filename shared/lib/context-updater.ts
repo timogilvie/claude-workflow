@@ -107,7 +107,8 @@ ${opts.recentChanges}
   const claudeCmd = process.env.CLAUDE_CMD || 'claude';
   const result = await callClaude(prompt, {
     mode: 'stream',
-    claudeCmd,
+    cliCmd: claudeCmd,
+    taskType: 'classify',
     cliFlags: [
       '--tools', '',
       '--append-system-prompt',

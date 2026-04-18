@@ -17,6 +17,7 @@ import {
   QUOTA_STATE_TIMINGS,
   compactQuotaState,
   getModelStatus,
+  markExhausted,
   readQuotaSnapshot,
   recordLimitError,
   recordSuccess,
@@ -133,6 +134,22 @@ describe('quota-state', () => {
 
     const models = rawQuotaState(repoDir).models as Record<string, Record<string, unknown>>;
     assert.equal(models['claude-opus-4-1']?.consecutiveLimitErrors, 0);
+  });
+
+  it('marks a model exhausted immediately without requiring consecutive errors', () => {
+    __setClock(() => Date.parse('2026-04-17T12:05:00.000Z'));
+    markExhausted({
+      modelId: 'claude-opus-4-7',
+      reason: '429 rate_limit',
+      resetAt: '2026-04-17T12:35:00.000Z',
+    }, repoDir);
+
+    const snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['claude-opus-4-7']?.status, 'exhausted');
+    assert.equal(snapshot.models['claude-opus-4-7']?.resetAt, '2026-04-17T12:35:00.000Z');
+
+    const models = rawQuotaState(repoDir).models as Record<string, Record<string, unknown>>;
+    assert.equal(models['claude-opus-4-7']?.consecutiveLimitErrors, 2);
   });
 
   it('persists quota state across reads without relying on process-local caches', () => {

@@ -129,6 +129,7 @@ export function buildIssueExpansionCallOptions(cliCmd?: string): LLMCallOptions 
   return {
     mode: 'stream',
     cliCmd: cliCmd || process.env.CLAUDE_CMD || 'claude',
+    taskType: 'planning',
     cliFlags: ISSUE_EXPANDER_CLI_FLAGS,
   };
 }

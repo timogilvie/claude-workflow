@@ -237,6 +237,7 @@ export async function decomposeWithClaude(
   const result = await callClaude(fullPrompt, {
     mode: 'stream',
     model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-7',
+    taskType: 'planning',
     cliFlags,
     timeout,
   });
@@ -342,6 +343,7 @@ export async function runResearch(
   const result = await callClaude(fullPrompt, {
     mode: 'stream',
     model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-7',
+    taskType: 'planning',
     cliFlags,
     timeout,
   });
