@@ -234,12 +234,17 @@ get_model_operating_mode() {
 }
 
 # Returns exit code 0 if any model is healthy, 1 if all are degraded/exhausted.
-# On error (e.g. npx not found), returns 0 to safely assume models are healthy.
+# On unexpected errors (exit code > 1, e.g. npx not found), returns 0 to safely assume models are healthy.
 has_any_healthy_model() {
   local repo_dir="${1:-${REPO_DIR:-$PWD}}"
   local tools_dir="${TOOLS_DIR:-${repo_dir%/}/tools}"
 
-  npx tsx "$tools_dir/get-operating-mode.ts" any-healthy --repo-dir "$repo_dir" 2>/dev/null || return 0
+  npx tsx "$tools_dir/get-operating-mode.ts" any-healthy --repo-dir "$repo_dir" 2>/dev/null
+  local exit_code=$?
+  if [[ $exit_code -gt 1 ]]; then
+    return 0  # Unexpected error, assume models are healthy
+  fi
+  return $exit_code  # Pass through 0 or 1
 }
 
 # ============================================================================

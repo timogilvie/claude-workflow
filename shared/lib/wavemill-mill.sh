@@ -4631,8 +4631,11 @@ Implement from the issue description plus direct codebase analysis."
     log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
   else
     local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
+    local task_operating_mode="normal"
+    task_operating_mode="$(get_model_operating_mode "$task_model" "$REPO_DIR")"
+
     build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" > "$instr_file"
+      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" "$task_agent_cmd" "$task_operating_mode" > "$instr_file"
 
     # Use coder model for implementation phase
     agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model" "$issue"
