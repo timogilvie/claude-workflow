@@ -12,6 +12,8 @@ Use this page as the canonical registry for agent instruction locations in this 
 - `tools/prompts/planning-phase.md`: Planning phase instructions (loaded by `build_planning_prompt`). GEPA-optimizable.
 - `tools/prompts/coding-phase.md`: Coding phase instructions (loaded by `build_coding_prompt`). GEPA-optimizable.
 - `tools/prompts/review-phase.md`: Review phase instructions (loaded by `build_review_prompt`). GEPA-optimizable.
+- `tools/prompts/initiative-planner.md`: Standard initiative decomposition prompt (loaded by `tools/plan-initiative.ts` via `shared/lib/plan-prompt-selector.ts`). Used when operating mode is `normal`. GEPA-optimizable.
+- `tools/prompts/initiative-planner-compressed.md`: Compressed initiative decomposition prompt (loaded by `tools/plan-initiative.ts` via `shared/lib/plan-prompt-selector.ts`). Used when operating mode is `constrained` or `survival`. GEPA-optimizable.
 - `commands/workflow.md`: Phase 4 defines the interactive `/workflow` self-review loop.
 - `commands/bugfix.md`: Phase 5 defines the bugfix self-review loop.
 - `commands/implement-plan.md`: does not define self-review; that behavior is owned by `/workflow`.
