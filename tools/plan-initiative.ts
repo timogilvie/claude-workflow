@@ -5,6 +5,7 @@ import path from "node:path";
 import { listInitiatives } from '../shared/lib/initiative-lister.ts';
 import { decomposeInitiative } from '../shared/lib/initiative-decomposer.ts';
 import { getPlanConfig } from '../shared/lib/config.ts';
+import { pickInitiativePrompt } from '../shared/lib/plan-prompt-selector.ts';
 
 const PLAN_MODEL = process.env.PLAN_MODEL || 'claude-opus-4-7';
 
@@ -90,9 +91,8 @@ async function handleDecompose(args: any): Promise<void> {
   }
   console.log('');
 
-  // Load system prompt
-  const promptPath = resolvePromptPath(import.meta.url, 'initiative-planner.md');
-  const systemPrompt = await fs.readFile(promptPath, 'utf-8');
+  // Load system prompt based on the current operating mode.
+  const { content: systemPrompt } = await pickInitiativePrompt(repoRoot);
 
   // Load research prompt if needed
   let researchPrompt: string | undefined;
