@@ -19,6 +19,9 @@ import type { WorkflowRouteDecision } from './workflow-router.ts';
 export interface HokusaiRouterOptions {
   repoDir?: string;
   modelsAvailable?: string[];
+  plannerModels?: string[];
+  coderModels?: string[];
+  reviewerModels?: string[];
   maxCostUsd?: number;
 }
 
@@ -82,15 +85,15 @@ export async function routeViaHokusai(
     descriptor.repoContext,
     {
       modelsAvailable: options.modelsAvailable,
-      plannerModels: options.modelsAvailable
+      plannerModels: options.plannerModels ?? (options.modelsAvailable
         ? undefined
-        : getAvailableModelsForStage(routerConfig, 'planner'),
-      coderModels: options.modelsAvailable
+        : getAvailableModelsForStage(routerConfig, 'planner')),
+      coderModels: options.coderModels ?? (options.modelsAvailable
         ? undefined
-        : getAvailableModelsForStage(routerConfig, 'coder'),
-      reviewerModels: options.modelsAvailable
+        : getAvailableModelsForStage(routerConfig, 'coder')),
+      reviewerModels: options.reviewerModels ?? (options.modelsAvailable
         ? undefined
-        : getAvailableModelsForStage(routerConfig, 'reviewer'),
+        : getAvailableModelsForStage(routerConfig, 'reviewer')),
       maxCostUsd: options.maxCostUsd,
     },
     'workflow-route',

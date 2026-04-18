@@ -21,7 +21,7 @@ export interface ModelRegistry {
 }
 
 const TASK_TYPES: RegistryTaskType[] = ['routing', 'planning', 'coding', 'review', 'classify'];
-const CLASS_RANK: Record<ModelClass, number> = {
+export const CLASS_RANK: Record<ModelClass, number> = {
   frontier: 3,
   strong_generalist: 2,
   fast_economy: 1,
