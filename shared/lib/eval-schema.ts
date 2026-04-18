@@ -21,11 +21,14 @@
  *   signals, constraints, per-stage model assignments, and outcomes
  * - **1.5.0**: `timeSeconds` now records actual wall-clock duration computed
  *   from task-branch git history instead of always remaining `0` (HOK-1329)
+ * - **1.6.0**: Added optional `fallbackEvent` metadata for cross-model quota
+ *   fallback attribution (HOK-1336)
  *
  * @module eval-schema
  */
 
 import type { ModelPricing } from './workflow-cost.ts';
+import type { RegistryTaskType } from './model-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -786,6 +789,64 @@ export interface TaskDescriptor {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Fallback Event (HOK-1336)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Outcome taxonomy for cross-model fallback events.
+ */
+export type FallbackOutcome = 'success' | 'all_exhausted' | 'non_quota_error';
+
+/**
+ * Snapshot of a single model's quota health at fallback time.
+ */
+export interface QuotaSnapshotEntry {
+  /** Current quota status for the model. */
+  status: 'healthy' | 'degrading' | 'exhausted';
+  /** When the model's quota is expected to recover, if known. */
+  resetAt: string | null;
+  /** Estimated remaining capacity, if available. */
+  remainingEstimate: number | null;
+  /** Confidence in the current estimate, normalized to 0-1. */
+  confidence: number;
+}
+
+/**
+ * Structured metadata for a quota-driven fallback event.
+ *
+ * Uses snake_case to match downstream training consumers.
+ *
+ * @since 1.6.0
+ */
+export interface FallbackEventMetadata {
+  /** Schema version for forward compatibility. */
+  schema_version: '1.0';
+  /** Model preferred before any fallback occurred. */
+  preferred_model: string;
+  /** Model that ultimately produced the response, or null if none succeeded. */
+  fallback_model: string | null;
+  /** Task type used to select the fallback ladder. */
+  task_type: RegistryTaskType | null;
+  /** Difficulty classification supplied by the caller when known. */
+  difficulty?: DifficultyBand | null;
+  /** Quota-state snapshot captured near the fallback event. */
+  quota_snapshot: {
+    snapshotAt: string;
+    models: Record<string, QuotaSnapshotEntry>;
+  };
+  /** Whether a human manually intervened in the fallback path. */
+  human_intervention: boolean;
+  /** Final outcome of the fallback sequence. */
+  outcome: FallbackOutcome;
+  /** End-to-end wall-clock duration across the fallback sequence. */
+  latency_ms: number;
+  /** Observed cost in USD across the fallback sequence, if surfaced. */
+  cost_usd: number | null;
+  /** Ordered list of models that failed before success or terminal exit. */
+  fallback_chain: Array<{ model: string; reason: string }>;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -960,6 +1021,13 @@ export interface EvalRecord {
    * @since 1.4.0
    */
   taskDescriptor?: TaskDescriptor;
+
+  /**
+   * Cross-model fallback telemetry for quota-aware training attribution.
+   *
+   * @since 1.6.0
+   */
+  fallbackEvent?: FallbackEventMetadata;
 
   /** Budget constraints applied during routing and execution. */
   constraints?: EvalConstraints;
