@@ -54,6 +54,7 @@ All business logic lives in `shared/lib/` for reusability across CLI tools, comm
 - `shell-utils.ts` - Safe shell command execution
 - `linear.js` - Linear API client
 - `config.ts` - Centralized config loading
+- `model-registry.ts` - Canonical model capability registry with task-specific fallback ladders
 
 ### Refactoring Pattern
 
