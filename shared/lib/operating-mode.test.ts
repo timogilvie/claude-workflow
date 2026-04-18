@@ -9,7 +9,13 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { clearConfigCache } from './config.ts';
 import type { QuotaSnapshot, QuotaStatus } from './quota-state.ts';
+import {
+  __resetQuotaStateTestState,
+  __setClock,
+  recordRequest,
+} from './quota-state.ts';
 import {
   CONSTRAINED_TRIGGER_STATUS,
   deriveOperatingMode,
@@ -82,6 +88,7 @@ function writeQuotaState(models: Record<string, QuotaStatus>): void {
 describe('operating-mode', () => {
   beforeEach(() => {
     resetWarningState();
+    clearConfigCache();
     tempRoot = join(
       tmpdir(),
       `operating-mode-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -90,6 +97,8 @@ describe('operating-mode', () => {
   });
 
   afterEach(() => {
+    __resetQuotaStateTestState();
+    clearConfigCache();
     if (existsSync(tempRoot)) {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -188,5 +197,26 @@ describe('operating-mode', () => {
 
   it('returns normal when no quota state file exists', () => {
     assert.equal(getCurrentOperatingMode(repoDir), 'normal');
+  });
+
+  it('uses proactive degradation to enter constrained mode before 429', () => {
+    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            class: 'frontier',
+          },
+        },
+      },
+    }, null, 2), 'utf-8');
+    clearConfigCache(repoDir);
+
+    const baseTime = Date.parse('2026-04-17T12:10:00.000Z');
+    __setClock(() => baseTime);
+    for (let index = 0; index < 100; index += 1) {
+      recordRequest({ modelId: 'claude-sonnet-4-6' }, repoDir);
+    }
+
+    assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
   });
 });

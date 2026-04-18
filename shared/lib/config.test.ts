@@ -30,6 +30,7 @@ import {
   getHokusaiSubmissionConfig,
   getReadyConfig,
   getModelRegistryConfig,
+  getQuotaConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -269,6 +270,33 @@ test('invalid challenge scheduler threshold throws validation error', () => {
   }
 });
 
+test('invalid quota override status throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      quota: {
+        manualOverrides: {
+          sonnet: {
+            status: 'warning',
+          },
+        },
+      },
+    }));
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('loads config without schema validation when Ajv validation is disabled', () => {
   const tmp = makeTempRepo();
   const previous = process.env.WAVEMILL_DISABLE_AJV_VALIDATION;
@@ -342,6 +370,37 @@ test('getModelRegistryConfig returns configured overrides', () => {
         classify: ['claude-haiku-4-5-20251001'],
       },
     });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getQuotaConfig returns configured overrides and thresholds', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      quota: {
+        manualOverrides: {
+          'claude-sonnet-4-6': {
+            status: 'degrading',
+            reason: 'known provider load',
+            expiresAt: '2026-04-20T00:00:00.000Z',
+          },
+        },
+        thresholds: {
+          volumeThresholdPercent: 75,
+          budgetThresholdPercent: 30,
+          nearLimitCount: 4,
+        },
+      },
+    }));
+
+    const quota = getQuotaConfig(tmp);
+    assert.equal(quota.manualOverrides?.['claude-sonnet-4-6']?.status, 'degrading');
+    assert.equal(quota.thresholds?.volumeThresholdPercent, 75);
+    assert.equal(quota.thresholds?.budgetThresholdPercent, 30);
+    assert.equal(quota.thresholds?.nearLimitCount, 4);
   } finally {
     cleanUp(tmp);
   }
