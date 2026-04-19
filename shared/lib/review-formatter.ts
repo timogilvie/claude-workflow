@@ -80,6 +80,14 @@ export function formatReviewResult(result: ReviewResult, verbose: boolean): stri
     lines.push('');
   }
 
+  if (result.needsStrongerReviewer) {
+    const reason = result.strongerReviewerReason
+      ? ` (${result.strongerReviewerReason})`
+      : '';
+    lines.push(`  ${DIM}Stronger reviewer needed:${NC} yes${reason}`);
+    lines.push('');
+  }
+
   lines.push(formatFindings(result.codeReviewFindings, 'Code Review'));
   lines.push('');
 

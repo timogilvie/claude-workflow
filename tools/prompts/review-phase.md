@@ -9,19 +9,19 @@ The implementation is complete. Your job is to review and create a PR.
 1. **Run self-review tool** (up to 3 iterations):
    IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
    IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
-   npx tsx {{TOOLS_DIR}}/review-changes.ts {{BASE_BRANCH}} --json
+   npx tsx {{TOOLS_DIR}}/review-changes.ts {{BASE_BRANCH}} --json --operating-mode {{OPERATING_MODE}}
    {{REVIEWER_NOTE}}
    - Exit code 0 = review passed → proceed to step 3
    - Exit code 1 = issues found → fix blockers and re-run (step 2)
    - Exit code 2 = error → log comprehensive diagnostics and proceed to step 3
-   The output is structured JSON with verdict, codeReviewFindings, and uiFindings.
+   The output is structured JSON with verdict, codeReviewFindings, and optional uiFindings.
 
    When exit code 2 occurs, you MUST log the following diagnostics to help debug the failure:
    ```
    ⚠️  Review tool failed with exit code 2
 
    Diagnostics:
-   - Command: npx tsx {{TOOLS_DIR}}/review-changes.ts {{BASE_BRANCH}} --json
+   - Command: npx tsx {{TOOLS_DIR}}/review-changes.ts {{BASE_BRANCH}} --json --operating-mode {{OPERATING_MODE}}
    - Working directory: $(pwd)
    - Tool path: {{TOOLS_DIR}}/review-changes.ts
    - Tool exists: $(ls -lh {{TOOLS_DIR}}/review-changes.ts 2>&1 || echo "NOT FOUND")
@@ -74,6 +74,8 @@ Before creating the PR, determine whether you are the principal author:
      - Never override the PR author field if someone else created the branch
 
 4. **Link the PR to {{ISSUE}}**
+
+{{OPERATING_MODE_GUIDANCE}}
 
 ### Review Mode: {{REVIEW_MODE}}
 

@@ -798,6 +798,10 @@ build_review_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
   "Issue Description:
 Test
 " "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "claude-sonnet" "static" "codex" "survival" > "$PROMPT_RENDER_DIR/review-survival.txt"
+build_review_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "claude-sonnet" "static" "codex" "constrained" > "$PROMPT_RENDER_DIR/review-constrained.txt"
 build_coding_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
   "Issue Description:
 Test
@@ -850,10 +854,29 @@ else
 fi
 
 if grep -q 'Draft PR fallback' "$PROMPT_RENDER_DIR/review-survival.txt" \
-  && grep -q -- '--draft' "$PROMPT_RENDER_DIR/review-survival.txt"; then
+  && grep -q -- '--draft' "$PROMPT_RENDER_DIR/review-survival.txt" \
+  && grep -q -- '--operating-mode survival' "$PROMPT_RENDER_DIR/review-survival.txt" \
+  && grep -q 'syntax, contract violations, obvious regressions, and test-coverage gaps' "$PROMPT_RENDER_DIR/review-survival.txt" \
+  && grep -q 'needs_stronger_reviewer' "$PROMPT_RENDER_DIR/review-survival.txt"; then
   pass "review prompt renders survival-mode draft PR fallback"
 else
   fail "review prompt is missing survival-mode draft PR fallback"
+fi
+
+if grep -q 'Scoped review (constrained quota)' "$PROMPT_RENDER_DIR/review-constrained.txt" \
+  && grep -q -- '--operating-mode constrained' "$PROMPT_RENDER_DIR/review-constrained.txt" \
+  && grep -q 'syntax, contract violations, obvious regressions, and test-coverage gaps' "$PROMPT_RENDER_DIR/review-constrained.txt" \
+  && grep -q 'needs_stronger_reviewer' "$PROMPT_RENDER_DIR/review-constrained.txt"; then
+  pass "review prompt renders constrained-mode scoped review guidance"
+else
+  fail "review prompt is missing constrained-mode scoped review guidance"
+fi
+
+if ! grep -q 'Scoped review (' "$PROMPT_RENDER_DIR/review-codex.txt" \
+  && ! grep -q 'needs_stronger_reviewer' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "normal review prompt omits scoped-review guidance"
+else
+  fail "normal review prompt unexpectedly includes scoped-review guidance"
 fi
 
 EXIT_SEMANTICS_PATTERN='(/exit|remain in session|exit the process|stay running|keep running|close the session|let the session end)'

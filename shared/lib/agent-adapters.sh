@@ -971,6 +971,30 @@ If \`\$coding_confidence\` is \`low\`, or if the initial self-review run exits 1
 - Note the low-confidence or failed-review reason in the PR description."
   fi
 
+  local operating_mode_guidance=""
+  case "$operating_mode" in
+    constrained)
+      operating_mode_guidance="## Scoped review (constrained quota)
+
+The reviewer is operating in degraded scoped-review mode.
+- Pass \`--operating-mode constrained\` to \`review-changes.ts\`.
+- The review covers only syntax, contract violations, obvious regressions, and test-coverage gaps.
+- After the final review run, read \`needs_stronger_reviewer\` and \`stronger_reviewer_reason\` from the JSON output.
+- If the flag is true, prefix the PR title with \`[needs-stronger-reviewer]\`, add a \`## ⚠️ Needs Stronger Reviewer\` section near the top of the PR body, and attempt \`gh pr edit \"\$PR_URL\" --add-label needs-stronger-reviewer\`.
+- If the label edit fails because the label is missing, do not fail the phase; mention that in the PR body."
+      ;;
+    survival)
+      operating_mode_guidance="## Scoped review (survival quota)
+
+The reviewer is operating in degraded scoped-review mode.
+- Pass \`--operating-mode survival\` to \`review-changes.ts\`.
+- The review covers only syntax, contract violations, obvious regressions, and test-coverage gaps.
+- After the final review run, read \`needs_stronger_reviewer\` and \`stronger_reviewer_reason\` from the JSON output.
+- If the flag is true, prefix the PR title with \`[needs-stronger-reviewer]\`, add a \`## ⚠️ Needs Stronger Reviewer\` section near the top of the PR body, and attempt \`gh pr edit \"\$PR_URL\" --add-label needs-stronger-reviewer\`.
+- If the label edit fails because the label is missing, do not fail the phase; mention that in the PR body."
+      ;;
+  esac
+
   # Load template and fill placeholders
   local template_file="$tools_dir/prompts/review-phase.md"
   local template_content
@@ -984,6 +1008,8 @@ If \`\$coding_confidence\` is \`low\`, or if the initial self-review run exits 1
     template_content="${template_content//\{\{FEATURE_DIR\}\}/$feature_dir}"
     template_content="${template_content//\{\{REVIEWER_NOTE\}\}/$reviewer_note}"
     template_content="${template_content//\{\{MODE_GUIDANCE\}\}/$mode_guidance}"
+    template_content="${template_content//\{\{OPERATING_MODE_GUIDANCE\}\}/$operating_mode_guidance}"
+    template_content="${template_content//\{\{OPERATING_MODE\}\}/$operating_mode}"
     template_content="${template_content//\{\{DRAFT_PR_INSTRUCTION\}\}/$draft_pr_instruction}"
   else
     template_content="[ERROR: Review template not found at $template_file]"

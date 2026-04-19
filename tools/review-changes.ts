@@ -19,6 +19,23 @@ import {
   formatReviewResult,
   parseLogFormat,
 } from '../shared/lib/review-formatter.ts';
+import { getCurrentOperatingMode, type OperatingMode } from '../shared/lib/operating-mode.ts';
+
+const VALID_OPERATING_MODES: readonly OperatingMode[] = ['normal', 'constrained', 'survival'];
+
+function parseOperatingMode(value: string | undefined): OperatingMode | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  if ((VALID_OPERATING_MODES as readonly string[]).includes(value)) {
+    return value as OperatingMode;
+  }
+
+  throw new Error(
+    `Invalid --operating-mode value: ${value}. Expected one of: ${VALID_OPERATING_MODES.join(', ')}.`
+  );
+}
 
 runTool({
   name: 'review-changes',
@@ -30,6 +47,7 @@ runTool({
     'skip-ui': { type: 'boolean', description: 'Skip UI verification even if design context exists' },
     'ui-only': { type: 'boolean', description: 'Run only UI verification (skip code review)' },
     'since-commit': { type: 'string', description: 'Only review changes after this commit SHA (scopes review to task-specific changes)' },
+    'operating-mode': { type: 'string', description: 'Force review mode: normal, constrained, or survival. Auto-detected when omitted.' },
   },
   positional: {
     name: 'targetBranch repoDir',
@@ -44,6 +62,7 @@ runTool({
     'npx tsx tools/review-changes.ts main --verbose',
     'npx tsx tools/review-changes.ts main /path/to/repo --skip-ui',
     'npx tsx tools/review-changes.ts main --since-commit abc1234',
+    'npx tsx tools/review-changes.ts main --operating-mode constrained',
   ],
   additionalHelp: `Exit Codes:
   0 - Review passed (verdict: ready)
@@ -62,6 +81,7 @@ Output Modes:
     const jsonOutput = !!args.json;
     const logFormat = parseLogFormat(args['log-format'] as string | undefined);
     const reporter = createReviewProgressReporter({ format: logFormat });
+    const forcedOperatingMode = parseOperatingMode(args['operating-mode'] as string | undefined);
 
     // Initialize metrics tracking
     let metric: ReviewMetric | undefined;
@@ -147,6 +167,14 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
       // Resolve sinceCommit: explicit flag > auto-detect from selected-task.json
       const sinceCommit = (args['since-commit'] as string | undefined)
         || detectSinceCommit(currentBranch, repoDir, verbose);
+      let operatingMode = forcedOperatingMode;
+      if (!operatingMode) {
+        try {
+          operatingMode = getCurrentOperatingMode(repoDir);
+        } catch {
+          operatingMode = 'normal';
+        }
+      }
 
       await reporter.emit({
         event: 'review_start',
@@ -157,6 +185,7 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
           skipUi: !!args['skip-ui'],
           uiOnly: !!args['ui-only'],
           sinceCommit: sinceCommit || null,
+          operatingMode,
         },
       });
       if (verbose) {
@@ -164,6 +193,7 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         console.error(`  Repository: ${repoDir}`);
         console.error(`  Skip UI: ${!!args['skip-ui']}`);
         console.error(`  UI only: ${!!args['ui-only']}`);
+        console.error(`  Operating mode: ${operatingMode}`);
         if (sinceCommit) {
           console.error(`  Since commit: ${sinceCommit}`);
         }
@@ -178,6 +208,7 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         verbose,
         reporter,
         sinceCommit,
+        operatingMode,
       });
 
       // Add iteration to metric
