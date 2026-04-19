@@ -10,6 +10,7 @@
 import { determineVerificationRequirements, type VerificationRequirements } from './verification-engine.ts';
 import { runReview, type ReviewResult } from './review-engine.ts';
 import type { ReviewContext } from './review-context-gatherer.ts';
+import { getVerificationConfig } from './config.ts';
 
 export interface ReviewPassSpec {
   passNumber: number;
@@ -177,8 +178,15 @@ function hasRiskyChanges(context: ReviewContext, repoDir: string): boolean {
  * Load risk patterns from config or use defaults.
  */
 function loadRiskPatterns(repoDir: string): string[] {
-  // For now, just use defaults
-  // Future: load from .wavemill-config.json verification.secondPassReview.riskPatterns
+  try {
+    const config = getVerificationConfig(repoDir);
+    const patterns = config?.secondPassReview?.riskPatterns;
+    if (patterns && Array.isArray(patterns) && patterns.length > 0) {
+      return patterns;
+    }
+  } catch (error) {
+    // Fall through to defaults on config error
+  }
   return DEFAULT_RISK_PATTERNS;
 }
 
