@@ -29,6 +29,16 @@ function writeQuotaState(status: 'healthy' | 'degrading' | 'exhausted'): void {
         lastReason: null,
         consecutiveLimitErrors: status === 'healthy' ? 0 : 1,
       },
+      'claude-opus-4-6': {
+        status,
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+        consecutiveLimitErrors: status === 'healthy' ? 0 : 1,
+      },
     },
   }, null, 2), 'utf-8');
 }

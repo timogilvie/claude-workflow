@@ -17,23 +17,36 @@ export function deriveOperatingMode(
     ? premiumModelIds
     : new Set(premiumModelIds);
 
-  let mode: OperatingMode = 'normal';
+  if (premiumIds.size === 0) {
+    return 'normal';
+  }
 
-  for (const [modelId, entry] of Object.entries(snapshot.models)) {
-    if (!premiumIds.has(modelId)) {
+  let anyHealthy = false;
+  let allExhausted = true;
+
+  for (const modelId of premiumIds) {
+    const status = snapshot.models[modelId]?.status ?? 'healthy';
+
+    if (status === 'healthy') {
+      anyHealthy = true;
+      allExhausted = false;
       continue;
     }
 
-    if (entry.status === SURVIVAL_TRIGGER_STATUS) {
-      return 'survival';
-    }
-
-    if (entry.status === CONSTRAINED_TRIGGER_STATUS) {
-      mode = 'constrained';
+    if (status === CONSTRAINED_TRIGGER_STATUS) {
+      allExhausted = false;
     }
   }
 
-  return mode;
+  if (anyHealthy) {
+    return 'normal';
+  }
+
+  if (allExhausted) {
+    return 'survival';
+  }
+
+  return 'constrained';
 }
 
 export function getCurrentOperatingMode(repoDir?: string): OperatingMode {

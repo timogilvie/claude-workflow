@@ -483,6 +483,18 @@ describe('quota-state', () => {
           },
         },
       },
+      quota: {
+        manualOverrides: {
+          'claude-opus-4-7': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
+          'claude-opus-4-6': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
+        },
+      },
     });
 
     const baseTime = Date.parse('2026-04-17T22:00:00.000Z');
