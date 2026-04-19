@@ -18,6 +18,7 @@ import { fillPromptTemplate } from './prompt-utils.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { detectDriftForIssue, formatDriftWarning } from './drift-detector.ts';
 import { errorMessage } from './error-utils.ts';
+import { buildScopeConstraintContext, type OperatingMode } from './scope-shrinker.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Public API
@@ -159,12 +160,14 @@ export async function expandIssueWithClaude(
   promptTemplate: string,
   issueContext: string,
   codebaseContext: string = '',
-  claudeCmd?: string
+  claudeCmd?: string,
+  mode: OperatingMode = 'normal',
 ): Promise<string> {
   // Fill template with context using placeholder substitution
   const fullPrompt = fillPromptTemplate(promptTemplate, {
     ISSUE_CONTEXT: issueContext,
     CODEBASE_CONTEXT: codebaseContext,
+    DEGRADED_MODE_CONTEXT: buildScopeConstraintContext(mode),
   });
 
   const result = await callClaude(fullPrompt, buildIssueExpansionCallOptions(claudeCmd));
