@@ -523,9 +523,11 @@ await test('routeWorkflow without difficulty options has no taskDifficulty in si
 await test('enforces budget and downgrades when possible', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
+    // Note: $1.00 budget may or may not require downgrade depending on default model costs.
+    // This test verifies budget enforcement works correctly in both cases.
     const decision = routeWorkflow(
       'Implement a new feature',
-      { repoDir, maxCostUsd: 1.00 } // Budget that requires downgrade but is achievable
+      { repoDir, maxCostUsd: 1.00 }
     );
 
     // Final cost after routing (reflects any successful downgrade)
@@ -533,17 +535,17 @@ await test('enforces budget and downgrades when possible', () => {
                      decision.expectedCostCode +
                      decision.expectedCostReview;
 
-    // Should either fit within budget OR have a budget violation
+    // Budget enforcement should result in: downgrade succeeded OR violation reported
     if (decision.budgetViolation) {
-      // If violation exists, downgrade failed
+      // Downgrade failed - verify violation is properly reported
       assert.ok(decision.budgetViolation.attemptedDowngrade);
       assert.ok(decision.budgetViolation.requestedCost > 1.00);
       assert.ok(decision.reasoning.some(r => r.includes('BUDGET VIOLATION')));
     } else {
-      // If no violation, final cost must be within budget
+      // Downgrade succeeded or not needed - verify cost is within budget
       assert.ok(totalCost <= 1.00, `Total cost ${totalCost} should be under $1.00`);
-      // If reasoning mentions downgrade, it succeeded
       if (decision.reasoning.some(r => r.includes('downgrade'))) {
+        // If downgrade happened, it must have brought cost within budget
         assert.ok(totalCost <= 1.00, 'Downgrade should result in cost within budget');
       }
     }
