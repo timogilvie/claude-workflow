@@ -88,7 +88,14 @@ run_launch_case() {
     }
     read_stage_status() {
       case "$TEST_CASE" in
+        pending_re_check) printf "%s\n" "running" ;;
         already_inflight_same_head) printf "%s\n" "running" ;;
+        *) printf "\n" ;;
+      esac
+    }
+    ready_stage_pending_verdict() {
+      case "$TEST_CASE" in
+        pending_re_check) printf "%s\n" "pending" ;;
         *) printf "\n" ;;
       esac
     }
@@ -136,6 +143,7 @@ run_launch_case() {
       fi
       return 1
     }
+    get_main_head_sha() { printf "%s\n" "main456"; }
     write_stage_result() {
       printf -v WRITE_STAGE_CALLS "%s%s|%s|%s|%s|%s|%s|%s\n" \
         "$WRITE_STAGE_CALLS" "${1-}" "${2-}" "${3-}" "${4-}" "${5-}" "${6-}" "${7-}"
@@ -149,7 +157,7 @@ run_launch_case() {
       fi
 
       case "$TEST_CASE" in
-        pending)
+        pending|pending_re_check)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pending\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pending\",\"message\":\"2 CI check(s) still running\",\"details\":{\"pendingChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"QUEUED\"},{\"name\":\"Check Lifecycle Paths\",\"state\":\"QUEUED\"}],\"totalChecks\":2}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"CI checks still in progress - will retry\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 2
           ;;
@@ -194,9 +202,19 @@ output="$(run_launch_case pending)"
 check_contains "pending ready returns retry code" "$output" "rc=4"
 check_contains "pending ready writes running stage result" "$output" "|ready|running|"
 check_contains "pending ready records pending verdict" "$output" "\"verdict\":\"pending\""
+check_contains "pending ready logs launch at info level" "$output" "logs=info   Launching ready phase for HOK-1300 (PR #304)"
 check_contains "pending ready logs retry message" "$output" "will retry"
+check_contains "pending ready logs retry at info level" "$output" "info   CI checks pending for HOK-1300 (PR #304) - will retry"
+check_not_contains "pending ready does not demote first poll to debug" "$output" "debug   CI checks pending for HOK-1300 (PR #304) - will retry"
 check_contains "pending ready skips attention file" "$output" "attention_count=0"
 check_contains "pending ready emits no errors" "$output" "error_count=0"
+
+output="$(run_launch_case pending_re_check)"
+check_contains "pending re-check returns retry code" "$output" "rc=4"
+check_contains "pending re-check logs launch at debug level" "$output" "logs=debug   Launching ready phase for HOK-1300 (PR #304)"
+check_contains "pending re-check logs retry at debug level" "$output" "debug   CI checks pending for HOK-1300 (PR #304) - will retry"
+check_not_contains "pending re-check does not log launch at info level" "$output" "info   Launching ready phase for HOK-1300 (PR #304)"
+check_not_contains "pending re-check does not log retry at info level" "$output" "info   CI checks pending for HOK-1300 (PR #304) - will retry"
 
 output="$(run_launch_case remediation_launch)"
 check_contains "first remediation launch returns rc 5" "$output" "rc=5"

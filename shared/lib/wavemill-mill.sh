@@ -3237,6 +3237,7 @@ launch_ready_phase() {
   local remediation_attempts remediation_launch_head remediation_enabled remediation_max_attempts
   local remediation_agent failed_check_names failed_check_summary current_head ready_status
   local remediation_artifacts_json ci_failed_checks_json ready_result_file
+  local prior_ready_status prior_ready_verdict pending_log_level
 
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
@@ -3244,8 +3245,15 @@ launch_ready_phase() {
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
   [[ -z "$current_agent" ]] && current_agent="$AGENT_CMD"
+  prior_ready_status=$(read_stage_status "$state_dir" "ready")
+  prior_ready_verdict=$(ready_stage_pending_verdict "$state_dir")
+  if [[ "$prior_ready_status" == "running" && "$prior_ready_verdict" == "pending" ]]; then
+    pending_log_level="debug"
+  else
+    pending_log_level="info"
+  fi
 
-  log "  Launching ready phase for $issue (PR #$pr_number)"
+  log "$pending_log_level" "  Launching ready phase for $issue (PR #$pr_number)"
 
   if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number"); then
     ready_rc=0
@@ -3340,7 +3348,7 @@ launch_ready_phase() {
     write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
       "CI checks pending for PR #$pr_number" \
       "$pending_artifacts_json"
-    log "  CI checks pending for $issue (PR #$pr_number) - will retry"
+    log "$pending_log_level" "  CI checks pending for $issue (PR #$pr_number) - will retry"
     return 4
   fi
 
