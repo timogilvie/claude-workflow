@@ -370,27 +370,6 @@ function highestPriorityFrontierWithStatus(
   );
 }
 
-function highestPriorityHealthyFrontierSibling(
-  quotaState: QuotaSnapshot,
-  repoDir?: string,
-  excludeModelId?: string,
-): string | null {
-  const registry = getEffectiveRegistry(repoDir);
-  const ladder = getLadder(registry, 'planning');
-  return (
-    ladder.find((modelId) => {
-      if (modelId === excludeModelId) {
-        return false;
-      }
-      const caps = registry.models[modelId];
-      return (
-        caps &&
-        caps.class === 'frontier' &&
-        quotaState.models[modelId]?.status === 'healthy'
-      );
-    }) ?? null
-  );
-}
 
 function logDegradedRoutingDecision(
   mode: Extract<OperatingMode, 'constrained' | 'survival'>,
