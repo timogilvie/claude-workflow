@@ -3238,7 +3238,7 @@ launch_ready_phase() {
   local current_agent current_model prompt_file launch_rc launch_head checks_run checks_passed
   local remediation_attempts remediation_launch_head remediation_enabled remediation_max_attempts
   local remediation_agent failed_check_names failed_check_summary current_head ready_status
-  local remediation_artifacts_json ci_failed_checks_json ready_result_file
+  local remediation_artifacts_json ci_failed_checks_json ready_result_file ready_stderr_file
   local prior_ready_status prior_ready_verdict pending_log_level
 
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
@@ -3257,10 +3257,32 @@ launch_ready_phase() {
 
   log "$pending_log_level" "  Launching ready phase for $issue (PR #$pr_number)"
 
-  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number"); then
-    ready_rc=0
+  ready_stderr_file=$(mktemp) || {
+    log_warn "  Failed to capture ready stderr for $issue (mktemp failed)"
+    ready_stderr_file=""
+  }
+  if [[ -n "$ready_stderr_file" ]]; then
+    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" 2>"$ready_stderr_file"); then
+      ready_rc=0
+    else
+      ready_rc=$?
+    fi
+    if [[ -s "$ready_stderr_file" ]]; then
+      while IFS= read -r line; do
+        if [[ "$ready_rc" -ne 0 ]]; then
+          log_error "  [ready stderr] $line"
+        else
+          log "debug" "  [ready stderr] $line"
+        fi
+      done < "$ready_stderr_file"
+    fi
+    rm -f "$ready_stderr_file"
   else
-    ready_rc=$?
+    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" 2>/dev/null); then
+      ready_rc=0
+    else
+      ready_rc=$?
+    fi
   fi
 
   merge_status=$(printf '%s' "$result" | jq -r '.mergeConflict.status // empty' 2>/dev/null || echo "")

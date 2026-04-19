@@ -74,6 +74,7 @@ run_launch_case() {
     READY_ATTENTION_CALLS=""
     LOG_OUTPUT=""
     LOG_ERROR_OUTPUT=""
+    LOG_WARN_OUTPUT=""
     LAUNCH_AGENT_CALLS=0
     READY_PROMPT_CALLS=0
 
@@ -123,6 +124,7 @@ run_launch_case() {
     ready_remediation_agent_cmd() { printf "\n"; }
     log() { LOG_OUTPUT+="$*\n"; }
     log_error() { LOG_ERROR_OUTPUT+="$*\n"; }
+    log_warn() { LOG_WARN_OUTPUT+="$*\n"; }
     build_conflict_resolution_prompt() { :; }
     build_ready_remediation_prompt() {
       READY_PROMPT_CALLS=$((READY_PROMPT_CALLS + 1))
@@ -165,6 +167,16 @@ run_launch_case() {
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"attempts\":1}}"
           return 0
           ;;
+        clean_with_stderr)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"attempts\":1}}"
+          printf "%s\n" "⚠️  MERGE CONFLICT: PR #304 has conflicts with main" >&2
+          return 0
+          ;;
+        fail_with_stderr)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
+          printf "%s\n" "TypeError: ready crashed" >&2
+          return 1
+          ;;
         remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 1
@@ -191,9 +203,9 @@ run_launch_case() {
     error_count=0
     [[ -n "$LOG_ERROR_OUTPUT" ]] && error_count=$(printf "%s" "$LOG_ERROR_OUTPUT" | grep -c .)
 
-    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nerror_payload=%s\n" \
-      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_ERROR_OUTPUT"
-  '
+    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\n" \
+      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT"
+  ' 2>&1
 }
 
 echo "=== Launch Ready Phase ==="
@@ -262,6 +274,15 @@ output="$(run_launch_case pass_after_remediation)"
 check_contains "pass after remediation returns success" "$output" "rc=0"
 check_contains "pass after remediation writes completed stage" "$output" "|ready|completed|"
 check_not_contains "pass after remediation clears remediation artifacts" "$output" "\"remediationAttempts\":"
+
+output="$(run_launch_case clean_with_stderr)"
+check_contains "success stderr stays in debug logs" "$output" "debug   [ready stderr] ⚠️  MERGE CONFLICT: PR #304 has conflicts with main"
+check_not_contains "success stderr does not leak to terminal" "$output" $'\n⚠️  MERGE CONFLICT: PR #304 has conflicts with main\n'
+check_contains "success stderr is not treated as error" "$output" "error_count=0"
+
+output="$(run_launch_case fail_with_stderr)"
+check_contains "failure stderr is logged as error" "$output" "error_payload=  [ready stderr] TypeError: ready crashed"
+check_not_contains "failure stderr does not leak to terminal" "$output" $'\nTypeError: ready crashed\n'
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
