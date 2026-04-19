@@ -375,6 +375,17 @@ function logDegradedRoutingDecision(
   mode: Extract<OperatingMode, 'constrained' | 'survival'>,
   repoDir?: string,
 ): void {
+  // Defensive guard: only log if the aggregated operating mode matches the expected mode
+  try {
+    const currentMode = getCurrentOperatingMode(repoDir);
+    if (currentMode !== mode) {
+      return;
+    }
+  } catch {
+    // If we can't read the mode, be conservative and skip logging
+    return;
+  }
+
   const quotaState = readRoutingQuotaState(repoDir);
   const degradedFrontier = quotaState
     ? highestPriorityFrontierWithStatus(quotaState, mode === 'survival' ? 'exhausted' : 'degrading', repoDir)
@@ -409,6 +420,7 @@ function logPolicyAdjustment(
 ): void {
   const registry = getEffectiveRegistry(repoDir);
   const chosenCapabilities = registry.models[chosenModel];
+  const role = roleLabelForStage(taskType);
 
   // Frontier substitution path: if chosen is healthy frontier and top-of-ladder frontier is degraded/exhausted
   if (chosenCapabilities && chosenCapabilities.class === 'frontier') {
@@ -423,9 +435,7 @@ function logPolicyAdjustment(
       if (topLadderFrontier && topLadderFrontier !== chosenModel) {
         const topStatus = quotaState.models[topLadderFrontier]?.status ?? 'healthy';
         if (topStatus === 'degrading' || topStatus === 'exhausted') {
-          routerLog(
-            `policy adjustment: ${roleLabelForStage(taskType)} ${topLadderFrontier} -> ${chosenModel} (quota=${topStatus}, frontier-sibling)`,
-          );
+          process.stderr.write(`[${role}] policy adjustment: ${topLadderFrontier} -> ${chosenModel} (quota=${topStatus}, same-class=frontier)\n`);
           return;
         }
       }
@@ -443,7 +453,21 @@ function logPolicyAdjustment(
     return;
   }
 
-  routerLog(`policy adjustment: ${roleLabelForStage(taskType)} ${preferredModel} -> ${chosenModel} (quota=${quotaStatus})`);
+  // Determine if this is a class downgrade or same-class substitution
+  const preferredCapabilities = registry.models[preferredModel];
+  const chosenClass = chosenCapabilities?.class;
+  const preferredClass = preferredCapabilities?.class;
+
+  if (chosenClass && preferredClass) {
+    if (chosenClass === preferredClass) {
+      process.stderr.write(`[${role}] policy adjustment: ${preferredModel} -> ${chosenModel} (quota=${quotaStatus}, same-class=${chosenClass})\n`);
+    } else {
+      process.stderr.write(`[${role}] policy adjustment: ${preferredModel} -> ${chosenModel} (quota=${quotaStatus}, class-downgrade=${preferredClass}->${chosenClass})\n`);
+    }
+  } else {
+    // Fallback if class information is missing
+    process.stderr.write(`[${role}] policy adjustment: ${preferredModel} -> ${chosenModel} (quota=${quotaStatus})\n`);
+  }
 }
 
 export function estimateStageCost(
@@ -1060,10 +1084,42 @@ export function routeWorkflowDegraded(
     ? 'Survival mode: frontier models exhausted. Restricted to haiku. KNN signal used without LLM reasoning.'
     : 'Constrained mode: frontier models degrading. Restricted to sonnet/haiku and KNN signal. LLM difficulty classification skipped.';
 
-  return prependReasoning(
-    routeWorkflowStageAware(prompt, degradedOptions),
-    rationale,
-  );
+  const decision = routeWorkflowStageAware(prompt, degradedOptions);
+
+  // Log policy adjustments for degraded mode selections
+  const repoDir = options.repoDir;
+  const quotaState = readRoutingQuotaState(repoDir);
+  if (quotaState) {
+    const registry = getEffectiveRegistry(repoDir);
+    const fullPool = getModelPool(repoDir);
+
+    // Log adjustments for each role if they were downgraded from a higher class
+    const roles: Array<{ model: string; taskType: RegistryTaskType }> = [
+      { model: decision.planner, taskType: 'planning' },
+      { model: decision.coder, taskType: 'coding' },
+      { model: decision.reviewer, taskType: 'review' },
+    ];
+
+    for (const { model: chosenModel, taskType } of roles) {
+      const preferredModel = getLadder(registry, taskType).find((m) => fullPool.includes(m));
+      if (preferredModel && preferredModel !== chosenModel && fullPool.includes(preferredModel)) {
+        const preferredCapabilities = registry.models[preferredModel];
+        const chosenCapabilities = registry.models[chosenModel];
+        const quotaStatus = quotaState.models[preferredModel]?.status ?? 'healthy';
+
+        if (chosenCapabilities && preferredCapabilities && quotaStatus !== 'healthy') {
+          const role = roleLabelForStage(taskType);
+          if (chosenCapabilities.class === preferredCapabilities.class) {
+            process.stderr.write(`[${role}] policy adjustment: ${preferredModel} -> ${chosenModel} (quota=${quotaStatus}, same-class=${chosenCapabilities.class})\n`);
+          } else {
+            process.stderr.write(`[${role}] policy adjustment: ${preferredModel} -> ${chosenModel} (quota=${quotaStatus}, class-downgrade=${preferredCapabilities.class}->${chosenCapabilities.class})\n`);
+          }
+        }
+      }
+    }
+  }
+
+  return prependReasoning(decision, rationale);
 }
 
 export function tryPolicyResolution(

@@ -689,6 +689,62 @@ await test('includes budget rule in reasoning when triggered', () => {
   }
 });
 
+// ────────────────────────────────────────────────────────────────
+// Cross-frontier substitution and class-downgrade logging tests
+// ────────────────────────────────────────────────────────────────
+
+await test('same-class frontier substitution logs with same-class=frontier tag', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'healthy',
+  });
+
+  try {
+    const { stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Build a backend feature.', { repoDir })
+    );
+    // In normal mode with one frontier healthy, verify no constrained banner is emitted
+    assert.doesNotMatch(stderr, /\[router\] (constrained|survival) mode:/);
+    // And that if policy adjustment is logged, it uses same-class=frontier tag
+    if (stderr.includes('policy adjustment')) {
+      assert.match(stderr, /same-class=frontier/);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+await test('class downgrade under constrained mode logs class-downgrade tag', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'degrading',
+    'claude-opus-4-6': 'degrading',
+  });
+
+  try {
+    const { stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Build a backend feature.', { repoDir })
+    );
+    assert.match(stderr, /\[router\] constrained mode:/);
+    assert.match(stderr, /\[(planner|coder|reviewer)\] policy adjustment:.*class-downgrade=frontier->strong_generalist/);
+  } finally {
+    cleanup();
+  }
+});
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);

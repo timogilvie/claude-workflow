@@ -23,9 +23,12 @@ When routing deviates from the normal path, `wavemill mill` prints a single conc
 
 ```text
 11:31:02 [router] constrained mode: claude-opus-4-7 quota is degrading; reserving it for high-complexity steps
-11:31:02 [router] policy adjustment: coder claude-opus-4-7 -> claude-sonnet-4-6 (quota=degrading)
+11:31:02 [coder] policy adjustment: claude-opus-4-7 -> claude-opus-4-6 (quota=exhausted, same-class=frontier)
+11:31:03 [coder] policy adjustment: claude-opus-4-7 -> claude-sonnet-4-6 (quota=degrading, class-downgrade=frontier->strong_generalist)
 11:31:44 [coder] claude-opus-4-7 unavailable (quota); falling back to claude-sonnet-4-6
 ```
+
+The `same-class=frontier` tag indicates healthy cross-frontier rerouting when one frontier model is exhausted but another frontier sibling is healthy. The `class-downgrade=` tag shows downgrade from one model class to another under quota pressure.
 
 These lines appear only when quota state or fallback behavior changes the normal route. Healthy normal-mode runs stay silent.
 
