@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from './config.ts';
 import type { QuotaStatus } from './quota-state.ts';
-import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute } from './workflow-router.ts';
+import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute, tryPolicyResolution } from './workflow-router.ts';
 
 let passed = 0;
 let failed = 0;
@@ -53,6 +53,33 @@ function baseConfig() {
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
         'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
+      },
+    },
+  };
+}
+
+function frontierSiblingConfig() {
+  return {
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+    modelRegistry: {
+      models: {
+        'gpt-5.4': {
+          vendor: 'openai',
+          class: 'frontier',
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
+        },
+      },
+      ladders: {
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
       },
     },
   };
@@ -425,6 +452,105 @@ await test('auto mode stays silent in normal routing mode', async () => {
     );
     assert.doesNotMatch(stderr, /\[(router|coder|planner|reviewer|classifier)]/);
   } finally {
+    cleanup();
+  }
+});
+
+await test('policy routing logs same-class frontier substitution distinctly', async () => {
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  try {
+    const { result, stderr } = await captureStderr(() =>
+      Promise.resolve(tryPolicyResolution(
+        'Implement a backend feature with tests and review.',
+        { repoDir, taskDifficulty: 'hard', skipDifficultyClassification: true }
+      ))
+    );
+    assert.equal(result?.routingMode, 'policy');
+    assert.match(stderr, /\[coder] policy adjustment: claude-opus-4-7 -> gpt-5\.4 \(quota=exhausted, same-class=frontier\)/);
+    assert.doesNotMatch(stderr, /\[router] constrained mode:/);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('policy routing logs class downgrade without same-class metadata', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'degrading',
+    'claude-opus-4-6': 'degrading',
+  });
+
+  try {
+    const { stderr } = await captureStderr(() =>
+      Promise.resolve(tryPolicyResolution(
+        'Implement a backend feature with tests and review.',
+        { repoDir, taskDifficulty: 'hard', skipDifficultyClassification: true }
+      ))
+    );
+    assert.match(stderr, /\[planner] policy adjustment: claude-opus-4-7 -> claude-sonnet-4-6 \(quota=degrading\)/);
+    assert.doesNotMatch(stderr, /same-class=/);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('auto mode logs frontier substitution without constrained banner when healthy sibling exists', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    ...frontierSiblingConfig(),
+    router: {
+      ...frontierSiblingConfig().router,
+      hokusai: {
+        endpoint: 'http://localhost:8080/predict',
+        timeout: 1000,
+      },
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      schema_version: '1.0',
+      route: {
+        planner_model: 'gpt-5.4',
+        coder_model: 'gpt-5.4',
+        reviewer_model: 'gpt-5.4',
+        plan_depth: 'medium',
+        code_depth: 'medium',
+        review_mode: 'light',
+      },
+      predictions: {
+        expected_success_probability: 0.88,
+        expected_cost_usd: 1.75,
+        confidence: 0.81,
+      },
+    }), { status: 200 });
+    const { result, stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Implement a backend feature with tests and review.', { repoDir })
+    );
+    assert.equal(result.routingMode, 'hokusai');
+    assert.match(stderr, /\[coder] policy adjustment: claude-opus-4-7 -> gpt-5\.4 \(quota=exhausted, same-class=frontier\)/);
+    assert.doesNotMatch(stderr, /\[router] constrained mode:/);
+    assert.doesNotMatch(result.reasoning[0], /Constrained mode|Survival mode/);
+  } finally {
+    globalThis.fetch = originalFetch;
     cleanup();
   }
 });

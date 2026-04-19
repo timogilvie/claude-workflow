@@ -116,6 +116,10 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 
 ## Recent Changes
 
+### 2026-04-19T16:00:00.000Z - HOK-1369: Cross-frontier substitution transparency
+**Changed:** Normal-mode routing now emits per-role policy-adjustment lines when a healthy frontier sibling is chosen because the top frontier is `degrading` or `exhausted`, for example `[coder] policy adjustment: claude-opus-4-7 -> gpt-5.4 (quota=exhausted, same-class=frontier)`.
+**Impact:** Operators can distinguish healthy cross-frontier rerouting from true class downgrades, while constrained and survival banners remain reserved for aggregated degraded modes only.
+
 ### 2026-04-19T15:13:53.493Z - HOK-1341: Degraded-mode behavior for the `route` command
 **Changed:** `routeWorkflowAuto()` now detects operating mode and delegates to `routeWorkflowDegraded()` when constrained or survival. Degraded routing restricts model pool (sonnet/haiku in constrained, haiku-only in survival), skips LLM difficulty classification, and prepends mode-aware rationale to reasoning field.
 **Impact:** Auto-mode routing now makes quota-aware decisions automatically. Commands using auto routing gracefully fall back to smaller models under quota pressure without user intervention.

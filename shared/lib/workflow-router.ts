@@ -20,7 +20,7 @@ import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
 import type { ModelClass } from './model-registry.ts';
-import { routerLog } from './router-log.ts';
+import { policyAdjustmentLog, routerLog } from './router-log.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -388,18 +388,6 @@ function logDegradedRoutingDecision(
   routerLog(`${mode} mode: ${subject} quota is ${status}; ${rationale}`);
 }
 
-function roleLabelForStage(stage: RegistryTaskType): 'planner' | 'coder' | 'reviewer' {
-  switch (stage) {
-    case 'planning':
-      return 'planner';
-    case 'coding':
-      return 'coder';
-    case 'review':
-    default:
-      return 'reviewer';
-  }
-}
-
 function logPolicyAdjustment(
   taskType: 'planning' | 'coding' | 'review',
   chosenModel: string,
@@ -423,9 +411,12 @@ function logPolicyAdjustment(
       if (topLadderFrontier && topLadderFrontier !== chosenModel) {
         const topStatus = quotaState.models[topLadderFrontier]?.status ?? 'healthy';
         if (topStatus === 'degrading' || topStatus === 'exhausted') {
-          routerLog(
-            `policy adjustment: ${roleLabelForStage(taskType)} ${topLadderFrontier} -> ${chosenModel} (quota=${topStatus}, frontier-sibling)`,
-          );
+          policyAdjustmentLog({
+            taskType,
+            fromModel: topLadderFrontier,
+            toModel: chosenModel,
+            metadata: [['quota', topStatus], ['same-class', 'frontier']],
+          });
           return;
         }
       }
@@ -443,7 +434,62 @@ function logPolicyAdjustment(
     return;
   }
 
-  routerLog(`policy adjustment: ${roleLabelForStage(taskType)} ${preferredModel} -> ${chosenModel} (quota=${quotaStatus})`);
+  policyAdjustmentLog({
+    taskType,
+    fromModel: preferredModel,
+    toModel: chosenModel,
+    metadata: [['quota', quotaStatus]],
+  });
+}
+
+function logFinalFrontierSubstitution(
+  decision: Pick<WorkflowRouteDecision, 'planner' | 'coder' | 'reviewer'>,
+  repoDir?: string,
+): void {
+  const quotaState = readRoutingQuotaState(repoDir);
+  if (!quotaState) {
+    return;
+  }
+
+  const registry = getEffectiveRegistry(repoDir);
+  const stages: Array<{ taskType: 'planning' | 'coding' | 'review'; modelId: string }> = [
+    { taskType: 'planning', modelId: decision.planner },
+    { taskType: 'coding', modelId: decision.coder },
+    { taskType: 'review', modelId: decision.reviewer },
+  ];
+
+  for (const { taskType, modelId } of stages) {
+    const chosenCapabilities = registry.models[modelId];
+    if (!chosenCapabilities || chosenCapabilities.class !== 'frontier') {
+      continue;
+    }
+
+    const chosenStatus = quotaState.models[modelId]?.status ?? 'healthy';
+    if (chosenStatus !== 'healthy') {
+      continue;
+    }
+
+    const topLadderFrontier = getLadder(registry, taskType).find((candidateId) => {
+      const candidateCapabilities = registry.models[candidateId];
+      return candidateCapabilities && candidateCapabilities.class === 'frontier';
+    });
+
+    if (!topLadderFrontier || topLadderFrontier === modelId) {
+      continue;
+    }
+
+    const topStatus = quotaState.models[topLadderFrontier]?.status ?? 'healthy';
+    if (topStatus !== 'degrading' && topStatus !== 'exhausted') {
+      continue;
+    }
+
+    policyAdjustmentLog({
+      taskType,
+      fromModel: topLadderFrontier,
+      toModel: modelId,
+      metadata: [['quota', topStatus], ['same-class', 'frontier']],
+    });
+  }
 }
 
 export function estimateStageCost(
@@ -1216,6 +1262,9 @@ export async function routeWorkflowAuto(
     if (decision.routingMode === 'hokusai') {
       routerLog(`hokusai routing active: planner=${decision.planner} coder=${decision.coder} reviewer=${decision.reviewer}`);
     }
+    if (decision.routingMode !== 'policy') {
+      logFinalFrontierSubstitution(decision, options?.repoDir);
+    }
     return decision;
   }
 
@@ -1224,7 +1273,9 @@ export async function routeWorkflowAuto(
     return withChallengeRecommendation(policyDecision, options?.repoDir);
   }
 
-  return routeWorkflowStageAware(prompt, options);
+  const decision = routeWorkflowStageAware(prompt, options);
+  logFinalFrontierSubstitution(decision, options?.repoDir);
+  return decision;
 }
 
 export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?: string): string {
