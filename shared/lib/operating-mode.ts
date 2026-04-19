@@ -1,9 +1,14 @@
 import type { ModelClass } from './model-registry.ts';
 import { getEffectiveRegistry } from './model-registry.ts';
-import type { QuotaSnapshot, QuotaStatus } from './quota-state.ts';
-import { readQuotaSnapshot } from './quota-state.ts';
+import type { QuotaSnapshot, QuotaStatus, VendorQuotaStats } from './quota-state.ts';
+import { getVendorQuotaBreakdown, readQuotaSnapshot } from './quota-state.ts';
 
 export type OperatingMode = 'normal' | 'constrained' | 'survival';
+
+export interface OperatingModeResult {
+  mode: OperatingMode;
+  vendorBreakdown: Record<string, VendorQuotaStats>;
+}
 
 export const PREMIUM_MODEL_CLASS: ModelClass = 'frontier';
 export const CONSTRAINED_TRIGGER_STATUS: QuotaStatus = 'degrading';
@@ -50,13 +55,21 @@ export function deriveOperatingMode(
 }
 
 export function getCurrentOperatingMode(repoDir?: string): OperatingMode {
+  return getOperatingModeResult(repoDir).mode;
+}
+
+export function getOperatingModeResult(repoDir?: string): OperatingModeResult {
   const snapshot = readQuotaSnapshot(repoDir);
   const registry = getEffectiveRegistry(repoDir);
-  const premiumModelIds = Object.entries(registry.models)
+  const frontierModels = Object.entries(registry.models)
     .filter(([, capabilities]) => capabilities.class === PREMIUM_MODEL_CLASS)
-    .map(([modelId]) => modelId);
+    .map(([modelId, capabilities]) => ({ modelId, vendor: capabilities.vendor }));
+  const premiumModelIds = frontierModels.map(({ modelId }) => modelId);
 
-  return deriveOperatingMode(snapshot, premiumModelIds);
+  return {
+    mode: deriveOperatingMode(snapshot, premiumModelIds),
+    vendorBreakdown: getVendorQuotaBreakdown(snapshot, frontierModels),
+  };
 }
 
 export function hasAnyHealthyModel(repoDir?: string): boolean {

@@ -21,6 +21,7 @@ import {
   CONSTRAINED_TRIGGER_STATUS,
   deriveOperatingMode,
   getCurrentOperatingMode,
+  getOperatingModeResult,
   getModelOperatingMode,
   hasAnyHealthyModel,
   PREMIUM_MODEL_CLASS,
@@ -291,6 +292,31 @@ describe('operating-mode', () => {
     assert.equal(runOperatingModeTool(['model', 'gpt-5.4', '--repo-dir', repoDir]).stdout, 'constrained');
   });
 
+  it('prints a vendor breakdown in verbose global mode', () => {
+    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+      modelRegistry: {
+        models: {
+          'gpt-5.4': {
+            vendor: 'openai',
+            class: 'frontier',
+          },
+        },
+      },
+    }, null, 2), 'utf-8');
+    clearConfigCache(repoDir);
+
+    writeQuotaState({
+      'claude-opus-4-7': 'healthy',
+      'claude-opus-4-6': 'degrading',
+      'gpt-5.4': 'exhausted',
+    });
+
+    assert.equal(
+      runOperatingModeTool(['global', '--verbose', '--repo-dir', repoDir]).stdout,
+      ['normal', 'Vendor breakdown:', '  anthropic: 1/2 healthy (1 degraded)', '  openai   : 0/1 healthy (1 exhausted)'].join('\n'),
+    );
+  });
+
   it('uses proactive degradation to enter constrained mode before 429', () => {
     writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
       modelRegistry: {
@@ -322,5 +348,92 @@ describe('operating-mode', () => {
     }
 
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
+  });
+
+  describe('getOperatingModeResult', () => {
+    it('returns normal mode with healthy vendor counts', () => {
+      const result = getOperatingModeResult(repoDir);
+
+      assert.equal(result.mode, 'normal');
+      assert.deepEqual(result.vendorBreakdown, {
+        anthropic: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
+      });
+    });
+
+    it('returns constrained mode with degraded vendor counts', () => {
+      writeQuotaState({
+        'claude-opus-4-7': 'degrading',
+        'claude-opus-4-6': 'exhausted',
+      });
+
+      const result = getOperatingModeResult(repoDir);
+
+      assert.equal(result.mode, 'constrained');
+      assert.deepEqual(result.vendorBreakdown, {
+        anthropic: { healthy: 0, degraded: 1, exhausted: 1, total: 2 },
+      });
+    });
+
+    it('returns survival mode when all frontier models are exhausted', () => {
+      writeQuotaState({
+        'claude-opus-4-7': 'exhausted',
+        'claude-opus-4-6': 'exhausted',
+      });
+
+      const result = getOperatingModeResult(repoDir);
+
+      assert.equal(result.mode, 'survival');
+      assert.deepEqual(result.vendorBreakdown, {
+        anthropic: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
+      });
+    });
+
+    it('returns multi-vendor counts when multiple frontier vendors are configured', () => {
+      writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              vendor: 'openai',
+              class: 'frontier',
+            },
+          },
+        },
+      }, null, 2), 'utf-8');
+      clearConfigCache(repoDir);
+      writeQuotaState({
+        'claude-opus-4-7': 'healthy',
+        'claude-opus-4-6': 'degrading',
+        'gpt-5.4': 'exhausted',
+      });
+
+      const result = getOperatingModeResult(repoDir);
+
+      assert.equal(result.mode, 'normal');
+      assert.deepEqual(result.vendorBreakdown, {
+        anthropic: { healthy: 1, degraded: 1, exhausted: 0, total: 2 },
+        openai: { healthy: 0, degraded: 0, exhausted: 1, total: 1 },
+      });
+    });
+
+    it('returns an empty breakdown when no frontier models are configured', () => {
+      writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+        modelRegistry: {
+          models: {
+            'claude-opus-4-7': {
+              class: 'strong_generalist',
+            },
+            'claude-opus-4-6': {
+              class: 'strong_generalist',
+            },
+          },
+        },
+      }, null, 2), 'utf-8');
+      clearConfigCache(repoDir);
+
+      const result = getOperatingModeResult(repoDir);
+
+      assert.equal(result.mode, 'normal');
+      assert.deepEqual(result.vendorBreakdown, {});
+    });
   });
 });

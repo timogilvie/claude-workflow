@@ -19,6 +19,7 @@ import {
   QUOTA_STATE_TIMINGS,
   compactQuotaState,
   estimateQuotaHealth,
+  getVendorQuotaBreakdown,
   getModelStatus,
   markExhausted,
   recordNearLimit,
@@ -82,6 +83,23 @@ function withCapturedWarnings(fn: () => void): string[] {
   }
 
   return warnings;
+}
+
+function makeSnapshot(models: Record<string, 'healthy' | 'degrading' | 'exhausted'>) {
+  return {
+    models: Object.fromEntries(
+      Object.entries(models).map(([modelId, status]) => [modelId, {
+        status,
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+      }]),
+    ),
+    snapshotAt: '2026-04-17T12:00:00.000Z',
+  };
 }
 
 describe('quota-state', () => {
@@ -506,5 +524,79 @@ describe('quota-state', () => {
     const snapshot = readQuotaSnapshot(repoDir);
     assert.equal(snapshot.models['claude-sonnet-4-6']?.lastLimitErrorAt, null);
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
+  });
+
+  describe('getVendorQuotaBreakdown', () => {
+    it('returns an empty object for an empty frontier set', () => {
+      assert.deepEqual(getVendorQuotaBreakdown(makeSnapshot({}), []), {});
+    });
+
+    it('counts a single healthy vendor', () => {
+      const snapshot = makeSnapshot({});
+
+      assert.deepEqual(getVendorQuotaBreakdown(snapshot, [
+        { modelId: 'claude-opus-4-7', vendor: 'anthropic' },
+        { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
+      ]), {
+        anthropic: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
+      });
+    });
+
+    it('counts mixed healthy and degraded models for one vendor', () => {
+      const snapshot = makeSnapshot({
+        'claude-opus-4-7': 'degrading',
+      });
+
+      assert.deepEqual(getVendorQuotaBreakdown(snapshot, [
+        { modelId: 'claude-opus-4-7', vendor: 'anthropic' },
+        { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
+      ]), {
+        anthropic: { healthy: 1, degraded: 1, exhausted: 0, total: 2 },
+      });
+    });
+
+    it('counts all exhausted models for one vendor', () => {
+      const snapshot = makeSnapshot({
+        'claude-opus-4-7': 'exhausted',
+        'claude-opus-4-6': 'exhausted',
+        'claude-opus-4-5': 'exhausted',
+      });
+
+      assert.deepEqual(getVendorQuotaBreakdown(snapshot, [
+        { modelId: 'claude-opus-4-7', vendor: 'anthropic' },
+        { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
+        { modelId: 'claude-opus-4-5', vendor: 'anthropic' },
+      ]), {
+        anthropic: { healthy: 0, degraded: 0, exhausted: 3, total: 3 },
+      });
+    });
+
+    it('groups mixed model states by vendor', () => {
+      const snapshot = makeSnapshot({
+        'gpt-5.4': 'exhausted',
+      });
+
+      assert.deepEqual(getVendorQuotaBreakdown(snapshot, [
+        { modelId: 'claude-opus-4-7', vendor: 'anthropic' },
+        { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
+        { modelId: 'gpt-5.4', vendor: 'openai' },
+      ]), {
+        anthropic: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
+        openai: { healthy: 0, degraded: 0, exhausted: 1, total: 1 },
+      });
+    });
+
+    it('treats models missing from the snapshot as healthy', () => {
+      const snapshot = makeSnapshot({
+        'claude-opus-4-7': 'exhausted',
+      });
+
+      assert.deepEqual(getVendorQuotaBreakdown(snapshot, [
+        { modelId: 'claude-opus-4-7', vendor: 'anthropic' },
+        { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
+      ]), {
+        anthropic: { healthy: 1, degraded: 0, exhausted: 1, total: 2 },
+      });
+    });
   });
 });
