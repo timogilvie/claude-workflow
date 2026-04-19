@@ -892,6 +892,128 @@
         }
       },
       "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "description": "Verification settings for weak model fallback. Automatically enforces extra checks when weaker models generate code.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable verification engine. When false, all verification is skipped."
+        },
+        "qualityThresholds": {
+          "type": "object",
+          "description": "Quality score thresholds per task type. Models scoring below threshold trigger verification.",
+          "properties": {
+            "routing": {
+              "type": "number",
+              "default": 70,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "planning": {
+              "type": "number",
+              "default": 70,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "coding": {
+              "type": "number",
+              "default": 80,
+              "minimum": 0,
+              "maximum": 100,
+              "description": "Threshold for coding tasks. Haiku (60) triggers verification, Sonnet (90) does not."
+            },
+            "review": {
+              "type": "number",
+              "default": 80,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "classify": {
+              "type": "number",
+              "default": 70,
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          "additionalProperties": false
+        },
+        "patchSizeCap": {
+          "type": "object",
+          "description": "Patch size cap settings. Enforced when weak model is used and no stronger reviewer is available.",
+          "properties": {
+            "baseLines": {
+              "type": "integer",
+              "default": 200,
+              "minimum": 50,
+              "description": "Base line count for patch size cap. Adjusted by quality gap if adjustByQualityGap is true."
+            },
+            "adjustByQualityGap": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to adjust cap based on quality gap. Formula: cap = baseLines * max(0.5, 1 - (gap / 50))"
+            }
+          },
+          "additionalProperties": false
+        },
+        "mandatoryChecks": {
+          "type": "object",
+          "description": "Checks that must pass before commit when verification is triggered.",
+          "properties": {
+            "typecheck": {
+              "type": "boolean",
+              "default": true
+            },
+            "lint": {
+              "type": "boolean",
+              "default": true
+            },
+            "test": {
+              "type": "boolean",
+              "default": true
+            },
+            "selfExplanation": {
+              "type": "boolean",
+              "default": true,
+              "description": "Require structured commit message with CHANGED/WHY/RISK sections."
+            }
+          },
+          "additionalProperties": false
+        },
+        "secondPassReview": {
+          "type": "object",
+          "description": "Second-pass review settings. Triggered when weak model is used and stronger reviewer is available.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "riskPatterns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [
+                "**/auth/**",
+                "**/authentication/**",
+                "**/authorization/**",
+                "**/migrations/**",
+                "**/schema/**",
+                "**/*crypto*",
+                "**/*encryption*",
+                "**/*permission*",
+                "**/*security*",
+                "**/sql/**"
+              ],
+              "description": "File path patterns that indicate high-risk code requiring second-pass review."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
