@@ -6,10 +6,6 @@ const SURVIVAL_MAX_FILES = 5;
 const CONSTRAINED_MAX_FILES = 10;
 const LARGE_PACKET_LINE_THRESHOLD = 400;
 
-function escapeJsonString(value: string): string {
-  return JSON.stringify(value);
-}
-
 function extractKeyFilesSection(fullContent: string): string {
   const headingMatch = fullContent.match(/^#{2,3}\s+Key Files\s*$/im);
   if (!headingMatch || headingMatch.index === undefined) {
@@ -66,7 +62,9 @@ function buildSplitPrompt(fullContent: string, mode: OperatingMode): string {
     '[{"title":"short title","content":"full markdown packet"}]',
     '',
     'Original packet:',
-    escapeJsonString(fullContent),
+    '---',
+    fullContent,
+    '---',
   ].join('\n');
 }
 
@@ -111,20 +109,28 @@ export function buildScopeConstraintContext(mode: OperatingMode): string {
     ? '- Mark deferred work explicitly in Scope Out or follow-up notes instead of partially implementing it.\n'
     : '- If the issue naturally breaks into multiple packets or PRs, choose the smallest independently shippable slice first.\n';
 
-  return [
+  const lines = [
     '## Degraded Mode Scope Constraints',
     '',
     `Operating mode is \`${mode}\`. Scope the task packet for weaker models and limited quota.`,
     '',
     '- Narrow the task to the smallest complete implementation that satisfies the issue.',
     `- Keep the primary implementation to ${maxFiles} files or fewer unless the issue is impossible to complete otherwise.`,
-    prefersOneFilePatches,
+  ];
+
+  if (prefersOneFilePatches) {
+    lines.push(prefersOneFilePatches.replace(/\n$/, ''));
+  }
+
+  lines.push(
     '- Forbid speculative refactors, opportunistic cleanup, or incidental renames.',
     '- Do not bundle follow-on enhancements into the same packet.',
-    deferralGuidance,
+    deferralGuidance.replace(/\n$/, ''),
     '- If work must be phased, make the first phase independently valuable and explicitly defer later phases.',
     '',
-  ].join('\n');
+  );
+
+  return lines.join('\n');
 }
 
 export function shouldSplitPacket(fullContent: string, mode: OperatingMode): boolean {
@@ -159,8 +165,6 @@ export async function splitPacketIntoSubPackets(
     cwd: options.repoDir,
     taskType: 'planning',
     cliFlags: [
-      '--tools',
-      '',
       '--append-system-prompt',
       'Return only raw JSON. Do not include markdown fences, commentary, or explanations.',
     ],
