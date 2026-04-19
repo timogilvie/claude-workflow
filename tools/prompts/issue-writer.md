@@ -14,6 +14,8 @@ You are expanding a brief Linear issue into a comprehensive task packet that an 
 
 **If this is a UI-related issue**, you MUST include the additional UI-specific sections (Section 7) in your task packet. If not, omit Section 7 entirely and proceed directly from Section 6 to Section 8.
 
+{{DEGRADED_MODE_CONTEXT}}
+
 ## Output Format
 
 **IMPORTANT**: You must generate TWO documents in your response, separated by a clear marker:
