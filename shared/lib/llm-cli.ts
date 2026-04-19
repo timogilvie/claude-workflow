@@ -27,6 +27,7 @@ import { getScoreBand, type DifficultyBand, type EvalRecord, type FallbackEventM
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getEffectiveRegistry, getLadder, rankCandidates, type RegistryTaskType } from './model-registry.ts';
 import { getModelStatus, markExhausted, readQuotaSnapshot, recordSuccess } from './quota-state.ts';
+import { fallbackLog } from './router-log.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -1450,10 +1451,14 @@ async function callLLMWithFallback(
         resetAt: classified.resetAt,
       });
 
-      if (!options.observer?.onQuotaFallback) {
-        console.warn(
-          `[llm-cli] model ${candidate} quota-exhausted, falling back to ${nextModel ?? 'none'} for task=${taskType}`,
-        );
+      if (!options.observer?.onQuotaFallback && nextModel) {
+        fallbackLog({
+          taskType,
+          failedModel: candidate,
+          nextModel,
+          reason: classified.reason,
+          resetAt: classified.resetAt,
+        });
       }
     }
   }
@@ -1471,6 +1476,18 @@ async function callLLMWithFallback(
       startedAt,
       endedAt: Date.now(),
       costUsd: null,
+    });
+  }
+
+  if (!options.observer?.onQuotaFallback && exhausted.length > 0) {
+    const lastExhausted = exhausted[exhausted.length - 1];
+    fallbackLog({
+      taskType,
+      failedModel: lastExhausted.model,
+      nextModel: null,
+      reason: 'quota',
+      resetAt: lastExhausted.resetAt,
+      exhaustedChain: exhausted.map(({ model }) => model),
     });
   }
 

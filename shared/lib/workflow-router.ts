@@ -12,7 +12,7 @@ import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } fro
 import { getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig } from './config.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
-import { getEffectiveRegistry } from './model-registry.ts';
+import { getEffectiveRegistry, getLadder, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import { resolveModel, topViableCandidate } from './routing-policy.ts';
 import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
@@ -20,6 +20,7 @@ import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
 import type { ModelClass } from './model-registry.ts';
+import { routerLog } from './router-log.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -315,6 +316,70 @@ function buildPolicyStagePools(params: {
     coderModels: toPoolModels('coding'),
     reviewerModels: toPoolModels('review'),
   };
+}
+
+function highestPriorityFrontierWithStatus(
+  quotaState: QuotaSnapshot,
+  status: 'degrading' | 'exhausted',
+  repoDir?: string,
+): string | null {
+  const registry = getEffectiveRegistry(repoDir);
+  return Object.entries(registry.models)
+    .filter(([, capabilities]) => capabilities.class === 'frontier')
+    .sort(([, leftCapabilities], [, rightCapabilities]) =>
+      (rightCapabilities.qualityScores.planning ?? 0) - (leftCapabilities.qualityScores.planning ?? 0))
+    .map(([modelId]) => modelId)
+    .find((modelId) => quotaState.models[modelId]?.status === status) ?? null;
+}
+
+function logDegradedRoutingDecision(
+  mode: Extract<OperatingMode, 'constrained' | 'survival'>,
+  repoDir?: string,
+): void {
+  const quotaState = readRoutingQuotaState(repoDir);
+  const degradedFrontier = quotaState
+    ? highestPriorityFrontierWithStatus(quotaState, mode === 'survival' ? 'exhausted' : 'degrading', repoDir)
+    : null;
+  const subject = degradedFrontier ?? 'frontier capacity';
+  const status = mode === 'survival' ? 'exhausted' : 'degrading';
+  const rationale = mode === 'survival'
+    ? 'restricting routing to fast-economy models'
+    : 'reserving it for high-complexity steps';
+
+  routerLog(`${mode} mode: ${subject} quota is ${status}; ${rationale}`);
+}
+
+function roleLabelForStage(stage: RegistryTaskType): 'planner' | 'coder' | 'reviewer' {
+  switch (stage) {
+    case 'planning':
+      return 'planner';
+    case 'coding':
+      return 'coder';
+    case 'review':
+    default:
+      return 'reviewer';
+  }
+}
+
+function logPolicyAdjustment(
+  taskType: 'planning' | 'coding' | 'review',
+  chosenModel: string,
+  pool: string[],
+  quotaState: QuotaSnapshot,
+  repoDir?: string,
+): void {
+  const registry = getEffectiveRegistry(repoDir);
+  const preferredModel = getLadder(registry, taskType).find((modelId) => pool.includes(modelId));
+  if (!preferredModel || preferredModel === chosenModel) {
+    return;
+  }
+
+  const quotaStatus = quotaState.models[preferredModel]?.status ?? 'healthy';
+  if (quotaStatus === 'healthy') {
+    return;
+  }
+
+  routerLog(`policy adjustment: ${roleLabelForStage(taskType)} ${preferredModel} -> ${chosenModel} (quota=${quotaStatus})`);
 }
 
 export function estimateStageCost(
@@ -836,6 +901,7 @@ export function routeWorkflowDegraded(
   options: RouteWorkflowOptions = {},
   mode: Extract<OperatingMode, 'constrained' | 'survival'>,
 ): StageAwareDecision {
+  logDegradedRoutingDecision(mode, options.repoDir);
   const degradedPool = buildDegradedModelPool(mode, options.repoDir);
   const degradedOptions: RouteWorkflowOptions = {
     ...options,
@@ -889,6 +955,10 @@ export function tryPolicyResolution(
     );
     return null;
   }
+
+  logPolicyAdjustment('planning', plannerModel, pool, quotaState, repoDir);
+  logPolicyAdjustment('coding', coderModel, pool, quotaState, repoDir);
+  logPolicyAdjustment('review', reviewerModel, pool, quotaState, repoDir);
 
   const expectedCostPlan = estimateStageCost(plannerModel, PLAN_TOKENS[planDepth], repoDir);
   const expectedCostCode = estimateStageCost(coderModel, CODE_TOKENS[codeDepth], repoDir);
@@ -998,7 +1068,11 @@ export async function routeWorkflowAuto(
 
   const hokusaiConfig = getHokusaiRouterConfig(options?.repoDir);
   if (hokusaiConfig.endpoint) {
-    return routeWorkflowHokusai(prompt, options);
+    const decision = await routeWorkflowHokusai(prompt, options);
+    if (decision.routingMode === 'hokusai') {
+      routerLog(`hokusai routing active: planner=${decision.planner} coder=${decision.coder} reviewer=${decision.reviewer}`);
+    }
+    return decision;
   }
 
   const policyDecision = tryPolicyResolution(prompt, options);

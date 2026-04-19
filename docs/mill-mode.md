@@ -135,6 +135,15 @@ The loop is:
 
 Challenge mode can also run head-to-head comparisons to generate stronger routing data over time. For the broader model-selection story and Hokusai opt-in, see [Routing & Hokusai](routing-and-hokusai.md).
 
+When quota pressure changes a routing decision, the control pane replays a single transparency line from the router or fallback path:
+
+```text
+11:31:02 [router] constrained mode: claude-opus-4-7 quota is degrading; reserving it for high-complexity steps
+11:31:44 [coder] claude-opus-4-7 unavailable (quota); falling back to claude-sonnet-4-6
+```
+
+Healthy runs do not emit extra routing noise.
+
 ## Routing Artifact Contract
 
 At startup, `wavemill mill` runs `route-task.ts --json` per task and persists the result
