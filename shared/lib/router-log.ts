@@ -77,3 +77,23 @@ export function fallbackLog(params: {
     `[${role}] ${params.failedModel} unavailable (${params.reason}); no remaining fallback candidates${chainSuffix}${resetAtSuffix}\n`
   );
 }
+
+export function policyAdjustmentLog(params: {
+  taskType: RegistryTaskType | null | undefined;
+  fromModel: string;
+  toModel: string;
+  metadata: Array<readonly [string, string]>;
+  level?: LogLevel;
+}): void {
+  const level = params.level ?? 'info';
+  if (levelNum(level) > currentVerbosityNum()) {
+    return;
+  }
+
+  const role = roleForTaskType(params.taskType);
+  const metadataSuffix = params.metadata.map(([key, value]) => `${key}=${value}`).join(', ');
+
+  process.stderr.write(
+    `[${role}] policy adjustment: ${params.fromModel} -> ${params.toModel} (${metadataSuffix})\n`
+  );
+}

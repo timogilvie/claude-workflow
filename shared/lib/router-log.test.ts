@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import { fallbackLog, roleForTaskType, routerLog } from './router-log.ts';
+import { fallbackLog, policyAdjustmentLog, roleForTaskType, routerLog } from './router-log.ts';
 
 function captureStderr(fn: () => void): string {
   let output = '';
@@ -45,6 +45,22 @@ describe('router-log', () => {
     assert.equal(
       output,
       '[coder] claude-opus-4-7 unavailable (quota); falling back to claude-sonnet-4-6\n',
+    );
+  });
+
+  it('formats policy adjustment messages with a role tag and ordered metadata', () => {
+    const output = captureStderr(() => {
+      policyAdjustmentLog({
+        taskType: 'coding',
+        fromModel: 'claude-opus-4-7',
+        toModel: 'gpt-5.4',
+        metadata: [['quota', 'exhausted'], ['same-class', 'frontier']],
+      });
+    });
+
+    assert.equal(
+      output,
+      '[coder] policy adjustment: claude-opus-4-7 -> gpt-5.4 (quota=exhausted, same-class=frontier)\n',
     );
   });
 
