@@ -26,6 +26,9 @@
  * }
  */
 
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, routeWorkflowStageAware, readTaskPromptFromFile, summarizeWorkflowRoute } from '../shared/lib/workflow-router.ts';
 
@@ -92,13 +95,33 @@ runTool({
         throw new Error(`--max-cost must be a non-negative number, got ${args['max-cost']}`);
       }
     }
+
+    // Detect wavemill root (route-task.ts is in tools/, so root is one level up)
+    const wavemillRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+    const additionalEvalsPaths: string[] = [];
+
+    // Only add wavemill paths if repoDir is different from wavemill root
+    // (avoid loading same data twice)
+    if (resolve(repoDir) !== resolve(wavemillRoot)) {
+      const aggregatedPath = resolve(wavemillRoot, '.wavemill/evals/aggregated-evals.jsonl');
+      const backfilledPath = resolve(wavemillRoot, '.wavemill/evals/aggregated-evals.backfilled.jsonl');
+
+      if (existsSync(aggregatedPath)) {
+        additionalEvalsPaths.push(aggregatedPath);
+      }
+      if (existsSync(backfilledPath)) {
+        additionalEvalsPaths.push(backfilledPath);
+      }
+    }
+
+    const routeOptions = { repoDir, maxCostUsd, additionalEvalsPaths };
     const decision = mode === 'heuristic'
-      ? routeWorkflow(prompt, { repoDir, maxCostUsd })
+      ? routeWorkflow(prompt, routeOptions)
       : mode === 'stage-aware'
-        ? routeWorkflowStageAware(prompt, { repoDir, maxCostUsd })
+        ? routeWorkflowStageAware(prompt, routeOptions)
         : mode === 'hokusai'
-          ? await routeWorkflowHokusai(prompt, { repoDir, maxCostUsd })
-          : await routeWorkflowAuto(prompt, { repoDir, maxCostUsd });
+          ? await routeWorkflowHokusai(prompt, routeOptions)
+          : await routeWorkflowAuto(prompt, routeOptions);
 
     // Surface budget violations
     if (decision.budgetViolation) {
