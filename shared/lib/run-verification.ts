@@ -18,7 +18,7 @@
  */
 
 import { determineVerificationRequirements } from './verification-engine.ts';
-import { getBaseBranch } from './patch-size-validator.ts';
+import { getBaseBranch, validatePatchSize } from './patch-size-validator.ts';
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -283,45 +283,25 @@ function checkPatchSize(
   repoDir: string,
 ): NonNullable<VerificationResult['patchSizeResult']> {
   try {
-    // Get the base branch from git
+    // Use shared validation logic from patch-size-validator.ts
     const baseBranch = getBaseBranch(repoDir);
+    const branch = 'HEAD';
+    const result = validatePatchSize(branch, baseBranch, cap, repoDir);
 
-    // Count added/deleted lines in diff
-    const diffOutput = execSync(
-      `git diff ${baseBranch}...HEAD --numstat`,
-      {
-        cwd: repoDir,
-        encoding: 'utf-8',
-        stdio: 'pipe',
-      },
-    );
-
-    let totalLines = 0;
-    const lines = diffOutput.trim().split('\n').filter(Boolean);
-
-    for (const line of lines) {
-      const [added, deleted] = line.split('\t');
-      if (added !== '-' && deleted !== '-') {
-        totalLines += parseInt(added, 10) + parseInt(deleted, 10);
-      }
-    }
-
-    const exceedsCap = totalLines > cap;
-
-    if (exceedsCap) {
+    if (result.exceedsCap) {
       console.error(`\n✗ Patch size cap exceeded:`);
-      console.error(`  Total lines changed: ${totalLines}`);
+      console.error(`  Total lines changed: ${result.totalLines}`);
       console.error(`  Cap: ${cap} lines`);
       console.error(`  Reason: ${reason}`);
       console.error(`\n  Suggestion: Split this work into smaller PRs\n`);
     } else {
-      console.log(`✓ Patch size ${totalLines} lines (under cap of ${cap})\n`);
+      console.log(`✓ Patch size ${result.totalLines} lines (under cap of ${cap})\n`);
     }
 
     return {
-      totalLines,
+      totalLines: result.totalLines,
       cap,
-      exceedsCap,
+      exceedsCap: result.exceedsCap,
       reason,
     };
   } catch (err) {
