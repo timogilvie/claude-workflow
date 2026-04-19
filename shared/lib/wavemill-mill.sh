@@ -100,6 +100,8 @@ _update_effective_max_parallel() {
   esac
 }
 
+_update_effective_max_parallel
+
 FORCE_MODEL="$(trim_outer_whitespace "${FORCE_MODEL:-}")"
 if [[ -z "$FORCE_MODEL" ]]; then
   unset FORCE_MODEL
@@ -6190,33 +6192,43 @@ while :; do
 done
 MONITOR_EOF
 
-# HOK-1297: Fix bash syntax error reported during forced exit
+# HOK-1297 / HOK-1364: Investigate bash syntax errors reported during exit
 #
-# INVESTIGATION SUMMARY (Plan Phase 3: Fix Identified Issues)
-# ============================================================
-# Bug Report: "syntax error near unexpected token `(' at line 5572"
-# Trigger: Forced exit after challenge panes failed to exit when issues lost their challenge
-# Date: April 15, 2026
+# INVESTIGATION SUMMARY
+# =====================
+# HOK-1297:
+# - Bug report: "syntax error near unexpected token `(' at line 5572"
+# - Trigger: Forced exit after challenge panes failed to exit when issues lost their challenge
+# - Date: April 15, 2026
 #
-# Investigation Steps Performed:
+# HOK-1364:
+# - Bug report: "unexpected EOF while looking for matching `\"'" at line 6268
+# - Trigger: Reported after tmux attach returned at session exit
+# - Date: April 19, 2026
+#
+# Investigation steps performed:
 # 1. ✓ Ran `bash -n shared/lib/wavemill-mill.sh` → PASS (no syntax errors found)
-# 2. ✓ Examined line 5572: `sleep "$POLL_SECONDS"` (syntactically correct)
-# 3. ✓ Checked git history: No syntax fixes between bug report and current HEAD
-# 4. ✓ Verified current file: 5621 lines, all syntax checks pass
+# 2. ✓ Ran `bash -n` on the extracted monitor heredoc content → PASS
+# 3. ✓ Examined the reported lines: `sleep "$POLL_SECONDS"` and
+#      `log "info" "  Type 'q' in control window to quit"` are syntactically correct
+# 4. ✓ Checked git history: No missing quote fix exists between the report and current HEAD
 # 5. ✓ Searched for invalid 'local' keywords outside function context → NONE FOUND
 #    (Previous bugs: fc198c8, d45ea00 fixed similar runtime errors with 'local')
-# 6. ✓ Checked heredoc terminator (line 5594: MONITOR_EOF) → CORRECT
+# 6. ✓ Verified the heredoc terminator and generated monitor script syntax → CORRECT
 #
-# Conclusion: SCENARIO C - Issue Not Reproducible (per Plan Phase 3)
-# - Syntax error was likely transient (file corruption during forced exit)
-# - OR error message showed misleading line number
-# - Current codebase is syntactically valid
+# Conclusions:
+# - Current codebase is syntactically valid; no unterminated string is present in this file.
+# - Because this repo runs from Dropbox, a mid-execution file replacement can make bash report
+#   a misleading EOF or line number while the shell is still reading the script in chunks.
+# - The generated monitor script now has CI coverage via `tests/check-shell.sh`, so heredoc
+#   quoting regressions are caught before runtime.
+# - `_update_effective_max_parallel` is intentionally applied during startup so the main script
+#   uses the degraded-model concurrency cap before any slot-selection logic runs.
 #
-# DEFENSIVE SAFEGUARDS (Plan Phase 4)
-# ====================================
-# Since direct fix isn't possible, adding validation to prevent similar issues:
+# Defensive safeguards:
 #
 # 1. Monitor script syntax validation (below)
+#    - Uses the same bash binary as the monitor script shebang
 #    - Catches syntax errors from heredoc expansion or variable substitution
 #    - Provides diagnostic output if validation fails
 #    - Prevents cryptic runtime errors during forced exit scenarios
@@ -6225,7 +6237,7 @@ MONITOR_EOF
 #    - Optional DEBUG_CLEANUP=1 for detailed error context
 #    - Non-fatal error handling preserved
 #
-validate_output=$(bash -n "$MONITOR_SCRIPT" 2>&1)
+validate_output=$(/opt/homebrew/bin/bash -n "$MONITOR_SCRIPT" 2>&1)
 if [[ -n "$validate_output" ]]; then
   log_error "Generated monitor script has syntax errors:"
   echo "$validate_output" | sed 's/^/  /' >&2

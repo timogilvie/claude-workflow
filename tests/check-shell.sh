@@ -72,6 +72,15 @@ else
   if [[ -z "$HEREDOC_CONTENT" ]]; then
     fail "Could not extract MONITOR_EOF heredoc from wavemill-mill.sh"
   else
+    MONITOR_TMP=$(mktemp /tmp/wavemill-monitor-check-XXXXXX.sh)
+    printf '#!/opt/homebrew/bin/bash\n%s\n' "$HEREDOC_CONTENT" > "$MONITOR_TMP"
+    if bash -n "$MONITOR_TMP" 2>/dev/null; then
+      pass "monitor script heredoc has no syntax errors (bash -n)"
+    else
+      fail "monitor script heredoc has syntax errors: $(bash -n "$MONITOR_TMP" 2>&1 | head -5)"
+    fi
+    rm -f "$MONITOR_TMP"
+
     # Extract function definitions from the heredoc (name followed by () with optional space and {)
     HEREDOC_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' <<< "$HEREDOC_CONTENT" | sed 's/()//' | sort -u)
 
