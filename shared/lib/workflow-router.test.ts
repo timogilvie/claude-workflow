@@ -875,6 +875,13 @@ await test('logPolicyAdjustment emits frontier-substitution line', () => {
     return true;
   } as typeof process.stderr.write;
 
+  // routerLog gates output on DASHBOARD_VERBOSITY / WAVEMILL_LOG_LEVEL;
+  // force 'info' so the substitution line is emitted regardless of ambient env.
+  const originalDashboardVerbosity = process.env.DASHBOARD_VERBOSITY;
+  const originalWavemillLogLevel = process.env.WAVEMILL_LOG_LEVEL;
+  process.env.DASHBOARD_VERBOSITY = 'info';
+  delete process.env.WAVEMILL_LOG_LEVEL;
+
   try {
     // Use a prompt that will be classified as planning-heavy to ensure planner selection
     const decision = tryPolicyResolution('Create a detailed implementation plan for the feature', {
@@ -895,6 +902,16 @@ await test('logPolicyAdjustment emits frontier-substitution line', () => {
     assert.ok(hasFrontierSubstitutionLog, `Should log frontier substitution message. Stderr: ${stderrOutput}`);
   } finally {
     process.stderr.write = originalStderrWrite;
+    if (originalDashboardVerbosity === undefined) {
+      delete process.env.DASHBOARD_VERBOSITY;
+    } else {
+      process.env.DASHBOARD_VERBOSITY = originalDashboardVerbosity;
+    }
+    if (originalWavemillLogLevel === undefined) {
+      delete process.env.WAVEMILL_LOG_LEVEL;
+    } else {
+      process.env.WAVEMILL_LOG_LEVEL = originalWavemillLogLevel;
+    }
     cleanup();
   }
 });
