@@ -79,7 +79,7 @@ else
     fi
 
     MONITOR_TMP=$(mktemp /tmp/wavemill-monitor-check-XXXXXX.sh)
-    printf '#!/opt/homebrew/bin/bash\n%s\n' "$HEREDOC_CONTENT" > "$MONITOR_TMP"
+    printf '%s\n' "$HEREDOC_CONTENT" > "$MONITOR_TMP"
     if $MONITOR_BASH -n "$MONITOR_TMP" 2>/dev/null; then
       pass "monitor script heredoc has no syntax errors (bash -n)"
     else

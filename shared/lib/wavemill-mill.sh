@@ -6228,7 +6228,7 @@ MONITOR_EOF
 # Defensive safeguards:
 #
 # 1. Monitor script syntax validation (below)
-#    - Uses the same bash binary as the monitor script shebang
+#    - Attempts to use the bash from monitor script shebang, falls back to system bash
 #    - Catches syntax errors from heredoc expansion or variable substitution
 #    - Provides diagnostic output if validation fails
 #    - Prevents cryptic runtime errors during forced exit scenarios
@@ -6237,7 +6237,9 @@ MONITOR_EOF
 #    - Optional DEBUG_CLEANUP=1 for detailed error context
 #    - Non-fatal error handling preserved
 #
-validate_output=$(/opt/homebrew/bin/bash -n "$MONITOR_SCRIPT" 2>&1)
+MONITOR_BASH="/opt/homebrew/bin/bash"
+[[ ! -x "$MONITOR_BASH" ]] && MONITOR_BASH="bash"
+validate_output=$($MONITOR_BASH -n "$MONITOR_SCRIPT" 2>&1)
 if [[ -n "$validate_output" ]]; then
   log_error "Generated monitor script has syntax errors:"
   echo "$validate_output" | sed 's/^/  /' >&2
