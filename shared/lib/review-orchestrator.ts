@@ -188,10 +188,11 @@ function loadRiskPatterns(repoDir: string): string[] {
  */
 function matchesPattern(path: string, pattern: string): boolean {
   // Convert glob pattern to regex
+  // IMPORTANT: Escape dots BEFORE replacing wildcards to avoid consuming the dots in .*
   const regexPattern = pattern
-    .replace(/\*\*/g, '.*')  // ** matches any path segment
-    .replace(/\*/g, '[^/]*')  // * matches within a segment
-    .replace(/\./g, '\\.');   // Escape dots
+    .replace(/\./g, '\\.')    // Escape dots first
+    .replace(/\*\*/g, '.*')   // ** matches any path segment
+    .replace(/\*/g, '[^/]*'); // * matches within a segment
 
   const regex = new RegExp(`^${regexPattern}$`);
   return regex.test(path);

@@ -346,7 +346,7 @@ function getBaseBranch(repoDir: string): string {
       stdio: 'pipe',
     }).trim();
 
-    return upstream.split('/')[0]; // Extract remote name
+    return upstream; // Return full ref (e.g., 'origin/main')
   } catch {
     // Fall back to 'main'
     return 'origin/main';
