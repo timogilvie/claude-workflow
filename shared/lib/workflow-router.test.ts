@@ -35,7 +35,9 @@ function baseConfig() {
       minModels: 2,
       defaultModel: 'claude-sonnet-4-5-20250929',
       agentMap: {
+        'claude-opus-4-7': 'claude',
         'claude-opus-4-6': 'claude',
+        'claude-sonnet-4-6': 'claude',
         'claude-sonnet-4-5-20250929': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.3-codex': 'codex',
@@ -44,10 +46,13 @@ function baseConfig() {
     },
     eval: {
       pricing: {
+        'claude-opus-4-7': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
         'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
+        'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
+        'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
       },
     },
   };
@@ -572,6 +577,111 @@ await test('routeWorkflow without difficulty options has no taskDifficulty in si
       },
     );
     assert.equal(decision.signals.taskDifficulty, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('enforces budget and downgrades when possible', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    // Note: $1.00 budget may or may not require downgrade depending on default model costs.
+    // This test verifies budget enforcement works correctly in both cases.
+    const decision = routeWorkflow(
+      'Implement a new feature',
+      { repoDir, maxCostUsd: 1.00 }
+    );
+
+    // Final cost after routing (reflects any successful downgrade)
+    const totalCost = decision.expectedCostPlan +
+                     decision.expectedCostCode +
+                     decision.expectedCostReview;
+
+    // Budget enforcement should result in: downgrade succeeded OR violation reported
+    if (decision.budgetViolation) {
+      // Downgrade failed - verify violation is properly reported
+      assert.ok(decision.budgetViolation.attemptedDowngrade);
+      assert.ok(decision.budgetViolation.requestedCost > 1.00);
+      assert.ok(decision.reasoning.some(r => r.includes('BUDGET VIOLATION')));
+    } else {
+      // Downgrade succeeded or not needed - verify cost is within budget
+      assert.ok(totalCost <= 1.00, `Total cost ${totalCost} should be under $1.00`);
+      if (decision.reasoning.some(r => r.includes('downgrade'))) {
+        // If downgrade happened, it must have brought cost within budget
+        assert.ok(totalCost <= 1.00, 'Downgrade should result in cost within budget');
+      }
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+await test('reports budget violation when impossible', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Complex infrastructure update requiring deep planning',
+      { repoDir, maxCostUsd: 0.001 } // Impossibly tight - even cheaper than cheapest option
+    );
+
+    assert.ok(decision.budgetViolation, 'Should have budget violation');
+    assert.equal(decision.budgetViolation.attemptedDowngrade, true);
+    assert.ok(decision.budgetViolation.requestedCost > 0.001);
+    assert.ok(decision.reasoning.some(r => r.includes('BUDGET VIOLATION')));
+  } finally {
+    cleanup();
+  }
+});
+
+await test('uses survival mode budget when in survival', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: baseConfig().router,
+    eval: baseConfig().eval,
+    budget: {
+      normalMode: 25,
+      constrainedMode: 15,
+      survivalMode: 5,
+    }
+  });
+
+  // Write quota state showing survival mode
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+  });
+
+  try {
+    const decision = routeWorkflow('Implement a feature', { repoDir });
+
+    // Should use $5 survival budget, not $25 normal
+    const totalCost = decision.expectedCostPlan +
+                     decision.expectedCostCode +
+                     decision.expectedCostReview;
+
+    assert.ok(totalCost <= 5 || decision.budgetViolation);
+    if (decision.budgetViolation) {
+      assert.equal(decision.budgetViolation.operatingMode, 'survival');
+      assert.equal(decision.budgetViolation.maxCostUsd, 5);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+await test('includes budget rule in reasoning when triggered', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Complex infrastructure update',
+      { repoDir, maxCostUsd: 0.20 } // Tight enough to trigger downgrade
+    );
+
+    // Should have budget reasoning since we're constraining the cost
+    const hasBudgetReasoning = decision.reasoning.some(r =>
+      r.includes('budget') || r.includes('downgrade')
+    );
+
+    assert.ok(hasBudgetReasoning, 'Should mention budget in reasoning');
   } finally {
     cleanup();
   }

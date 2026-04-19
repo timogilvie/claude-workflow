@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
-import { getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig } from './config.ts';
+import { getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig } from './config.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { getEffectiveRegistry, getLadder, type RegistryTaskType } from './model-registry.ts';
@@ -25,6 +25,19 @@ import { routerLog } from './router-log.ts';
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
 export type ReviewMode = 'none' | 'static' | 'llm' | 'static+llm';
+
+export interface BudgetViolation {
+  requestedCost: number;
+  maxCostUsd: number;
+  operatingMode: OperatingMode;
+  attemptedDowngrade: boolean;
+  cheapestViableOption: {
+    planner: string;
+    coder: string;
+    reviewer: string;
+    totalCost: number;
+  } | null;
+}
 
 export interface WorkflowRouteDecision {
   planner: string;
@@ -51,6 +64,7 @@ export interface WorkflowRouteDecision {
   constraints?: {
     maxCostUsd?: number;
   };
+  budgetViolation?: BudgetViolation;
 }
 
 export interface RouteWorkflowOptions {
@@ -393,6 +407,36 @@ export function estimateStageCost(
   return roundMoney(computeModelCost(profile, pricing));
 }
 
+/**
+ * Compute the absolute cheapest viable model combination from the available pool.
+ * Returns null if the pool doesn't contain the minimum viable model (haiku).
+ */
+function getCheapestOption(
+  pool: string[],
+  planDepth: PlanDepth,
+  codeDepth: CodeDepth,
+  reviewMode: ReviewMode,
+  repoDir?: string,
+): { planner: string; coder: string; reviewer: string; totalCost: number } | null {
+  const haiku = 'claude-haiku-4-5-20251001';
+  if (!pool.includes(haiku)) {
+    return null;
+  }
+
+  const planCost = estimateStageCost(haiku, PLAN_TOKENS[planDepth], repoDir);
+  const codeCost = estimateStageCost(haiku, CODE_TOKENS[codeDepth], repoDir);
+  const reviewCost = reviewMode === 'none'
+    ? 0
+    : estimateStageCost(haiku, REVIEW_TOKENS[reviewMode as Exclude<ReviewMode, 'none'>], repoDir);
+
+  return {
+    planner: haiku,
+    coder: haiku,
+    reviewer: haiku,
+    totalCost: planCost + codeCost + reviewCost,
+  };
+}
+
 function downgradeModelsForBudget(params: {
   planner: string;
   coder: string;
@@ -666,37 +710,54 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     finalReviewer = newReviewer;
   }
 
-  // Enforce budget constraint if provided
+  // Enforce budget constraint (use mode-specific budget if not explicitly provided)
   let budgetAdjustmentApplied = false;
+  let budgetViolation: BudgetViolation | undefined;
 
-  if (typeof options?.maxCostUsd === 'number') {
-    const initialCost =
-      estimateStageCost(planner, PLAN_TOKENS[planDepth], repoDir) +
-      estimateStageCost(coder, CODE_TOKENS[codeDepth], repoDir) +
-      (reviewRecommended === 'none'
-        ? 0
-        : estimateStageCost(reviewer, REVIEW_TOKENS[reviewRecommended as Exclude<ReviewMode, 'none'>], repoDir));
+  const mode = getCurrentOperatingMode(repoDir);
+  const budgetConfig = getBudgetConfig(repoDir);
+  const effectiveBudget = options?.maxCostUsd ?? (
+    mode === 'survival' ? budgetConfig.survivalMode :
+    mode === 'constrained' ? budgetConfig.constrainedMode :
+    budgetConfig.normalMode
+  );
 
-    if (initialCost > options.maxCostUsd) {
-      // Try downgrading models to fit within budget
-      const downgradedModels = downgradeModelsForBudget({
-        planner,
-        coder,
-        reviewer,
-        planDepth,
-        codeDepth,
-        reviewMode: reviewRecommended,
-        pool,
-        maxCostUsd: options.maxCostUsd,
-        repoDir,
-      });
+  const initialCost =
+    estimateStageCost(finalPlanner, PLAN_TOKENS[planDepth], repoDir) +
+    estimateStageCost(finalCoder, CODE_TOKENS[codeDepth], repoDir) +
+    (reviewRecommended === 'none'
+      ? 0
+      : estimateStageCost(finalReviewer, REVIEW_TOKENS[reviewRecommended as Exclude<ReviewMode, 'none'>], repoDir));
 
-      if (downgradedModels) {
-        finalPlanner = downgradedModels.planner;
-        finalCoder = downgradedModels.coder;
-        finalReviewer = downgradedModels.reviewer;
-        budgetAdjustmentApplied = true;
-      }
+  if (initialCost > effectiveBudget) {
+    // Try downgrading models to fit within budget
+    const downgradedModels = downgradeModelsForBudget({
+      planner: finalPlanner,
+      coder: finalCoder,
+      reviewer: finalReviewer,
+      planDepth,
+      codeDepth,
+      reviewMode: reviewRecommended,
+      pool,
+      maxCostUsd: effectiveBudget,
+      repoDir,
+    });
+
+    if (downgradedModels) {
+      finalPlanner = downgradedModels.planner;
+      finalCoder = downgradedModels.coder;
+      finalReviewer = downgradedModels.reviewer;
+      budgetAdjustmentApplied = true;
+    } else {
+      // Cannot fit budget - record violation
+      const cheapestOption = getCheapestOption(pool, planDepth, codeDepth, reviewRecommended, repoDir);
+      budgetViolation = {
+        requestedCost: initialCost,
+        maxCostUsd: effectiveBudget,
+        operatingMode: mode,
+        attemptedDowngrade: true,
+        cheapestViableOption: cheapestOption,
+      };
     }
   }
 
@@ -735,7 +796,14 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   }
 
   if (budgetAdjustmentApplied) {
-    reasoning.push(`Models downgraded to fit within $${options!.maxCostUsd} budget constraint.`);
+    reasoning.push(`Models downgraded to fit within $${effectiveBudget.toFixed(2)} budget constraint (${mode} mode).`);
+  }
+
+  if (budgetViolation) {
+    reasoning.push(
+      `⚠️ BUDGET VIOLATION: Estimated cost $${budgetViolation.requestedCost.toFixed(2)} exceeds ${mode} mode budget $${effectiveBudget.toFixed(2)}. ` +
+      `No cheaper model combination available. Task routing may fail.`
+    );
   }
 
   return {
@@ -761,9 +829,8 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       riskScore,
       ...(taskDifficulty ? { taskDifficulty } : {}),
     },
-    constraints: options?.maxCostUsd === undefined
-      ? undefined
-      : { maxCostUsd: options.maxCostUsd },
+    constraints: { maxCostUsd: effectiveBudget },
+    ...(budgetViolation ? { budgetViolation } : {}),
   };
 }
 
@@ -903,10 +970,18 @@ export function routeWorkflowDegraded(
 ): StageAwareDecision {
   logDegradedRoutingDecision(mode, options.repoDir);
   const degradedPool = buildDegradedModelPool(mode, options.repoDir);
+
+  // Apply mode-specific budget if not explicitly provided
+  const budgetConfig = getBudgetConfig(options.repoDir);
+  const modeBudget = mode === 'survival'
+    ? budgetConfig.survivalMode
+    : budgetConfig.constrainedMode;
+
   const degradedOptions: RouteWorkflowOptions = {
     ...options,
     modelsAvailable: degradedPool,
     skipDifficultyClassification: true,
+    maxCostUsd: options.maxCostUsd ?? modeBudget,
   };
   const rationale = mode === 'survival'
     ? 'Survival mode: frontier models exhausted. Restricted to haiku. KNN signal used without LLM reasoning.'
