@@ -750,6 +750,39 @@ test('routeWorkflowStageAware still uses heuristic-fallback when there are no re
   }
 });
 
+test('loadStageAwareEvalRecords merges additionalEvalsPaths into final record set', () => {
+  const localRecords = [
+    makeEvalRecord('local-1', 'claude-sonnet-4-5-20250929', { plan: 0.9, implementation: 0.85, review: 0.88 }),
+    makeEvalRecord('local-2', 'claude-opus-4-6', { plan: 0.92, implementation: 0.87, review: 0.91 }),
+  ];
+  const { repoDir, cleanup: cleanupMain } = makeRepoWithStageAwareData({ local: localRecords });
+
+  const additionalDir = mkdtempSync(join(tmpdir(), 'stage-aware-additional-'));
+  mkdirSync(join(additionalDir, '.wavemill', 'evals'), { recursive: true });
+  const additionalRecords = [
+    makeEvalRecord('additional-1', 'gpt-5.3-codex', { plan: 0.88, implementation: 0.97, review: 0.7 }),
+    makeEvalRecord('additional-2', 'claude-haiku-4-5-20251001', { plan: 0.68, implementation: 0.62, review: 0.95 }),
+  ];
+  const additionalPath = join(additionalDir, '.wavemill', 'evals', 'aggregated-evals.jsonl');
+  writeJsonl(additionalDir, '.wavemill/evals/aggregated-evals.jsonl', additionalRecords);
+
+  try {
+    const records = loadStageAwareEvalRecords({
+      repoDir,
+      additionalEvalsPaths: [additionalPath],
+    });
+
+    assert.equal(records.length, 4);
+    assert.ok(records.some((record) => record.id === 'local-1'));
+    assert.ok(records.some((record) => record.id === 'local-2'));
+    assert.ok(records.some((record) => record.id === 'additional-1'));
+    assert.ok(records.some((record) => record.id === 'additional-2'));
+  } finally {
+    cleanupMain();
+    rmSync(additionalDir, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);

@@ -32,6 +32,7 @@ export interface StageAwareOptions extends StageAwareConstraints {
   minModels?: number;
   backfilledEvalsPath?: string;
   aggregatedEvalsPath?: string;
+  additionalEvalsPaths?: string[];
   stageBlendWeight?: number;
   queryInput?: Partial<TaskDescriptorInput>;
 }
@@ -222,7 +223,7 @@ export function findKNearest(
 }
 
 function getHistoricalSources(repoDir: string, options: StageAwareOptions): HistoricalEvalSource[] {
-  return [
+  const sources: HistoricalEvalSource[] = [
     {
       path: resolve(repoDir, '.wavemill/evals/evals.jsonl'),
       kind: 'local',
@@ -239,6 +240,18 @@ function getHistoricalSources(repoDir: string, options: StageAwareOptions): Hist
       priority: 1,
     },
   ];
+
+  if (options.additionalEvalsPaths) {
+    for (const additionalPath of options.additionalEvalsPaths) {
+      sources.push({
+        path: additionalPath,
+        kind: 'aggregated',
+        priority: 1,
+      });
+    }
+  }
+
+  return sources;
 }
 
 function historicalRecordKey(record: EvalRecord): string {
