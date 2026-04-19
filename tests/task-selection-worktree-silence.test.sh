@@ -176,6 +176,8 @@ output="$(run_launch_case create_success)"
 check_contains "create success returns 0" "$output" "rc=0"
 check_contains "create success launches planning once" "$output" "launch_planning_calls=1"
 check_contains "create success logs worktree noise to mill log" "$output" "mill_log=Preparing worktree (new branch 'task/per-vendor-frontier-quota-telemetry');branch 'task/per-vendor-frontier-quota-telemetry' set up to track 'origin/main'.;HEAD is now at cb3e98d HOK-1367: Aggregate operating mode across all frontier models (#349);"
+# Needles use a leading \n to match standalone pane output. mill_log= uses ; separators,
+# so noise stored there is never preceded by \n and won't trigger these checks.
 check_not_contains "create success does not leak preparing line to pane" "$output" $'\nPreparing worktree (new branch '\''task/per-vendor-frontier-quota-telemetry'\'')'
 check_not_contains "create success does not leak tracking line to pane" "$output" $'\nbranch '\''task/per-vendor-frontier-quota-telemetry'\'' set up to track '\''origin/main'\''.'
 check_not_contains "create success does not leak head line to pane" "$output" $'\nHEAD is now at cb3e98d HOK-1367: Aggregate operating mode across all frontier models (#349)'
