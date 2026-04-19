@@ -1799,6 +1799,19 @@ log_warn() {
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 
+replay_route_transparency_logs() {
+  local stderr_file="$1"
+  [[ -s "$stderr_file" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*)
+        log "info" "$line"
+        ;;
+    esac
+  done < "$stderr_file"
+}
+
 # Duplicated intentionally from the parent script because the monitor runs as a
 # standalone generated shell script and does not inherit parent functions.
 render_prompt_template() {
