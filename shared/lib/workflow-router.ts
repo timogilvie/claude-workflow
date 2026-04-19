@@ -307,6 +307,26 @@ function readRoutingQuotaState(repoDir?: string): QuotaSnapshot | null {
   }
 }
 
+function resolvePolicyStagePools(
+  options: RouteWorkflowOptions,
+): { taskDifficulty: RoutingDifficulty; quotaState: QuotaSnapshot; policyStagePools: ReturnType<typeof buildPolicyStagePools> } | null {
+  const repoDir = options.repoDir;
+  const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
+  if (!taskDifficulty) {
+    return null;
+  }
+
+  const quotaState = readRoutingQuotaState(repoDir);
+  if (!quotaState) {
+    return null;
+  }
+
+  const pool = getModelPool(repoDir);
+  const policyStagePools = buildPolicyStagePools({ difficulty: taskDifficulty, quotaState, pool, repoDir });
+
+  return { taskDifficulty, quotaState, policyStagePools };
+}
+
 function buildPolicyStagePools(params: {
   difficulty: RoutingDifficulty;
   pool: string[];
@@ -320,6 +340,9 @@ function buildPolicyStagePools(params: {
   } as const;
   const poolSet = new Set(params.pool);
 
+  // Pools inherit the healthy frontier sibling substitution rule from resolveModel:
+  // when top-of-ladder frontier is degrading/exhausted and a healthy frontier sibling exists,
+  // non-frontier models are excluded from viable candidates
   const toPoolModels = (taskType: 'planning' | 'coding' | 'review'): string[] =>
     resolveModel({ ...basePolicy, taskType })
       .filter((candidate) => candidate.viable && poolSet.has(candidate.modelId))
@@ -338,12 +361,35 @@ function highestPriorityFrontierWithStatus(
   repoDir?: string,
 ): string | null {
   const registry = getEffectiveRegistry(repoDir);
-  return Object.entries(registry.models)
-    .filter(([, capabilities]) => capabilities.class === 'frontier')
-    .sort(([, leftCapabilities], [, rightCapabilities]) =>
-      (rightCapabilities.qualityScores.planning ?? 0) - (leftCapabilities.qualityScores.planning ?? 0))
-    .map(([modelId]) => modelId)
-    .find((modelId) => quotaState.models[modelId]?.status === status) ?? null;
+  const ladder = getLadder(registry, 'planning');
+  return (
+    ladder.find((modelId) => {
+      const caps = registry.models[modelId];
+      return caps && caps.class === 'frontier' && quotaState.models[modelId]?.status === status;
+    }) ?? null
+  );
+}
+
+function highestPriorityHealthyFrontierSibling(
+  quotaState: QuotaSnapshot,
+  repoDir?: string,
+  excludeModelId?: string,
+): string | null {
+  const registry = getEffectiveRegistry(repoDir);
+  const ladder = getLadder(registry, 'planning');
+  return (
+    ladder.find((modelId) => {
+      if (modelId === excludeModelId) {
+        return false;
+      }
+      const caps = registry.models[modelId];
+      return (
+        caps &&
+        caps.class === 'frontier' &&
+        quotaState.models[modelId]?.status === 'healthy'
+      );
+    }) ?? null
+  );
 }
 
 function logDegradedRoutingDecision(
@@ -383,6 +429,31 @@ function logPolicyAdjustment(
   repoDir?: string,
 ): void {
   const registry = getEffectiveRegistry(repoDir);
+  const chosenCapabilities = registry.models[chosenModel];
+
+  // Frontier substitution path: if chosen is healthy frontier and top-of-ladder frontier is degraded/exhausted
+  if (chosenCapabilities && chosenCapabilities.class === 'frontier') {
+    const chosenStatus = quotaState.models[chosenModel]?.status ?? 'healthy';
+    if (chosenStatus === 'healthy') {
+      const ladder = getLadder(registry, taskType);
+      const topLadderFrontier = ladder.find((modelId) => {
+        const caps = registry.models[modelId];
+        return caps && caps.class === 'frontier';
+      });
+
+      if (topLadderFrontier && topLadderFrontier !== chosenModel) {
+        const topStatus = quotaState.models[topLadderFrontier]?.status ?? 'healthy';
+        if (topStatus === 'degrading' || topStatus === 'exhausted') {
+          routerLog(
+            `policy adjustment: ${roleLabelForStage(taskType)} ${topLadderFrontier} -> ${chosenModel} (quota=${topStatus}, frontier-sibling)`,
+          );
+          return;
+        }
+      }
+    }
+  }
+
+  // Existing path: ladder-first-in-pool logic
   const preferredModel = getLadder(registry, taskType).find((modelId) => pool.includes(modelId));
   if (!preferredModel || preferredModel === chosenModel) {
     return;
@@ -842,14 +913,19 @@ export function routeWorkflowStageAware(
   const characteristics = analyzePrompt(prompt);
   const riskScore = computeRiskScore(prompt, characteristics);
 
-  // Resolve difficulty before stage-aware routing so floor can be applied
-  const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
+  // Resolve difficulty and policy pools before stage-aware routing
+  // so both KNN selection and difficulty floor application respect frontier substitution
+  const policyResolution = resolvePolicyStagePools(options || {});
+  const taskDifficulty = policyResolution?.taskDifficulty || resolveTaskDifficulty(options || {}, repoDir);
 
   let stageAwareDecision;
   try {
     stageAwareDecision = routeStageAware(prompt, {
       repoDir,
       modelsAvailable: options?.modelsAvailable,
+      plannerModelsAvailable: policyResolution?.policyStagePools.plannerModels,
+      coderModelsAvailable: policyResolution?.policyStagePools.coderModels,
+      reviewerModelsAvailable: policyResolution?.policyStagePools.reviewerModels,
       maxCostUsd: options?.maxCostUsd,
     });
   } catch (error) {
@@ -884,16 +960,25 @@ export function routeWorkflowStageAware(
     // and cost estimates, but overlay heuristic model selection.
     const fallback = routeWorkflow(prompt, options);
 
-    // Apply difficulty floors to stage-aware partial models
+    // Apply difficulty floors to stage-aware partial models, using substitution-aware pool
     let finalPlanner = fallback.planner;
     let finalCoder = fallback.coder;
     let finalReviewer = fallback.reviewer;
     if (taskDifficulty) {
       const floor = getAllowedModelFloor(taskDifficulty);
-      const pool = getModelPool(repoDir);
-      finalPlanner = applyDifficultyFloor(fallback.planner, floor, pool, 'planner');
-      finalCoder = applyDifficultyFloor(fallback.coder, floor, pool, 'coder');
-      finalReviewer = applyDifficultyFloor(fallback.reviewer, floor, pool, 'reviewer');
+      // Use policy-filtered pool if available, otherwise full pool
+      const floorPool = policyResolution?.policyStagePools
+        ? [
+            ...new Set([
+              ...policyResolution.policyStagePools.plannerModels,
+              ...policyResolution.policyStagePools.coderModels,
+              ...policyResolution.policyStagePools.reviewerModels,
+            ]),
+          ]
+        : getModelPool(repoDir);
+      finalPlanner = applyDifficultyFloor(fallback.planner, floor, floorPool, 'planner');
+      finalCoder = applyDifficultyFloor(fallback.coder, floor, floorPool, 'coder');
+      finalReviewer = applyDifficultyFloor(fallback.reviewer, floor, floorPool, 'reviewer');
     }
 
     decision = {
@@ -905,16 +990,25 @@ export function routeWorkflowStageAware(
       signals: baseSignals,
     };
   } else {
-    // Apply difficulty floors to fully stage-aware models
+    // Apply difficulty floors to fully stage-aware models, using substitution-aware pool
     let saPlanner = stageAwareDecision.planner;
     let saCoder = stageAwareDecision.coder;
     let saReviewer = stageAwareDecision.reviewer;
     if (taskDifficulty) {
       const floor = getAllowedModelFloor(taskDifficulty);
-      const pool = getModelPool(repoDir);
-      saPlanner = applyDifficultyFloor(stageAwareDecision.planner, floor, pool, 'planner');
-      saCoder = applyDifficultyFloor(stageAwareDecision.coder, floor, pool, 'coder');
-      saReviewer = applyDifficultyFloor(stageAwareDecision.reviewer, floor, pool, 'reviewer');
+      // Use policy-filtered pool if available, otherwise full pool
+      const floorPool = policyResolution?.policyStagePools
+        ? [
+            ...new Set([
+              ...policyResolution.policyStagePools.plannerModels,
+              ...policyResolution.policyStagePools.coderModels,
+              ...policyResolution.policyStagePools.reviewerModels,
+            ]),
+          ]
+        : getModelPool(repoDir);
+      saPlanner = applyDifficultyFloor(stageAwareDecision.planner, floor, floorPool, 'planner');
+      saCoder = applyDifficultyFloor(stageAwareDecision.coder, floor, floorPool, 'coder');
+      saReviewer = applyDifficultyFloor(stageAwareDecision.reviewer, floor, floorPool, 'reviewer');
     }
 
     decision = {
@@ -1098,17 +1192,13 @@ export async function routeWorkflowHokusai(
   options?: RouteWorkflowOptions,
 ): Promise<StageAwareDecision> {
   const repoDir = options?.repoDir;
-  const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
-  const quotaState = taskDifficulty ? readRoutingQuotaState(repoDir) : null;
-  const pool = getModelPool(repoDir);
-  const policyStagePools = taskDifficulty && quotaState
-    ? buildPolicyStagePools({ difficulty: taskDifficulty, quotaState, pool, repoDir })
-    : null;
+  const policyResolution = resolvePolicyStagePools(options || {});
+  const taskDifficulty = policyResolution?.taskDifficulty || resolveTaskDifficulty(options || {}, repoDir);
   const decision = await routeViaHokusai(prompt, {
     ...options,
-    plannerModels: policyStagePools?.plannerModels,
-    coderModels: policyStagePools?.coderModels,
-    reviewerModels: policyStagePools?.reviewerModels,
+    plannerModels: policyResolution?.policyStagePools.plannerModels,
+    coderModels: policyResolution?.policyStagePools.coderModels,
+    reviewerModels: policyResolution?.policyStagePools.reviewerModels,
   });
   if (!decision) {
     return routeWorkflowStageAware(prompt, options);
@@ -1117,7 +1207,7 @@ export async function routeWorkflowHokusai(
   const enriched = withSignals(decision, prompt, taskDifficulty);
   return withChallengeRecommendation({
     ...enriched,
-    reasoning: policyStagePools
+    reasoning: policyResolution
       ? [
           ...enriched.reasoning,
           `Hokusai input used policy-filtered candidate pools for ${taskDifficulty} difficulty.`,
