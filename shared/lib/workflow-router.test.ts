@@ -346,6 +346,7 @@ await test('auto mode excludes opus in constrained mode', async () => {
 
   writeQuotaState(repoDir, {
     'claude-opus-4-7': 'degrading',
+    'claude-opus-4-6': 'degrading',
   });
 
   try {
@@ -370,6 +371,7 @@ await test('auto mode emits a constrained router transparency line when quota is
 
   writeQuotaState(repoDir, {
     'claude-opus-4-7': 'degrading',
+    'claude-opus-4-6': 'degrading',
   });
 
   try {

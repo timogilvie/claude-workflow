@@ -159,23 +159,23 @@ describe('operating-mode', () => {
     );
   });
 
-  it('returns constrained when one premium model is degrading and another is healthy', () => {
+  it('returns normal when one premium model is degrading and another is healthy', () => {
     assert.equal(
       deriveOperatingMode(makeSnapshot({
         'claude-opus-4-7': 'degrading',
         'claude-opus-4-6': 'healthy',
       }), ['claude-opus-4-7', 'claude-opus-4-6']),
-      'constrained',
+      'normal',
     );
   });
 
-  it('returns survival when any premium model is exhausted even if another is degrading', () => {
+  it('returns constrained when one premium model is exhausted and another is degrading', () => {
     assert.equal(
       deriveOperatingMode(makeSnapshot({
         'claude-opus-4-7': 'degrading',
         'claude-opus-4-6': 'exhausted',
       }), ['claude-opus-4-7', 'claude-opus-4-6']),
-      'survival',
+      'constrained',
     );
   });
 
@@ -186,6 +186,25 @@ describe('operating-mode', () => {
         'claude-opus-4-6': 'exhausted',
       }), ['claude-opus-4-7', 'claude-opus-4-6']),
       'survival',
+    );
+  });
+
+  it('returns constrained when all premium models are degrading', () => {
+    assert.equal(
+      deriveOperatingMode(makeSnapshot({
+        'claude-opus-4-7': 'degrading',
+        'claude-opus-4-6': 'degrading',
+      }), ['claude-opus-4-7', 'claude-opus-4-6']),
+      'constrained',
+    );
+  });
+
+  it('treats premium models missing from the snapshot as healthy capacity', () => {
+    assert.equal(
+      deriveOperatingMode(makeSnapshot({
+        'claude-opus-4-7': 'exhausted',
+      }), ['claude-opus-4-7', 'claude-opus-4-6']),
+      'normal',
     );
   });
 
@@ -204,7 +223,10 @@ describe('operating-mode', () => {
   });
 
   it('reads the persisted quota state and returns the matching mode', () => {
-    writeQuotaState({ 'claude-opus-4-7': 'degrading' });
+    writeQuotaState({
+      'claude-opus-4-7': 'degrading',
+      'claude-opus-4-6': 'degrading',
+    });
 
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
   });
@@ -261,6 +283,7 @@ describe('operating-mode', () => {
   it('exposes global and model modes through the CLI tool', () => {
     writeQuotaState({
       'claude-opus-4-7': 'exhausted',
+      'claude-opus-4-6': 'exhausted',
       'gpt-5.4': 'degrading',
     });
 
@@ -274,6 +297,18 @@ describe('operating-mode', () => {
         models: {
           'claude-sonnet-4-6': {
             class: 'frontier',
+          },
+        },
+      },
+      quota: {
+        manualOverrides: {
+          'claude-opus-4-7': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
+          'claude-opus-4-6': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
           },
         },
       },

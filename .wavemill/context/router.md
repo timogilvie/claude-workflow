@@ -11,9 +11,9 @@ The router now has a single operating-mode view derived from quota health so com
 
 | Mode | Meaning |
 |------|---------|
-| `normal` | All tracked premium models are healthy, or no premium models are tracked in the current snapshot. |
-| `constrained` | At least one premium model is degrading and no premium model is exhausted. |
-| `survival` | At least one premium model is exhausted. |
+| `normal` | At least one premium model has healthy capacity after treating snapshot-absent premium models as `healthy`. |
+| `constrained` | No premium model is healthy, and at least one premium model is `degrading` rather than `exhausted`. |
+| `survival` | Every premium model is `exhausted`. |
 
 Premium models are defined by `PREMIUM_MODEL_CLASS = 'frontier'`.
 
@@ -22,19 +22,18 @@ Premium models are defined by `PREMIUM_MODEL_CLASS = 'frontier'`.
 The operating mode is derived from `readQuotaSnapshot()` plus the effective model registry:
 
 1. Resolve premium model IDs from `getEffectiveRegistry()` where `capabilities.class === PREMIUM_MODEL_CLASS`.
-2. Inspect only those premium models present in the quota snapshot.
-3. Apply the status thresholds in priority order:
-   - `SURVIVAL_TRIGGER_STATUS = 'exhausted'`
-   - `CONSTRAINED_TRIGGER_STATUS = 'degrading'`
-   - Otherwise `normal`
+2. Compute each premium model's effective status from the quota snapshot, treating models absent from the snapshot as `healthy`.
+3. Aggregate those effective statuses across the full premium set.
 
 Decision table:
 
-| Premium model statuses in snapshot | Result |
-|-----------------------------------|--------|
-| any `exhausted` | `survival` |
-| none exhausted, any `degrading` | `constrained` |
-| otherwise | `normal` |
+| Effective premium statuses (absent from snapshot = `healthy`) | Result |
+|---------------------------------------------------------------|--------|
+| any `healthy` | `normal` |
+| none `healthy`, not all `exhausted` | `constrained` |
+| every `exhausted` | `survival` |
+
+A single degraded premium model no longer triggers constrained mode on its own; the router waits until no premium alternative is healthy.
 
 ## API
 
