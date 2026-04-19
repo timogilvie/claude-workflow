@@ -4214,11 +4214,17 @@ launch_task() {
     log "info" "  Worktree exists: $wt_dir (resuming)"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
     log "info" "  Branch $branch exists, resuming"
-    git -C "$REPO_DIR" worktree add "$wt_dir" "$branch"
+    if ! git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" >>"$MILL_LOG_FILE" 2>&1; then
+      log_error "$issue: worktree add failed (log: $MILL_LOG_FILE)"
+      return 1
+    fi
     created_new=true
   else
     log "info" "  Creating branch $branch from origin/$BASE_BRANCH"
-    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH"
+    if ! git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >>"$MILL_LOG_FILE" 2>&1; then
+      log_error "$issue: worktree add failed (log: $MILL_LOG_FILE)"
+      return 1
+    fi
     created_new=true
   fi
   mkdir -p "$feature_dir"
