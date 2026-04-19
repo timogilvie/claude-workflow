@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
+import type { RegistryTaskType } from './model-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // TypeScript Types (matching wavemill-config.schema.json)
@@ -93,19 +94,18 @@ export interface AvailableModelsConfig {
 }
 
 export type ModelRegistryClass = 'frontier' | 'strong_generalist' | 'fast_economy';
-export type ModelRegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
 
 export interface ModelCapabilitiesOverride {
   vendor?: string;
   class?: ModelRegistryClass;
   strengths?: string[];
   weaknesses?: string[];
-  qualityScores?: Partial<Record<ModelRegistryTaskType, number>>;
+  qualityScores?: Partial<Record<RegistryTaskType, number>>;
 }
 
 export interface ModelRegistryConfig {
   models?: Record<string, ModelCapabilitiesOverride>;
-  ladders?: Partial<Record<ModelRegistryTaskType, string[]>>;
+  ladders?: Partial<Record<RegistryTaskType, string[]>>;
 }
 
 export interface AggregationConfig {
@@ -247,6 +247,31 @@ export interface ReadyRemediationConfig {
   agentCmd?: string;
 }
 
+export interface VerificationMandatoryChecksConfig {
+  typecheck?: boolean;
+  lint?: boolean;
+  test?: boolean;
+  selfExplanation?: boolean;
+}
+
+export interface VerificationPatchSizeCapConfig {
+  baseLines?: number;
+  adjustByQualityGap?: boolean;
+}
+
+export interface VerificationSecondPassReviewConfig {
+  enabled?: boolean;
+  riskPatterns?: string[];
+}
+
+export interface VerificationConfig {
+  enabled?: boolean;
+  qualityThresholds?: Partial<Record<RegistryTaskType, number>>;
+  patchSizeCap?: VerificationPatchSizeCapConfig;
+  mandatoryChecks?: VerificationMandatoryChecksConfig;
+  secondPassReview?: VerificationSecondPassReviewConfig;
+}
+
 export interface WavemillConfig {
   configVersion?: string;
   linear?: LinearConfig;
@@ -268,6 +293,7 @@ export interface WavemillConfig {
   permissions?: PermissionsConfig;
   modelRegistry?: ModelRegistryConfig;
   quota?: QuotaConfig;
+  verification?: VerificationConfig;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -603,6 +629,14 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
       agentCmd: config.ready?.remediation?.agentCmd ?? '',
     },
   };
+}
+
+/**
+ * Get the verification config section.
+ * Returns empty object if not configured.
+ */
+export function getVerificationConfig(repoDir?: string): VerificationConfig {
+  return loadWavemillConfig(repoDir).verification || {};
 }
 
 /**
