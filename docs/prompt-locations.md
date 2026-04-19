@@ -12,6 +12,8 @@ Use this page as the canonical registry for agent instruction locations in this 
 - `tools/prompts/planning-phase.md`: Planning phase instructions (loaded by `build_planning_prompt`). GEPA-optimizable.
 - `tools/prompts/coding-phase.md`: Coding phase instructions (loaded by `build_coding_prompt`). GEPA-optimizable.
 - `tools/prompts/review-phase.md`: Review phase instructions (loaded by `build_review_prompt`). GEPA-optimizable.
+- `tools/prompts/review-general.md`: Default general-purpose review persona prompt (loaded by `shared/lib/review-engine.ts` in normal operating mode).
+- `tools/prompts/review-general-scoped.md`: Degraded-mode scoped review persona prompt (loaded by `shared/lib/review-engine.ts` when operating mode is `constrained` or `survival`).
 - `tools/prompts/initiative-planner.md`: Standard initiative decomposition prompt (loaded by `tools/plan-initiative.ts` via `shared/lib/plan-prompt-selector.ts`). Used when operating mode is `normal`. GEPA-optimizable.
 - `tools/prompts/initiative-planner-compressed.md`: Compressed initiative decomposition prompt (loaded by `tools/plan-initiative.ts` via `shared/lib/plan-prompt-selector.ts`). Used when operating mode is `constrained` or `survival`. GEPA-optimizable.
 - `commands/workflow.md`: Phase 4 defines the interactive `/workflow` self-review loop.
@@ -20,4 +22,4 @@ Use this page as the canonical registry for agent instruction locations in this 
 
 ## Update Rule
 
-If you change agent launch instructions, workflow phase ownership, or self-review behavior, update this registry and the corresponding Claude/Codex-facing entrypoint docs so future editors can find the full instruction surface quickly.
+If you change agent launch instructions, workflow phase ownership, self-review behavior, or degraded-mode scoped review behavior, update this registry and the corresponding Claude/Codex-facing entrypoint docs so future editors can find the full instruction surface quickly.

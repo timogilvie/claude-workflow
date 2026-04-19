@@ -7,7 +7,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ReviewResult, ReviewOptions } from './review-runner.ts';
@@ -92,6 +92,20 @@ describe('review-runner', () => {
 
       assert.equal(options.verbose, true);
     });
+
+    it('should expose operatingMode option for degraded review routing', () => {
+      const options: ReviewOptions = {
+        operatingMode: 'survival',
+      };
+
+      assert.equal(options.operatingMode, 'survival');
+    });
+
+    it('should forward operatingMode to the review engine', () => {
+      const source = readFileSync(new URL('./review-runner.ts', import.meta.url), 'utf-8');
+
+      assert.match(source, /operatingMode:\s*options\.operatingMode/);
+    });
   });
 
   describe('Review Result Parsing', () => {
@@ -139,6 +153,18 @@ describe('review-runner', () => {
 
       assert.ok(mockResponse.uiFindings);
       assert.equal(mockResponse.uiFindings.length, 1);
+    });
+
+    it('should handle stronger reviewer escalation fields when present', () => {
+      const mockResponse = {
+        verdict: 'ready',
+        codeReviewFindings: [],
+        needsStrongerReviewer: true,
+        strongerReviewerReason: 'Cross-file contract verification was incomplete',
+      };
+
+      assert.equal(mockResponse.needsStrongerReviewer, true);
+      assert.match(mockResponse.strongerReviewerReason, /Cross-file contract/);
     });
   });
 

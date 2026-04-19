@@ -19,6 +19,7 @@ import {
 import { callClaude, parseJsonFromLLM, ensureClaudeAvailable } from './llm-cli.ts';
 import { loadWavemillConfig } from './config.ts';
 import type { ReviewProgressReporter } from './review-progress.ts';
+import type { OperatingMode } from './operating-mode.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -48,6 +49,8 @@ export interface ReviewResult {
   verdict: 'ready' | 'not_ready';
   codeReviewFindings: ReviewFinding[];
   uiFindings?: ReviewFinding[];
+  needsStrongerReviewer?: boolean;
+  strongerReviewerReason?: string;
   metadata?: {
     branch: string;
     files: string[];
@@ -74,6 +77,8 @@ export interface ReviewEngineOptions {
   reporter?: ReviewProgressReporter;
   /** Skip Claude CLI preflight when a caller already performed it */
   skipClaudePreflight?: boolean;
+  /** Operating mode controls degraded/scoped review behavior */
+  operatingMode?: OperatingMode;
 }
 
 interface JudgeConfig {
@@ -132,14 +137,26 @@ function loadConfig(repoDir: string): Config {
  * @param persona - Reviewer persona (general, security, performance, correctness, design)
  * @returns Prompt template string
  */
-function loadPersonaPromptTemplate(persona: ReviewerPersona): string {
+function getPersonaPromptPath(persona: ReviewerPersona, operatingMode: OperatingMode = 'normal'): string {
+  if (persona === 'general' && operatingMode !== 'normal') {
+    return join(__dirname, '../../tools/prompts/review-general-scoped.md');
+  }
+
+  return join(__dirname, `../../tools/prompts/review-${persona}.md`);
+}
+
+function loadPersonaPromptTemplate(
+  persona: ReviewerPersona,
+  operatingMode: OperatingMode = 'normal'
+): string {
+  const promptPath = getPersonaPromptPath(persona, operatingMode);
+
   // Return cached template if available
-  if (_promptTemplateCache.has(persona)) {
-    return _promptTemplateCache.get(persona)!;
+  if (_promptTemplateCache.has(promptPath)) {
+    return _promptTemplateCache.get(promptPath)!;
   }
 
   // Load and cache template
-  const promptPath = join(__dirname, `../../tools/prompts/review-${persona}.md`);
   if (!existsSync(promptPath)) {
     throw new Error(
       `Review prompt template not found for persona "${persona}" at: ${promptPath}\n` +
@@ -165,7 +182,7 @@ function loadPersonaPromptTemplate(persona: ReviewerPersona): string {
     );
   }
 
-  _promptTemplateCache.set(persona, template);
+  _promptTemplateCache.set(promptPath, template);
   return template;
 }
 
@@ -183,8 +200,13 @@ function loadPersonaPromptTemplate(persona: ReviewerPersona): string {
 function filterEnabledPersonas(
   requested: ReviewerPersona[],
   repoDir: string,
-  hasUiChanges: boolean
+  hasUiChanges: boolean,
+  operatingMode: OperatingMode = 'normal'
 ): ReviewerPersona[] {
+  if (operatingMode !== 'normal') {
+    return ['general'];
+  }
+
   const config = loadWavemillConfig(repoDir);
 
   return requested.filter(persona => {
@@ -434,7 +456,8 @@ function looksLikeJson(text: string): boolean {
  */
 function parseReviewResponse(
   responseText: string,
-  context: ReviewContext
+  context: ReviewContext,
+  operatingMode: OperatingMode = 'normal'
 ): ReviewResult {
   let parsed: any;
 
@@ -486,6 +509,14 @@ function parseReviewResponse(
     if (result.metadata) {
       result.metadata.uiVerificationRun = true;
     }
+  }
+
+  if (operatingMode !== 'normal' && typeof parsed.needs_stronger_reviewer === 'boolean') {
+    result.needsStrongerReviewer = parsed.needs_stronger_reviewer;
+  }
+
+  if (operatingMode !== 'normal' && typeof parsed.stronger_reviewer_reason === 'string') {
+    result.strongerReviewerReason = parsed.stronger_reviewer_reason;
   }
 
   return result;
@@ -606,7 +637,7 @@ async function runReviewWithRetry(
       attempt,
       maxAttempts,
     });
-    return parseReviewResponse(responseText, context);
+    return parseReviewResponse(responseText, context, options.operatingMode ?? 'normal');
   } catch (error) {
     if (attempt < maxAttempts) {
       await options.reporter?.emit({
@@ -736,7 +767,7 @@ async function runPersonaReview(
   options: ReviewEngineOptions
 ): Promise<ReviewResult> {
   // Load persona-specific template
-  const template = loadPersonaPromptTemplate(persona);
+  const template = loadPersonaPromptTemplate(persona, options.operatingMode ?? 'normal');
 
   // Design persona needs design context, others skip it
   const skipDesignContext = persona !== 'design';
@@ -800,13 +831,15 @@ export async function runReview(
   const model = options.model || config.judge.model;
   const timeout = options.timeout || DEFAULT_TIMEOUT_MS;
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const operatingMode = options.operatingMode ?? 'normal';
 
   // Determine reviewers to run (default: ['general'])
   const requestedReviewers = options.reviewers || ['general'];
   const enabledReviewers = filterEnabledPersonas(
     requestedReviewers,
     repoDir,
-    context.metadata.hasUiChanges
+    context.metadata.hasUiChanges,
+    operatingMode
   );
 
   if (enabledReviewers.length === 0) {
@@ -821,6 +854,7 @@ export async function runReview(
     console.error(`Model: ${model}`);
     console.error(`Timeout: ${timeout}ms`);
     console.error(`Max retries: ${maxRetries}`);
+    console.error(`Operating mode: ${operatingMode}`);
     console.error(`Requested reviewers: ${requestedReviewers.join(', ')}`);
     console.error(`Enabled reviewers: ${enabledReviewers.join(', ')}`);
     console.error(`Design context available: ${context.designContext !== null}`);
@@ -889,6 +923,9 @@ export async function runReview(
   // Aggregate findings from all reviewers
   const allCodeFindings = results.flatMap(r => r.codeReviewFindings);
   const allUiFindings = results.flatMap(r => r.uiFindings || []);
+  const strongerReviewerReason = results
+    .map(result => result.strongerReviewerReason?.trim())
+    .find((reason): reason is string => Boolean(reason));
 
   // Deduplicate findings
   const deduplicatedCodeFindings = deduplicateFindings(allCodeFindings);
@@ -935,7 +972,7 @@ export async function runReview(
     },
   });
 
-  return {
+  const finalResult: ReviewResult = {
     verdict: hasBlockers ? 'not_ready' : 'ready',
     codeReviewFindings: deduplicatedCodeFindings,
     uiFindings: deduplicatedUiFindings.length > 0 ? deduplicatedUiFindings : undefined,
@@ -947,4 +984,18 @@ export async function runReview(
       uiVerificationRun: deduplicatedUiFindings.length > 0,
     },
   };
+
+  if (operatingMode !== 'normal') {
+    finalResult.needsStrongerReviewer = results.some(result => result.needsStrongerReviewer === true);
+    if (strongerReviewerReason) {
+      finalResult.strongerReviewerReason = strongerReviewerReason;
+    }
+  }
+
+  return finalResult;
 }
+
+export const reviewEngineTestUtils = {
+  getPersonaPromptPath,
+  loadPersonaPromptTemplate,
+};
