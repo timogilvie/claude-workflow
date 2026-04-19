@@ -272,6 +272,12 @@ export interface VerificationConfig {
   secondPassReview?: VerificationSecondPassReviewConfig;
 }
 
+export interface BudgetConfig {
+  normalMode?: number;
+  constrainedMode?: number;
+  survivalMode?: number;
+}
+
 export interface WavemillConfig {
   configVersion?: string;
   linear?: LinearConfig;
@@ -294,6 +300,7 @@ export interface WavemillConfig {
   modelRegistry?: ModelRegistryConfig;
   quota?: QuotaConfig;
   verification?: VerificationConfig;
+  budget?: BudgetConfig;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -717,4 +724,22 @@ export function getDifficultyClassifierConfig(repoDir?: string): DifficultyClass
  */
 export function getQuotaConfig(repoDir?: string): QuotaConfig {
   return loadWavemillConfig(repoDir).quota || {};
+}
+
+/**
+ * Get the budget configuration with defaults.
+ * Returns default budgets when not configured.
+ *
+ * Default budgets:
+ * - Normal mode: $25.00
+ * - Constrained mode: $15.00
+ * - Survival mode: $5.00
+ */
+export function getBudgetConfig(repoDir?: string): Required<BudgetConfig> {
+  const config = loadWavemillConfig(repoDir).budget || {};
+  return {
+    normalMode: config.normalMode ?? 25.0,
+    constrainedMode: config.constrainedMode ?? 15.0,
+    survivalMode: config.survivalMode ?? 5.0,
+  };
 }

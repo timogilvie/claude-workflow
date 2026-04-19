@@ -100,6 +100,27 @@ runTool({
           ? await routeWorkflowHokusai(prompt, { repoDir, maxCostUsd })
           : await routeWorkflowAuto(prompt, { repoDir, maxCostUsd });
 
+    // Surface budget violations
+    if (decision.budgetViolation) {
+      const v = decision.budgetViolation;
+      console.error('\n⚠️  BUDGET VIOLATION DETECTED\n');
+      console.error(`Operating Mode: ${v.operatingMode}`);
+      console.error(`Budget Limit: $${v.maxCostUsd.toFixed(2)}`);
+      console.error(`Estimated Cost: $${v.requestedCost.toFixed(2)}`);
+      console.error(`Overage: $${(v.requestedCost - v.maxCostUsd).toFixed(2)}\n`);
+
+      if (v.cheapestViableOption) {
+        console.error(`Cheapest available option would cost: $${v.cheapestViableOption.totalCost.toFixed(2)}\n`);
+      } else {
+        console.error('No viable model combination found within any budget.\n');
+      }
+
+      console.error('Consider:');
+      console.error('  - Increasing budget limits in .wavemill-config.json');
+      console.error('  - Simplifying task scope');
+      console.error('  - Waiting for quota recovery\n');
+    }
+
     if (args.json) {
       console.log(JSON.stringify(decision, null, 2));
       return;

@@ -23,6 +23,8 @@
  *   from task-branch git history instead of always remaining `0` (HOK-1329)
  * - **1.6.0**: Added optional `fallbackEvent` metadata for cross-model quota
  *   fallback attribution (HOK-1336)
+ * - **1.7.0**: Added optional `budgetViolated` and `budgetViolationDetails`
+ *   fields to track cost budget constraint violations during routing (HOK-1350)
  *
  * @module eval-schema
  */
@@ -1028,6 +1030,40 @@ export interface EvalRecord {
    * @since 1.6.0
    */
   fallbackEvent?: FallbackEventMetadata;
+
+  /**
+   * Whether the routing decision violated cost budget constraints.
+   *
+   * True when the router could not find a model combination within the
+   * configured or operating-mode budget, indicating runaway spend risk.
+   *
+   * @since 1.7.0
+   */
+  budgetViolated?: boolean;
+
+  /**
+   * Structured budget violation details if budgetViolated is true.
+   *
+   * Captures the cost overage, operating mode, attempted downgrade, and
+   * cheapest available option for analysis of budget constraint tuning.
+   *
+   * @since 1.7.0
+   */
+  budgetViolationDetails?: {
+    /** Estimated cost that exceeded the budget */
+    requestedCost: number;
+    /** Budget limit that was exceeded */
+    maxCostUsd: number;
+    /** Operating mode at time of violation (normal, constrained, survival) */
+    operatingMode: 'normal' | 'constrained' | 'survival';
+    /** Whether the router attempted to downgrade models to fit budget */
+    attemptedDowngrade: boolean;
+    /** Cheapest available model combination and its cost */
+    cheapestOption?: {
+      totalCost: number;
+      wouldStillExceed: boolean;
+    };
+  };
 
   /** Budget constraints applied during routing and execution. */
   constraints?: EvalConstraints;
