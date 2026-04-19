@@ -764,9 +764,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       riskScore,
       ...(taskDifficulty ? { taskDifficulty } : {}),
     },
-    constraints: options?.maxCostUsd === undefined
-      ? undefined
-      : { maxCostUsd: options.maxCostUsd },
+    constraints: { maxCostUsd: effectiveBudget },
     ...(budgetViolation ? { budgetViolation } : {}),
   };
 }
@@ -906,10 +904,18 @@ export function routeWorkflowDegraded(
   mode: Extract<OperatingMode, 'constrained' | 'survival'>,
 ): StageAwareDecision {
   const degradedPool = buildDegradedModelPool(mode, options.repoDir);
+
+  // Apply mode-specific budget if not explicitly provided
+  const budgetConfig = getBudgetConfig(options.repoDir);
+  const modeBudget = mode === 'survival'
+    ? budgetConfig.survivalMode
+    : budgetConfig.constrainedMode;
+
   const degradedOptions: RouteWorkflowOptions = {
     ...options,
     modelsAvailable: degradedPool,
     skipDifficultyClassification: true,
+    maxCostUsd: options.maxCostUsd ?? modeBudget,
   };
   const rationale = mode === 'survival'
     ? 'Survival mode: frontier models exhausted. Restricted to haiku. KNN signal used without LLM reasoning.'
