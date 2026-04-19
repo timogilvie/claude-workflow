@@ -1,6 +1,6 @@
 # Router
 
-**Last updated:** 2026-04-19T15:13:53.493Z
+**Last updated:** 2026-04-19T16:30:00.000Z
 **Files touched:** 2 files in last 30 days
 
 ## Purpose
@@ -11,29 +11,42 @@ The router now has a single operating-mode view derived from quota health so com
 
 | Mode | Meaning |
 |------|---------|
-| `normal` | At least one premium model has healthy capacity after treating snapshot-absent premium models as `healthy`. |
-| `constrained` | No premium model is healthy, and at least one premium model is `degrading` rather than `exhausted`. |
-| `survival` | Every premium model is `exhausted`. |
+| `normal` | At least one frontier model has healthy capacity after treating snapshot-absent frontier models as `healthy`. This includes mixed-frontier scenarios where the top-of-ladder frontier is degraded but a healthy frontier sibling can be substituted transparently. |
+| `constrained` | Aggregate-across-frontier degraded mode: no frontier model is healthy, and at least one frontier model is `degrading` rather than `exhausted`. |
+| `survival` | Aggregate-across-frontier exhausted mode: every frontier model is `exhausted`. |
 
-Premium models are defined by `PREMIUM_MODEL_CLASS = 'frontier'`.
+Frontier models are defined by `PREMIUM_MODEL_CLASS = 'frontier'`.
 
 ## Derivation Rule
 
 The operating mode is derived from `readQuotaSnapshot()` plus the effective model registry:
 
-1. Resolve premium model IDs from `getEffectiveRegistry()` where `capabilities.class === PREMIUM_MODEL_CLASS`.
-2. Compute each premium model's effective status from the quota snapshot, treating models absent from the snapshot as `healthy`.
-3. Aggregate those effective statuses across the full premium set.
+1. Resolve frontier model IDs from `getEffectiveRegistry()` where `capabilities.class === PREMIUM_MODEL_CLASS`.
+2. Compute each frontier model's effective status from the quota snapshot, treating models absent from the snapshot as `healthy`.
+3. Aggregate those effective statuses across the full frontier set.
 
 Decision table:
 
-| Effective premium statuses (absent from snapshot = `healthy`) | Result |
-|---------------------------------------------------------------|--------|
-| any `healthy` | `normal` |
-| none `healthy`, not all `exhausted` | `constrained` |
-| every `exhausted` | `survival` |
+| Effective frontier statuses (absent from snapshot = `healthy`) | Result | Notes |
+|---------------------------------------------------------------|--------|-------|
+| Any `healthy`, and it is the top-of-ladder frontier | `normal` | Standard routing |
+| Any `healthy`, but the top-of-ladder frontier is `degrading` or `exhausted` | `normal` | Cross-frontier substitution keeps routing within the frontier class |
+| None `healthy`, at least one `degrading` | `constrained` | Aggregate degraded routing; class downgrade allowed |
+| Every `exhausted` | `survival` | Aggregate exhausted routing; haiku-only path |
 
-A single degraded premium model no longer triggers constrained mode on its own; the router waits until no premium alternative is healthy.
+A single degraded frontier model must never trigger `constrained` mode on its own; the router stays in `normal` until no frontier alternative is healthy.
+
+### Normal-Mode Cross-Frontier Substitution
+
+When `deriveOperatingMode()` returns `normal`, the routing policy still checks whether the preferred frontier candidate is degraded. If the top-of-ladder frontier is `degrading` or `exhausted` and another frontier sibling is `healthy`, routing remains in `normal` mode and substitutes the healthy sibling.
+
+This substitution path is implemented in `routing-policy.ts`:
+
+- `findHealthyFrontierSibling()` looks for a healthy frontier peer for the active task ladder.
+- `healthyFrontierSubstituteAvailable` marks the mixed-frontier case where the preferred frontier is unhealthy but a healthy sibling exists.
+- `resolveModel()` assigns `below-frontier-substitute` to non-frontier candidates in that case, preventing a downgrade to sonnet or haiku while a healthy frontier sibling is still available.
+
+This is a normal-mode policy adjustment, not degraded routing. `workflow-router.ts` logs the substitution with `policyAdjustmentLog()` and `logFinalFrontierSubstitution()`, including `same-class=frontier` metadata. Constrained and survival banners do not fire for this path.
 
 ## API
 
@@ -62,7 +75,7 @@ Operating mode now includes proactive quota-state transitions, not just reactive
 Manual per-model overrides in `.wavemill-config.json` are applied after projection and can force
 `healthy`, `degrading`, or `exhausted` status for known high-usage windows.
 
-See [Quota Tracking](/Users/timothyogilvie/Dropbox/wavemill/worktrees/proactive-quota-degradation-before-hard-stop/.wavemill/context/quota-tracking.md) for full signal definitions, thresholds, and CLI override flow.
+See [Quota Tracking](quota-tracking.md) for full signal definitions, thresholds, and CLI override flow.
 
 ## Degraded-Mode Routing
 
@@ -71,7 +84,7 @@ When the operating mode is `constrained` or `survival`, `routeWorkflowAuto()` au
 - **Constrained**: Model pool restricted to `strong_generalist` and `fast_economy` classes. LLM-based difficulty classification is skipped.
 - **Survival**: Model pool restricted to `fast_economy` class (haiku-only). LLM-based difficulty classification is skipped.
 
-Both modes use stage-aware KNN signals for candidate selection and prepend a degraded-mode rationale to the routing decision's reasoning field. If no models of the appropriate class are available, routing falls back to the full pool with a warning.
+Both modes use stage-aware KNN signals for candidate selection and prepend a degraded-mode rationale to the routing decision's reasoning field. Those degraded-mode banners only fire once the aggregate frontier state has crossed into `constrained` or `survival`. If any frontier sibling remains healthy, routing stays in `normal` mode, uses cross-frontier substitution, and does not emit degraded-mode rationale. If no models of the appropriate class are available, routing falls back to the full pool with a warning.
 
 `routeWorkflowDegraded()` is the explicit API for degraded-mode routing; `routeWorkflowAuto()` uses it automatically based on current operating mode.
 
@@ -79,11 +92,15 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 
 ### DO
 - Always prepend degraded-mode rationale to routing decisions when constrained or survival
+- Treat constrained and survival as aggregate-across-frontier states, not single-model triggers
+- Prefer a healthy frontier sibling over non-frontier fallbacks when the top-of-ladder frontier is degrading in normal mode
 - Respect `modelsAvailable` option in routing functions to allow test injection
 - Skip LLM-based difficulty classification in constrained and survival modes
 - Fall back to full model pool if no degraded candidates exist (with warning)
 
 ### DON'T
+- Trigger constrained mode while any frontier model is healthy
+- Skip cross-frontier substitution and fall back to non-frontier models while a healthy frontier sibling is available
 - Use frontier models (opus) in constrained or survival mode
 - Use LLM reasoning for candidate selection in degraded modes
 - Assume model registry will have preferred classes available
@@ -93,6 +110,9 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 | Symptom | Root Cause | Fix |
 |---------|------------|-----|
 | Degraded routing falls back to full pool | No models of restricted class available in registry | Ensure model registry includes sonnet/haiku; verify class definitions in `model-registry.ts` |
+| `constrained` mode fires even though one frontier model is healthy | Operating mode derived from a single-model check instead of aggregating all frontier IDs | Ensure `deriveOperatingMode()` iterates the full frontier set from the effective registry and treats snapshot-absent frontier models as `healthy` |
+| A non-frontier model is selected while a healthy frontier sibling is available | Frontier-sibling substitution was skipped, or `below-frontier-substitute` exclusions were not applied | Verify `findHealthyFrontierSibling()` can see the current quota snapshot and `resolveModel()` is excluding non-frontier candidates in the mixed-frontier path |
+| No policy-adjustment line appears for a frontier-to-frontier swap | The route never passed through `logPolicyAdjustment()` or `logFinalFrontierSubstitution()` for that path | Confirm routing stayed out of degraded mode and note that `routingMode === 'policy'` intentionally skips the final frontier-substitution log |
 
 ## Testing Patterns
 
@@ -110,11 +130,15 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 
 ## Related Subsystems
 
-- [Quota Tracking](quota-tracking.md) — quota state derivation and thresholds
-- [Model Registry](model-registry.md) — model class definitions and capability registry
-- [Stage-Aware Router](stage-aware-router.md) — KNN-based routing for degraded modes
+- [Quota Tracking](quota-tracking.md) — quota state derivation, thresholds, and the persisted snapshot consumed by operating-mode and substitution logic
+- `shared/lib/model-registry.ts` — model class definitions and effective registry resolution used to identify frontier models
+- `shared/lib/stage-aware-router.ts` — KNN-based routing used by degraded modes after aggregate frontier exhaustion/degradation is confirmed
 
 ## Recent Changes
+
+### 2026-04-19T16:30:00.000Z - HOK-1370: Router docs refreshed for multi-frontier semantics
+**Changed:** Updated the router subsystem spec to document aggregate-across-frontier operating modes, explicit mixed-frontier decision-table behavior, normal-mode frontier sibling substitution, and the `below-frontier-substitute` / transparency-log invariants.
+**Impact:** Future routing work can distinguish true degraded-mode entry from healthy frontier substitution and avoids reintroducing single-model triggers for `constrained` mode.
 
 ### 2026-04-19T16:00:00.000Z - HOK-1369: Cross-frontier substitution transparency
 **Changed:** Normal-mode routing now emits per-role policy-adjustment lines when a healthy frontier sibling is chosen because the top frontier is `degrading` or `exhausted`, for example `[coder] policy adjustment: claude-opus-4-7 -> gpt-5.4 (quota=exhausted, same-class=frontier)`.
