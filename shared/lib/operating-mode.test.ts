@@ -100,6 +100,30 @@ function writeQuotaState(models: Record<string, QuotaStatus>): void {
   }, null, 2), 'utf-8');
 }
 
+function writeMultiFrontierConfig(targetRepoDir: string): void {
+  writeFileSync(join(targetRepoDir, '.wavemill-config.json'), JSON.stringify({
+    modelRegistry: {
+      models: {
+        'gpt-5.4': {
+          vendor: 'openai',
+          class: 'frontier',
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
+        },
+      },
+      ladders: {
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+      },
+    },
+  }, null, 2), 'utf-8');
+  clearConfigCache(targetRepoDir);
+}
+
 describe('operating-mode', () => {
   beforeEach(() => {
     resetWarningState();
@@ -268,6 +292,50 @@ describe('operating-mode', () => {
     writeQuotaState(statuses);
 
     assert.equal(hasAnyHealthyModel(repoDir), false);
+  });
+
+  describe('multi-vendor frontier operating mode', () => {
+    it('returns normal when one frontier vendor is exhausted and another vendor is healthy', () => {
+      writeMultiFrontierConfig(repoDir);
+      writeQuotaState({
+        'claude-opus-4-7': 'exhausted',
+        'claude-opus-4-6': 'exhausted',
+        'gpt-5.4': 'healthy',
+      });
+
+      assert.equal(getCurrentOperatingMode(repoDir), 'normal');
+      assert.equal(hasAnyHealthyModel(repoDir), true);
+      assert.deepEqual(getOperatingModeResult(repoDir).vendorBreakdown, {
+        anthropic: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
+        openai: { healthy: 1, degraded: 0, exhausted: 0, total: 1 },
+      });
+    });
+
+    it('returns constrained when every frontier vendor is degrading', () => {
+      writeMultiFrontierConfig(repoDir);
+      writeQuotaState({
+        'claude-opus-4-7': 'degrading',
+        'claude-opus-4-6': 'degrading',
+        'gpt-5.4': 'degrading',
+      });
+
+      assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
+      assert.deepEqual(getOperatingModeResult(repoDir).vendorBreakdown, {
+        anthropic: { healthy: 0, degraded: 2, exhausted: 0, total: 2 },
+        openai: { healthy: 0, degraded: 1, exhausted: 0, total: 1 },
+      });
+    });
+
+    it('returns survival when every frontier vendor is exhausted', () => {
+      writeMultiFrontierConfig(repoDir);
+      writeQuotaState({
+        'claude-opus-4-7': 'exhausted',
+        'claude-opus-4-6': 'exhausted',
+        'gpt-5.4': 'exhausted',
+      });
+
+      assert.equal(getCurrentOperatingMode(repoDir), 'survival');
+    });
   });
 
   it('returns the operating mode for an individual model', () => {
