@@ -31,6 +31,13 @@ export interface QuotaSnapshot {
   snapshotAt: string;
 }
 
+export interface VendorQuotaStats {
+  healthy: number;
+  degraded: number;
+  exhausted: number;
+  total: number;
+}
+
 export interface LimitErrorInput {
   modelId: string;
   resetAt?: string | Date | null;
@@ -697,6 +704,36 @@ export function readQuotaSnapshot(repoDir?: string): QuotaSnapshot {
     models,
     snapshotAt,
   });
+}
+
+export function getVendorQuotaBreakdown(
+  snapshot: QuotaSnapshot,
+  frontierModels: ReadonlyArray<{ modelId: string; vendor: string }>,
+): Record<string, VendorQuotaStats> {
+  return frontierModels.reduce<Record<string, VendorQuotaStats>>((acc, { modelId, vendor }) => {
+    const vendorKey = typeof vendor === 'string' && vendor.trim().length > 0
+      ? vendor.trim()
+      : 'unknown';
+    const stats = acc[vendorKey] ?? {
+      healthy: 0,
+      degraded: 0,
+      exhausted: 0,
+      total: 0,
+    };
+    const status = snapshot.models[modelId]?.status ?? 'healthy';
+
+    if (status === 'healthy') {
+      stats.healthy += 1;
+    } else if (status === 'degrading') {
+      stats.degraded += 1;
+    } else {
+      stats.exhausted += 1;
+    }
+
+    stats.total += 1;
+    acc[vendorKey] = stats;
+    return acc;
+  }, {});
 }
 
 export function getModelStatus(modelId: string, repoDir?: string): QuotaStatus {
