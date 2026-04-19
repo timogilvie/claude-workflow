@@ -31,6 +31,32 @@ function makeSnapshot(statuses: Partial<Record<string, QuotaStatus>> = {}): Quot
   };
 }
 
+function makeSnapshotWithCustomModels(
+  models: string[],
+  statuses: Partial<Record<string, QuotaStatus>> = {},
+): QuotaSnapshot {
+  const modelEntries = Object.fromEntries(
+    models.map((modelId) => [
+      modelId,
+      {
+        status: statuses[modelId] ?? 'healthy',
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+        consecutiveLimitErrors: 0,
+      },
+    ]),
+  );
+
+  return {
+    models: modelEntries,
+    snapshotAt: new Date().toISOString(),
+  };
+}
+
 function baseConfig(mode: 'auto' | 'heuristic' = 'auto') {
   return {
     router: {
@@ -272,6 +298,335 @@ describe('routing-policy ranking', () => {
     assert.ok(sonnet45);
     assert.equal(sonnet45.viable, false);
     assert.equal(sonnet45.exclusionReason, 'below-quality-threshold');
+  });
+
+  it('promotes a healthy frontier sibling over strong_generalist when top-of-ladder frontier is degrading', () => {
+    const testRegistry = {
+      models: {
+        'claude-opus-4-7': {
+          vendor: 'anthropic' as const,
+          class: 'frontier' as const,
+          strengths: ['reasoning'],
+          weaknesses: ['cost'],
+          qualityScores: { planning: 95, coding: 95, review: 85, classify: 95, routing: 60 },
+        },
+        'gpt-5.4': {
+          vendor: 'openai' as const,
+          class: 'frontier' as const,
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
+        },
+        'claude-sonnet-4-6': {
+          vendor: 'anthropic' as const,
+          class: 'strong_generalist' as const,
+          strengths: ['balanced'],
+          weaknesses: [],
+          qualityScores: { planning: 75, coding: 90, review: 90, classify: 82, routing: 78 },
+        },
+        'claude-haiku-4-5-20251001': {
+          vendor: 'anthropic' as const,
+          class: 'fast_economy' as const,
+          strengths: ['speed'],
+          weaknesses: [],
+          qualityScores: { planning: 88, coding: 55, review: 60, classify: 55, routing: 92 },
+        },
+      },
+      ladders: {
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+      },
+    };
+
+    const ranked = resolveModel({
+      taskType: 'coding',
+      difficulty: 'hard',
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'degrading' }),
+      repoDir: undefined,
+    }, testRegistry);
+
+    assert.equal(ranked[0].modelId, 'gpt-5.4');
+    assert.equal(ranked[0].viable, true);
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    assert.ok(sonnet);
+    assert.equal(sonnet.viable, false);
+    assert.equal(sonnet.exclusionReason, 'below-frontier-substitute');
+  });
+
+  it('promotes a healthy frontier sibling over strong_generalist when top-of-ladder frontier is exhausted', () => {
+    const testRegistry = {
+      models: {
+        'claude-opus-4-7': {
+          vendor: 'anthropic' as const,
+          class: 'frontier' as const,
+          strengths: ['reasoning'],
+          weaknesses: ['cost'],
+          qualityScores: { planning: 95, coding: 95, review: 85, classify: 95, routing: 60 },
+        },
+        'gpt-5.4': {
+          vendor: 'openai' as const,
+          class: 'frontier' as const,
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
+        },
+        'claude-sonnet-4-6': {
+          vendor: 'anthropic' as const,
+          class: 'strong_generalist' as const,
+          strengths: ['balanced'],
+          weaknesses: [],
+          qualityScores: { planning: 75, coding: 90, review: 90, classify: 82, routing: 78 },
+        },
+        'claude-haiku-4-5-20251001': {
+          vendor: 'anthropic' as const,
+          class: 'fast_economy' as const,
+          strengths: ['speed'],
+          weaknesses: [],
+          qualityScores: { planning: 88, coding: 55, review: 60, classify: 55, routing: 92 },
+        },
+      },
+      ladders: {
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+      },
+    };
+
+    const ranked = resolveModel({
+      taskType: 'coding',
+      difficulty: 'hard',
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'exhausted' }),
+      repoDir: undefined,
+    }, testRegistry);
+
+    assert.equal(ranked[0].modelId, 'gpt-5.4');
+    assert.equal(ranked[0].viable, true);
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    assert.ok(sonnet);
+    assert.equal(sonnet.viable, false);
+    assert.equal(sonnet.exclusionReason, 'below-frontier-substitute');
+  });
+
+  it('does not substitute when every frontier is degrading', () => {
+    const testRegistry = {
+      models: {
+        'claude-opus-4-7': {
+          vendor: 'anthropic' as const,
+          class: 'frontier' as const,
+          strengths: ['reasoning'],
+          weaknesses: ['cost'],
+          qualityScores: { planning: 95, coding: 95, review: 85, classify: 95, routing: 60 },
+        },
+        'gpt-5.4': {
+          vendor: 'openai' as const,
+          class: 'frontier' as const,
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
+        },
+        'claude-sonnet-4-6': {
+          vendor: 'anthropic' as const,
+          class: 'strong_generalist' as const,
+          strengths: ['balanced'],
+          weaknesses: [],
+          qualityScores: { planning: 75, coding: 90, review: 90, classify: 82, routing: 78 },
+        },
+        'claude-haiku-4-5-20251001': {
+          vendor: 'anthropic' as const,
+          class: 'fast_economy' as const,
+          strengths: ['speed'],
+          weaknesses: [],
+          qualityScores: { planning: 88, coding: 55, review: 60, classify: 55, routing: 92 },
+        },
+      },
+      ladders: {
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+      },
+    };
+
+    const ranked = resolveModel({
+      taskType: 'coding',
+      difficulty: 'hard',
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'degrading', 'gpt-5.4': 'degrading' }),
+      repoDir: undefined,
+    }, testRegistry);
+
+    // Sonnet should be viable when both frontiers are degrading
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    assert.ok(sonnet);
+    assert.equal(sonnet.viable, true);
+  });
+
+  it('does not substitute in normal mode (all frontiers healthy)', () => {
+    const testRegistry = {
+      models: {
+        'claude-opus-4-7': {
+          vendor: 'anthropic' as const,
+          class: 'frontier' as const,
+          strengths: ['reasoning'],
+          weaknesses: ['cost'],
+          qualityScores: { planning: 95, coding: 95, review: 85, classify: 95, routing: 60 },
+        },
+        'gpt-5.4': {
+          vendor: 'openai' as const,
+          class: 'frontier' as const,
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
+        },
+        'claude-sonnet-4-6': {
+          vendor: 'anthropic' as const,
+          class: 'strong_generalist' as const,
+          strengths: ['balanced'],
+          weaknesses: [],
+          qualityScores: { planning: 75, coding: 90, review: 90, classify: 82, routing: 78 },
+        },
+        'claude-haiku-4-5-20251001': {
+          vendor: 'anthropic' as const,
+          class: 'fast_economy' as const,
+          strengths: ['speed'],
+          weaknesses: [],
+          qualityScores: { planning: 88, coding: 55, review: 60, classify: 55, routing: 92 },
+        },
+      },
+      ladders: {
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+      },
+    };
+
+    const ranked = resolveModel({
+      taskType: 'coding',
+      difficulty: 'moderate',
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001']),
+      repoDir: undefined,
+    }, testRegistry);
+
+    // In normal mode when all are healthy, no substitution rule applies, so ranking is purely by quality score
+    // opus-4-7 (95) > sonnet (90) > gpt-5.4 (82), so opus-4-7 ranks first
+    assert.equal(ranked[0].modelId, 'claude-opus-4-7');
+  });
+
+  it('healthy frontier outranks degrading frontier via sort rule', () => {
+    const testRegistry = {
+      models: {
+        'claude-opus-4-7': {
+          vendor: 'anthropic' as const,
+          class: 'frontier' as const,
+          strengths: ['reasoning'],
+          weaknesses: ['cost'],
+          qualityScores: { planning: 95, coding: 95, review: 85, classify: 95, routing: 60 },
+        },
+        'gpt-5.4': {
+          vendor: 'openai' as const,
+          class: 'frontier' as const,
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
+        },
+        'claude-sonnet-4-6': {
+          vendor: 'anthropic' as const,
+          class: 'strong_generalist' as const,
+          strengths: ['balanced'],
+          weaknesses: [],
+          qualityScores: { planning: 75, coding: 90, review: 90, classify: 82, routing: 78 },
+        },
+        'claude-haiku-4-5-20251001': {
+          vendor: 'anthropic' as const,
+          class: 'fast_economy' as const,
+          strengths: ['speed'],
+          weaknesses: [],
+          qualityScores: { planning: 88, coding: 55, review: 60, classify: 55, routing: 92 },
+        },
+      },
+      ladders: {
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+      },
+    };
+
+    const ranked = resolveModel({
+      taskType: 'coding',
+      difficulty: 'hard',
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'degrading' }),
+      repoDir: undefined,
+    }, testRegistry);
+
+    const opusIdx = ranked.findIndex((candidate) => candidate.modelId === 'claude-opus-4-7');
+    const gptIdx = ranked.findIndex((candidate) => candidate.modelId === 'gpt-5.4');
+    assert.ok(opusIdx !== -1);
+    assert.ok(gptIdx !== -1);
+    // gpt-5.4 (healthy frontier) should rank before opus (degrading frontier)
+    assert.ok(gptIdx < opusIdx);
+  });
+
+  it('still allows strong_generalist fallback when all frontiers are exhausted', () => {
+    const testRegistry = {
+      models: {
+        'claude-opus-4-7': {
+          vendor: 'anthropic' as const,
+          class: 'frontier' as const,
+          strengths: ['reasoning'],
+          weaknesses: ['cost'],
+          qualityScores: { planning: 95, coding: 95, review: 85, classify: 95, routing: 60 },
+        },
+        'gpt-5.4': {
+          vendor: 'openai' as const,
+          class: 'frontier' as const,
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
+        },
+        'claude-sonnet-4-6': {
+          vendor: 'anthropic' as const,
+          class: 'strong_generalist' as const,
+          strengths: ['balanced'],
+          weaknesses: [],
+          qualityScores: { planning: 75, coding: 90, review: 90, classify: 82, routing: 78 },
+        },
+        'claude-haiku-4-5-20251001': {
+          vendor: 'anthropic' as const,
+          class: 'fast_economy' as const,
+          strengths: ['speed'],
+          weaknesses: [],
+          qualityScores: { planning: 88, coding: 55, review: 60, classify: 55, routing: 92 },
+        },
+      },
+      ladders: {
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+      },
+    };
+
+    const ranked = resolveModel({
+      taskType: 'coding',
+      difficulty: 'critical',
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'exhausted', 'gpt-5.4': 'exhausted' }),
+      repoDir: undefined,
+    }, testRegistry);
+
+    // Sonnet should be viable when all frontiers are exhausted
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    assert.ok(sonnet);
+    assert.equal(sonnet.viable, true);
   });
 });
 

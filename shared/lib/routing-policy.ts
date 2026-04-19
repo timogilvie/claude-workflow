@@ -1,6 +1,7 @@
 import {
   CLASS_RANK,
   getEffectiveRegistry,
+  getLadder,
   type ModelClass,
   type ModelRegistry,
   type RegistryTaskType,
@@ -21,7 +22,8 @@ export type ExclusionReason =
   | 'quota-exhausted'
   | 'below-difficulty-floor'
   | 'below-quality-threshold'
-  | 'exceeds-cost-tier';
+  | 'exceeds-cost-tier'
+  | 'below-frontier-substitute';
 
 export interface RankedCandidate {
   modelId: string;
@@ -30,6 +32,7 @@ export interface RankedCandidate {
   modelClass: ModelClass;
   viable: boolean;
   exclusionReason?: ExclusionReason;
+  quotaStatus?: QuotaStatus;
 }
 
 const DEGRADING_SCORE_PENALTY = 0.85;
@@ -49,6 +52,15 @@ function compareCandidates(left: RankedCandidate, right: RankedCandidate): numbe
     return left.viable ? -1 : 1;
   }
 
+  // When both are viable frontier-class candidates, healthy ranks above degrading
+  if (left.viable && left.modelClass === 'frontier' && right.modelClass === 'frontier') {
+    const leftHealthy = left.quotaStatus === 'healthy';
+    const rightHealthy = right.quotaStatus === 'healthy';
+    if (leftHealthy !== rightHealthy) {
+      return leftHealthy ? -1 : 1;
+    }
+  }
+
   const leftScore = left.viable ? left.adjustedScore : left.qualityScore;
   const rightScore = right.viable ? right.adjustedScore : right.qualityScore;
   if (rightScore !== leftScore) {
@@ -61,6 +73,39 @@ function compareCandidates(left: RankedCandidate, right: RankedCandidate): numbe
   }
 
   return left.modelId.localeCompare(right.modelId);
+}
+
+function findHealthyFrontierSibling(
+  registry: ModelRegistry,
+  quotaState: QuotaSnapshot,
+  taskType: RegistryTaskType,
+  excludeModelId?: string,
+  maxCostTier?: ModelClass,
+): string | null {
+  // Walk the ladder to find the first healthy frontier sibling, respecting cost tier
+  const ladder = getLadder(registry, taskType);
+
+  for (const modelId of ladder) {
+    if (modelId === excludeModelId) {
+      continue;
+    }
+
+    const capabilities = registry.models[modelId];
+    if (!capabilities || capabilities.class !== 'frontier') {
+      continue;
+    }
+
+    if (maxCostTier && CLASS_RANK[capabilities.class] > CLASS_RANK[maxCostTier]) {
+      continue;
+    }
+
+    const status = getQuotaStatus(quotaState, modelId);
+    if (status === 'healthy') {
+      return modelId;
+    }
+  }
+
+  return null;
 }
 
 export function resolveModel(
@@ -80,6 +125,28 @@ export function resolveModel(
 
     return getQuotaStatus(policy.quotaState, modelId) !== 'exhausted';
   });
+
+  // Detect frontier sibling substitution scenario
+  const topLadderFrontier = getLadder(registry, policy.taskType).find((modelId) => {
+    const caps = registry.models[modelId];
+    return caps && caps.class === 'frontier';
+  }) || null;
+
+  const topFrontierStatus = topLadderFrontier
+    ? getQuotaStatus(policy.quotaState, topLadderFrontier)
+    : null;
+
+  const healthyFrontierSubstituteAvailable = !!(
+    topLadderFrontier &&
+    (topFrontierStatus === 'degrading' || topFrontierStatus === 'exhausted') &&
+    findHealthyFrontierSibling(
+      registry,
+      policy.quotaState,
+      policy.taskType,
+      topLadderFrontier,
+      policy.maxCostTier,
+    )
+  );
 
   const candidates = Object.entries(registry.models).map(([modelId, capabilities]) => {
     const qualityScore = capabilities.qualityScores[policy.taskType] ?? 0;
@@ -102,6 +169,11 @@ export function resolveModel(
         return 'below-difficulty-floor' satisfies ExclusionReason;
       }
 
+      // New exclusion: if a healthy frontier sibling is available, exclude non-frontier models
+      if (healthyFrontierSubstituteAvailable && capabilities.class !== 'frontier') {
+        return 'below-frontier-substitute' satisfies ExclusionReason;
+      }
+
       if (policy.minQualityScore !== undefined && qualityScore < policy.minQualityScore) {
         return 'below-quality-threshold' satisfies ExclusionReason;
       }
@@ -116,6 +188,7 @@ export function resolveModel(
       modelClass: capabilities.class,
       viable: exclusionReason === undefined,
       exclusionReason,
+      quotaStatus: status,
     } satisfies RankedCandidate;
   });
 
