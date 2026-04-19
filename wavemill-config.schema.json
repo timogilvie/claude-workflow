@@ -1014,6 +1014,28 @@
         }
       },
       "additionalProperties": false
+    },
+    "budget": {
+      "type": "object",
+      "description": "Cost budget constraints per operating mode. Used by the router to enforce spending limits.",
+      "properties": {
+        "normalMode": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Per-task cost budget in USD for normal mode. Default: 25.00"
+        },
+        "constrainedMode": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Per-task cost budget in USD for constrained mode. Default: 15.00"
+        },
+        "survivalMode": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Per-task cost budget in USD for survival mode. Default: 5.00"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

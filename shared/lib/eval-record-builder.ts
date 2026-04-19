@@ -264,6 +264,35 @@ export function attachConstraints(
   }
 }
 
+/**
+ * Extract and attach budget violation metadata from routing decision (HOK-1350).
+ *
+ * Populates budgetViolated and budgetViolationDetails fields when the routing
+ * decision contains a budget violation, enabling analysis of cost constraint
+ * effectiveness and budget tuning.
+ *
+ * @param record - Eval record to mutate
+ */
+export function attachBudgetViolation(record: EvalRecord): void {
+  const routingDecision = record.routingDecision as any;
+  if (!routingDecision?.budgetViolation) {
+    return;
+  }
+
+  const v = routingDecision.budgetViolation;
+  record.budgetViolated = true;
+  record.budgetViolationDetails = {
+    requestedCost: v.requestedCost,
+    maxCostUsd: v.maxCostUsd,
+    operatingMode: v.operatingMode,
+    attemptedDowngrade: v.attemptedDowngrade,
+    cheapestOption: v.cheapestViableOption ? {
+      totalCost: v.cheapestViableOption.totalCost,
+      wouldStillExceed: v.cheapestViableOption.totalCost > v.maxCostUsd,
+    } : undefined,
+  };
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
@@ -293,6 +322,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
   attachFallbackEvent(record, metadata.fallbackEvent || null);
   attachConstraints(record, metadata.constraints || null);
+  attachBudgetViolation(record);
 
   // Extract stageScores from record metadata (set by evaluateTask)
   const stageScores = record.metadata?.stageScores as
