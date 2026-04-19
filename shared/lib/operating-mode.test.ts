@@ -350,6 +350,110 @@ describe('operating-mode', () => {
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
   });
 
+  describe('multi-frontier aggregate mode', () => {
+    it('case (a): one exhausted + one healthy frontier resolves to normal mode', () => {
+      writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              vendor: 'openai',
+              class: 'frontier',
+            },
+          },
+        },
+      }, null, 2), 'utf-8');
+      clearConfigCache(repoDir);
+
+      writeQuotaState({
+        'claude-opus-4-7': 'exhausted',
+        'gpt-5.4': 'healthy',
+      });
+
+      const result = getOperatingModeResult(repoDir);
+      assert.equal(getCurrentOperatingMode(repoDir), 'normal');
+      assert.equal(result.mode, 'normal');
+      assert.equal(hasAnyHealthyModel(repoDir), true);
+      assert.deepEqual(result.vendorBreakdown, {
+        anthropic: { healthy: 1, degraded: 0, exhausted: 1, total: 2 },
+        openai: { healthy: 1, degraded: 0, exhausted: 0, total: 1 },
+      });
+    });
+
+    it('case (b): all frontiers degrading resolves to constrained mode', () => {
+      writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              vendor: 'openai',
+              class: 'frontier',
+            },
+          },
+        },
+      }, null, 2), 'utf-8');
+      clearConfigCache(repoDir);
+
+      writeQuotaState({
+        'claude-opus-4-7': 'degrading',
+        'claude-opus-4-6': 'degrading',
+        'gpt-5.4': 'degrading',
+      });
+
+      const result = getOperatingModeResult(repoDir);
+      assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
+      assert.equal(result.mode, 'constrained');
+      assert.deepEqual(result.vendorBreakdown, {
+        anthropic: { healthy: 0, degraded: 2, exhausted: 0, total: 2 },
+        openai: { healthy: 0, degraded: 1, exhausted: 0, total: 1 },
+      });
+    });
+
+    it('case (c): all frontiers exhausted resolves to survival mode', () => {
+      writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              vendor: 'openai',
+              class: 'frontier',
+            },
+          },
+        },
+      }, null, 2), 'utf-8');
+      clearConfigCache(repoDir);
+
+      writeQuotaState({
+        'claude-opus-4-7': 'exhausted',
+        'claude-opus-4-6': 'exhausted',
+        'gpt-5.4': 'exhausted',
+      });
+
+      assert.equal(getCurrentOperatingMode(repoDir), 'survival');
+    });
+
+    it('regression guard: a single exhausted frontier does not force degraded modes when another frontier is healthy', () => {
+      writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              vendor: 'openai',
+              class: 'frontier',
+            },
+          },
+        },
+      }, null, 2), 'utf-8');
+      clearConfigCache(repoDir);
+
+      writeQuotaState({
+        'claude-opus-4-7': 'exhausted',
+        'gpt-5.4': 'healthy',
+      });
+
+      const mode = getCurrentOperatingMode(repoDir);
+      assert.notEqual(mode, 'constrained');
+      assert.notEqual(mode, 'survival');
+      assert.equal(mode, 'normal');
+    });
+  });
+
   describe('getOperatingModeResult', () => {
     it('returns normal mode with healthy vendor counts', () => {
       const result = getOperatingModeResult(repoDir);

@@ -331,6 +331,85 @@ await test('auto mode falls back to stage-aware chain without hokusai config', a
   }
 });
 
+await test('auto mode stays normal with cross-vendor healthy sibling and routes all stages to gpt-5.4', async () => {
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  try {
+    const { result: decision, stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Implement a backend feature with tests and review.', {
+        repoDir,
+        taskDifficulty: 'hard',
+        skipDifficultyClassification: true,
+      }),
+    );
+    const selectedModels = [decision.planner, decision.coder, decision.reviewer];
+    assert.equal(decision.planner, 'gpt-5.4');
+    assert.equal(decision.coder, 'gpt-5.4');
+    assert.equal(decision.reviewer, 'gpt-5.4');
+    assert.ok(selectedModels.every((modelId) => !modelId.toLowerCase().includes('sonnet')));
+    assert.ok(selectedModels.every((modelId) => !modelId.toLowerCase().includes('haiku')));
+    assert.doesNotMatch(decision.reasoning[0], /Constrained mode|Survival mode/);
+    assert.match(stderr, /\[planner] policy adjustment: claude-opus-4-7 -> gpt-5\.4 \(quota=exhausted, same-class=frontier\)/);
+    assert.match(stderr, /\[coder] policy adjustment: claude-opus-4-7 -> gpt-5\.4 \(quota=exhausted, same-class=frontier\)/);
+    assert.match(stderr, /\[reviewer] policy adjustment: claude-opus-4-7 -> gpt-5\.4 \(quota=exhausted, same-class=frontier\)/);
+    assert.doesNotMatch(stderr, /\[router] constrained mode:/);
+    assert.doesNotMatch(stderr, /\[router] survival mode:/);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('auto mode enters constrained mode when all cross-vendor frontiers are degrading', async () => {
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'degrading',
+    'claude-opus-4-6': 'degrading',
+    'gpt-5.4': 'degrading',
+  });
+
+  try {
+    const { result: decision, stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Implement a backend feature with tests and review.', { repoDir }),
+    );
+    const selectedModels = [decision.planner, decision.coder, decision.reviewer];
+    assert.match(decision.reasoning[0], /Constrained mode/);
+    assert.match(stderr, /\[router] constrained mode: .*quota is degrading/);
+    assert.ok(selectedModels.every((modelId) => !modelId.toLowerCase().includes('opus')));
+    assert.ok(selectedModels.every((modelId) => !modelId.toLowerCase().includes('gpt-5.4')));
+  } finally {
+    cleanup();
+  }
+});
+
+await test('auto mode enters survival mode when all cross-vendor frontiers are exhausted', async () => {
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'exhausted',
+  });
+
+  try {
+    const { result: decision, stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Implement a backend feature with tests and review.', { repoDir }),
+    );
+    const selectedModels = [decision.planner, decision.coder, decision.reviewer];
+    assert.match(decision.reasoning[0], /Survival mode/);
+    assert.match(stderr, /\[router] survival mode: .*quota is exhausted/);
+    assert.ok(selectedModels.every((modelId) => modelId.toLowerCase().includes('haiku')));
+  } finally {
+    cleanup();
+  }
+});
+
 await test('auto mode uses degraded haiku-only routing in survival mode', async () => {
   const { repoDir, cleanup } = makeRepo({
     router: {

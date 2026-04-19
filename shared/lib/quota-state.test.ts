@@ -102,6 +102,29 @@ function makeSnapshot(models: Record<string, 'healthy' | 'degrading' | 'exhauste
   };
 }
 
+function writeQuotaState(
+  targetRepoDir: string,
+  models: Record<string, 'healthy' | 'degrading' | 'exhausted'>,
+): void {
+  mkdirSync(join(targetRepoDir, '.wavemill'), { recursive: true });
+  writeFileSync(quotaStatePath(targetRepoDir), JSON.stringify({
+    version: 1,
+    updatedAt: '2026-04-17T12:00:00.000Z',
+    models: Object.fromEntries(
+      Object.entries(models).map(([modelId, status]) => [modelId, {
+        status,
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+        consecutiveLimitErrors: status === 'healthy' ? 0 : 1,
+      }]),
+    ),
+  }, null, 2), 'utf-8');
+}
+
 describe('quota-state', () => {
   beforeEach(() => {
     tempRoot = join(
@@ -524,6 +547,88 @@ describe('quota-state', () => {
     const snapshot = readQuotaSnapshot(repoDir);
     assert.equal(snapshot.models['claude-sonnet-4-6']?.lastLimitErrorAt, null);
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
+  });
+
+  describe('multi-frontier operating mode from persisted state', () => {
+    it('case (a): one exhausted + one healthy frontier yields normal mode', () => {
+      writeRepoConfig(repoDir, {
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              vendor: 'openai',
+              class: 'frontier',
+            },
+          },
+        },
+      });
+      writeQuotaState(repoDir, {
+        'claude-opus-4-7': 'exhausted',
+        'gpt-5.4': 'healthy',
+      });
+
+      assert.equal(getCurrentOperatingMode(repoDir), 'normal');
+    });
+
+    it('case (b): all frontiers degrading yields constrained mode', () => {
+      writeRepoConfig(repoDir, {
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              vendor: 'openai',
+              class: 'frontier',
+            },
+          },
+        },
+      });
+      writeQuotaState(repoDir, {
+        'claude-opus-4-7': 'degrading',
+        'claude-opus-4-6': 'degrading',
+        'gpt-5.4': 'degrading',
+      });
+
+      assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
+    });
+
+    it('case (c): all frontiers exhausted yields survival mode', () => {
+      writeRepoConfig(repoDir, {
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              vendor: 'openai',
+              class: 'frontier',
+            },
+          },
+        },
+      });
+      writeQuotaState(repoDir, {
+        'claude-opus-4-7': 'exhausted',
+        'claude-opus-4-6': 'exhausted',
+        'gpt-5.4': 'exhausted',
+      });
+
+      assert.equal(getCurrentOperatingMode(repoDir), 'survival');
+    });
+
+    it('regression guard: single exhausted frontier does not trigger degraded modes when siblings are healthy', () => {
+      writeRepoConfig(repoDir, {
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              vendor: 'openai',
+              class: 'frontier',
+            },
+          },
+        },
+      });
+      writeQuotaState(repoDir, {
+        'claude-opus-4-7': 'exhausted',
+      });
+
+      const mode = getCurrentOperatingMode(repoDir);
+      assert.notEqual(mode, 'constrained');
+      assert.notEqual(mode, 'survival');
+      assert.equal(mode, 'normal');
+    });
   });
 
   describe('getVendorQuotaBreakdown', () => {
