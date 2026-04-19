@@ -18,6 +18,7 @@
  */
 
 import { determineVerificationRequirements } from './verification-engine.ts';
+import { getBaseBranch } from './patch-size-validator.ts';
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -331,25 +332,6 @@ function checkPatchSize(
       exceedsCap: false,
       reason,
     };
-  }
-}
-
-/**
- * Get the base branch for diff comparison.
- */
-function getBaseBranch(repoDir: string): string {
-  try {
-    // Try to get the upstream branch
-    const upstream = execSync('git rev-parse --abbrev-ref @{upstream}', {
-      cwd: repoDir,
-      encoding: 'utf-8',
-      stdio: 'pipe',
-    }).trim();
-
-    return upstream; // Return full ref (e.g., 'origin/main')
-  } catch {
-    // Fall back to 'main'
-    return 'origin/main';
   }
 }
 
