@@ -247,6 +247,31 @@ export interface ReadyRemediationConfig {
   agentCmd?: string;
 }
 
+export interface VerificationMandatoryChecksConfig {
+  typecheck?: boolean;
+  lint?: boolean;
+  test?: boolean;
+  selfExplanation?: boolean;
+}
+
+export interface VerificationPatchSizeCapConfig {
+  baseLines?: number;
+  adjustByQualityGap?: boolean;
+}
+
+export interface VerificationSecondPassReviewConfig {
+  enabled?: boolean;
+  riskPatterns?: string[];
+}
+
+export interface VerificationConfig {
+  enabled?: boolean;
+  qualityThresholds?: Partial<Record<ModelRegistryTaskType, number>>;
+  patchSizeCap?: VerificationPatchSizeCapConfig;
+  mandatoryChecks?: VerificationMandatoryChecksConfig;
+  secondPassReview?: VerificationSecondPassReviewConfig;
+}
+
 export interface WavemillConfig {
   configVersion?: string;
   linear?: LinearConfig;
@@ -268,6 +293,7 @@ export interface WavemillConfig {
   permissions?: PermissionsConfig;
   modelRegistry?: ModelRegistryConfig;
   quota?: QuotaConfig;
+  verification?: VerificationConfig;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -603,6 +629,14 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
       agentCmd: config.ready?.remediation?.agentCmd ?? '',
     },
   };
+}
+
+/**
+ * Get the verification config section.
+ * Returns empty object if not configured.
+ */
+export function getVerificationConfig(repoDir?: string): VerificationConfig {
+  return loadWavemillConfig(repoDir).verification || {};
 }
 
 /**
