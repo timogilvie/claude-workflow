@@ -182,6 +182,19 @@ log_warn() {
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 
+replay_route_transparency_logs() {
+  local stderr_file="$1"
+  [[ -s "$stderr_file" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*)
+        log "info" "$line"
+        ;;
+    esac
+  done < "$stderr_file"
+}
+
 # Future submission hook for Hokusai data export. This is intentionally kept
 # lightweight so the mill can gate outbound submission without duplicating the
 # consent/version logic that lives in TypeScript.
@@ -1546,7 +1559,11 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
       IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
       PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
       if [[ -f "$PACKET_FILE" ]]; then
-        ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" "${ROUTE_MAX_COST_ARGS[@]}" 2>/dev/null || echo "")
+        ROUTE_STDERR="/tmp/${SESSION}-${ISSUE}-route.stderr"
+        rm -f "$ROUTE_STDERR"
+        ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" "${ROUTE_MAX_COST_ARGS[@]}" 2>"$ROUTE_STDERR" || echo "")
+        replay_route_transparency_logs "$ROUTE_STDERR"
+        rm -f "$ROUTE_STDERR"
         if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
           PLANNER=$(echo "$ROUTE_JSON" | jq -r '.planner // empty' 2>/dev/null)
           CODER=$(echo "$ROUTE_JSON" | jq -r '.coder // empty' 2>/dev/null)
@@ -4253,6 +4270,7 @@ launch_task() {
       local route_attempt=1
       local route_reason=""
       local route_source=""
+      local route_stderr_file="/tmp/${SESSION}-${issue}-route-live.stderr"
       local route_max_cost_args=()
       local route_mode_args=()
       local route_debug_enabled="false"
@@ -4291,18 +4309,24 @@ launch_task() {
       else
         while (( route_attempt <= 3 )); do
           printf '\n[attempt %d] live route\n' "$route_attempt" >> "$routing_log_file"
+          rm -f "$route_stderr_file"
           if [[ "$route_debug_enabled" == "true" ]]; then
-            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2> >(tee -a "$routing_log_file" >&2)); then
+            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
               route_rc=0
             else
               route_rc=$?
             fi
           else
-            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>>"$routing_log_file"); then
+            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
               route_rc=0
             else
               route_rc=$?
             fi
+          fi
+
+          if [[ -s "$route_stderr_file" ]]; then
+            cat "$route_stderr_file" >> "$routing_log_file"
+            replay_route_transparency_logs "$route_stderr_file"
           fi
 
           if [[ -n "$route_json" ]]; then
@@ -4339,18 +4363,24 @@ launch_task() {
 
       if [[ -z "$route_source" ]] && [[ -s "$route_input_file" ]]; then
         printf '\n[heuristic fallback]\n' >> "$routing_log_file"
+        rm -f "$route_stderr_file"
         if [[ "$route_debug_enabled" == "true" ]]; then
-          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2> >(tee -a "$routing_log_file" >&2)); then
+          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2>"$route_stderr_file"); then
             route_rc=0
           else
             route_rc=$?
           fi
         else
-          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2>>"$routing_log_file"); then
+          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2>"$route_stderr_file"); then
             route_rc=0
           else
             route_rc=$?
           fi
+        fi
+
+        if [[ -s "$route_stderr_file" ]]; then
+          cat "$route_stderr_file" >> "$routing_log_file"
+          replay_route_transparency_logs "$route_stderr_file"
         fi
 
         if [[ -n "$route_json" ]]; then
@@ -4409,6 +4439,7 @@ debug_log=$routing_log_file
 EOF
         log "info" "  Workflow routing unavailable (${route_reason:-unknown}), using default agent"
       fi
+      rm -f "$route_stderr_file"
     fi
   fi
 

@@ -118,6 +118,22 @@ function writeQuotaState(
   }, null, 2), 'utf-8');
 }
 
+async function captureStderr<T>(fn: () => T | Promise<T>): Promise<{ result: T; stderr: string }> {
+  let output = '';
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    output += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8');
+    return true;
+  }) as typeof process.stderr.write;
+
+  try {
+    const result = await fn();
+    return { result, stderr: output };
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+}
+
 const originalFetch = globalThis.fetch;
 
 console.log('\n--- workflow-router Tests ---\n');
@@ -339,6 +355,29 @@ await test('auto mode excludes opus in constrained mode', async () => {
   }
 });
 
+await test('auto mode emits a constrained router transparency line when quota is degrading', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'degrading',
+  });
+
+  try {
+    const { result, stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir })
+    );
+    assert.match(stderr, /\[router] constrained mode: claude-opus-4-7 quota is degrading; reserving it for high-complexity steps/);
+    assert.ok(result.reasoning[0].includes('Constrained mode'));
+  } finally {
+    cleanup();
+  }
+});
+
 await test('auto mode does not prepend degraded reasoning in normal mode', async () => {
   const { repoDir, cleanup } = makeRepo({
     router: {
@@ -355,6 +394,29 @@ await test('auto mode does not prepend degraded reasoning in normal mode', async
   try {
     const decision = await routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir });
     assert.doesNotMatch(decision.reasoning[0], /Survival mode|Constrained mode/);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('auto mode stays silent in normal routing mode', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'healthy',
+    'claude-opus-4-6': 'healthy',
+  });
+
+  try {
+    const { stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir })
+    );
+    assert.doesNotMatch(stderr, /\[(router|coder|planner|reviewer|classifier)]/);
   } finally {
     cleanup();
   }

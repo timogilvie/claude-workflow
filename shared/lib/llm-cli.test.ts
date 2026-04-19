@@ -12,6 +12,41 @@ import { markExhausted, readQuotaSnapshot } from './quota-state.ts';
 let tempRoot: string;
 let repoDir: string;
 
+function captureStderr<T>(fn: () => T | Promise<T>): Promise<{ result: T; stderr: string }> {
+  let output = '';
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    output += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8');
+    return true;
+  }) as typeof process.stderr.write;
+
+  return Promise.resolve()
+    .then(fn)
+    .then((result) => ({ result, stderr: output }))
+    .finally(() => {
+      process.stderr.write = originalWrite;
+    });
+}
+
+function captureStderrError(fn: () => Promise<unknown>): Promise<{ error: unknown; stderr: string }> {
+  let output = '';
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    output += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8');
+    return true;
+  }) as typeof process.stderr.write;
+
+  return Promise.resolve()
+    .then(fn)
+    .then(() => {
+      throw new Error('Expected function to throw');
+    })
+    .catch((error) => ({ error, stderr: output }))
+    .finally(() => {
+      process.stderr.write = originalWrite;
+    });
+}
+
 function git(command: string, cwd: string): string {
   return execSync(`git ${command}`, {
     cwd,
@@ -236,7 +271,7 @@ describe('quota fallback', () => {
       'model-b': { type: 'success', text: 'ok from b', costUsd: 0.12 },
     });
 
-    const result = await callLLM('test prompt', {
+    const { result, stderr } = await captureStderr(() => callLLM('test prompt', {
       provider: 'claude',
       mode: 'stream',
       cliCmd: cliPath,
@@ -244,8 +279,9 @@ describe('quota fallback', () => {
       taskType: 'coding',
       difficulty: 'hard',
       fallbackModels: ['model-a', 'model-b'],
-    });
+    }));
 
+    assert.match(stderr, /\[coder] model-a unavailable \(quota\); falling back to model-b/);
     assert.equal(result.text, 'ok from b');
     assert.equal(result.model, 'model-b');
     assert.deepEqual(result.fallbackChain, [{ model: 'model-a', reason: 'quota' }]);
@@ -266,6 +302,69 @@ describe('quota fallback', () => {
     assert.equal(records[0].fallbackEvent?.outcome, 'success');
     assert.equal(records[0].fallbackEvent?.cost_usd, 0.12);
     assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [{ model: 'model-a', reason: 'quota' }]);
+  });
+
+  it('stays silent when an observer handles quota fallback telemetry', async () => {
+    const { cliPath } = createMockCli('quota-observer', {
+      'model-a': { type: 'quota', message: 'Error: 429 rate_limit_exceeded', code: 1 },
+      'model-b': { type: 'success', text: 'ok from b' },
+    });
+
+    const fallbackEvents: Array<{ failedModel: string; nextModel?: string; reason?: string; resetAt?: string | null }> = [];
+    const { result, stderr } = await captureStderr(() => callLLM('observer prompt', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      taskType: 'coding',
+      fallbackModels: ['model-a', 'model-b'],
+      observer: {
+        onQuotaFallback(event) {
+          fallbackEvents.push(event);
+          return Promise.resolve();
+        },
+      },
+    }));
+
+    assert.equal(stderr, '');
+    assert.equal(result.model, 'model-b');
+    assert.deepEqual(fallbackEvents, [{ failedModel: 'model-a', nextModel: 'model-b', reason: 'quota', resetAt: null }]);
+  });
+
+  it('throws LLMQuotaError when every candidate is exhausted', async () => {
+    const { cliPath } = createMockCli('all-quota', {
+      'model-a': { type: 'quota', message: '429 quota exceeded', code: 1 },
+      'model-b': { type: 'quota', message: '429 quota exceeded', code: 1 },
+    });
+
+    const { error, stderr } = await captureStderrError(() => callLLM('all fail', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      taskType: 'coding',
+      fallbackModels: ['model-a', 'model-b'],
+    }));
+
+    assert.ok(error instanceof LLMQuotaError);
+    assert.match((error as Error).message, /model-a/);
+    assert.match((error as Error).message, /model-b/);
+
+    assert.match(
+      stderr,
+      /\[coder] model-b unavailable \(quota\); no remaining fallback candidates after: model-a -> model-b/,
+    );
+
+    const records = readFallbackRecords();
+    assert.equal(records.length, 1);
+    assert.equal(records[0].modelId, 'model-a');
+    assert.equal(records[0].score, 0);
+    assert.equal(records[0].fallbackEvent?.outcome, 'all_exhausted');
+    assert.equal(records[0].fallbackEvent?.fallback_model, null);
+    assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [
+      { model: 'model-a', reason: 'quota' },
+      { model: 'model-b', reason: 'quota' },
+    ]);
   });
 
   it('uses task-specific ladders from the registry', async () => {
@@ -325,41 +424,6 @@ describe('quota fallback', () => {
       taskType: 'review',
     });
     assert.equal(reviewResult.model, 'model-a');
-  });
-
-  it('throws LLMQuotaError when every candidate is exhausted', async () => {
-    const { cliPath } = createMockCli('all-quota', {
-      'model-a': { type: 'quota', message: '429 quota exceeded', code: 1 },
-      'model-b': { type: 'quota', message: '429 quota exceeded', code: 1 },
-    });
-
-    await assert.rejects(
-      () => callLLM('all fail', {
-        provider: 'claude',
-        mode: 'stream',
-        cliCmd: cliPath,
-        repoDir,
-        taskType: 'coding',
-        fallbackModels: ['model-a', 'model-b'],
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof LLMQuotaError);
-        assert.match((error as Error).message, /model-a/);
-        assert.match((error as Error).message, /model-b/);
-        return true;
-      }
-    );
-
-    const records = readFallbackRecords();
-    assert.equal(records.length, 1);
-    assert.equal(records[0].modelId, 'model-a');
-    assert.equal(records[0].score, 0);
-    assert.equal(records[0].fallbackEvent?.outcome, 'all_exhausted');
-    assert.equal(records[0].fallbackEvent?.fallback_model, null);
-    assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [
-      { model: 'model-a', reason: 'quota' },
-      { model: 'model-b', reason: 'quota' },
-    ]);
   });
 
   it('persists a non_quota_error fallback event when a later candidate fails for another reason', async () => {
