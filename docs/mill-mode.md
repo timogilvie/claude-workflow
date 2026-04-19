@@ -49,6 +49,8 @@ If you only document one command first, document `mill`.
 - review-to-ready-to-merge gating before marking tasks done
 - persistent workflow state in `.wavemill/workflow-state.json`
 
+When operating mode drops to `constrained` or `survival`, mill-mode review switches to a scoped checklist: syntax/type failures, contract violations, obvious regressions, and test-coverage gaps. In that mode the review tool may emit `needs_stronger_reviewer`, which the review phase should surface on the PR title/body/labels for human follow-up.
+
 ## Ready Phase
 
 By default, `wavemill mill` inserts a merge-readiness phase after PR creation and before merge completion:

@@ -17,6 +17,7 @@ import {
 import { runReview, type ReviewResult, type ReviewFinding, type ReviewerPersona } from './review-engine.ts';
 import { ensureClaudeAvailable } from './llm-cli.ts';
 import type { ReviewProgressReporter } from './review-progress.ts';
+import type { OperatingMode } from './operating-mode.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -42,6 +43,8 @@ export interface ReviewOptions {
    * this commit are reviewed, filtering out pre-existing branch changes.
    */
   sinceCommit?: string;
+  /** Force normal vs degraded scoped-review behavior */
+  operatingMode?: OperatingMode;
 }
 
 // Re-export types from review-engine for backward compatibility
@@ -117,5 +120,6 @@ export async function reviewChanges(
     reviewers: options.reviewers,
     reporter,
     skipClaudePreflight: true,
+    operatingMode: options.operatingMode,
   });
 }

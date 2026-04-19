@@ -184,6 +184,7 @@ Read the review configuration from `.wavemill-config.json`:
 # Load review settings (fallback to defaults if not configured)
 REVIEW_ENABLED=$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.enabled // true')
 MAX_ITERATIONS=$(cat .wavemill-config.json 2>/dev/null | jq -r '.review.maxIterations // 3')
+OPERATING_MODE=$(npx tsx tools/get-operating-mode.ts current --repo-dir . 2>/dev/null || echo "normal")
 
 # Skip self-review if disabled
 if [ "$REVIEW_ENABLED" != "true" ]; then
@@ -216,7 +217,7 @@ REVIEW_PASSED=false
 
 Apply the canonical template with these workflow-specific values:
 
-- Review command: `npx tsx tools/review-changes.ts main --json`
+- Review command: `npx tsx tools/review-changes.ts main --json --operating-mode "$OPERATING_MODE"`
 - Tool path: `tools/review-changes.ts`
 - Base branch: `main`
 - Error follow-up: `continue to validation`
@@ -271,6 +272,8 @@ All review logs saved to:
 - `features/<feature-name>/review-iteration-1.log`
 - `features/<feature-name>/review-iteration-2.log`
 - `features/<feature-name>/review-iteration-N.log`
+
+After the final successful review iteration, inspect the saved JSON output. If it contains `needs_stronger_reviewer: true`, write `features/<feature-name>/.needs-stronger-reviewer` with the stronger-reviewer reason (if provided). This marker is an input to PR creation.
 
 ### 4F. Clear Context
 ```
@@ -338,6 +341,10 @@ Use the **git-workflow-manager** skill to:
    - Phases completed
    - Validation results
    - Testing checklist
+5. If `features/<feature-name>/.needs-stronger-reviewer` exists, surface it on the PR:
+   - Prefix the title with `[needs-stronger-reviewer] `
+   - Add a `## ⚠️ Needs Stronger Reviewer` section near the top of the body
+   - Attempt to add the `needs-stronger-reviewer` label, but do not fail if the label is missing
 
 ### 6C. Finalize Session
 After PR is created, finalize the session using the instructions in the **Session Tracking** section. Use the PR URL and compute execution/wait times.
