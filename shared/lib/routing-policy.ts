@@ -1,6 +1,7 @@
 import {
   CLASS_RANK,
   getEffectiveRegistry,
+  getLadder,
   type ModelClass,
   type ModelRegistry,
   type RegistryTaskType,
@@ -19,6 +20,7 @@ export interface RoutingPolicy {
 
 export type ExclusionReason =
   | 'quota-exhausted'
+  | 'frontier-substitution-active'
   | 'below-difficulty-floor'
   | 'below-quality-threshold'
   | 'exceeds-cost-tier';
@@ -63,6 +65,52 @@ function compareCandidates(left: RankedCandidate, right: RankedCandidate): numbe
   return left.modelId.localeCompare(right.modelId);
 }
 
+/**
+ * Determines if frontier substitution should be active for the given policy and registry.
+ *
+ * Substitution is active when:
+ * 1. The top-of-ladder frontier model for this task type is degrading or exhausted
+ * 2. At least one other frontier model is healthy
+ *
+ * @returns true if non-frontier models should be excluded to force healthy frontier sibling selection
+ */
+export function shouldSubstituteFrontier(
+  policy: RoutingPolicy,
+  registry: ModelRegistry,
+): boolean {
+  // Find the preferred frontier model (first frontier in the ladder)
+  const ladder = getLadder(registry, policy.taskType);
+  const preferredFrontier = ladder.find(
+    (modelId) => registry.models[modelId]?.class === 'frontier',
+  );
+
+  // If no frontier in ladder, substitution doesn't apply
+  if (!preferredFrontier) {
+    return false;
+  }
+
+  // Check if the preferred frontier is degrading or exhausted
+  const preferredStatus = getQuotaStatus(policy.quotaState, preferredFrontier);
+  if (preferredStatus !== 'degrading' && preferredStatus !== 'exhausted') {
+    return false;
+  }
+
+  // Check if any other frontier model is healthy
+  const hasHealthyFrontierSibling = Object.entries(registry.models).some(
+    ([modelId, capabilities]) => {
+      if (modelId === preferredFrontier) {
+        return false; // Skip the preferred frontier itself
+      }
+      if (capabilities.class !== 'frontier') {
+        return false;
+      }
+      return getQuotaStatus(policy.quotaState, modelId) === 'healthy';
+    },
+  );
+
+  return hasHealthyFrontierSibling;
+}
+
 export function resolveModel(
   policy: RoutingPolicy,
   registryOverride?: ModelRegistry,
@@ -81,6 +129,9 @@ export function resolveModel(
     return getQuotaStatus(policy.quotaState, modelId) !== 'exhausted';
   });
 
+  // Check if frontier substitution should be active
+  const substitutionActive = shouldSubstituteFrontier(policy, registry);
+
   const candidates = Object.entries(registry.models).map(([modelId, capabilities]) => {
     const qualityScore = capabilities.qualityScores[policy.taskType] ?? 0;
     const status = getQuotaStatus(policy.quotaState, modelId);
@@ -92,6 +143,11 @@ export function resolveModel(
 
       if (policy.maxCostTier && CLASS_RANK[capabilities.class] > CLASS_RANK[policy.maxCostTier]) {
         return 'exceeds-cost-tier' satisfies ExclusionReason;
+      }
+
+      // If frontier substitution is active, exclude non-frontier models
+      if (substitutionActive && capabilities.class !== 'frontier') {
+        return 'frontier-substitution-active' satisfies ExclusionReason;
       }
 
       if (!floor.allowHaiku && capabilities.class === 'fast_economy') {

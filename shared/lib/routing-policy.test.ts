@@ -393,3 +393,175 @@ describe('routing-policy integration', () => {
     }
   });
 });
+
+describe('frontier substitution', () => {
+  // Create a registry with gpt-5.4 as a frontier model
+  function makeRegistryWithGpt54() {
+    return {
+      models: {
+        ...DEFAULT_MODEL_REGISTRY.models,
+        'gpt-5.4': {
+          vendor: 'openai',
+          class: 'frontier' as const,
+          strengths: ['reasoning', 'code generation'],
+          weaknesses: ['cost'],
+          qualityScores: {
+            routing: 88,
+            planning: 90,
+            coding: 88,
+            review: 87,
+            classify: 85,
+          },
+        },
+      },
+      ladders: DEFAULT_MODEL_REGISTRY.ladders,
+    };
+  }
+
+  // Create a snapshot that includes gpt-5.4
+  function makeSnapshotWithGpt54(statuses: Partial<Record<string, QuotaStatus>> = {}): QuotaSnapshot {
+    const registry = makeRegistryWithGpt54();
+    const models = Object.fromEntries(
+      Object.keys(registry.models).map((modelId) => [
+        modelId,
+        {
+          status: statuses[modelId] ?? 'healthy',
+          remainingEstimate: null,
+          resetAt: null,
+          confidence: 1,
+          lastLimitErrorAt: null,
+          lastSuccessAt: null,
+          lastReason: null,
+        },
+      ]),
+    );
+
+    return {
+      models,
+      snapshotAt: new Date().toISOString(),
+    };
+  }
+
+  it('substitutes healthy frontier sibling when top-of-ladder frontier is exhausted', () => {
+    const registry = makeRegistryWithGpt54();
+    const ranked = resolveModel(
+      {
+        taskType: 'coding',
+        difficulty: 'moderate',
+        quotaState: makeSnapshotWithGpt54({
+          'claude-opus-4-7': 'exhausted',
+          'gpt-5.4': 'healthy',
+        }),
+      },
+      registry,
+    );
+
+    // gpt-5.4 should be the top viable candidate
+    assert.equal(ranked[0].modelId, 'gpt-5.4');
+    assert.equal(ranked[0].viable, true);
+
+    // claude-sonnet-4-6 should be excluded due to frontier substitution
+    const sonnet = ranked.find((c) => c.modelId === 'claude-sonnet-4-6');
+    assert.ok(sonnet);
+    assert.equal(sonnet.viable, false);
+    assert.equal(sonnet.exclusionReason, 'frontier-substitution-active');
+  });
+
+  it('substitutes healthy frontier sibling when top-of-ladder frontier is degrading', () => {
+    const registry = makeRegistryWithGpt54();
+    const ranked = resolveModel(
+      {
+        taskType: 'coding',
+        difficulty: 'moderate',
+        quotaState: makeSnapshotWithGpt54({
+          'claude-opus-4-7': 'degrading',
+          'gpt-5.4': 'healthy',
+        }),
+      },
+      registry,
+    );
+
+    // gpt-5.4 should be the top viable candidate
+    assert.equal(ranked[0].modelId, 'gpt-5.4');
+    assert.equal(ranked[0].viable, true);
+
+    // claude-sonnet-4-6 should be excluded
+    const sonnet = ranked.find((c) => c.modelId === 'claude-sonnet-4-6');
+    assert.ok(sonnet);
+    assert.equal(sonnet.viable, false);
+    assert.equal(sonnet.exclusionReason, 'frontier-substitution-active');
+  });
+
+  it('skips substitution when no frontier sibling is healthy', () => {
+    const registry = makeRegistryWithGpt54();
+    const ranked = resolveModel(
+      {
+        taskType: 'coding',
+        difficulty: 'moderate',
+        quotaState: makeSnapshotWithGpt54({
+          'claude-opus-4-7': 'exhausted',
+          'claude-opus-4-6': 'exhausted',
+          'gpt-5.4': 'degrading',
+        }),
+      },
+      registry,
+    );
+
+    // claude-sonnet-4-6 should be the top viable (no substitution)
+    assert.equal(ranked[0].modelId, 'claude-sonnet-4-6');
+    assert.equal(ranked[0].viable, true);
+    assert.equal(ranked[0].exclusionReason, undefined);
+  });
+
+  it('skips substitution when top-of-ladder frontier is healthy', () => {
+    const registry = makeRegistryWithGpt54();
+    const ranked = resolveModel(
+      {
+        taskType: 'coding',
+        difficulty: 'moderate',
+        quotaState: makeSnapshotWithGpt54({
+          'claude-opus-4-7': 'healthy',
+          'gpt-5.4': 'degrading',
+        }),
+      },
+      registry,
+    );
+
+    // Normal ranking applies - no frontier-substitution-active exclusions
+    const sonnet = ranked.find((c) => c.modelId === 'claude-sonnet-4-6');
+    assert.ok(sonnet);
+    assert.notEqual(sonnet.exclusionReason, 'frontier-substitution-active');
+  });
+
+  it('respects substitution across planning, coding, and review task types', () => {
+    const registry = makeRegistryWithGpt54();
+    const quotaState = makeSnapshotWithGpt54({
+      'claude-opus-4-7': 'exhausted',
+      'claude-opus-4-6': 'exhausted', // Exclude opus-4-6 to test gpt-5.4 selection
+      'gpt-5.4': 'healthy',
+    });
+
+    // Test all three task types
+    const taskTypes: Array<'planning' | 'coding' | 'review'> = ['planning', 'coding', 'review'];
+    for (const taskType of taskTypes) {
+      const ranked = resolveModel(
+        {
+          taskType,
+          difficulty: 'moderate',
+          quotaState,
+        },
+        registry,
+      );
+
+      // For each task type, gpt-5.4 should be selected (it's the only healthy frontier)
+      const topViable = ranked.find((c) => c.viable);
+      assert.equal(topViable?.modelId, 'gpt-5.4', `${taskType} should pick gpt-5.4`);
+
+      // Non-frontier should be excluded
+      const sonnet = ranked.find((c) => c.modelId === 'claude-sonnet-4-6');
+      assert.ok(sonnet);
+      assert.equal(sonnet.viable, false);
+      assert.equal(sonnet.exclusionReason, 'frontier-substitution-active');
+    }
+  });
+});

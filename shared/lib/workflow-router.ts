@@ -336,12 +336,14 @@ function highestPriorityFrontierWithStatus(
   quotaState: QuotaSnapshot,
   status: 'degrading' | 'exhausted',
   repoDir?: string,
+  taskType?: RegistryTaskType,
 ): string | null {
   const registry = getEffectiveRegistry(repoDir);
+  const sortTaskType = taskType ?? 'planning';
   return Object.entries(registry.models)
     .filter(([, capabilities]) => capabilities.class === 'frontier')
     .sort(([, leftCapabilities], [, rightCapabilities]) =>
-      (rightCapabilities.qualityScores.planning ?? 0) - (leftCapabilities.qualityScores.planning ?? 0))
+      (rightCapabilities.qualityScores[sortTaskType] ?? 0) - (leftCapabilities.qualityScores[sortTaskType] ?? 0))
     .map(([modelId]) => modelId)
     .find((modelId) => quotaState.models[modelId]?.status === status) ?? null;
 }
@@ -393,7 +395,19 @@ function logPolicyAdjustment(
     return;
   }
 
-  routerLog(`policy adjustment: ${roleLabelForStage(taskType)} ${preferredModel} -> ${chosenModel} (quota=${quotaStatus})`);
+  // Check if this is a frontier substitution
+  const preferredCapabilities = registry.models[preferredModel];
+  const chosenCapabilities = registry.models[chosenModel];
+  const isFrontierSubstitution =
+    preferredCapabilities?.class === 'frontier' &&
+    chosenCapabilities?.class === 'frontier' &&
+    (quotaStatus === 'degrading' || quotaStatus === 'exhausted');
+
+  if (isFrontierSubstitution) {
+    routerLog(`frontier substitution: ${roleLabelForStage(taskType)} ${preferredModel} (${quotaStatus}) -> ${chosenModel} (healthy frontier sibling)`);
+  } else {
+    routerLog(`policy adjustment: ${roleLabelForStage(taskType)} ${preferredModel} -> ${chosenModel} (quota=${quotaStatus})`);
+  }
 }
 
 export function estimateStageCost(
@@ -845,11 +859,24 @@ export function routeWorkflowStageAware(
   // Resolve difficulty before stage-aware routing so floor can be applied
   const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
 
+  // Compute policy-filtered per-stage pools when difficulty is available
+  // and caller hasn't provided a flat pool (preserve escape hatch)
+  const quotaState = taskDifficulty && !options?.modelsAvailable
+    ? readRoutingQuotaState(repoDir)
+    : null;
+  const pool = getModelPool(repoDir);
+  const policyStagePools = taskDifficulty && quotaState && !options?.modelsAvailable
+    ? buildPolicyStagePools({ difficulty: taskDifficulty, quotaState, pool, repoDir })
+    : null;
+
   let stageAwareDecision;
   try {
     stageAwareDecision = routeStageAware(prompt, {
       repoDir,
       modelsAvailable: options?.modelsAvailable,
+      plannerModelsAvailable: policyStagePools?.plannerModels,
+      coderModelsAvailable: policyStagePools?.coderModels,
+      reviewerModelsAvailable: policyStagePools?.reviewerModels,
       maxCostUsd: options?.maxCostUsd,
     });
   } catch (error) {

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from './config.ts';
 import type { QuotaStatus } from './quota-state.ts';
-import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute } from './workflow-router.ts';
+import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, routeWorkflowStageAware, summarizeWorkflowRoute, tryPolicyResolution } from './workflow-router.ts';
 
 let passed = 0;
 let failed = 0;
@@ -685,6 +685,216 @@ await test('includes budget rule in reasoning when triggered', () => {
 
     assert.ok(hasBudgetReasoning, 'Should mention budget in reasoning');
   } finally {
+    cleanup();
+  }
+});
+
+console.log('\nFrontier substitution tests:');
+
+await test('tryPolicyResolution returns frontier sibling when opus is exhausted', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: {
+        'gpt-5.4': {
+          class: 'frontier',
+          qualityScores: {
+            planning: 90,
+            coding: 88,
+            review: 87,
+          },
+        },
+      },
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  try {
+    const decision = tryPolicyResolution('Implement a feature', {
+      repoDir,
+      taskDifficulty: 'moderate',
+      skipDifficultyClassification: true,
+    });
+
+    assert.ok(decision, 'Should return a decision');
+    assert.equal(decision.planner, 'gpt-5.4');
+    assert.equal(decision.coder, 'gpt-5.4');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('buildPolicyStagePools filters out strong_generalist when substitution active', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: {
+        'gpt-5.4': {
+          class: 'frontier',
+          qualityScores: {
+            planning: 90,
+            coding: 88,
+            review: 87,
+          },
+        },
+      },
+    },
+    router: {
+      enabled: true,
+      mode: 'hokusai',
+      hokusai: {
+        endpoint: 'http://localhost:8080',
+        apiKey: 'test-key',
+      },
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  let requestBody: Record<string, unknown> | null = null;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({
+      schema_version: '1.0',
+      route: {
+        planner_model: 'gpt-5.4',
+        coder_model: 'gpt-5.4',
+        reviewer_model: 'gpt-5.4',
+        plan_depth: 'medium',
+        code_depth: 'medium',
+        review_mode: 'standard',
+      },
+      predictions: {
+        expected_success_probability: 0.85,
+        expected_cost_usd: 3.5,
+        confidence: 0.80,
+      },
+    }), { status: 200 });
+  };
+
+  try {
+    await routeWorkflowHokusai('Implement a feature', {
+      repoDir,
+      taskDifficulty: 'moderate',
+      skipDifficultyClassification: true,
+    });
+
+    assert.ok(requestBody, 'Should have called Hokusai');
+    const availableModels = requestBody?.available_models as Record<string, string[]>;
+
+    // coder_models should contain gpt-5.4 but exclude claude-sonnet-4-6
+    assert.ok(availableModels.coder_models.includes('gpt-5.4'), 'Should include gpt-5.4');
+    assert.ok(!availableModels.coder_models.includes('claude-sonnet-4-6'), 'Should exclude sonnet-4-6 due to substitution');
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+await test('routeWorkflowStageAware passes policy-filtered pools when substitution active', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      enabled: true,
+      mode: 'auto',
+      defaultAgent: 'claude',
+      minRecords: 2,
+      minModels: 1,
+    },
+    modelRegistry: {
+      models: {
+        'gpt-5.4': {
+          class: 'frontier',
+          qualityScores: {
+            planning: 90,
+            coding: 88,
+            review: 87,
+          },
+        },
+      },
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  try {
+    const decision = routeWorkflowStageAware('Implement a feature', {
+      repoDir,
+      taskDifficulty: 'moderate',
+    });
+
+    // Should route through policy-filtered pools
+    // With substitution active and all opus models exhausted, should select gpt-5.4
+    // (or fall back to heuristic which would also respect the policy)
+    assert.ok(decision);
+    // The key assertion is that sonnet is NOT selected (it should be excluded by substitution)
+    assert.notEqual(decision.coder, 'claude-sonnet-4-6',
+      'Sonnet should be excluded when frontier substitution is active');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('logPolicyAdjustment emits frontier-substitution line', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: {
+        'gpt-5.4': {
+          class: 'frontier',
+          qualityScores: {
+            planning: 90,
+            coding: 88,
+            review: 87,
+          },
+        },
+      },
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  // Capture stderr
+  const originalStderrWrite = process.stderr.write;
+  let stderrOutput = '';
+  process.stderr.write = function(chunk: string | Uint8Array): boolean {
+    stderrOutput += chunk.toString();
+    return true;
+  } as typeof process.stderr.write;
+
+  try {
+    // Use a prompt that will be classified as planning-heavy to ensure planner selection
+    const decision = tryPolicyResolution('Create a detailed implementation plan for the feature', {
+      repoDir,
+      taskDifficulty: 'moderate',
+      skipDifficultyClassification: true,
+    });
+
+    assert.ok(decision);
+
+    // Check for frontier substitution log line
+    // The log fires when the preferred model (first in ladder) is an unhealthy frontier
+    // For planning, opus-4-7 is first in ladder and exhausted, gpt-5.4 is the healthy sibling
+    const hasFrontierSubstitutionLog = stderrOutput.includes('frontier substitution:') &&
+      stderrOutput.includes('claude-opus-4-7') &&
+      stderrOutput.includes('gpt-5.4');
+
+    assert.ok(hasFrontierSubstitutionLog, `Should log frontier substitution message. Stderr: ${stderrOutput}`);
+  } finally {
+    process.stderr.write = originalStderrWrite;
     cleanup();
   }
 });
