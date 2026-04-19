@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord, TaskDescriptor } from './eval-schema.ts';
+import type { QuotaStatus } from './quota-state.ts';
 import {
   cosineSimilarity,
   findKNearest,
@@ -16,7 +17,7 @@ import {
   vectorizeDescriptor,
 } from './stage-aware-router.ts';
 import { clearConfigCache } from './config.ts';
-import { routeWorkflowStageAware, summarizeWorkflowRoute } from './workflow-router.ts';
+import { routeWorkflowAuto, routeWorkflowStageAware, summarizeWorkflowRoute } from './workflow-router.ts';
 
 let passed = 0;
 let failed = 0;
@@ -24,6 +25,18 @@ let failed = 0;
 function test(name: string, fn: () => void) {
   try {
     fn();
+    passed++;
+    console.log(`  PASS  ${name}`);
+  } catch (err) {
+    failed++;
+    console.log(`  FAIL  ${name}`);
+    console.log(`        ${(err as Error).message}`);
+  }
+}
+
+async function testAsync(name: string, fn: () => Promise<void>) {
+  try {
+    await fn();
     passed++;
     console.log(`  PASS  ${name}`);
   } catch (err) {
@@ -105,11 +118,45 @@ function makeEvalRecord(id: string, modelId: string, stageScores: {
   } as EvalRecord;
 }
 
+function makeSchemaV1Descriptor(overrides: Partial<TaskDescriptor> = {}): TaskDescriptor {
+  return {
+    ...makeDescriptor(overrides),
+    stages: undefined,
+  } as TaskDescriptor;
+}
+
 function writeJsonl(repoDir: string, relativePath: string, records: EvalRecord[]) {
   writeFileSync(
     join(repoDir, relativePath),
     records.length > 0 ? `${records.map((record) => JSON.stringify(record)).join('\n')}\n` : '',
   );
+}
+
+function writeQuotaState(
+  repoDir: string,
+  models: Record<string, QuotaStatus>,
+): void {
+  mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill', 'quota-state.json'), JSON.stringify({
+    version: 1,
+    updatedAt: '2026-04-17T12:00:00.000Z',
+    models: Object.fromEntries(
+      Object.entries(models).map(([modelId, status]) => [modelId, {
+        status,
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+        consecutiveLimitErrors: status === 'healthy' ? 0 : 1,
+        requestHistory: [],
+        consecutiveNearLimitSignals: 0,
+        lastNearLimitAt: null,
+        budgetSignal: null,
+      }]),
+    ),
+  }, null, 2), 'utf-8');
 }
 
 function makeRepoWithStageAwareData(
@@ -140,18 +187,24 @@ function makeRepoWithStageAwareData(
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
       agentMap: {
+        'claude-opus-4-7': 'claude',
         'claude-opus-4-6': 'claude',
+        'claude-sonnet-4-6': 'claude',
         'claude-sonnet-4-5-20250929': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.3-codex': 'codex',
+        'gpt-5.4': 'codex',
       },
     },
     eval: {
       pricing: {
+        'claude-opus-4-7': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
         'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
+        'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
+        'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
       },
     },
     ...configOverrides,
@@ -599,6 +652,99 @@ test('routeStageAware returns stage-aware-partial when neighbors have single mod
     assert.equal(decision?.routingMode, 'stage-aware-partial');
     assert.equal(decision?.neighborCount, 3);
     assert.ok((decision?.confidence || 0) < 0.8);
+  } finally {
+    cleanup();
+  }
+});
+
+test('routeStageAware retries without constraints when allowlist filters all neighbors', () => {
+  const records = Array.from({ length: 20 }, (_, index) => makeEvalRecord(
+    `${index + 1}`,
+    'claude-opus-4-6',
+    { plan: 0.91, implementation: 0.84, review: 0.89 },
+    { taskDescriptor: makeSchemaV1Descriptor() },
+  ));
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 20,
+      models: [],
+      defaultAgent: 'claude',
+    },
+  });
+
+  try {
+    const decision = routeStageAware('Build a TypeScript backend feature with tests and review.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 20,
+      modelsAvailable: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    });
+    assert.ok(decision);
+    assert.equal(decision?.routingMode, 'stage-aware-partial');
+    assert.equal(decision?.neighborCount, 20);
+  } finally {
+    cleanup();
+  }
+});
+
+await testAsync('routeWorkflowAuto preserves neighbor counts in survival mode when degraded pool filters neighbors', async () => {
+  const records = Array.from({ length: 20 }, (_, index) => makeEvalRecord(
+    `${index + 1}`,
+    'claude-sonnet-4-5-20250929',
+    { plan: 0.89, implementation: 0.83, review: 0.87 },
+    {
+      taskDescriptor: makeSchemaV1Descriptor(),
+      workflowCost: 1.2,
+    },
+  ));
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'auto',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 20,
+      models: [],
+      defaultAgent: 'claude',
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+  });
+
+  try {
+    const decision = await routeWorkflowAuto('Build a TypeScript backend feature with tests and review.', { repoDir });
+    assert.notEqual(decision.routingMode, 'heuristic-fallback');
+    assert.ok(decision.neighborCount > 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('routeWorkflowStageAware still uses heuristic-fallback when there are no records', () => {
+  const { repoDir, cleanup } = makeRepoWithStageAwareData([], {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 20,
+      models: [],
+      defaultAgent: 'claude',
+    },
+  });
+
+  try {
+    const decision = routeWorkflowStageAware('Build a TypeScript backend feature with tests and review.', { repoDir });
+    assert.equal(decision.routingMode, 'heuristic-fallback');
+    assert.equal(decision.neighborCount, 0);
   } finally {
     cleanup();
   }

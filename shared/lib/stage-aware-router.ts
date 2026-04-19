@@ -632,14 +632,46 @@ export function routeStageAware(
 
   const { selection } = rankModelsPerStage(neighbors, {
     modelsAvailable: options.modelsAvailable,
-    plannerModelsAvailable: plannerModels,
-    coderModelsAvailable: coderModels,
-    reviewerModelsAvailable: reviewerModels,
+    plannerModelsAvailable: options.plannerModelsAvailable ?? plannerModels,
+    coderModelsAvailable: options.coderModelsAvailable ?? coderModels,
+    reviewerModelsAvailable: options.reviewerModelsAvailable ?? reviewerModels,
     maxCostUsd: options.maxCostUsd,
   }, stageBlendWeight);
 
   if (!selection) {
-    return null;
+    const hasModelConstraints =
+      (options.modelsAvailable && options.modelsAvailable.length > 0) ||
+      (options.plannerModelsAvailable && options.plannerModelsAvailable.length > 0) ||
+      (options.coderModelsAvailable && options.coderModelsAvailable.length > 0) ||
+      (options.reviewerModelsAvailable && options.reviewerModelsAvailable.length > 0) ||
+      plannerModels.length > 0 ||
+      coderModels.length > 0 ||
+      reviewerModels.length > 0;
+    if (!hasModelConstraints) {
+      return null;
+    }
+
+    // Preserve stage/depth calibration from similar tasks even when the active
+    // model allowlist filters every neighbor out of stage selection.
+    const { selection: unconstrainedSelection } = rankModelsPerStage(neighbors, {
+      maxCostUsd: options.maxCostUsd,
+    }, stageBlendWeight);
+    if (!unconstrainedSelection) {
+      return null;
+    }
+
+    const partialDecision = buildStageAwareDecision(
+      unconstrainedSelection,
+      neighbors,
+      kNeighbors,
+      repoDir,
+    );
+    if (options.maxCostUsd !== undefined) {
+      partialDecision.constraints = { maxCostUsd: options.maxCostUsd };
+    }
+    partialDecision.routingMode = 'stage-aware-partial';
+    partialDecision.confidence = Number((clamp(partialDecision.confidence * 0.8, 0.1, 0.95)).toFixed(2));
+    return partialDecision;
   }
 
   const decision = buildStageAwareDecision(selection, neighbors, kNeighbors, repoDir);
