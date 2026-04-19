@@ -49,6 +49,7 @@ epics/*/
 .wavemill/logs/
 
 worktrees/
+test-reg-*/
 
 # Python
 __pycache__/
