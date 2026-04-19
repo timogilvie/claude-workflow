@@ -555,6 +555,127 @@ await test('auto mode logs frontier substitution without constrained banner when
   }
 });
 
+await test('auto mode routes to healthy frontier sibling when anthropic frontier is exhausted', async () => {
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  try {
+    const decision = await routeWorkflowAuto('Implement a backend feature with tests and review.', {
+      repoDir,
+      taskDifficulty: 'hard',
+      skipDifficultyClassification: true,
+    });
+    assert.equal(decision.planner, 'gpt-5.4');
+    assert.equal(decision.coder, 'gpt-5.4');
+    assert.equal(decision.reviewer, 'gpt-5.4');
+    assert.doesNotMatch(decision.reasoning[0], /Constrained mode|Survival mode/);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('tryPolicyResolution pools select healthy frontier for all three roles', () => {
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  try {
+    const decision = tryPolicyResolution('Implement a backend feature with tests and review.', {
+      repoDir,
+      taskDifficulty: 'hard',
+      skipDifficultyClassification: true,
+    });
+    assert.equal(decision?.routingMode, 'policy');
+    assert.equal(decision?.planner, 'gpt-5.4');
+    assert.equal(decision?.coder, 'gpt-5.4');
+    assert.equal(decision?.reviewer, 'gpt-5.4');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('emits same-class substitution log for every role and no constrained banner in case (a)', async () => {
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'healthy',
+  });
+
+  try {
+    const { result, stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Implement a backend feature with tests and review.', {
+        repoDir,
+        taskDifficulty: 'hard',
+        skipDifficultyClassification: true,
+      })
+    );
+    assert.equal(result.planner, 'gpt-5.4');
+    assert.equal(result.coder, 'gpt-5.4');
+    assert.equal(result.reviewer, 'gpt-5.4');
+    assert.match(stderr, /\[planner] policy adjustment: claude-opus-4-7 -> gpt-5\.4 \(quota=exhausted, same-class=frontier\)/);
+    assert.match(stderr, /\[coder] policy adjustment: claude-opus-4-7 -> gpt-5\.4 \(quota=exhausted, same-class=frontier\)/);
+    assert.match(stderr, /\[reviewer] policy adjustment: claude-opus-4-7 -> gpt-5\.4 \(quota=exhausted, same-class=frontier\)/);
+    assert.doesNotMatch(stderr, /\[router] (constrained|survival) mode:/);
+    assert.doesNotMatch(result.reasoning[0], /Constrained mode|Survival mode/);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('emits constrained-mode banner when every frontier vendor is degrading (case b)', async () => {
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'degrading',
+    'claude-opus-4-6': 'degrading',
+    'gpt-5.4': 'degrading',
+  });
+
+  try {
+    const { result, stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Implement a backend feature with tests and review.', { repoDir })
+    );
+    assert.match(stderr, /\[router] constrained mode: .* quota is degrading; reserving it for high-complexity steps/);
+    assert.ok(result.reasoning[0].includes('Constrained mode'));
+    assert.doesNotMatch(stderr, /same-class=frontier/);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('emits survival-mode banner when every frontier vendor is exhausted (case c)', async () => {
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+    'gpt-5.4': 'exhausted',
+  });
+
+  try {
+    const { result, stderr } = await captureStderr(() =>
+      routeWorkflowAuto('Implement a backend feature with tests and review.', { repoDir })
+    );
+    assert.match(stderr, /\[router] survival mode: .* quota is exhausted; restricting routing to fast-economy models/);
+    assert.ok(result.reasoning[0].includes('Survival mode'));
+    assert.ok([result.planner, result.coder, result.reviewer].every((modelId) => modelId.toLowerCase().includes('haiku')));
+    assert.doesNotMatch(stderr, /same-class=frontier/);
+  } finally {
+    cleanup();
+  }
+});
+
 await test('explicit hokusai mode falls back gracefully to stage-aware', async () => {
   const { repoDir, cleanup } = makeRepo({
     router: {

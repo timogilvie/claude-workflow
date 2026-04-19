@@ -102,6 +102,29 @@ function makeSnapshot(models: Record<string, 'healthy' | 'degrading' | 'exhauste
   };
 }
 
+function writeMultiFrontierConfig(targetRepoDir: string): void {
+  writeRepoConfig(targetRepoDir, {
+    modelRegistry: {
+      models: {
+        'gpt-5.4': {
+          vendor: 'openai',
+          class: 'frontier',
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
+        },
+      },
+      ladders: {
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+      },
+    },
+  });
+}
+
 describe('quota-state', () => {
   beforeEach(() => {
     tempRoot = join(
@@ -526,6 +549,67 @@ describe('quota-state', () => {
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
   });
 
+  it('derives normal operating mode when a cross-vendor frontier sibling remains healthy', () => {
+    writeMultiFrontierConfig(repoDir);
+
+    recordLimitError({
+      modelId: 'claude-opus-4-7',
+      reason: '429 rate_limit',
+    }, repoDir);
+    recordLimitError({
+      modelId: 'claude-opus-4-7',
+      reason: 'quota_exhausted',
+    }, repoDir);
+    recordLimitError({
+      modelId: 'claude-opus-4-6',
+      reason: '429 rate_limit',
+    }, repoDir);
+    recordLimitError({
+      modelId: 'claude-opus-4-6',
+      reason: 'quota_exhausted',
+    }, repoDir);
+    recordSuccess({ modelId: 'gpt-5.4' }, repoDir);
+
+    assert.equal(getCurrentOperatingMode(repoDir), 'normal');
+    assert.deepEqual(getVendorQuotaBreakdown(readQuotaSnapshot(repoDir), [
+      { modelId: 'claude-opus-4-7', vendor: 'anthropic' },
+      { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
+      { modelId: 'gpt-5.4', vendor: 'openai' },
+    ]), {
+      anthropic: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
+      openai: { healthy: 1, degraded: 0, exhausted: 0, total: 1 },
+    });
+  });
+
+  it('derives constrained operating mode when every frontier vendor is degrading', () => {
+    writeMultiFrontierConfig(repoDir);
+
+    recordLimitError({
+      modelId: 'claude-opus-4-7',
+      reason: '429 rate_limit',
+    }, repoDir);
+    recordLimitError({
+      modelId: 'claude-opus-4-6',
+      reason: '429 rate_limit',
+    }, repoDir);
+    recordLimitError({
+      modelId: 'gpt-5.4',
+      reason: '429 rate_limit',
+    }, repoDir);
+
+    assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
+  });
+
+  it('derives survival operating mode when every frontier vendor is exhausted', () => {
+    writeMultiFrontierConfig(repoDir);
+
+    markExhausted({ modelId: 'claude-opus-4-7', reason: 'quota_exhausted' }, repoDir);
+    markExhausted({ modelId: 'claude-opus-4-6', reason: 'quota_exhausted' }, repoDir);
+    markExhausted({ modelId: 'gpt-5.4', reason: 'quota_exhausted' }, repoDir);
+
+    assert.equal(getCurrentOperatingMode(repoDir), 'survival');
+  });
+
   describe('getVendorQuotaBreakdown', () => {
     it('returns an empty object for an empty frontier set', () => {
       assert.deepEqual(getVendorQuotaBreakdown(makeSnapshot({}), []), {});
@@ -583,6 +667,23 @@ describe('quota-state', () => {
       ]), {
         anthropic: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
         openai: { healthy: 0, degraded: 0, exhausted: 1, total: 1 },
+      });
+    });
+
+    it('distinguishes exhausted and healthy counts across vendors', () => {
+      const snapshot = makeSnapshot({
+        'claude-opus-4-7': 'exhausted',
+        'claude-opus-4-6': 'exhausted',
+        'gpt-5.4': 'healthy',
+      });
+
+      assert.deepEqual(getVendorQuotaBreakdown(snapshot, [
+        { modelId: 'claude-opus-4-7', vendor: 'anthropic' },
+        { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
+        { modelId: 'gpt-5.4', vendor: 'openai' },
+      ]), {
+        anthropic: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
+        openai: { healthy: 1, degraded: 0, exhausted: 0, total: 1 },
       });
     });
 
