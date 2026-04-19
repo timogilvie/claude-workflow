@@ -206,6 +206,49 @@ else
   fail "active row is missing expected PR or status details"
 fi
 
+STATE_FILE_SKIPPED="$TMP_DIR/state-skipped.json"
+cat > "$STATE_FILE_SKIPPED" <<EOF
+{
+  "tasks": {
+    "HOK-1224": {
+      "slug": "skipped-check-task",
+      "branch": "task/skipped-check-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "executing",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+BEHAVIOR_SKIPPED="$TMP_DIR/behavior-skipped.json"
+cat > "$BEHAVIOR_SKIPPED" <<'EOF'
+{
+  "pane": {
+    "HOK-1224-skipped-check-task": "14"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {
+    "task/skipped-check-task": "348|OPEN"
+  },
+  "checks": {
+    "task/skipped-check-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_SKIPPED="$TMP_DIR/output-skipped.txt"
+run_render "$STATE_FILE_SKIPPED" "$WORKTREES_DIR" "$BEHAVIOR_SKIPPED" "$OUTPUT_SKIPPED"
+
+if grep -q 'HOK-1224.*skipped-check-task.*🔨 executing.*● running.*#348 ✓' "$OUTPUT_SKIPPED"; then
+  pass "treats skipped or neutral PR checks as passing in dashboard output"
+else
+  fail "dashboard did not render skipped-check PR as passing"
+fi
+
 if grep -q 'Ctrl+B <PANE>: switch task' "$OUTPUT_ONE"; then
   pass "footer advertises pane-number switching"
 else
