@@ -10,8 +10,9 @@
  * @module plan-decomposer
  */
 
-import { callClaude } from './llm-cli.ts';
+import { callClaude, type LLMCallResult } from './llm-cli.ts';
 import { fillPromptTemplate } from './prompt-utils.ts';
+import { startHeartbeat } from './progress-heartbeat.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Constants
@@ -234,13 +235,23 @@ export async function decomposeWithClaude(
     cliFlags.push('--tools', '', '--append-system-prompt', NON_INTERACTIVE_DECOMPOSE_PROMPT);
   }
 
-  const result = await callClaude(fullPrompt, {
-    mode: 'stream',
-    model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-7',
-    taskType: 'planning',
-    cliFlags,
-    timeout,
+  const stopHeartbeat = startHeartbeat({
+    label: 'plan-decomposer',
+    initialMessage: '  (This typically takes 1-3 minutes. You can leave this running.)',
   });
+
+  let result: LLMCallResult;
+  try {
+    result = await callClaude(fullPrompt, {
+      mode: 'stream',
+      model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-7',
+      taskType: 'planning',
+      cliFlags,
+      timeout,
+    });
+  } finally {
+    stopHeartbeat();
+  }
 
   return result.text;
 }
@@ -340,13 +351,23 @@ export async function runResearch(
     cliFlags.push('--tools', '', '--append-system-prompt', NON_INTERACTIVE_RESEARCH_PROMPT);
   }
 
-  const result = await callClaude(fullPrompt, {
-    mode: 'stream',
-    model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-7',
-    taskType: 'planning',
-    cliFlags,
-    timeout,
+  const stopHeartbeat = startHeartbeat({
+    label: 'plan-decomposer',
+    initialMessage: '  (This typically takes 1-3 minutes. You can leave this running.)',
   });
+
+  let result: LLMCallResult;
+  try {
+    result = await callClaude(fullPrompt, {
+      mode: 'stream',
+      model: opts.model || process.env.PLAN_MODEL || 'claude-opus-4-7',
+      taskType: 'planning',
+      cliFlags,
+      timeout,
+    });
+  } finally {
+    stopHeartbeat();
+  }
 
   return result.text;
 }
