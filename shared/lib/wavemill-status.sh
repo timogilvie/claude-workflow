@@ -60,7 +60,7 @@ pr_checks() {
     .[] | select(.headRefName == $b) |
     .statusCheckRollup // [] |
     if length == 0 then "none"
-    elif all(.conclusion == "SUCCESS") then "pass"
+    elif all(.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED") then "pass"
     elif any(.conclusion == "FAILURE" or .conclusion == "ERROR") then "fail"
     else "pending" end
   ' "$PR_CACHE" 2>/dev/null | head -1
