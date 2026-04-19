@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from './config.ts';
+import type { QuotaStatus } from './quota-state.ts';
 import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute } from './workflow-router.ts';
 
 let passed = 0;
@@ -88,6 +89,33 @@ function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; 
       rmSync(repoDir, { recursive: true, force: true });
     },
   };
+}
+
+function writeQuotaState(
+  repoDir: string,
+  models: Record<string, QuotaStatus>,
+): void {
+  mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill', 'quota-state.json'), JSON.stringify({
+    version: 1,
+    updatedAt: '2026-04-17T12:00:00.000Z',
+    models: Object.fromEntries(
+      Object.entries(models).map(([modelId, status]) => [modelId, {
+        status,
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+        consecutiveLimitErrors: status === 'healthy' ? 0 : 1,
+        requestHistory: [],
+        consecutiveNearLimitSignals: 0,
+        lastNearLimitAt: null,
+        budgetSignal: null,
+      }]),
+    ),
+  }, null, 2), 'utf-8');
 }
 
 const originalFetch = globalThis.fetch;
@@ -250,6 +278,83 @@ await test('auto mode falls back to stage-aware chain without hokusai config', a
   try {
     const decision = await routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir });
     assert.notEqual(decision.routingMode, 'hokusai');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('auto mode uses degraded haiku-only routing in survival mode', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'exhausted',
+    'claude-opus-4-6': 'exhausted',
+  });
+
+  try {
+    const decision = await routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir });
+    const selectedModels = [decision.planner, decision.coder, decision.reviewer];
+
+    assert.ok(selectedModels.every((modelId) => modelId.toLowerCase().includes('haiku')));
+    assert.ok(selectedModels.every((modelId) => !modelId.toLowerCase().includes('opus')));
+    assert.ok(selectedModels.every((modelId) => !modelId.toLowerCase().includes('sonnet')));
+    assert.match(decision.reasoning[0], /Survival mode/);
+    assert.equal(typeof decision.planner, 'string');
+    assert.equal(typeof decision.coder, 'string');
+    assert.equal(typeof decision.reviewer, 'string');
+    assert.ok(['stage-aware', 'stage-aware-partial', 'heuristic-fallback'].includes(decision.routingMode));
+    assert.equal(typeof decision.neighborCount, 'number');
+    assert.ok(Array.isArray(decision.neighborSimilarityRange));
+  } finally {
+    cleanup();
+  }
+});
+
+await test('auto mode excludes opus in constrained mode', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'degrading',
+  });
+
+  try {
+    const decision = await routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir });
+    const selectedModels = [decision.planner, decision.coder, decision.reviewer];
+
+    assert.ok(selectedModels.every((modelId) => !modelId.toLowerCase().includes('opus')));
+    assert.ok(selectedModels.every((modelId) => modelId.toLowerCase().includes('sonnet') || modelId.toLowerCase().includes('haiku')));
+    assert.match(decision.reasoning[0], /Constrained mode/);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('auto mode does not prepend degraded reasoning in normal mode', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+
+  writeQuotaState(repoDir, {
+    'claude-opus-4-7': 'healthy',
+    'claude-opus-4-6': 'healthy',
+  });
+
+  try {
+    const decision = await routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir });
+    assert.doesNotMatch(decision.reasoning[0], /Survival mode|Constrained mode/);
   } finally {
     cleanup();
   }

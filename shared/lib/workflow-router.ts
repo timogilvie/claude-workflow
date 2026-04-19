@@ -18,6 +18,8 @@ import { resolveModel, topViableCandidate } from './routing-policy.ts';
 import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
+import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
+import type { ModelClass } from './model-registry.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -213,6 +215,14 @@ function getModelPool(repoDir?: string): string[] {
     ...pricingModels,
     ...DEFAULT_MODEL_POOL,
   ])];
+}
+
+function getEffectiveModelPool(options?: RouteWorkflowOptions): string[] {
+  if (options?.modelsAvailable && options.modelsAvailable.length > 0) {
+    return [...new Set(options.modelsAvailable)];
+  }
+
+  return getModelPool(options?.repoDir);
 }
 
 function pickAvailableModel(pool: string[], preferred: string[], fallback: string): string {
@@ -538,7 +548,7 @@ export function readTaskPromptFromFile(filePath: string): string {
 
 export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): WorkflowRouteDecision {
   const repoDir = options?.repoDir;
-  const pool = getModelPool(repoDir);
+  const pool = getEffectiveModelPool(options);
   const characteristics = analyzePrompt(prompt);
   const riskScore = computeRiskScore(prompt, characteristics);
   const planDepth = choosePlanDepth(characteristics, riskScore);
@@ -788,6 +798,60 @@ export function routeWorkflowStageAware(
   return withChallengeRecommendation(decision, repoDir);
 }
 
+function buildDegradedModelPool(
+  mode: Extract<OperatingMode, 'constrained' | 'survival'>,
+  repoDir?: string,
+): string[] {
+  const registry = getEffectiveRegistry(repoDir);
+  const allowedClasses: ModelClass[] = mode === 'survival'
+    ? ['fast_economy']
+    : ['strong_generalist', 'fast_economy'];
+
+  const pool = Object.entries(registry.models)
+    .filter(([, capabilities]) => allowedClasses.includes(capabilities.class))
+    .map(([modelId]) => modelId);
+
+  if (pool.length > 0) {
+    return pool;
+  }
+
+  console.warn(
+    `[workflow-router] No degraded model pool available for ${mode} mode; falling back to full routing pool.`,
+  );
+  return getModelPool(repoDir);
+}
+
+function prependReasoning(
+  decision: StageAwareDecision,
+  rationale: string,
+): StageAwareDecision {
+  return {
+    ...decision,
+    reasoning: [rationale, ...decision.reasoning],
+  };
+}
+
+export function routeWorkflowDegraded(
+  prompt: string,
+  options: RouteWorkflowOptions = {},
+  mode: Extract<OperatingMode, 'constrained' | 'survival'>,
+): StageAwareDecision {
+  const degradedPool = buildDegradedModelPool(mode, options.repoDir);
+  const degradedOptions: RouteWorkflowOptions = {
+    ...options,
+    modelsAvailable: degradedPool,
+    skipDifficultyClassification: true,
+  };
+  const rationale = mode === 'survival'
+    ? 'Survival mode: frontier models exhausted. Restricted to haiku. KNN signal used without LLM reasoning.'
+    : 'Constrained mode: frontier models degrading. Restricted to sonnet/haiku and KNN signal. LLM difficulty classification skipped.';
+
+  return prependReasoning(
+    routeWorkflowStageAware(prompt, degradedOptions),
+    rationale,
+  );
+}
+
 export function tryPolicyResolution(
   prompt: string,
   options?: RouteWorkflowOptions,
@@ -927,6 +991,11 @@ export async function routeWorkflowAuto(
   prompt: string,
   options?: RouteWorkflowOptions,
 ): Promise<StageAwareDecision> {
+  const operatingMode = getCurrentOperatingMode(options?.repoDir);
+  if (operatingMode === 'constrained' || operatingMode === 'survival') {
+    return routeWorkflowDegraded(prompt, options, operatingMode);
+  }
+
   const hokusaiConfig = getHokusaiRouterConfig(options?.repoDir);
   if (hokusaiConfig.endpoint) {
     return routeWorkflowHokusai(prompt, options);
