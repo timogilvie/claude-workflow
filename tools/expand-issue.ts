@@ -1,4 +1,5 @@
 #!/usr/bin/env -S npx tsx
+import path from 'node:path';
 import { runTool, resolvePromptPath } from '../shared/lib/tool-runner.ts';
 import { getIssue, updateIssue } from '../shared/lib/linear.ts';
 import {
@@ -24,6 +25,8 @@ import { errorMessage } from '../shared/lib/error-utils.ts';
 import { isInteractive } from '../shared/lib/cli-utils.ts';
 import { logLinearUpdateError, logValidationWarning } from '../shared/lib/linear-update-error-log.ts';
 import { formatLintResults, lintSubsystemSpecs } from '../shared/lib/context-linter.ts';
+import { getCurrentOperatingMode } from '../shared/lib/operating-mode.ts';
+import { shouldSplitPacket, splitPacketIntoSubPackets } from '../shared/lib/scope-shrinker.ts';
 
 runTool({
   name: 'expand-issue',
@@ -81,6 +84,11 @@ runTool({
 
     // Format issue context
     const issueContext = formatIssueContext(issue);
+    const mode = getCurrentOperatingMode(repoPath);
+
+    if (mode !== 'normal') {
+      console.log(`⚠️  ${mode.toUpperCase()} MODE: Applying scope constraints to task packet`);
+    }
 
     // Gather codebase context
     const codebaseContext = await gatherCodebaseContext({
@@ -111,7 +119,9 @@ runTool({
     const expandedDescription = await expandIssueWithClaude(
       promptTemplate,
       issueContext,
-      codebaseContext
+      codebaseContext,
+      undefined,
+      mode,
     );
     console.log('─'.repeat(80));
     console.log('\n');
@@ -119,6 +129,19 @@ runTool({
     // Split into header and details
     const { header, details, fullContent } = splitTaskPacket(expandedDescription);
     console.log(`Split task packet: header (${header.length} chars), details (${details.length} chars)\n`);
+    let splitSubPackets: string[] = [];
+
+    if (shouldSplitPacket(fullContent, mode)) {
+      splitSubPackets = await splitPacketIntoSubPackets(fullContent, mode, {
+        repoDir: repoPath,
+      });
+
+      if (splitSubPackets.length > 1) {
+        console.log(`Split into ${splitSubPackets.length} sub-packets for ${mode} mode\n`);
+      } else {
+        console.log(`Packet remained single-file after ${mode} mode split attempt\n`);
+      }
+    }
 
     // Handle output (don't let file write failure block Linear update)
     if (outputFile) {
@@ -131,6 +154,19 @@ runTool({
         console.log(`✓ Header saved to: ${artifactPaths.header}`);
         console.log(`✓ Details saved to: ${artifactPaths.details}`);
         console.log(`✓ Full content saved to: ${artifactPaths.full}`);
+
+        if (splitSubPackets.length > 1) {
+          const parsedOutput = path.parse(outputFile);
+          const basePath = path.join(parsedOutput.dir, parsedOutput.name);
+          const extension = parsedOutput.ext || '.md';
+
+          for (const [index, packet] of splitSubPackets.entries()) {
+            const packetOutput = `${basePath}-${index + 1}${extension}`;
+            const packetParts = splitTaskPacket(packet);
+            const packetPaths = await writeTaskPacketArtifacts(packetOutput, packetParts);
+            console.log(`✓ Sub-packet ${index + 1} saved to: ${packetPaths.full}`);
+          }
+        }
       } catch (writeError) {
         const errorMsg = errorMessage(writeError);
         console.warn(`⚠️  Failed to write output files: ${errorMsg}`);
