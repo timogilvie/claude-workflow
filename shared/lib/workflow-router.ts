@@ -76,6 +76,7 @@ export interface RouteWorkflowOptions {
   taskDescription?: string;
   packetContent?: string;
   skipDifficultyClassification?: boolean;
+  additionalEvalsPaths?: string[];
 }
 
 function withSignals(
@@ -952,6 +953,7 @@ export function routeWorkflowStageAware(
       coderModelsAvailable: policyResolution?.policyStagePools.coderModels,
       reviewerModelsAvailable: policyResolution?.policyStagePools.reviewerModels,
       maxCostUsd: options?.maxCostUsd,
+      additionalEvalsPaths: options?.additionalEvalsPaths,
     });
   } catch (error) {
     console.warn('[workflow-router] Stage-aware routing failed, falling back to heuristic:', error);
