@@ -95,7 +95,6 @@ runTool({
         throw new Error(`--max-cost must be a non-negative number, got ${args['max-cost']}`);
       }
     }
-
     // Detect wavemill root (route-task.ts is in tools/, so root is one level up)
     const wavemillRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
     const additionalEvalsPaths: string[] = [];
