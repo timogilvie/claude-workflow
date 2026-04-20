@@ -463,6 +463,93 @@ else
 fi
 
 echo ""
+echo "=== wavemill-status pr_checks rollup handling ==="
+
+run_pr_checks() {
+  local cache="$1"
+  local branch="$2"
+  (
+    SESSION_NAME="pr-checks-$RANDOM"
+    cache_path="/tmp/${SESSION_NAME}-pr-cache.json"
+    cp "$cache" "$cache_path"
+    set -- "$SESSION_NAME" "$TMP_DIR" ""
+    # Preserve stdout on fd 3; silence everything else so tput cursor codes
+    # (civis/cnorm) emitted by the sourced script don't pollute captured output.
+    exec 3>&1
+    exec >/dev/null 2>&1
+    source "$REPO_DIR/shared/lib/wavemill-status.sh"
+    trap - EXIT
+    pr_checks "$branch" >&3
+    rm -f "$cache_path"
+  )
+}
+
+assert_pr_check() {
+  local label="$1" expected="$2" actual="$3"
+  if [[ "$actual" == "$expected" ]]; then
+    pass "$label (got '$actual')"
+  else
+    fail "$label (expected '$expected', got '$actual')"
+  fi
+}
+
+ROLLUP_FIXTURE="$TMP_DIR/rollup.json"
+cat > "$ROLLUP_FIXTURE" <<'EOF'
+[
+  {
+    "headRefName": "task/status-context-success",
+    "statusCheckRollup": [
+      {"__typename":"StatusContext","context":"Vercel","state":"SUCCESS","conclusion":null},
+      {"__typename":"CheckRun","name":"build","state":null,"conclusion":"SUCCESS"}
+    ]
+  },
+  {
+    "headRefName": "task/status-context-pending",
+    "statusCheckRollup": [
+      {"__typename":"StatusContext","context":"Vercel","state":"PENDING","conclusion":null},
+      {"__typename":"CheckRun","name":"build","state":null,"conclusion":"SUCCESS"}
+    ]
+  },
+  {
+    "headRefName": "task/status-context-failure",
+    "statusCheckRollup": [
+      {"__typename":"StatusContext","context":"Vercel","state":"FAILURE","conclusion":null},
+      {"__typename":"CheckRun","name":"build","state":null,"conclusion":"SUCCESS"}
+    ]
+  },
+  {
+    "headRefName": "task/check-run-skipped",
+    "statusCheckRollup": [
+      {"__typename":"CheckRun","name":"optional","conclusion":"SKIPPED"}
+    ]
+  },
+  {
+    "headRefName": "task/check-run-timed-out",
+    "statusCheckRollup": [
+      {"__typename":"CheckRun","name":"build","conclusion":"TIMED_OUT"}
+    ]
+  },
+  {
+    "headRefName": "task/empty-rollup",
+    "statusCheckRollup": []
+  }
+]
+EOF
+
+assert_pr_check "StatusContext SUCCESS + CheckRun SUCCESS -> pass" \
+  "pass" "$(run_pr_checks "$ROLLUP_FIXTURE" "task/status-context-success")"
+assert_pr_check "StatusContext PENDING -> pending" \
+  "pending" "$(run_pr_checks "$ROLLUP_FIXTURE" "task/status-context-pending")"
+assert_pr_check "StatusContext FAILURE -> fail" \
+  "fail" "$(run_pr_checks "$ROLLUP_FIXTURE" "task/status-context-failure")"
+assert_pr_check "CheckRun SKIPPED -> pass" \
+  "pass" "$(run_pr_checks "$ROLLUP_FIXTURE" "task/check-run-skipped")"
+assert_pr_check "CheckRun TIMED_OUT -> fail" \
+  "fail" "$(run_pr_checks "$ROLLUP_FIXTURE" "task/check-run-timed-out")"
+assert_pr_check "Empty rollup -> none" \
+  "none" "$(run_pr_checks "$ROLLUP_FIXTURE" "task/empty-rollup")"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
 if (( FAIL > 0 )); then
