@@ -113,6 +113,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 | `constrained` mode fires even though one frontier model is healthy | Operating mode derived from a single-model check instead of aggregating all frontier IDs | Ensure `deriveOperatingMode()` iterates the full frontier set from the effective registry and treats snapshot-absent frontier models as `healthy` |
 | A non-frontier model is selected while a healthy frontier sibling is available | Frontier-sibling substitution was skipped, or `below-frontier-substitute` exclusions were not applied | Verify `findHealthyFrontierSibling()` can see the current quota snapshot and `resolveModel()` is excluding non-frontier candidates in the mixed-frontier path |
 | No policy-adjustment line appears for a frontier-to-frontier swap | The route never passed through `logPolicyAdjustment()` or `logFinalFrontierSubstitution()` for that path | Confirm routing stayed out of degraded mode and note that `routingMode === 'policy'` intentionally skips the final frontier-substitution log |
+| `heuristic-fallback, neighbors=0` appears in degraded mode despite populated `evals.jsonl` | The degraded `modelsAvailable` allowlist filters every k-nearest neighbor before stage selection, so `routeStageAware()` returns `null` and the caller reports zero neighbors | Retry `rankModelsPerStage()` without model constraints when filtering caused the null, return `stage-aware-partial`, and let the caller overlay degraded model selection while preserving the real neighbor count |
 
 ## Testing Patterns
 
