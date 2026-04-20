@@ -56,12 +56,15 @@ pr_for_branch() {
 pr_checks() {
   local branch="$1"
   [[ -f "$PR_CACHE" ]] || return 0
+  # Rollup entries are either CheckRun (uses .conclusion) or StatusContext
+  # (uses .state, e.g. Vercel/Netlify). Coalesce so both are treated uniformly.
   jq -r --arg b "$branch" '
+    def outcome: .conclusion // .state;
     .[] | select(.headRefName == $b) |
     .statusCheckRollup // [] |
     if length == 0 then "none"
-    elif all(.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED") then "pass"
-    elif any(.conclusion == "FAILURE" or .conclusion == "ERROR") then "fail"
+    elif all(.[]; outcome == "SUCCESS" or outcome == "NEUTRAL" or outcome == "SKIPPED") then "pass"
+    elif any(.[]; outcome == "FAILURE" or outcome == "ERROR" or outcome == "TIMED_OUT" or outcome == "CANCELLED") then "fail"
     else "pending" end
   ' "$PR_CACHE" 2>/dev/null | head -1
 }
