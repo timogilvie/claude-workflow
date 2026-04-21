@@ -2275,6 +2275,9 @@ read_state_value() {
   fi
 }
 
+# Duplicated intentionally: the pre-heredoc definition (~line 595) does not
+# enter the generated monitor script, so the monitor needs its own copy to
+# service late migration reservations.
 save_migration_reservation() {
   local issue="$1"
   local num="$2"
