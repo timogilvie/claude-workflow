@@ -1048,6 +1048,55 @@
         }
       },
       "additionalProperties": false
+    },
+    "lifecycle": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "promotion": {
+          "type": "object",
+          "properties": {
+            "minEvalRecords": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minMeanScore": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "requireAllAboveAssisted": {
+              "type": "boolean"
+            },
+            "requireChallengeWin": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "canary": {
+          "type": "object",
+          "properties": {
+            "defaultTrafficPercent": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "maxActiveCanaryAgeDays": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "rollbackHistoryDepth": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

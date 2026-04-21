@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "transitionId",
+    "timestamp",
+    "resource",
+    "fromState",
+    "toState",
+    "actor",
+    "rationale"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string"
+    },
+    "transitionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "type",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "optimizer-artifact",
+            "tool",
+            "memory",
+            "agent-config",
+            "environment"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "fromState": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "draft",
+            "canary",
+            "stable",
+            "rejected",
+            "rolled_back"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "toState": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "canary",
+        "stable",
+        "rejected",
+        "rolled_back"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "user"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "previousStable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "metadata": {
+      "type": "object"
+    }
+  }
+}

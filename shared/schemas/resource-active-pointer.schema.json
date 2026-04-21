@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "updatedAt",
+    "entries"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string"
+    },
+    "updatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stable": {
+            "$ref": "#/$defs/pointerSlot"
+          },
+          "canary": {
+            "$ref": "#/$defs/pointerSlot"
+          },
+          "previousStable": {
+            "$ref": "#/$defs/pointerSlot"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/pointerSlot"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "pointerSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trafficPercent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

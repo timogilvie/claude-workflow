@@ -3,7 +3,13 @@
  */
 
 import { describe, test, expect } from 'vitest';
-import { fillPromptTemplate, fillPromptTemplatePositional } from './prompt-utils.ts';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { writeActivePointersAtomic } from './resource-lifecycle.ts';
+import { clearConfigCache } from './config.ts';
+import { registerResource } from './resource-registry.ts';
+import { fillPromptTemplate, fillPromptTemplatePositional, loadPromptTemplate } from './prompt-utils.ts';
 
 describe('fillPromptTemplate', () => {
   test('replaces single variable', () => {
@@ -87,5 +93,52 @@ describe('fillPromptTemplatePositional', () => {
     const template = 'Issue: {{ISSUE_CONTEXT}}';
     const result = fillPromptTemplatePositional(template, 'HOK-123');
     expect(result).toBe('Issue: HOK-123');
+  });
+});
+
+describe('loadPromptTemplate', () => {
+  test('prefers canary content when active pointer routes there', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'prompt-utils-'));
+    try {
+      const promptsDir = join(repoDir, 'tools', 'prompts');
+      mkdirSync(promptsDir, { recursive: true });
+      const stablePath = join(promptsDir, 'issue-writer.md');
+      const canaryPath = join(promptsDir, 'issue-writer-canary.md');
+      writeFileSync(stablePath, 'stable prompt', 'utf-8');
+      writeFileSync(canaryPath, 'canary prompt', 'utf-8');
+
+      const stable = registerResource({
+        type: 'prompt',
+        name: 'issue-writer',
+        content: 'stable prompt',
+        version: 'v1',
+        uri: stablePath,
+      }, { repoDir });
+      const canary = registerResource({
+        type: 'prompt',
+        name: 'issue-writer',
+        content: 'canary prompt',
+        version: 'v2',
+        uri: canaryPath,
+      }, { repoDir });
+      writeActivePointersAtomic({
+        schemaVersion: '1.0.0',
+        updatedAt: '2026-04-21T00:00:00.000Z',
+        entries: {
+          'prompt:issue-writer': {
+            stable: { id: stable!.id, version: stable!.version, updatedAt: '2026-04-21T00:00:00.000Z' },
+            canary: { id: canary!.id, version: canary!.version, updatedAt: '2026-04-21T00:00:00.000Z', trafficPercent: 100 },
+          },
+        },
+      }, repoDir);
+
+      process.env.WAVEMILL_SESSION = 'session-a';
+      const content = await loadPromptTemplate(stablePath, { repoDir, skipRegistry: true });
+      expect(content).toBe('canary prompt');
+    } finally {
+      delete process.env.WAVEMILL_SESSION;
+      clearConfigCache(repoDir);
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 });

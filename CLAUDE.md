@@ -58,6 +58,9 @@ All business logic lives in `shared/lib/` for reusability across CLI tools, comm
 - `config.ts` - Centralized config loading
 - `model-registry.ts` - Canonical model capability registry with task-specific fallback ladders
 - `resource-registry.ts` / `resource-manifest.ts` - Runtime resource tracking and per-run attribution
+- `resource-lifecycle.ts` - Promotion, canary, rollback, and active-pointer state for mutable resources
+
+The lifecycle layer keeps resource registration append-only while adding governed state on top of it. Use `tools/resource-lifecycle.ts` to inspect active stable/canary pointers, evaluate evidence gates, promote candidates, reject them, or roll back to the previous stable version.
 
 ### Refactoring Pattern
 

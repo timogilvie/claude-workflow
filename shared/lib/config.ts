@@ -252,6 +252,25 @@ export interface RegistryConfig {
   dir?: string;
 }
 
+export interface LifecyclePromotionConfig {
+  minEvalRecords?: number;
+  minMeanScore?: number;
+  requireAllAboveAssisted?: boolean;
+  requireChallengeWin?: boolean;
+}
+
+export interface LifecycleCanaryConfig {
+  defaultTrafficPercent?: number;
+  maxActiveCanaryAgeDays?: number;
+}
+
+export interface LifecycleConfig {
+  enabled?: boolean;
+  promotion?: LifecyclePromotionConfig;
+  canary?: LifecycleCanaryConfig;
+  rollbackHistoryDepth?: number;
+}
+
 export interface VerificationMandatoryChecksConfig {
   typecheck?: boolean;
   lint?: boolean;
@@ -307,6 +326,7 @@ export interface WavemillConfig {
   verification?: VerificationConfig;
   budget?: BudgetConfig;
   registry?: RegistryConfig;
+  lifecycle?: LifecycleConfig;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -755,5 +775,24 @@ export function getRegistryConfig(repoDir?: string): Required<RegistryConfig> {
   return {
     enabled: config.enabled ?? true,
     dir: config.dir ?? '.wavemill/registry',
+  };
+}
+
+export function getLifecycleConfig(repoDir?: string): Required<LifecycleConfig> {
+  const registryConfig = getRegistryConfig(repoDir);
+  const config = loadWavemillConfig(repoDir).lifecycle || {};
+  return {
+    enabled: config.enabled ?? registryConfig.enabled,
+    promotion: {
+      minEvalRecords: config.promotion?.minEvalRecords ?? 5,
+      minMeanScore: config.promotion?.minMeanScore ?? 0.8,
+      requireAllAboveAssisted: config.promotion?.requireAllAboveAssisted ?? false,
+      requireChallengeWin: config.promotion?.requireChallengeWin ?? false,
+    },
+    canary: {
+      defaultTrafficPercent: config.canary?.defaultTrafficPercent ?? 10,
+      maxActiveCanaryAgeDays: config.canary?.maxActiveCanaryAgeDays ?? 14,
+    },
+    rollbackHistoryDepth: config.rollbackHistoryDepth ?? 5,
   };
 }

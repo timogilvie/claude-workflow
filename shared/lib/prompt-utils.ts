@@ -9,7 +9,10 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { logPromptUsage, type RegistryOptions } from './prompt-registry.ts';
+import { recordUse } from './resource-manifest.ts';
+import { resolveActivePrompt } from './resource-adapters/prompt-adapter.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -131,13 +134,32 @@ export function fillPromptTemplatePositional(
  */
 export async function loadPromptTemplate(
   templatePath: string,
-  options?: RegistryOptions & { skipRegistry?: boolean }
+  options?: RegistryOptions & { skipRegistry?: boolean; repoDir?: string; useActivePointer?: boolean }
 ): Promise<string> {
-  const content = await readFile(templatePath, 'utf-8');
+  const shouldUseActivePointer = options?.useActivePointer ?? Boolean(options?.repoDir);
+  let resolvedPath = templatePath;
+
+  if (shouldUseActivePointer && options?.repoDir) {
+    const templateName = templatePath.split('/').pop()?.replace(/\.(md|txt)$/, '');
+    if (templateName) {
+      const activePrompt = resolveActivePrompt(templateName, options.repoDir, {
+        sessionId: process.env.WAVEMILL_SESSION,
+      });
+      if (activePrompt?.resource.uri && existsSync(activePrompt.resource.uri)) {
+        resolvedPath = activePrompt.resource.uri;
+        const sessionId = process.env.WAVEMILL_SESSION;
+        if (sessionId) {
+          recordUse(sessionId, process.env.WAVEMILL_PHASE || 'unknown', activePrompt.ref, options.repoDir);
+        }
+      }
+    }
+  }
+
+  const content = await readFile(resolvedPath, 'utf-8');
 
   if (!options?.skipRegistry) {
     try {
-      logPromptUsage(templatePath, content, { dir: options?.dir });
+      logPromptUsage(resolvedPath, content, { dir: options?.dir });
     } catch (err) {
       // Log warning but don't fail - registry is metadata
       console.warn(`[prompt-registry] Failed to log: ${err}`);

@@ -14,7 +14,10 @@ import { execShellCommand } from './shell-utils.ts';
 import type { PromptCharacteristics, TaskType, ModelRecommendation } from './model-router.ts';
 import { resolveAgent } from './model-router.ts';
 import { recordUse } from './resource-manifest.ts';
-import { registerDspyArtifact } from './resource-adapters/dspy-adapter.ts';
+import {
+  registerDspyArtifact,
+  resolveActiveArtifact,
+} from './resource-adapters/dspy-adapter.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Artifact Types
@@ -87,10 +90,15 @@ export function loadArtifact(
   repoDir?: string,
   artifactPath?: string,
 ): SelectorArtifact | null {
-  const path = resolve(
-    repoDir || '.',
-    artifactPath || DEFAULT_ARTIFACT_PATH,
-  );
+  const activeArtifact = !artifactPath && repoDir
+    ? resolveActiveArtifact('optimized-selector', repoDir)
+    : null;
+  const path = activeArtifact?.resource.uri
+    ? activeArtifact.resource.uri
+    : resolve(
+      repoDir || '.',
+      artifactPath || DEFAULT_ARTIFACT_PATH,
+    );
   if (!existsSync(path)) return null;
 
   try {
@@ -99,7 +107,7 @@ export function loadArtifact(
       return null;
     }
     try {
-      const artifactRef = registerDspyArtifact(path, data, repoDir);
+      const artifactRef = activeArtifact?.ref || registerDspyArtifact(path, data, repoDir);
       const sessionId = process.env.WAVEMILL_SESSION;
       if (sessionId && artifactRef) {
         recordUse(sessionId, process.env.WAVEMILL_PHASE || 'unknown', artifactRef, repoDir);

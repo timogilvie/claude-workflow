@@ -28,6 +28,7 @@ import {
   getPermissionsConfig,
   getDashboardConfig,
   getHokusaiSubmissionConfig,
+  getLifecycleConfig,
   getReadyConfig,
   getModelRegistryConfig,
   getQuotaConfig,
@@ -150,6 +151,15 @@ test('valid config passes validation', () => {
           review: ['claude-opus-4-7', 'claude-sonnet-4-6'],
         },
       },
+      lifecycle: {
+        promotion: {
+          minEvalRecords: 3,
+          minMeanScore: 0.9,
+        },
+        canary: {
+          defaultTrafficPercent: 15,
+        },
+      },
       router: {
         enabled: true,
         defaultModel: 'claude-sonnet-4-5-20250929',
@@ -173,6 +183,7 @@ test('valid config passes validation', () => {
     assert.deepEqual(config.modelRegistry?.ladders?.review, ['claude-opus-4-7', 'claude-sonnet-4-6']);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
     assert.equal(config.mill?.maxParallel, 5);
+    assert.equal(config.lifecycle?.promotion?.minEvalRecords, 3);
     assert.deepEqual(config.router?.availableModels?.planner, ['claude-sonnet-4-5-20250929']);
     assert.deepEqual(config.router?.availableModels?.coder, ['gpt-5.4']);
   } finally {
@@ -265,6 +276,29 @@ test('invalid challenge scheduler threshold throws validation error', () => {
         loadWavemillConfig(tmp);
       });
     }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('lifecycle config accessor returns defaults and overrides', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      registry: { enabled: true },
+      lifecycle: {
+        promotion: { minEvalRecords: 7 },
+        canary: { defaultTrafficPercent: 25 },
+      },
+    }));
+
+    const lifecycle = getLifecycleConfig(tmp);
+    assert.equal(lifecycle.enabled, true);
+    assert.equal(lifecycle.promotion.minEvalRecords, 7);
+    assert.equal(lifecycle.promotion.minMeanScore, 0.8);
+    assert.equal(lifecycle.canary.defaultTrafficPercent, 25);
+    assert.equal(lifecycle.rollbackHistoryDepth, 5);
   } finally {
     cleanUp(tmp);
   }

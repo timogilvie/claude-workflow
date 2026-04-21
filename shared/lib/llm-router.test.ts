@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { writeActivePointersAtomic } from './resource-lifecycle.ts';
+import { registerDspyArtifact } from './resource-adapters/dspy-adapter.ts';
 import type { SelectorArtifact, LLMRoutingResponse, CallFn } from './llm-router.ts';
 import {
   loadArtifact,
@@ -162,6 +164,36 @@ test('loads artifact from custom path', () => {
     const result = loadArtifact(dir, 'custom/my-artifact.json');
     assert.notEqual(result, null);
     assert.equal(result!.version, '1.0.0');
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test('loads active pointed artifact when no explicit path is provided', () => {
+  const dir = makeTempDir();
+  try {
+    const artifactDir = join(dir, 'dspy', 'artifacts');
+    mkdirSync(artifactDir, { recursive: true });
+    const stablePath = join(artifactDir, 'optimized-selector.json');
+    const candidatePath = join(artifactDir, 'optimized-selector-v2.json');
+    writeFileSync(stablePath, JSON.stringify(makeArtifact({ version: '1.0.0', system_prompt: 'stable prompt' })));
+    writeFileSync(candidatePath, JSON.stringify(makeArtifact({ version: '2.0.0', system_prompt: 'candidate prompt' })));
+    const stable = registerDspyArtifact(stablePath, makeArtifact({ version: '1.0.0', system_prompt: 'stable prompt' }), dir);
+    const candidate = registerDspyArtifact(candidatePath, makeArtifact({ version: '2.0.0', system_prompt: 'candidate prompt' }), dir);
+    writeActivePointersAtomic({
+      schemaVersion: '1.0.0',
+      updatedAt: '2026-04-21T00:00:00.000Z',
+      entries: {
+        'optimizer-artifact:optimized-selector': {
+          stable: { id: candidate!.id, version: candidate!.version, updatedAt: '2026-04-21T00:00:00.000Z' },
+          previousStable: { id: stable!.id, version: stable!.version, updatedAt: '2026-04-20T00:00:00.000Z' },
+        },
+      },
+    }, dir);
+
+    const result = loadArtifact(dir);
+    assert.equal(result?.version, '2.0.0');
+    assert.equal(result?.system_prompt, 'candidate prompt');
   } finally {
     rmSync(dir, { recursive: true });
   }

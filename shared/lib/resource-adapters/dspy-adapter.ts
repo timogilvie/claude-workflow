@@ -1,6 +1,17 @@
 import { basename, resolve } from 'node:path';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { registerResource, toResourceRef, type ResourceRef } from '../resource-registry.ts';
+import { getLifecycleConfig } from '../config.ts';
+import {
+  getPointerEntry,
+  type PointerEntry,
+} from '../resource-lifecycle.ts';
+import {
+  getResource,
+  registerResource,
+  toResourceRef,
+  type ResourceRef,
+  type ResourceVersion,
+} from '../resource-registry.ts';
 import type { SelectorArtifact } from '../llm-router.ts';
 
 function getArtifactName(artifactPath: string): string {
@@ -54,4 +65,31 @@ export function scanAndRegisterAll(repoDir?: string): ResourceRef[] {
       return registerDspyArtifact(path, artifact, repoDir);
     })
     .filter((entry): entry is ResourceRef => Boolean(entry));
+}
+
+export function resolveActiveArtifact(
+  artifactName: string,
+  repoDir?: string,
+): { ref: ResourceRef; resource: ResourceVersion; slot: 'stable' | 'canary'; pointerEntry: PointerEntry | null } | null {
+  if (getLifecycleConfig(repoDir).enabled === false) {
+    return null;
+  }
+
+  const pointerEntry = getPointerEntry('optimizer-artifact', artifactName, repoDir);
+  const target = pointerEntry?.stable || pointerEntry?.canary;
+  if (!target) {
+    return null;
+  }
+
+  const resource = getResource(target.id, target.version, repoDir);
+  if (!resource) {
+    return null;
+  }
+
+  return {
+    ref: { id: resource.id, version: resource.version },
+    resource,
+    slot: pointerEntry?.stable?.id === target.id && pointerEntry.stable.version === target.version ? 'stable' : 'canary',
+    pointerEntry: pointerEntry || null,
+  };
 }
