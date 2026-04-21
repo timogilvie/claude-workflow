@@ -956,13 +956,15 @@ export function shouldRouteToCanary(entry: PointerEntry | null | undefined, sess
   if (trafficPercent >= 100) {
     return true;
   }
-  const seed = sessionSeed || process.env.WAVEMILL_SESSION || '';
-  const source = seed || `${entry.canary.id}@${entry.canary.version}`;
-  let total = 0;
-  for (const char of source) {
-    total += char.charCodeAt(0);
+  const seed = sessionSeed || process.env.WAVEMILL_SESSION;
+  if (seed) {
+    let total = 0;
+    for (const char of seed) {
+      total += char.charCodeAt(0);
+    }
+    return (total % 100) < trafficPercent;
   }
-  return (total % 100) < trafficPercent;
+  return (randomBytes(1)[0] % 100) < trafficPercent;
 }
 
 export function buildLifecycleResourceRef(resource: ResourceVersion): LifecycleResourceRef {

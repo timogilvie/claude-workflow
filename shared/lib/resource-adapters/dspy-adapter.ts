@@ -3,6 +3,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { getLifecycleConfig } from '../config.ts';
 import {
   getPointerEntry,
+  shouldRouteToCanary,
   type PointerEntry,
 } from '../resource-lifecycle.ts';
 import {
@@ -70,13 +71,20 @@ export function scanAndRegisterAll(repoDir?: string): ResourceRef[] {
 export function resolveActiveArtifact(
   artifactName: string,
   repoDir?: string,
+  options?: { sessionId?: string },
 ): { ref: ResourceRef; resource: ResourceVersion; slot: 'stable' | 'canary'; pointerEntry: PointerEntry | null } | null {
   if (getLifecycleConfig(repoDir).enabled === false) {
     return null;
   }
 
   const pointerEntry = getPointerEntry('optimizer-artifact', artifactName, repoDir);
-  const target = pointerEntry?.stable || pointerEntry?.canary;
+  if (!pointerEntry) {
+    return null;
+  }
+
+  const useCanary = shouldRouteToCanary(pointerEntry, options?.sessionId);
+  const target = useCanary ? pointerEntry.canary : pointerEntry.stable;
+  const slot = useCanary ? 'canary' : 'stable';
   if (!target) {
     return null;
   }
@@ -89,7 +97,7 @@ export function resolveActiveArtifact(
   return {
     ref: { id: resource.id, version: resource.version },
     resource,
-    slot: pointerEntry?.stable?.id === target.id && pointerEntry.stable.version === target.version ? 'stable' : 'canary',
-    pointerEntry: pointerEntry || null,
+    slot,
+    pointerEntry,
   };
 }

@@ -26,7 +26,7 @@
  * - **1.7.0**: Added optional `budgetViolated` and `budgetViolationDetails`
  *   fields to track cost budget constraint violations during routing (HOK-1350)
  * - **1.8.0**: Added optional `manifestRef` for per-run resource manifest
- *   attribution (HOK-1378)
+ *   attribution (HOK-1379)
  *
  * @module eval-schema
  */
