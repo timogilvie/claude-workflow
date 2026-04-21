@@ -1088,7 +1088,7 @@ agent_launch_autonomous() {
   # Wrap agent command so exit status is visible and the shell survives
   case "$agent_cmd" in
     claude)
-      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
+      tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$window'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
       ;;
     codex)
       local launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
@@ -1098,6 +1098,7 @@ agent_launch_autonomous() {
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1291,6 +1292,7 @@ agent_launch_interactive() {
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1304,6 +1306,7 @@ LAUNCHEOF
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1317,6 +1320,7 @@ LAUNCHEOF
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi

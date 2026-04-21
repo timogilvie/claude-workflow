@@ -21,9 +21,11 @@ import type {
   FallbackEventMetadata,
   TaskDescriptor,
   EvalConstraints,
+  ManifestRef,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
+import { getManifestRef } from './resource-manifest.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -293,6 +295,20 @@ export function attachBudgetViolation(record: EvalRecord): void {
   };
 }
 
+export function attachManifestRef(
+  record: EvalRecord,
+  sessionId?: string | null,
+  repoDir?: string,
+): void {
+  if (!sessionId) {
+    return;
+  }
+  const manifestRef = getManifestRef(sessionId, repoDir);
+  if (manifestRef) {
+    record.manifestRef = manifestRef as ManifestRef;
+  }
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
@@ -323,6 +339,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachFallbackEvent(record, metadata.fallbackEvent || null);
   attachConstraints(record, metadata.constraints || null);
   attachBudgetViolation(record);
+  attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
 
   // Extract stageScores from record metadata (set by evaluateTask)
   const stageScores = record.metadata?.stageScores as

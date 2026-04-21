@@ -1000,7 +1000,7 @@ test('Record with minimal outcomes (only required fields) validates', () => {
 test('Record with fallbackEvent validates and round-trips through JSON serialization', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
-    schemaVersion: '1.6.0',
+    schemaVersion: '1.8.0',
     fallbackEvent: {
       schema_version: '1.0',
       preferred_model: 'model-a',

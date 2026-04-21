@@ -180,7 +180,7 @@ const DEFAULT_MAX_RETRIES = 2;
 const SLOW_CALL_WARNING_MS = 30_000;
 const SLOW_CALL_REPEAT_MS = 15_000;
 const FALLBACK_DEFAULT_TASK_TYPE: RegistryTaskType = 'classify';
-const FALLBACK_EVAL_SCHEMA_VERSION = '1.6.0';
+const FALLBACK_EVAL_SCHEMA_VERSION = '1.8.0';
 const FALLBACK_EVENT_SCHEMA_VERSION = '1.0';
 const warnedMissingTaskType = new Set<string>();
 

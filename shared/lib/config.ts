@@ -247,6 +247,11 @@ export interface ReadyRemediationConfig {
   agentCmd?: string;
 }
 
+export interface RegistryConfig {
+  enabled?: boolean;
+  dir?: string;
+}
+
 export interface VerificationMandatoryChecksConfig {
   typecheck?: boolean;
   lint?: boolean;
@@ -301,6 +306,7 @@ export interface WavemillConfig {
   quota?: QuotaConfig;
   verification?: VerificationConfig;
   budget?: BudgetConfig;
+  registry?: RegistryConfig;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -741,5 +747,13 @@ export function getBudgetConfig(repoDir?: string): Required<BudgetConfig> {
     normalMode: config.normalMode ?? 25.0,
     constrainedMode: config.constrainedMode ?? 15.0,
     survivalMode: config.survivalMode ?? 5.0,
+  };
+}
+
+export function getRegistryConfig(repoDir?: string): Required<RegistryConfig> {
+  const config = loadWavemillConfig(repoDir).registry || {};
+  return {
+    enabled: config.enabled ?? true,
+    dir: config.dir ?? '.wavemill/registry',
   };
 }

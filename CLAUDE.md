@@ -11,6 +11,8 @@ This repository provides shared tooling for both Claude and Codex AI workflows:
 - **`claude/config.json`** - Claude-specific configuration (Linear projects, git prefixes, check commands)
 - **`codex/`** - Codex-specific commands and state management
 - **`tools/prompts/`** - Shared prompt templates for PRDs, tasks, bug investigations, and issue expansion
+- **`.wavemill/registry/`** - Append-only runtime resource registry
+- **`.wavemill/manifests/`** - Per-session resource manifests
 
 ### Key Principles
 1. **Single Source of Truth**: This repo is canonical. `shared/lib/` contains all API logic; `tools/` contains all CLI tools. `wavemill` runs tools directly from the repo — never from `~/.claude/tools/`.
@@ -55,6 +57,7 @@ All business logic lives in `shared/lib/` for reusability across CLI tools, comm
 - `linear.js` - Linear API client
 - `config.ts` - Centralized config loading
 - `model-registry.ts` - Canonical model capability registry with task-specific fallback ladders
+- `resource-registry.ts` / `resource-manifest.ts` - Runtime resource tracking and per-run attribution
 
 ### Refactoring Pattern
 
