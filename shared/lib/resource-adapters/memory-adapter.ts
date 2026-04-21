@@ -22,7 +22,7 @@ function collectMarkdownFiles(root: string, output: string[]): void {
 export function registerMemoryAssets(repoDir?: string): ResourceRef[] {
   const root = resolve(repoDir || process.cwd());
   const files: string[] = [];
-  const projectContext = join(root, 'project-context.md');
+  const projectContext = join(root, '.wavemill', 'project-context.md');
   if (existsSync(projectContext)) {
     files.push(projectContext);
   }
