@@ -2275,6 +2275,20 @@ read_state_value() {
   fi
 }
 
+save_migration_reservation() {
+  local issue="$1"
+  local num="$2"
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --arg issue "$issue" --argjson num "$num" \
+     '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
+}
+
 get_task_phase() {
   local issue="$1"
   read_state_value "executing" --arg issue "$issue" '.tasks[$issue].phase // "executing"'
