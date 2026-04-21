@@ -549,6 +549,21 @@ assert_pr_check "CheckRun TIMED_OUT -> fail" \
 assert_pr_check "Empty rollup -> none" \
   "none" "$(run_pr_checks "$ROLLUP_FIXTURE" "task/empty-rollup")"
 
+# Regression guard: verify save_migration_reservation exists in MONITOR_EOF heredoc.
+# This guards against regressions where the function gets moved outside the heredoc
+# and becomes unavailable to the generated monitor script at runtime.
+echo ""
+echo "=== Heredoc Regression Guards ==="
+MONITOR_EOF_START=$(grep -n "^cat > \"\$MONITOR_SCRIPT\" <<'MONITOR_EOF'" "$REPO_DIR/shared/lib/wavemill-mill.sh" | cut -d: -f1)
+MONITOR_EOF_END=$(grep -n "^MONITOR_EOF$" "$REPO_DIR/shared/lib/wavemill-mill.sh" | cut -d: -f1)
+HEREDOC_CONTENT=$(sed -n "${MONITOR_EOF_START},${MONITOR_EOF_END}p" "$REPO_DIR/shared/lib/wavemill-mill.sh")
+MATCH_COUNT=$(echo "$HEREDOC_CONTENT" | grep -c "^save_migration_reservation()" || true)
+if [ "$MATCH_COUNT" -gt 0 ]; then
+  pass "save_migration_reservation is defined in MONITOR_EOF heredoc"
+else
+  fail "save_migration_reservation missing from MONITOR_EOF heredoc (will cause 'command not found' at runtime)"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
