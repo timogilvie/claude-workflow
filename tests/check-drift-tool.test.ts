@@ -43,9 +43,15 @@ function writeSpec(repoDir: string, subsystemId: string, name: string, keyFile: 
 }
 
 function runCheckDrift(repoDir: string) {
+  const env = { ...process.env };
+  delete env.npm_config_verify_deps_before_run;
+  delete env.npm_config__jsr_registry;
+  delete env.npm_config_prefix;
+
   return spawnSync('npx', ['tsx', toolPath, repoDir], {
     cwd: repoRoot,
     encoding: 'utf-8',
+    env,
   });
 }
 
