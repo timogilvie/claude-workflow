@@ -25,6 +25,8 @@
  *   fallback attribution (HOK-1336)
  * - **1.7.0**: Added optional `budgetViolated` and `budgetViolationDetails`
  *   fields to track cost budget constraint violations during routing (HOK-1350)
+ * - **1.8.0**: Added optional `manifestRef` for per-run resource manifest
+ *   attribution (HOK-1378)
  *
  * @module eval-schema
  */
@@ -280,6 +282,12 @@ export interface RoutingDecision {
    * Can be free text or structured (e.g., JSON of feature weights).
    */
   decisionRationale?: string;
+}
+
+export interface ManifestRef {
+  sessionId: string;
+  manifestDigest: string;
+  path?: string;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -999,6 +1007,8 @@ export interface EvalRecord {
     templateHash: string;
     filledPromptHash: string;
   }[];
+
+  manifestRef?: ManifestRef;
 
   /**
    * Per-stage quality attribution for GEPA training.

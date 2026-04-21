@@ -13,6 +13,8 @@ import { resolve, basename } from 'node:path';
 import { execShellCommand } from './shell-utils.ts';
 import type { PromptCharacteristics, TaskType, ModelRecommendation } from './model-router.ts';
 import { resolveAgent } from './model-router.ts';
+import { recordUse } from './resource-manifest.ts';
+import { registerDspyArtifact } from './resource-adapters/dspy-adapter.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Artifact Types
@@ -95,6 +97,15 @@ export function loadArtifact(
     const data = JSON.parse(readFileSync(path, 'utf-8'));
     if (!data.system_prompt || !Array.isArray(data.few_shot_examples)) {
       return null;
+    }
+    try {
+      const artifactRef = registerDspyArtifact(path, data, repoDir);
+      const sessionId = process.env.WAVEMILL_SESSION;
+      if (sessionId && artifactRef) {
+        recordUse(sessionId, process.env.WAVEMILL_PHASE || 'unknown', artifactRef, repoDir);
+      }
+    } catch (error) {
+      console.warn(`[registry] Failed to register artifact ${path}: ${(error as Error).message}`);
     }
     return data as SelectorArtifact;
   } catch {
