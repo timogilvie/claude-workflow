@@ -2244,6 +2244,23 @@ remove_task_state() {
   fi
 }
 
+# Duplicated intentionally: the pre-heredoc definition (~line 595) does not
+# enter the generated monitor script, so the monitor needs its own copy to
+# service late migration reservations.
+save_migration_reservation() {
+  local issue="$1"
+  local num="$2"
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --arg issue "$issue" --argjson num "$num" \
+     '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
+}
+
 set_task_phase() {
   local issue="$1" phase="$2"
   local tmp

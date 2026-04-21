@@ -145,6 +145,7 @@ harness_extract_real_functions() {
     phase_should_remain_active_without_pr \
     stage_result_is_in_progress \
     ready_conflict_launch_head \
+    save_migration_reservation \
     _persist_phase
   do
     local extracted
@@ -309,7 +310,6 @@ harness_run_tick() {
     maybe_run_challenge_comparison() { :; }
     get_challenge_sibling_pr() { :; }
     check_challenge_sibling_merged() { return 1; }
-    save_migration_reservation() { :; }
     should_cleanup_closed_pr() { return 1; }
     transient_error_recovery_pending() { return 1; }
     codex_has_pending_approval() { return 1; }
@@ -456,6 +456,79 @@ test_mixed_artifacts_source_edit_wins() {
   check_eq "mixed: coding launch not invoked" "false" "$(kv_value "$tick" coding_launched)"
 }
 
+test_monitor_heredoc_contains_save_migration_reservation() {
+  # Direct regression guard for HOK-1383: save_migration_reservation must be
+  # defined *inside* the MONITOR_EOF heredoc so it ends up in the generated
+  # monitor script. A pre-heredoc definition alone fails at runtime with
+  # "save_migration_reservation: command not found".
+  local heredoc_body
+  heredoc_body="$(awk '
+    /^cat > "\$MONITOR_SCRIPT" <<'"'"'MONITOR_EOF'"'"'/ { capture = 1; next }
+    /^MONITOR_EOF$/ && capture { capture = 0 }
+    capture { print }
+  ' "$MILL_SCRIPT")"
+
+  if [[ -z "$heredoc_body" ]]; then
+    fail "monitor heredoc: MONITOR_EOF block not found in $MILL_SCRIPT"
+    return
+  fi
+
+  if grep -qE '^save_migration_reservation\(\)[[:space:]]*\{' <<< "$heredoc_body"; then
+    pass "monitor heredoc: save_migration_reservation defined inside heredoc"
+  else
+    fail "monitor heredoc: save_migration_reservation missing from MONITOR_EOF block"
+  fi
+}
+
+test_late_migration_detection() {
+  # Regression guard: save_migration_reservation must exist inside the monitor
+  # heredoc (not just pre-heredoc) for the planning late-migration path.
+  local slug="planning-late-migration"
+  local issue="HOK-MIG-1"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "awaiting_user"
+  harness_setup_runtime_artifacts "$repo"
+
+  touch "$repo/features/$slug/.migration-detected"
+
+  mkdir -p "$repo/.wavemill"
+  printf '{"tasks":{},"migrationReservations":{},"nextMigrationNum":1}\n' \
+    > "$repo/.wavemill/state.json"
+
+  # Override read_state_value with real jq-backed behavior so the planning-case
+  # path reads nextMigrationNum from STATE_FILE (the default stub returns the
+  # literal default, which would otherwise force a fall-through to the git
+  # ls-tree pipeline and fail under pipefail when grep finds no matches).
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    read_state_value() {
+      local default="$1"
+      shift
+      local value
+      if [[ ! -r "$STATE_FILE" || ! -s "$STATE_FILE" ]]; then
+        printf "%s\n" "$default"
+        return 0
+      fi
+      if value=$(jq -r "$@" "$STATE_FILE" 2>/dev/null); then
+        printf "%s\n" "$value"
+      else
+        printf "%s\n" "$default"
+      fi
+    }
+  ')"
+
+  check_file_exists "late-migration: .migration-number created" \
+    "$repo/features/$slug/.migration-number"
+  check_eq "late-migration: migration number written to feature dir" "1" \
+    "$(cat "$repo/features/$slug/.migration-number" 2>/dev/null || echo '')"
+  check_eq "late-migration: STATE_FILE records reservation" "1" \
+    "$(jq -r --arg i "$issue" '.migrationReservations[$i] // empty' "$repo/.wavemill/state.json")"
+  check_eq "late-migration: STATE_FILE nextMigrationNum advanced" "2" \
+    "$(jq -r '.nextMigrationNum' "$repo/.wavemill/state.json")"
+  check_not_contains "late-migration: no command-not-found warning" \
+    "$(kv_value "$tick" warn_output)" "save_migration_reservation"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -463,6 +536,8 @@ test_positive_handoff_two_ticks
 test_source_edit_blocks_handoff
 test_regression_without_wavemill_allowance
 test_mixed_artifacts_source_edit_wins
+test_monitor_heredoc_contains_save_migration_reservation
+test_late_migration_detection
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then
