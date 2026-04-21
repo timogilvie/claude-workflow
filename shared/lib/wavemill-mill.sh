@@ -1812,6 +1812,22 @@ replay_route_transparency_logs() {
   done < "$stderr_file"
 }
 
+# Mirrors save_migration_reservation() from the parent script (see HOK-1377, c6dbb1c precedent).
+# Duplicated here because the monitor runs as a standalone shell and does not inherit parent functions.
+save_migration_reservation() {
+  local issue="$1"
+  local num="$2"
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --arg issue "$issue" --argjson num "$num" \
+     '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
+}
+
 # Duplicated intentionally from the parent script because the monitor runs as a
 # standalone generated shell script and does not inherit parent functions.
 render_prompt_template() {

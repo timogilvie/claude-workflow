@@ -148,6 +148,7 @@ else
       fetch_candidates filter_active_issues
       launch_task is_task_packet
       cleanup_dashboard_pane
+      save_migration_reservation
     )
 
     for func in "${CRITICAL_FUNCTIONS[@]}"; do
