@@ -202,6 +202,7 @@ run_lifecycle_scenario() {
       POST_MERGE_EVAL_CALLS=""
       LOG_OUTPUT=""
       READY_ATTENTION_CALLS=""
+      SAVE_MIGRATION_CALLS=""
 
       mkdir -p "$WORKTREE_ROOT/$SLUG/features/$SLUG" "$REPO_DIR" "$TOOLS_DIR" "$LIB_DIR"
       FEATURE_DIR="$WORKTREE_ROOT/$SLUG/features/$SLUG"
@@ -232,12 +233,19 @@ run_lifecycle_scenario() {
       local default="${1:-}"
       shift || true
       local expr="${*: -1}"
+      local value
       case "$expr" in
         *".tasks["*"].agent"*) printf "%s\n" "$CURRENT_AGENT" ;;
         *".tasks["*"].title"*) printf "%s\n" "$TASK_TITLE" ;;
         *".tasks["*"].status"*) printf "%s\n" "$TASK_STATUS" ;;
         *".tasks["*"].evalCompleted"*) printf "%s\n" "$EVAL_COMPLETED" ;;
-        *) printf "%s\n" "$default" ;;
+        *)
+          if [[ -r "$STATE_FILE" ]] && value=$(jq -r "$@" "$STATE_FILE" 2>/dev/null); then
+            printf "%s\n" "$value"
+          else
+            printf "%s\n" "$default"
+          fi
+          ;;
       esac
     }
 
@@ -269,6 +277,7 @@ run_lifecycle_scenario() {
       esac
     }
     save_task_state() { printf -v SAVE_TASK_CALLS "%s%s\n" "$SAVE_TASK_CALLS" "$*"; }
+    save_migration_reservation() { printf -v SAVE_MIGRATION_CALLS "%s%s|%s\n" "$SAVE_MIGRATION_CALLS" "$1" "$2"; }
     _with_timeout() { shift; "$@"; }
     gh() { return 1; }
     find_pr_for_branch() { printf "%s\n" "${FOUND_PR:-$PR}"; }
@@ -376,7 +385,8 @@ JSON
     cleanup_summary=$(printf "%s" "$CLEANUP_CALLS" | tr "\n" ";")
     linear_summary=$(printf "%s" "$LINEAR_CALLS" | tr "\n" ";")
     eval_summary=$(printf "%s" "$POST_MERGE_EVAL_CALLS" | tr "\n" ";")
-    printf "scenario=%s\nscenario_dir=%s\nwt_dir=%s\nfeature_dir=%s\nphase=%s\nattention=%s\nactive_count=%s\nstage_calls=%s\nphase_calls=%s\ncoding_launches=%s\nreview_launches=%s\nready_launches=%s\ncleanup_count=%s\ncleanup_calls=%s\nlinear_calls=%s\npost_merge_eval_calls=%s\nlogs=%s\n" \
+    migration_summary=$(printf "%s" "$SAVE_MIGRATION_CALLS" | tr "\n" ";")
+    printf "scenario=%s\nscenario_dir=%s\nwt_dir=%s\nfeature_dir=%s\nphase=%s\nattention=%s\nactive_count=%s\nstage_calls=%s\nphase_calls=%s\ncoding_launches=%s\nreview_launches=%s\nready_launches=%s\ncleanup_count=%s\ncleanup_calls=%s\nlinear_calls=%s\npost_merge_eval_calls=%s\nsave_migration_calls=%s\nlogs=%s\n" \
       "$SCENARIO_NAME" \
       "$SCENARIO_DIR" \
       "$WT_DIR" \
@@ -393,6 +403,7 @@ JSON
       "$cleanup_summary" \
       "$linear_summary" \
       "$eval_summary" \
+      "$migration_summary" \
       "$log_summary"
   '
 }
