@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "resource-manifest.schema.json",
+  "title": "ResourceManifest",
+  "type": "object",
+  "required": [
+    "manifestSchemaVersion",
+    "sessionId",
+    "workflowType",
+    "createdAt",
+    "phases",
+    "resources",
+    "digest"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "manifestSchemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflowType": {
+      "type": "string",
+      "minLength": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string"
+    },
+    "phases": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z-]*$"
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/resourceRef" }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/resourceRef" }
+    },
+    "digest": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "resourceRef": {
+      "type": "object",
+      "required": ["id", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

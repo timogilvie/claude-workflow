@@ -21,6 +21,8 @@ import { routeStageAware, type StageAwareDecision } from './stage-aware-router.t
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
 import type { ModelClass } from './model-registry.ts';
 import { policyAdjustmentLog, routerLog } from './router-log.ts';
+import { registerAgentConfig } from './resource-adapters/agent-config-adapter.ts';
+import { recordUse } from './resource-manifest.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -1048,7 +1050,9 @@ export function routeWorkflowStageAware(
     };
   }
 
-  return withChallengeRecommendation(decision, repoDir);
+  const finalDecision = withChallengeRecommendation(decision, repoDir);
+  registerWorkflowDecisionResources(finalDecision, repoDir);
+  return finalDecision;
 }
 
 function buildDegradedModelPool(
@@ -1082,6 +1086,35 @@ function prependReasoning(
     ...decision,
     reasoning: [rationale, ...decision.reasoning],
   };
+}
+
+function registerWorkflowDecisionResources(
+  decision: WorkflowRouteDecision,
+  repoDir?: string,
+): void {
+  const sessionId = process.env.WAVEMILL_SESSION;
+  if (!sessionId) {
+    return;
+  }
+  const routerConfig = loadRouterConfig(repoDir);
+  const agentMap = routerConfig.agentMap || {};
+  const defaultAgent = routerConfig.defaultAgent || 'claude';
+
+  for (const [phase, model] of [
+    ['planning', decision.planner],
+    ['coding', decision.coder],
+    ['review', decision.reviewer],
+  ] as const) {
+    const ref = registerAgentConfig({
+      phase,
+      model,
+      cliCmd: resolveAgent(model, agentMap, defaultAgent),
+      repoDir,
+    });
+    if (ref) {
+      recordUse(sessionId, phase, ref, repoDir);
+    }
+  }
 }
 
 export function routeWorkflowDegraded(
@@ -1232,7 +1265,7 @@ export async function routeWorkflowHokusai(
   }
 
   const enriched = withSignals(decision, prompt, taskDifficulty);
-  return withChallengeRecommendation({
+  const finalDecision = withChallengeRecommendation({
     ...enriched,
     reasoning: policyResolution
       ? [
@@ -1247,6 +1280,8 @@ export async function routeWorkflowHokusai(
       (enriched.expectedCostPlan + enriched.expectedCostCode + enriched.expectedCostReview).toFixed(2)
     ),
   }, repoDir);
+  registerWorkflowDecisionResources(finalDecision, repoDir);
+  return finalDecision;
 }
 
 export async function routeWorkflowAuto(
@@ -1272,7 +1307,9 @@ export async function routeWorkflowAuto(
 
   const policyDecision = tryPolicyResolution(prompt, options);
   if (policyDecision) {
-    return withChallengeRecommendation(policyDecision, options?.repoDir);
+    const finalDecision = withChallengeRecommendation(policyDecision, options?.repoDir);
+    registerWorkflowDecisionResources(finalDecision, options?.repoDir);
+    return finalDecision;
   }
 
   const decision = routeWorkflowStageAware(prompt, options);

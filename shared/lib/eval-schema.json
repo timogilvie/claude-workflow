@@ -1114,6 +1114,23 @@
       ],
       "additionalProperties": false
     },
+    "manifestRef": {
+      "type": "object",
+      "description": "Reference to the per-run resource manifest used for this workflow.",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "manifestDigest": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": ["sessionId", "manifestDigest"],
+      "additionalProperties": false
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,

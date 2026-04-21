@@ -5,6 +5,7 @@ import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { randomUUID } from 'crypto';
 import { join } from "node:path";
+import { closeManifest, openManifest } from './resource-manifest.ts';
 
 export type WorkflowType = 'feature' | 'bugfix' | 'plan' | 'validate-plan' | 'implement-plan';
 export type SessionStatus = 'running' | 'completed' | 'failed' | 'cancelled';
@@ -88,6 +89,14 @@ export async function createSession(opts: CreateSessionOpts): Promise<string | n
       status: 'running',
     };
     await persist(dir, session);
+    try {
+      openManifest(session.sessionId, {
+        workflowType: session.workflowType,
+        repoDir: opts?.repoDir,
+      });
+    } catch (err) {
+      console.warn(`[manifest] Failed to open manifest for ${session.sessionId}: ${(err as Error).message}`);
+    }
     return session.sessionId;
   } catch (err) {
     console.warn(`[session] Failed to create session: ${(err as Error).message}`);
@@ -130,6 +139,14 @@ export async function completeSession(sessionId: string, opts: CompleteSessionOp
       ...(opts.error && { error: opts.error }),
     };
     await persist(dir, merged);
+    try {
+      closeManifest(sessionId, {
+        status: merged.status,
+        repoDir: opts?.repoDir,
+      });
+    } catch (err) {
+      console.warn(`[manifest] Failed to close manifest for ${sessionId}: ${(err as Error).message}`);
+    }
     return true;
   } catch (err) {
     console.warn(`[session] Failed to complete session ${sessionId}: ${(err as Error).message}`);

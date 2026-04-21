@@ -16,6 +16,8 @@ import { getEvalConfig } from './config.ts';
 import { loadPricingTable } from './workflow-cost.ts';
 import { createPromptArtifact, type PromptArtifact } from './prompt-hash.ts';
 import { errorMessage } from './error-utils.ts';
+import { getLatestSession } from './session.ts';
+import { attachManifestRef } from './eval-record-builder.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -23,7 +25,7 @@ const __dirname = dirname(__filename);
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
-const SCHEMA_VERSION = '1.6.0';
+const SCHEMA_VERSION = '1.8.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 
@@ -380,7 +382,7 @@ export async function evaluateTask(
     ? response.costUsd
     : computeCost(model, tokenUsage, pricingTable);
 
-  return {
+  const record: EvalRecord = {
     id: randomUUID(),
     schemaVersion: SCHEMA_VERSION,
     originalPrompt: taskPrompt,
@@ -408,4 +410,7 @@ export async function evaluateTask(
     ...(promptArtifacts.length > 0 && { promptArtifacts }),
     metadata: { ...metadata, interventionFlags, ...(stageScores && { stageScores }) },
   };
+  const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
+  attachManifestRef(record, activeSessionId);
+  return record;
 }

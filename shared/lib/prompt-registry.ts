@@ -25,6 +25,8 @@ import { basename, join, resolve } from 'node:path';
 import { hashString } from './prompt-hash.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
 import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
+import { recordUse } from './resource-manifest.ts';
+import { registerPromptTemplate } from './resource-adapters/prompt-adapter.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -165,6 +167,12 @@ export function logPromptUsage(
 
     // Append to registry
     appendJsonlRecord(registryPath, entry);
+
+    const promptRef = registerPromptTemplate(templatePath, templateContent);
+    const sessionId = process.env.WAVEMILL_SESSION;
+    if (sessionId && promptRef) {
+      recordUse(sessionId, process.env.WAVEMILL_PHASE || 'unknown', promptRef);
+    }
   } catch (err) {
     // Graceful degradation: registry is metadata, shouldn't break workflows
     console.warn(`[prompt-registry] Failed to log template usage: ${err}`);
