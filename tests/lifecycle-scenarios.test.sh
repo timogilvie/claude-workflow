@@ -341,6 +341,10 @@ JSON
       RESTORE_COUNT=$((RESTORE_COUNT + 1))
       return 0
     }
+    _restore_inflight_task_window_if_missing() {
+      _RESTORE_STATE="none"
+      return 0
+    }
     validate_pr_merge() { [[ "$VALIDATE_MERGED" == "true" ]]; }
     ready_state_dir() { printf "%s\n" "$1/features/$2/ready"; }
     ready_conflict_launch_head() { printf "\n"; }
