@@ -1,6 +1,6 @@
 # Router
 
-**Last updated:** 2026-04-19T16:30:00.000Z
+**Last updated:** 2026-04-21T14:28:57.564Z
 **Files touched:** 2 files in last 30 days
 
 ## Purpose
@@ -97,6 +97,8 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Respect `modelsAvailable` option in routing functions to allow test injection
 - Skip LLM-based difficulty classification in constrained and survival modes
 - Fall back to full model pool if no degraded candidates exist (with warning)
+- Register agent configurations and DSPy artifacts as resources when they are used in routing decisions
+- Wrap resource registration in try-catch to ensure registry failures do not break routing
 
 ### DON'T
 - Trigger constrained mode while any frontier model is healthy
@@ -128,6 +130,9 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - `operating-mode.ts` — for `getCurrentOperatingMode()` to detect quota state
 - `model-registry.ts` — for model class definitions and effective registry resolution
 - `stage-aware-router.ts` — for KNN-based routing fallback
+- `resource-manifest.ts` — for recording agent and artifact use in per-run manifests
+- `resource-adapters/agent-config-adapter.ts` — for registering agent configurations as resources
+- `resource-adapters/dspy-adapter.ts` — for registering DSPy artifacts as resources
 
 ## Related Subsystems
 
@@ -136,6 +141,10 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - `shared/lib/stage-aware-router.ts` — KNN-based routing used by degraded modes after aggregate frontier exhaustion/degradation is confirmed
 
 ## Recent Changes
+
+### 2026-04-21T14:28:57.564Z - HOK-1378: Create a first-class resource registry and per-run resource manifest
+**Changed:** Routing functions now register agent configurations and DSPy artifacts as resources and record their use in per-session manifests. All major routing entry points (`routeWorkflowStageAware`, `routeWorkflowHokusai`, `routeWorkflowAuto`) register the planner, coder, and reviewer models; artifact loading also triggers registration and use recording.
+**Impact:** Routing decisions are now attributed to specific resource versions in the manifest, enabling eval attribution and performance analysis tied to concrete agent/artifact versions. Resource registration is non-breaking (wrapped in try-catch) and gracefully degrades when WAVEMILL_SESSION is not set.
 
 ### 2026-04-19T16:30:00.000Z - HOK-1370: Router docs refreshed for multi-frontier semantics
 **Changed:** Updated the router subsystem spec to document aggregate-across-frontier operating modes, explicit mixed-frontier decision-table behavior, normal-mode frontier sibling substitution, and the `below-frontier-substitute` / transparency-log invariants.

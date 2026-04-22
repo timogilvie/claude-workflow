@@ -456,6 +456,28 @@ test_mixed_artifacts_source_edit_wins() {
   check_eq "mixed: coding launch not invoked" "false" "$(kv_value "$tick" coding_launched)"
 }
 
+test_claude_local_settings_allowed() {
+  local slug="planning-claude-local-settings"
+  local issue="HOK-1293-CLAUDE"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  mkdir -p "$repo/.claude"
+  printf '{}\n' > "$repo/.claude/settings.local.json"
+  git -C "$repo" add ".claude/settings.local.json"
+  git -C "$repo" commit -q -m "Track local Claude settings"
+
+  harness_setup_planning_state "$repo" "$slug" "awaiting_user"
+  harness_setup_runtime_artifacts "$repo"
+  printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"hook.sh"}]}]}}\n' > "$repo/.claude/settings.local.json"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue")"
+  check_eq "claude settings: planning transitions to completed" "completed" "$(harness_read_stage_status "$repo" "$slug" planning)"
+  check_file_exists "claude settings: .plan-approved preserved" "$repo/features/$slug/.plan-approved"
+  check_eq "claude settings: no coding launch on same tick" "false" "$(kv_value "$tick" coding_launched)"
+  check_eq "claude settings: no overreach warning" "" "$(kv_value "$tick" warn_output)"
+  check_contains "claude settings: tracked file remains modified" "$(git -C "$repo" status --short .claude/settings.local.json)" "M .claude/settings.local.json"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -463,6 +485,7 @@ test_positive_handoff_two_ticks
 test_source_edit_blocks_handoff
 test_regression_without_wavemill_allowance
 test_mixed_artifacts_source_edit_wins
+test_claude_local_settings_allowed
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then
