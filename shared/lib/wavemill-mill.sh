@@ -2631,6 +2631,7 @@ validate_planning_phase_output() {
     case "$changed_file" in
       features/*) ;;
       .wavemill/*) ;;
+      .claude/settings.local.json) ;;
       *)
         out_of_scope_files+=("$changed_file")
         if git -C "$wt_dir" ls-files --error-unmatch -- "$changed_file" >/dev/null 2>&1; then

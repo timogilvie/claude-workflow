@@ -142,6 +142,7 @@ else
     CRITICAL_FUNCTIONS=(
       log log_error log_warn
       save_task_state remove_task_state set_task_phase get_task_phase
+      save_migration_reservation
       find_pr_for_branch check_pr_exists pr_state validate_pr_merge
       linear_set_state linear_is_completed
       check_routing_complete
@@ -310,6 +311,7 @@ else
 
   if grep -qE '^validate_planning_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq '.claude/settings.local.json) ;;' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'Planning phase modified source code, reverted changes and blocked transition' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'write_stage_result "$FEATURE_DIR" "planning" "awaiting_user"' <<< "$MONITOR_ISSUE_BLOCK"; then
