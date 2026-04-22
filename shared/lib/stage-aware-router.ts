@@ -353,13 +353,25 @@ function stageScoreFromRecord(
   return clamp(typeof record.score === 'number' ? record.score : 0, 0, 1);
 }
 
+/**
+ * Resolve the model that actually handled the given stage on this record.
+ *
+ * Returns `null` when the record has no real per-stage attribution. We do NOT
+ * fall back to `record.modelId` here: that field is the solution/coder model,
+ * and using it as the planner model pollutes plan-quality rankings by pinning
+ * every legacy record's plan score to whoever coded. Callers that need
+ * per-stage rankings should skip records that return null.
+ */
 function stageModelFromRecord(
   record: EvalRecord,
   role: 'planner' | 'coder' | 'reviewer',
-): string {
+): string | null {
   const descriptor = isTaskDescriptor(record.taskDescriptor) ? record.taskDescriptor : undefined;
   const stageModel = descriptor?.stages?.[role]?.model;
-  return typeof stageModel === 'string' && stageModel.length > 0 ? stageModel : record.modelId;
+  if (typeof stageModel === 'string' && stageModel.length > 0) {
+    return stageModel;
+  }
+  return null;
 }
 
 function stageCostFromRecord(
@@ -422,6 +434,12 @@ function aggregateRoleRanking(
 
   for (const neighbor of neighbors) {
     const modelId = stageModelFromRecord(neighbor.record, role);
+    if (modelId === null) {
+      // Record has no real per-stage attribution. Skipping here prevents
+      // legacy records from mis-attributing plan/code/review scores to their
+      // solution/coder model.
+      continue;
+    }
     if (allowedModels && !allowedModels.has(modelId)) {
       continue;
     }
