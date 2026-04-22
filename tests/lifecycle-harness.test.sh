@@ -303,6 +303,7 @@ harness_run_tick() {
     ready_state_dir() { printf "%s\n" "$1/features/$2/ready"; }
     write_ready_attention_file() { :; }
     restore_review_task_window() { return 0; }
+    _restore_inflight_task_window_if_missing() { _RESTORE_STATE="none"; return 0; }
     check_routing_complete() { return 1; }
     is_challenge_task() { return 1; }
     maybe_run_challenge_eval() { :; }
