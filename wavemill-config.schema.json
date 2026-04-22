@@ -61,9 +61,9 @@
         },
         "planningMode": {
           "type": "string",
-          "enum": ["skip", "interactive"],
-          "default": "skip",
-          "description": "How to handle the planning phase. 'interactive' launches Claude in tmux for user-guided planning before implementation. 'skip' goes straight to autonomous implementation (current default behavior)."
+          "enum": ["interactive"],
+          "default": "interactive",
+          "description": "How to handle the planning phase. Interactive planning launches a dedicated planning phase in tmux before implementation."
         },
         "maxRetries": {
           "type": "integer",

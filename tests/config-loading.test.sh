@@ -132,6 +132,56 @@ check "repo PROJECT_NAME override" "Repo Project" "$R_PROJECT_NAME"
 check "repo DASHBOARD_VERBOSITY override" "status" "$R_DASHBOARD_VERBOSITY"
 check "repo DASHBOARD_LOG_TO_FILE override" "false" "$R_DASHBOARD_LOG_TO_FILE"
 
+write_repo_override_config() {
+  cat > "$TMP/.wavemill-config.json" << 'EOF'
+{
+  "linear": {
+    "project": "Repo Project"
+  },
+  "mill": {
+    "session": "custom-session",
+    "maxParallel": 5,
+    "baseBranch": "develop",
+    "agentCmd": "codex"
+  },
+  "expand": {
+    "maxSelect": 2,
+    "maxDisplay": 6
+  },
+  "dashboard": {
+    "verbosity": "status",
+    "logToFile": false
+  }
+}
+EOF
+}
+
+# ============================================================================
+# Test 2b: Legacy skip planning mode is coerced to interactive
+# ============================================================================
+echo ""
+echo "=== Legacy Planning Mode Migration ==="
+
+cat > "$TMP/.wavemill-config.json" << 'EOF'
+{
+  "mill": {
+    "planningMode": "skip"
+  }
+}
+EOF
+
+eval "$(
+  export HOME="$FAKE_HOME"
+  unset $UNSET_VARS 2>/dev/null || true
+  source "$COMMON"
+  load_config "$TMP"
+  echo "LEGACY_PLANNING_MODE='$PLANNING_MODE'"
+)"
+
+check "legacy skip planning mode coerced" "interactive" "$LEGACY_PLANNING_MODE"
+
+write_repo_override_config
+
 # ============================================================================
 # Test 3: Env vars override repo config
 # ============================================================================

@@ -194,7 +194,7 @@ agent_completion_text() {
   fi
 }
 
-# Build the autonomous (skip-mode) prompt.
+# Build the autonomous prompt.
 # All variables are passed explicitly so there's no implicit coupling.
 #
 # Args (named via local vars — call with positional):

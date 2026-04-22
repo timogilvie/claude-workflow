@@ -17,6 +17,10 @@ REPO_DIR="$(jq -r '.repoDir' "$PLAN_FILE")"
 BASE_BRANCH="$(jq -r '.baseBranch' "$PLAN_FILE")"
 WORKTREE_ROOT="$(jq -r '.worktreeRoot' "$PLAN_FILE")"
 PLANNING_MODE="$(jq -r '.planningMode' "$PLAN_FILE")"
+if [[ "$PLANNING_MODE" != "interactive" ]]; then
+  startup_log "Warning: planningMode='$PLANNING_MODE' is no longer supported; forcing interactive planning."
+  PLANNING_MODE="interactive"
+fi
 AGENT_CMD="$(jq -r '.agentCmd' "$PLAN_FILE")"
 AGENT_CMD_EXPLICIT="$(jq -r '.agentCmdExplicit // false' "$PLAN_FILE")"
 FORCE_MODEL="$(jq -r '.forceModel // empty' "$PLAN_FILE")"
@@ -431,10 +435,7 @@ $details_context"
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     return 1
   fi
-  local persisted_phase="$INITIAL_PHASE"
-  if [[ "$PLANNING_MODE" != "interactive" ]]; then
-    persisted_phase="coding"
-  fi
+  local persisted_phase="planning"
 
   if ! set_task_phase_local "$issue" "$persisted_phase"; then
     remove_task_state "$issue" >/dev/null 2>&1 || true
@@ -445,26 +446,14 @@ $details_context"
   state_written=true
   startup_step "[5/7] Saving workflow state...  ✓"
 
-  if [[ "$PLANNING_MODE" == "interactive" ]]; then
-    planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
-    build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" > "$planning_prompt"
-    if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" "${planner_model:-claude-sonnet-4-6}"; then
-      [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
-      tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-      startup_log "✗ $issue FAILED at step [6/7]: launching planning agent"
-      return 1
-    fi
-  else
-    instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
-    build_autonomous_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" "$task_agent" > "$instr_file"
-    if ! agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent" "$coder_model" "$issue"; then
-      [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
-      tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-      startup_log "✗ $issue FAILED at step [6/7]: launching implementation agent"
-      return 1
-    fi
+  planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
+  build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" > "$planning_prompt"
+  if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" "${planner_model:-claude-sonnet-4-6}"; then
+    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+    tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    startup_log "✗ $issue FAILED at step [6/7]: launching planning agent"
+    return 1
   fi
   startup_step "[6/7] Launching agent...        ✓"
 
