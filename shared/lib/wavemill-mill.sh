@@ -2963,6 +2963,80 @@ _ensure_window_exists() {
   fi
 }
 
+# Relaunch an in-flight task's phase agent when its tmux window has been lost
+# (typically after a `r`/`a` session resume, which kills the prior tmux session
+# before restarting the monitor).
+#
+# Always returns 0 — the monitor runs under `set -Eeuo pipefail` with an ERR
+# trap, so signalling via non-zero return codes would either bail out of the
+# monitor or spam error logs. Callers read the outcome from the shell variable
+# `_RESTORE_STATE`:
+#   none       — window already existed, caller should continue normal processing
+#   restored   — agent was relaunched, caller should mark task active and return
+#   failed     — restoration failed, caller should flag needs-user and return
+_RESTORE_STATE=""
+_restore_inflight_task_window_if_missing() {
+  local issue="$1" slug="$2" branch="$3" phase="$4"
+  local win="${issue}-${slug}"
+  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local feature_dir="${wt_dir}/features/${slug}"
+  _RESTORE_STATE="none"
+
+  if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
+    return 0
+  fi
+
+  log "status" "⚡ $issue → tmux window missing after resume, relaunching $phase phase"
+
+  local title issue_json
+  title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')
+  if [[ -z "$title" ]]; then
+    issue_json=$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")
+    title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+  fi
+
+  local model agent_cmd depth rc=0
+  case "$phase" in
+    planning)
+      model=$(read_phase_config "$feature_dir" "planning" "model")
+      [[ -z "$model" ]] && model=$(get_task_meta "$issue" "plannerModel")
+      model="$(resolve_phase_model "planning" "$model" "claude-sonnet-4-6")"
+      depth=$(read_phase_config "$feature_dir" "planning" "depth")
+      [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "planDepth")
+      [[ -z "$depth" ]] && depth="light"
+      agent_cmd="$(agent_resolve_from_model "$model")"
+      launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent_cmd" "$depth" || rc=$?
+      ;;
+    coding)
+      model=$(read_phase_config "$feature_dir" "coding" "model")
+      [[ -z "$model" ]] && model=$(get_task_meta "$issue" "coderModel")
+      model="$(resolve_phase_model "coding" "$model" "claude-opus-4-7")"
+      depth=$(read_phase_config "$feature_dir" "coding" "depth")
+      [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "codeDepth")
+      [[ -z "$depth" ]] && depth="medium"
+      agent_cmd="$(agent_resolve_from_model "$model")"
+      launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent_cmd" "$depth" || rc=$?
+      ;;
+    *)
+      log_warn "$issue → Cannot restore window for unsupported phase: $phase"
+      _RESTORE_STATE="failed"
+      return 0
+      ;;
+  esac
+
+  if [[ "$rc" -ne 0 ]]; then
+    log_warn "$issue → Failed to relaunch $phase phase after resume (rc=$rc)"
+    _RESTORE_STATE="failed"
+    return 0
+  fi
+
+  log "status" "✓ $issue → $phase phase relaunched in restored window"
+  _RESTORE_STATE="restored"
+  return 0
+}
+
 # Launch an agent in a tmux window, ensuring any previous agent is terminated first.
 # This is the single point of control for all phase launches — it guarantees:
 #   1. Previous agent is killed (Ctrl-C + wait for shell)
@@ -5148,6 +5222,23 @@ monitor_issue_state() {
             return 0
           fi
 
+          # Resume recovery: if the tmux window was lost (session was quit and
+          # restarted via `r`/`a`), relaunch the planning agent so the task is
+          # interactable again. On success we treat the task as freshly active
+          # and skip the rest of this cycle's processing — the next poll will
+          # pick up whatever state the agent produces. This must run before any
+          # of the sub-state handlers below, which all assume the pane exists.
+          _restore_inflight_task_window_if_missing "$ISSUE" "$SLUG" "$BRANCH" "planning"
+          if [[ "$_RESTORE_STATE" == "restored" ]]; then
+            set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          elif [[ "$_RESTORE_STATE" == "failed" ]]; then
+            set_window_attention_state "$WIN" "needs-user"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
           # Late migration detection: agent writes .migration-detected after expanding
           local mig_marker="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.migration-detected"
           local mig_num_file="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}/.migration-number"
@@ -5313,6 +5404,18 @@ monitor_issue_state() {
             write_stage_result "$FEATURE_DIR" "coding" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+
+          # Resume recovery: see matching block in the planning case above.
+          _restore_inflight_task_window_if_missing "$ISSUE" "$SLUG" "$BRANCH" "coding"
+          if [[ "$_RESTORE_STATE" == "restored" ]]; then
+            set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          elif [[ "$_RESTORE_STATE" == "failed" ]]; then
+            set_window_attention_state "$WIN" "needs-user"
+            active_count=$((active_count + 1))
             return 0
           fi
 

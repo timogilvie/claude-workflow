@@ -256,7 +256,14 @@ is_actionable_state() {
 
 window_index() {
   local win="$1"
-  # Windows can disappear between discovery and render; keep the dashboard stable.
+  # `tmux display-message -t session:missing-window` silently falls back to the
+  # active window's info instead of erroring, which misreports missing task
+  # windows as whichever window is currently focused (typically the control
+  # window at index 0). Verify presence first.
+  if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
+    echo "—"
+    return
+  fi
   tmux display-message -t "$SESSION:$win" -p '#{window_index}' 2>/dev/null || echo "—"
 }
 
