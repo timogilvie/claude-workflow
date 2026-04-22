@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
-import { getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig } from './config.ts';
+import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig } from './config.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { getEffectiveRegistry, getLadder, type RegistryTaskType } from './model-registry.ts';
@@ -72,6 +72,9 @@ export interface WorkflowRouteDecision {
 export interface RouteWorkflowOptions {
   repoDir?: string;
   modelsAvailable?: string[];
+  plannerModelsAvailable?: string[];
+  coderModelsAvailable?: string[];
+  reviewerModelsAvailable?: string[];
   maxCostUsd?: number;
   taskDifficulty?: RoutingDifficulty;
   taskTitle?: string;
@@ -241,6 +244,38 @@ function getEffectiveModelPool(options?: RouteWorkflowOptions): string[] {
   }
 
   return getModelPool(options?.repoDir);
+}
+
+function intersectPools(basePool: string[], preferredPool?: string[]): string[] {
+  if (!preferredPool || preferredPool.length === 0) {
+    return [...new Set(basePool)];
+  }
+
+  const intersected = preferredPool.filter((modelId) => basePool.includes(modelId));
+  if (intersected.length > 0) {
+    return [...new Set(intersected)];
+  }
+
+  return [...new Set(preferredPool)];
+}
+
+function resolveStagePool(
+  role: 'planner' | 'coder' | 'reviewer',
+  basePool: string[],
+  routerConfig: ReturnType<typeof getRouterConfig>,
+  options?: RouteWorkflowOptions,
+  policyPool?: string[],
+): string[] {
+  const explicitPool = options?.modelsAvailable && options.modelsAvailable.length > 0
+    ? options.modelsAvailable
+    : role === 'planner'
+      ? options?.plannerModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'planner')
+      : role === 'coder'
+        ? options?.coderModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'coder')
+        : options?.reviewerModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'reviewer');
+
+  const configuredPool = intersectPools(basePool, explicitPool);
+  return intersectPools(configuredPool, policyPool);
 }
 
 function pickAvailableModel(pool: string[], preferred: string[], fallback: string): string {
@@ -543,11 +578,13 @@ function downgradeModelsForBudget(params: {
   planDepth: PlanDepth;
   codeDepth: CodeDepth;
   reviewMode: ReviewMode;
-  pool: string[];
+  plannerPool: string[];
+  coderPool: string[];
+  reviewerPool: string[];
   maxCostUsd: number;
   repoDir?: string;
 }): { planner: string; coder: string; reviewer: string } | null {
-  const { planner, coder, reviewer, planDepth, codeDepth, reviewMode, pool, maxCostUsd, repoDir } = params;
+  const { planner, coder, reviewer, planDepth, codeDepth, reviewMode, plannerPool, coderPool, reviewerPool, maxCostUsd, repoDir } = params;
 
   // Define downgrade tiers for each role (most expensive to cheapest)
   const coderTiers = [
@@ -569,11 +606,11 @@ function downgradeModelsForBudget(params: {
 
   // Try all combinations, starting with minimal downgrades
   for (const coderTier of coderTiers) {
-    const downgradedCoder = pickAvailableModel(pool, coderTier, coder);
+    const downgradedCoder = pickAvailableModel(coderPool, coderTier, coder);
     for (const plannerTier of plannerTiers) {
-      const downgradedPlanner = pickAvailableModel(pool, plannerTier, planner);
+      const downgradedPlanner = pickAvailableModel(plannerPool, plannerTier, planner);
       for (const reviewerTier of reviewerTiers) {
-        const downgradedReviewer = pickAvailableModel(pool, reviewerTier, reviewer);
+        const downgradedReviewer = pickAvailableModel(reviewerPool, reviewerTier, reviewer);
 
         const totalCost =
           estimateStageCost(downgradedPlanner, PLAN_TOKENS[planDepth], repoDir) +
@@ -763,29 +800,34 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   const codeDepth = chooseCodeDepth(characteristics, riskScore);
   const reviewRecommended = chooseReviewMode(characteristics, riskScore);
 
-  const routerConfig = loadRouterConfig(repoDir);
+  const routerConfig = getRouterConfig(repoDir);
+  const modelRouterConfig = loadRouterConfig(repoDir);
+  const policyResolution = resolvePolicyStagePools(options || {});
+  const plannerPool = resolveStagePool('planner', pool, routerConfig, options, policyResolution?.policyStagePools.plannerModels);
+  const coderPool = resolveStagePool('coder', pool, routerConfig, options, policyResolution?.policyStagePools.coderModels);
+  const reviewerPool = resolveStagePool('reviewer', pool, routerConfig, options, policyResolution?.policyStagePools.reviewerModels);
   const coderRecommendation = recommendModel(prompt, {
-    ...routerConfig,
+    ...modelRouterConfig,
     repoDir,
     mode: 'heuristic',
-    models: pool,
+    models: coderPool,
   });
 
   const planner = planDepth === 'deep'
-    ? pickAvailableModel(pool, ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel)
-    : pickAvailableModel(pool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel);
+    ? pickAvailableModel(plannerPool, ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel)
+    : pickAvailableModel(plannerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel);
 
   const coder = codeDepth === 'deep'
-    ? pickAvailableModel(pool, [coderRecommendation.recommendedModel, 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'], coderRecommendation.recommendedModel)
+    ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'], coderRecommendation.recommendedModel)
     : codeDepth === 'medium'
-      ? pickAvailableModel(pool, [coderRecommendation.recommendedModel, 'gpt-5.3-codex', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'], coderRecommendation.recommendedModel)
-      : pickAvailableModel(pool, [coderRecommendation.recommendedModel, 'gpt-5.3-codex', 'claude-haiku-4-5-20251001'], coderRecommendation.recommendedModel);
+      ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'gpt-5.3-codex', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'], coderRecommendation.recommendedModel)
+      : pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'gpt-5.3-codex', 'claude-haiku-4-5-20251001'], coderRecommendation.recommendedModel);
 
   const reviewer = reviewRecommended === 'static+llm'
-    ? pickAvailableModel(pool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-opus-4-7', 'claude-opus-4-6', planner], planner)
+    ? pickAvailableModel(reviewerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-opus-4-7', 'claude-opus-4-6', planner], planner)
     : reviewRecommended === 'llm'
-      ? pickAvailableModel(pool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', planner], planner)
-      : pickAvailableModel(pool, ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', planner], planner);
+      ? pickAvailableModel(reviewerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', planner], planner)
+      : pickAvailableModel(reviewerPool, ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', planner], planner);
 
   // Enforce difficulty floor
   const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
@@ -796,9 +838,9 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
 
   if (taskDifficulty) {
     const floor = getAllowedModelFloor(taskDifficulty);
-    const newPlanner = applyDifficultyFloor(planner, floor, pool, 'planner');
-    const newCoder = applyDifficultyFloor(coder, floor, pool, 'coder');
-    const newReviewer = applyDifficultyFloor(reviewer, floor, pool, 'reviewer');
+    const newPlanner = applyDifficultyFloor(planner, floor, plannerPool, 'planner');
+    const newCoder = applyDifficultyFloor(coder, floor, coderPool, 'coder');
+    const newReviewer = applyDifficultyFloor(reviewer, floor, reviewerPool, 'reviewer');
 
     if (newPlanner !== planner || newCoder !== coder || newReviewer !== reviewer) {
       difficultyFloorApplied = true;
@@ -837,7 +879,9 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       planDepth,
       codeDepth,
       reviewMode: reviewRecommended,
-      pool,
+      plannerPool,
+      coderPool,
+      reviewerPool,
       maxCostUsd: effectiveBudget,
       repoDir,
     });
