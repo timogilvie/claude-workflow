@@ -223,6 +223,28 @@ await test('includes budget constraints in heuristic routing decisions when prov
   }
 });
 
+await test('heuristic routing honors stage-specific planner and reviewer pools', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      availableModels: {
+        planner: ['gpt-5.4'],
+        reviewer: ['claude-sonnet-4-6'],
+      },
+    },
+  });
+  try {
+    const decision = routeWorkflow(
+      'Create a wavemill route CLI command that extends the router, outputs planner coder and reviewer, prints JSON and stdout, and estimates cost and success.',
+      { repoDir, maxCostUsd: 25, skipDifficultyClassification: true }
+    );
+    assert.equal(decision.planner, 'gpt-5.4');
+    assert.equal(decision.reviewer, 'claude-sonnet-4-6');
+  } finally {
+    cleanup();
+  }
+});
+
 await test('heuristic routing confidence varies across prompts instead of staying constant', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
