@@ -148,7 +148,14 @@
     },
     "mode": "auto",
     "llmModel": "gpt-4o-mini",
-    "llmProvider": "openai"
+    "llmProvider": "openai",
+    "availableModels": {
+      "planner": [
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "gpt-5.4"
+      ]
+    }
   },
   "validation": {
     "enabled": true,
