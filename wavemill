@@ -510,6 +510,9 @@ run_init() {
     "minRecords": 20,
     "minModels": 2,
     "models": [],
+    "availableModels": {
+      "planner": ["claude-opus-4-7", "claude-sonnet-4-6", "gpt-5.4"]
+    },
     "defaultAgent": "claude",
     "agentMap": {
       "claude-opus-4-7": "claude",
