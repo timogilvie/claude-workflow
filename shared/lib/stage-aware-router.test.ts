@@ -658,11 +658,13 @@ test('routeStageAware returns stage-aware-partial when neighbors have single mod
 });
 
 test('routeStageAware retries without constraints when allowlist filters all neighbors', () => {
+  // Records carry real per-stage attribution so the router actually has
+  // something to rank; the test exercises the unconstrained-retry path when
+  // the caller's allowlist filters every attributed model out.
   const records = Array.from({ length: 20 }, (_, index) => makeEvalRecord(
     `${index + 1}`,
     'claude-opus-4-6',
     { plan: 0.91, implementation: 0.84, review: 0.89 },
-    { taskDescriptor: makeSchemaV1Descriptor() },
   ));
   const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
     router: {
@@ -693,13 +695,22 @@ test('routeStageAware retries without constraints when allowlist filters all nei
 });
 
 await testAsync('routeWorkflowAuto preserves neighbor counts in survival mode when degraded pool filters neighbors', async () => {
+  // Stage costs must sum under the survival-mode budget ($5 default) so the
+  // degraded-pool retry doesn't fail on cost grounds — this test is about
+  // neighbor-count preservation, not cost filtering.
   const records = Array.from({ length: 20 }, (_, index) => makeEvalRecord(
     `${index + 1}`,
     'claude-sonnet-4-5-20250929',
     { plan: 0.89, implementation: 0.83, review: 0.87 },
     {
-      taskDescriptor: makeSchemaV1Descriptor(),
       workflowCost: 1.2,
+      taskDescriptor: makeDescriptor({
+        stages: {
+          planner: { model: 'claude-sonnet-4-5-20250929', cost_usd: 0.4 },
+          coder: { model: 'claude-sonnet-4-5-20250929', cost_usd: 0.4 },
+          reviewer: { model: 'claude-sonnet-4-5-20250929', cost_usd: 0.4 },
+        },
+      }),
     },
   ));
   const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
