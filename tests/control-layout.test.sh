@@ -123,13 +123,13 @@ write_plan() {
     --arg repoDir "$repo_dir" \
     --arg baseBranch "main" \
     --arg worktreeRoot "$repo_dir/worktrees" \
-    --arg planningMode "skip" \
+    --arg planningMode "interactive" \
     --arg agentCmd "claude" \
     --arg stateDir "$state_dir" \
     --arg stateFile "$state_file" \
     --arg toolsDir "$repo_dir/tools" \
     --arg libDir "$repo_dir/shared/lib" \
-    --arg initialPhase "executing" \
+    --arg initialPhase "planning" \
     --arg statusLogFile "$status_log" \
     --arg monitorEnv "$monitor_env" \
     --arg monitorScript "$monitor_script" \

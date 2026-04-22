@@ -172,6 +172,11 @@ load_config() {
   SETUP_CMD="${SETUP_CMD:-$_CFG_SETUP_CMD}"
   DEFAULT_MAX_COST_USD="${DEFAULT_MAX_COST_USD:-$_CFG_DEFAULT_MAX_COST_USD}"
 
+  if [[ "$PLANNING_MODE" != "interactive" ]]; then
+    echo "Warning: planningMode='$PLANNING_MODE' is no longer supported; forcing interactive planning." >&2
+    PLANNING_MODE="interactive"
+  fi
+
   # WORKTREE_ROOT: resolve relative paths against repo_dir
   local wt_raw="${WORKTREE_ROOT:-$_CFG_WORKTREE_ROOT}"
   if [[ "$wt_raw" != /* ]]; then

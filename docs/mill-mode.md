@@ -172,7 +172,7 @@ all downstream consumers should read it via `read_route_json()` from `wavemill-c
 | Consumer | File | Fields Used |
 |----------|------|-------------|
 | Phase 5 challenge planning | `wavemill-mill.sh` | coder, planner, reviewer, planDepth, codeDepth, reviewRecommended |
-| Orchestrator (skip mode) | `wavemill-orchestrator.sh` | coder, planner, reviewer, planDepth, codeDepth, reviewRecommended, routingMode |
+| Orchestrator compatibility wrapper | `wavemill-orchestrator.sh` | planner, coder, reviewer, planDepth, codeDepth, reviewRecommended, routingMode |
 | Orchestrator (interactive) | `wavemill-orchestrator.sh` | Full route (runs router inline) |
 | Monitor launch_task() | `wavemill-mill.sh` | Full route (re-routes or reads cached) |
 

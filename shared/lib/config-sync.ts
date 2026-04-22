@@ -227,6 +227,12 @@ export function prepareConfigSync(repoDir: string): PreparedConfigSync {
 
   const mergedConfig = deepMergeConfig(CANONICAL_CONFIG_TEMPLATE, currentConfig) as WavemillConfig;
   mergedConfig.configVersion = CURRENT_CONFIG_VERSION;
+  if (mergedConfig.mill?.planningMode !== 'interactive') {
+    mergedConfig.mill = {
+      ...(mergedConfig.mill || {}),
+      planningMode: 'interactive',
+    };
+  }
 
   const additions = configExists ? identifyConfigAdditions(currentConfig, mergedConfig) : [];
   const alreadyCurrent =

@@ -277,9 +277,7 @@ create_tmux_session() {
 
 write_launch_plan() {
   local launch_plan_file="$1"
-  local initial_phase="routing"
-  [[ "$PLANNING_MODE" == "interactive" ]] && initial_phase="planning"
-  [[ "$PLANNING_MODE" == "skip" ]] && initial_phase="executing"
+  local initial_phase="planning"
 
   local tasks_json='[]'
   local t issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file route_file
@@ -4648,8 +4646,7 @@ EOF
   fi
 
   # Save to state ledger (after routing so agent is known)
-  local initial_phase="executing"
-  [[ "$PLANNING_MODE" == "interactive" ]] && initial_phase="planning"
+  local initial_phase="planning"
   # If this task was already marked as a challenge participant (e.g. challenger
   # launched via recursive call with WAVEMILL_DISABLE_CHALLENGE=1), preserve
   # the existing challenge flag rather than overwriting with "false".
@@ -4778,85 +4775,73 @@ $details_context"
 Implement from the issue description plus direct codebase analysis."
   fi
 
-  if [[ "$PLANNING_MODE" == "interactive" ]]; then
-    # Launch in routing phase - monitor will handle phase transitions
-    mkdir -p "$feature_dir"
-    local labels_json="[]"
-    labels_json=$(echo "$issue_json" | jq '[.labels.nodes[]?.name // empty]' 2>/dev/null || echo "[]")
+  # Launch in routing phase - monitor will handle phase transitions
+  mkdir -p "$feature_dir"
+  local labels_json="[]"
+  labels_json=$(echo "$issue_json" | jq '[.labels.nodes[]?.name // empty]' 2>/dev/null || echo "[]")
 
-    jq -n \
-      --arg taskId "$issue" \
-      --arg title "$title" \
-      --arg description "$packet_content" \
-      --argjson labels "$labels_json" \
-      --arg featureName "$slug" \
-      --arg contextPath "features/$slug/selected-task.json" \
-      '{
-        taskId: $taskId,
-        title: $title,
-        description: $description,
-        labels: $labels,
-        workflowType: "feature",
-        featureName: $featureName,
-        contextPath: $contextPath,
-        selectedAt: (now | todate)
-      }' > "$feature_dir/selected-task.json"
+  jq -n \
+    --arg taskId "$issue" \
+    --arg title "$title" \
+    --arg description "$packet_content" \
+    --argjson labels "$labels_json" \
+    --arg featureName "$slug" \
+    --arg contextPath "features/$slug/selected-task.json" \
+    '{
+      taskId: $taskId,
+      title: $title,
+      description: $description,
+      labels: $labels,
+      workflowType: "feature",
+      featureName: $featureName,
+      contextPath: $contextPath,
+      selectedAt: (now | todate)
+    }' > "$feature_dir/selected-task.json"
 
-    # Write routing results directly (no LLM needed — routing is deterministic)
-    # The routing tool was already called at lines above (route-task.ts).
-    # We just need to write the .routing-complete file and launch planning.
-    local routing_file="$feature_dir/.routing-complete"
-    local routing_max_cost_usd
-    routing_max_cost_usd="$(read_route_json "$SESSION" "$issue" "constraints.maxCostUsd" "")"
-    [[ -z "$routing_max_cost_usd" ]] && routing_max_cost_usd="${DEFAULT_MAX_COST_USD:-}"
+  # Write routing results directly (no LLM needed — routing is deterministic)
+  # The routing tool was already called at lines above (route-task.ts).
+  # We just need to write the .routing-complete file and launch planning.
+  local routing_file="$feature_dir/.routing-complete"
+  local routing_max_cost_usd
+  routing_max_cost_usd="$(read_route_json "$SESSION" "$issue" "constraints.maxCostUsd" "")"
+  [[ -z "$routing_max_cost_usd" ]] && routing_max_cost_usd="${DEFAULT_MAX_COST_USD:-}"
 
-    jq -n \
-      --arg planner "${planner_model:-claude-sonnet-4-6}" \
-      --arg coder "${task_model:-claude-opus-4-7}" \
-      --arg reviewer "${reviewer_model:-claude-sonnet-4-6}" \
-      --arg planDepth "${plan_depth:-light}" \
-      --arg codeDepth "${code_depth:-medium}" \
-      --arg reviewMode "${review_mode:-static}" \
-      --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
-      '{
-        planner: $planner,
-        coder: $coder,
-        reviewer: $reviewer,
-        planDepth: $planDepth,
-        codeDepth: $codeDepth,
-        reviewMode: $reviewMode
-      } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$routing_file"
+  jq -n \
+    --arg planner "${planner_model:-claude-sonnet-4-6}" \
+    --arg coder "${task_model:-claude-opus-4-7}" \
+    --arg reviewer "${reviewer_model:-claude-sonnet-4-6}" \
+    --arg planDepth "${plan_depth:-light}" \
+    --arg codeDepth "${code_depth:-medium}" \
+    --arg reviewMode "${review_mode:-static}" \
+    --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
+    '{
+      planner: $planner,
+      coder: $coder,
+      reviewer: $reviewer,
+      planDepth: $planDepth,
+      codeDepth: $codeDepth,
+      reviewMode: $reviewMode
+    } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$routing_file"
 
-    # Save initial route for eval comparison (routed on raw description)
-    cp "$routing_file" "$feature_dir/.initial-route.json"
+  # Save initial route for eval comparison (routed on raw description)
+  cp "$routing_file" "$feature_dir/.initial-route.json"
 
-    # Launch planning phase directly with the routed model (skip routing agent)
-    local resolved_planner_agent
-    resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")"
+  # Launch planning phase directly with the routed model (skip routing agent)
+  local resolved_planner_agent
+  resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")"
 
-    # Record planning stage as running before the first launch so the monitor
-    # keeps the task active even before any planning artifacts exist.
-    write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"
+  # Record planning stage as running before the first launch so the monitor
+  # keeps the task active even before any planning artifacts exist.
+  write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"
 
-    launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "${planner_model:-claude-sonnet-4-6}" "$resolved_planner_agent" "${plan_depth:-light}"
-    local launch_rc=$?
-    if ! handle_phase_launch_result "$issue" "$feature_dir" "planning" "routing" "$launch_rc" "$win" \
-      "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
-      return 0
-    fi
-    log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
-  else
-    local instr_file="/tmp/${SESSION}-${issue}-instructions.txt"
-    local task_operating_mode="normal"
-    task_operating_mode="$(get_model_operating_mode "$task_model" "$REPO_DIR")"
-
-    build_autonomous_prompt "$title" "$issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-      "$issue_context" "$status_file" "$TOOLS_DIR" "$reviewer_model" "$review_mode" "$task_agent_cmd" "$task_operating_mode" > "$instr_file"
-
-    # Use coder model for implementation phase
-    agent_launch_autonomous "$SESSION" "$win" "$instr_file" "$task_agent_cmd" "$task_model" "$issue"
+  launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+    "${planner_model:-claude-sonnet-4-6}" "$resolved_planner_agent" "${plan_depth:-light}"
+  local launch_rc=$?
+  if ! handle_phase_launch_result "$issue" "$feature_dir" "planning" "routing" "$launch_rc" "$win" \
+    "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
+    return 0
   fi
+  log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
 
   log "status" "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
   [[ -n "$planner_model" ]] && log "info" "  ✓ Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"

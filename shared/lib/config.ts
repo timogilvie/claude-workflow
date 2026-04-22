@@ -34,7 +34,7 @@ export interface MillConfig {
   worktreeRoot?: string;
   agentCmd?: string;
   requireConfirm?: boolean;
-  planningMode?: 'skip' | 'interactive';
+  planningMode?: 'interactive';
   maxRetries?: number;
   retryDelay?: number;
   setupCommand?: string;
@@ -506,6 +506,17 @@ export function loadWavemillConfig(repoDir?: string): WavemillConfig {
     throw new Error(
       `Failed to parse .wavemill-config.json at ${configPath}: ${message}`
     );
+  }
+
+  // Migrate legacy configs that still carry the removed skip-planning mode.
+  if (
+    typeof parsed === 'object' &&
+    parsed !== null &&
+    'mill' in parsed &&
+    typeof (parsed as { mill?: { planningMode?: string } }).mill === 'object' &&
+    (parsed as { mill?: { planningMode?: string } }).mill?.planningMode === 'skip'
+  ) {
+    (parsed as { mill: { planningMode: 'interactive' } }).mill.planningMode = 'interactive';
   }
 
   // Validate against schema
