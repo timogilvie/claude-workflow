@@ -457,6 +457,16 @@ $details_context"
       return 1
     fi
   fi
+
+  # Reassert the launched phase after agent dispatch and Linear updates so the
+  # final persisted state reflects active coding work even if a helper touched
+  # workflow-state during startup.
+  if ! set_task_phase_local "$issue" "$persisted_phase"; then
+    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+    tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    startup_log "✗ $issue FAILED at step [7/7]: finalizing workflow state"
+    return 1
+  fi
   startup_step "[7/7] Setting Linear → In Progress... ✓"
 
   printf '%s\n' "$issue" >> "$LAUNCHED_ISSUES_FILE"
