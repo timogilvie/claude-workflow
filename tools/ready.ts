@@ -35,10 +35,6 @@ runTool({
     const repoDir = args['repo-dir'] || process.cwd();
     const result = await runReadyStage({ prNumber, repoDir });
 
-    if (result.mergeConflict) {
-      printMergeConflictStatus(result);
-    }
-
     // Output JSON for scripting
     console.log(JSON.stringify(result, null, 2));
 
@@ -65,22 +61,4 @@ function extractPrNumber(input: string): number {
   }
 
   throw new Error(`Invalid PR number or URL: ${input}`);
-}
-
-function printMergeConflictStatus(result: Awaited<ReturnType<typeof runReadyStage>>): void {
-  const status = result.mergeConflict?.status;
-
-  switch (status) {
-    case 'CONFLICTED':
-      console.error(`⚠️  MERGE CONFLICT: PR #${result.prNumber} has conflicts with main`);
-      break;
-    case 'UNKNOWN':
-      console.error(`⏳ MERGE STATUS UNKNOWN: PR #${result.prNumber} - GitHub computing mergeability`);
-      break;
-    case 'ERROR':
-      console.error(`⚠️  MERGE STATUS ERROR: PR #${result.prNumber} - ${result.mergeConflict?.message}`);
-      break;
-    default:
-      break;
-  }
 }

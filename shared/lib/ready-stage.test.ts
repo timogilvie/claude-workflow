@@ -327,6 +327,21 @@ describe('ready-stage', () => {
   });
 
   describe('checkCIStatus', () => {
+    it('suppresses gh stderr when fetching checks', () => {
+      let receivedCommand = '';
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        receivedCommand = cmd;
+        return JSON.stringify([]);
+      });
+
+      try {
+        checkCIStatus(42, '/tmp/test');
+        assert.match(receivedCommand, /gh pr checks '?42'? --json state,name 2>\/dev\/null$/);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
     it('returns pending for queued checks', () => {
       const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
         JSON.stringify([{ name: 'Shell and Unit Tests', state: 'QUEUED' }])
@@ -674,6 +689,59 @@ describe('ready-stage', () => {
   });
 
   describe('runReadyStage - integration', () => {
+    it('suppresses gh stderr while gathering PR context CI metadata', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
+      await fs.writeFile(
+        path.join(repoDir, '.wavemill-config.json'),
+        JSON.stringify({ ready: { checks: [], requiredChecks: [] } }),
+        'utf-8'
+      );
+
+      const commands: string[] = [];
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        commands.push(cmd);
+
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+            });
+          }
+
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return '';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([]);
+        }
+        return '';
+      });
+
+      try {
+        await runReadyStage({
+          prNumber: 42,
+          repoDir,
+        });
+
+        assert.ok(
+          commands.some((cmd) => /gh pr checks '?42'? --json state 2>\/dev\/null$/.test(cmd)),
+          'expected gatherPRContext to suppress gh stderr'
+        );
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
     it('includes merge conflict status independently from the readiness verdict', async () => {
       const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
       await fs.writeFile(

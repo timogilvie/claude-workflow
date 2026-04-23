@@ -198,7 +198,7 @@ async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRCon
     let ciStatus = 'unknown';
     try {
       const checksJson = readyStageDeps.execShellCommand(
-        `gh pr checks ${escapeShellArg(String(prNumber))} --json state`,
+        `gh pr checks ${escapeShellArg(String(prNumber))} --json state 2>/dev/null`,
         { encoding: 'utf-8', cwd: repoDir }
       );
       const checks = JSON.parse(checksJson.toString());
@@ -537,7 +537,7 @@ function checkReleaseRequirements(
 export function checkCIStatus(prNumber: number, repoDir: string): ReadyCheck {
   try {
     const checksJson = readyStageDeps.execShellCommand(
-      `gh pr checks ${escapeShellArg(String(prNumber))} --json state,name`,
+      `gh pr checks ${escapeShellArg(String(prNumber))} --json state,name 2>/dev/null`,
       { encoding: 'utf-8', cwd: repoDir }
     );
     const checks = JSON.parse(checksJson.toString());
