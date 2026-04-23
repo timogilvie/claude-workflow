@@ -102,6 +102,8 @@ mkdir -p \
   "$WORKTREES_DIR/coding-task/features/coding-task" \
   "$WORKTREES_DIR/review-task/features/review-task" \
   "$WORKTREES_DIR/ready-task/features/ready-task" \
+  "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task" \
+  "$WORKTREES_DIR/ready-failed-task/features/ready-failed-task" \
   "$WORKTREES_DIR/stale-task/features/stale-task"
 
 STATE_FILE_ONE="$TMP_DIR/state-one.json"
@@ -460,6 +462,85 @@ if grep -q 'HOK-1302.*ready-task.*🚦 ready.*● running' "$OUTPUT_READY"; then
   pass "shows ready phase with emoji"
 else
   fail "ready phase row is missing emoji"
+fi
+
+cat > "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed"
+}
+EOF
+
+cat > "$WORKTREES_DIR/ready-failed-task/features/ready-failed-task/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "failed"
+}
+EOF
+
+cat > "$WORKTREES_DIR/ready-failed-task/features/ready-failed-task/.needs-attention" <<'EOF'
+Remediation exhausted after 3 attempt(s) for PR #378.
+EOF
+
+STATE_FILE_READY_CLASSIFY="$TMP_DIR/state-ready-classify.json"
+cat > "$STATE_FILE_READY_CLASSIFY" <<EOF
+{
+  "tasks": {
+    "HOK-1303": {
+      "slug": "ready-complete-task",
+      "branch": "task/ready-complete-task",
+      "worktree": "$WORKTREES_DIR/ready-complete-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    },
+    "HOK-1304": {
+      "slug": "ready-failed-task",
+      "branch": "task/ready-failed-task",
+      "worktree": "$WORKTREES_DIR/ready-failed-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+BEHAVIOR_READY_CLASSIFY="$TMP_DIR/behavior-ready-classify.json"
+cat > "$BEHAVIOR_READY_CLASSIFY" <<'EOF'
+{
+  "pane": {
+    "HOK-1303-ready-complete-task": "9",
+    "HOK-1304-ready-failed-task": "10"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {
+    "task/ready-complete-task": "411|OPEN",
+    "task/ready-failed-task": "412|OPEN"
+  },
+  "checks": {
+    "task/ready-complete-task": "pass",
+    "task/ready-failed-task": "fail"
+  }
+}
+EOF
+
+OUTPUT_READY_CLASSIFY="$TMP_DIR/output-ready-classify.txt"
+run_render "$STATE_FILE_READY_CLASSIFY" "$WORKTREES_DIR" "$BEHAVIOR_READY_CLASSIFY" "$OUTPUT_READY_CLASSIFY"
+
+if grep -q '📥 INBOX (2)' "$OUTPUT_READY_CLASSIFY" && ! grep -q '⚡ ACTIVE (2)' "$OUTPUT_READY_CLASSIFY"; then
+  pass "classifies completed or attention-needed ready tasks as inbox items"
+else
+  fail "ready-task controller state did not move actionable tasks into inbox"
+fi
+
+if grep -q 'HOK-1304.*ready-failed-task.*🚦 ready.*● running.*#412 ✗' "$OUTPUT_READY_CLASSIFY" \
+  && grep -q 'Remediation exhausted after 3 attempt(s) for PR #378.' "$OUTPUT_READY_CLASSIFY"; then
+  pass "shows ready attention detail for failed ready tasks"
+else
+  fail "failed ready task detail or status is missing"
 fi
 
 echo ""

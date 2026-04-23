@@ -127,6 +127,24 @@ get_planning_display_status() {
 
 }
 
+get_ready_display_status() {
+  local worktree="$1" slug="$2"
+  local feature_dir="$worktree/features/$slug"
+  local result_file="$feature_dir/.ready-result.json"
+
+  [[ -f "$result_file" ]] || return 0
+  jq -r '.status // empty' "$result_file" 2>/dev/null || true
+}
+
+ready_attention_detail() {
+  local worktree="$1" slug="$2"
+  local feature_dir="$worktree/features/$slug"
+  local attention_file="$feature_dir/.needs-attention"
+
+  [[ -f "$attention_file" ]] || return 0
+  head -1 "$attention_file" 2>/dev/null | tr -d '\r'
+}
+
 # Legacy compat wrapper — used in the render loop below.
 plan_waiting_for_review() {
   local task_phase="$1"
@@ -248,6 +266,27 @@ truncate_detail() {
 # Classify dashboard tasks into sections based on agent state.
 is_actionable_state() {
   local agent_state="$1"
+  local task_phase="${2:-}"
+  local worktree="${3:-}"
+  local slug="${4:-}"
+  local ready_status attention_detail
+
+  attention_detail=$(ready_attention_detail "$worktree" "$slug")
+  if [[ -n "$attention_detail" ]]; then
+    echo "actionable"
+    return
+  fi
+
+  if [[ "$task_phase" == "ready" ]]; then
+    ready_status=$(get_ready_display_status "$worktree" "$slug")
+    case "$ready_status" in
+      completed|failed|aborted)
+        echo "actionable"
+        return
+        ;;
+    esac
+  fi
+
   case "$agent_state" in
     exited|waiting|error) echo "actionable" ;;
     *)                    echo "active" ;;
@@ -281,7 +320,7 @@ render_section_header() {
 render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
-  local t st_str pr_str pr_info checks phase_str plan_status reported ds pane
+  local t st_str pr_str pr_info checks phase_str plan_status ready_status attention_detail reported ds pane
 
   t=$(elapsed "$worktree")
   reported=""
@@ -341,7 +380,14 @@ render_task_row() {
     executing) phase_str="${G}🔨 executing${N}" ;;
     coding)    phase_str="${G}💻 coding${N}" ;;
     review)    phase_str="${Y}🔍 review${N}" ;;
-    ready)     phase_str="${G}🚦 ready${N}" ;;
+    ready)
+      ready_status=$(get_ready_display_status "$worktree" "$slug")
+      case "$ready_status" in
+        failed|aborted) phase_str="${R}🚦 ready${N}" ;;
+        completed)      phase_str="${Y}🚦 ready${N}" ;;
+        *)              phase_str="${G}🚦 ready${N}" ;;
+      esac
+      ;;
     *)         phase_str="${D}$task_phase${N}" ;;
   esac
 
@@ -354,6 +400,10 @@ render_task_row() {
 
   if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
     reported="Plan ready — waiting for approval"
+  fi
+  attention_detail=$(ready_attention_detail "$worktree" "$slug")
+  if [[ -z "$reported" && -n "$attention_detail" ]]; then
+    reported="$attention_detail"
   fi
   case "$reported" in
     working|waiting|done) reported="" ;;
@@ -449,7 +499,7 @@ render_dashboard() {
         agent_state=$(agent_status "$win")
       fi
 
-      classification=$(is_actionable_state "$agent_state")
+      classification=$(is_actionable_state "$agent_state" "$task_phase" "$worktree" "$slug")
       task_data="$issue|$slug|$branch|$worktree|$win|$task_status|$task_phase|$state_pr|$agent_state"
 
       if [[ "$classification" == "actionable" ]]; then
