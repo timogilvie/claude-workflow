@@ -28,7 +28,7 @@
  * - **1.8.0**: Added optional `manifestRef` for per-run resource manifest
  *   attribution (HOK-1378)
  * - **1.9.0**: Added `PlanCritique` interface and optional `planCritique`
- *   field to `StageScore` for explicit plan quality evaluation (HOK-1391)
+ *   field to `EvalRecord.metadata` for explicit plan quality evaluation (HOK-1391)
  *
  * @module eval-schema
  */
@@ -653,8 +653,6 @@ export interface StageScore {
   score: number;
   /** 1-2 sentence attribution rationale */
   rationale: string;
-  /** Explicit plan critique when plan artifact was available */
-  planCritique?: PlanCritique;
 }
 
 /**
