@@ -1426,6 +1426,18 @@ _pane_child_count() {
   } | wc -l | tr -d ' '
 }
 
+_pane_metadata_unavailable() {
+  local target="$1"
+  local pane_pid current_command
+
+  tmux list-panes -t "$target" >/dev/null 2>&1 || return 1
+
+  pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
+  current_command=$(tmux display-message -t "$target" -p '#{pane_current_command}' 2>/dev/null || echo "")
+
+  [[ -z "$pane_pid" && -z "$current_command" ]]
+}
+
 _pane_descendant_pids() {
   local root_pid="$1"
   local queue="$root_pid"
@@ -1609,6 +1621,10 @@ agent_pane_is_ready() {
   local pane_pid
   pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
   if [[ -z "$pane_pid" ]]; then
+    if _pane_metadata_unavailable "$target"; then
+      _agent_log_debug "Pane $target metadata unavailable; assuming ready"
+      return 0
+    fi
     return 1
   fi
 
@@ -1651,6 +1667,11 @@ agent_verify_launch() {
     local current_command children state_changed=0
     current_command=$(_pane_current_command "$target")
     children=$(_pane_child_count "$target")
+
+    if _pane_metadata_unavailable "$target"; then
+      _agent_log_debug "Launch verification unavailable for $target; assuming success"
+      return 0
+    fi
 
     if [[ -n "$baseline_command" ]] || [[ -n "$baseline_children" ]]; then
       if [[ "$current_command" != "$baseline_command" ]] || [[ "$children" != "${baseline_children:-}" ]]; then
