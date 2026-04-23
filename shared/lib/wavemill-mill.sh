@@ -736,13 +736,13 @@ cleanup_completed_task() {
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
   execute tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
-  log "  ✓ Closed window: $win"
+  log "debug" "  ✓ Closed window: $win"
 
   # Remove worktree
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   if [[ -d "$wt_dir" ]]; then
     execute git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
-    log "  ✓ Removed worktree: $wt_dir"
+    log "debug" "  ✓ Removed worktree: $wt_dir"
   fi
 
   # Delete branch after removing the worktree so Git can detach cleanly first.
@@ -751,9 +751,9 @@ cleanup_completed_task() {
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-    log "  ✓ Deleted local branch: $task_branch"
+    log "debug" "  ✓ Deleted local branch: $task_branch"
     if execute git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
-      log "  ✓ Deleted remote branch: $task_branch"
+      log "debug" "  ✓ Deleted remote branch: $task_branch"
     else
       log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
     fi
@@ -1172,8 +1172,6 @@ inflight_tasks="$(detect_inflight_tasks)"
 if [[ -n "$inflight_tasks" ]]; then
   inflight_count=$(printf '%s\n' "$inflight_tasks" | grep -c .)
   inflight_primary_count=$(count_inflight_primary_tasks "$inflight_tasks")
-  available_startup_slots=$((EFFECTIVE_MAX_PARALLEL - inflight_primary_count))
-  (( available_startup_slots < 0 )) && available_startup_slots=0
 
   echo ""
   log "status" "Found $inflight_count in-flight task(s) from a previous session:"
@@ -1200,36 +1198,19 @@ if [[ -n "$inflight_tasks" ]]; then
   done <<<"$inflight_tasks"
 
   echo ""
-  if (( available_startup_slots > 0 )); then
-    log "info" "Resume impact: $inflight_primary_count slot(s) already in use, $available_startup_slots slot(s) available for new work"
-  else
-    log "info" "Resume impact: all $EFFECTIVE_MAX_PARALLEL startup slot(s) are already occupied by in-flight primary tasks"
-  fi
-  echo ""
   echo "Options:"
   echo "  r  Resume these tasks (skip backlog selection)"
-  echo "  a  Resume these tasks and pick additional tasks from backlog"
   echo "  f  Ignore old state and start fresh"
   echo "  q  Quit"
 
   while true; do
     echo ""
-    echo "Choose: [r/a/f/q]"
+    echo "Choose: [r/f/q]"
     read -r RESUME_CHOICE
     case "${RESUME_CHOICE:-}" in
       r|R)
         SKIP_BACKLOG_SELECTION=true
         STARTUP_SLOT_LIMIT=0
-        break
-        ;;
-      a|A)
-        if (( available_startup_slots == 0 )); then
-          log "status" "No startup slots are available for new work. Resuming existing tasks only."
-          SKIP_BACKLOG_SELECTION=true
-          STARTUP_SLOT_LIMIT=0
-        else
-          STARTUP_SLOT_LIMIT="$available_startup_slots"
-        fi
         break
         ;;
       f|F)
@@ -4063,13 +4044,13 @@ cleanup_completed_task() {
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
   tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
-  log "  ✓ Closed window: $win"
+  log "debug" "  ✓ Closed window: $win"
 
   # Remove worktree
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   if [[ -d "$wt_dir" ]]; then
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
-    log "  ✓ Removed worktree: $wt_dir"
+    log "debug" "  ✓ Removed worktree: $wt_dir"
   fi
 
   # Delete branch after removing the worktree so Git can detach cleanly first.
@@ -4078,9 +4059,9 @@ cleanup_completed_task() {
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-    log "  ✓ Deleted local branch: $task_branch"
+    log "debug" "  ✓ Deleted local branch: $task_branch"
     if git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
-      log "  ✓ Deleted remote branch: $task_branch"
+      log "debug" "  ✓ Deleted remote branch: $task_branch"
     else
       log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
     fi
