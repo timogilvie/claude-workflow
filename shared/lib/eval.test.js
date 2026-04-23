@@ -26,7 +26,7 @@ describe('evaluateTask', () => {
 
     // Core EvalRecord fields from eval-schema.ts
     assert.ok(result.id, 'should have a UUID id');
-    assert.equal(result.schemaVersion, '1.8.0');
+    assert.equal(result.schemaVersion, '1.9.0');
     assert.equal(result.originalPrompt, 'Add a loading spinner');
     assert.ok(result.modelId);
     assert.ok(result.modelVersion);
@@ -364,5 +364,109 @@ describe('evaluateTask', () => {
       result2.promptArtifacts[0].filledPromptHash,
       'filled prompt hash should be deterministic for same inputs'
     );
+  });
+
+  it('includes valid planCritique in metadata when present', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.85,
+      rationale: 'Task completed successfully.',
+      interventionFlags: [],
+      planCritique: {
+        component_boundaries: { score: 0.9, rationale: 'Correctly identified all target files.' },
+        invariant_coverage: { score: 0.75, rationale: 'Missed one edge case constraint.' },
+        approach_soundness: { score: 0.85, rationale: 'Approach was technically sound.' },
+        missed_patches: { score: 0.8, rationale: 'Implementation needed minor additions.' },
+        overall: { score: 0.82, rationale: 'Strong plan with minor gaps.' },
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Add a new feature',
+        prReviewOutput: 'Clean implementation',
+        planContent: 'Implementation plan content here',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.ok(result.metadata.planCritique, 'should include planCritique in metadata');
+    assert.equal(result.metadata.planCritique.component_boundaries.score, 0.9);
+    assert.equal(result.metadata.planCritique.invariant_coverage.score, 0.75);
+    assert.equal(result.metadata.planCritique.approach_soundness.score, 0.85);
+    assert.equal(result.metadata.planCritique.missed_patches.score, 0.8);
+    assert.equal(result.metadata.planCritique.overall.score, 0.82);
+    assert.ok(result.metadata.planCritique.component_boundaries.rationale.includes('target files'));
+  });
+
+  it('omits planCritique when not present in judge response', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.8,
+      rationale: 'Task completed with minor issues.',
+      interventionFlags: [],
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Fix a bug',
+        prReviewOutput: 'Bug fixed correctly',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.equal(result.metadata.planCritique, undefined, 'should not include planCritique when absent');
+  });
+
+  it('gracefully handles planCritique with invalid dimension scores', async () => {
+    const invalidResponse = JSON.stringify({
+      score: 0.85,
+      rationale: 'Task completed successfully.',
+      interventionFlags: [],
+      planCritique: {
+        component_boundaries: { score: 1.5, rationale: 'Invalid score out of range.' },
+        invariant_coverage: { score: 0.75, rationale: 'Valid dimension.' },
+        approach_soundness: { score: 0.85, rationale: 'Valid dimension.' },
+        missed_patches: { score: -0.1, rationale: 'Invalid negative score.' },
+        overall: { score: 0.82, rationale: 'Overall score.' },
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Add a feature',
+        prReviewOutput: 'Feature added',
+      },
+      undefined,
+      { _callFn: mockCallFn(invalidResponse) }
+    );
+
+    // planCritique should be omitted entirely if any dimension is invalid
+    assert.equal(result.metadata.planCritique, undefined, 'should omit planCritique when dimensions are invalid');
+  });
+
+  it('gracefully handles planCritique with missing dimensions', async () => {
+    const incompleteResponse = JSON.stringify({
+      score: 0.85,
+      rationale: 'Task completed successfully.',
+      interventionFlags: [],
+      planCritique: {
+        component_boundaries: { score: 0.9, rationale: 'Good boundaries.' },
+        invariant_coverage: { score: 0.75, rationale: 'Valid dimension.' },
+        // Missing approach_soundness, missed_patches, and overall
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Add a feature',
+        prReviewOutput: 'Feature added',
+      },
+      undefined,
+      { _callFn: mockCallFn(incompleteResponse) }
+    );
+
+    // planCritique should be omitted if not all required dimensions are present
+    assert.equal(result.metadata.planCritique, undefined, 'should omit planCritique when incomplete');
   });
 });

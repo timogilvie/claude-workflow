@@ -27,6 +27,8 @@
  *   fields to track cost budget constraint violations during routing (HOK-1350)
  * - **1.8.0**: Added optional `manifestRef` for per-run resource manifest
  *   attribution (HOK-1378)
+ * - **1.9.0**: Added `PlanCritique` interface and optional `planCritique`
+ *   field to `StageScore` for explicit plan quality evaluation (HOK-1391)
  *
  * @module eval-schema
  */
@@ -606,6 +608,41 @@ export type Stratum = string;
 // ────────────────────────────────────────────────────────────────
 
 /**
+ * A single dimension of plan quality critique.
+ *
+ * Each dimension captures a specific aspect of plan quality with
+ * a normalized score and brief rationale.
+ */
+export interface PlanCritiqueDimension {
+  /** Quality score 0.0–1.0 for this dimension */
+  score: number;
+  /** 1-2 sentence rationale for the score */
+  rationale: string;
+}
+
+/**
+ * Explicit plan quality critique across multiple dimensions.
+ *
+ * Captures concrete plan evaluation criteria like component boundaries,
+ * invariant coverage, and approach soundness. Enables direct plan quality
+ * measurement rather than inferring it from downstream diff cleanliness.
+ *
+ * @since 1.9.0
+ */
+export interface PlanCritique {
+  /** Did the plan identify the correct component boundaries? */
+  component_boundaries: PlanCritiqueDimension;
+  /** Were key invariants and constraints identified in the plan? */
+  invariant_coverage: PlanCritiqueDimension;
+  /** Was the proposed approach viable and technically sound? */
+  approach_soundness: PlanCritiqueDimension;
+  /** Did the implementation have to patch around plan gaps? */
+  missed_patches: PlanCritiqueDimension;
+  /** Overall aggregate plan quality score */
+  overall: PlanCritiqueDimension;
+}
+
+/**
  * Per-stage quality attribution from the eval judge.
  *
  * Captures how well a specific workflow stage performed,
@@ -616,6 +653,8 @@ export interface StageScore {
   score: number;
   /** 1-2 sentence attribution rationale */
   rationale: string;
+  /** Explicit plan critique when plan artifact was available */
+  planCritique?: PlanCritique;
 }
 
 /**

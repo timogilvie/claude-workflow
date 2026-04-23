@@ -105,6 +105,41 @@ In addition to the overall score, attribute quality to **all four workflow stage
   - *When Implementation Plan is provided*: Score based on whether the plan was sound and the implementation followed it successfully.
   - *When Implementation Plan is NOT provided*: Infer from the PR diff and commit history. Was the approach well-structured (logical file changes, good decomposition)? Or are there signs of rework, wrong-direction commits, or thrashing? A clean, well-organized diff with no rework suggests good planning (score 0.7–0.9). Multiple reverts or approach changes suggest poor planning (score 0.3–0.6). For single-shot autonomous workflows with no plan artifact, score based on whether the agent chose a reasonable approach.
 
+### Plan Critique (when Implementation Plan is provided)
+
+When `{{PLAN_CONTENT}}` is available (not "Not available"), you **must** include a `planCritique` field in your JSON response. This field provides explicit plan quality evaluation across four dimensions:
+
+**1. component_boundaries** — Did the plan correctly identify which components, modules, or files needed to be modified?
+- Score 1.0 if the plan identified exactly the right components with no false positives or missed areas
+- Score 0.7–0.9 if the plan identified most key components but missed 1-2 secondary areas
+- Score 0.4–0.6 if the plan had significant gaps (missed major components) or false positives (targeted wrong areas)
+- Compare planned file changes to actual PR diff changes for precise assessment
+
+**2. invariant_coverage** — Did the plan identify critical constraints, edge cases, and invariants?
+- Score 1.0 if the plan documented all critical constraints with no surprises during implementation
+- Score 0.7–0.9 if the plan captured most key constraints but missed 1-2 non-obvious edge cases
+- Score 0.4–0.6 if the plan missed several important constraints that impacted correctness
+- Check if the implementation had to add defensive checks, validation, or error handling not mentioned in the plan
+
+**3. approach_soundness** — Was the proposed implementation approach technically viable and correct?
+- Score 1.0 if the approach was optimal and implementation followed it directly
+- Score 0.7–0.9 if the approach was sound but suboptimal, requiring minor adjustments
+- Score 0.4–0.6 if the approach had notable issues (inefficient, brittle) requiring rework
+- Check if the implementation followed the planned approach or had to deviate significantly
+
+**4. missed_patches** — Did the implementation have to work around gaps or errors in the plan?
+- Score 1.0 if the implementation followed the plan directly with no patches or workarounds
+- Score 0.7–0.9 if implementation needed 1-2 minor additions not covered by the plan
+- Score 0.4–0.6 if implementation had to patch around multiple plan gaps or fix plan errors
+- Analyze commit messages and diff hunks for signs of unplanned work
+
+**5. overall** — Aggregate plan quality score (weighted, not a simple average)
+- Weight `component_boundaries` and `invariant_coverage` heavily (strong foundation)
+- Reward low `missed_patches` (plan was actionable)
+- Let `approach_soundness` gate the overall score (low soundness caps overall regardless of other dimensions)
+
+**When to omit `planCritique`**: Only when `{{PLAN_CONTENT}}` is literally "Not available" in the input. If a plan artifact exists, you must score it.
+
 - **implementation** (always scored): Given the spec and plan, did the code correctly implement what was asked? Score 1.0 if the code is correct, complete, and production-ready. Score lower for bugs, missing edge cases, or poor code quality — but only penalize the implementation for issues that were NOT caused by a bad spec or plan.
 
 - **review** (always scored): Did the review process catch issues before human review?
@@ -129,6 +164,13 @@ Respond with **only** a JSON object (no markdown fences, no preamble):
     "plan": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
     "implementation": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
     "review": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" }
+  },
+  "planCritique": {
+    "component_boundaries": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "invariant_coverage": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "approach_soundness": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "missed_patches": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "overall": { "score": <0.0-1.0>, "rationale": "<2-3 sentences>" }
   }
 }
 ```
@@ -137,5 +179,6 @@ Respond with **only** a JSON object (no markdown fences, no preamble):
 - `rationale`: A concise, human-readable explanation justifying the score. **Must reference specific intervention events if any are present.**
 - `interventionFlags`: Array of strings describing notable interventions (empty array if none). Use the format `"type:description"` (e.g., `"review_comment:missing error handling"`, `"post_pr_commit:fixed lint errors"`)
 - `stageScores`: Object with per-stage attribution scores. **Always include all four stages** (expansion, plan, implementation, review). When artifacts are not available for a stage, infer quality from the PR diff, intervention patterns, and overall outcome.
+- `planCritique`: **Optional** object with explicit plan quality scores across five dimensions. **Only include when `{{PLAN_CONTENT}}` is available** (not "Not available"). Omit this field entirely when no plan artifact exists.
 
 Output ONLY the JSON object. No other text.

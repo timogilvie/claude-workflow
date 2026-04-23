@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { getScoreBand, type EvalRecord, type InterventionRecord, type Outcomes, type RoutingDecision } from './eval-schema.ts';
+import { getScoreBand, type EvalRecord, type InterventionRecord, type Outcomes, type RoutingDecision, type PlanCritique } from './eval-schema.ts';
 import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
 import { getEvalConfig } from './config.ts';
 import { loadPricingTable } from './workflow-cost.ts';
@@ -25,7 +25,7 @@ const __dirname = dirname(__filename);
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
-const SCHEMA_VERSION = '1.8.0';
+const SCHEMA_VERSION = '1.9.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 
@@ -91,6 +91,7 @@ interface JudgeResponse {
   rationale: string;
   interventionFlags: string[];
   stageScores?: Record<string, { score: number; rationale: string }>;
+  planCritique?: PlanCritique;
 }
 
 /**
@@ -238,6 +239,7 @@ function parseJudgeResponse(raw: string): JudgeResponse {
     rationale?: string;
     interventionFlags?: string[];
     stageScores?: Record<string, { score?: number; rationale?: string }>;
+    planCritique?: Record<string, { score?: number; rationale?: string }>;
   };
 
   if (typeof parsed.score !== 'number' || parsed.score < 0 || parsed.score > 1) {
@@ -275,11 +277,42 @@ function parseJudgeResponse(raw: string): JudgeResponse {
     }
   }
 
+  // Parse and validate planCritique (optional)
+  let planCritique: PlanCritique | undefined;
+  if (parsed.planCritique && typeof parsed.planCritique === 'object') {
+    const requiredDimensions = ['component_boundaries', 'invariant_coverage', 'approach_soundness', 'missed_patches', 'overall'];
+    const validatedDimensions: Partial<PlanCritique> = {};
+
+    for (const dimension of requiredDimensions) {
+      const dimData = parsed.planCritique[dimension];
+      if (
+        dimData &&
+        typeof dimData === 'object' &&
+        typeof dimData.score === 'number' &&
+        dimData.score >= 0 &&
+        dimData.score <= 1 &&
+        typeof dimData.rationale === 'string' &&
+        dimData.rationale.trim().length > 0
+      ) {
+        (validatedDimensions as any)[dimension] = {
+          score: dimData.score,
+          rationale: dimData.rationale.trim(),
+        };
+      }
+    }
+
+    // Only include if all required dimensions are present and valid
+    if (Object.keys(validatedDimensions).length === requiredDimensions.length) {
+      planCritique = validatedDimensions as PlanCritique;
+    }
+  }
+
   return {
     score: parsed.score,
     rationale: parsed.rationale.trim(),
     interventionFlags: parsed.interventionFlags,
     ...(stageScores && { stageScores }),
+    ...(planCritique && { planCritique }),
   };
 }
 
@@ -373,7 +406,7 @@ export async function evaluateTask(
   const response = await callFn(prompt, model);
 
   // Parse response
-  const { score, rationale, interventionFlags, stageScores } = parseJudgeResponse(response.text);
+  const { score, rationale, interventionFlags, stageScores, planCritique } = parseJudgeResponse(response.text);
   const band = getScoreBand(score);
 
   const tokenUsage = response.usage || undefined;
@@ -408,7 +441,7 @@ export async function evaluateTask(
     ...(outcomes && { outcomes }),
     ...(routingDecision && { routingDecision }),
     ...(promptArtifacts.length > 0 && { promptArtifacts }),
-    metadata: { ...metadata, interventionFlags, ...(stageScores && { stageScores }) },
+    metadata: { ...metadata, interventionFlags, ...(stageScores && { stageScores }), ...(planCritique && { planCritique }) },
   };
   const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
   attachManifestRef(record, activeSessionId);
