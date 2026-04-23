@@ -113,6 +113,22 @@ In addition to the overall score, attribute quality to **all four workflow stage
 
 **Key attribution principle**: The stage scores should help identify WHERE in the pipeline quality was lost. If the overall score is 0.7, the stage scores should make it clear whether the spec was the problem (low expansion, higher implementation) or the code was the problem (high expansion, low implementation). Stage scores must sum to a coherent story — they should explain the overall score, not just repeat it.
 
+### Plan Critique
+
+When `Implementation Plan` is available, also produce a `planCritique` object that evaluates the plan directly rather than inferring plan quality only from the downstream diff.
+
+Score each dimension from 0.0 to 1.0 and provide a 1-2 sentence rationale:
+
+- `component_boundaries`: Did the plan identify the correct files, modules, or component boundaries for the work?
+- `invariant_coverage`: Did the plan surface key constraints, assumptions, or invariants the implementation had to respect?
+- `approach_soundness`: Was the proposed implementation approach viable, correct, and appropriately scoped?
+- `missed_patches`: Did the implementation need to patch around plan gaps, omissions, or mistaken assumptions?
+- `overall`: Aggregate assessment of planning quality based on the four dimensions above.
+
+For `missed_patches`, use a high score when the implementation flowed cleanly from the plan and a low score when the implementation had to compensate for planning gaps.
+
+If `Implementation Plan` is "Not available for this workflow.", omit `planCritique` entirely.
+
 ---
 
 ## Output Format
@@ -129,6 +145,13 @@ Respond with **only** a JSON object (no markdown fences, no preamble):
     "plan": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
     "implementation": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
     "review": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" }
+  },
+  "planCritique": {
+    "component_boundaries": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "invariant_coverage": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "approach_soundness": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "missed_patches": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
+    "overall": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" }
   }
 }
 ```
@@ -137,5 +160,6 @@ Respond with **only** a JSON object (no markdown fences, no preamble):
 - `rationale`: A concise, human-readable explanation justifying the score. **Must reference specific intervention events if any are present.**
 - `interventionFlags`: Array of strings describing notable interventions (empty array if none). Use the format `"type:description"` (e.g., `"review_comment:missing error handling"`, `"post_pr_commit:fixed lint errors"`)
 - `stageScores`: Object with per-stage attribution scores. **Always include all four stages** (expansion, plan, implementation, review). When artifacts are not available for a stage, infer quality from the PR diff, intervention patterns, and overall outcome.
+- `planCritique`: Optional object. **Include it only when an Implementation Plan is available.** Omit it entirely when the plan artifact is not available.
 
 Output ONLY the JSON object. No other text.

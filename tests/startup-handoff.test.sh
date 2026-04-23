@@ -12,6 +12,35 @@ FAIL=0
 pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 
+dump_file_on_failure() {
+  local label="$1"
+  local path="$2"
+  echo "    --- $label: $path ---"
+  if [[ -f "$path" ]]; then
+    sed 's/^/    /' "$path"
+  else
+    echo "    (missing)"
+  fi
+  echo "    --- end $label ---"
+}
+
+wait_for_jq_match() {
+  local expr="$1"
+  local path="$2"
+  local attempts="${3:-20}"
+  local delay="${4:-0.1}"
+  local i
+
+  for ((i = 1; i <= attempts; i++)); do
+    if jq -e "$expr" "$path" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  return 1
+}
+
 make_mock_bin() {
   local dir="$1"
   mkdir -p "$dir"
@@ -303,10 +332,13 @@ write_plan "$SUCCESS_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-succ
 SUCCESS_OUTPUT="$TMP_ROOT/success-output.txt"
 bash "$RUNNER_SCRIPT" "$SUCCESS_PLAN" > "$SUCCESS_OUTPUT" 2>&1
 
-if jq -e '.tasks["HOK-1001"].phase == "planning"' "$STATE_FILE" >/dev/null 2>&1; then
+if wait_for_jq_match '.tasks["HOK-1001"].phase == "coding"' "$STATE_FILE"; then
   pass "startup runner writes workflow state only after in-tmux startup succeeds"
 else
   fail "startup runner did not persist workflow state for the launched task"
+  dump_file_on_failure "workflow-state" "$STATE_FILE"
+  dump_file_on_failure "startup-output" "$SUCCESS_OUTPUT"
+  dump_file_on_failure "tmux-log" "$MOCK_TMUX_LOG"
 fi
 
 if grep -q 'HOK-1001|In Progress' "$MOCK_LINEAR_LOG"; then

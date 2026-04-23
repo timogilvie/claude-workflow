@@ -231,6 +231,47 @@ describe('eval-record-builder', () => {
   });
 
   describe('enrichEvalRecord', () => {
+    it('attaches planCritique to the normalized plan stage outcome', () => {
+      baseRecord.metadata = {
+        stageScores: {
+          plan: {
+            score: 0.81,
+            rationale: 'The plan covered the right implementation areas.',
+          },
+        },
+        planCritique: {
+          component_boundaries: {
+            score: 0.9,
+            rationale: 'The plan identified the correct component boundary.',
+          },
+          invariant_coverage: {
+            score: 0.7,
+            rationale: 'It captured the main compatibility invariant.',
+          },
+          approach_soundness: {
+            score: 0.8,
+            rationale: 'The proposed approach was viable.',
+          },
+          missed_patches: {
+            score: 0.78,
+            rationale: 'Implementation needed only minor follow-up fixes.',
+          },
+          overall: {
+            score: 0.8,
+            rationale: 'Overall the plan was a useful guide.',
+          },
+        },
+      };
+
+      enrichEvalRecord(baseRecord, {});
+
+      expect(baseRecord.stageOutcomes?.plan).toEqual({
+        score: 0.81,
+        rationale: 'The plan covered the right implementation areas.',
+        planCritique: baseRecord.metadata.planCritique,
+      });
+    });
+
     it('should attach all metadata when provided', () => {
       const metadata = {
         agentType: 'codex',
