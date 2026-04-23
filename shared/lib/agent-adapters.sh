@@ -1606,6 +1606,8 @@ agent_pane_is_ready() {
     sleep 0.5
   fi
 
+  local current_command
+  current_command=$(_pane_current_command "$target")
   local pane_pid
   pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
   if [[ -z "$pane_pid" ]]; then
@@ -1615,8 +1617,6 @@ agent_pane_is_ready() {
     return 0
   fi
 
-  local current_command
-  current_command=$(_pane_current_command "$target")
   if _pane_command_is_shell "$current_command"; then
     local children
     children=$(_pane_child_count "$target")
@@ -1651,6 +1651,7 @@ agent_verify_launch() {
   attempts=$(awk "BEGIN { v = $max_wait / $poll_interval; if (v < 1) v = 1; printf \"%d\", (v == int(v) ? v : int(v) + 1) }")
 
   local attempt=1
+  local introspection_available=0
   while (( attempt <= attempts )); do
     local current_command children state_changed=0
     current_command=$(_pane_current_command "$target")
@@ -1665,8 +1666,9 @@ agent_verify_launch() {
       return 0
     fi
 
-    if [[ -n "$current_command" ]] || [[ -n "$children" ]]; then
+    if [[ -n "$current_command" || -n "$children" ]]; then
       saw_probe_data=1
+      introspection_available=1
     fi
     if [[ -n "$baseline_command" ]] || [[ -n "$baseline_children" ]]; then
       if [[ "$current_command" != "$baseline_command" ]] || [[ "$children" != "${baseline_children:-}" ]]; then
