@@ -435,6 +435,16 @@ $details_context"
     startup_log "✗ $issue FAILED at step [6/7]: launching coding agent"
     return 1
   fi
+
+  # Re-persist the launched task after the pane handoff succeeds so the final
+  # workflow record reflects a fully launched coding session.
+  if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
+    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
+    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+    tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    startup_log "✗ $issue FAILED after step [6/7]: re-saving workflow state"
+    return 1
+  fi
   startup_step "[6/7] Launching agent...        ✓"
 
   if should_update_linear_for_task "$challenge_role"; then
