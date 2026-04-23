@@ -750,7 +750,7 @@ cleanup_completed_task() {
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-    execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+    execute git -C "$REPO_DIR" branch -D "$task_branch" >/dev/null 2>&1 || true
     log "  ✓ Deleted local branch: $task_branch"
     if execute git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
       log "  ✓ Deleted remote branch: $task_branch"
@@ -1106,7 +1106,7 @@ cleanup_stale_tasks() {
           if [[ "$branch" == "main" || "$branch" == "master" ]]; then
             log_warn "  Refusing to delete protected branch: $branch"
           else
-            git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
+            git -C "$REPO_DIR" branch -D "$branch" >/dev/null 2>&1 || true
             git -C "$REPO_DIR" push origin --delete "$branch" 2>/dev/null || true
           fi
         fi
@@ -4077,7 +4077,7 @@ cleanup_completed_task() {
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-    git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+    git -C "$REPO_DIR" branch -D "$task_branch" >/dev/null 2>&1 || true
     log "  ✓ Deleted local branch: $task_branch"
     if git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
       log "  ✓ Deleted remote branch: $task_branch"

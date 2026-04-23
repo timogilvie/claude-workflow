@@ -59,6 +59,14 @@ else
   fail "cleanup logging still reports generic branch deletion"
 fi
 
+if grep -Fq 'branch -D "$task_branch" >/dev/null 2>&1 || true' <<< "$HEREDOC_CONTENT" \
+  && grep -Fq 'branch -D "$task_branch" >/dev/null 2>&1 || true' <<< "$outer_cleanup" \
+  && grep -Fq 'branch -D "$branch" >/dev/null 2>&1 || true' "$MILL_SCRIPT"; then
+  pass "cleanup suppresses git branch deletion stdout in backlog paths"
+else
+  fail "cleanup still leaks git branch deletion stdout"
+fi
+
 if grep -Fq 'Remote branch already deleted or push failed: $task_branch' <<< "$HEREDOC_CONTENT" \
   && grep -Fq 'Remote branch already deleted or push failed: $task_branch' <<< "$outer_cleanup"; then
   pass "cleanup tolerates already-deleted remote branches"
