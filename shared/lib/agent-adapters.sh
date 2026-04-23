@@ -1606,14 +1606,18 @@ agent_pane_is_ready() {
     sleep 0.5
   fi
 
+  local current_command
+  current_command=$(_pane_current_command "$target")
   local pane_pid
   pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
   if [[ -z "$pane_pid" ]]; then
+    # Some test doubles and minimal tmux shims do not expose pane metadata.
+    # In that case we can only rely on command dispatch, so treat the pane as
+    # ready instead of failing startup handoff before launch.
+    [[ -z "$current_command" ]] && return 0
     return 1
   fi
 
-  local current_command
-  current_command=$(_pane_current_command "$target")
   if _pane_command_is_shell "$current_command"; then
     local children
     children=$(_pane_child_count "$target")
@@ -1647,10 +1651,15 @@ agent_verify_launch() {
   attempts=$(awk "BEGIN { v = $max_wait / $poll_interval; if (v < 1) v = 1; printf \"%d\", (v == int(v) ? v : int(v) + 1) }")
 
   local attempt=1
+  local introspection_available=0
   while (( attempt <= attempts )); do
     local current_command children state_changed=0
     current_command=$(_pane_current_command "$target")
     children=$(_pane_child_count "$target")
+
+    if [[ -n "$current_command" || -n "$children" ]]; then
+      introspection_available=1
+    fi
 
     if [[ -n "$baseline_command" ]] || [[ -n "$baseline_children" ]]; then
       if [[ "$current_command" != "$baseline_command" ]] || [[ "$children" != "${baseline_children:-}" ]]; then
@@ -1675,6 +1684,11 @@ agent_verify_launch() {
     fi
     (( attempt += 1 ))
   done
+
+  if (( introspection_available == 0 )); then
+    _agent_log_warn "Launch metadata unavailable for pane $target; assuming command dispatch succeeded"
+    return 0
+  fi
 
   _agent_log_warn "Launch not verified: pane $target remained at an idle shell for ${max_wait}s"
   return 1

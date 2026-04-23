@@ -435,7 +435,10 @@ $details_context"
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     return 1
   fi
-  local persisted_phase="planning"
+  # Startup handoff seeds planning artifacts, but launched slots should enter
+  # the active coding pool immediately so the monitor/dashboard see them as
+  # active work until stage-result reconciliation runs.
+  local persisted_phase="coding"
 
   if ! set_task_phase_local "$issue" "$persisted_phase"; then
     remove_task_state "$issue" >/dev/null 2>&1 || true
