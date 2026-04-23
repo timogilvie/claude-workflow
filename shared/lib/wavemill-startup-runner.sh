@@ -127,7 +127,7 @@ save_task_state() {
         status: $status,
         linearIssueId: $linearIssue,
         updated: (now | todate)
-      }
+      } + (if $phase != "" then {phase: $phase} else {} end)
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
       | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
       | if $challengePair != "" then .tasks[$issue].challengePairId = $challengePair else . end
@@ -138,8 +138,7 @@ save_task_state() {
       | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
       | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
       | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
-      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end
-      | if $phase != "" then .tasks[$issue].phase = $phase else . end' \
+      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end' \
      "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
     return 0
