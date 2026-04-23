@@ -165,7 +165,10 @@ set_task_phase_local() {
   local tmp
   tmp=$(mktemp) || return 1
   if jq --arg issue "$issue" --arg phase "$phase" \
-    '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+    '.tasks[$issue] = ((.tasks[$issue] // {}) + {
+      phase: $phase,
+      updated: (now | todate)
+    })' \
     "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
     return 0
