@@ -213,6 +213,15 @@ cp "$REPO_DIR/shared/lib/agent-adapters.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/model-validator.ts" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/wavemill-status.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/tools/prompts/"*.md "$TEST_REPO/tools/prompts/"
+
+# Stub agent_launch_interactive so it doesn't exercise real tmux pane readiness
+# checks against the mock tmux. Appended functions override the original at
+# source time.
+cat >> "$TEST_REPO/shared/lib/agent-adapters.sh" <<'STUB_EOF'
+
+agent_launch_interactive() { return 0; }
+agent_launch_autonomous() { return 0; }
+STUB_EOF
 printf '{}' > "$TMP_ROOT/home/.claude.json"
 printf '{"token":"ok"}' > "$TMP_ROOT/home/.codex/auth.json"
 
