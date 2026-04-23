@@ -736,13 +736,13 @@ cleanup_completed_task() {
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
   execute tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
-  log "  ✓ Closed window: $win"
+  log "debug" "  ✓ Closed window: $win"
 
   # Remove worktree
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   if [[ -d "$wt_dir" ]]; then
     execute git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
-    log "  ✓ Removed worktree: $wt_dir"
+    log "debug" "  ✓ Removed worktree: $wt_dir"
   fi
 
   # Delete branch after removing the worktree so Git can detach cleanly first.
@@ -751,9 +751,9 @@ cleanup_completed_task() {
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-    log "  ✓ Deleted local branch: $task_branch"
+    log "debug" "  ✓ Deleted local branch: $task_branch"
     if execute git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
-      log "  ✓ Deleted remote branch: $task_branch"
+      log "debug" "  ✓ Deleted remote branch: $task_branch"
     else
       log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
     fi
@@ -4063,13 +4063,13 @@ cleanup_completed_task() {
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
   tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
-  log "  ✓ Closed window: $win"
+  log "debug" "  ✓ Closed window: $win"
 
   # Remove worktree
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   if [[ -d "$wt_dir" ]]; then
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
-    log "  ✓ Removed worktree: $wt_dir"
+    log "debug" "  ✓ Removed worktree: $wt_dir"
   fi
 
   # Delete branch after removing the worktree so Git can detach cleanly first.
@@ -4078,9 +4078,9 @@ cleanup_completed_task() {
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
-    log "  ✓ Deleted local branch: $task_branch"
+    log "debug" "  ✓ Deleted local branch: $task_branch"
     if git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
-      log "  ✓ Deleted remote branch: $task_branch"
+      log "debug" "  ✓ Deleted remote branch: $task_branch"
     else
       log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
     fi
