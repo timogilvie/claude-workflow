@@ -26,7 +26,7 @@ describe('evaluateTask', () => {
 
     // Core EvalRecord fields from eval-schema.ts
     assert.ok(result.id, 'should have a UUID id');
-    assert.equal(result.schemaVersion, '1.8.0');
+    assert.equal(result.schemaVersion, '1.9.0');
     assert.equal(result.originalPrompt, 'Add a loading spinner');
     assert.ok(result.modelId);
     assert.ok(result.modelVersion);
@@ -89,6 +89,142 @@ describe('evaluateTask', () => {
     ]);
     assert.deepEqual(result.metadata.interventionFlags, ['needed-design-guidance']);
     assert.equal(result.scoreBand, 'Assisted Success');
+  });
+
+  it('stores planCritique in metadata when the judge returns it', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.88,
+      rationale: 'Implementation succeeded and the plan was mostly strong.',
+      interventionFlags: [],
+      stageScores: {
+        expansion: { score: 0.9, rationale: 'Spec was clear.' },
+        plan: { score: 0.84, rationale: 'Plan mostly identified the right work.' },
+        implementation: { score: 0.9, rationale: 'Code landed cleanly.' },
+        review: { score: 0.85, rationale: 'Review coverage was good.' },
+      },
+      planCritique: {
+        component_boundaries: {
+          score: 0.9,
+          rationale: 'The plan targeted the correct eval prompt, parser, and schema layers.',
+        },
+        invariant_coverage: {
+          score: 0.75,
+          rationale: 'It identified the key optional-field compatibility constraint.',
+        },
+        approach_soundness: {
+          score: 0.85,
+          rationale: 'The approach was viable without adding extra judge calls.',
+        },
+        missed_patches: {
+          score: 0.8,
+          rationale: 'Only minor parser cleanup was needed during implementation.',
+        },
+        overall: {
+          score: 0.82,
+          rationale: 'The plan provided a solid implementation guide.',
+        },
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Add plan critique to evals',
+        prReviewOutput: 'Changes are correct',
+        planContent: 'Implement schema, prompt, parser, and tests.',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.deepEqual(result.metadata.planCritique, {
+      component_boundaries: {
+        score: 0.9,
+        rationale: 'The plan targeted the correct eval prompt, parser, and schema layers.',
+      },
+      invariant_coverage: {
+        score: 0.75,
+        rationale: 'It identified the key optional-field compatibility constraint.',
+      },
+      approach_soundness: {
+        score: 0.85,
+        rationale: 'The approach was viable without adding extra judge calls.',
+      },
+      missed_patches: {
+        score: 0.8,
+        rationale: 'Only minor parser cleanup was needed during implementation.',
+      },
+      overall: {
+        score: 0.82,
+        rationale: 'The plan provided a solid implementation guide.',
+      },
+    });
+    assert.equal(result.metadata.stageScores.plan.score, 0.84);
+  });
+
+  it('omits planCritique when the judge does not return it', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.8,
+      rationale: 'Good execution.',
+      interventionFlags: [],
+      stageScores: {
+        expansion: { score: 0.8, rationale: 'Adequate.' },
+        plan: { score: 0.78, rationale: 'Reasonable inferred planning.' },
+        implementation: { score: 0.82, rationale: 'Correct result.' },
+        review: { score: 0.79, rationale: 'No major misses.' },
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Task without saved plan artifact',
+        prReviewOutput: 'Clean',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.equal('planCritique' in result.metadata, false);
+  });
+
+  it('ignores invalid planCritique dimensions gracefully', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.73,
+      rationale: 'Task completed.',
+      interventionFlags: [],
+      planCritique: {
+        component_boundaries: {
+          score: 1.2,
+          rationale: 'Out of range score should invalidate the object.',
+        },
+        invariant_coverage: {
+          score: 0.7,
+          rationale: 'Valid but should be dropped with the invalid object.',
+        },
+        approach_soundness: {
+          score: 0.75,
+          rationale: 'Valid but incomplete overall object.',
+        },
+        missed_patches: {
+          score: 0.8,
+          rationale: 'Valid but incomplete overall object.',
+        },
+        overall: {
+          score: 0.74,
+          rationale: 'Valid but incomplete overall object.',
+        },
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Task with malformed plan critique',
+        prReviewOutput: 'Completed',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.equal('planCritique' in result.metadata, false);
   });
 
   it('throws immediately on malformed JSON response', async () => {

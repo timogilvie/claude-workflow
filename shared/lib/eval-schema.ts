@@ -27,6 +27,8 @@
  *   fields to track cost budget constraint violations during routing (HOK-1350)
  * - **1.8.0**: Added optional `manifestRef` for per-run resource manifest
  *   attribution (HOK-1378)
+ * - **1.9.0**: Added optional `planCritique` to capture explicit planning
+ *   quality dimensions from the eval judge (HOK-1391)
  *
  * @module eval-schema
  */
@@ -616,6 +618,37 @@ export interface StageScore {
   score: number;
   /** 1-2 sentence attribution rationale */
   rationale: string;
+  /** Detailed plan critique when available for the plan stage */
+  planCritique?: PlanCritique;
+}
+
+/**
+ * A single plan-critique rubric dimension.
+ *
+ * Captures both the normalized score and the judge's rationale so plan
+ * quality can be compared directly across models.
+ */
+export interface PlanCritiqueDimension {
+  /** Quality score 0.0–1.0 for this planning dimension */
+  score: number;
+  /** 1-2 sentence rationale for the score */
+  rationale: string;
+}
+
+/**
+ * Explicit critique of plan quality across the key planning dimensions.
+ */
+export interface PlanCritique {
+  /** Whether the plan chose the right component/service boundaries */
+  component_boundaries: PlanCritiqueDimension;
+  /** Whether the plan surfaced key invariants and constraints */
+  invariant_coverage: PlanCritiqueDimension;
+  /** Whether the proposed approach was viable and correct */
+  approach_soundness: PlanCritiqueDimension;
+  /** Whether implementation had to patch around plan gaps */
+  missed_patches: PlanCritiqueDimension;
+  /** Aggregate plan-quality assessment */
+  overall: PlanCritiqueDimension;
 }
 
 /**
