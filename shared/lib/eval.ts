@@ -10,7 +10,15 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { getScoreBand, type EvalRecord, type InterventionRecord, type Outcomes, type RoutingDecision } from './eval-schema.ts';
+import {
+  getScoreBand,
+  type EvalRecord,
+  type InterventionRecord,
+  type Outcomes,
+  type PlanCritique,
+  type PlanCritiqueDimension,
+  type RoutingDecision,
+} from './eval-schema.ts';
 import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
 import { getEvalConfig } from './config.ts';
 import { loadPricingTable } from './workflow-cost.ts';
@@ -25,7 +33,7 @@ const __dirname = dirname(__filename);
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
-const SCHEMA_VERSION = '1.8.0';
+const SCHEMA_VERSION = '1.9.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 
@@ -91,6 +99,7 @@ interface JudgeResponse {
   rationale: string;
   interventionFlags: string[];
   stageScores?: Record<string, { score: number; rationale: string }>;
+  planCritique?: PlanCritique;
 }
 
 /**
@@ -232,12 +241,78 @@ function computeCost(
   return inputCost + outputCost;
 }
 
+const PLAN_CRITIQUE_DIMENSIONS = [
+  'component_boundaries',
+  'invariant_coverage',
+  'approach_soundness',
+  'missed_patches',
+  'overall',
+] as const satisfies readonly (keyof PlanCritique)[];
+
+function parsePlanCritiqueDimension(
+  value: unknown,
+): PlanCritiqueDimension | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const dimension = value as {
+    score?: number;
+    rationale?: string;
+  };
+
+  if (
+    typeof dimension.score !== 'number' ||
+    dimension.score < 0 ||
+    dimension.score > 1 ||
+    typeof dimension.rationale !== 'string'
+  ) {
+    return undefined;
+  }
+
+  const rationale = dimension.rationale.trim();
+  if (rationale.length === 0) {
+    return undefined;
+  }
+
+  return {
+    score: dimension.score,
+    rationale,
+  };
+}
+
+function parsePlanCritique(value: unknown): PlanCritique | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const rawPlanCritique = value as Partial<Record<keyof PlanCritique, unknown>>;
+  const parsedDimensions = PLAN_CRITIQUE_DIMENSIONS.reduce<
+    Partial<Record<keyof PlanCritique, PlanCritiqueDimension>>
+  >((acc, dimensionName) => {
+    const parsedDimension = parsePlanCritiqueDimension(
+      rawPlanCritique[dimensionName],
+    );
+    if (parsedDimension) {
+      acc[dimensionName] = parsedDimension;
+    }
+    return acc;
+  }, {});
+
+  if (PLAN_CRITIQUE_DIMENSIONS.every((dimensionName) => parsedDimensions[dimensionName])) {
+    return parsedDimensions as PlanCritique;
+  }
+
+  return undefined;
+}
+
 function parseJudgeResponse(raw: string): JudgeResponse {
   const parsed = parseJsonFromLLM(raw) as {
     score?: number;
     rationale?: string;
     interventionFlags?: string[];
     stageScores?: Record<string, { score?: number; rationale?: string }>;
+    planCritique?: unknown;
   };
 
   if (typeof parsed.score !== 'number' || parsed.score < 0 || parsed.score > 1) {
@@ -275,11 +350,14 @@ function parseJudgeResponse(raw: string): JudgeResponse {
     }
   }
 
+  const planCritique = parsePlanCritique(parsed.planCritique);
+
   return {
     score: parsed.score,
     rationale: parsed.rationale.trim(),
     interventionFlags: parsed.interventionFlags,
     ...(stageScores && { stageScores }),
+    ...(planCritique && { planCritique }),
   };
 }
 
@@ -373,7 +451,7 @@ export async function evaluateTask(
   const response = await callFn(prompt, model);
 
   // Parse response
-  const { score, rationale, interventionFlags, stageScores } = parseJudgeResponse(response.text);
+  const { score, rationale, interventionFlags, stageScores, planCritique } = parseJudgeResponse(response.text);
   const band = getScoreBand(score);
 
   const tokenUsage = response.usage || undefined;
@@ -408,7 +486,12 @@ export async function evaluateTask(
     ...(outcomes && { outcomes }),
     ...(routingDecision && { routingDecision }),
     ...(promptArtifacts.length > 0 && { promptArtifacts }),
-    metadata: { ...metadata, interventionFlags, ...(stageScores && { stageScores }) },
+    metadata: {
+      ...metadata,
+      interventionFlags,
+      ...(stageScores && { stageScores }),
+      ...(planCritique && { planCritique }),
+    },
   };
   const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
   attachManifestRef(record, activeSessionId);

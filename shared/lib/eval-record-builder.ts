@@ -15,6 +15,7 @@
 
 import type {
   EvalRecord,
+  PlanCritique,
   TaskContext,
   RepoContext,
   StageOutcomes,
@@ -157,7 +158,8 @@ export function attachWorkflowCostMetadata(
  */
 export function attachStageOutcomes(
   record: EvalRecord,
-  stageScores?: Record<string, { score: number; rationale: string }>
+  stageScores?: Record<string, { score: number; rationale: string }>,
+  planCritique?: PlanCritique,
 ): void {
   if (!stageScores || Object.keys(stageScores).length === 0) {
     return;
@@ -177,6 +179,7 @@ export function attachStageOutcomes(
     stageOutcomes.plan = {
       score: stageScores.plan.score,
       rationale: stageScores.plan.rationale,
+      ...(planCritique && { planCritique }),
     };
   }
 
@@ -345,5 +348,6 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   const stageScores = record.metadata?.stageScores as
     | Record<string, { score: number; rationale: string }>
     | undefined;
-  attachStageOutcomes(record, stageScores);
+  const planCritique = record.metadata?.planCritique as PlanCritique | undefined;
+  attachStageOutcomes(record, stageScores, planCritique);
 }

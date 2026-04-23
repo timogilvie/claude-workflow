@@ -110,7 +110,7 @@ EOF
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
-  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
+  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}" phase="${19:-}"
   local tmp
   tmp=$(mktemp) || return 1
   if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
@@ -118,7 +118,7 @@ save_task_state() {
      --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
      --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
      --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
+     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" --arg phase "$phase" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {
         slug: $slug,
         branch: $branch,
@@ -127,7 +127,7 @@ save_task_state() {
         status: $status,
         linearIssueId: $linearIssue,
         updated: (now | todate)
-      }
+      } + (if $phase != "" then {phase: $phase} else {} end)
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
       | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
       | if $challengePair != "" then .tasks[$issue].challengePairId = $challengePair else . end
@@ -165,7 +165,10 @@ set_task_phase_local() {
   local tmp
   tmp=$(mktemp) || return 1
   if jq --arg issue "$issue" --arg phase "$phase" \
-    '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+    '.tasks[$issue] = ((.tasks[$issue] // {}) + {
+      phase: $phase,
+      updated: (now | todate)
+    })' \
     "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
     return 0
@@ -415,13 +418,16 @@ $details_context"
   write_stage_result_local "$feature_dir" "coding" "running" "$task_agent" "${coder_model:-}" "Startup handoff launched coding" || true
   startup_step "[4/7] Writing task artifacts...  ✓"
 
+  # Persist launched tasks as active coding work in the initial state write so
+  # downstream startup checks do not depend on a second jq update succeeding.
+  local persisted_phase="coding"
+
   if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
-    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"; then
+    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
     startup_log "✗ $issue FAILED at step [5/7]: saving workflow state"
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     return 1
   fi
-  local persisted_phase="coding"
 
   if ! set_task_phase_local "$issue" "$persisted_phase"; then
     remove_task_state "$issue" >/dev/null 2>&1 || true
@@ -450,6 +456,16 @@ $details_context"
       startup_log "✗ $issue FAILED at step [7/7]: setting Linear → In Progress"
       return 1
     fi
+  fi
+
+  # Reassert the launched phase after agent dispatch and Linear updates so the
+  # final persisted state reflects active coding work even if a helper touched
+  # workflow-state during startup.
+  if ! set_task_phase_local "$issue" "$persisted_phase"; then
+    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+    tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    startup_log "✗ $issue FAILED at step [7/7]: finalizing workflow state"
+    return 1
   fi
   startup_step "[7/7] Setting Linear → In Progress... ✓"
 
