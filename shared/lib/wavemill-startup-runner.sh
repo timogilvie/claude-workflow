@@ -262,7 +262,7 @@ launch_task_from_plan() {
   local planner_model coder_model reviewer_model plan_depth code_depth review_mode route_max_cost_usd
   local challenge challenge_pair challenge_role challenge_model task_agent win
   local packet_content issue_json issue_description issue_context details_context labels_json
-  local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false
+  local feature_dir status_file coding_prompt instr_file created_window state_written created_new=false
 
   issue="$(echo "$task_json" | jq -r '.issue')"
   slug="$(echo "$task_json" | jq -r '.slug')"
@@ -411,22 +411,8 @@ $details_context"
       } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$feature_dir/.routing-complete"
     cp "$feature_dir/.routing-complete" "$feature_dir/.initial-route.json"
 
-    jq -n \
-      --arg startedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-      --arg agent "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" \
-      --arg model "${planner_model:-claude-sonnet-4-6}" \
-      '{
-        stage: "planning",
-        status: "running",
-        startedAt: $startedAt,
-        finishedAt: null,
-        agent: $agent,
-        model: $model,
-        notes: ""
-      }' > "$feature_dir/.planning-result.json"
-  else
-    write_stage_result_local "$feature_dir" "coding" "running" "$task_agent" "${coder_model:-}" "Autonomous launch started" || true
   fi
+  write_stage_result_local "$feature_dir" "coding" "running" "$task_agent" "${coder_model:-}" "Startup handoff launched coding" || true
   startup_step "[4/7] Writing task artifacts...  ✓"
 
   if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
@@ -446,13 +432,13 @@ $details_context"
   state_written=true
   startup_step "[5/7] Saving workflow state...  ✓"
 
-  planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
-  build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" > "$planning_prompt"
-  if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")" "${planner_model:-claude-sonnet-4-6}"; then
+  coding_prompt="/tmp/${SESSION}-${issue}-coding-prompt.txt"
+  build_coding_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$task_agent" > "$coding_prompt"
+  if ! agent_launch_interactive "$SESSION" "$win" "$coding_prompt" "$task_agent" "${coder_model:-}"; then
     [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-    startup_log "✗ $issue FAILED at step [6/7]: launching planning agent"
+    startup_log "✗ $issue FAILED at step [6/7]: launching coding agent"
     return 1
   fi
   startup_step "[6/7] Launching agent...        ✓"

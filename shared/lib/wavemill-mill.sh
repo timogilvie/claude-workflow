@@ -1172,8 +1172,6 @@ inflight_tasks="$(detect_inflight_tasks)"
 if [[ -n "$inflight_tasks" ]]; then
   inflight_count=$(printf '%s\n' "$inflight_tasks" | grep -c .)
   inflight_primary_count=$(count_inflight_primary_tasks "$inflight_tasks")
-  available_startup_slots=$((EFFECTIVE_MAX_PARALLEL - inflight_primary_count))
-  (( available_startup_slots < 0 )) && available_startup_slots=0
 
   echo ""
   log "status" "Found $inflight_count in-flight task(s) from a previous session:"
@@ -1200,36 +1198,19 @@ if [[ -n "$inflight_tasks" ]]; then
   done <<<"$inflight_tasks"
 
   echo ""
-  if (( available_startup_slots > 0 )); then
-    log "info" "Resume impact: $inflight_primary_count slot(s) already in use, $available_startup_slots slot(s) available for new work"
-  else
-    log "info" "Resume impact: all $EFFECTIVE_MAX_PARALLEL startup slot(s) are already occupied by in-flight primary tasks"
-  fi
-  echo ""
   echo "Options:"
   echo "  r  Resume these tasks (skip backlog selection)"
-  echo "  a  Resume these tasks and pick additional tasks from backlog"
   echo "  f  Ignore old state and start fresh"
   echo "  q  Quit"
 
   while true; do
     echo ""
-    echo "Choose: [r/a/f/q]"
+    echo "Choose: [r/f/q]"
     read -r RESUME_CHOICE
     case "${RESUME_CHOICE:-}" in
       r|R)
         SKIP_BACKLOG_SELECTION=true
         STARTUP_SLOT_LIMIT=0
-        break
-        ;;
-      a|A)
-        if (( available_startup_slots == 0 )); then
-          log "status" "No startup slots are available for new work. Resuming existing tasks only."
-          SKIP_BACKLOG_SELECTION=true
-          STARTUP_SLOT_LIMIT=0
-        else
-          STARTUP_SLOT_LIMIT="$available_startup_slots"
-        fi
         break
         ;;
       f|F)
