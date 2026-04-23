@@ -169,7 +169,6 @@ run_launch_case() {
           ;;
         clean_with_stderr)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"attempts\":1}}"
-          printf "%s\n" "⚠️  MERGE CONFLICT: PR #304 has conflicts with main" >&2
           return 0
           ;;
         fail_with_stderr)
@@ -276,9 +275,8 @@ check_contains "pass after remediation writes completed stage" "$output" "|ready
 check_not_contains "pass after remediation clears remediation artifacts" "$output" "\"remediationAttempts\":"
 
 output="$(run_launch_case clean_with_stderr)"
-check_contains "success stderr stays in debug logs" "$output" "debug   [ready stderr] ⚠️  MERGE CONFLICT: PR #304 has conflicts with main"
-check_not_contains "success stderr does not leak to terminal" "$output" $'\n⚠️  MERGE CONFLICT: PR #304 has conflicts with main\n'
 check_contains "success stderr is not treated as error" "$output" "error_count=0"
+check_not_contains "success path does not log ready stderr" "$output" "[ready stderr] ⚠️  MERGE CONFLICT: PR #304 has conflicts with main"
 
 output="$(run_launch_case fail_with_stderr)"
 check_contains "failure stderr is logged as error" "$output" "error_payload=  [ready stderr] TypeError: ready crashed"

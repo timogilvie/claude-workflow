@@ -1645,6 +1645,7 @@ agent_verify_launch() {
   local baseline_command="${5:-}"
   local baseline_children="${6:-}"
   local target="$session:$window"
+  local saw_probe_data=0
 
   local attempts
   attempts=$(awk "BEGIN { v = $max_wait / $poll_interval; if (v < 1) v = 1; printf \"%d\", (v == int(v) ? v : int(v) + 1) }")
@@ -1656,15 +1657,19 @@ agent_verify_launch() {
     current_command=$(_pane_current_command "$target")
     children=$(_pane_child_count "$target")
 
-    if [[ -z "$current_command" && -z "$children" ]]; then
-      _agent_log_debug "Launch verification unavailable for $target; accepting best-effort dispatch"
+    if (( attempt == 1 )) \
+      && [[ -z "$baseline_command" ]] \
+      && [[ -z "${baseline_children:-}" ]] \
+      && [[ -z "$current_command" ]] \
+      && [[ -z "$children" ]]; then
+      _agent_log_warn "Launch could not be verified: tmux pane metadata unavailable for $target; assuming dispatch succeeded"
       return 0
     fi
 
     if [[ -n "$current_command" || -n "$children" ]]; then
+      saw_probe_data=1
       introspection_available=1
     fi
-
     if [[ -n "$baseline_command" ]] || [[ -n "$baseline_children" ]]; then
       if [[ "$current_command" != "$baseline_command" ]] || [[ "$children" != "${baseline_children:-}" ]]; then
         state_changed=1
@@ -1688,6 +1693,11 @@ agent_verify_launch() {
     fi
     (( attempt += 1 ))
   done
+
+  if (( ! saw_probe_data )); then
+    _agent_log_warn "Launch could not be verified after retries: tmux pane metadata unavailable for $target; assuming dispatch succeeded"
+    return 0
+  fi
 
   _agent_log_warn "Launch not verified: pane $target remained at an idle shell for ${max_wait}s"
   return 1

@@ -138,7 +138,8 @@ save_task_state() {
       | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
       | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
       | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
-      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end' \
+      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end
+      | if $phase != "" then .tasks[$issue].phase = $phase else . end' \
      "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
     return 0
@@ -421,7 +422,6 @@ $details_context"
   # Persist launched tasks as active coding work in the initial state write so
   # downstream startup checks do not depend on a second jq update succeeding.
   local persisted_phase="coding"
-
   if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
     "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
     startup_log "✗ $issue FAILED at step [5/7]: saving workflow state"
@@ -445,6 +445,16 @@ $details_context"
     [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED at step [6/7]: launching coding agent"
+    return 1
+  fi
+
+  # Re-persist the launched task after the pane handoff succeeds so the final
+  # workflow record reflects a fully launched coding session.
+  if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
+    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
+    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+    tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    startup_log "✗ $issue FAILED after step [6/7]: re-saving workflow state"
     return 1
   fi
   startup_step "[6/7] Launching agent...        ✓"
