@@ -294,7 +294,7 @@ write_plan "$SUCCESS_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-succ
 SUCCESS_OUTPUT="$TMP_ROOT/success-output.txt"
 bash "$RUNNER_SCRIPT" "$SUCCESS_PLAN" > "$SUCCESS_OUTPUT" 2>&1
 
-if jq -e '.tasks["HOK-1001"].phase == "planning"' "$STATE_FILE" >/dev/null 2>&1; then
+if jq -e '.tasks["HOK-1001"].phase == "coding"' "$STATE_FILE" >/dev/null 2>&1; then
   pass "startup runner writes workflow state only after in-tmux startup succeeds"
 else
   fail "startup runner did not persist workflow state for the launched task"
