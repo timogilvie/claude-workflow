@@ -118,6 +118,62 @@ function makeEvalRecord(id: string, modelId: string, stageScores: {
   } as EvalRecord;
 }
 
+function makeRubricDescriptor(modelId: string, meanScore: number, overrides: Partial<TaskDescriptor> = {}): TaskDescriptor {
+  return makeDescriptor({
+    stages: {
+      planner: { model: modelId, cost_usd: 1.5 },
+      coder: { model: modelId, cost_usd: 6 },
+      reviewer: { model: modelId, cost_usd: 1.5 },
+    },
+    rubric: {
+      has_rubric: true,
+      criterion_count: 5,
+      mean_score: meanScore,
+      criteria_scores: {
+        completeness: meanScore,
+        correctness: meanScore,
+        code_quality: meanScore,
+        intervention_impact: meanScore,
+        autonomy: meanScore,
+      },
+    },
+    ...overrides,
+  });
+}
+
+function makeRubricEvalRecord(id: string, modelId: string, stageScores: {
+  plan: number;
+  implementation: number;
+  review: number;
+}, meanScore: number, overrides: Partial<EvalRecord> = {}): EvalRecord {
+  return makeEvalRecord(id, modelId, stageScores, {
+    taskDescriptor: makeRubricDescriptor(modelId, meanScore),
+    ...overrides,
+  });
+}
+
+function makeRouterConfigWithRubricAware(rubricAware: Record<string, unknown>) {
+  return {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 50,
+      stageBlendWeight: 0.3,
+      defaultAgent: 'claude',
+      agentMap: {
+        'claude-opus-4-6': 'claude',
+        'claude-sonnet-4-6': 'claude',
+        'claude-haiku-4-5-20251001': 'claude',
+        'gpt-5.3-codex': 'codex',
+        'gpt-5.4': 'codex',
+      },
+      rubricAware,
+    },
+  };
+}
+
 function makeSchemaV1Descriptor(overrides: Partial<TaskDescriptor> = {}): TaskDescriptor {
   return {
     ...makeDescriptor(overrides),
@@ -791,6 +847,233 @@ test('loadStageAwareEvalRecords merges additionalEvalsPaths into final record se
   } finally {
     cleanupMain();
     rmSync(additionalDir, { recursive: true, force: true });
+  }
+});
+
+test('rubric-aware: mode=off is byte-identical to baseline', () => {
+  const records = [
+    makeRubricEvalRecord('rubric-off-1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }, 0.2),
+    makeEvalRecord('rubric-off-2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeRubricEvalRecord('rubric-off-3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }, 0.9),
+  ];
+  const baseline = makeRepoWithStageAwareData(records);
+  const off = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({ mode: 'off' }));
+
+  try {
+    const baselineDecision = routeStageAware('Build a backend feature with tests and review.', { repoDir: baseline.repoDir, kNeighbors: 3 });
+    const offDecision = routeStageAware('Build a backend feature with tests and review.', { repoDir: off.repoDir, kNeighbors: 3 });
+    assert.deepEqual(offDecision, baselineDecision);
+  } finally {
+    baseline.cleanup();
+    off.cleanup();
+  }
+});
+
+test('rubric-aware: records without rubric participate via scalar path', () => {
+  const records = [
+    ...Array.from({ length: 40 }, (_, index) => makeEvalRecord(
+      `rubric-mixed-legacy-${index}`,
+      'claude-opus-4-6',
+      { plan: 0.82, implementation: 0.82, review: 0.82 },
+    )),
+    ...Array.from({ length: 10 }, (_, index) => makeRubricEvalRecord(
+      `rubric-mixed-aware-${index}`,
+      'gpt-5.3-codex',
+      { plan: 0.78, implementation: 0.78, review: 0.78 },
+      0.9,
+    )),
+  ];
+  const neighbors = records.map((record) => ({
+    record,
+    descriptor: record.taskDescriptor as TaskDescriptor,
+    similarity: 0.9,
+  }));
+
+  const { rankings } = rankModelsPerStage(neighbors, {}, 0.3, 0.3);
+  const totalSupport = rankings[0].candidates.reduce((sum, candidate) => sum + candidate.support, 0);
+  assert.equal(totalSupport, 50);
+});
+
+test('rubric-aware: sparse coverage triggers fallback with rationale', () => {
+  const records = [
+    ...Array.from({ length: 45 }, (_, index) => makeEvalRecord(
+      `rubric-sparse-legacy-${index}`,
+      index % 2 === 0 ? 'claude-opus-4-6' : 'gpt-5.3-codex',
+      { plan: 0.85, implementation: 0.85, review: 0.85 },
+    )),
+    ...Array.from({ length: 5 }, (_, index) => makeRubricEvalRecord(
+      `rubric-sparse-aware-${index}`,
+      'claude-haiku-4-5-20251001',
+      { plan: 0.7, implementation: 0.7, review: 0.7 },
+      1,
+    )),
+  ];
+  const baseline = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({ mode: 'off' }));
+  const sparse = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({
+    mode: 'on',
+    minCoverage: 0.3,
+    weight: 0.5,
+  }));
+
+  try {
+    const baselineDecision = routeStageAware('Build a backend feature with tests and review.', { repoDir: baseline.repoDir, kNeighbors: 50 });
+    const sparseDecision = routeStageAware('Build a backend feature with tests and review.', { repoDir: sparse.repoDir, kNeighbors: 50 });
+    assert.ok(baselineDecision);
+    assert.ok(sparseDecision);
+    assert.equal(sparseDecision?.planner, baselineDecision?.planner);
+    assert.equal(sparseDecision?.coder, baselineDecision?.coder);
+    assert.equal(sparseDecision?.reviewer, baselineDecision?.reviewer);
+    assert.match(sparseDecision?.reasoning[0] || '', /rubric-aware fallback/);
+    assert.match(sparseDecision?.reasoning[0] || '', /coverage 0\.10 < minCoverage 0\.30/);
+  } finally {
+    baseline.cleanup();
+    sparse.cleanup();
+  }
+});
+
+test('rubric-aware: mode=on with sufficient coverage uses rubric scores', () => {
+  const records = [
+    ...Array.from({ length: 15 }, (_, index) => makeRubricEvalRecord(
+      `rubric-on-opus-${index}`,
+      'claude-opus-4-6',
+      { plan: 0.9, implementation: 0.9, review: 0.9 },
+      0.1,
+    )),
+    ...Array.from({ length: 15 }, (_, index) => makeRubricEvalRecord(
+      `rubric-on-codex-${index}`,
+      'gpt-5.3-codex',
+      { plan: 0.7, implementation: 0.7, review: 0.7 },
+      1,
+    )),
+  ];
+  const neighbors = records.map((record) => ({
+    record,
+    descriptor: record.taskDescriptor as TaskDescriptor,
+    similarity: 0.9,
+  }));
+  const scalar = rankModelsPerStage(neighbors, {}, 0.3, 0);
+  const rubric = rankModelsPerStage(neighbors, {}, 0.3, 0.5);
+  const scalarTopScore = scalar.rankings[0].candidates[0].score;
+  const rubricTopScore = rubric.rankings[0].candidates[0].score;
+  assert.notEqual(Number(rubricTopScore.toFixed(3)), Number(scalarTopScore.toFixed(3)));
+
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({
+    mode: 'on',
+    minCoverage: 1,
+    weight: 0.5,
+  }));
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir, kNeighbors: 30 });
+    assert.ok(decision);
+    assert.equal(decision?.planner, 'gpt-5.3-codex');
+    assert.match(decision?.reasoning[0] || '', /rubric-aware \(mode=on/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('rubric-aware: shadow mode emits scalar decision + side-channel', () => {
+  const records = [
+    ...Array.from({ length: 10 }, (_, index) => makeRubricEvalRecord(
+      `rubric-shadow-opus-${index}`,
+      'claude-opus-4-6',
+      { plan: 0.9, implementation: 0.9, review: 0.9 },
+      0.1,
+    )),
+    ...Array.from({ length: 10 }, (_, index) => makeRubricEvalRecord(
+      `rubric-shadow-codex-${index}`,
+      'gpt-5.3-codex',
+      { plan: 0.7, implementation: 0.7, review: 0.7 },
+      1,
+    )),
+  ];
+  const off = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({ mode: 'off' }));
+  const shadow = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({
+    mode: 'shadow',
+    minCoverage: 1,
+    weight: 0.5,
+  }));
+
+  try {
+    const offDecision = routeStageAware('Build a backend feature with tests and review.', { repoDir: off.repoDir, kNeighbors: 20 });
+    const shadowDecision = routeStageAware('Build a backend feature with tests and review.', { repoDir: shadow.repoDir, kNeighbors: 20 });
+    assert.ok(offDecision);
+    assert.ok(shadowDecision);
+    assert.equal(shadowDecision?.planner, offDecision?.planner);
+    assert.equal(shadowDecision?.coder, offDecision?.coder);
+    assert.equal(shadowDecision?.reviewer, offDecision?.reviewer);
+    assert.ok(shadowDecision?.shadowDecision);
+    assert.equal(shadowDecision?.shadowDecision?.planner, 'gpt-5.3-codex');
+    assert.match(shadowDecision?.reasoning[0] || '', /rubric-aware \(mode=shadow/);
+  } finally {
+    off.cleanup();
+    shadow.cleanup();
+  }
+});
+
+test('rubric-aware: schema config loads with partial rubricAware section', () => {
+  const records = [
+    makeRubricEvalRecord('rubric-partial-1', 'claude-opus-4-6', { plan: 0.9, implementation: 0.9, review: 0.9 }, 0.8),
+    makeRubricEvalRecord('rubric-partial-2', 'gpt-5.3-codex', { plan: 0.8, implementation: 0.8, review: 0.8 }, 0.8),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({ mode: 'on' }));
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir, kNeighbors: 2 });
+    assert.ok(decision);
+    assert.match(decision?.reasoning[0] || '', /rubric-aware \(mode=on, coverage=1\.00, weight=0\.3\)/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('rubric-aware: comparison test non-regression on mixed dataset', () => {
+  const models = ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-haiku-4-5-20251001'];
+  const records = Array.from({ length: 100 }, (_, index) => {
+    const modelId = models[index % models.length];
+    const score = 0.72 + ((index % 9) * 0.02);
+    if (index < 60) {
+      return makeRubricEvalRecord(
+        `rubric-regression-aware-${index}`,
+        modelId,
+        { plan: score, implementation: score, review: score },
+        Math.min(1, Math.max(0, score + (((index % 3) - 1) * 0.03))),
+      );
+    }
+    return makeEvalRecord(
+      `rubric-regression-legacy-${index}`,
+      modelId,
+      { plan: score, implementation: score, review: score },
+    );
+  });
+  const scalar = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({ mode: 'off' }));
+  const rubric = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({
+    mode: 'on',
+    minCoverage: 0.3,
+    weight: 0.3,
+  }));
+
+  try {
+    let agreements = 0;
+    for (let index = 0; index < 20; index += 1) {
+      const prompt = `Build backend feature ${index} with tests and review.`;
+      const scalarDecision = routeStageAware(prompt, { repoDir: scalar.repoDir, kNeighbors: 50 });
+      const rubricDecision = routeStageAware(prompt, { repoDir: rubric.repoDir, kNeighbors: 50 });
+      assert.ok(scalarDecision);
+      assert.ok(rubricDecision);
+      if (
+        scalarDecision?.planner === rubricDecision?.planner &&
+        scalarDecision?.coder === rubricDecision?.coder &&
+        scalarDecision?.reviewer === rubricDecision?.reviewer
+      ) {
+        agreements += 1;
+      }
+    }
+    assert.ok(agreements / 20 >= 0.8, `agreement was ${agreements}/20`);
+  } finally {
+    scalar.cleanup();
+    rubric.cleanup();
   }
 });
 

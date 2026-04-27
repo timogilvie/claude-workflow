@@ -66,6 +66,36 @@ Contract notes:
 - Legacy rows without rubric criteria must continue to omit `taskDescriptor.rubric`.
 - Consumers should treat unknown future keys as forward-compatible additions only when schema versions permit.
 
+## Router Rollout
+
+Stage-aware routing consumes rubric descriptors through `router.rubricAware`:
+
+```json
+{
+  "router": {
+    "rubricAware": {
+      "mode": "shadow",
+      "minCoverage": 0.3,
+      "weight": 0.3
+    }
+  }
+}
+```
+
+Rollout sequence:
+
+- `off`: Default behavior. The router ignores rubric descriptors and uses scalar stage scores only.
+- `shadow`: Canonical routing remains scalar-only. When the nearest-neighbor window meets `minCoverage`, the router also computes a rubric-aware `shadowDecision`.
+- `on`: When the nearest-neighbor window meets `minCoverage`, each rubric-bearing record blends its scalar stage score with `rubric.mean_score`: `scalar * (1 - weight) + rubricMean * weight`.
+
+Coverage is measured across the nearest-neighbor window after KNN selection: `rubriced_neighbors / total_neighbors`. Legacy rows still participate through the scalar path. If coverage is below `minCoverage`, `shadowDecision` is `null` in shadow mode and `on` mode falls back to scalar scoring.
+
+Decision reasoning starts with one of these tags when rubric-aware config is active:
+
+- `rubric-aware (mode=shadow, coverage=0.60, weight=0.3)`
+- `rubric-aware (mode=on, coverage=0.60, weight=0.3)`
+- `rubric-aware fallback: coverage 0.10 < minCoverage 0.30`
+
 ## Schema Reference
 
 See the `1.13.0` changelog entry in [shared/lib/eval-schema.ts](../shared/lib/eval-schema.ts).
