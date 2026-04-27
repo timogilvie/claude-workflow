@@ -332,13 +332,23 @@ write_plan "$SUCCESS_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-succ
 SUCCESS_OUTPUT="$TMP_ROOT/success-output.txt"
 bash "$RUNNER_SCRIPT" "$SUCCESS_PLAN" > "$SUCCESS_OUTPUT" 2>&1
 
-if wait_for_jq_match '.tasks["HOK-1001"].phase == "coding"' "$STATE_FILE"; then
+if wait_for_jq_match '.tasks["HOK-1001"].phase == "planning"' "$STATE_FILE"; then
   pass "startup runner writes workflow state only after in-tmux startup succeeds"
 else
   fail "startup runner did not persist workflow state for the launched task"
   dump_file_on_failure "workflow-state" "$STATE_FILE"
   dump_file_on_failure "startup-output" "$SUCCESS_OUTPUT"
   dump_file_on_failure "tmux-log" "$MOCK_TMUX_LOG"
+fi
+
+SUCCESS_FEATURE_DIR="$TEST_REPO/worktrees/alpha-task/features/alpha-task"
+if jq -e '.stage == "planning" and .status == "running"' "$SUCCESS_FEATURE_DIR/.planning-result.json" >/dev/null 2>&1 \
+  && [[ ! -f "$SUCCESS_FEATURE_DIR/.coding-result.json" ]]; then
+  pass "startup runner launches planning before coding"
+else
+  fail "startup runner did not enforce planning-first launch"
+  dump_file_on_failure "planning-result" "$SUCCESS_FEATURE_DIR/.planning-result.json"
+  dump_file_on_failure "coding-result" "$SUCCESS_FEATURE_DIR/.coding-result.json"
 fi
 
 if grep -q 'HOK-1001|In Progress' "$MOCK_LINEAR_LOG"; then
