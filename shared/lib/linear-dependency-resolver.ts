@@ -1,8 +1,8 @@
 import type { LinearIssue } from './linear.ts';
 
 export interface ResolvedDependencies {
-  dependsOn: string[];
-  dependsOnLinear: string[];
+  depends_on: string[];
+  depends_on_linear: string[];
 }
 
 /**
@@ -40,8 +40,16 @@ export async function resolveLinearDependencies(
     }
   }
 
+  // Sort deterministically for consistent output
+  const prRefs = [...dependsOnSet].sort((a, b) => {
+    const numA = Number.parseInt(a.slice(3), 10);
+    const numB = Number.parseInt(b.slice(3), 10);
+    return numA - numB;
+  });
+  const linearIds = [...dependsOnLinearSet].sort();
+
   return {
-    dependsOn: [...dependsOnSet],
-    dependsOnLinear: [...dependsOnLinearSet],
+    depends_on: prRefs,
+    depends_on_linear: linearIds,
   };
 }

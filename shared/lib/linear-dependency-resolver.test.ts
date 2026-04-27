@@ -38,8 +38,8 @@ describe('resolveLinearDependencies', () => {
 
     const result = await resolveLinearDependencies(issue, () => 123);
 
-    assert.deepEqual(result.dependsOn, ['PR#123']);
-    assert.deepEqual(result.dependsOnLinear, []);
+    assert.deepEqual(result.depends_on, ['PR#123']);
+    assert.deepEqual(result.depends_on_linear, []);
   });
 
   it('falls back to dependsOnLinear when resolvePr returns null', async () => {
@@ -49,8 +49,8 @@ describe('resolveLinearDependencies', () => {
 
     const result = await resolveLinearDependencies(issue, () => null);
 
-    assert.deepEqual(result.dependsOn, []);
-    assert.deepEqual(result.dependsOnLinear, ['HOK-100']);
+    assert.deepEqual(result.depends_on, []);
+    assert.deepEqual(result.depends_on_linear, ['HOK-100']);
   });
 
   it('excludes blockers with completedAt set', async () => {
@@ -62,8 +62,8 @@ describe('resolveLinearDependencies', () => {
 
     const result = await resolveLinearDependencies(issue, () => 123);
 
-    assert.deepEqual(result.dependsOn, []);
-    assert.deepEqual(result.dependsOnLinear, []);
+    assert.deepEqual(result.depends_on, []);
+    assert.deepEqual(result.depends_on_linear, []);
   });
 
   it('excludes blockers with canceledAt set', async () => {
@@ -75,8 +75,8 @@ describe('resolveLinearDependencies', () => {
 
     const result = await resolveLinearDependencies(issue, () => 123);
 
-    assert.deepEqual(result.dependsOn, []);
-    assert.deepEqual(result.dependsOnLinear, []);
+    assert.deepEqual(result.depends_on, []);
+    assert.deepEqual(result.depends_on_linear, []);
   });
 
   it('handles mixed: resolved, unresolved, and canceled blockers', async () => {
@@ -93,8 +93,8 @@ describe('resolveLinearDependencies', () => {
     const resolvePr = (id: string) => (id === 'HOK-200' ? 42 : null);
     const result = await resolveLinearDependencies(issue, resolvePr);
 
-    assert.deepEqual(result.dependsOn, ['PR#42']);
-    assert.deepEqual(result.dependsOnLinear, ['HOK-201']);
+    assert.deepEqual(result.depends_on, ['PR#42']);
+    assert.deepEqual(result.depends_on_linear, ['HOK-201']);
   });
 
   it('returns empty arrays when no relations exist', async () => {
@@ -102,8 +102,8 @@ describe('resolveLinearDependencies', () => {
 
     const result = await resolveLinearDependencies(issue, () => 123);
 
-    assert.deepEqual(result.dependsOn, []);
-    assert.deepEqual(result.dependsOnLinear, []);
+    assert.deepEqual(result.depends_on, []);
+    assert.deepEqual(result.depends_on_linear, []);
   });
 
   it('returns empty arrays when inverseRelations is empty', async () => {
@@ -111,8 +111,8 @@ describe('resolveLinearDependencies', () => {
 
     const result = await resolveLinearDependencies(issue, () => 123);
 
-    assert.deepEqual(result.dependsOn, []);
-    assert.deepEqual(result.dependsOnLinear, []);
+    assert.deepEqual(result.depends_on, []);
+    assert.deepEqual(result.depends_on_linear, []);
   });
 
   it('falls back to dependsOnLinear when resolvePr throws', async () => {
@@ -124,8 +124,8 @@ describe('resolveLinearDependencies', () => {
       throw new Error('network error');
     });
 
-    assert.deepEqual(result.dependsOn, []);
-    assert.deepEqual(result.dependsOnLinear, ['HOK-100']);
+    assert.deepEqual(result.depends_on, []);
+    assert.deepEqual(result.depends_on_linear, ['HOK-100']);
   });
 
   it('deduplicates identical identifiers', async () => {
@@ -137,8 +137,8 @@ describe('resolveLinearDependencies', () => {
 
     const result = await resolveLinearDependencies(issue, () => 42);
 
-    assert.deepEqual(result.dependsOn, ['PR#42']);
-    assert.deepEqual(result.dependsOnLinear, []);
+    assert.deepEqual(result.depends_on, ['PR#42']);
+    assert.deepEqual(result.depends_on_linear, []);
   });
 
   it('ignores non-blocks relation types', async () => {
@@ -153,7 +153,7 @@ describe('resolveLinearDependencies', () => {
 
     const result = await resolveLinearDependencies(issue, () => 123);
 
-    assert.deepEqual(result.dependsOn, []);
-    assert.deepEqual(result.dependsOnLinear, []);
+    assert.deepEqual(result.depends_on, []);
+    assert.deepEqual(result.depends_on_linear, []);
   });
 });
