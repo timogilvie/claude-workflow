@@ -99,6 +99,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Fall back to full model pool if no degraded candidates exist (with warning)
 - Register agent configurations and DSPy artifacts as resources when they are used in routing decisions
 - Wrap resource registration in try-catch to ensure registry failures do not break routing
+- Gate rubric-aware stage scoring on nearest-neighbor window coverage, not per-record coverage
 
 ### DON'T
 - Trigger constrained mode while any frontier model is healthy
@@ -116,6 +117,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 | A non-frontier model is selected while a healthy frontier sibling is available | Frontier-sibling substitution was skipped, or `below-frontier-substitute` exclusions were not applied | Verify `findHealthyFrontierSibling()` can see the current quota snapshot and `resolveModel()` is excluding non-frontier candidates in the mixed-frontier path |
 | No policy-adjustment line appears for a frontier-to-frontier swap | The route never passed through `logPolicyAdjustment()` or `logFinalFrontierSubstitution()` for that path | Confirm routing stayed out of degraded mode and note that `routingMode === 'policy'` intentionally skips the final frontier-substitution log |
 | `heuristic-fallback, neighbors=0` appears in degraded mode despite populated `evals.jsonl` | The degraded `modelsAvailable` allowlist filters every k-nearest neighbor before stage selection, so `routeStageAware()` returns `null` and the caller reports zero neighbors | Retry `rankModelsPerStage()` without model constraints when filtering caused the null, return `stage-aware-partial`, and let the caller overlay degraded model selection while preserving the real neighbor count |
+| Rubric-aware mode is enabled but scalar routing still wins | Rubric coverage in the nearest-neighbor window is below `router.rubricAware.minCoverage` | Check decision reasoning for `rubric-aware fallback`; lower `minCoverage` only after validating mixed-dataset behavior |
 
 ## Testing Patterns
 
@@ -141,6 +143,10 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - `shared/lib/stage-aware-router.ts` — KNN-based routing used by degraded modes after aggregate frontier exhaustion/degradation is confirmed
 
 ## Recent Changes
+
+### 2026-04-27T00:00:00.000Z - HOK-1410: Rubric-aware stage labels in stage-aware routing
+**Changed:** Stage-aware routing can now blend per-record rubric mean scores with scalar stage scores behind `router.rubricAware`. The default remains `off`; `shadow` records a side-channel decision while preserving scalar routing, and `on` uses rubric-aware scoring when nearest-neighbor coverage meets the configured threshold.
+**Impact:** Historical records with rubric descriptors can improve per-stage model ranking without dropping legacy records. Sparse mixed windows explicitly fall back to scalar scoring and prepend a `rubric-aware fallback` rationale.
 
 ### 2026-04-21T14:28:57.564Z - HOK-1378: Create a first-class resource registry and per-run resource manifest
 **Changed:** Routing functions now register agent configurations and DSPy artifacts as resources and record their use in per-session manifests. All major routing entry points (`routeWorkflowStageAware`, `routeWorkflowHokusai`, `routeWorkflowAuto`) register the planner, coder, and reviewer models; artifact loading also triggers registration and use recording.

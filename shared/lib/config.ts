@@ -151,6 +151,11 @@ export interface RouterConfig {
   kNeighbors?: number;
   backfilledEvalsPath?: string;
   stageBlendWeight?: number;
+  rubricAware?: {
+    mode?: 'off' | 'shadow' | 'on';
+    minCoverage?: number;
+    weight?: number;
+  };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
 }

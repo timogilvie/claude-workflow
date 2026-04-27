@@ -42,6 +42,7 @@ export interface StageAwareDecision extends WorkflowRouteDecision {
   neighborCount: number;
   neighborSimilarityRange: [number, number];
   expectedCost: number;
+  shadowDecision?: StageAwareDecision | null;
 }
 
 export interface ScoredNeighbor {
@@ -86,6 +87,8 @@ const DEFAULT_K_NEIGHBORS = 20;
 const DEFAULT_MIN_RECORDS = 20;
 const DEFAULT_MIN_MODELS = 2;
 const DEFAULT_STAGE_BLEND_WEIGHT = 0.3;
+const DEFAULT_RUBRIC_AWARE_MIN_COVERAGE = 0.3;
+const DEFAULT_RUBRIC_AWARE_WEIGHT = 0.3;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -354,6 +357,45 @@ function stageScoreFromRecord(
   return clamp(typeof record.score === 'number' ? record.score : 0, 0, 1);
 }
 
+export function extractRubricScore(descriptor: TaskDescriptor): number | null {
+  const rubric = descriptor.rubric;
+  if (
+    !rubric?.has_rubric ||
+    rubric.criterion_count <= 0 ||
+    typeof rubric.mean_score !== 'number' ||
+    !Number.isFinite(rubric.mean_score)
+  ) {
+    return null;
+  }
+
+  return clamp(rubric.mean_score, 0, 1);
+}
+
+export function computeRubricCoverage(neighbors: ScoredNeighbor[]): number {
+  if (neighbors.length === 0) {
+    return 0;
+  }
+
+  const rubricCount = neighbors.filter((neighbor) => extractRubricScore(neighbor.descriptor) !== null).length;
+  return rubricCount / neighbors.length;
+}
+
+function stageScoreFromRecordRubricAware(
+  record: EvalRecord,
+  stageKey: 'plan' | 'implementation' | 'review',
+  stageBlendWeight: number,
+  rubricWeight: number,
+): number {
+  const scalarScore = stageScoreFromRecord(record, stageKey, stageBlendWeight);
+  const rubricScore = extractRubricScore(descriptorFromEvalRecord(record));
+
+  if (rubricScore === null || rubricWeight <= 0) {
+    return scalarScore;
+  }
+
+  return clamp(scalarScore * (1 - rubricWeight) + rubricScore * rubricWeight, 0, 1);
+}
+
 /**
  * Resolve the model that actually handled the given stage on this record.
  *
@@ -428,6 +470,7 @@ function aggregateRoleRanking(
   stageKey: 'plan' | 'implementation' | 'review',
   constraints: StageAwareConstraints,
   stageBlendWeight: number,
+  rubricWeight: number,
 ): RoleRanking {
   const allowedModels = resolveModelsForRole(constraints, role);
 
@@ -453,7 +496,9 @@ function aggregateRoleRanking(
       support: 0,
     };
     const similarityWeight = Math.max(neighbor.similarity, 0.001);
-    const stageScore = stageScoreFromRecord(neighbor.record, stageKey, stageBlendWeight);
+    const stageScore = rubricWeight > 0
+      ? stageScoreFromRecordRubricAware(neighbor.record, stageKey, stageBlendWeight, rubricWeight)
+      : stageScoreFromRecord(neighbor.record, stageKey, stageBlendWeight);
     const stageCost = stageCostFromRecord(neighbor.record, role, modelId);
 
     bucket.scoreWeight += similarityWeight;
@@ -529,14 +574,16 @@ export function rankModelsPerStage(
   neighbors: ScoredNeighbor[],
   constraints: StageAwareConstraints = {},
   stageBlendWeight = DEFAULT_STAGE_BLEND_WEIGHT,
+  rubricWeight = 0,
 ): {
   rankings: RoleRanking[];
   selection: CombinationDecision | null;
 } {
+  const boundedRubricWeight = clamp(rubricWeight, 0, 1);
   const rankings = [
-    aggregateRoleRanking(neighbors, 'planner', 'plan', constraints, stageBlendWeight),
-    aggregateRoleRanking(neighbors, 'coder', 'implementation', constraints, stageBlendWeight),
-    aggregateRoleRanking(neighbors, 'reviewer', 'review', constraints, stageBlendWeight),
+    aggregateRoleRanking(neighbors, 'planner', 'plan', constraints, stageBlendWeight, boundedRubricWeight),
+    aggregateRoleRanking(neighbors, 'coder', 'implementation', constraints, stageBlendWeight, boundedRubricWeight),
+    aggregateRoleRanking(neighbors, 'reviewer', 'review', constraints, stageBlendWeight, boundedRubricWeight),
   ];
 
   return {
@@ -621,6 +668,11 @@ function buildStageAwareDecision(
   };
 }
 
+function prependRubricReasoning(decision: StageAwareDecision, message: string): StageAwareDecision {
+  decision.reasoning = [message, ...decision.reasoning];
+  return decision;
+}
+
 export function routeStageAware(
   prompt: string,
   options: StageAwareOptions = {},
@@ -635,6 +687,17 @@ export function routeStageAware(
   const minModels = options.minModels || routerConfig.minModels || DEFAULT_MIN_MODELS;
   const stageBlendWeight = clamp(
     options.stageBlendWeight ?? routerConfig.stageBlendWeight ?? DEFAULT_STAGE_BLEND_WEIGHT,
+    0,
+    1,
+  );
+  const rubricAwareMode = routerConfig.rubricAware?.mode || 'off';
+  const rubricAwareMinCoverage = clamp(
+    routerConfig.rubricAware?.minCoverage ?? DEFAULT_RUBRIC_AWARE_MIN_COVERAGE,
+    0,
+    1,
+  );
+  const rubricAwareWeight = clamp(
+    routerConfig.rubricAware?.weight ?? DEFAULT_RUBRIC_AWARE_WEIGHT,
     0,
     1,
   );
@@ -661,6 +724,13 @@ export function routeStageAware(
 
   const distinctNeighborModels = new Set(neighbors.map((neighbor) => neighbor.record.modelId));
   const hasModelDiversity = distinctNeighborModels.size >= minModels;
+  const rubricCoverage = computeRubricCoverage(neighbors);
+  const rubricCoverageLabel = rubricCoverage.toFixed(2);
+  const rubricWeightLabel = Number(rubricAwareWeight.toFixed(2)).toString();
+  const rubricFallbackReason = `rubric-aware fallback: coverage ${rubricCoverageLabel} < minCoverage ${rubricAwareMinCoverage.toFixed(2)}`;
+  const rubricActiveReason = `rubric-aware (mode=${rubricAwareMode}, coverage=${rubricCoverageLabel}, weight=${rubricWeightLabel})`;
+  const rubricHasSufficientCoverage = rubricCoverage >= rubricAwareMinCoverage;
+  const rubricScoringWeight = rubricAwareMode === 'on' && rubricHasSufficientCoverage ? rubricAwareWeight : 0;
 
   const { selection } = rankModelsPerStage(neighbors, {
     modelsAvailable: options.modelsAvailable,
@@ -668,7 +738,7 @@ export function routeStageAware(
     coderModelsAvailable: options.coderModelsAvailable ?? coderModels,
     reviewerModelsAvailable: options.reviewerModelsAvailable ?? reviewerModels,
     maxCostUsd: options.maxCostUsd,
-  }, stageBlendWeight);
+  }, stageBlendWeight, rubricScoringWeight);
 
   if (!selection) {
     const hasModelConstraints =
@@ -687,7 +757,7 @@ export function routeStageAware(
     // model allowlist filters every neighbor out of stage selection.
     const { selection: unconstrainedSelection } = rankModelsPerStage(neighbors, {
       maxCostUsd: options.maxCostUsd,
-    }, stageBlendWeight);
+    }, stageBlendWeight, rubricScoringWeight);
     if (!unconstrainedSelection) {
       return null;
     }
@@ -703,6 +773,24 @@ export function routeStageAware(
     }
     partialDecision.routingMode = 'stage-aware-partial';
     partialDecision.confidence = Number((clamp(partialDecision.confidence * 0.8, 0.1, 0.95)).toFixed(2));
+    if (rubricAwareMode === 'on' || rubricAwareMode === 'shadow') {
+      prependRubricReasoning(
+        partialDecision,
+        rubricHasSufficientCoverage ? rubricActiveReason : rubricFallbackReason,
+      );
+      if (rubricAwareMode === 'shadow') {
+        if (rubricHasSufficientCoverage) {
+          const { selection: shadowUnconstrainedSelection } = rankModelsPerStage(neighbors, {
+            maxCostUsd: options.maxCostUsd,
+          }, stageBlendWeight, rubricAwareWeight);
+          partialDecision.shadowDecision = shadowUnconstrainedSelection
+            ? buildStageAwareDecision(shadowUnconstrainedSelection, neighbors, kNeighbors, repoDir)
+            : null;
+        } else {
+          partialDecision.shadowDecision = null;
+        }
+      }
+    }
     return partialDecision;
   }
 
@@ -717,6 +805,29 @@ export function routeStageAware(
   if (!hasModelDiversity) {
     decision.routingMode = 'stage-aware-partial';
     decision.confidence = Number((clamp(decision.confidence * 0.8, 0.1, 0.95)).toFixed(2));
+  }
+
+  if (rubricAwareMode === 'on' || rubricAwareMode === 'shadow') {
+    prependRubricReasoning(
+      decision,
+      rubricHasSufficientCoverage ? rubricActiveReason : rubricFallbackReason,
+    );
+    if (rubricAwareMode === 'shadow') {
+      if (rubricHasSufficientCoverage) {
+        const { selection: shadowSelection } = rankModelsPerStage(neighbors, {
+          modelsAvailable: options.modelsAvailable,
+          plannerModelsAvailable: options.plannerModelsAvailable ?? plannerModels,
+          coderModelsAvailable: options.coderModelsAvailable ?? coderModels,
+          reviewerModelsAvailable: options.reviewerModelsAvailable ?? reviewerModels,
+          maxCostUsd: options.maxCostUsd,
+        }, stageBlendWeight, rubricAwareWeight);
+        decision.shadowDecision = shadowSelection
+          ? buildStageAwareDecision(shadowSelection, neighbors, kNeighbors, repoDir)
+          : null;
+      } else {
+        decision.shadowDecision = null;
+      }
+    }
   }
 
   return decision;
