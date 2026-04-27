@@ -145,20 +145,20 @@ function loadPersonaPromptTemplate(
   persona: ReviewerPersona,
   operatingMode: OperatingMode = 'normal'
 ): string {
+  const promptPath = getPersonaPromptPath(persona, operatingMode);
+
+  // Return cached template if available (avoids redundant disk I/O)
+  if (_promptTemplateCache.has(promptPath)) {
+    return _promptTemplateCache.get(promptPath)!;
+  }
+
   const promptResource = loadPromptResourceSync({
     kind: 'prompt',
     role: 'reviewer',
     persona,
     operatingMode,
   });
-  const promptPath = promptResource.path;
 
-  // Return cached template if available
-  if (_promptTemplateCache.has(promptPath)) {
-    return _promptTemplateCache.get(promptPath)!;
-  }
-
-  // Load and cache template
   if (!existsSync(promptPath)) {
     throw new Error(
       `Review prompt template not found for persona "${persona}" at: ${promptPath}\n` +

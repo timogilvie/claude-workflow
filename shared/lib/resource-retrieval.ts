@@ -175,6 +175,8 @@ function resolveBackingPath(query: NormalizedRuntimeResourceQuery): string {
           return join(query.repoDir, '.wavemill', 'context', `${requireNonEmptyId(query.role, query.id)}.md`);
         case 'concept-page':
           return join(query.repoDir, '.wavemill', 'context', 'concepts', `${requireNonEmptyId(query.role, query.id)}.md`);
+        default:
+          throw new Error(`Unrecognized memory role: ${(query as { role: string }).role}`);
       }
     case 'policy':
       return join(query.repoDir, '.wavemill-config.json');
