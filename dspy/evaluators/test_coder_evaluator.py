@@ -6,7 +6,30 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from coder_evaluator import parse_coder_output
+from coder_evaluator import CoderEvaluatorSignature, parse_coder_output
+
+
+CODER_RUBRIC_OUTPUT_FIELDS = frozenset(
+    {
+        "implementation_score",
+        "quality_band",
+        "reasoning",
+        "requirement_completeness",
+        "correctness",
+        "integration_with_existing_patterns",
+        "code_quality_and_test_coverage",
+    }
+)
+
+
+def test_signature_output_fields_match_production_rubric():
+    assert CoderEvaluatorSignature is not None, "DSPy not installed"
+
+    actual = frozenset(CoderEvaluatorSignature.output_fields.keys())
+    extra = actual - CODER_RUBRIC_OUTPUT_FIELDS
+    missing = CODER_RUBRIC_OUTPUT_FIELDS - actual
+
+    assert not extra and not missing, f"Signature mismatch: extra={extra}, missing={missing}"
 
 
 def test_parse_coder_legacy_minimal_json():
@@ -23,6 +46,37 @@ def test_parse_coder_legacy_minimal_json():
     assert result["implementation_score"] == 0.78
     assert result["quality_band"] == "good"
     assert result["reasoning"] == "The implementation was mostly complete."
+
+
+def test_parse_coder_missing_rubric_criterion_handled():
+    result = parse_coder_output(
+        json.dumps({"implementation_score": 0.75, "quality_band": "good", "reasoning": "OK implementation."})
+    )
+
+    assert result["implementation_score"] == 0.75
+    for field in [
+        "requirement_completeness",
+        "correctness",
+        "integration_with_existing_patterns",
+        "code_quality_and_test_coverage",
+    ]:
+        assert field not in result or isinstance(result.get(field), (int, float, type(None)))
+
+
+def test_parse_coder_rubric_criterion_out_of_domain():
+    result = parse_coder_output(
+        json.dumps(
+            {
+                "implementation_score": 0.8,
+                "quality_band": "good",
+                "reasoning": "Solid implementation.",
+                "correctness": 1.5,
+            }
+        )
+    )
+
+    assert result["implementation_score"] == 0.8
+    assert result["correctness"] == 1.5
 
 
 def test_parse_coder_derives_from_stage_scores_and_preserves_rubric():

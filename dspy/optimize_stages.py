@@ -22,50 +22,17 @@ import dspy
 
 from claude_cli_lm import ClaudeCLI
 
+RUBRIC_SCHEMA_VERSION = "production-stage-rubric-v1"
+
 # Add evaluators to path
 sys.path.insert(0, str(Path(__file__).resolve().parent / "evaluators"))
 from data_loader import default_evals_path, load_eval_examples, stratified_split
-from planner_evaluator import derive_plan_quality, planner_metric
-from coder_evaluator import filter_with_impl_scores, get_impl_ground_truth, coder_metric
+from planner_evaluator import PlannerEvaluatorSignature, derive_plan_quality, planner_metric
+from coder_evaluator import CoderEvaluatorSignature, filter_with_impl_scores, get_impl_ground_truth, coder_metric
 from reviewer_evaluator import derive_review_quality, reviewer_metric
 
 
 # ── DSPy Signatures for each stage ──────────────────────────────────────────
-
-
-class PlannerAssessor(dspy.Signature):
-    """Assess the quality of an AI planning agent's work on a software task.
-
-    Consider whether the plan correctly identifies scope, key files, dependencies,
-    and potential risks. A good plan leads to smooth implementation without rework."""
-
-    task_prompt: str = dspy.InputField(desc="The task description/ticket")
-    repo_name: str = dspy.InputField(desc="Target repository name")
-    overall_score: str = dspy.InputField(desc="Workflow outcome score (0-1)")
-    intervention_count: str = dspy.InputField(desc="Number of human interventions needed")
-    judge_rationale: str = dspy.InputField(desc="Eval judge's rationale for the score")
-
-    plan_score: float = dspy.OutputField(desc="Plan quality score (0.0-1.0)")
-    quality_band: str = dspy.OutputField(desc="Quality band: excellent, good, weak, or poor")
-    reasoning: str = dspy.OutputField(desc="1-2 sentence explanation")
-
-
-class CoderAssessor(dspy.Signature):
-    """Assess the quality of an AI coding agent's implementation.
-
-    Consider whether the implementation was correct, complete, followed good
-    patterns, and required minimal rework or interventions."""
-
-    task_prompt: str = dspy.InputField(desc="The task description/ticket")
-    repo_name: str = dspy.InputField(desc="Target repository name")
-    model_id: str = dspy.InputField(desc="Model used for implementation")
-    overall_score: str = dspy.InputField(desc="Workflow outcome score (0-1)")
-    intervention_count: str = dspy.InputField(desc="Number of interventions")
-    judge_rationale: str = dspy.InputField(desc="Eval judge's rationale")
-
-    implementation_score: float = dspy.OutputField(desc="Implementation quality score (0.0-1.0)")
-    quality_band: str = dspy.OutputField(desc="Quality band: excellent, good, acceptable, or poor")
-    reasoning: str = dspy.OutputField(desc="1-2 sentence explanation")
 
 
 class ReviewerAssessor(dspy.Signature):
@@ -89,11 +56,33 @@ class ReviewerAssessor(dspy.Signature):
 # ── Data preparation ────────────────────────────────────────────────────────
 
 
+def _extract_stage_rubric_gt(example, stage: str) -> dict[str, float]:
+    """Extract rubric criterion scores from stageScores, when present."""
+    stages = example.metadata.get("stageScores", {})
+    stage_data = stages.get(stage, {}) if isinstance(stages, dict) else {}
+    criteria = stage_data.get("rubricCriteria", []) if isinstance(stage_data, dict) else []
+
+    gt = {}
+    for criterion in criteria:
+        if not isinstance(criterion, dict):
+            continue
+        name = criterion.get("criterion")
+        score = criterion.get("score")
+        if not isinstance(name, str):
+            continue
+        try:
+            gt[name] = float(score)
+        except (TypeError, ValueError):
+            pass
+    return gt
+
+
 def prepare_planner_examples(examples: list) -> list:
     """Convert eval examples to DSPy examples for planner optimization."""
     dspy_examples = []
     for ex in examples:
         gt = derive_plan_quality(ex)
+        rubric_gt = _extract_stage_rubric_gt(ex, "plan")
         dspy_ex = dspy.Example(
             task_prompt=ex.original_prompt[:2000],
             repo_name=ex.source_repo or "unknown",
@@ -105,6 +94,10 @@ def prepare_planner_examples(examples: list) -> list:
             plan_score=gt["score"],
             quality_band=gt["band"],
             reasoning=gt["rationale"],
+            component_boundaries=rubric_gt.get("component_boundaries", gt["score"]),
+            invariant_coverage=rubric_gt.get("invariant_coverage", gt["score"]),
+            sequencing_and_dependencies=rubric_gt.get("sequencing_and_dependencies", gt["score"]),
+            risk_and_validation_coverage=rubric_gt.get("risk_and_validation_coverage", gt["score"]),
         ).with_inputs("task_prompt", "repo_name", "overall_score", "intervention_count", "judge_rationale")
         dspy_examples.append(dspy_ex)
     return dspy_examples
@@ -116,6 +109,7 @@ def prepare_coder_examples(examples: list) -> list:
     dspy_examples = []
     for ex in filtered:
         gt = get_impl_ground_truth(ex)
+        rubric_gt = _extract_stage_rubric_gt(ex, "implementation")
         dspy_ex = dspy.Example(
             task_prompt=ex.original_prompt[:2000],
             repo_name=ex.source_repo or "unknown",
@@ -128,6 +122,10 @@ def prepare_coder_examples(examples: list) -> list:
             implementation_score=gt["score"],
             quality_band=gt["band"],
             reasoning=gt["rationale"],
+            requirement_completeness=rubric_gt.get("requirement_completeness", gt["score"]),
+            correctness=rubric_gt.get("correctness", gt["score"]),
+            integration_with_existing_patterns=rubric_gt.get("integration_with_existing_patterns", gt["score"]),
+            code_quality_and_test_coverage=rubric_gt.get("code_quality_and_test_coverage", gt["score"]),
         ).with_inputs("task_prompt", "repo_name", "model_id", "overall_score", "intervention_count", "judge_rationale")
         dspy_examples.append(dspy_ex)
     return dspy_examples
@@ -205,6 +203,7 @@ def export_stage_artifact(
     return {
         "version": "1.0.0",
         "stage": stage,
+        "rubric_schema_version": RUBRIC_SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "optimizer": "MIPROv2",
         "teacher_model": teacher_model,
@@ -227,13 +226,13 @@ def export_stage_artifact(
 
 STAGES = {
     "planner": {
-        "signature": PlannerAssessor,
+        "signature": PlannerEvaluatorSignature,
         "metric": planner_metric,
         "prepare_data": prepare_planner_examples,
         "output_artifact": "artifacts/optimized-planner.json",
     },
     "coder": {
-        "signature": CoderAssessor,
+        "signature": CoderEvaluatorSignature,
         "metric": coder_metric,
         "prepare_data": prepare_coder_examples,
         "output_artifact": "artifacts/optimized-coder.json",

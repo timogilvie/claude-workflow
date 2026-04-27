@@ -21,6 +21,42 @@ from data_loader import EvalExample, default_evals_path, load_eval_examples, str
 from llm_caller import call_llm
 from template_utils import fill_template
 
+try:
+    import dspy
+
+    class CoderEvaluatorSignature(dspy.Signature):
+        """Assess the quality of an AI coding agent's implementation against the production rubric.
+
+        Score the implementation stage using production rubric criteria from eval-judge.md:
+        - requirement_completeness: Did the code cover the intended task scope?
+        - correctness: Did it behave correctly without human-found bugs?
+        - integration_with_existing_patterns: Did it fit the codebase's established architecture, schema, and rollout constraints?
+        - code_quality_and_test_coverage: Was the code clean, maintainable, and appropriately validated?
+
+        calibration: excellent=0.9-1.0, good=0.7-0.9, acceptable=0.5-0.7, poor=0.0-0.5"""
+
+        task_prompt: str = dspy.InputField(desc="The task description/ticket")
+        repo_name: str = dspy.InputField(desc="Target repository name")
+        model_id: str = dspy.InputField(desc="Model used for implementation")
+        overall_score: str = dspy.InputField(desc="Workflow outcome score (0-1)")
+        intervention_count: str = dspy.InputField(desc="Number of interventions")
+        judge_rationale: str = dspy.InputField(desc="Eval judge's rationale")
+
+        implementation_score: float = dspy.OutputField(desc="Implementation quality score (0.0-1.0)")
+        quality_band: str = dspy.OutputField(desc="Quality band: excellent, good, acceptable, or poor")
+        reasoning: str = dspy.OutputField(desc="1-2 sentence explanation citing the strongest rubric criteria drivers")
+        requirement_completeness: float = dspy.OutputField(desc="Score 0.0-1.0: did the code cover the intended task scope?")
+        correctness: float = dspy.OutputField(desc="Score 0.0-1.0: did it behave correctly without human-found bugs?")
+        integration_with_existing_patterns: float = dspy.OutputField(
+            desc="Score 0.0-1.0: did it fit the codebase's established architecture, schema, and rollout constraints?"
+        )
+        code_quality_and_test_coverage: float = dspy.OutputField(
+            desc="Score 0.0-1.0: was the code clean, maintainable, and appropriately validated?"
+        )
+
+except ImportError:
+    CoderEvaluatorSignature = None
+
 
 # Quality bands for implementation scores
 IMPL_BANDS = {
@@ -109,9 +145,9 @@ The production eval judge also records rubricEval criteria named `completeness`,
 
 Respond with ONLY a valid JSON object (no markdown fences):
 
-{"implementation_score": <float 0.0-1.0>, "quality_band": "excellent|good|acceptable|poor", "reasoning": "<1-2 sentence explanation>", "stageScores": {"implementation": {"score": <same float>, "rationale": "<optional rubric rationale>"}}, "rubricEval": {"completeness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "correctness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "code_quality": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "intervention_impact": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "autonomy": {"score": <float 0.0-1.0>, "rationale": "<optional>"}}}
+{"implementation_score": <float 0.0-1.0>, "quality_band": "excellent|good|acceptable|poor", "reasoning": "<1-2 sentence explanation>", "requirement_completeness": <float 0.0-1.0>, "correctness": <float 0.0-1.0>, "integration_with_existing_patterns": <float 0.0-1.0>, "code_quality_and_test_coverage": <float 0.0-1.0>, "stageScores": {"implementation": {"score": <same float>, "rationale": "<optional rubric rationale>", "rubricCriteria": [{"criterion": "requirement_completeness", "score": <float 0.0-1.0>, "rationale": "<optional>"}, {"criterion": "correctness", "score": <float 0.0-1.0>, "rationale": "<optional>"}, {"criterion": "integration_with_existing_patterns", "score": <float 0.0-1.0>, "rationale": "<optional>"}, {"criterion": "code_quality_and_test_coverage", "score": <float 0.0-1.0>, "rationale": "<optional>"}]}}, "rubricEval": {"completeness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "correctness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "code_quality": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "intervention_impact": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "autonomy": {"score": <float 0.0-1.0>, "rationale": "<optional>"}}}
 
-`stageScores` and `rubricEval` are optional extra fields. `implementation_score`, `quality_band`, and `reasoning` are always required."""
+`stageScores` and `rubricEval` are optional extra fields. `implementation_score`, `quality_band`, `reasoning`, and the four implementation criterion scores are always required."""
 
 
 def build_coder_input(example: EvalExample) -> dict[str, str]:
@@ -229,6 +265,14 @@ def score_impl_agreement(predicted: float, ground_truth: float, had_intervention
     }
 
 
+CODER_RUBRIC_FIELDS = [
+    "requirement_completeness",
+    "correctness",
+    "integration_with_existing_patterns",
+    "code_quality_and_test_coverage",
+]
+
+
 def evaluate_coder(
     candidate_prompt: str,
     example: EvalExample,
@@ -269,7 +313,23 @@ def coder_metric(example, prediction, trace=None) -> float:
         return 0.0
 
     ground_truth = float(example.ground_truth_impl_score)
-    return 1.0 - abs(predicted - ground_truth)
+    score_agreement = 1.0 - abs(predicted - ground_truth)
+
+    rubric_agreements = []
+    for field in CODER_RUBRIC_FIELDS:
+        gt_val = getattr(example, field, None)
+        pred_val = getattr(prediction, field, None)
+        if gt_val is not None and pred_val is not None:
+            try:
+                rubric_agreements.append(1.0 - abs(float(pred_val) - float(gt_val)))
+            except (TypeError, ValueError):
+                pass
+
+    if rubric_agreements:
+        rubric_score = sum(rubric_agreements) / len(rubric_agreements)
+        return 0.6 * score_agreement + 0.4 * rubric_score
+
+    return score_agreement
 
 
 def run_evaluation(

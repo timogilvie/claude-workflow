@@ -24,6 +24,45 @@ from data_loader import EvalExample, default_evals_path, load_eval_examples, str
 from llm_caller import call_llm
 from template_utils import fill_template
 
+try:
+    import dspy
+
+    class PlannerEvaluatorSignature(dspy.Signature):
+        """Assess the quality of an AI planning agent's work against the production rubric.
+
+        Score the plan stage using production rubric criteria from eval-judge.md:
+        - component_boundaries: Did the plan identify the right files, modules, and ownership boundaries?
+        - invariant_coverage: Did it surface key constraints, compatibility requirements, rollout rules, or schema contracts?
+        - sequencing_and_dependencies: Did it order the work sensibly and account for blockers or downstream implications?
+        - risk_and_validation_coverage: Did it anticipate likely failure modes and how to verify the change?
+
+        calibration: excellent=0.9-1.0, good=0.7-0.9, weak=0.4-0.7, poor=0.0-0.4"""
+
+        task_prompt: str = dspy.InputField(desc="The task description/ticket")
+        repo_name: str = dspy.InputField(desc="Target repository name")
+        overall_score: str = dspy.InputField(desc="Workflow outcome score (0-1)")
+        intervention_count: str = dspy.InputField(desc="Number of human interventions needed")
+        judge_rationale: str = dspy.InputField(desc="Eval judge's rationale for the overall score")
+
+        plan_score: float = dspy.OutputField(desc="Plan quality score (0.0-1.0)")
+        quality_band: str = dspy.OutputField(desc="Quality band: excellent, good, weak, or poor")
+        reasoning: str = dspy.OutputField(desc="1-2 sentence explanation citing the strongest rubric criteria drivers")
+        component_boundaries: float = dspy.OutputField(
+            desc="Score 0.0-1.0: did the plan identify the right files, modules, and ownership boundaries?"
+        )
+        invariant_coverage: float = dspy.OutputField(
+            desc="Score 0.0-1.0: did it surface key constraints, compatibility requirements, rollout rules, or schema contracts?"
+        )
+        sequencing_and_dependencies: float = dspy.OutputField(
+            desc="Score 0.0-1.0: did it order the work sensibly and account for blockers or downstream implications?"
+        )
+        risk_and_validation_coverage: float = dspy.OutputField(
+            desc="Score 0.0-1.0: did it anticipate likely failure modes and how to verify the change?"
+        )
+
+except ImportError:
+    PlannerEvaluatorSignature = None
+
 
 # Plan quality bands (derived from workflow outcome)
 PLAN_BANDS = {
@@ -139,9 +178,9 @@ The production eval judge also records rubricEval criteria named `completeness`,
 
 Respond with ONLY a valid JSON object (no markdown fences):
 
-{"plan_score": <float 0.0-1.0>, "quality_band": "excellent|good|weak|poor", "reasoning": "<1-2 sentence explanation>", "stageScores": {"plan": {"score": <same float>, "rationale": "<optional rubric rationale>"}}, "rubricEval": {"completeness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "correctness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "code_quality": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "intervention_impact": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "autonomy": {"score": <float 0.0-1.0>, "rationale": "<optional>"}}}
+{"plan_score": <float 0.0-1.0>, "quality_band": "excellent|good|weak|poor", "reasoning": "<1-2 sentence explanation>", "component_boundaries": <float 0.0-1.0>, "invariant_coverage": <float 0.0-1.0>, "sequencing_and_dependencies": <float 0.0-1.0>, "risk_and_validation_coverage": <float 0.0-1.0>, "stageScores": {"plan": {"score": <same float>, "rationale": "<optional rubric rationale>", "rubricCriteria": [{"criterion": "component_boundaries", "score": <float 0.0-1.0>, "rationale": "<optional>"}, {"criterion": "invariant_coverage", "score": <float 0.0-1.0>, "rationale": "<optional>"}, {"criterion": "sequencing_and_dependencies", "score": <float 0.0-1.0>, "rationale": "<optional>"}, {"criterion": "risk_and_validation_coverage", "score": <float 0.0-1.0>, "rationale": "<optional>"}]}}, "rubricEval": {"completeness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "correctness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "code_quality": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "intervention_impact": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "autonomy": {"score": <float 0.0-1.0>, "rationale": "<optional>"}}}
 
-`stageScores` and `rubricEval` are optional extra fields. `plan_score`, `quality_band`, and `reasoning` are always required."""
+`stageScores` and `rubricEval` are optional extra fields. `plan_score`, `quality_band`, `reasoning`, and the four planning criterion scores are always required."""
 
 
 def build_planner_input(example: EvalExample) -> dict[str, str]:
@@ -284,6 +323,14 @@ def evaluate_planner(
     }
 
 
+PLANNER_RUBRIC_FIELDS = [
+    "component_boundaries",
+    "invariant_coverage",
+    "sequencing_and_dependencies",
+    "risk_and_validation_coverage",
+]
+
+
 def planner_metric(example, prediction, trace=None) -> float:
     """DSPy-compatible metric wrapper for the planner evaluator."""
     try:
@@ -292,7 +339,23 @@ def planner_metric(example, prediction, trace=None) -> float:
         return 0.0
 
     ground_truth = float(example.ground_truth_plan_score)
-    return 1.0 - abs(predicted - ground_truth)
+    score_agreement = 1.0 - abs(predicted - ground_truth)
+
+    rubric_agreements = []
+    for field in PLANNER_RUBRIC_FIELDS:
+        gt_val = getattr(example, field, None)
+        pred_val = getattr(prediction, field, None)
+        if gt_val is not None and pred_val is not None:
+            try:
+                rubric_agreements.append(1.0 - abs(float(pred_val) - float(gt_val)))
+            except (TypeError, ValueError):
+                pass
+
+    if rubric_agreements:
+        rubric_score = sum(rubric_agreements) / len(rubric_agreements)
+        return 0.6 * score_agreement + 0.4 * rubric_score
+
+    return score_agreement
 
 
 def run_evaluation(
