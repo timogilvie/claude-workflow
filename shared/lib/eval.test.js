@@ -7,6 +7,20 @@ function mockCallFn(responseText, usage = null, costUsd = undefined) {
   return mock.fn(() => Promise.resolve({ text: responseText, usage, costUsd }));
 }
 
+async function withMockSession(fn) {
+  const previousSession = process.env.WAVEMILL_SESSION;
+  process.env.WAVEMILL_SESSION = 'test-session';
+  try {
+    return await fn();
+  } finally {
+    if (previousSession === undefined) {
+      delete process.env.WAVEMILL_SESSION;
+    } else {
+      process.env.WAVEMILL_SESSION = previousSession;
+    }
+  }
+}
+
 describe('evaluateTask', () => {
   it('returns a valid EvalRecord conforming to eval-schema', async () => {
     const validResponse = JSON.stringify({
@@ -377,13 +391,15 @@ describe('evaluateTask', () => {
         },
       });
 
-      const result = await evaluateTask(
-        {
-          taskPrompt: 'Scalar-only judge payload',
-          prReviewOutput: 'Clean',
-        },
-        undefined,
-        { _callFn: mockCallFn(validResponse) }
+      const result = await withMockSession(() =>
+        evaluateTask(
+          {
+            taskPrompt: 'Scalar-only judge payload',
+            prReviewOutput: 'Clean',
+          },
+          undefined,
+          { _callFn: mockCallFn(validResponse) }
+        )
       );
 
       for (const stage of Object.values(result.metadata.stageScores)) {
@@ -455,13 +471,15 @@ describe('evaluateTask', () => {
         },
       });
 
-      const result = await evaluateTask(
-        {
-          taskPrompt: 'Malformed criteria payload',
-          prReviewOutput: 'Completed',
-        },
-        undefined,
-        { _callFn: mockCallFn(validResponse) }
+      const result = await withMockSession(() =>
+        evaluateTask(
+          {
+            taskPrompt: 'Malformed criteria payload',
+            prReviewOutput: 'Completed',
+          },
+          undefined,
+          { _callFn: mockCallFn(validResponse) }
+        )
       );
 
       assert.equal('rubricCriteria' in result.metadata.stageScores.expansion, false);
