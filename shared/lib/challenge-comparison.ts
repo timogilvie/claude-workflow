@@ -9,6 +9,9 @@ export interface ChallengeRoutingMeta {
   planDepth: string;
   codeDepth: string;
   reviewMode: string;
+  routerVariant?: string;
+  plannerPromptVariant?: string;
+  reviewerPromptVariant?: string;
 }
 
 export interface VariedDimensions {
@@ -18,6 +21,9 @@ export interface VariedDimensions {
   planDepth: boolean;
   codeDepth: boolean;
   reviewMode: boolean;
+  routerVariant: boolean;
+  plannerPromptVariant: boolean;
+  reviewerPromptVariant: boolean;
 }
 
 export type ChallengeType =
@@ -75,6 +81,15 @@ export function detectVariedDimensions(
   // Treat empty strings as equivalent to missing values
   const normalize = (val: string) => val.trim() || '';
 
+  // For optional variant fields introduced post-feature-ship: only flag as varied when
+  // both sides have a defined value. A legacy record (undefined) vs a new record ('baseline')
+  // would otherwise produce cross-boundary false positives in variant win-rate statistics.
+  const variantDiffers = (a: string | undefined, b: string | undefined): boolean => {
+    const na = normalize(a || '');
+    const nb = normalize(b || '');
+    return na !== '' && nb !== '' && na !== nb;
+  };
+
   return {
     planner: normalize(primaryRouting.planner) !== normalize(challengerRouting.planner),
     coder: normalize(primaryRouting.coder) !== normalize(challengerRouting.coder),
@@ -82,6 +97,9 @@ export function detectVariedDimensions(
     planDepth: normalize(primaryRouting.planDepth) !== normalize(challengerRouting.planDepth),
     codeDepth: normalize(primaryRouting.codeDepth) !== normalize(challengerRouting.codeDepth),
     reviewMode: normalize(primaryRouting.reviewMode) !== normalize(challengerRouting.reviewMode),
+    routerVariant: variantDiffers(primaryRouting.routerVariant, challengerRouting.routerVariant),
+    plannerPromptVariant: variantDiffers(primaryRouting.plannerPromptVariant, challengerRouting.plannerPromptVariant),
+    reviewerPromptVariant: variantDiffers(primaryRouting.reviewerPromptVariant, challengerRouting.reviewerPromptVariant),
   };
 }
 
@@ -90,15 +108,22 @@ export function detectVariedDimensions(
  */
 export function classifyChallengeType(varied: VariedDimensions): ChallengeType {
   const roleChanges = [varied.planner, varied.coder, varied.reviewer].filter(Boolean).length;
-  const configChanges = [varied.planDepth, varied.codeDepth, varied.reviewMode].filter(Boolean).length;
+  // Base config dimensions are the original 3; new variant dimensions are additive.
+  // Keep them separate so legacy records (which lack variant fields) can still reach 'full-stack'.
+  const baseConfigChanges = [varied.planDepth, varied.codeDepth, varied.reviewMode].filter(Boolean).length;
+  const totalConfigChanges = baseConfigChanges + [
+    varied.routerVariant,
+    varied.plannerPromptVariant,
+    varied.reviewerPromptVariant,
+  ].filter(Boolean).length;
 
-  // All dimensions varied
-  if (roleChanges === 3 && configChanges === 3) {
+  // All base dimensions varied (roles + original config); variant fields are optional extras
+  if (roleChanges === 3 && baseConfigChanges === 3) {
     return 'full-stack';
   }
 
   // Exactly one role varied, no config changes
-  if (roleChanges === 1 && configChanges === 0) {
+  if (roleChanges === 1 && totalConfigChanges === 0) {
     if (varied.planner) return 'planner-only';
     if (varied.coder) return 'coder-only';
     if (varied.reviewer) return 'reviewer-only';

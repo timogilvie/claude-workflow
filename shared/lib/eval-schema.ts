@@ -29,15 +29,18 @@
  *   attribution (HOK-1378)
  * - **1.9.0**: Added optional `planCritique` to capture explicit planning
  *   quality dimensions from the eval judge (HOK-1391)
- * - **1.10.0**: Added `rubricEval` field (HOK-1406) to capture per-criterion
- *   rubric scores as durable training signal; includes rubric version for
- *   forward compatibility and determinative boundary classification
+ * - **1.10.0**: Added optional `resourceSelections` for governed runtime
+ *   prompt/router artifact attribution (HOK-1380), and `rubricEval` field
+ *   (HOK-1406) to capture per-criterion rubric scores as durable training
+ *   signal; includes rubric version for forward compatibility and
+ *   determinative boundary classification
  *
  * @module eval-schema
  */
 
 import type { ModelPricing } from './workflow-cost.ts';
 import type { RegistryTaskType } from './model-registry.ts';
+import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -287,6 +290,9 @@ export interface RoutingDecision {
    * Can be free text or structured (e.g., JSON of feature weights).
    */
   decisionRationale?: string;
+
+  /** Runtime-governed resource selections used while making the routing decision. */
+  resourceSelections?: RuntimeResourceSelection[];
 }
 
 export interface ManifestRef {
@@ -1107,6 +1113,9 @@ export interface EvalRecord {
     templateHash: string;
     filledPromptHash: string;
   }[];
+
+  /** Runtime-governed resource variants used by this run. */
+  resourceSelections?: RuntimeResourceSelection[];
 
   manifestRef?: ManifestRef;
 

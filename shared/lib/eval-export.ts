@@ -63,6 +63,10 @@ export interface ExportRow {
 
   // Routing decision (HOK-775)
   routing_decision: string;
+  resource_variants: string;
+  router_resource_variant: string;
+  planner_prompt_variant: string;
+  reviewer_prompt_variant: string;
 }
 
 /** Column order for CSV output. */
@@ -93,6 +97,10 @@ const COLUMNS: (keyof ExportRow)[] = [
   'lines_added',
   'lines_removed',
   'routing_decision',
+  'resource_variants',
+  'router_resource_variant',
+  'planner_prompt_variant',
+  'reviewer_prompt_variant',
 ];
 
 // ────────────────────────────────────────────────────────────────
@@ -101,6 +109,24 @@ const COLUMNS: (keyof ExportRow)[] = [
 
 export interface FlattenOptions {
   redact?: boolean;
+}
+
+function summarizeResourceVariants(record: EvalRecord): {
+  all: string;
+  router: string;
+  planner: string;
+  reviewer: string;
+} {
+  const selections = record.resourceSelections || [];
+  const findVariant = (surface: 'router' | 'planner' | 'reviewer') =>
+    selections.find((selection) => selection.surface === surface)?.variant || '';
+
+  return {
+    all: selections.length > 0 ? JSON.stringify(selections) : '',
+    router: findVariant('router'),
+    planner: findVariant('planner'),
+    reviewer: findVariant('reviewer'),
+  };
 }
 
 /** Flatten an EvalRecord into a flat ExportRow for ML consumption. */
@@ -123,6 +149,7 @@ export function flattenRecord(
   const filesChanged = typeof meta.filesChanged === 'number' ? meta.filesChanged : null;
   const linesAdded = typeof meta.linesAdded === 'number' ? meta.linesAdded : null;
   const linesRemoved = typeof meta.linesRemoved === 'number' ? meta.linesRemoved : null;
+  const resourceVariants = summarizeResourceVariants(record);
 
   return {
     id: record.id,
@@ -163,6 +190,10 @@ export function flattenRecord(
     routing_decision: record.routingDecision
       ? JSON.stringify(record.routingDecision)
       : '',
+    resource_variants: resourceVariants.all,
+    router_resource_variant: resourceVariants.router,
+    planner_prompt_variant: resourceVariants.planner,
+    reviewer_prompt_variant: resourceVariants.reviewer,
   };
 }
 

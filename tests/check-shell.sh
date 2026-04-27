@@ -479,6 +479,32 @@ else
 fi
 
 # ============================================================================
+# TEST 3a: Runtime prompt resolver integration guards
+# ============================================================================
+echo ""
+echo "=== Runtime Prompt Resolver Guards ==="
+
+if grep -q 'resolve-runtime-resource.ts' "$LIB_DIR/agent-adapters.sh" \
+  && grep -q -- '--surface planner' "$LIB_DIR/agent-adapters.sh"; then
+  pass "planning prompt uses runtime resolver helper"
+else
+  fail "planning prompt is missing runtime resolver helper"
+fi
+
+if grep -q 'resolve-runtime-resource.ts' "$LIB_DIR/agent-adapters.sh" \
+  && grep -q -- '--surface reviewer' "$LIB_DIR/agent-adapters.sh"; then
+  pass "review prompt uses runtime resolver helper"
+else
+  fail "review prompt is missing runtime resolver helper"
+fi
+
+if grep -q 'falling back to \$template_file' "$LIB_DIR/agent-adapters.sh"; then
+  pass "agent adapters preserve static prompt fallback"
+else
+  fail "agent adapters are missing static prompt fallback warning"
+fi
+
+# ============================================================================
 # TEST 4: FORCE_MODEL challenge bypass guards
 # ============================================================================
 echo ""

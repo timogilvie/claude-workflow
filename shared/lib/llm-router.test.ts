@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { SelectorArtifact, LLMRoutingResponse, CallFn } from './llm-router.ts';
+import { clearConfigCache } from './config.ts';
 import {
   loadArtifact,
   buildRoutingPrompt,
@@ -278,6 +279,7 @@ test('returns null when no artifact exists', () => {
 test('returns recommendation on successful LLM call', () => {
   const dir = makeTempDir();
   try {
+    clearConfigCache(dir);
     const artifactDir = join(dir, 'dspy', 'artifacts');
     mkdirSync(artifactDir, { recursive: true });
     writeFileSync(
@@ -301,6 +303,8 @@ test('returns recommendation on successful LLM call', () => {
     assert.deepEqual(result!.riskFlags, ['modifies-existing-runtime']);
     assert.equal(result!.costEstimate, 'medium');
     assert.equal(result!.routingMode, 'llm');
+    assert.equal(result!.resourceSelections?.[0]?.surface, 'router');
+    assert.equal(result!.resourceSelections?.[0]?.variant, 'baseline');
     assert.ok(result!.reasoning.startsWith('[LLM Router]'));
   } finally {
     rmSync(dir, { recursive: true });

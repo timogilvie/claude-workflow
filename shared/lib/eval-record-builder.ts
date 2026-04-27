@@ -24,10 +24,13 @@ import type {
   TaskDescriptor,
   EvalConstraints,
   ManifestRef,
+  RoutingDecision,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
-import { getManifestRef } from './resource-manifest.ts';
+import { getManifest, getManifestRef } from './resource-manifest.ts';
+import type { RuntimeResourceSelection } from './resource-selection.ts';
+import { getResource } from './resource-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -315,6 +318,88 @@ export function attachManifestRef(
   }
 }
 
+export function attachResourceSelections(record: EvalRecord): void {
+  const routingDecision = record.routingDecision as (RoutingDecision & { resourceSelections?: RuntimeResourceSelection[] }) | undefined;
+  // Routing decision may carry router-surface entries; manifest carries planner/reviewer prompt entries.
+  // Both sources are merged so no surface is silently omitted when both are present.
+  const routingSelections: RuntimeResourceSelection[] = routingDecision?.resourceSelections ?? [];
+
+  const sessionId = process.env.WAVEMILL_SESSION;
+  const manifestSelections: RuntimeResourceSelection[] = [];
+
+  if (sessionId) {
+    const manifest = getManifest(sessionId);
+    if (manifest) {
+      for (const ref of manifest.resources) {
+        const resource = getResource(ref.id, ref.version);
+        if (!resource) {
+          continue;
+        }
+
+        if (resource.type === 'prompt' && resource.uri === 'tools/prompts/planning-phase.md') {
+          manifestSelections.push({
+            surface: 'planner',
+            variant: 'baseline',
+            requestedVariant: 'baseline',
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
+        } else if (resource.type === 'prompt' && resource.uri === 'tools/prompts/review-phase.md') {
+          manifestSelections.push({
+            surface: 'reviewer',
+            variant: 'baseline',
+            requestedVariant: 'baseline',
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
+        } else if (resource.type === 'prompt' && resource.name === 'planner-optimized') {
+          manifestSelections.push({
+            surface: 'planner',
+            variant: 'optimized',
+            requestedVariant: 'optimized',
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
+        } else if (resource.type === 'prompt' && resource.name === 'reviewer-optimized') {
+          manifestSelections.push({
+            surface: 'reviewer',
+            variant: 'optimized',
+            requestedVariant: 'optimized',
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
+        } else if (resource.type === 'optimizer-artifact') {
+          // Router artifacts are registered as optimizer-artifact type, not prompt.
+          const routerVariant = resource.name.includes('optimized') ? 'optimized' : 'baseline';
+          manifestSelections.push({
+            surface: 'router',
+            variant: routerVariant as 'baseline' | 'optimized' | 'canary',
+            requestedVariant: 'baseline' as const,
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
+        }
+      }
+    }
+  }
+
+  // Routing selections take priority; manifest fills surfaces not already covered.
+  const coveredSurfaces = new Set(routingSelections.map((s) => s.surface));
+  const merged = [
+    ...routingSelections,
+    ...manifestSelections.filter((s) => !coveredSurfaces.has(s.surface)),
+  ];
+
+  if (merged.length > 0) {
+    record.resourceSelections = merged;
+  }
+}
+
 /**
  * Attach structured rubric criteria evaluation to the eval record (HOK-1406).
  *
@@ -360,6 +445,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
     attachRubricEval(record, metadata.rubricEval);
   }
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
+  attachResourceSelections(record);
 
   // Extract stageScores from record metadata (set by evaluateTask)
   const stageScores = record.metadata?.stageScores as

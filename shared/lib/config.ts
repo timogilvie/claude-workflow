@@ -252,6 +252,29 @@ export interface RegistryConfig {
   dir?: string;
 }
 
+export type RuntimeResourceSurface = 'router' | 'planner' | 'reviewer';
+export type RuntimeResourceVariantKind = 'baseline' | 'optimized' | 'canary';
+
+export interface RuntimeResourceSurfaceConfig {
+  enabled?: boolean;
+  variant?: RuntimeResourceVariantKind;
+  resourceId?: string;
+  version?: string;
+  path?: string;
+}
+
+export interface RuntimeResourceSelectionConfig {
+  enabled?: boolean;
+  defaultVariant?: RuntimeResourceVariantKind;
+  fallbackToBaseline?: boolean;
+  canaryRate?: number;
+  surfaces?: Partial<Record<RuntimeResourceSurface, RuntimeResourceSurfaceConfig>>;
+}
+
+export interface ResourcesConfig {
+  runtimeSelection?: RuntimeResourceSelectionConfig;
+}
+
 export interface VerificationMandatoryChecksConfig {
   typecheck?: boolean;
   lint?: boolean;
@@ -307,6 +330,7 @@ export interface WavemillConfig {
   verification?: VerificationConfig;
   budget?: BudgetConfig;
   registry?: RegistryConfig;
+  resources?: ResourcesConfig;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -766,5 +790,18 @@ export function getRegistryConfig(repoDir?: string): Required<RegistryConfig> {
   return {
     enabled: config.enabled ?? true,
     dir: config.dir ?? '.wavemill/registry',
+  };
+}
+
+export function getRuntimeResourceSelectionConfig(repoDir?: string): Required<Omit<RuntimeResourceSelectionConfig, 'surfaces'>> & {
+  surfaces: Partial<Record<RuntimeResourceSurface, RuntimeResourceSurfaceConfig>>;
+} {
+  const config = loadWavemillConfig(repoDir).resources?.runtimeSelection || {};
+  return {
+    enabled: config.enabled ?? false,
+    defaultVariant: config.defaultVariant ?? 'baseline',
+    fallbackToBaseline: config.fallbackToBaseline ?? true,
+    canaryRate: config.canaryRate ?? 0,
+    surfaces: config.surfaces ?? {},
   };
 }
