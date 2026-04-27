@@ -248,10 +248,10 @@ export function formatEvalRecord(record: EvalRecord): string {
     const pad = (label: string) => label.padEnd(20);
     const c = re.criteria;
     lines.push(`    ${pad('Completeness:')}  ${scoreColor(c.completeness.score)}${c.completeness.score.toFixed(2)}${NC}  ${DIM}${c.completeness.rationale}${NC}`);
-    lines.push(`    ${pad('Correctness:')}   ${scoreColor(c.correctness.score)}${c.correctness.score.toFixed(2)}${NC}  ${DIM}${c.correctness.rationale}${NC}`);
+    lines.push(`    ${pad('Correctness:')}  ${scoreColor(c.correctness.score)}${c.correctness.score.toFixed(2)}${NC}  ${DIM}${c.correctness.rationale}${NC}`);
     lines.push(`    ${pad('Code quality:')}  ${scoreColor(c.code_quality.score)}${c.code_quality.score.toFixed(2)}${NC}  ${DIM}${c.code_quality.rationale}${NC}`);
     lines.push(`    ${pad('Intervention:')}  ${scoreColor(c.intervention_impact.score)}${c.intervention_impact.score.toFixed(2)}${NC}  ${DIM}${c.intervention_impact.rationale}${NC}`);
-    lines.push(`    ${pad('Autonomy:')}      ${scoreColor(c.autonomy.score)}${c.autonomy.score.toFixed(2)}${NC}  ${DIM}${c.autonomy.rationale}${NC}`);
+    lines.push(`    ${pad('Autonomy:')}  ${scoreColor(c.autonomy.score)}${c.autonomy.score.toFixed(2)}${NC}  ${DIM}${c.autonomy.rationale}${NC}`);
 
     if (re.determinative_boundary) {
       lines.push(`    ${DIM}Determinative:${NC}  ${re.determinative_boundary}`);

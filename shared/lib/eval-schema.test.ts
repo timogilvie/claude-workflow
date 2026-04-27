@@ -1110,6 +1110,25 @@ test('rubricEval round-trips through JSON serialization', () => {
   assert.deepEqual((serialized as any).rubricEval, validRubricEval);
 });
 
+test('Rejects rubricEval with invalid determinative_boundary enum value', () => {
+  const bad = {
+    ...scenarios[0].record,
+    schemaVersion: '1.10.0',
+    rubricEval: {
+      schema_version: '1.0',
+      rubric_version: '1.0',
+      criteria: validRubricEval.criteria,
+      determinative_boundary: 'invalid_boundary',
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(
+    result.errors.some((e) => e.includes('determinative_boundary')),
+    'Should mention determinative_boundary in error',
+  );
+});
+
 // ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────
