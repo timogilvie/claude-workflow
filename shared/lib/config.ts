@@ -204,6 +204,17 @@ export interface ReviewConfig {
   enabled?: boolean;
 }
 
+export interface IntegrationConfig {
+  enabled: boolean;
+  integrationBranch: string;
+  promotionBranch: string;
+  mergeMethod: 'merge' | 'squash' | 'rebase';
+  deleteBranchAfterMerge: boolean;
+  haltOnRed: boolean;
+  highRiskPolicy: 'block' | 'manual' | 'allow';
+  useMillSession: boolean;
+}
+
 export interface LinearConfig {
   project?: string;
 }
@@ -323,6 +334,7 @@ export interface WavemillConfig {
   constraints?: ConstraintsConfig;
   ui?: UiConfig;
   review?: ReviewConfig;
+  integration?: Partial<IntegrationConfig>;
   ready?: ReadyConfig;
   permissions?: PermissionsConfig;
   modelRegistry?: ModelRegistryConfig;
@@ -332,6 +344,17 @@ export interface WavemillConfig {
   registry?: RegistryConfig;
   resources?: ResourcesConfig;
 }
+
+export const INTEGRATION_DEFAULTS: IntegrationConfig = {
+  enabled: false,
+  integrationBranch: 'auto/integration',
+  promotionBranch: 'main',
+  mergeMethod: 'squash',
+  deleteBranchAfterMerge: true,
+  haltOnRed: true,
+  highRiskPolicy: 'manual',
+  useMillSession: true,
+};
 
 // ────────────────────────────────────────────────────────────────
 // Schema Validation
@@ -677,6 +700,14 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
       agentCmd: config.ready?.remediation?.agentCmd ?? '',
     },
   };
+}
+
+/**
+ * Get the integration mode config section.
+ * Returns defaults when not configured.
+ */
+export function getIntegrationConfig(repoDir?: string): IntegrationConfig {
+  return { ...INTEGRATION_DEFAULTS, ...(loadWavemillConfig(repoDir).integration ?? {}) };
 }
 
 /**

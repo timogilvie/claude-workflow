@@ -807,6 +807,55 @@
       },
       "additionalProperties": false
     },
+    "integration": {
+      "type": "object",
+      "description": "Settings for autonomous integration mode (opt-in). Task branches are promoted to an integration branch before merging to main.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable autonomous integration mode. When false (default), the integration controller is a no-op."
+        },
+        "integrationBranch": {
+          "type": "string",
+          "default": "auto/integration",
+          "description": "The long-lived integration branch where task branches are merged before promotion to main."
+        },
+        "promotionBranch": {
+          "type": "string",
+          "default": "main",
+          "description": "The target branch for promotion after integration validation passes."
+        },
+        "mergeMethod": {
+          "type": "string",
+          "enum": ["merge", "squash", "rebase"],
+          "default": "squash",
+          "description": "Merge strategy for promoting the integration branch to the promotion branch."
+        },
+        "deleteBranchAfterMerge": {
+          "type": "boolean",
+          "default": true,
+          "description": "Delete task branches after they are merged into the integration branch."
+        },
+        "haltOnRed": {
+          "type": "boolean",
+          "default": true,
+          "description": "Halt integration promotion when CI checks are failing on the integration branch."
+        },
+        "highRiskPolicy": {
+          "type": "string",
+          "enum": ["block", "manual", "allow"],
+          "default": "manual",
+          "description": "Policy for handling high-risk PRs: 'block' prevents merge, 'manual' requires human approval, 'allow' permits autonomous merge."
+        },
+        "useMillSession": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, the integration controller reuses the active mill tmux session for status reporting."
+        }
+      },
+      "additionalProperties": false
+    },
     "permissions": {
       "type": "object",
       "description": "Permission settings for agent tool usage. Configures which commands can be auto-approved without user confirmation.",
