@@ -977,6 +977,9 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     },
     constraints: { maxCostUsd: effectiveBudget },
     ...(budgetViolation ? { budgetViolation } : {}),
+    ...(coderRecommendation.resourceSelections?.length
+      ? { resourceSelections: coderRecommendation.resourceSelections }
+      : {}),
   };
 }
 

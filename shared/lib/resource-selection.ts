@@ -272,7 +272,6 @@ function resolveSelectionInternal(
   if (requestedVariant === 'canary') {
     const sessionId = selectSessionId(options.sessionId);
     if (!sessionId) {
-      resolvedVariant = 'baseline';
       return {
         candidate: baselineCandidate,
         selection: {
@@ -288,7 +287,6 @@ function resolveSelectionInternal(
     }
     const bucket = stableBucket(`${surface}:${sessionId}`);
     if (bucket >= normalizeRate(runtimeConfig.canaryRate)) {
-      resolvedVariant = 'baseline';
       return {
         candidate: baselineCandidate,
         selection: {

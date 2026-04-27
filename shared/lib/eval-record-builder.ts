@@ -369,6 +369,17 @@ export function attachResourceSelections(record: EvalRecord): void {
             uri: resource.uri,
             fallbackApplied: false,
           });
+        } else if (resource.type === 'optimizer-artifact') {
+          // Router artifacts are registered as optimizer-artifact type, not prompt.
+          const routerVariant = resource.name.includes('optimized') ? 'optimized' : 'baseline';
+          manifestSelections.push({
+            surface: 'router',
+            variant: routerVariant as 'baseline' | 'optimized' | 'canary',
+            requestedVariant: 'baseline' as const,
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
         }
       }
     }
