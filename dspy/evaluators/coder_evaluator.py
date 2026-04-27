@@ -62,8 +62,10 @@ def get_impl_ground_truth(example: EvalExample) -> dict:
     }
 
 
-# Default coder evaluation prompt
-DEFAULT_CODER_EVAL_PROMPT = """You are evaluating the quality of an AI coding agent's implementation.
+# Default coder evaluation prompt.
+# Source of truth: tools/prompts/eval-judge.md. DSPy parser strategy:
+# preserve runner-facing score fields and tolerate extra rubric fields.
+DEFAULT_CODER_EVAL_PROMPT = """You are evaluating the quality of an AI coding agent's implementation using the production rubric contract.
 
 Given a task description and context about the implementation outcome, score the implementation quality.
 
@@ -79,27 +81,37 @@ Overall workflow score: {{OVERALL_SCORE}}
 Intervention count: {{INTERVENTION_COUNT}}
 Intervention details: {{INTERVENTION_DETAILS}}
 
-Judge rationale: {{JUDGE_RATIONALE}}
+Production judge rationale: {{JUDGE_RATIONALE}}
 
-## Scoring Guidelines
+## Implementation Rubric
 
-Score the IMPLEMENTATION quality specifically (not the overall workflow):
+Score the implementation stage specifically, not the overall workflow. Use these production stage criteria:
 
-- **0.9-1.0 (Excellent)**: Clean, correct implementation. All requirements met. Good patterns, tests pass, no rework needed.
-- **0.7-0.9 (Good)**: Mostly correct with minor issues. May need small fixes but core logic is sound.
-- **0.5-0.7 (Acceptable)**: Works but has notable issues. Missing edge cases, incomplete test coverage, or needs significant fixes.
-- **0.0-0.5 (Poor)**: Major problems. Incorrect logic, missing requirements, or fundamentally flawed approach.
+- **requirement_completeness**: Did the code cover the intended task scope without missing requested behavior?
+- **correctness**: Does the implementation behave correctly, handle important edge cases, and avoid regressions?
+- **integration_with_existing_patterns**: Does the code fit existing architecture, APIs, conventions, and ownership boundaries?
+- **code_quality_and_test_coverage**: Is the solution maintainable, appropriately simple, and validated by relevant tests or checks?
 
-Consider:
-- Did the implementation match the plan/requirements?
-- Were interventions needed during the coding phase?
-- Was the code quality good (patterns, error handling, tests)?
+Calibrate against the overall score, interventions, and production judge rationale. Interventions should lower the score when they indicate missing requirements, incorrect code, integration issues, or inadequate validation.
+
+## Score Bands
+
+- **0.9-1.0 (excellent)**: Complete, correct, well-integrated implementation with strong quality and validation.
+- **0.7-0.9 (good)**: Mostly correct implementation with minor gaps or limited but acceptable validation.
+- **0.5-0.7 (acceptable)**: Partially successful implementation with notable omissions, edge-case gaps, or quality concerns.
+- **0.0-0.5 (poor)**: Major correctness, completeness, integration, or validation failures.
+
+## Production Rubric Alignment
+
+The production eval judge also records rubricEval criteria named `completeness`, `correctness`, `code_quality`, `intervention_impact`, and `autonomy`. You may include a compact `rubricEval` object using those names, and you may include `stageScores.implementation`, but the runner-facing fields below are required.
 
 ## Output
 
 Respond with ONLY a valid JSON object (no markdown fences):
 
-{"implementation_score": <float 0.0-1.0>, "quality_band": "excellent|good|acceptable|poor", "reasoning": "<1-2 sentence explanation>"}"""
+{"implementation_score": <float 0.0-1.0>, "quality_band": "excellent|good|acceptable|poor", "reasoning": "<1-2 sentence explanation>", "stageScores": {"implementation": {"score": <same float>, "rationale": "<optional rubric rationale>"}}, "rubricEval": {"completeness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "correctness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "code_quality": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "intervention_impact": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "autonomy": {"score": <float 0.0-1.0>, "rationale": "<optional>"}}}
+
+`stageScores` and `rubricEval` are optional extra fields. `implementation_score`, `quality_band`, and `reasoning` are always required."""
 
 
 def build_coder_input(example: EvalExample) -> dict[str, str]:
@@ -115,28 +127,76 @@ def build_coder_input(example: EvalExample) -> dict[str, str]:
     }
 
 
-def parse_coder_output(output: str) -> dict:
-    """Parse the coder evaluator's JSON response."""
-    # Strip markdown fences
+def _coder_parse_error(reason: str = "Parse failed") -> dict:
+    return {"implementation_score": -1, "quality_band": "unknown", "reasoning": reason}
+
+
+def _coerce_score(value) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_json_object(output: str) -> dict | None:
     cleaned = re.sub(r"^```(?:json)?\s*", "", output.strip())
     cleaned = re.sub(r"\s*```$", "", cleaned)
 
     for candidate in [cleaned]:
         try:
             data = json.loads(candidate)
-            return data
+            return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
             pass
 
-    # Try to find JSON in output
     match = re.search(r"\{[\s\S]*\}", output)
     if match:
         try:
-            return json.loads(match.group())
+            data = json.loads(match.group())
+            return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
             pass
 
-    return {"implementation_score": -1, "quality_band": "unknown", "reasoning": "Parse failed"}
+    return None
+
+
+def parse_coder_output(output: str) -> dict:
+    """Parse and normalize the coder evaluator's JSON response."""
+    data = _extract_json_object(output)
+    if data is None:
+        return _coder_parse_error()
+
+    stage_scores = data.get("stageScores", {})
+    if not isinstance(stage_scores, dict):
+        stage_scores = {}
+    stage_impl = stage_scores.get("implementation", {})
+    if not isinstance(stage_impl, dict):
+        stage_impl = {}
+
+    score = _coerce_score(data.get("implementation_score")) if "implementation_score" in data else None
+    if "implementation_score" in data and score is None:
+        return _coder_parse_error("Parse failed: missing numeric implementation_score")
+    if "implementation_score" not in data:
+        score = _coerce_score(stage_impl.get("score"))
+    if score is None:
+        return _coder_parse_error("Parse failed: missing numeric implementation_score")
+
+    data["implementation_score"] = score
+
+    if not data.get("quality_band"):
+        data["quality_band"] = score_to_impl_band(score)
+
+    if not data.get("reasoning"):
+        rationale = stage_impl.get("rationale")
+        data["reasoning"] = rationale if isinstance(rationale, str) and rationale else "No reasoning provided"
+
+    return data
 
 
 def score_impl_agreement(predicted: float, ground_truth: float, had_interventions: bool) -> dict[str, float]:
