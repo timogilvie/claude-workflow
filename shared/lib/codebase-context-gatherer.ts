@@ -189,32 +189,30 @@ export async function getKeyFilesReference(
   repoPath: string,
   maxLines: number = 1000
 ): Promise<string> {
-  // Try hot memory tier first via typed retrieval (registers with registry)
-  try {
-    const hotMemory = await resolveMemoryResource({
-      class: 'memory',
-      tier: 'hot',
-      repoDir: repoPath,
-    });
-    if (hotMemory) {
-      const content = hotMemory.content;
-      const sizeKB = Buffer.byteLength(content, 'utf-8') / 1024;
-      if (sizeKB > 100) {
-        console.warn(
-          `⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (>100KB limit)`
-        );
-        console.warn(
-          '   Consider archiving old "Recent Work" entries to project-context-archive.md'
-        );
-      } else if (sizeKB > 50) {
-        console.warn(
-          `⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (approaching 100KB limit)`
-        );
-      }
-      return `Source: project-context.md\n\n${content}`;
+  // Try hot memory tier first via typed retrieval (registers with registry).
+  // resolveMemoryResource returns null when the file is absent; any other error
+  // (e.g. permission denied) is a genuine I/O failure and should propagate.
+  const hotMemory = await resolveMemoryResource({
+    class: 'memory',
+    tier: 'hot',
+    repoDir: repoPath,
+  });
+  if (hotMemory) {
+    const content = hotMemory.content;
+    const sizeKB = Buffer.byteLength(content, 'utf-8') / 1024;
+    if (sizeKB > 100) {
+      console.warn(
+        `⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (>100KB limit)`
+      );
+      console.warn(
+        '   Consider archiving old "Recent Work" entries to project-context-archive.md'
+      );
+    } else if (sizeKB > 50) {
+      console.warn(
+        `⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (approaching 100KB limit)`
+      );
     }
-  } catch {
-    // Fall through to path-based candidates below
+    return `Source: project-context.md\n\n${content}`;
   }
 
   // Legacy fallbacks — codebase-context.md and CLAUDE.md (not formal memory tier)

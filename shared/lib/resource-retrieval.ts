@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import type { ResourceRef } from './resource-registry.ts';
 import { registerPromptTemplate, type PromptContractMetadata } from './resource-adapters/prompt-adapter.ts';
 import { registerResource, toResourceRef } from './resource-registry.ts';
+import { logPromptUsage } from './prompt-registry.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = join(__dirname, '..', '..', 'tools', 'prompts');
@@ -281,6 +282,10 @@ export async function resolvePromptResource(
   };
 
   const resourceRef = registerPromptTemplate(filePath, content, request.repoDir, contractMetadata);
+
+  // Log to GEPA prompt-registry.jsonl for training attribution.
+  // logPromptUsage internally calls registerPromptTemplate which is idempotent.
+  logPromptUsage(filePath, content);
 
   const metadata: Record<string, unknown> = {
     path: filePath,
