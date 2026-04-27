@@ -415,6 +415,7 @@ describe('hokusai-schema', () => {
       const result = toHokusaiSubmission(makeRecord());
 
       assert.deepEqual(result, {
+        schema_version: '1.0',
         run_id: 'eval-1',
         task_id: 'HOK-1237',
         constraints: {
@@ -432,6 +433,104 @@ describe('hokusai-schema', () => {
           intervention_count: 1,
         },
       });
+    });
+
+    it('emits rubric signals and schema version 1.1 when rubric features are present', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        rubric_provenance: 'judge',
+        rubricEval: {
+          schema_version: '1.0',
+          rubric_version: '2026-04',
+          criteria: {
+            completeness: { score: 0.9, rationale: 'internal text' },
+            correctness: { score: 0.8, rationale: 'internal text' },
+            code_quality: { score: 0.7, rationale: 'internal text' },
+            intervention_impact: { score: 0.6, rationale: 'internal text' },
+            autonomy: { score: 0.5, rationale: 'internal text' },
+          },
+          determinative_boundary: 'functional_bug',
+        },
+        taskDescriptor: makeDescriptor({
+          constraints: {
+            max_cost_usd: 3,
+            models_available: ['planner-a', 'coder-a', 'reviewer-a'],
+            objective: 'balanced',
+          },
+          stages: {
+            planner: { model: 'planner-a' },
+            coder: { model: 'coder-a' },
+            reviewer: { model: 'reviewer-a' },
+          },
+          rubric: {
+            has_rubric: true,
+            criterion_count: 5,
+            mean_score: 0.7,
+            criteria_scores: {
+              completeness: 0.9,
+              correctness: 0.8,
+              code_quality: 0.7,
+              intervention_impact: 0.6,
+              autonomy: 0.5,
+            },
+            determinative_boundary: 'functional_bug',
+          },
+        }),
+      }));
+
+      assert.equal(result?.schema_version, '1.1');
+      assert.deepEqual(result?.rubric_signals, {
+        rubric_version: '2026-04',
+        criterion_count: 5,
+        mean_score: 0.7,
+        criteria_scores: {
+          completeness: 0.9,
+          correctness: 0.8,
+          code_quality: 0.7,
+          intervention_impact: 0.6,
+          autonomy: 0.5,
+        },
+        determinative_boundary: 'functional_bug',
+        rubric_provenance: 'judge',
+      });
+    });
+
+    it('omits rubric signals and emits schema version 1.0 when rubric data is absent', () => {
+      const result = toHokusaiSubmission(makeRecord());
+
+      assert.equal(result?.schema_version, '1.0');
+      assert.equal(result?.rubric_signals, undefined);
+    });
+
+    it('omits rubric signals when descriptor explicitly says rubric is absent', () => {
+      const result = toHokusaiSubmission(makeRecord({
+        taskDescriptor: makeDescriptor({
+          constraints: {
+            max_cost_usd: 3,
+            models_available: ['planner-a', 'coder-a', 'reviewer-a'],
+            objective: 'balanced',
+          },
+          stages: {
+            planner: { model: 'planner-a' },
+            coder: { model: 'coder-a' },
+            reviewer: { model: 'reviewer-a' },
+          },
+          rubric: {
+            has_rubric: false,
+            criterion_count: 0,
+            mean_score: 0,
+            criteria_scores: {
+              completeness: 0,
+              correctness: 0,
+              code_quality: 0,
+              intervention_impact: 0,
+              autonomy: 0,
+            },
+          },
+        }),
+      }));
+
+      assert.equal(result?.schema_version, '1.0');
+      assert.equal(result?.rubric_signals, undefined);
     });
 
     it('uses taskDescriptor stage models when present', () => {
@@ -617,6 +716,100 @@ describe('hokusai-schema', () => {
         valid: true,
         errors: [],
       });
+    });
+
+    it('accepts valid rubric signals', () => {
+      const submission = toHokusaiSubmission(makeRecord({
+        rubric_provenance: 'backfill_derived',
+        rubricEval: {
+          schema_version: '1.0',
+          rubric_version: '2026-04',
+          criteria: {
+            completeness: { score: 1, rationale: '' },
+            correctness: { score: 0.8, rationale: '' },
+            code_quality: { score: 0.7, rationale: '' },
+            intervention_impact: { score: 0.6, rationale: '' },
+            autonomy: { score: 0.5, rationale: '' },
+          },
+        },
+        taskDescriptor: makeDescriptor({
+          constraints: {
+            max_cost_usd: 3,
+            models_available: ['planner-a', 'coder-a', 'reviewer-a'],
+            objective: 'balanced',
+          },
+          stages: {
+            planner: { model: 'planner-a' },
+            coder: { model: 'coder-a' },
+            reviewer: { model: 'reviewer-a' },
+          },
+          rubric: {
+            has_rubric: true,
+            criterion_count: 5,
+            mean_score: 0.72,
+            criteria_scores: {
+              completeness: 1,
+              correctness: 0.8,
+              code_quality: 0.7,
+              intervention_impact: 0.6,
+              autonomy: 0.5,
+            },
+          },
+        }),
+      }));
+
+      assert.ok(submission);
+      assert.deepEqual(validateHokusaiSubmission(submission), {
+        valid: true,
+        errors: [],
+      });
+    });
+
+    it('accepts old-format submissions without schema version or rubric signals', () => {
+      const submission = toHokusaiSubmission(makeRecord()) as HokusaiSubmission;
+      delete submission.schema_version;
+
+      assert.deepEqual(validateHokusaiSubmission(submission), {
+        valid: true,
+        errors: [],
+      });
+    });
+
+    it('rejects malformed rubric signal numbers', () => {
+      const submission = toHokusaiSubmission(makeRecord()) as HokusaiSubmission;
+      submission.schema_version = '1.1';
+      submission.rubric_signals = {
+        rubric_version: '2026-04',
+        criterion_count: 5,
+        mean_score: -0.1,
+        criteria_scores: {
+          completeness: Number.NaN,
+          correctness: 0.8,
+          code_quality: 0.7,
+          intervention_impact: 0.6,
+          autonomy: 0.5,
+        },
+      };
+
+      const result = validateHokusaiSubmission(submission);
+
+      assert.equal(result.valid, false);
+      assert.deepEqual(result.errors, [
+        'rubric_signals.mean_score must be a non-negative number',
+        'rubric_signals.criteria_scores.completeness must be a number between 0 and 1',
+      ]);
+    });
+
+    it('rejects unsupported submission schema versions', () => {
+      const submission = toHokusaiSubmission(makeRecord()) as HokusaiSubmission;
+      submission.schema_version = '2.0';
+
+      const result = validateHokusaiSubmission(submission);
+
+      assert.equal(result.valid, false);
+      assert.deepEqual(result.errors, [
+        'schema_version must be "1.0" or "1.1"',
+      ]);
     });
 
     it('reports an empty run_id', () => {

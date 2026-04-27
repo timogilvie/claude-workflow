@@ -71,6 +71,19 @@ Hokusai is optional. The default model is:
 - local learning from your own data
 - collective learning only when explicitly enabled
 
+### Submission Schema
+
+Outbound Hokusai training submissions include a `schema_version` field:
+
+- `1.0` submissions contain route, constraint, and observed outcome fields.
+- `1.1` submissions also include a `rubric_signals` block when sanitized rubric features are available.
+
+The `rubric_signals` block carries the rubric version, criterion count, mean score, five normalized criterion scores, optional determinative boundary, and optional rubric provenance. These values come from the privacy-safe rubric projection on the task descriptor plus record-level rubric metadata.
+
+Free-text rubric rationale, stage rationale, judge notes, prompt-registry hashes, and internal model identifiers are not forwarded. Redaction uses an allow-list for safe strings, so unexpected new text fields are stripped by default while numeric rubric features pass through unchanged.
+
+The new fields are optional. Existing consumers can continue accepting old submissions and ignore unknown optional fields until they are updated for `1.1`.
+
 ## Related Commands
 
 - `wavemill mill` runs routing as part of the main factory loop
