@@ -741,7 +741,7 @@ cleanup_completed_task() {
   # Remove worktree
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   if [[ -d "$wt_dir" ]]; then
-    execute git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
+    execute git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
     log "debug" "  ✓ Removed worktree: $wt_dir"
   fi
 
@@ -750,9 +750,9 @@ cleanup_completed_task() {
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-    execute git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+    execute git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
     log "debug" "  ✓ Deleted local branch: $task_branch"
-    if execute git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
+    if execute git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
       log "debug" "  ✓ Deleted remote branch: $task_branch"
     else
       log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
@@ -760,7 +760,7 @@ cleanup_completed_task() {
   fi
 
   # Clean up state
-  execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  execute git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   reset_retry_count "$SESSION" "$issue"
   remove_task_state "$issue"
@@ -4074,7 +4074,7 @@ cleanup_completed_task() {
   # Remove worktree
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   if [[ -d "$wt_dir" ]]; then
-    git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
+    git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
     log "debug" "  ✓ Removed worktree: $wt_dir"
   fi
 
@@ -4083,9 +4083,9 @@ cleanup_completed_task() {
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-    git -C "$REPO_DIR" branch -D "$task_branch" 2>/dev/null || true
+    git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
     log "debug" "  ✓ Deleted local branch: $task_branch"
-    if git -C "$REPO_DIR" push origin --delete "$task_branch" 2>/dev/null; then
+    if git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
       log "debug" "  ✓ Deleted remote branch: $task_branch"
     else
       log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
@@ -4093,7 +4093,7 @@ cleanup_completed_task() {
   fi
 
   # Clean up state
-  git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   remove_task_state "$issue"
   CLEANED["$issue"]=1
