@@ -963,9 +963,9 @@
               }
             },
             "required": ["model"],
-        "additionalProperties": false
-      }
-    },
+            "additionalProperties": false
+          }
+        },
     "rubric": {
       "type": "object",
       "description": "Rubric-derived features for router training (HOK-1409). NN-ready: bounded numeric features only, no free text.",
