@@ -120,7 +120,7 @@ export function vectorizeDescriptor(descriptor: TaskDescriptor): number[] {
   const languages = new Set(heuristic.languages.map(normalizeLanguage));
   const domain = normalizeDomain(learned.domain);
 
-  // TODO(HOK-1409): incorporate rubricFeatures.dimensionScores into vectorization
+  // Future: incorporate rubricFeatures.dimensionScores into vectorization
   // once the rubric-aware corpus is dense enough to tune weights.
   return [
     ...TASK_TYPE_DIMENSIONS.map((candidate) => Number(taskType === candidate)),
