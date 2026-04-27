@@ -162,7 +162,8 @@ function loadPersonaPromptTemplate(
   if (!promptResource.content) {
     throw new Error(
       `Failed to load prompt template for reviewer: ${persona}. ` +
-      `Please ensure the prompt file exists for the ${persona} reviewer.`
+      `Expected file at ${promptPath}. ` +
+      `Please ensure the prompt file exists and is readable.`
     );
   }
 
