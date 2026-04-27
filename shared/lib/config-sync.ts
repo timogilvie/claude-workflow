@@ -47,6 +47,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
       'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
       'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheReadCostPerMTok: 0.44 },
       'gpt-5.4': { inputCostPerMTok: 2.5, outputCostPerMTok: 15, cacheReadCostPerMTok: 0.25 },
+      'gpt-5.5': { inputCostPerMTok: 5, outputCostPerMTok: 30 },
     },
     interventionPenalties: {
       reviewComment: 0.05,
@@ -77,6 +78,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
       'claude-haiku-4-5-20251001',
       'gpt-5.3-codex',
       'gpt-5.4',
+      'gpt-5.5',
     ],
     comparisonModel: 'claude-opus-4-7',
     autoMergeWinner: false,
@@ -93,6 +95,9 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     minRecords: 20,
     minModels: 2,
     models: [],
+    availableModels: {
+      planner: ['claude-opus-4-7', 'claude-sonnet-4-6', 'gpt-5.4', 'gpt-5.5'],
+    },
     defaultAgent: 'claude',
     agentMap: {
       'claude-opus-4-7': 'claude',
@@ -102,6 +107,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
       'claude-haiku-4-5-20251001': 'claude',
       'gpt-5.3-codex': 'codex',
       'gpt-5.4': 'codex',
+      'gpt-5.5': 'codex',
     },
     mode: 'auto',
     llmModel: 'gpt-4o-mini',

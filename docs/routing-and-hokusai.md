@@ -82,3 +82,4 @@ Hokusai is optional. The default model is:
 - [Mill Mode](mill-mode.md) — the default workflow
 - [CLI Reference](cli-reference.md) — all commands and command groups
 - [Eval Mode](eval-mode.md) — how outcomes are scored
+- [Adding Models](model-additions.md) — maintainer checklist for adding model support
