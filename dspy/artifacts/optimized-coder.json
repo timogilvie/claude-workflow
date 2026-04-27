@@ -1,6 +1,9 @@
 {
   "version": "1.0.0",
   "stage": "coder",
+  "rubric_schema_version": "production-stage-rubric-v1",
+  "rubric_artifact_status": "pending_regeneration",
+  "rubric_artifact_note": "Optimization content predates rubric-aware signatures; regenerate with dspy/optimize_stages.py after persisted rubricCriteria labels are available.",
   "created_at": "2026-04-04T15:30:27.388687+00:00",
   "optimizer": "MIPROv2",
   "teacher_model": "claude-sonnet-4-5-20250929",
