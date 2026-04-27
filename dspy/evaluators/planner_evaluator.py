@@ -93,10 +93,10 @@ def derive_plan_quality(example: EvalExample) -> dict:
     }
 
 
-# Default planner evaluation prompt
-DEFAULT_PLANNER_EVAL_PROMPT = """You are evaluating the quality of an AI planning agent's work.
+# Default planner evaluation prompt — rubric-aligned to production eval-judge criteria
+DEFAULT_PLANNER_EVAL_PROMPT = """You are evaluating the quality of an AI planning agent's work using a structured rubric.
 
-Given a task description and context about the workflow outcome, assess how well the planning phase was executed.
+Given a task description and context about the workflow outcome, assess how well the planning phase was executed against the rubric criteria below.
 
 ## Task Description
 
@@ -111,34 +111,39 @@ Intervention details: {{INTERVENTION_DETAILS}}
 
 Judge rationale: {{JUDGE_RATIONALE}}
 
-## What Makes a Good Plan
+## Rubric Criteria
 
-A good plan:
-- Correctly identifies the scope and key files to modify
-- Breaks work into logical, ordered phases
-- Anticipates edge cases and constraints
-- Doesn't overscope or underscope the work
-- Leads to smooth implementation without rework
+Evaluate each criterion on a 0.0–1.0 scale:
 
-A poor plan:
-- Misses critical requirements or files
-- Has incorrect dependencies or ordering
-- Overscopes (leads to unnecessary work)
-- Underscopes (misses requirements, causing rework)
-- Leads to interventions during implementation
+1. **component_boundaries** — Did the plan identify the right files, modules, and ownership boundaries?
+2. **invariant_coverage** — Did it surface key constraints, compatibility requirements, rollout rules, or schema contracts?
+3. **sequencing_and_dependencies** — Did it order the work sensibly and account for blockers or downstream implications?
+4. **risk_and_validation_coverage** — Did it anticipate likely failure modes and how to verify the change?
 
 ## Scoring Guidelines
 
-- **0.9-1.0 (Excellent)**: Plan was comprehensive and accurate. Implementation flowed smoothly.
-- **0.7-0.9 (Good)**: Plan was mostly correct. Minor gaps but didn't cause significant issues.
-- **0.4-0.7 (Weak)**: Plan had gaps that required rework or interventions.
-- **0.0-0.4 (Poor)**: Plan was inadequate. Major rework, wrong approach, or missed requirements.
+Derive `plan_score` as a holistic 0.0–1.0 score informed by the rubric criteria above:
+
+- **0.9–1.0 (excellent)**: Plan was comprehensive and accurate across all criteria. Implementation flowed smoothly.
+- **0.7–0.9 (good)**: Plan was mostly correct. Minor gaps in one or two criteria but didn't cause significant issues.
+- **0.4–0.7 (weak)**: Plan had gaps in multiple criteria that required rework or interventions.
+- **0.0–0.4 (poor)**: Plan was inadequate. Major rework, wrong approach, or missed requirements across criteria.
 
 ## Output
 
-Respond with ONLY a valid JSON object (no markdown fences):
+Respond with ONLY a valid JSON object (no markdown fences, no preamble).
 
-{"plan_score": <float 0.0-1.0>, "quality_band": "excellent|good|weak|poor", "reasoning": "<1-2 sentence explanation>"}"""
+Required fields: `plan_score`, `quality_band`, `reasoning`.
+
+Optional but encouraged: `stageScores.plan` with `score`, `rationale`, and `rubricCriteria` array.
+
+When both `plan_score` and `stageScores.plan.score` are present, they must be equal.
+
+Example minimal output:
+{"plan_score": 0.82, "quality_band": "good", "reasoning": "Plan identified correct scope but missed a schema constraint."}
+
+Example richer output:
+{"plan_score": 0.82, "quality_band": "good", "reasoning": "Plan identified correct scope but missed a schema constraint.", "stageScores": {"plan": {"score": 0.82, "rationale": "Good scope identification with minor invariant gap.", "rubricCriteria": [{"criterion": "component_boundaries", "score": 0.9, "notes": "Correct files and modules identified."}, {"criterion": "invariant_coverage", "score": 0.65, "notes": "Missed schema migration constraint."}, {"criterion": "sequencing_and_dependencies", "score": 0.85, "notes": "Sensible ordering."}, {"criterion": "risk_and_validation_coverage", "score": 0.8, "notes": "Covered main failure modes."}]}}}"""
 
 
 def build_planner_input(example: EvalExample) -> dict[str, str]:
@@ -154,21 +159,46 @@ def build_planner_input(example: EvalExample) -> dict[str, str]:
     }
 
 
+def _normalize_planner_result(data: dict) -> dict:
+    """Normalize a parsed planner result to ensure scalar compatibility fields exist.
+
+    If plan_score is absent but stageScores.plan.score exists, backfill the scalar.
+    If quality_band is absent but plan_score is available, derive it.
+    """
+    if "plan_score" not in data:
+        try:
+            nested = data["stageScores"]["plan"]["score"]
+            if isinstance(nested, (int, float)):
+                data["plan_score"] = float(nested)
+        except (KeyError, TypeError):
+            pass
+
+    score = data.get("plan_score")
+    if "quality_band" not in data and isinstance(score, (int, float)) and score >= 0:
+        data["quality_band"] = score_to_plan_band(float(score))
+
+    return data
+
+
 def parse_planner_output(output: str) -> dict:
-    """Parse the planner evaluator's JSON response."""
+    """Parse the planner evaluator's JSON response.
+
+    Tolerates markdown fences, preamble text, and extra production-aligned fields.
+    Normalizes stageScores.plan.score into plan_score when the scalar is absent.
+    """
     cleaned = re.sub(r"^```(?:json)?\s*", "", output.strip())
     cleaned = re.sub(r"\s*```$", "", cleaned)
 
     for candidate in [cleaned]:
         try:
-            return json.loads(candidate)
+            return _normalize_planner_result(json.loads(candidate))
         except json.JSONDecodeError:
             pass
 
     match = re.search(r"\{[\s\S]*\}", output)
     if match:
         try:
-            return json.loads(match.group())
+            return _normalize_planner_result(json.loads(match.group()))
         except json.JSONDecodeError:
             pass
 

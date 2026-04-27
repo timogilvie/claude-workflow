@@ -34,10 +34,13 @@ from reviewer_evaluator import derive_review_quality, reviewer_metric
 
 
 class PlannerAssessor(dspy.Signature):
-    """Assess the quality of an AI planning agent's work on a software task.
-
-    Consider whether the plan correctly identifies scope, key files, dependencies,
-    and potential risks. A good plan leads to smooth implementation without rework."""
+    """Assess the quality of an AI planning agent's work on a software task
+    using the production rubric criteria: component_boundaries (right files,
+    modules, ownership boundaries), invariant_coverage (constraints, compatibility
+    requirements, schema contracts), sequencing_and_dependencies (sensible ordering,
+    blockers, downstream implications), and risk_and_validation_coverage (failure
+    modes, verification approach). Derive plan_score as a holistic 0.0-1.0 score
+    informed by these criteria."""
 
     task_prompt: str = dspy.InputField(desc="The task description/ticket")
     repo_name: str = dspy.InputField(desc="Target repository name")
@@ -47,14 +50,16 @@ class PlannerAssessor(dspy.Signature):
 
     plan_score: float = dspy.OutputField(desc="Plan quality score (0.0-1.0)")
     quality_band: str = dspy.OutputField(desc="Quality band: excellent, good, weak, or poor")
-    reasoning: str = dspy.OutputField(desc="1-2 sentence explanation")
+    reasoning: str = dspy.OutputField(desc="1-2 sentence explanation referencing rubric criteria")
 
 
 class CoderAssessor(dspy.Signature):
-    """Assess the quality of an AI coding agent's implementation.
-
-    Consider whether the implementation was correct, complete, followed good
-    patterns, and required minimal rework or interventions."""
+    """Assess the quality of an AI coding agent's implementation using the
+    production rubric criteria: requirement_completeness (task scope coverage),
+    correctness (no human-found bugs), integration_with_existing_patterns
+    (architecture, schema, rollout constraints), and code_quality_and_test_coverage
+    (clean, maintainable, appropriately validated). Derive implementation_score
+    as a holistic 0.0-1.0 score informed by these criteria."""
 
     task_prompt: str = dspy.InputField(desc="The task description/ticket")
     repo_name: str = dspy.InputField(desc="Target repository name")
@@ -65,7 +70,7 @@ class CoderAssessor(dspy.Signature):
 
     implementation_score: float = dspy.OutputField(desc="Implementation quality score (0.0-1.0)")
     quality_band: str = dspy.OutputField(desc="Quality band: excellent, good, acceptable, or poor")
-    reasoning: str = dspy.OutputField(desc="1-2 sentence explanation")
+    reasoning: str = dspy.OutputField(desc="1-2 sentence explanation referencing rubric criteria")
 
 
 class ReviewerAssessor(dspy.Signature):
@@ -202,6 +207,17 @@ def export_stage_artifact(
 
     data_hash = hashlib.sha256(Path(data_path).read_bytes()).hexdigest()[:16]
 
+    scalar_output_keys = {
+        "planner": "plan_score",
+        "coder": "implementation_score",
+        "reviewer": "review_score",
+    }
+    label_source_stages = {
+        "planner": "plan",
+        "coder": "implementation",
+        "reviewer": "review",
+    }
+
     return {
         "version": "1.0.0",
         "stage": stage,
@@ -218,6 +234,10 @@ def export_stage_artifact(
             "improvement": round(val_score - baseline_score, 4),
             "data_source": str(data_path),
             "data_hash": f"sha256:{data_hash}",
+            "rubric_contract": "eval-judge-stage-rubric-v1.0",
+            "label_source": f"metadata.stageScores.{label_source_stages.get(stage, stage)}.score",
+            "required_scalar_output": scalar_output_keys.get(stage, f"{stage}_score"),
+            "compatible_output_contract": "scalar-alias-plus-stageScores",
         },
     }
 

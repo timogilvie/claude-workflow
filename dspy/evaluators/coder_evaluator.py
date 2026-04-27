@@ -62,10 +62,10 @@ def get_impl_ground_truth(example: EvalExample) -> dict:
     }
 
 
-# Default coder evaluation prompt
-DEFAULT_CODER_EVAL_PROMPT = """You are evaluating the quality of an AI coding agent's implementation.
+# Default coder evaluation prompt — rubric-aligned to production eval-judge criteria
+DEFAULT_CODER_EVAL_PROMPT = """You are evaluating the quality of an AI coding agent's implementation using a structured rubric.
 
-Given a task description and context about the implementation outcome, score the implementation quality.
+Given a task description and context about the implementation outcome, score the implementation quality against the rubric criteria below.
 
 ## Task Description
 
@@ -81,25 +81,39 @@ Intervention details: {{INTERVENTION_DETAILS}}
 
 Judge rationale: {{JUDGE_RATIONALE}}
 
+## Rubric Criteria
+
+Evaluate each criterion on a 0.0–1.0 scale:
+
+1. **requirement_completeness** — Did the code cover the intended task scope?
+2. **correctness** — Did it behave correctly without human-found bugs?
+3. **integration_with_existing_patterns** — Did it fit the codebase's established architecture, schema, and rollout constraints?
+4. **code_quality_and_test_coverage** — Was the code clean, maintainable, and appropriately validated?
+
 ## Scoring Guidelines
 
-Score the IMPLEMENTATION quality specifically (not the overall workflow):
+Derive `implementation_score` as a holistic 0.0–1.0 score informed by the rubric criteria above:
 
-- **0.9-1.0 (Excellent)**: Clean, correct implementation. All requirements met. Good patterns, tests pass, no rework needed.
-- **0.7-0.9 (Good)**: Mostly correct with minor issues. May need small fixes but core logic is sound.
-- **0.5-0.7 (Acceptable)**: Works but has notable issues. Missing edge cases, incomplete test coverage, or needs significant fixes.
-- **0.0-0.5 (Poor)**: Major problems. Incorrect logic, missing requirements, or fundamentally flawed approach.
-
-Consider:
-- Did the implementation match the plan/requirements?
-- Were interventions needed during the coding phase?
-- Was the code quality good (patterns, error handling, tests)?
+- **0.9–1.0 (excellent)**: Clean, correct implementation. All criteria scored highly. No rework needed.
+- **0.7–0.9 (good)**: Mostly correct with minor issues in one or two criteria. Core logic is sound.
+- **0.5–0.7 (acceptable)**: Works but has notable issues. Missing edge cases, incomplete test coverage, or pattern mismatches.
+- **0.0–0.5 (poor)**: Major problems across criteria. Incorrect logic, missing requirements, or fundamentally flawed approach.
 
 ## Output
 
-Respond with ONLY a valid JSON object (no markdown fences):
+Respond with ONLY a valid JSON object (no markdown fences, no preamble).
 
-{"implementation_score": <float 0.0-1.0>, "quality_band": "excellent|good|acceptable|poor", "reasoning": "<1-2 sentence explanation>"}"""
+Required fields: `implementation_score`, `quality_band`, `reasoning`.
+
+Optional but encouraged: `stageScores.implementation` with `score`, `rationale`, and `rubricCriteria` array.
+
+When both `implementation_score` and `stageScores.implementation.score` are present, they must be equal.
+
+Example minimal output:
+{"implementation_score": 0.85, "quality_band": "good", "reasoning": "Correct implementation with minor test gap."}
+
+Example richer output:
+{"implementation_score": 0.85, "quality_band": "good", "reasoning": "Correct implementation with minor test gap.", "stageScores": {"implementation": {"score": 0.85, "rationale": "Solid implementation, minor test coverage gap.", "rubricCriteria": [{"criterion": "requirement_completeness", "score": 0.9, "notes": "All requirements addressed."}, {"criterion": "correctness", "score": 0.9, "notes": "No bugs found."}, {"criterion": "integration_with_existing_patterns", "score": 0.85, "notes": "Good pattern adherence."}, {"criterion": "code_quality_and_test_coverage", "score": 0.7, "notes": "Missing edge case tests."}]}}}"""
 
 
 def build_coder_input(example: EvalExample) -> dict[str, str]:
@@ -115,24 +129,46 @@ def build_coder_input(example: EvalExample) -> dict[str, str]:
     }
 
 
+def _normalize_coder_result(data: dict) -> dict:
+    """Normalize a parsed coder result to ensure scalar compatibility fields exist.
+
+    If implementation_score is absent but stageScores.implementation.score exists,
+    backfill the scalar. If quality_band is absent but a score is available, derive it.
+    """
+    if "implementation_score" not in data:
+        try:
+            nested = data["stageScores"]["implementation"]["score"]
+            if isinstance(nested, (int, float)):
+                data["implementation_score"] = float(nested)
+        except (KeyError, TypeError):
+            pass
+
+    score = data.get("implementation_score")
+    if "quality_band" not in data and isinstance(score, (int, float)) and score >= 0:
+        data["quality_band"] = score_to_impl_band(float(score))
+
+    return data
+
+
 def parse_coder_output(output: str) -> dict:
-    """Parse the coder evaluator's JSON response."""
-    # Strip markdown fences
+    """Parse the coder evaluator's JSON response.
+
+    Tolerates markdown fences, preamble text, and extra production-aligned fields.
+    Normalizes stageScores.implementation.score into implementation_score when absent.
+    """
     cleaned = re.sub(r"^```(?:json)?\s*", "", output.strip())
     cleaned = re.sub(r"\s*```$", "", cleaned)
 
     for candidate in [cleaned]:
         try:
-            data = json.loads(candidate)
-            return data
+            return _normalize_coder_result(json.loads(candidate))
         except json.JSONDecodeError:
             pass
 
-    # Try to find JSON in output
     match = re.search(r"\{[\s\S]*\}", output)
     if match:
         try:
-            return json.loads(match.group())
+            return _normalize_coder_result(json.loads(match.group()))
         except json.JSONDecodeError:
             pass
 
