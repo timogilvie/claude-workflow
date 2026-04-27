@@ -13,8 +13,11 @@ import { resolve, basename } from 'node:path';
 import { execShellCommand } from './shell-utils.ts';
 import type { PromptCharacteristics, TaskType, ModelRecommendation } from './model-router.ts';
 import { resolveAgent } from './model-router.ts';
-import { recordUse } from './resource-manifest.ts';
-import { registerDspyArtifact } from './resource-adapters/dspy-adapter.ts';
+import {
+  recordRuntimeResourceSelection,
+  resolveRuntimeResource,
+  type RuntimeResourceSelection,
+} from './resource-selection.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Artifact Types
@@ -65,6 +68,11 @@ export interface LLMRouterOptions {
   llmProvider?: 'openai' | 'anthropic';
 }
 
+export interface LoadedSelectorArtifact {
+  artifact: SelectorArtifact;
+  selection: RuntimeResourceSelection;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
@@ -87,9 +95,26 @@ export function loadArtifact(
   repoDir?: string,
   artifactPath?: string,
 ): SelectorArtifact | null {
+  return loadArtifactWithSelection(repoDir, artifactPath)?.artifact || null;
+}
+
+export function loadArtifactWithSelection(
+  repoDir?: string,
+  artifactPath?: string,
+): LoadedSelectorArtifact | null {
+  const selection = artifactPath
+    ? {
+        surface: 'router' as const,
+        variant: 'baseline' as const,
+        requestedVariant: 'baseline' as const,
+        resourceRef: null,
+        uri: artifactPath,
+        fallbackApplied: false,
+      }
+    : resolveRuntimeResource('router', { repoDir });
   const path = resolve(
     repoDir || '.',
-    artifactPath || DEFAULT_ARTIFACT_PATH,
+    artifactPath || selection.uri || DEFAULT_ARTIFACT_PATH,
   );
   if (!existsSync(path)) return null;
 
@@ -98,16 +123,19 @@ export function loadArtifact(
     if (!data.system_prompt || !Array.isArray(data.few_shot_examples)) {
       return null;
     }
-    try {
-      const artifactRef = registerDspyArtifact(path, data, repoDir);
-      const sessionId = process.env.WAVEMILL_SESSION;
-      if (sessionId && artifactRef) {
-        recordUse(sessionId, process.env.WAVEMILL_PHASE || 'unknown', artifactRef, repoDir);
-      }
-    } catch (error) {
-      console.warn(`[registry] Failed to register artifact ${path}: ${(error as Error).message}`);
+    if (!artifactPath) {
+      recordRuntimeResourceSelection(selection, {
+        repoDir,
+        phase: process.env.WAVEMILL_PHASE || 'unknown',
+      });
     }
-    return data as SelectorArtifact;
+    return {
+      artifact: data as SelectorArtifact,
+      selection: {
+        ...selection,
+        ...(selection.uri ? {} : { uri: artifactPath || DEFAULT_ARTIFACT_PATH }),
+      },
+    };
   } catch {
     return null;
   }
@@ -283,8 +311,9 @@ export function recommendModelLLM(
   _callFn?: CallFn,
 ): ModelRecommendation | null {
   // 1. Load artifact
-  const artifact = loadArtifact(options.repoDir, options.artifactPath);
-  if (!artifact) return null;
+  const loaded = loadArtifactWithSelection(options.repoDir, options.artifactPath);
+  if (!loaded) return null;
+  const artifact = loaded.artifact;
 
   // 2. Determine available models
   const availableModels = options.models?.length
@@ -342,5 +371,6 @@ export function recommendModelLLM(
     riskFlags: response.risk_flags,
     costEstimate: response.cost_estimate,
     routingMode: 'llm',
+    resourceSelections: [loaded.selection],
   };
 }

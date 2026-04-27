@@ -88,6 +88,9 @@ test('computeAggregations calculates role, stage, and cost summaries', () => {
         planDepth: 'deep',
         codeDepth: 'high',
         reviewMode: 'full',
+        routerVariant: 'baseline',
+        plannerPromptVariant: 'optimized',
+        reviewerPromptVariant: 'baseline',
       },
       challengerRouting: {
         planner: 'planner-b',
@@ -96,6 +99,9 @@ test('computeAggregations calculates role, stage, and cost summaries', () => {
         planDepth: 'medium',
         codeDepth: 'medium',
         reviewMode: 'lite',
+        routerVariant: 'canary',
+        plannerPromptVariant: 'baseline',
+        reviewerPromptVariant: 'optimized',
       },
       challengeType: 'multi-variable',
     },
@@ -133,8 +139,10 @@ test('computeAggregations calculates role, stage, and cost summaries', () => {
   assert.equal(stats.winRatesByRole.planner['planner-a']?.wins, 1);
   assert.equal(stats.stageQuality.plan?.count, 1);
   assert.equal(stats.costEfficiency?.winnerAvg, 1.25);
+  assert.equal(stats.winRatesByResourceVariant.planner.get('optimized')?.wins, 1);
 
   const output = formatChallengeTextOutput(stats);
   assert.match(output, /Overall Win Rates:/);
   assert.match(output, /Cost Efficiency:/);
+  assert.match(output, /By Planner Resource Variant:/);
 });

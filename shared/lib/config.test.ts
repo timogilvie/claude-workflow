@@ -31,6 +31,7 @@ import {
   getReadyConfig,
   getModelRegistryConfig,
   getQuotaConfig,
+  getRuntimeResourceSelectionConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -159,6 +160,21 @@ test('valid config passes validation', () => {
           coder: ['gpt-5.4'],
         },
       },
+      resources: {
+        runtimeSelection: {
+          enabled: true,
+          defaultVariant: 'optimized',
+          fallbackToBaseline: true,
+          canaryRate: 0.2,
+          surfaces: {
+            planner: {
+              enabled: true,
+              variant: 'optimized',
+              path: 'dspy/artifacts/optimized-planner.json',
+            },
+          },
+        },
+      },
       challenge: { enabled: true, rate: 0.25, models: ['claude-opus-4-6', 'gpt-5.3-codex'] },
       challengeScheduler: { enabled: true, confidenceThreshold: 0.65, newModelChallengeCount: 4 },
       eval: { evalsDir: '.wavemill/evals' },
@@ -175,6 +191,37 @@ test('valid config passes validation', () => {
     assert.equal(config.mill?.maxParallel, 5);
     assert.deepEqual(config.router?.availableModels?.planner, ['claude-sonnet-4-5-20250929']);
     assert.deepEqual(config.router?.availableModels?.coder, ['gpt-5.4']);
+    assert.equal(config.resources?.runtimeSelection?.defaultVariant, 'optimized');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid runtime resource variant fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      resources: {
+        runtimeSelection: {
+          surfaces: {
+            planner: {
+              variant: 'beta',
+            },
+          },
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
   } finally {
     cleanUp(tmp);
   }
@@ -763,6 +810,24 @@ test('accessor returns empty object when section missing', () => {
 
     const routerConfig = getRouterConfig(tmp);
     assert.deepEqual(routerConfig, {});
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('runtime resource selection accessor returns stable defaults', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ mill: { maxParallel: 5 } }));
+
+    assert.deepEqual(getRuntimeResourceSelectionConfig(tmp), {
+      enabled: false,
+      defaultVariant: 'baseline',
+      fallbackToBaseline: true,
+      canaryRate: 0,
+      surfaces: {},
+    });
   } finally {
     cleanUp(tmp);
   }

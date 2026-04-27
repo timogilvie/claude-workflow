@@ -23,10 +23,13 @@ import type {
   TaskDescriptor,
   EvalConstraints,
   ManifestRef,
+  RoutingDecision,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
-import { getManifestRef } from './resource-manifest.ts';
+import { getManifest, getManifestRef } from './resource-manifest.ts';
+import type { RuntimeResourceSelection } from './resource-selection.ts';
+import { getResource } from './resource-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -312,6 +315,74 @@ export function attachManifestRef(
   }
 }
 
+export function attachResourceSelections(record: EvalRecord): void {
+  const routingDecision = record.routingDecision as (RoutingDecision & { resourceSelections?: RuntimeResourceSelection[] }) | undefined;
+  if (routingDecision?.resourceSelections?.length) {
+    record.resourceSelections = routingDecision.resourceSelections;
+    return;
+  }
+
+  const sessionId = process.env.WAVEMILL_SESSION;
+  if (!sessionId) {
+    return;
+  }
+
+  const manifest = getManifest(sessionId);
+  if (!manifest) {
+    return;
+  }
+
+  const selections: RuntimeResourceSelection[] = [];
+  for (const ref of manifest.resources) {
+    const resource = getResource(ref.id, ref.version);
+    if (!resource) {
+      continue;
+    }
+
+    if (resource.type === 'prompt' && resource.uri === 'tools/prompts/planning-phase.md') {
+      selections.push({
+        surface: 'planner',
+        variant: 'baseline',
+        requestedVariant: 'baseline',
+        resourceRef: ref,
+        uri: resource.uri,
+        fallbackApplied: false,
+      });
+    } else if (resource.type === 'prompt' && resource.uri === 'tools/prompts/review-phase.md') {
+      selections.push({
+        surface: 'reviewer',
+        variant: 'baseline',
+        requestedVariant: 'baseline',
+        resourceRef: ref,
+        uri: resource.uri,
+        fallbackApplied: false,
+      });
+    } else if (resource.type === 'prompt' && resource.name === 'planner-optimized') {
+      selections.push({
+        surface: 'planner',
+        variant: 'optimized',
+        requestedVariant: 'optimized',
+        resourceRef: ref,
+        uri: resource.uri,
+        fallbackApplied: false,
+      });
+    } else if (resource.type === 'prompt' && resource.name === 'reviewer-optimized') {
+      selections.push({
+        surface: 'reviewer',
+        variant: 'optimized',
+        requestedVariant: 'optimized',
+        resourceRef: ref,
+        uri: resource.uri,
+        fallbackApplied: false,
+      });
+    }
+  }
+
+  if (selections.length > 0) {
+    record.resourceSelections = selections;
+  }
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
@@ -343,6 +414,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachConstraints(record, metadata.constraints || null);
   attachBudgetViolation(record);
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
+  attachResourceSelections(record);
 
   // Extract stageScores from record metadata (set by evaluateTask)
   const stageScores = record.metadata?.stageScores as

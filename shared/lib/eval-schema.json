@@ -1131,6 +1131,46 @@
       "required": ["sessionId", "manifestDigest"],
       "additionalProperties": false
     },
+    "resourceSelections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "surface": {
+            "type": "string",
+            "enum": ["router", "planner", "reviewer"]
+          },
+          "variant": {
+            "type": "string",
+            "enum": ["baseline", "optimized", "canary"]
+          },
+          "requestedVariant": {
+            "type": "string",
+            "enum": ["baseline", "optimized", "canary"]
+          },
+          "resourceRef": {
+            "type": ["object", "null"],
+            "properties": {
+              "id": { "type": "string" },
+              "version": { "type": "string" }
+            },
+            "required": ["id", "version"],
+            "additionalProperties": false
+          },
+          "uri": {
+            "type": "string"
+          },
+          "fallbackApplied": {
+            "type": "boolean"
+          },
+          "rejectionReason": {
+            "type": "string"
+          }
+        },
+        "required": ["surface", "variant", "requestedVariant", "resourceRef", "fallbackApplied"],
+        "additionalProperties": false
+      }
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,

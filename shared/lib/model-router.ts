@@ -19,6 +19,7 @@ import { loadWavemillConfig } from './config.ts';
 import { aggregateEvals } from './eval-aggregator.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
+import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -234,6 +235,8 @@ export interface ModelRecommendation {
   costEstimate?: string;
   /** Which routing mode produced this recommendation */
   routingMode?: 'heuristic' | 'llm';
+  /** Runtime-governed resource selections used to produce this recommendation */
+  resourceSelections?: RuntimeResourceSelection[];
 }
 
 export interface RouterOptions {

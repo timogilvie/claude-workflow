@@ -9,6 +9,9 @@ export interface ChallengeRoutingMeta {
   planDepth: string;
   codeDepth: string;
   reviewMode: string;
+  routerVariant?: string;
+  plannerPromptVariant?: string;
+  reviewerPromptVariant?: string;
 }
 
 export interface VariedDimensions {
@@ -18,6 +21,9 @@ export interface VariedDimensions {
   planDepth: boolean;
   codeDepth: boolean;
   reviewMode: boolean;
+  routerVariant: boolean;
+  plannerPromptVariant: boolean;
+  reviewerPromptVariant: boolean;
 }
 
 export type ChallengeType =
@@ -82,6 +88,9 @@ export function detectVariedDimensions(
     planDepth: normalize(primaryRouting.planDepth) !== normalize(challengerRouting.planDepth),
     codeDepth: normalize(primaryRouting.codeDepth) !== normalize(challengerRouting.codeDepth),
     reviewMode: normalize(primaryRouting.reviewMode) !== normalize(challengerRouting.reviewMode),
+    routerVariant: normalize(primaryRouting.routerVariant || '') !== normalize(challengerRouting.routerVariant || ''),
+    plannerPromptVariant: normalize(primaryRouting.plannerPromptVariant || '') !== normalize(challengerRouting.plannerPromptVariant || ''),
+    reviewerPromptVariant: normalize(primaryRouting.reviewerPromptVariant || '') !== normalize(challengerRouting.reviewerPromptVariant || ''),
   };
 }
 
@@ -90,10 +99,17 @@ export function detectVariedDimensions(
  */
 export function classifyChallengeType(varied: VariedDimensions): ChallengeType {
   const roleChanges = [varied.planner, varied.coder, varied.reviewer].filter(Boolean).length;
-  const configChanges = [varied.planDepth, varied.codeDepth, varied.reviewMode].filter(Boolean).length;
+  const configChanges = [
+    varied.planDepth,
+    varied.codeDepth,
+    varied.reviewMode,
+    varied.routerVariant,
+    varied.plannerPromptVariant,
+    varied.reviewerPromptVariant,
+  ].filter(Boolean).length;
 
   // All dimensions varied
-  if (roleChanges === 3 && configChanges === 3) {
+  if (roleChanges === 3 && configChanges === 6) {
     return 'full-stack';
   }
 

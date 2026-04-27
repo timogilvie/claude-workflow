@@ -130,6 +130,34 @@ test('flattenRecord handles missing optional fields', () => {
   assert.equal(row.files_changed, null);
 });
 
+test('flattenRecord exports resource selection variants', () => {
+  const record = makeRecord({
+    resourceSelections: [
+      {
+        surface: 'router',
+        variant: 'optimized',
+        requestedVariant: 'optimized',
+        resourceRef: { id: 'optimizer-artifact:optimized-selector@1.0.0', version: '1.0.0' },
+        fallbackApplied: false,
+      },
+      {
+        surface: 'planner',
+        variant: 'baseline',
+        requestedVariant: 'optimized',
+        resourceRef: { id: 'prompt:planning-phase@sha256:abc', version: 'sha256:abc' },
+        fallbackApplied: true,
+        rejectionReason: 'policy disabled',
+      },
+    ],
+  });
+  const row = flattenRecord(record);
+
+  assert.equal(row.router_resource_variant, 'optimized');
+  assert.equal(row.planner_prompt_variant, 'baseline');
+  assert.equal(row.reviewer_prompt_variant, '');
+  assert.match(row.resource_variants, /"surface":"router"/);
+});
+
 // ────────────────────────────────────────────────────────────────
 // Redaction Tests
 // ────────────────────────────────────────────────────────────────
@@ -220,9 +248,7 @@ test('toCsv column count matches header count', () => {
   const lines = csv.trim().split('\n');
   const headerCols = lines[0].split(',').length;
 
-  // Each data line should have same number of fields (accounting for quoted commas)
-  // Simpler check: header has 26 columns (22 original + workflow_cost + workflow_cost_status + interventions + routing_decision)
-  assert.equal(headerCols, 26);
+  assert.equal(headerCols, 30);
 });
 
 // ────────────────────────────────────────────────────────────────

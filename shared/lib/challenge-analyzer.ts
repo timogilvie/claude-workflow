@@ -40,6 +40,11 @@ export interface AggregatedStats {
   };
   winRatesByChallengeType: Map<string, ModelStats>;
   winRatesByDepth: Map<string, ModelStats>;
+  winRatesByResourceVariant: {
+    router: Map<string, ModelStats>;
+    planner: Map<string, ModelStats>;
+    reviewer: Map<string, ModelStats>;
+  };
   stageQuality: {
     expansion?: StageQuality;
     plan?: StageQuality;
@@ -47,6 +52,10 @@ export interface AggregatedStats {
     review?: StageQuality;
   };
   costEfficiency?: CostStats;
+}
+
+function variantFromEval(record: EvalRecord | undefined, surface: 'router' | 'planner' | 'reviewer'): string {
+  return record?.resourceSelections?.find((selection) => selection.surface === surface)?.variant || '';
 }
 
 /**
@@ -92,6 +101,11 @@ export function computeAggregations(joined: JoinedChallengeRecord[]): Aggregated
     },
     winRatesByChallengeType: new Map(),
     winRatesByDepth: new Map(),
+    winRatesByResourceVariant: {
+      router: new Map(),
+      planner: new Map(),
+      reviewer: new Map(),
+    },
     stageQuality: {},
   };
 
@@ -148,6 +162,32 @@ export function computeAggregations(joined: JoinedChallengeRecord[]): Aggregated
       const challengerDepth = `${challengerRouting.planDepth}×${challengerRouting.codeDepth}`;
       incrementModelStat(stats.winRatesByDepth, primaryDepth, winner === 'primary');
       incrementModelStat(stats.winRatesByDepth, challengerDepth, winner === 'challenger');
+
+      const variantBuckets: Array<['router' | 'planner' | 'reviewer', string, string]> = [
+        [
+          'router',
+          primaryRouting.routerVariant || variantFromEval(primaryEval, 'router'),
+          challengerRouting.routerVariant || variantFromEval(challengerEval, 'router'),
+        ],
+        [
+          'planner',
+          primaryRouting.plannerPromptVariant || variantFromEval(primaryEval, 'planner'),
+          challengerRouting.plannerPromptVariant || variantFromEval(challengerEval, 'planner'),
+        ],
+        [
+          'reviewer',
+          primaryRouting.reviewerPromptVariant || variantFromEval(primaryEval, 'reviewer'),
+          challengerRouting.reviewerPromptVariant || variantFromEval(challengerEval, 'reviewer'),
+        ],
+      ];
+      for (const [surface, primaryVariant, challengerVariant] of variantBuckets) {
+        if (primaryVariant) {
+          incrementModelStat(stats.winRatesByResourceVariant[surface], primaryVariant, winner === 'primary');
+        }
+        if (challengerVariant) {
+          incrementModelStat(stats.winRatesByResourceVariant[surface], challengerVariant, winner === 'challenger');
+        }
+      }
     }
 
     if (primaryEval?.stageOutcomes && challengerEval?.stageOutcomes) {
@@ -239,6 +279,18 @@ export function formatChallengeTextOutput(stats: AggregatedStats): string {
       lines.push(`  ${type.padEnd(20)} ${stat.total} comparisons`);
     }
     lines.push('');
+  }
+
+  for (const surface of ['router', 'planner', 'reviewer'] as const) {
+    const variants = Array.from(stats.winRatesByResourceVariant[surface].entries());
+    if (variants.length > 0) {
+      lines.push(`By ${surface.charAt(0).toUpperCase() + surface.slice(1)} Resource Variant:`);
+      for (const [variant, stat] of variants.sort((a, b) => b[1].winRate - a[1].winRate)) {
+        const pct = (stat.winRate * 100).toFixed(1);
+        lines.push(`  ${variant.padEnd(20)} ${stat.wins}/${stat.total}  ${pct}%`);
+      }
+      lines.push('');
+    }
   }
 
   const stageNames = ['expansion', 'plan', 'implementation', 'review'] as const;

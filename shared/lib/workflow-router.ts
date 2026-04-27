@@ -23,6 +23,7 @@ import type { ModelClass } from './model-registry.ts';
 import { policyAdjustmentLog, routerLog } from './router-log.ts';
 import { registerAgentConfig } from './resource-adapters/agent-config-adapter.ts';
 import { recordUse } from './resource-manifest.ts';
+import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -67,6 +68,7 @@ export interface WorkflowRouteDecision {
     maxCostUsd?: number;
   };
   budgetViolation?: BudgetViolation;
+  resourceSelections?: RuntimeResourceSelection[];
 }
 
 export interface RouteWorkflowOptions {
@@ -1158,6 +1160,12 @@ function registerWorkflowDecisionResources(
     });
     if (ref) {
       recordUse(sessionId, phase, ref, repoDir);
+    }
+  }
+
+  for (const selection of decision.resourceSelections || []) {
+    if (selection.resourceRef) {
+      recordUse(sessionId, selection.surface === 'router' ? 'planning' : 'unknown', selection.resourceRef, repoDir);
     }
   }
 }
