@@ -93,8 +93,10 @@ def derive_plan_quality(example: EvalExample) -> dict:
     }
 
 
-# Default planner evaluation prompt
-DEFAULT_PLANNER_EVAL_PROMPT = """You are evaluating the quality of an AI planning agent's work.
+# Default planner evaluation prompt.
+# Source of truth: tools/prompts/eval-judge.md. DSPy parser strategy:
+# preserve runner-facing score fields and tolerate extra rubric fields.
+DEFAULT_PLANNER_EVAL_PROMPT = """You are evaluating the quality of an AI planning agent's work using the production rubric contract.
 
 Given a task description and context about the workflow outcome, assess how well the planning phase was executed.
 
@@ -109,36 +111,37 @@ Overall workflow score: {{OVERALL_SCORE}} ({{SCORE_BAND}})
 Intervention count: {{INTERVENTION_COUNT}}
 Intervention details: {{INTERVENTION_DETAILS}}
 
-Judge rationale: {{JUDGE_RATIONALE}}
+Production judge rationale: {{JUDGE_RATIONALE}}
 
-## What Makes a Good Plan
+## Planning Rubric
 
-A good plan:
-- Correctly identifies the scope and key files to modify
-- Breaks work into logical, ordered phases
-- Anticipates edge cases and constraints
-- Doesn't overscope or underscope the work
-- Leads to smooth implementation without rework
+Score only the planning stage. Use these production stage criteria:
 
-A poor plan:
-- Misses critical requirements or files
-- Has incorrect dependencies or ordering
-- Overscopes (leads to unnecessary work)
-- Underscopes (misses requirements, causing rework)
-- Leads to interventions during implementation
+- **component_boundaries**: Did the plan identify the right files, modules, ownership boundaries, and integration points?
+- **invariant_coverage**: Did the plan preserve important behavioral, data, API, and compatibility constraints?
+- **sequencing_and_dependencies**: Did the plan order the work coherently and account for dependencies between steps?
+- **risk_and_validation_coverage**: Did the plan call out meaningful risks, edge cases, tests, and validation steps?
 
-## Scoring Guidelines
+Calibrate against the workflow outcome and intervention details, but do not score implementation quality directly. Strong plans make the correct scope and validation strategy clear enough that implementation can proceed with minimal rework. Weak plans miss key requirements, rely on incorrect sequencing, ignore constraints, or cause later interventions.
 
-- **0.9-1.0 (Excellent)**: Plan was comprehensive and accurate. Implementation flowed smoothly.
-- **0.7-0.9 (Good)**: Plan was mostly correct. Minor gaps but didn't cause significant issues.
-- **0.4-0.7 (Weak)**: Plan had gaps that required rework or interventions.
-- **0.0-0.4 (Poor)**: Plan was inadequate. Major rework, wrong approach, or missed requirements.
+## Score Bands
+
+- **0.9-1.0 (excellent)**: Comprehensive, well-scoped, correctly sequenced plan with strong invariant and validation coverage.
+- **0.7-0.9 (good)**: Mostly correct plan with minor gaps that would not materially derail implementation.
+- **0.4-0.7 (weak)**: Meaningful gaps in scope, ordering, constraints, or validation that plausibly caused rework.
+- **0.0-0.4 (poor)**: Missing or misleading plan, wrong approach, or major omissions that would require substantial intervention.
+
+## Production Rubric Alignment
+
+The production eval judge also records rubricEval criteria named `completeness`, `correctness`, `code_quality`, `intervention_impact`, and `autonomy`. You may include a compact `rubricEval` object using those names, and you may include `stageScores.plan`, but the runner-facing fields below are required.
 
 ## Output
 
 Respond with ONLY a valid JSON object (no markdown fences):
 
-{"plan_score": <float 0.0-1.0>, "quality_band": "excellent|good|weak|poor", "reasoning": "<1-2 sentence explanation>"}"""
+{"plan_score": <float 0.0-1.0>, "quality_band": "excellent|good|weak|poor", "reasoning": "<1-2 sentence explanation>", "stageScores": {"plan": {"score": <same float>, "rationale": "<optional rubric rationale>"}}, "rubricEval": {"completeness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "correctness": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "code_quality": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "intervention_impact": {"score": <float 0.0-1.0>, "rationale": "<optional>"}, "autonomy": {"score": <float 0.0-1.0>, "rationale": "<optional>"}}}
+
+`stageScores` and `rubricEval` are optional extra fields. `plan_score`, `quality_band`, and `reasoning` are always required."""
 
 
 def build_planner_input(example: EvalExample) -> dict[str, str]:
@@ -154,25 +157,76 @@ def build_planner_input(example: EvalExample) -> dict[str, str]:
     }
 
 
-def parse_planner_output(output: str) -> dict:
-    """Parse the planner evaluator's JSON response."""
+def _planner_parse_error(reason: str = "Parse failed") -> dict:
+    return {"plan_score": -1, "quality_band": "unknown", "reasoning": reason}
+
+
+def _coerce_score(value) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_json_object(output: str) -> dict | None:
     cleaned = re.sub(r"^```(?:json)?\s*", "", output.strip())
     cleaned = re.sub(r"\s*```$", "", cleaned)
 
     for candidate in [cleaned]:
         try:
-            return json.loads(candidate)
+            data = json.loads(candidate)
+            return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
             pass
 
     match = re.search(r"\{[\s\S]*\}", output)
     if match:
         try:
-            return json.loads(match.group())
+            data = json.loads(match.group())
+            return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
             pass
 
-    return {"plan_score": -1, "quality_band": "unknown", "reasoning": "Parse failed"}
+    return None
+
+
+def parse_planner_output(output: str) -> dict:
+    """Parse and normalize the planner evaluator's JSON response."""
+    data = _extract_json_object(output)
+    if data is None:
+        return _planner_parse_error()
+
+    stage_scores = data.get("stageScores", {})
+    if not isinstance(stage_scores, dict):
+        stage_scores = {}
+    stage_plan = stage_scores.get("plan", {})
+    if not isinstance(stage_plan, dict):
+        stage_plan = {}
+
+    score = _coerce_score(data.get("plan_score")) if "plan_score" in data else None
+    if "plan_score" in data and score is None:
+        return _planner_parse_error("Parse failed: missing numeric plan_score")
+    if "plan_score" not in data:
+        score = _coerce_score(stage_plan.get("score"))
+    if score is None:
+        return _planner_parse_error("Parse failed: missing numeric plan_score")
+
+    data["plan_score"] = score
+
+    if not data.get("quality_band"):
+        data["quality_band"] = score_to_plan_band(score)
+
+    if not data.get("reasoning"):
+        rationale = stage_plan.get("rationale")
+        data["reasoning"] = rationale if isinstance(rationale, str) and rationale else "No reasoning provided"
+
+    return data
 
 
 def score_plan_agreement(predicted: float, ground_truth: float) -> dict[str, float]:
