@@ -46,6 +46,8 @@ describe('model-registry', () => {
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
       'claude-haiku-4-5-20251001',
+      'gpt-5.5',
+      'gpt-5.4',
     ];
 
     assert.deepEqual(Object.keys(DEFAULT_MODEL_REGISTRY.models).sort(), expectedModels.sort());
@@ -72,6 +74,8 @@ describe('model-registry', () => {
     assert.deepEqual(getLadder(DEFAULT_MODEL_REGISTRY, 'classify'), [
       'claude-haiku-4-5-20251001',
       'claude-sonnet-4-6',
+      'gpt-5.5',
+      'gpt-5.4',
     ]);
   });
 
@@ -186,7 +190,7 @@ describe('model-registry', () => {
       excluded: ['claude-sonnet-4-6'],
     });
 
-    assert.deepEqual(once, ['claude-opus-4-7', 'claude-haiku-4-5-20251001']);
+    assert.deepEqual(once, ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-haiku-4-5-20251001']);
     assert.equal(JSON.stringify(once), JSON.stringify(twice));
     assert.equal(JSON.stringify(twice), JSON.stringify(thrice));
   });
@@ -201,7 +205,7 @@ describe('model-registry', () => {
   it('rankCandidates returns an empty ladder when every candidate is excluded', () => {
     assert.deepEqual(
       rankCandidates(DEFAULT_MODEL_REGISTRY, 'classify', {
-        excluded: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6'],
+        excluded: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
       }),
       []
     );
@@ -209,6 +213,8 @@ describe('model-registry', () => {
 
   it('rankCandidates returns the full ladder when no exclusions are provided', () => {
     assert.deepEqual(rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding'), [
+      'gpt-5.5',
+      'gpt-5.4',
       'claude-sonnet-4-6',
       'claude-opus-4-7',
       'claude-haiku-4-5-20251001',
@@ -255,7 +261,7 @@ describe('model-registry', () => {
   it('mergeModelRegistry can add a new model ID', () => {
     const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
       models: {
-        'gpt-5.4': {
+        'gpt-5.6': {
           vendor: 'openai',
           class: 'frontier',
           strengths: ['general reasoning'],
@@ -271,8 +277,8 @@ describe('model-registry', () => {
       },
     });
 
-    assert.equal(merged.models['gpt-5.4'].vendor, 'openai');
-    assert.equal(merged.models['gpt-5.4'].qualityScores.planning, 90);
+    assert.equal(merged.models['gpt-5.6'].vendor, 'openai');
+    assert.equal(merged.models['gpt-5.6'].qualityScores.planning, 90);
   });
 
   it('filters unknown ladder IDs while warning once', () => {

@@ -160,13 +160,27 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       weaknesses: ['less depth on complex reasoning'],
       qualityScores: scores(88, 55, 60, 55, 92),
     },
+    'gpt-5.5': {
+      vendor: 'openai',
+      class: 'frontier',
+      strengths: ['frontier reasoning', 'code generation', 'architecture'],
+      weaknesses: ['higher cost'],
+      qualityScores: scores(62, 96, 92, 94, 62),
+    },
+    'gpt-5.4': {
+      vendor: 'openai',
+      class: 'frontier',
+      strengths: ['frontier reasoning', 'code generation', 'architecture'],
+      weaknesses: ['higher cost'],
+      qualityScores: scores(60, 94, 90, 92, 60),
+    },
   },
   ladders: {
-    routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7'],
-    planning: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    coding: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'],
-    review: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6'],
+    routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'claude-opus-4-7'],
+    planning: ['gpt-5.5', 'claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    coding: ['gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'],
+    review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
   },
 };
 
