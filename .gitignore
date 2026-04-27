@@ -47,6 +47,7 @@ epics/*/
 .wavemill/evals/
 .wavemill/context/
 .wavemill/logs/
+prompt-registry.jsonl
 
 worktrees/
 test-reg-*/
