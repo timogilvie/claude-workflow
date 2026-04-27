@@ -26,7 +26,8 @@ import { hashString } from './prompt-hash.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
 import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
 import { recordUse } from './resource-manifest.ts';
-import { registerPromptTemplate } from './resource-adapters/prompt-adapter.ts';
+import { registerPromptTemplate, type PromptRegistrationOptions } from './resource-adapters/prompt-adapter.ts';
+import type { ResourceRef } from './resource-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -138,7 +139,8 @@ export function logPromptUsage(
   templatePath: string,
   templateContent: string,
   options?: RegistryOptions,
-): void {
+  promptOptions?: PromptRegistrationOptions,
+): ResourceRef | null {
   try {
     const evalsDir = resolveEvalsDir(options?.dir).dir;
     const registryPath = resolveRegistryFile(options?.dir);
@@ -168,14 +170,16 @@ export function logPromptUsage(
     // Append to registry
     appendJsonlRecord(registryPath, entry);
 
-    const promptRef = registerPromptTemplate(templatePath, templateContent);
+    const promptRef = registerPromptTemplate(templatePath, templateContent, options?.dir, promptOptions);
     const sessionId = process.env.WAVEMILL_SESSION;
     if (sessionId && promptRef) {
-      recordUse(sessionId, process.env.WAVEMILL_PHASE || 'unknown', promptRef);
+      recordUse(sessionId, process.env.WAVEMILL_PHASE || 'unknown', promptRef, options?.dir);
     }
+    return promptRef;
   } catch (err) {
     // Graceful degradation: registry is metadata, shouldn't break workflows
     console.warn(`[prompt-registry] Failed to log template usage: ${err}`);
+    return null;
   }
 }
 
