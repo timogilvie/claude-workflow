@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 from data_loader import EvalExample, default_evals_path, load_eval_examples, stratified_split
+from evaluator_utils import coerce_score, extract_json_object
 from llm_caller import call_llm
 from template_utils import fill_template
 
@@ -131,44 +132,9 @@ def _coder_parse_error(reason: str = "Parse failed") -> dict:
     return {"implementation_score": -1, "quality_band": "unknown", "reasoning": reason}
 
 
-def _coerce_score(value) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value.strip())
-        except ValueError:
-            return None
-    return None
-
-
-def _extract_json_object(output: str) -> dict | None:
-    cleaned = re.sub(r"^```(?:json)?\s*", "", output.strip())
-    cleaned = re.sub(r"\s*```$", "", cleaned)
-
-    for candidate in [cleaned]:
-        try:
-            data = json.loads(candidate)
-            return data if isinstance(data, dict) else None
-        except json.JSONDecodeError:
-            pass
-
-    match = re.search(r"\{[\s\S]*\}", output)
-    if match:
-        try:
-            data = json.loads(match.group())
-            return data if isinstance(data, dict) else None
-        except json.JSONDecodeError:
-            pass
-
-    return None
-
-
 def parse_coder_output(output: str) -> dict:
     """Parse and normalize the coder evaluator's JSON response."""
-    data = _extract_json_object(output)
+    data = extract_json_object(output)
     if data is None:
         return _coder_parse_error()
 
@@ -179,11 +145,11 @@ def parse_coder_output(output: str) -> dict:
     if not isinstance(stage_impl, dict):
         stage_impl = {}
 
-    score = _coerce_score(data.get("implementation_score")) if "implementation_score" in data else None
+    score = coerce_score(data.get("implementation_score")) if "implementation_score" in data else None
     if "implementation_score" in data and score is None:
         return _coder_parse_error("Parse failed: missing numeric implementation_score")
     if "implementation_score" not in data:
-        score = _coerce_score(stage_impl.get("score"))
+        score = coerce_score(stage_impl.get("score"))
     if score is None:
         return _coder_parse_error("Parse failed: missing numeric implementation_score")
 

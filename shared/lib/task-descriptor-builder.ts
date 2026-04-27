@@ -22,6 +22,7 @@ import type {
   StageOutcomes,
   ComplexityBand,
   InterventionRecord,
+  RubricEval,
 } from './eval-schema.ts';
 import type { RoutingCompleteData } from './eval-context-gatherer.ts';
 
@@ -81,6 +82,8 @@ export interface TaskDescriptorInput {
   interventionCount?: number;
   /** Structured intervention records */
   interventions?: InterventionRecord[];
+  /** Structured rubric criteria from eval judge */
+  rubricEval?: RubricEval;
 
   // ── Config ──
   /** Models available for routing consideration */
@@ -541,6 +544,67 @@ function deriveOutcome(
 }
 
 // ────────────────────────────────────────────────────────────────
+// Rubric Feature Derivation
+// ────────────────────────────────────────────────────────────────
+
+function deriveRubricFeatures(
+  rubricEval?: RubricEval,
+): TaskDescriptor['rubric'] {
+  const criteria = rubricEval?.criteria;
+  if (!criteria) {
+    return undefined;
+  }
+
+  const criteriaKeys = [
+    'completeness',
+    'correctness',
+    'code_quality',
+    'intervention_impact',
+    'autonomy',
+  ] as const;
+
+  const isFiniteNumber = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value);
+  const clampScore = (value: number): number => Math.max(0, Math.min(1, value));
+
+  const rawScores = criteriaKeys.map((key) => criteria[key]?.score);
+  const validScores = rawScores
+    .filter(isFiniteNumber)
+    .map((score) => clampScore(score));
+
+  if (validScores.length === 0) {
+    return undefined;
+  }
+
+  const meanScore =
+    validScores.reduce((sum, score) => sum + score, 0) / validScores.length;
+
+  return {
+    has_rubric: true,
+    criterion_count: validScores.length,
+    mean_score: meanScore,
+    criteria_scores: {
+      completeness: isFiniteNumber(criteria.completeness?.score)
+        ? clampScore(criteria.completeness.score)
+        : 0,
+      correctness: isFiniteNumber(criteria.correctness?.score)
+        ? clampScore(criteria.correctness.score)
+        : 0,
+      code_quality: isFiniteNumber(criteria.code_quality?.score)
+        ? clampScore(criteria.code_quality.score)
+        : 0,
+      intervention_impact: isFiniteNumber(criteria.intervention_impact?.score)
+        ? clampScore(criteria.intervention_impact.score)
+        : 0,
+      autonomy: isFiniteNumber(criteria.autonomy?.score)
+        ? clampScore(criteria.autonomy.score)
+        : 0,
+    },
+    determinative_boundary: rubricEval.determinative_boundary,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────
 // Main Builder
 // ────────────────────────────────────────────────────────────────
 
@@ -564,6 +628,7 @@ export function buildTaskDescriptor(
     },
     constraints: deriveConstraints(input),
     stages: deriveStages(input),
+    rubric: deriveRubricFeatures(input.rubricEval),
     outcome: deriveOutcome(input),
   };
 }
