@@ -159,7 +159,13 @@ function loadPersonaPromptTemplate(
     operatingMode,
   });
 
-  const template = promptResource.content!;
+  if (!promptResource.content) {
+    throw new Error(
+      `Failed to load review template for persona "${persona}" in mode "${operatingMode}" at ${promptResource.path}`
+    );
+  }
+
+  const template = promptResource.content;
   _promptTemplateCache.set(promptPath, template);
   return template;
 }

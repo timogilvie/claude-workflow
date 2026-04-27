@@ -1275,3 +1275,33 @@ export interface EvalRecord {
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;
 }
+
+/**
+ * Get numeric priority for rubric provenance, used for deduplication.
+ * Higher values indicate higher confidence in the rubric data.
+ */
+export function rubricProvenancePriority(record: EvalRecord): number {
+  switch (record.rubric_provenance) {
+    case 'judge':
+      return 3;
+    case 'backfill_derived':
+      return 2;
+    case 'legacy_absent':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Compare two eval records for deduplication purposes.
+ * Prefers records with higher rubric provenance priority, then earliest timestamp.
+ */
+export function compareDedupCandidates(a: EvalRecord, b: EvalRecord): number {
+  const provenanceDelta = rubricProvenancePriority(b) - rubricProvenancePriority(a);
+  if (provenanceDelta !== 0) {
+    return provenanceDelta;
+  }
+
+  return a.timestamp.localeCompare(b.timestamp);
+}

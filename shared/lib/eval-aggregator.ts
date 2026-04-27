@@ -14,29 +14,8 @@ import { existsSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, basename, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { EvalRecord } from './eval-schema.ts';
+import { compareDedupCandidates } from './eval-schema.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
-
-function rubricProvenancePriority(record: EvalRecord): number {
-  switch (record.rubric_provenance) {
-    case 'judge':
-      return 3;
-    case 'backfill_derived':
-      return 2;
-    case 'legacy_absent':
-      return 1;
-    default:
-      return 0;
-  }
-}
-
-function compareDedupCandidates(a: EvalRecord, b: EvalRecord): number {
-  const provenanceDelta = rubricProvenancePriority(b) - rubricProvenancePriority(a);
-  if (provenanceDelta !== 0) {
-    return provenanceDelta;
-  }
-
-  return String(a.timestamp || '').localeCompare(String(b.timestamp || ''));
-}
 
 // ────────────────────────────────────────────────────────────────
 // Auto-Discovery
