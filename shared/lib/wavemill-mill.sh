@@ -3421,6 +3421,9 @@ launch_ready_phase() {
   if [[ "$merge_status" == "CONFLICTED" ]]; then
     mkdir -p "$state_dir"
     if [[ -f "$state_dir/.conflict-detected" ]]; then
+      write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+        "Merge conflicts persist after remediation" \
+        "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number}}"
       write_ready_attention_file "$state_dir" "PR #$pr_number still has merge conflicts after automatic remediation."
       log_error "  Merge conflicts persist for $issue after remediation attempt"
       return 1
@@ -5574,6 +5577,11 @@ monitor_issue_state() {
               return 0
             fi
 
+            if [[ -f "$ready_state_dir_path/.needs-attention" ]]; then
+              set_window_attention_state "$WIN" "needs-user"
+              return 0
+            fi
+
             if [[ "$ready_status" != "running" || -z "$launch_head" || "$launch_head" != "$current_head" ]]; then
               local pr_number
               pr_number=$(find_pr_for_branch "$BRANCH")
@@ -5908,6 +5916,11 @@ monitor_issue_state() {
       if [[ "$ready_status" == "running" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
+        return 0
+      fi
+
+      if [[ -f "$ready_state_dir_path/.needs-attention" ]]; then
+        set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
 

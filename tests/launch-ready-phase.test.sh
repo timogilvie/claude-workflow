@@ -91,6 +91,7 @@ run_launch_case() {
       case "$TEST_CASE" in
         pending_re_check) printf "%s\n" "running" ;;
         already_inflight_same_head) printf "%s\n" "running" ;;
+        conflict_persists_after_remediation) printf "%s\n" "running" ;;
         *) printf "\n" ;;
       esac
     }
@@ -159,6 +160,11 @@ run_launch_case() {
       fi
 
       case "$TEST_CASE" in
+        conflict_persists_after_remediation)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"merge-conflict\",\"status\":\"fail\",\"message\":\"PR has merge conflicts\",\"details\":{}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"Merge conflicts detected\",\"mergeConflict\":{\"status\":\"CONFLICTED\",\"message\":\"PR has conflicts with main\",\"mergeable\":\"CONFLICTING\",\"mergeStateStatus\":\"DIRTY\",\"attempts\":1}}"
+          printf "%s\n" "⚠️  MERGE CONFLICT: PR #304 has conflicts with main" >&2
+          return 1
+          ;;
         pending|pending_re_check)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pending\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pending\",\"message\":\"2 CI check(s) still running\",\"details\":{\"pendingChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"QUEUED\"},{\"name\":\"Check Lifecycle Paths\",\"state\":\"QUEUED\"}],\"totalChecks\":2}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"CI checks still in progress - will retry\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 2
@@ -191,6 +197,9 @@ run_launch_case() {
     }
 
     set +e
+    if [[ "$TEST_CASE" == "conflict_persists_after_remediation" ]]; then
+      touch "$STATE_DIR/.conflict-detected"
+    fi
     launch_ready_phase "HOK-1300" "fix-failing-ci-tests" "Fix failing CI tests" "$WT_DIR" "task/fix-failing-ci-tests" "main" "304"
     rc=$?
     set -e
@@ -240,6 +249,12 @@ check_contains "first remediation launch emits no errors" "$output" "error_count
 output="$(run_launch_case second_remediation_launch)"
 check_contains "second remediation launch returns rc 5" "$output" "rc=5"
 check_contains "second remediation launch records attempt 2" "$output" "\"remediationAttempts\":2"
+
+output="$(run_launch_case conflict_persists_after_remediation)"
+check_contains "persistent conflict returns failure" "$output" "rc=1"
+check_contains "persistent conflict writes failed stage result" "$output" "|ready|failed|"
+check_contains "persistent conflict writes operator message" "$output" "PR #304 still has merge conflicts after automatic remediation."
+check_contains "persistent conflict logs terse error" "$output" "Merge conflicts persist for HOK-1300 after remediation attempt"
 
 output="$(run_launch_case remediation_exhausted)"
 check_contains "remediation exhaustion returns failure" "$output" "rc=1"

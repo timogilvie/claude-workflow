@@ -120,6 +120,13 @@ run_monitor_case() {
         READY_STATUS="completed"
         touch "$READY_DIR/.conflict-detected"
         ;;
+      ready_conflict_alerts_once)
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        READY_LAUNCH_RC=1
+        INVOKE_COUNT=2
+        touch "$READY_DIR/.conflict-detected"
+        ;;
       ready_pending_repolls_ci)
         CURRENT_PHASE="ready"
         READY_STATUS="running"
@@ -279,6 +286,9 @@ JSON
     launch_ready_phase() {
       READY_LAUNCH_COUNT=$((READY_LAUNCH_COUNT + 1))
       READY_LAUNCH_ARGS="$*"
+      if [[ "$CASE_NAME" == "ready_conflict_alerts_once" && "$READY_LAUNCH_COUNT" -eq 1 ]]; then
+        printf "%s\n" "PR #$PR still has merge conflicts after automatic remediation." > "$READY_DIR/.needs-attention"
+      fi
       return "$READY_LAUNCH_RC"
     }
     check_stage_aborted() { [[ "$ABORTED" == "true" ]]; }
@@ -348,6 +358,10 @@ ready_conflict_output="$(run_monitor_case ready_conflict_rerun)"
 check_contains "ready conflict rerun keeps task in ready" "$ready_conflict_output" "phase=ready"
 check_contains "ready conflict rerun launches ready checks again" "$ready_conflict_output" "ready_launches=1"
 check_contains "ready conflict rerun leaves attention on task" "$ready_conflict_output" "attention=needs-user"
+
+ready_conflict_alerts_once_output="$(run_monitor_case ready_conflict_alerts_once)"
+check_contains "ready conflict only alerts once across ticks" "$ready_conflict_alerts_once_output" "ready_launches=1"
+check_contains "ready conflict once still needs user" "$ready_conflict_alerts_once_output" "attention=needs-user"
 
 ready_pending_repolls_ci_output="$(run_monitor_case ready_pending_repolls_ci)"
 check_contains "pending ready re-polls CI" "$ready_pending_repolls_ci_output" "ready_launches=1"
