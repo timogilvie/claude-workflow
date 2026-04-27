@@ -434,6 +434,21 @@
       "required": ["candidates", "chosen", "decisionPolicyVersion"],
       "additionalProperties": false
     },
+    "stageOutcomes": {
+      "type": "object",
+      "description": "Per-stage quality attribution for GEPA training.",
+      "properties": {
+        "expansion": { "$ref": "#/$defs/StageScore" },
+        "plan": { "$ref": "#/$defs/StageScore" },
+        "implementation": { "$ref": "#/$defs/StageScore" },
+        "review": { "$ref": "#/$defs/StageScore" },
+        "routing": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
     "taskContext": {
       "type": "object",
       "description": "Task context metadata for routing and evaluation (HOK-774).",
@@ -1213,6 +1228,52 @@
     }
   },
   "$defs": {
+    "RubricCriterion": {
+      "type": "object",
+      "description": "A single structured per-stage rubric criterion from the eval judge.",
+      "properties": {
+        "criterion": {
+          "type": "string",
+          "description": "Criterion identifier, e.g. \"requirement_coverage\"."
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Normalized score 0.0-1.0 for this stage criterion."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional brief explanation from the judge."
+        }
+      },
+      "required": ["criterion", "score"],
+      "additionalProperties": false
+    },
+    "StageScore": {
+      "type": "object",
+      "description": "Per-stage quality attribution from the eval judge.",
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "planCritique": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "rubricCriteria": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RubricCriterion" }
+        }
+      },
+      "required": ["score", "rationale"],
+      "additionalProperties": false
+    },
     "RubricCriterionScore": {
       "type": "object",
       "description": "Score and rationale for a single rubric criterion.",

@@ -25,6 +25,7 @@ import type {
   EvalConstraints,
   ManifestRef,
   RoutingDecision,
+  RubricCriterion,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
@@ -164,7 +165,7 @@ export function attachWorkflowCostMetadata(
  */
 export function attachStageOutcomes(
   record: EvalRecord,
-  stageScores?: Record<string, { score: number; rationale: string }>,
+  stageScores?: Record<string, { score: number; rationale: string; rubricCriteria?: RubricCriterion[] | null }>,
   planCritique?: PlanCritique,
 ): void {
   if (!stageScores || Object.keys(stageScores).length === 0) {
@@ -178,6 +179,9 @@ export function attachStageOutcomes(
     stageOutcomes.expansion = {
       score: stageScores.expansion.score,
       rationale: stageScores.expansion.rationale,
+      ...(stageScores.expansion.rubricCriteria?.length && {
+        rubricCriteria: stageScores.expansion.rubricCriteria,
+      }),
     };
   }
 
@@ -185,6 +189,9 @@ export function attachStageOutcomes(
     stageOutcomes.plan = {
       score: stageScores.plan.score,
       rationale: stageScores.plan.rationale,
+      ...(stageScores.plan.rubricCriteria?.length && {
+        rubricCriteria: stageScores.plan.rubricCriteria,
+      }),
       ...(planCritique && { planCritique }),
     };
   }
@@ -193,6 +200,9 @@ export function attachStageOutcomes(
     stageOutcomes.implementation = {
       score: stageScores.implementation.score,
       rationale: stageScores.implementation.rationale,
+      ...(stageScores.implementation.rubricCriteria?.length && {
+        rubricCriteria: stageScores.implementation.rubricCriteria,
+      }),
     };
   }
 
@@ -200,6 +210,9 @@ export function attachStageOutcomes(
     stageOutcomes.review = {
       score: stageScores.review.score,
       rationale: stageScores.review.rationale,
+      ...(stageScores.review.rubricCriteria?.length && {
+        rubricCriteria: stageScores.review.rubricCriteria,
+      }),
     };
   }
 
@@ -449,7 +462,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
 
   // Extract stageScores from record metadata (set by evaluateTask)
   const stageScores = record.metadata?.stageScores as
-    | Record<string, { score: number; rationale: string }>
+    | Record<string, { score: number; rationale: string; rubricCriteria?: RubricCriterion[] }>
     | undefined;
   const planCritique = record.metadata?.planCritique as PlanCritique | undefined;
   attachStageOutcomes(record, stageScores, planCritique);
