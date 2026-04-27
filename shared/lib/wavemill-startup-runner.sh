@@ -260,6 +260,53 @@ should_update_linear_for_task() {
   [[ "$challenge_role" != "challenger" ]]
 }
 
+# Install JS deps in a worktree when a lockfile is present and node_modules is
+# missing. Worktrees created by `git worktree add` start without node_modules,
+# so test scripts that depend on local .bin binaries (jest, ts-node, etc.) fail
+# unless we install. Detects the package manager from the lockfile and skips
+# silently for non-JS repos.
+ensure_worktree_dependencies() {
+  local wt_dir="$1" issue="$2"
+  local pm="" lockfile="" install_cmd=""
+
+  if [[ -f "$wt_dir/pnpm-lock.yaml" ]]; then
+    pm="pnpm"; lockfile="pnpm-lock.yaml"
+    install_cmd="pnpm install --frozen-lockfile --prefer-offline"
+  elif [[ -f "$wt_dir/yarn.lock" ]]; then
+    pm="yarn"; lockfile="yarn.lock"
+    install_cmd="yarn install --frozen-lockfile --prefer-offline"
+  elif [[ -f "$wt_dir/package-lock.json" ]]; then
+    pm="npm"; lockfile="package-lock.json"
+    install_cmd="npm ci --prefer-offline"
+  else
+    return 0
+  fi
+
+  if [[ -d "$wt_dir/node_modules" ]]; then
+    return 0
+  fi
+
+  if ! command -v "$pm" >/dev/null 2>&1; then
+    startup_log "  Warning: $lockfile present but '$pm' not on PATH; skipping dep install"
+    return 0
+  fi
+
+  startup_step "[1.5/7] Installing deps ($pm)..."
+  local install_stderr
+  install_stderr="$(mktemp)"
+  if ! (cd "$wt_dir" && eval "$install_cmd") >/dev/null 2>"$install_stderr"; then
+    startup_log "✗ $issue FAILED at step [1.5/7]: $pm install"
+    [[ -s "$install_stderr" ]] && tail -n 40 "$install_stderr" | sed 's/^/  '"$pm"': /' >> "$STATUS_LOG_FILE"
+    [[ -s "$install_stderr" ]] && tail -n 40 "$install_stderr" | sed 's/^/  '"$pm"': /'
+    rm -f "$install_stderr"
+    startup_log "  Task will not be launched. Retry with: wavemill mill"
+    return 1
+  fi
+  rm -f "$install_stderr"
+  startup_step "[1.5/7] Installing deps ($pm)... ✓"
+  return 0
+}
+
 launch_task_from_plan() {
   local task_json="$1" ordinal="$2" total="$3"
   local issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file
@@ -335,6 +382,12 @@ launch_task_from_plan() {
     fi
     rm -f "$worktree_stderr"
     startup_step "[1/7] Creating worktree...     ✓"
+  fi
+
+  if ! ensure_worktree_dependencies "$wt_dir" "$issue"; then
+    [[ -n "${created_new:-}" && "$created_new" == "true" ]] && \
+      git worktree remove --force "$wt_dir" >/dev/null 2>&1 || true
+    return 1
   fi
 
   AGENT_CMD="$task_agent"
