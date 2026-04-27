@@ -15,6 +15,7 @@ import type {
   DescriptorConstraints,
   StageDescriptor,
   DescriptorOutcome,
+  RubricDescriptorFeatures,
   TaskContext,
   RepoContext,
   DifficultySignals,
@@ -22,8 +23,13 @@ import type {
   StageOutcomes,
   ComplexityBand,
   InterventionRecord,
+  RubricEval,
+  RubricProvenance,
 } from './eval-schema.ts';
 import type { RoutingCompleteData } from './eval-context-gatherer.ts';
+
+// SCHEMA CHANGELOG: 2026.04 — Added rubricFeatures block (HOK-1409)
+export const DESCRIPTOR_FEATURE_SET_VERSION = '2026.04';
 
 // ────────────────────────────────────────────────────────────────
 // Input Types
@@ -81,6 +87,10 @@ export interface TaskDescriptorInput {
   interventionCount?: number;
   /** Structured intervention records */
   interventions?: InterventionRecord[];
+  /** Structured rubric criteria evaluation from the eval judge (HOK-1406) */
+  rubricEval?: RubricEval;
+  /** Provenance of rubric metadata (HOK-1408) */
+  rubricProvenance?: RubricProvenance;
 
   // ── Config ──
   /** Models available for routing consideration */
@@ -433,6 +443,48 @@ function deriveLearnedSignals(input: TaskDescriptorInput): LearnedSignals {
   };
 }
 
+/**
+ * Derive rubric descriptor features from eval rubric data.
+ *
+ * Returns undefined when no valid rubric data is present (legacy path).
+ * Maps the fixed RubricCriteria fields to dimension scores.
+ */
+function deriveRubricFeatures(
+  rubricEval?: RubricEval,
+  rubricProvenance?: RubricProvenance,
+): RubricDescriptorFeatures | undefined {
+  if (!rubricEval || rubricProvenance === 'legacy_absent') {
+    return undefined;
+  }
+
+  const dimensionScores: Record<string, number> = {};
+  const dimensionCounts: Record<string, number> = {};
+
+  for (const [key, val] of Object.entries(rubricEval.criteria)) {
+    if (val && typeof val.score === 'number' && !Number.isNaN(val.score)) {
+      dimensionScores[key] = val.score;
+      dimensionCounts[key] = 1;
+    }
+  }
+
+  if (Object.keys(dimensionScores).length === 0) {
+    return undefined;
+  }
+
+  const scores = Object.values(dimensionScores);
+  const overallMean = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+
+  return {
+    present: true,
+    dimensionScores,
+    dimensionCounts,
+    overallMean: Number(overallMean.toFixed(4)),
+    rubricSchemaVersion: rubricEval.rubric_version,
+    rubricProvenance,
+    determinativeBoundary: rubricEval.determinative_boundary,
+  };
+}
+
 // ────────────────────────────────────────────────────────────────
 // Constraints Derivation
 // ────────────────────────────────────────────────────────────────
@@ -556,8 +608,14 @@ function deriveOutcome(
 export function buildTaskDescriptor(
   input: TaskDescriptorInput,
 ): TaskDescriptor {
+  const rubricFeatures = deriveRubricFeatures(
+    input.rubricEval,
+    input.rubricProvenance,
+  );
+
   return {
     schema_version: '1.0',
+    descriptorFeatureSetVersion: DESCRIPTOR_FEATURE_SET_VERSION,
     signals: {
       heuristic: deriveHeuristicSignals(input),
       learned: deriveLearnedSignals(input),
@@ -565,5 +623,6 @@ export function buildTaskDescriptor(
     constraints: deriveConstraints(input),
     stages: deriveStages(input),
     outcome: deriveOutcome(input),
+    ...(rubricFeatures !== undefined ? { rubricFeatures } : {}),
   };
 }

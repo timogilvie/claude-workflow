@@ -49,3 +49,17 @@ To strip only the provenance marker:
 ```bash
 jq -c 'del(.rubric_provenance)' .wavemill/evals/evals.jsonl > /tmp/evals.jsonl && mv /tmp/evals.jsonl .wavemill/evals/evals.jsonl
 ```
+
+## Descriptor Feature Contract
+
+`taskDescriptor.rubricFeatures` carries privacy-safe rubric-derived signals for routing and downstream training. The block is omitted for legacy records and any row explicitly marked `rubric_provenance: legacy_absent`.
+
+| Field | Type | Range | Consumer | Notes |
+|-------|------|-------|----------|-------|
+| `present` | `boolean` | `true` / `false` | KNN + Learned | Always `true` when the block is present |
+| `dimensionScores` | `Record<string, number>` | `0-1` per key | KNN (future) + Learned | Keys: `completeness`, `correctness`, `code_quality`, `intervention_impact`, `autonomy` |
+| `dimensionCounts` | `Record<string, number>` | integer `>= 1` | Learned | Forward-compatible; always `1` with the current fixed-criteria schema |
+| `overallMean` | `number` | `0-1` | KNN (future) | Simple mean of all valid dimension scores |
+| `rubricSchemaVersion` | `string` | semver | Learned | Copied from `rubricEval.rubric_version` |
+| `rubricProvenance` | `string` | `judge`, `backfill_derived`, `legacy_absent` | Learned | Use for filtering or weighting mixed-quality corpora |
+| `determinativeBoundary` | `string` | rubric boundary enum | Learned | Optional binding-constraint label from `rubricEval` |

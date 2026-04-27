@@ -9,7 +9,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTaskDescriptor } from './task-descriptor-builder.ts';
+import {
+  buildTaskDescriptor,
+  DESCRIPTOR_FEATURE_SET_VERSION,
+} from './task-descriptor-builder.ts';
 import type { TaskDescriptorInput } from './task-descriptor-builder.ts';
 import type { RoutingCompleteData } from './eval-context-gatherer.ts';
 
@@ -23,6 +26,10 @@ describe('task-descriptor-builder', () => {
       const descriptor = buildTaskDescriptor(input);
 
       assert.equal(descriptor.schema_version, '1.0');
+      assert.equal(
+        descriptor.descriptorFeatureSetVersion,
+        DESCRIPTOR_FEATURE_SET_VERSION,
+      );
       assert.ok(descriptor.signals.heuristic);
       assert.ok(descriptor.signals.learned);
       assert.ok(descriptor.constraints);
@@ -478,6 +485,174 @@ describe('task-descriptor-builder', () => {
       assert.equal(descriptor.outcome.overall_score, 0.9);
       assert.equal(descriptor.outcome.total_cost_usd, 11.1);
       assert.equal(descriptor.outcome.interventions, 1);
+    });
+  });
+
+  describe('rubricFeatures derivation', () => {
+    it('omits rubricFeatures for legacy records without rubricEval', () => {
+      const descriptor = buildTaskDescriptor({
+        originalPrompt: 'Legacy task without rubric data',
+      });
+
+      assert.equal(
+        descriptor.descriptorFeatureSetVersion,
+        DESCRIPTOR_FEATURE_SET_VERSION,
+      );
+      assert.equal(descriptor.rubricFeatures, undefined);
+    });
+
+    it('omits rubricFeatures when provenance is legacy_absent', () => {
+      const descriptor = buildTaskDescriptor({
+        originalPrompt: 'Backfilled legacy task',
+        rubricEval: {
+          schema_version: '1.0',
+          rubric_version: '2026.04',
+          criteria: {
+            completeness: { score: 0.8, rationale: 'Complete' },
+            correctness: { score: 0.9, rationale: 'Correct' },
+            code_quality: { score: 0.85, rationale: 'Clean' },
+            intervention_impact: { score: 0.7, rationale: 'Some help' },
+            autonomy: { score: 0.75, rationale: 'Mostly autonomous' },
+          },
+        },
+        rubricProvenance: 'legacy_absent',
+      });
+
+      assert.equal(
+        descriptor.descriptorFeatureSetVersion,
+        DESCRIPTOR_FEATURE_SET_VERSION,
+      );
+      assert.equal(descriptor.rubricFeatures, undefined);
+    });
+
+    it('derives rubricFeatures for rubric-aware records', () => {
+      const descriptor = buildTaskDescriptor({
+        originalPrompt: 'Rubric-aware task',
+        rubricEval: {
+          schema_version: '1.0',
+          rubric_version: '2026.04',
+          criteria: {
+            completeness: { score: 0.8, rationale: 'Complete' },
+            correctness: { score: 0.9, rationale: 'Correct' },
+            code_quality: { score: 0.85, rationale: 'Clean' },
+            intervention_impact: { score: 0.7, rationale: 'Some help' },
+            autonomy: { score: 0.75, rationale: 'Mostly autonomous' },
+          },
+        },
+        rubricProvenance: 'judge',
+      });
+
+      assert.equal(
+        descriptor.descriptorFeatureSetVersion,
+        DESCRIPTOR_FEATURE_SET_VERSION,
+      );
+      assert.deepEqual(descriptor.rubricFeatures, {
+        present: true,
+        dimensionScores: {
+          completeness: 0.8,
+          correctness: 0.9,
+          code_quality: 0.85,
+          intervention_impact: 0.7,
+          autonomy: 0.75,
+        },
+        dimensionCounts: {
+          completeness: 1,
+          correctness: 1,
+          code_quality: 1,
+          intervention_impact: 1,
+          autonomy: 1,
+        },
+        overallMean: 0.8,
+        rubricSchemaVersion: '2026.04',
+        rubricProvenance: 'judge',
+        determinativeBoundary: undefined,
+      });
+    });
+
+    it('skips invalid rubric scores without throwing', () => {
+      const descriptor = buildTaskDescriptor({
+        originalPrompt: 'Task with partial rubric data',
+        rubricEval: {
+          schema_version: '1.0',
+          rubric_version: '2026.04',
+          criteria: {
+            completeness: { score: 0.8, rationale: 'Complete' },
+            correctness: { score: Number.NaN, rationale: 'Invalid numeric' },
+            code_quality: { score: 0.85, rationale: 'Clean' },
+            intervention_impact: { score: 0.7, rationale: 'Some help' },
+            autonomy: { score: 0.75, rationale: 'Mostly autonomous' },
+          },
+        },
+        rubricProvenance: 'backfill_derived',
+      });
+
+      assert.deepEqual(descriptor.rubricFeatures?.dimensionScores, {
+        completeness: 0.8,
+        code_quality: 0.85,
+        intervention_impact: 0.7,
+        autonomy: 0.75,
+      });
+      assert.deepEqual(descriptor.rubricFeatures?.dimensionCounts, {
+        completeness: 1,
+        code_quality: 1,
+        intervention_impact: 1,
+        autonomy: 1,
+      });
+      assert.equal(descriptor.rubricFeatures?.overallMean, 0.775);
+    });
+
+    it('propagates determinative boundary when present', () => {
+      const descriptor = buildTaskDescriptor({
+        originalPrompt: 'Task with determinative boundary',
+        rubricEval: {
+          schema_version: '1.0',
+          rubric_version: '2026.04',
+          determinative_boundary: 'functional_bug',
+          criteria: {
+            completeness: { score: 0.8, rationale: 'Complete' },
+            correctness: { score: 0.6, rationale: 'Bug present' },
+            code_quality: { score: 0.85, rationale: 'Clean' },
+            intervention_impact: { score: 0.7, rationale: 'Some help' },
+            autonomy: { score: 0.75, rationale: 'Mostly autonomous' },
+          },
+        },
+        rubricProvenance: 'judge',
+      });
+
+      assert.equal(
+        descriptor.rubricFeatures?.determinativeBoundary,
+        'functional_bug',
+      );
+    });
+
+    it('always sets descriptorFeatureSetVersion for legacy and rubric-aware records', () => {
+      const legacyDescriptor = buildTaskDescriptor({
+        originalPrompt: 'Legacy task',
+      });
+      const rubricDescriptor = buildTaskDescriptor({
+        originalPrompt: 'Rubric task',
+        rubricEval: {
+          schema_version: '1.0',
+          rubric_version: '2026.04',
+          criteria: {
+            completeness: { score: 0.9, rationale: 'Complete' },
+            correctness: { score: 0.9, rationale: 'Correct' },
+            code_quality: { score: 0.9, rationale: 'Clean' },
+            intervention_impact: { score: 0.9, rationale: 'Autonomous' },
+            autonomy: { score: 0.9, rationale: 'Autonomous' },
+          },
+        },
+        rubricProvenance: 'judge',
+      });
+
+      assert.equal(
+        legacyDescriptor.descriptorFeatureSetVersion,
+        DESCRIPTOR_FEATURE_SET_VERSION,
+      );
+      assert.equal(
+        rubricDescriptor.descriptorFeatureSetVersion,
+        DESCRIPTOR_FEATURE_SET_VERSION,
+      );
     });
   });
 });

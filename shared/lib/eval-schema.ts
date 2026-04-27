@@ -909,6 +909,31 @@ export interface DescriptorOutcome {
 }
 
 /**
+ * Rubric-derived features propagated into the task descriptor.
+ *
+ * Privacy-safe: only numeric scores, counts, booleans, and version strings.
+ * No raw text, criterion descriptions, or judge rationale.
+ *
+ * @since descriptor-feature-set 2026.04
+ */
+export interface RubricDescriptorFeatures {
+  /** Whether rubric criteria were present and valid on the source record */
+  present: boolean;
+  /** Mean score per rubric dimension (criterion name → 0-1 mean) */
+  dimensionScores: Record<string, number>;
+  /** Number of criteria contributing to each dimension's mean */
+  dimensionCounts: Record<string, number>;
+  /** Simple mean across all rubric criteria */
+  overallMean: number;
+  /** Semantic rubric version from the source rubricEval */
+  rubricSchemaVersion: string;
+  /** Provenance of the rubric data (judge | backfill_derived | legacy_absent) */
+  rubricProvenance?: string;
+  /** Which scoring boundary was the binding constraint, if recorded */
+  determinativeBoundary?: string;
+}
+
+/**
  * Task descriptor for router training and prediction.
  *
  * Consolidates all generalizable task features into a single,
@@ -924,6 +949,8 @@ export interface DescriptorOutcome {
 export interface TaskDescriptor {
   /** Schema version for forward compatibility */
   schema_version: '1.0';
+  /** Descriptor feature-set version — bump on additive field additions */
+  descriptorFeatureSetVersion?: string;
   /** Heuristic and learned feature signals */
   signals: {
     heuristic: HeuristicSignals;
@@ -935,6 +962,8 @@ export interface TaskDescriptor {
   stages: Record<string, StageDescriptor>;
   /** Overall outcome (null when used as router input pre-eval) */
   outcome?: DescriptorOutcome;
+  /** Rubric-derived training features (absent for legacy records) */
+  rubricFeatures?: RubricDescriptorFeatures;
 }
 
 // ────────────────────────────────────────────────────────────────
