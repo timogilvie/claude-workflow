@@ -2508,6 +2508,28 @@ ready_conflict_launch_head() {
   fi
 }
 
+ready_conflict_attention_head() {
+  local feature_dir="$1"
+  local attention_head_file="$feature_dir/.conflict-attention-head"
+  if [[ -f "$attention_head_file" ]]; then
+    cat "$attention_head_file" 2>/dev/null || echo ""
+  else
+    echo ""
+  fi
+}
+
+record_ready_conflict_attention() {
+  local feature_dir="$1" head="$2"
+  mkdir -p "$feature_dir"
+  printf '%s\n' "$head" > "$feature_dir/.conflict-attention-head"
+  touch "$feature_dir/.conflict-attention-reported"
+}
+
+clear_ready_conflict_attention() {
+  local feature_dir="$1"
+  rm -f "$feature_dir/.conflict-attention-head" "$feature_dir/.conflict-attention-reported"
+}
+
 ready_remediation_attempts() {
   local feature_dir="$1"
   local result_file="$feature_dir/.ready-result.json"
@@ -3421,7 +3443,9 @@ launch_ready_phase() {
   if [[ "$merge_status" == "CONFLICTED" ]]; then
     mkdir -p "$state_dir"
     if [[ -f "$state_dir/.conflict-detected" ]]; then
+      current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
       write_ready_attention_file "$state_dir" "PR #$pr_number still has merge conflicts after automatic remediation."
+      record_ready_conflict_attention "$state_dir" "$current_head"
       log_error "  Merge conflicts persist for $issue after remediation attempt"
       return 1
     fi
@@ -3458,6 +3482,7 @@ launch_ready_phase() {
   fi
 
   rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention"
+  clear_ready_conflict_attention "$state_dir"
 
   if [[ "$ready_rc" -eq 0 ]]; then
     # Record ready stage result (HOK-1177)
@@ -5563,14 +5588,20 @@ monitor_issue_state() {
           ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
 
           if [[ -f "$ready_state_dir_path/.conflict-detected" ]]; then
-            local ready_status launch_head current_head
+            local ready_status launch_head current_head attention_head
             ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
             launch_head=$(ready_conflict_launch_head "$ready_state_dir_path")
             current_head=$(git -C "${WORKTREE_ROOT}/${SLUG}" rev-parse HEAD 2>/dev/null || echo "")
+            attention_head=$(ready_conflict_attention_head "$ready_state_dir_path")
 
             if [[ "$ready_status" == "running" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
               set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
+              return 0
+            fi
+
+            if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
+              set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
 
@@ -5904,10 +5935,17 @@ monitor_issue_state() {
       ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
       launch_head=$(ready_conflict_launch_head "$ready_state_dir_path")
       current_head=$(git -C "${WORKTREE_ROOT}/${SLUG}" rev-parse HEAD 2>/dev/null || echo "")
+      local attention_head
+      attention_head=$(ready_conflict_attention_head "$ready_state_dir_path")
 
       if [[ "$ready_status" == "running" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
+        return 0
+      fi
+
+      if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
+        set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
 
