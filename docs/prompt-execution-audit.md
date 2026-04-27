@@ -10,7 +10,7 @@ This audit inventories the prompt-construction and orchestration paths that curr
 
 | Function | File | Line | Template source | Callers |
 |---|---|---:|---|---|
-| `build_autonomous_prompt` | `shared/lib/agent-adapters.sh` | removed in this change | inline heredoc | none |
+| `build_autonomous_prompt` | `shared/lib/agent-adapters.sh` | 214 (pre-deletion) | inline heredoc | none |
 | `build_interactive_prompt` | `shared/lib/agent-adapters.sh` | 210 | inline heredoc | `tests/check-shell.sh:816` |
 | `build_routing_prompt` | `shared/lib/agent-adapters.sh` | 334 | inline heredoc | `tests/check-shell.sh:812` |
 | `build_planning_prompt` | `shared/lib/agent-adapters.sh` | 421 | `tools/prompts/planning-phase.md` | `shared/lib/wavemill-startup-runner.sh:513`, `shared/lib/wavemill-mill.sh:3099`, `tests/check-shell.sh:768`, `tests/check-shell.sh:772`, `tests/check-shell.sh:792` |
