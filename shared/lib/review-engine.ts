@@ -159,7 +159,10 @@ function loadPersonaPromptTemplate(
     operatingMode,
   });
 
-  const template = promptResource.content!;
+  if (!promptResource.content) {
+    throw new Error(`Review prompt template not found at: ${promptPath}`);
+  }
+  const template = promptResource.content;
   _promptTemplateCache.set(promptPath, template);
   return template;
 }

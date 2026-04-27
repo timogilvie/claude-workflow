@@ -40,7 +40,7 @@ The tool reads `.wavemill/evals/evals.jsonl`, marks only rows that do not alread
 
 ## Schema Reference
 
-See the `1.12.0` changelog entry in [shared/lib/eval-schema.ts](/Users/timothyogilvie/Dropbox/wavemill/worktrees/backfill-and-aggregate-rubric-aware-eval-records-for-collective-training-data/shared/lib/eval-schema.ts:1).
+See the `1.12.0` changelog entry in [shared/lib/eval-schema.ts](../shared/lib/eval-schema.ts).
 
 ## Reverting a Backfill
 
