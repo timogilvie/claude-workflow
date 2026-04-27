@@ -9,11 +9,13 @@ import {
   attachConstraints,
   attachDifficultyMetadata,
   attachFallbackEvent,
+  attachRubricEval,
   attachTaskContextMetadata,
   attachRepoContextMetadata,
   attachWorkflowCostMetadata,
   enrichEvalRecord,
 } from './eval-record-builder.ts';
+import type { RubricEval } from './eval-schema.ts';
 
 describe('eval-record-builder', () => {
   let baseRecord: EvalRecord;
@@ -361,6 +363,43 @@ describe('eval-record-builder', () => {
       // Everything else unchanged
       expect(baseRecord.difficultyBand).toBeUndefined();
       expect(baseRecord.taskContext).toBeUndefined();
+    });
+  });
+
+  describe('attachRubricEval (HOK-1406)', () => {
+    const validRubricEval: RubricEval = {
+      schema_version: '1.0',
+      rubric_version: '1.0',
+      criteria: {
+        completeness: { score: 0.9, rationale: 'All requirements met.' },
+        correctness: { score: 0.95, rationale: 'No bugs found.' },
+        code_quality: { score: 0.85, rationale: 'Clean code.' },
+        intervention_impact: { score: 0.7, rationale: 'One fix needed.' },
+        autonomy: { score: 0.75, rationale: 'Mostly autonomous.' },
+      },
+      determinative_boundary: 'functional_bug',
+    };
+
+    it('is a no-op when rubricEval is undefined', () => {
+      const before = { ...baseRecord };
+      attachRubricEval(baseRecord, undefined);
+      expect(baseRecord.rubricEval).toBeUndefined();
+      expect(baseRecord).toEqual(before);
+    });
+
+    it('sets record.rubricEval when provided', () => {
+      attachRubricEval(baseRecord, validRubricEval);
+      expect(baseRecord.rubricEval).toEqual(validRubricEval);
+    });
+
+    it('enrichEvalRecord leaves rubricEval undefined when not in metadata', () => {
+      enrichEvalRecord(baseRecord, {});
+      expect(baseRecord.rubricEval).toBeUndefined();
+    });
+
+    it('enrichEvalRecord attaches rubricEval when passed in metadata', () => {
+      enrichEvalRecord(baseRecord, { rubricEval: validRubricEval });
+      expect(baseRecord.rubricEval).toEqual(validRubricEval);
     });
   });
 });

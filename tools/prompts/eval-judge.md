@@ -131,6 +131,30 @@ If `Implementation Plan` is "Not available for this workflow.", omit `planCritiq
 
 ---
 
+## Rubric Criteria Scoring
+
+In addition to the overall score, score each of the five rubric criteria individually. For each criterion, provide a normalized score (0.0–1.0) and a **1-sentence** rationale.
+
+### Criterion Definitions
+
+- **completeness** (0.0–1.0): Were all requirements in the task prompt addressed? 1.0 = all requirements fully met; 0.0 = major requirements missing.
+- **correctness** (0.0–1.0): Does the implementation work correctly based on the PR review? 1.0 = no bugs found; 0.0 = fundamental correctness failures.
+- **code_quality** (0.0–1.0): Is the code clean, idiomatic, and following project conventions? 1.0 = exemplary quality; 0.0 = significant quality problems.
+- **intervention_impact** (0.0–1.0): Combined count + severity penalty. 1.0 = no interventions at all; 0.0 = maximum intervention penalty (heavy repeated edits or redesign). Compute this as the complement of the weighted intervention penalty — if interventions would reduce the score by 0.3, then `intervention_impact = 0.7`.
+- **autonomy** (0.0–1.0): Holistic judgment of how autonomously the agent executed. 1.0 = fully autonomous with no direction needed; 0.0 = agent required constant direction. This may differ from `intervention_impact` when the agent was largely autonomous but had one critical failure, or when it needed subtle guidance not captured as formal interventions.
+
+### determinative_boundary
+
+Identify which rule from "Scoring boundaries (strict)" was the **binding constraint** on the final score:
+
+- `no_interventions` — score was 0.9–1.0; no interventions were the dominant factor
+- `cosmetic_only` — score was 0.8–0.9; only cosmetic/style interventions
+- `functional_bug` — a human-fixed functional bug capped the score at ≤0.7
+- `multiple_bugs` — multiple bugs or substantial rework capped the score at 0.5–0.6
+- `heavy_intervention` — heavy repeated manual intervention drove score to ≤0.5
+
+---
+
 ## Output Format
 
 Respond with **only** a JSON object (no markdown fences, no preamble):
@@ -152,6 +176,18 @@ Respond with **only** a JSON object (no markdown fences, no preamble):
     "approach_soundness": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
     "missed_patches": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" },
     "overall": { "score": <0.0-1.0>, "rationale": "<1-2 sentences>" }
+  },
+  "rubricEval": {
+    "schema_version": "1.0",
+    "rubric_version": "1.0",
+    "criteria": {
+      "completeness": { "score": <0.0-1.0>, "rationale": "<1 sentence>" },
+      "correctness": { "score": <0.0-1.0>, "rationale": "<1 sentence>" },
+      "code_quality": { "score": <0.0-1.0>, "rationale": "<1 sentence>" },
+      "intervention_impact": { "score": <0.0-1.0>, "rationale": "<1 sentence>" },
+      "autonomy": { "score": <0.0-1.0>, "rationale": "<1 sentence>" }
+    },
+    "determinative_boundary": "<no_interventions|cosmetic_only|functional_bug|multiple_bugs|heavy_intervention>"
   }
 }
 ```
@@ -161,5 +197,6 @@ Respond with **only** a JSON object (no markdown fences, no preamble):
 - `interventionFlags`: Array of strings describing notable interventions (empty array if none). Use the format `"type:description"` (e.g., `"review_comment:missing error handling"`, `"post_pr_commit:fixed lint errors"`)
 - `stageScores`: Object with per-stage attribution scores. **Always include all four stages** (expansion, plan, implementation, review). When artifacts are not available for a stage, infer quality from the PR diff, intervention patterns, and overall outcome.
 - `planCritique`: Optional object. **Include it only when an Implementation Plan is available.** Omit it entirely when the plan artifact is not available.
+- `rubricEval`: **Always include.** Contains per-criterion scores and the determinative boundary. Use `schema_version: "1.0"` and `rubric_version: "1.0"` (hardcoded).
 
 Output ONLY the JSON object. No other text.
