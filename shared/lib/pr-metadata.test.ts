@@ -233,7 +233,7 @@ describe('renderPrMetadata', () => {
   });
 
   it('renders an empty block when no fields are set', () => {
-    assert.equal(renderPrMetadata({}), '<!-- wavemill-meta\n-->');
+    assert.equal(renderPrMetadata({}), '<!-- wavemill-meta\n\n-->');
   });
 });
 

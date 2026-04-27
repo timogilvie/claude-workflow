@@ -186,7 +186,7 @@ export function renderPrMetadata(meta: PrMetadata): string {
 
   return lines.length > 0
     ? `<!-- wavemill-meta\n${lines.join('\n')}\n-->`
-    : '<!-- wavemill-meta\n-->';
+    : '<!-- wavemill-meta\n\n-->';
 }
 
 export function updatePrMetadata(body: string, meta: PrMetadata): string {
