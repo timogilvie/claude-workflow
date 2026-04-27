@@ -21,6 +21,7 @@ function makeTempDir(prefix: string): string {
 
 function makeSubmission(overrides: Partial<HokusaiSubmission> = {}): HokusaiSubmission {
   return {
+    schema_version: '1.0',
     run_id: 'run-user@example.com',
     task_id: 'issue-/Users/tim/project/private-repo',
     constraints: { max_cost_usd: 12.5 },
@@ -55,6 +56,7 @@ describe('hokusai-redaction', () => {
     assert.notEqual(result.run_id, input.run_id);
     assert.notEqual(result.task_id, input.task_id);
     assert.deepEqual(result.constraints, { max_cost_usd: null });
+    assert.equal(result.schema_version, '1.0');
     assert.deepEqual(result.route_taken, input.route_taken);
     assert.deepEqual(result.observed_outcomes, input.observed_outcomes);
   });
@@ -96,6 +98,39 @@ describe('hokusai-redaction', () => {
     assert.equal(result.description, '');
     assert.equal(result.repo_url, '');
     assert.equal(result.metadata.notes, '');
+  });
+
+  it('preserves allow-listed rubric signal fields and strips unexpected text', () => {
+    const input = {
+      ...makeSubmission({
+        schema_version: '1.1',
+        rubric_signals: {
+          rubric_version: '2026-04',
+          criterion_count: 5,
+          mean_score: 0.72,
+          criteria_scores: {
+            completeness: 0.9,
+            correctness: 0.8,
+            code_quality: 0.7,
+            intervention_impact: 0.6,
+            autonomy: 0.5,
+          },
+          determinative_boundary: 'functional_bug',
+          rubric_provenance: 'judge',
+        },
+      }),
+      rubric_notes: 'Reviewer named jane@example.com in rationale',
+    } as HokusaiSubmission & { rubric_notes: string };
+
+    const result = redactHokusaiSubmission(input, { salt: '2'.repeat(64) }) as typeof input;
+
+    assert.equal(result.schema_version, '1.1');
+    assert.deepEqual(result.rubric_signals, input.rubric_signals);
+    assert.equal(result.rubric_notes, '');
+    assert.deepEqual(validateHokusaiSubmission(result), {
+      valid: true,
+      errors: [],
+    });
   });
 
   it('returns a submission that still validates', () => {

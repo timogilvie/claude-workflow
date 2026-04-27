@@ -18,9 +18,13 @@ export interface RedactionOptions {
 
 const HASHED_IDENTIFIER_PATHS = new Set(['run_id', 'task_id']);
 const PRESERVED_STRING_PATHS = new Set([
+  'schema_version',
   'route_taken.planner_model',
   'route_taken.coder_model',
   'route_taken.reviewer_model',
+  'rubric_signals.determinative_boundary',
+  'rubric_signals.rubric_provenance',
+  'rubric_signals.rubric_version',
 ]);
 
 function isNonEmptySalt(value: unknown): value is string {
