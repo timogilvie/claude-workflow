@@ -91,13 +91,13 @@ The purpose of this eval is to measure **autonomous reliability**. An agent that
 
 In addition to the overall score, score **all four workflow stages**: `expansion`, `plan`, `implementation`, and `review`.
 
-The output shape for each stage remains:
+The output shape for each stage is:
 
 ```json
-{ "score": 0.0, "rationale": "" }
+{ "score": 0.0, "rationale": "", "rubricCriteria": [{ "criterion": "", "score": 0.0, "notes": "" }] }
 ```
 
-Do **not** add nested `criteria`, extra stage fields, or ad hoc JSON under `stageScores`. The structure must remain parser-compatible during rollout.
+`rubricCriteria` is optional but preferred. Use it to emit the stage-specific criteria listed below as structured data. Keep each `criterion` as a stable snake_case identifier, `score` as `0.0` to `1.0`, and `notes` as an optional brief explanation.
 
 Each stage rationale must still be **rubric-structured**: name the most important stage criteria that drove the score rather than giving generic free-form commentary. A good rationale says which criteria were strong or weak and ties them to the observed outcome.
 
@@ -109,10 +109,10 @@ If stage artifacts are missing, infer stage quality conservatively from the orig
 
 Judge how well the task specification set up the rest of the workflow.
 
-- **requirement coverage**: Did the expanded spec identify the real requirements and acceptance criteria?
-- **ambiguity resolution**: Did it resolve unclear asks, constraints, or rollout concerns?
-- **implementation guidance quality**: Did it point the implementation toward the correct files, interfaces, or system behavior?
-- **validation readiness**: Did it surface how success should be checked?
+- **requirement_coverage**: Did the expanded spec identify the real requirements and acceptance criteria?
+- **ambiguity_resolution**: Did it resolve unclear asks, constraints, or rollout concerns?
+- **implementation_guidance_quality**: Did it point the implementation toward the correct files, interfaces, or system behavior?
+- **validation_readiness**: Did it surface how success should be checked?
 
 Calibration:
 
@@ -128,10 +128,10 @@ Edge handling:
 
 Judge the quality of the implementation approach, not just whether the final code eventually worked.
 
-- **component boundaries**: Did the plan identify the right files, modules, and ownership boundaries?
-- **invariant coverage**: Did it surface key constraints, compatibility requirements, rollout rules, or schema contracts?
-- **sequencing and dependencies**: Did it order the work sensibly and account for blockers or downstream implications?
-- **risk and validation coverage**: Did it anticipate likely failure modes and how to verify the change?
+- **component_boundaries**: Did the plan identify the right files, modules, and ownership boundaries?
+- **invariant_coverage**: Did it surface key constraints, compatibility requirements, rollout rules, or schema contracts?
+- **sequencing_and_dependencies**: Did it order the work sensibly and account for blockers or downstream implications?
+- **risk_and_validation_coverage**: Did it anticipate likely failure modes and how to verify the change?
 
 Calibration:
 
@@ -147,10 +147,10 @@ Edge handling:
 
 Judge how well the code executed against the task and plan.
 
-- **requirement completeness**: Did the code cover the intended task scope?
+- **requirement_completeness**: Did the code cover the intended task scope?
 - **correctness**: Did it behave correctly without human-found bugs?
-- **integration with existing patterns**: Did it fit the codebase's established architecture, schema, and rollout constraints?
-- **code quality and test coverage**: Was the code clean, maintainable, and appropriately validated?
+- **integration_with_existing_patterns**: Did it fit the codebase's established architecture, schema, and rollout constraints?
+- **code_quality_and_test_coverage**: Was the code clean, maintainable, and appropriately validated?
 
 Calibration:
 
@@ -167,10 +167,10 @@ Attribution rule:
 
 Judge whether the workflow's review/self-check stage caught important issues before human intervention.
 
-- **issue detection**: Did review or self-review find substantive problems?
-- **validation depth**: Did the review process exercise the risky parts of the change, not just superficial checks?
-- **regression risk coverage**: Did review reduce the chance of shipping a broken or incompatible change?
-- **self-review effectiveness**: Did the agent detect and address its own mistakes before human review had to do it?
+- **issue_detection**: Did review or self-review find substantive problems?
+- **validation_depth**: Did the review process exercise the risky parts of the change, not just superficial checks?
+- **regression_risk_coverage**: Did review reduce the chance of shipping a broken or incompatible change?
+- **self_review_effectiveness**: Did the agent detect and address its own mistakes before human review had to do it?
 
 Calibration:
 
@@ -270,7 +270,8 @@ Schema requirements:
 - `rationale` must be a concise 2-4 sentence explanation and must reference specific interventions when present.
 - `interventionFlags` must be an array of strings and may be empty.
 - `stageScores` must include all four stages: `expansion`, `plan`, `implementation`, `review`.
-- Each stage entry must remain exactly `{ "score": number, "rationale": string }`.
+- Each stage entry must include `score` and `rationale`, and may include `rubricCriteria`.
+- `rubricCriteria` must be an array of objects shaped as `{ "criterion": string, "score": number, "notes": string }`; `notes` is optional within each item.
 - `rubricEval.schema_version` must be `"1.0"`.
 - `rubricEval.rubric_version` must be `"1.0"`.
 
@@ -282,10 +283,34 @@ Schema requirements:
   "rationale": "",
   "interventionFlags": [],
   "stageScores": {
-    "expansion": { "score": 0.0, "rationale": "" },
-    "plan": { "score": 0.0, "rationale": "" },
-    "implementation": { "score": 0.0, "rationale": "" },
-    "review": { "score": 0.0, "rationale": "" }
+    "expansion": {
+      "score": 0.0,
+      "rationale": "",
+      "rubricCriteria": [
+        { "criterion": "requirement_coverage", "score": 0.0, "notes": "" }
+      ]
+    },
+    "plan": {
+      "score": 0.0,
+      "rationale": "",
+      "rubricCriteria": [
+        { "criterion": "component_boundaries", "score": 0.0, "notes": "" }
+      ]
+    },
+    "implementation": {
+      "score": 0.0,
+      "rationale": "",
+      "rubricCriteria": [
+        { "criterion": "requirement_completeness", "score": 0.0, "notes": "" }
+      ]
+    },
+    "review": {
+      "score": 0.0,
+      "rationale": "",
+      "rubricCriteria": [
+        { "criterion": "issue_detection", "score": 0.0, "notes": "" }
+      ]
+    }
   },
   "planCritique": {
     "component_boundaries": { "score": 0.0, "rationale": "" },
@@ -324,19 +349,43 @@ This is an illustrative example of a mostly successful workflow where human revi
   "stageScores": {
     "expansion": {
       "score": 0.88,
-      "rationale": "Requirement coverage and rollout constraints were mostly clear, and the task framing pointed toward the correct prompt and schema surfaces."
+      "rationale": "Requirement coverage and rollout constraints were mostly clear, and the task framing pointed toward the correct prompt and schema surfaces.",
+      "rubricCriteria": [
+        { "criterion": "requirement_coverage", "score": 0.9, "notes": "The core prompt and parser requirements were identified." },
+        { "criterion": "ambiguity_resolution", "score": 0.84, "notes": "Rollout compatibility was mostly resolved." },
+        { "criterion": "implementation_guidance_quality", "score": 0.9, "notes": "The correct prompt and schema surfaces were named." },
+        { "criterion": "validation_readiness", "score": 0.86, "notes": "Expected parser and schema checks were clear." }
+      ]
     },
     "plan": {
       "score": 0.83,
-      "rationale": "Component boundaries and invariant coverage were strong, but validation coverage did not fully protect against the stage-output compatibility mistake."
+      "rationale": "Component boundaries and invariant coverage were strong, but validation coverage did not fully protect against the stage-output compatibility mistake.",
+      "rubricCriteria": [
+        { "criterion": "component_boundaries", "score": 0.9, "notes": "The plan targeted prompt, parser, and schema layers." },
+        { "criterion": "invariant_coverage", "score": 0.82, "notes": "Compatibility invariants were named but not fully guarded." },
+        { "criterion": "sequencing_and_dependencies", "score": 0.85, "notes": "The implementation strategy was viable." },
+        { "criterion": "risk_and_validation_coverage", "score": 0.74, "notes": "Testing missed one stage-output compatibility case." }
+      ]
     },
     "implementation": {
       "score": 0.68,
-      "rationale": "Requirement completeness was high, but correctness and integration with the persisted schema were weakened by the compatibility bug that required human correction."
+      "rationale": "Requirement completeness was high, but correctness and integration with the persisted schema were weakened by the compatibility bug that required human correction.",
+      "rubricCriteria": [
+        { "criterion": "requirement_completeness", "score": 0.88, "notes": "Most requested prompt and schema changes landed." },
+        { "criterion": "correctness", "score": 0.62, "notes": "A compatibility bug required human correction." },
+        { "criterion": "integration_with_existing_patterns", "score": 0.66, "notes": "The persisted schema contract was not fully aligned initially." },
+        { "criterion": "code_quality_and_test_coverage", "score": 0.78, "notes": "The final structure remained understandable and testable." }
+      ]
     },
     "review": {
       "score": 0.79,
-      "rationale": "Review eventually detected the functional issue, which helped contain regression risk, but self-review effectiveness was incomplete because the bug escaped to human review."
+      "rationale": "Review eventually detected the functional issue, which helped contain regression risk, but self-review effectiveness was incomplete because the bug escaped to human review.",
+      "rubricCriteria": [
+        { "criterion": "issue_detection", "score": 0.82, "notes": "The compatibility issue was eventually found." },
+        { "criterion": "validation_depth", "score": 0.78, "notes": "Regression risk was contained after review." },
+        { "criterion": "self_review_effectiveness", "score": 0.72, "notes": "The issue escaped initial self-review." },
+        { "criterion": "regression_risk_coverage", "score": 0.84, "notes": "The correction was focused and verifiable." }
+      ]
     }
   },
   "planCritique": {

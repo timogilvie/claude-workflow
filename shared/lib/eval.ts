@@ -20,6 +20,7 @@ import {
   type RoutingDecision,
   type RubricEval,
   type RubricCriteria,
+  type RubricCriterion,
   type RubricCriterionScore,
   type RubricDeterminativeBoundary,
 } from './eval-schema.ts';
@@ -37,7 +38,7 @@ const __dirname = dirname(__filename);
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
-const SCHEMA_VERSION = '1.10.0';
+const SCHEMA_VERSION = '1.11.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 
@@ -102,7 +103,7 @@ interface JudgeResponse {
   score: number;
   rationale: string;
   interventionFlags: string[];
-  stageScores?: Record<string, { score: number; rationale: string }>;
+  stageScores?: Record<string, { score: number; rationale: string; rubricCriteria?: RubricCriterion[] }>;
   planCritique?: PlanCritique;
   rubricEval?: RubricEval;
 }
@@ -375,12 +376,62 @@ function parseRubricEval(value: unknown): RubricEval | undefined {
   };
 }
 
+function parseStageRubricCriteria(
+  value: unknown,
+  stageName: string,
+): RubricCriterion[] | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    console.warn(`[eval] Ignoring invalid rubricCriteria for stage "${stageName}": expected array.`);
+    return undefined;
+  }
+
+  const parsedCriteria: RubricCriterion[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') {
+      console.warn(`[eval] Ignoring malformed rubricCriteria item for stage "${stageName}".`);
+      continue;
+    }
+
+    const rawCriterion = item as {
+      criterion?: unknown;
+      score?: unknown;
+      notes?: unknown;
+    };
+
+    if (
+      typeof rawCriterion.criterion !== 'string' ||
+      rawCriterion.criterion.trim().length === 0 ||
+      typeof rawCriterion.score !== 'number' ||
+      rawCriterion.score < 0 ||
+      rawCriterion.score > 1
+    ) {
+      console.warn(`[eval] Ignoring malformed rubricCriteria item for stage "${stageName}".`);
+      continue;
+    }
+
+    const criterion: RubricCriterion = {
+      criterion: rawCriterion.criterion.trim(),
+      score: rawCriterion.score,
+    };
+    if (typeof rawCriterion.notes === 'string' && rawCriterion.notes.trim().length > 0) {
+      criterion.notes = rawCriterion.notes.trim();
+    }
+    parsedCriteria.push(criterion);
+  }
+
+  return parsedCriteria.length > 0 ? parsedCriteria : undefined;
+}
+
 function parseJudgeResponse(raw: string): JudgeResponse {
   const parsed = parseJsonFromLLM(raw) as {
     score?: number;
     rationale?: string;
     interventionFlags?: string[];
-    stageScores?: Record<string, { score?: number; rationale?: string }>;
+    stageScores?: Record<string, { score?: number; rationale?: string; rubricCriteria?: unknown }>;
     planCritique?: unknown;
     rubricEval?: unknown;
   };
@@ -398,7 +449,7 @@ function parseJudgeResponse(raw: string): JudgeResponse {
   }
 
   // Parse and validate stageScores (optional)
-  let stageScores: Record<string, { score: number; rationale: string }> | undefined;
+  let stageScores: Record<string, { score: number; rationale: string; rubricCriteria?: RubricCriterion[] }> | undefined;
   if (parsed.stageScores && typeof parsed.stageScores === 'object') {
     stageScores = {};
     for (const [stage, stageData] of Object.entries(parsed.stageScores)) {
@@ -408,9 +459,11 @@ function parseJudgeResponse(raw: string): JudgeResponse {
         stageData.score <= 1 &&
         typeof stageData?.rationale === 'string'
       ) {
+        const rubricCriteria = parseStageRubricCriteria(stageData.rubricCriteria, stage);
         stageScores[stage] = {
           score: stageData.score,
           rationale: stageData.rationale.trim(),
+          ...(rubricCriteria && { rubricCriteria }),
         };
       }
     }

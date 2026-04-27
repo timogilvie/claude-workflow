@@ -10,6 +10,7 @@ import {
   attachDifficultyMetadata,
   attachFallbackEvent,
   attachRubricEval,
+  attachStageOutcomes,
   attachTaskContextMetadata,
   attachRepoContextMetadata,
   attachWorkflowCostMetadata,
@@ -363,6 +364,84 @@ describe('eval-record-builder', () => {
       // Everything else unchanged
       expect(baseRecord.difficultyBand).toBeUndefined();
       expect(baseRecord.taskContext).toBeUndefined();
+    });
+  });
+
+  describe('attachStageOutcomes rubricCriteria', () => {
+    it('propagates rubricCriteria to stageOutcomes', () => {
+      attachStageOutcomes(baseRecord, {
+        expansion: {
+          score: 0.88,
+          rationale: 'Expansion was strong.',
+          rubricCriteria: [
+            {
+              criterion: 'requirement_coverage',
+              score: 0.9,
+              notes: 'Requirements were covered.',
+            },
+          ],
+        },
+      });
+
+      expect(baseRecord.stageOutcomes?.expansion?.rubricCriteria).toEqual([
+        {
+          criterion: 'requirement_coverage',
+          score: 0.9,
+          notes: 'Requirements were covered.',
+        },
+      ]);
+    });
+
+    it('treats undefined, null, and empty rubricCriteria as no-op', () => {
+      attachStageOutcomes(baseRecord, {
+        expansion: {
+          score: 0.8,
+          rationale: 'Undefined criteria.',
+          rubricCriteria: undefined,
+        },
+        plan: {
+          score: 0.79,
+          rationale: 'Null criteria.',
+          rubricCriteria: null,
+        },
+        implementation: {
+          score: 0.82,
+          rationale: 'Empty criteria.',
+          rubricCriteria: [],
+        },
+      });
+
+      expect(baseRecord.stageOutcomes?.expansion).not.toHaveProperty('rubricCriteria');
+      expect(baseRecord.stageOutcomes?.plan).not.toHaveProperty('rubricCriteria');
+      expect(baseRecord.stageOutcomes?.implementation).not.toHaveProperty('rubricCriteria');
+    });
+
+    it('enrichEvalRecord propagates rubricCriteria from metadata stageScores', () => {
+      baseRecord.metadata = {
+        stageScores: {
+          review: {
+            score: 0.84,
+            rationale: 'Review checked the important risks.',
+            rubricCriteria: [
+              {
+                criterion: 'issue_detection',
+                score: 0.86,
+                notes: 'Review found the relevant issue class.',
+              },
+            ],
+          },
+        },
+      };
+
+      enrichEvalRecord(baseRecord, {});
+
+      expect(baseRecord.stageOutcomes?.review?.rubricCriteria).toEqual([
+        {
+          criterion: 'issue_detection',
+          score: 0.86,
+          notes: 'Review found the relevant issue class.',
+        },
+      ]);
     });
   });
 

@@ -34,6 +34,9 @@
  *   (HOK-1406) to capture per-criterion rubric scores as durable training
  *   signal; includes rubric version for forward compatibility and
  *   determinative boundary classification
+ * - **1.11.0**: Added optional `rubricCriteria` array to `StageScore`
+ *   (HOK-1407) to persist per-stage structured criteria from the eval judge;
+ *   enables higher-fidelity GEPA attribution and per-criterion failure analysis
  *
  * @module eval-schema
  */
@@ -617,6 +620,20 @@ export type Stratum = string;
 // ────────────────────────────────────────────────────────────────
 
 /**
+ * A single structured per-stage rubric criterion from the eval judge.
+ *
+ * @since 1.11.0
+ */
+export interface RubricCriterion {
+  /** Criterion identifier, e.g. "requirement_coverage" */
+  criterion: string;
+  /** Normalized score 0.0-1.0 for this stage criterion */
+  score: number;
+  /** Optional brief explanation from the judge */
+  notes?: string;
+}
+
+/**
  * Per-stage quality attribution from the eval judge.
  *
  * Captures how well a specific workflow stage performed,
@@ -629,6 +646,8 @@ export interface StageScore {
   rationale: string;
   /** Detailed plan critique when available for the plan stage */
   planCritique?: PlanCritique;
+  /** Structured criterion-level scores for this stage */
+  rubricCriteria?: RubricCriterion[];
 }
 
 /**
