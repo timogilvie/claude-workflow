@@ -67,6 +67,13 @@ export interface ExportRow {
   router_resource_variant: string;
   planner_prompt_variant: string;
   reviewer_prompt_variant: string;
+  rubric_provenance: string;
+  rubric_completeness: number | null;
+  rubric_correctness: number | null;
+  rubric_code_quality: number | null;
+  rubric_intervention_impact: number | null;
+  rubric_autonomy: number | null;
+  rubric_determinative_boundary: string;
 }
 
 /** Column order for CSV output. */
@@ -101,6 +108,13 @@ const COLUMNS: (keyof ExportRow)[] = [
   'router_resource_variant',
   'planner_prompt_variant',
   'reviewer_prompt_variant',
+  'rubric_provenance',
+  'rubric_completeness',
+  'rubric_correctness',
+  'rubric_code_quality',
+  'rubric_intervention_impact',
+  'rubric_autonomy',
+  'rubric_determinative_boundary',
 ];
 
 // ────────────────────────────────────────────────────────────────
@@ -150,6 +164,7 @@ export function flattenRecord(
   const linesAdded = typeof meta.linesAdded === 'number' ? meta.linesAdded : null;
   const linesRemoved = typeof meta.linesRemoved === 'number' ? meta.linesRemoved : null;
   const resourceVariants = summarizeResourceVariants(record);
+  const rubric = record.rubricEval;
 
   return {
     id: record.id,
@@ -194,6 +209,13 @@ export function flattenRecord(
     router_resource_variant: resourceVariants.router,
     planner_prompt_variant: resourceVariants.planner,
     reviewer_prompt_variant: resourceVariants.reviewer,
+    rubric_provenance: record.rubric_provenance ?? '',
+    rubric_completeness: rubric?.criteria.completeness.score ?? null,
+    rubric_correctness: rubric?.criteria.correctness.score ?? null,
+    rubric_code_quality: rubric?.criteria.code_quality.score ?? null,
+    rubric_intervention_impact: rubric?.criteria.intervention_impact.score ?? null,
+    rubric_autonomy: rubric?.criteria.autonomy.score ?? null,
+    rubric_determinative_boundary: rubric?.determinative_boundary ?? '',
   };
 }
 

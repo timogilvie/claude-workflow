@@ -16,6 +16,28 @@ import { createHash } from 'node:crypto';
 import type { EvalRecord } from './eval-schema.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 
+function rubricProvenancePriority(record: EvalRecord): number {
+  switch (record.rubric_provenance) {
+    case 'judge':
+      return 3;
+    case 'backfill_derived':
+      return 2;
+    case 'legacy_absent':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function compareDedupCandidates(a: EvalRecord, b: EvalRecord): number {
+  const provenanceDelta = rubricProvenancePriority(b) - rubricProvenancePriority(a);
+  if (provenanceDelta !== 0) {
+    return provenanceDelta;
+  }
+
+  return String(a.timestamp || '').localeCompare(String(b.timestamp || ''));
+}
+
 // ────────────────────────────────────────────────────────────────
 // Auto-Discovery
 // ────────────────────────────────────────────────────────────────
@@ -188,7 +210,9 @@ export function hashEvalRecord(record: EvalRecord): string {
 /**
  * Deduplicate eval records using MD5 hash of key fields.
  *
- * When duplicates exist, keeps the earliest by timestamp.
+ * When duplicates exist, prefers the rubric-richest record by provenance
+ * (`judge` > `backfill_derived` > `legacy_absent` > `undefined`) and uses
+ * earliest timestamp as the tiebreak.
  * Returns both deduplicated records and the duplicate groups for reporting.
  *
  * @param records - Array of eval records
@@ -216,9 +240,7 @@ export function deduplicateByHash(records: EvalRecord[]): DeduplicationResult {
   const deduplicatedRecords: EvalRecord[] = [];
 
   for (const [hash, group] of hashGroups) {
-    const sorted = [...group].sort((a, b) =>
-      String(a.timestamp || '').localeCompare(String(b.timestamp || '')),
-    );
+    const sorted = [...group].sort(compareDedupCandidates);
 
     if (sorted.length > 1) {
       duplicateGroups.set(hash, sorted);
