@@ -158,6 +158,45 @@ test('flattenRecord exports resource selection variants', () => {
   assert.match(row.resource_variants, /"surface":"router"/);
 });
 
+test('flattenRecord exports rubric fields when present', () => {
+  const record = makeRecord({
+    rubric_provenance: 'judge',
+    rubricEval: {
+      schema_version: '1.0',
+      rubric_version: '1.0',
+      criteria: {
+        completeness: { score: 0.91, rationale: 'Complete.' },
+        correctness: { score: 0.82, rationale: 'Mostly correct.' },
+        code_quality: { score: 0.88, rationale: 'Clean.' },
+        intervention_impact: { score: 0.7, rationale: 'One follow-up.' },
+        autonomy: { score: 0.74, rationale: 'Mostly autonomous.' },
+      },
+      determinative_boundary: 'functional_bug',
+    },
+  });
+  const row = flattenRecord(record);
+
+  assert.equal(row.rubric_provenance, 'judge');
+  assert.equal(row.rubric_completeness, 0.91);
+  assert.equal(row.rubric_correctness, 0.82);
+  assert.equal(row.rubric_code_quality, 0.88);
+  assert.equal(row.rubric_intervention_impact, 0.7);
+  assert.equal(row.rubric_autonomy, 0.74);
+  assert.equal(row.rubric_determinative_boundary, 'functional_bug');
+});
+
+test('flattenRecord leaves rubric export fields blank when absent', () => {
+  const row = flattenRecord(makeRecord());
+
+  assert.equal(row.rubric_provenance, '');
+  assert.equal(row.rubric_completeness, null);
+  assert.equal(row.rubric_correctness, null);
+  assert.equal(row.rubric_code_quality, null);
+  assert.equal(row.rubric_intervention_impact, null);
+  assert.equal(row.rubric_autonomy, null);
+  assert.equal(row.rubric_determinative_boundary, '');
+});
+
 // ────────────────────────────────────────────────────────────────
 // Redaction Tests
 // ────────────────────────────────────────────────────────────────
@@ -248,7 +287,7 @@ test('toCsv column count matches header count', () => {
   const lines = csv.trim().split('\n');
   const headerCols = lines[0].split(',').length;
 
-  assert.equal(headerCols, 30);
+  assert.equal(headerCols, 37);
 });
 
 // ────────────────────────────────────────────────────────────────
@@ -284,6 +323,8 @@ test('toJsonl includes all fields', () => {
   assert.ok('score_band' in parsed);
   assert.ok('files_changed' in parsed);
   assert.ok('lines_added' in parsed);
+  assert.ok('rubric_provenance' in parsed);
+  assert.ok('rubric_completeness' in parsed);
 });
 
 test('flattenRecord includes workflow_cost_status (HOK-883)', () => {

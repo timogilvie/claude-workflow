@@ -37,6 +37,9 @@
  * - **1.11.0**: Added optional `rubricCriteria` array to `StageScore`
  *   (HOK-1407) to persist per-stage structured criteria from the eval judge;
  *   enables higher-fidelity GEPA attribution and per-criterion failure analysis
+ * - **1.12.0**: Added optional `rubric_provenance` field (HOK-1408) to mark
+ *   whether rubric data came directly from the judge, was backfilled, or is
+ *   explicitly absent on legacy records
  *
  * @module eval-schema
  */
@@ -744,6 +747,17 @@ export interface RubricEval {
 }
 
 /**
+ * Provenance of rubric metadata attached to an eval record.
+ *
+ * Distinguishes new records with judge-emitted rubric from historical rows
+ * that were explicitly marked during backfill, allowing mixed-quality
+ * training datasets to weight or filter records safely.
+ *
+ * @since 1.12.0
+ */
+export type RubricProvenance = 'judge' | 'backfill_derived' | 'legacy_absent';
+
+/**
  * Routing outcome — deterministic record, not judge-scored.
  *
  * Records the routing decision and its realized outcome for offline
@@ -1172,6 +1186,18 @@ export interface EvalRecord {
    * @since 1.10.0
    */
   rubricEval?: RubricEval;
+
+  /**
+   * Provenance of the rubric metadata attached to this eval record.
+   *
+   * `judge` means the rubric was emitted directly by the eval judge.
+   * `backfill_derived` means a later tool reconstructed rubric semantics.
+   * `legacy_absent` means the record predates rubric capture and was
+   * explicitly marked as lacking rubric data.
+   *
+   * @since 1.12.0
+   */
+  rubric_provenance?: RubricProvenance;
 
   /**
    * Cross-model fallback telemetry for quota-aware training attribution.

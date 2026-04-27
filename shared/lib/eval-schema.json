@@ -1221,6 +1221,11 @@
       "required": ["schema_version", "rubric_version", "criteria"],
       "additionalProperties": false
     },
+    "rubric_provenance": {
+      "type": "string",
+      "enum": ["judge", "backfill_derived", "legacy_absent"],
+      "description": "Provenance of the rubric metadata attached to this eval record."
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,

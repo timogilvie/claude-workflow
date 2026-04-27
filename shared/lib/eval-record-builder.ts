@@ -422,6 +422,7 @@ export function attachResourceSelections(record: EvalRecord): void {
 export function attachRubricEval(record: EvalRecord, rubricEval?: RubricEval): void {
   if (!rubricEval) return;
   record.rubricEval = rubricEval;
+  record.rubric_provenance = 'judge';
 }
 
 // ────────────────────────────────────────────────────────────────
