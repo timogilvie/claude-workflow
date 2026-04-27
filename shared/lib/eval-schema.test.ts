@@ -118,6 +118,13 @@ function validateNode(
     }
   }
 
+  if (expectedType === 'array' && Array.isArray(value) && schemaNode.items) {
+    const itemSchema = schemaNode.items as Record<string, unknown>;
+    value.forEach((item, index) => {
+      validateNode(item, itemSchema, `${path}[${index}]`, errors);
+    });
+  }
+
   if (
     expectedType === 'object' &&
     typeof value === 'object' &&
@@ -1191,6 +1198,52 @@ test('Rejects rubricEval with invalid determinative_boundary enum value', () => 
     result.errors.some((e) => e.includes('determinative_boundary')),
     'Should mention determinative_boundary in error',
   );
+});
+
+console.log('\n--- StageOutcomes RubricCriteria Tests (HOK-1407) ---\n');
+
+test('Record with stageOutcomes including rubricCriteria validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    schemaVersion: '1.11.0',
+    stageOutcomes: {
+      expansion: {
+        score: 0.9,
+        rationale: 'Expansion covered requirements and validation.',
+        rubricCriteria: [
+          {
+            criterion: 'requirement_coverage',
+            score: 0.92,
+            notes: 'All core requirements were identified.',
+          },
+          {
+            criterion: 'validation_readiness',
+            score: 0.86,
+          },
+        ],
+      },
+      plan: {
+        score: 0.84,
+        rationale: 'Plan covered component boundaries.',
+        planCritique: {
+          component_boundaries: {
+            score: 0.9,
+            rationale: 'The right modules were named.',
+          },
+        },
+      },
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Old record without stageOutcomes still validates (backward compat, HOK-1407)', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  assert.ok(!('stageOutcomes' in record), 'Scenario 1 should not have stageOutcomes');
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
 // ────────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluateTask } from './eval.ts';
+import { enrichEvalRecord } from './eval-record-builder.ts';
 
 function mockCallFn(responseText, usage = null, costUsd = undefined) {
   return mock.fn(() => Promise.resolve({ text: responseText, usage, costUsd }));
@@ -26,7 +27,7 @@ describe('evaluateTask', () => {
 
     // Core EvalRecord fields from eval-schema.ts
     assert.ok(result.id, 'should have a UUID id');
-    assert.equal(result.schemaVersion, '1.10.0');
+    assert.equal(result.schemaVersion, '1.11.0');
     assert.equal(result.originalPrompt, 'Add a loading spinner');
     assert.ok(result.modelId);
     assert.ok(result.modelVersion);
@@ -272,6 +273,203 @@ describe('evaluateTask', () => {
       },
       determinative_boundary: 'functional_bug',
     });
+  });
+
+  it('stores rubricCriteria from stageScores and enriches stageOutcomes', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.86,
+      rationale: 'The workflow completed with strong stage quality.',
+      interventionFlags: [],
+      stageScores: {
+        expansion: {
+          score: 0.9,
+          rationale: 'Expansion covered requirements and validation.',
+          rubricCriteria: [
+            {
+              criterion: 'requirement_coverage',
+              score: 0.92,
+              notes: 'All key requirements were surfaced.',
+            },
+          ],
+        },
+        plan: {
+          score: 0.84,
+          rationale: 'Plan captured the right boundaries.',
+          rubricCriteria: [
+            {
+              criterion: 'component_boundaries',
+              score: 0.86,
+              notes: 'The affected modules were identified.',
+            },
+          ],
+        },
+        implementation: {
+          score: 0.88,
+          rationale: 'Implementation matched the plan.',
+          rubricCriteria: [
+            {
+              criterion: 'correctness',
+              score: 0.9,
+              notes: 'No functional issues were found.',
+            },
+          ],
+        },
+        review: {
+          score: 0.82,
+          rationale: 'Review checked the important behavior.',
+          rubricCriteria: [
+            {
+              criterion: 'issue_detection',
+              score: 0.8,
+              notes: 'Review covered the main failure modes.',
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Persist stage rubric criteria',
+        prReviewOutput: 'Clean diff',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.deepEqual(result.metadata.stageScores.expansion.rubricCriteria, [
+      {
+        criterion: 'requirement_coverage',
+        score: 0.92,
+        notes: 'All key requirements were surfaced.',
+      },
+    ]);
+
+    enrichEvalRecord(result, {});
+    assert.deepEqual(result.stageOutcomes.expansion.rubricCriteria, [
+      {
+        criterion: 'requirement_coverage',
+        score: 0.92,
+        notes: 'All key requirements were surfaced.',
+      },
+    ]);
+    assert.deepEqual(result.stageOutcomes.plan.rubricCriteria, [
+      {
+        criterion: 'component_boundaries',
+        score: 0.86,
+        notes: 'The affected modules were identified.',
+      },
+    ]);
+  });
+
+  it('keeps scalar-only stageScores compatible without rubricCriteria warnings', async () => {
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const validResponse = JSON.stringify({
+        score: 0.8,
+        rationale: 'Task completed without structured stage criteria.',
+        interventionFlags: [],
+        stageScores: {
+          expansion: { score: 0.8, rationale: 'Expansion was adequate.' },
+          plan: { score: 0.78, rationale: 'Plan was adequate.' },
+          implementation: { score: 0.82, rationale: 'Implementation was adequate.' },
+          review: { score: 0.79, rationale: 'Review was adequate.' },
+        },
+      });
+
+      const result = await evaluateTask(
+        {
+          taskPrompt: 'Scalar-only judge payload',
+          prReviewOutput: 'Clean',
+        },
+        undefined,
+        { _callFn: mockCallFn(validResponse) }
+      );
+
+      for (const stage of Object.values(result.metadata.stageScores)) {
+        assert.equal('rubricCriteria' in stage, false);
+      }
+      assert.equal(warn.mock.callCount(), 0);
+    } finally {
+      warn.mock.restore();
+    }
+  });
+
+  it('preserves rubricCriteria only for stages that provide them', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.77,
+      rationale: 'Mixed old and new stage payloads were accepted.',
+      interventionFlags: [],
+      stageScores: {
+        expansion: {
+          score: 0.83,
+          rationale: 'Expansion had structured evidence.',
+          rubricCriteria: [
+            { criterion: 'validation_readiness', score: 0.8 },
+          ],
+        },
+        plan: { score: 0.75, rationale: 'Plan used the scalar format.' },
+        implementation: { score: 0.78, rationale: 'Implementation used the scalar format.' },
+        review: { score: 0.74, rationale: 'Review used the scalar format.' },
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Mixed stage payload',
+        prReviewOutput: 'Mostly clean',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+    enrichEvalRecord(result, {});
+
+    assert.deepEqual(result.stageOutcomes.expansion.rubricCriteria, [
+      { criterion: 'validation_readiness', score: 0.8 },
+    ]);
+    assert.equal('rubricCriteria' in result.stageOutcomes.plan, false);
+    assert.equal('rubricCriteria' in result.stageOutcomes.implementation, false);
+    assert.equal('rubricCriteria' in result.stageOutcomes.review, false);
+  });
+
+  it('drops malformed rubricCriteria without failing the eval', async () => {
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const validResponse = JSON.stringify({
+        score: 0.73,
+        rationale: 'Malformed per-stage criteria were ignored.',
+        interventionFlags: [],
+        stageScores: {
+          expansion: {
+            score: 0.8,
+            rationale: 'Expansion had invalid criteria shape.',
+            rubricCriteria: 'not an array',
+          },
+          plan: {
+            score: 0.72,
+            rationale: 'Plan had malformed criteria item.',
+            rubricCriteria: [
+              { score: 0.7, notes: 'Missing criterion.' },
+            ],
+          },
+        },
+      });
+
+      const result = await evaluateTask(
+        {
+          taskPrompt: 'Malformed criteria payload',
+          prReviewOutput: 'Completed',
+        },
+        undefined,
+        { _callFn: mockCallFn(validResponse) }
+      );
+
+      assert.equal('rubricCriteria' in result.metadata.stageScores.expansion, false);
+      assert.equal('rubricCriteria' in result.metadata.stageScores.plan, false);
+      assert.equal(warn.mock.callCount(), 2);
+    } finally {
+      warn.mock.restore();
+    }
   });
 
   it('omits planCritique when the judge does not return it', async () => {
