@@ -26,6 +26,7 @@ export function buildTaskDescriptorFromEvalRecord(
     | 'timeSeconds'
     | 'interventionCount'
     | 'interventions'
+    | 'rubricEval'
   >,
 ): TaskDescriptor | null {
   if (typeof record.originalPrompt !== 'string' || record.originalPrompt.trim() === '') {
@@ -45,6 +46,7 @@ export function buildTaskDescriptorFromEvalRecord(
     timeSeconds: record.timeSeconds,
     interventionCount: record.interventionCount,
     interventions: record.interventions || undefined,
+    rubricEval: record.rubricEval || undefined,
   });
 }
 

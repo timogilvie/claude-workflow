@@ -40,6 +40,10 @@
  * - **1.12.0**: Added optional `rubric_provenance` field (HOK-1408) to mark
  *   whether rubric data came directly from the judge, was backfilled, or is
  *   explicitly absent on legacy records
+ * - **1.13.0**: Added optional `rubric` section to `TaskDescriptor`
+ *   (HOK-1409) to propagate rubric-derived features (criterion count, mean
+ *   score, per-criterion scores, determinative boundary) into privacy-safe
+ *   descriptor data for router training
  *
  * @module eval-schema
  */
@@ -933,6 +937,25 @@ export interface TaskDescriptor {
   constraints: DescriptorConstraints;
   /** Per-stage model assignments and outcomes */
   stages: Record<string, StageDescriptor>;
+  /** Rubric-derived features for router training */
+  rubric?: {
+    /** Whether rubric criteria were present on this record */
+    has_rubric: boolean;
+    /** Number of criteria with valid finite scores */
+    criterion_count: number;
+    /** Mean score across valid criteria */
+    mean_score: number;
+    /** Per-criterion scores (fixed bounded dimensions) */
+    criteria_scores: {
+      completeness: number;
+      correctness: number;
+      code_quality: number;
+      intervention_impact: number;
+      autonomy: number;
+    };
+    /** Which rubric boundary determinatively capped the score */
+    determinative_boundary?: string;
+  };
   /** Overall outcome (null when used as router input pre-eval) */
   outcome?: DescriptorOutcome;
 }

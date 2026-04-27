@@ -38,9 +38,37 @@ The tool reads `.wavemill/evals/evals.jsonl`, marks only rows that do not alread
 - When duplicate records collide, dedup prefers `judge` over `backfill_derived`, `backfill_derived` over `legacy_absent`, and all of those over an unset value.
 - If provenance ties, existing earliest-timestamp behavior still decides the winner.
 
+## Task Descriptor Rubric Features
+
+`TaskDescriptor` now includes an optional `rubric` section derived from `EvalRecord.rubricEval`:
+
+- `rubric.has_rubric`: Always `true` when the section is present.
+- `rubric.criterion_count`: Count of rubric criteria with finite scores.
+- `rubric.mean_score`: Mean across finite criterion scores (clamped to `0..1`).
+- `rubric.criteria_scores`: Fixed per-criterion numeric scores:
+  `completeness`, `correctness`, `code_quality`, `intervention_impact`, `autonomy`.
+- `rubric.determinative_boundary`: Optional boundary label copied from `rubricEval`.
+
+Router/training feature intent:
+
+| Feature | Nearest-neighbor ready | Future learned models |
+|---|---|---|
+| `has_rubric` | Yes | Yes |
+| `criterion_count` | Yes | Yes |
+| `mean_score` | Yes | Yes |
+| `criteria_scores.*` | Yes | Yes |
+| `determinative_boundary` | Yes (categorical encoding) | Yes |
+| Rubric rationale text | No | No |
+
+Contract notes:
+
+- The `rubric` section is additive-only and optional for backward compatibility.
+- Legacy rows without rubric criteria must continue to omit `taskDescriptor.rubric`.
+- Consumers should treat unknown future keys as forward-compatible additions only when schema versions permit.
+
 ## Schema Reference
 
-See the `1.12.0` changelog entry in [shared/lib/eval-schema.ts](/Users/timothyogilvie/Dropbox/wavemill/worktrees/backfill-and-aggregate-rubric-aware-eval-records-for-collective-training-data/shared/lib/eval-schema.ts:1).
+See the `1.13.0` changelog entry in [shared/lib/eval-schema.ts](/Users/timothyogilvie/Dropbox/wavemill/worktrees/backfill-and-aggregate-rubric-aware-eval-records-for-collective-training-data/shared/lib/eval-schema.ts:1).
 
 ## Reverting a Backfill
 

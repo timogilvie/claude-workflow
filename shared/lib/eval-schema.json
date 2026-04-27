@@ -935,10 +935,10 @@
           "required": ["models_available", "objective"],
           "additionalProperties": false
         },
-        "stages": {
-          "type": "object",
-          "description": "Per-stage execution details.",
-          "additionalProperties": {
+    "stages": {
+      "type": "object",
+      "description": "Per-stage execution details.",
+      "additionalProperties": {
             "type": "object",
             "properties": {
               "model": {
@@ -963,13 +963,79 @@
               }
             },
             "required": ["model"],
-            "additionalProperties": false
-          }
+        "additionalProperties": false
+      }
+    },
+    "rubric": {
+      "type": "object",
+      "description": "Rubric-derived features for router training (HOK-1409). NN-ready: bounded numeric features only, no free text.",
+      "properties": {
+        "has_rubric": {
+          "type": "boolean"
         },
-        "outcome": {
+        "criterion_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mean_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "criteria_scores": {
           "type": "object",
-          "description": "Overall task outcome summary (null when used as router input pre-eval).",
           "properties": {
+            "completeness": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "correctness": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "code_quality": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "intervention_impact": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "autonomy": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "completeness",
+            "correctness",
+            "code_quality",
+            "intervention_impact",
+            "autonomy"
+          ],
+          "additionalProperties": false
+        },
+        "determinative_boundary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "has_rubric",
+        "criterion_count",
+        "mean_score",
+        "criteria_scores"
+      ],
+      "additionalProperties": false
+    },
+    "outcome": {
+      "type": "object",
+      "description": "Overall task outcome summary (null when used as router input pre-eval).",
+      "properties": {
             "overall_score": {
               "type": "number",
               "minimum": 0,

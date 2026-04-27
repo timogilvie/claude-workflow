@@ -479,5 +479,128 @@ describe('task-descriptor-builder', () => {
       assert.equal(descriptor.outcome.total_cost_usd, 11.1);
       assert.equal(descriptor.outcome.interventions, 1);
     });
+
+    describe('rubric feature derivation', () => {
+      it('derives rubric features for rubric-aware records', () => {
+        const descriptor = buildTaskDescriptor({
+          originalPrompt: 'Add API endpoint for subscriptions',
+          rubricEval: {
+            schema_version: '1.0',
+            rubric_version: '2026-04',
+            criteria: {
+              completeness: { score: 0.9, rationale: 'Covered all required paths' },
+              correctness: { score: 0.8, rationale: 'Handles expected edge cases' },
+              code_quality: { score: 0.7, rationale: 'Clean and consistent' },
+              intervention_impact: { score: 1.0, rationale: 'No interventions needed' },
+              autonomy: { score: 0.6, rationale: 'Minor guidance requested' },
+            },
+            determinative_boundary: 'cosmetic_only',
+          },
+        });
+
+        assert.ok(descriptor.rubric);
+        assert.equal(descriptor.rubric.has_rubric, true);
+        assert.equal(descriptor.rubric.criterion_count, 5);
+        assert.equal(Number(descriptor.rubric.mean_score.toFixed(4)), 0.8);
+        assert.deepEqual(descriptor.rubric.criteria_scores, {
+          completeness: 0.9,
+          correctness: 0.8,
+          code_quality: 0.7,
+          intervention_impact: 1.0,
+          autonomy: 0.6,
+        });
+        assert.equal(descriptor.rubric.determinative_boundary, 'cosmetic_only');
+      });
+
+      it('omits rubric for legacy records without rubricEval', () => {
+        const descriptor = buildTaskDescriptor({
+          originalPrompt: 'Legacy eval record',
+        });
+
+        assert.equal(descriptor.rubric, undefined);
+      });
+
+      it('omits rubric for rubricEval without criteria', () => {
+        const descriptor = buildTaskDescriptor({
+          originalPrompt: 'Malformed rubric record',
+          rubricEval: {
+            schema_version: '1.0',
+            rubric_version: '2026-04',
+          } as unknown as TaskDescriptorInput['rubricEval'],
+        });
+
+        assert.equal(descriptor.rubric, undefined);
+      });
+
+      it('handles partially valid criteria scores gracefully', () => {
+        const descriptor = buildTaskDescriptor({
+          originalPrompt: 'Partially populated rubric',
+          rubricEval: {
+            schema_version: '1.0',
+            rubric_version: '2026-04',
+            criteria: {
+              completeness: { score: 0.75, rationale: 'ok' },
+              correctness: { score: 0.5, rationale: 'ok' },
+              code_quality: { score: Number.NaN, rationale: 'invalid sentinel' },
+              intervention_impact: { score: Number.POSITIVE_INFINITY, rationale: 'invalid sentinel' },
+              autonomy: { score: 0.25, rationale: 'ok' },
+            },
+          },
+        });
+
+        assert.ok(descriptor.rubric);
+        assert.equal(descriptor.rubric.criterion_count, 3);
+        assert.equal(Number(descriptor.rubric.mean_score.toFixed(4)), 0.5);
+        assert.deepEqual(descriptor.rubric.criteria_scores, {
+          completeness: 0.75,
+          correctness: 0.5,
+          code_quality: 0,
+          intervention_impact: 0,
+          autonomy: 0.25,
+        });
+      });
+
+      it('never includes rubric rationale text in descriptor payload', () => {
+        const descriptor = buildTaskDescriptor({
+          originalPrompt: 'Privacy check',
+          rubricEval: {
+            schema_version: '1.0',
+            rubric_version: '2026-04',
+            criteria: {
+              completeness: { score: 1.0, rationale: 'FREE_TEXT_SENTINEL_42' },
+              correctness: { score: 1.0, rationale: 'FREE_TEXT_SENTINEL_42' },
+              code_quality: { score: 1.0, rationale: 'FREE_TEXT_SENTINEL_42' },
+              intervention_impact: { score: 1.0, rationale: 'FREE_TEXT_SENTINEL_42' },
+              autonomy: { score: 1.0, rationale: 'FREE_TEXT_SENTINEL_42' },
+            },
+          },
+        });
+
+        const serialized = JSON.stringify(descriptor);
+        assert.equal(serialized.includes('FREE_TEXT_SENTINEL_42'), false);
+      });
+
+      it('guards against NaN and Infinity scores', () => {
+        const descriptor = buildTaskDescriptor({
+          originalPrompt: 'Invalid numeric values in rubric',
+          rubricEval: {
+            schema_version: '1.0',
+            rubric_version: '2026-04',
+            criteria: {
+              completeness: { score: 0.5, rationale: 'ok' },
+              correctness: { score: 0.6, rationale: 'ok' },
+              code_quality: { score: Number.NaN, rationale: 'invalid' },
+              intervention_impact: { score: Number.POSITIVE_INFINITY, rationale: 'invalid' },
+              autonomy: { score: 0.7, rationale: 'ok' },
+            },
+          },
+        });
+
+        assert.ok(descriptor.rubric);
+        assert.equal(descriptor.rubric.criterion_count, 3);
+        assert.equal(Number.isFinite(descriptor.rubric.mean_score), true);
+        assert.equal(JSON.stringify(descriptor).includes('NaN'), false);
+      });
+    });
   });
 });
