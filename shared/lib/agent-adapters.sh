@@ -606,8 +606,21 @@ Scope the plan to the minimum viable change:
   # Load template and fill placeholders
   local template_file="$tools_dir/prompts/planning-phase.md"
   local template_content
-  if [[ -f "$template_file" ]]; then
+  local resolver_tool="$tools_dir/resolve-runtime-resource.ts"
+  if [[ -f "$resolver_tool" ]]; then
+    local resolved_json
+    if resolved_json="$(npx tsx "$resolver_tool" --surface planner --repo-dir "$wt_dir" --json 2>/dev/null)" \
+      && template_content="$(printf '%s' "$resolved_json" | jq -er '.content')" ; then
+      :
+    else
+      echo "[warn] Failed to resolve planner runtime resource, falling back to $template_file" >&2
+      template_content=""
+    fi
+  fi
+  if [[ -z "${template_content:-}" && -f "$template_file" ]]; then
     template_content=$(cat "$template_file")
+  fi
+  if [[ -n "${template_content:-}" ]]; then
     template_content="${template_content//\{\{PLAN_DEPTH\}\}/$plan_depth}"
     template_content="${template_content//\{\{SLUG\}\}/$slug}"
     template_content="${template_content//\{\{TOOLS_DIR\}\}/$tools_dir}"
@@ -618,7 +631,7 @@ Scope the plan to the minimum viable change:
     template_content="${template_content//\{\{PLAN_PATH\}\}/$plan_path}"
     template_content="${template_content//\{\{DEPTH_GUIDANCE\}\}/$depth_guidance}"
     template_content="${template_content//\{\{PLAN_MODE_GUIDANCE\}\}/$plan_mode_guidance}"
-  else
+  elif [[ ! -f "$template_file" ]]; then
     template_content="[ERROR: Planning template not found at $template_file]"
   fi
 
@@ -998,8 +1011,21 @@ The reviewer is operating in degraded scoped-review mode.
   # Load template and fill placeholders
   local template_file="$tools_dir/prompts/review-phase.md"
   local template_content
-  if [[ -f "$template_file" ]]; then
+  local resolver_tool="$tools_dir/resolve-runtime-resource.ts"
+  if [[ -f "$resolver_tool" ]]; then
+    local resolved_json
+    if resolved_json="$(npx tsx "$resolver_tool" --surface reviewer --repo-dir "$wt_dir" --json 2>/dev/null)" \
+      && template_content="$(printf '%s' "$resolved_json" | jq -er '.content')" ; then
+      :
+    else
+      echo "[warn] Failed to resolve reviewer runtime resource, falling back to $template_file" >&2
+      template_content=""
+    fi
+  fi
+  if [[ -z "${template_content:-}" && -f "$template_file" ]]; then
     template_content=$(cat "$template_file")
+  fi
+  if [[ -n "${template_content:-}" ]]; then
     template_content="${template_content//\{\{REVIEW_MODE\}\}/$review_mode}"
     template_content="${template_content//\{\{TOOLS_DIR\}\}/$tools_dir}"
     template_content="${template_content//\{\{BASE_BRANCH\}\}/$base_branch}"
@@ -1011,7 +1037,7 @@ The reviewer is operating in degraded scoped-review mode.
     template_content="${template_content//\{\{OPERATING_MODE_GUIDANCE\}\}/$operating_mode_guidance}"
     template_content="${template_content//\{\{OPERATING_MODE\}\}/$operating_mode}"
     template_content="${template_content//\{\{DRAFT_PR_INSTRUCTION\}\}/$draft_pr_instruction}"
-  else
+  elif [[ ! -f "$template_file" ]]; then
     template_content="[ERROR: Review template not found at $template_file]"
   fi
 

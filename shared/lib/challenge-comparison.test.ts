@@ -84,6 +84,9 @@ function makeRouting(overrides?: Partial<ChallengeRoutingMeta>): ChallengeRoutin
     planDepth: 'deep',
     codeDepth: 'medium',
     reviewMode: 'strict',
+    routerVariant: 'baseline',
+    plannerPromptVariant: 'baseline',
+    reviewerPromptVariant: 'baseline',
     ...overrides,
   };
 }
@@ -108,6 +111,9 @@ test('detectVariedDimensions returns all false when routings are identical', () 
   assert.equal(result.planDepth, false);
   assert.equal(result.codeDepth, false);
   assert.equal(result.reviewMode, false);
+  assert.equal(result.routerVariant, false);
+  assert.equal(result.plannerPromptVariant, false);
+  assert.equal(result.reviewerPromptVariant, false);
 });
 
 test('detectVariedDimensions detects single field difference (coder)', () => {
@@ -121,6 +127,9 @@ test('detectVariedDimensions detects single field difference (coder)', () => {
   assert.equal(result.planDepth, false);
   assert.equal(result.codeDepth, false);
   assert.equal(result.reviewMode, false);
+  assert.equal(result.routerVariant, false);
+  assert.equal(result.plannerPromptVariant, false);
+  assert.equal(result.reviewerPromptVariant, false);
 });
 
 test('detectVariedDimensions detects multiple field differences', () => {
@@ -128,6 +137,7 @@ test('detectVariedDimensions detects multiple field differences', () => {
   const challenger = makeRouting({
     planner: 'claude-sonnet-4-5-20250929',
     codeDepth: 'shallow',
+    routerVariant: 'optimized',
   });
   const result = detectVariedDimensions(primary, challenger);
   assert.ok(result);
@@ -137,6 +147,7 @@ test('detectVariedDimensions detects multiple field differences', () => {
   assert.equal(result.planDepth, false);
   assert.equal(result.codeDepth, true);
   assert.equal(result.reviewMode, false);
+  assert.equal(result.routerVariant, true);
 });
 
 test('detectVariedDimensions treats empty strings as equivalent', () => {
@@ -145,6 +156,7 @@ test('detectVariedDimensions treats empty strings as equivalent', () => {
   const result = detectVariedDimensions(primary, challenger);
   assert.ok(result);
   assert.equal(result.reviewer, false);
+  assert.equal(result.reviewerPromptVariant, false);
 });
 
 console.log('\n--- Challenge Type Classification Tests ---\n');
@@ -157,6 +169,9 @@ test('classifyChallengeType returns "coder-only" when only coder differs', () =>
     planDepth: false,
     codeDepth: false,
     reviewMode: false,
+    routerVariant: false,
+    plannerPromptVariant: false,
+    reviewerPromptVariant: false,
   };
   const result = classifyChallengeType(varied);
   assert.equal(result, 'coder-only');
@@ -170,6 +185,9 @@ test('classifyChallengeType returns "planner-only" when only planner differs', (
     planDepth: false,
     codeDepth: false,
     reviewMode: false,
+    routerVariant: false,
+    plannerPromptVariant: false,
+    reviewerPromptVariant: false,
   };
   const result = classifyChallengeType(varied);
   assert.equal(result, 'planner-only');
@@ -183,6 +201,9 @@ test('classifyChallengeType returns "reviewer-only" when only reviewer differs',
     planDepth: false,
     codeDepth: false,
     reviewMode: false,
+    routerVariant: false,
+    plannerPromptVariant: false,
+    reviewerPromptVariant: false,
   };
   const result = classifyChallengeType(varied);
   assert.equal(result, 'reviewer-only');
@@ -196,6 +217,9 @@ test('classifyChallengeType returns "full-stack" when all dimensions differ', ()
     planDepth: true,
     codeDepth: true,
     reviewMode: true,
+    routerVariant: true,
+    plannerPromptVariant: true,
+    reviewerPromptVariant: true,
   };
   const result = classifyChallengeType(varied);
   assert.equal(result, 'full-stack');
@@ -209,6 +233,9 @@ test('classifyChallengeType returns "multi-variable" when coder and planDepth di
     planDepth: true,
     codeDepth: false,
     reviewMode: false,
+    routerVariant: false,
+    plannerPromptVariant: false,
+    reviewerPromptVariant: false,
   };
   const result = classifyChallengeType(varied);
   assert.equal(result, 'multi-variable');

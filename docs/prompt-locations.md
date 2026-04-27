@@ -8,14 +8,16 @@ Use this page as the canonical registry for agent instruction locations in this 
 
 Prompt templates are also mirrored into the first-class resource registry at `.wavemill/registry/resources.jsonl`. The legacy `.wavemill/evals/prompt-registry.jsonl` log remains for GEPA compatibility.
 
+Planner and reviewer phase prompts now resolve through `tools/resolve-runtime-resource.ts`, which applies governed runtime selection before `shared/lib/agent-adapters.sh` performs placeholder substitution. If runtime selection fails, the shell layer logs a warning and falls back to the static prompt file.
 Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.ts` when it needs prompt, memory, or policy assets. The backing files below remain the source of truth in phase one.
 
 ## Registry
 
-- `shared/lib/agent-adapters.sh`: `agent_launch_autonomous()` and `agent_launch_interactive()` define how mill mode launches agents in autonomous vs phase-launch flows. Codex launchers should use `codex exec ... --dangerously-bypass-approvals-and-sandbox - < prompt_file`, while Claude keeps its interactive CLI path. Phase prompts (`build_planning_prompt`, `build_coding_prompt`, `build_review_prompt`) load instruction content from template files.
+- `shared/lib/agent-adapters.sh`: `agent_launch_autonomous()` and `agent_launch_interactive()` define how mill mode launches agents in autonomous vs phase-launch flows. Codex launchers should use `codex exec ... --dangerously-bypass-approvals-and-sandbox - < prompt_file`, while Claude keeps its interactive CLI path. `build_planning_prompt` and `build_review_prompt` now call `tools/resolve-runtime-resource.ts` before loading prompt content; `build_coding_prompt` still reads `tools/prompts/coding-phase.md` directly.
 - `tools/prompts/planning-phase.md`: Planning phase instructions (loaded by `build_planning_prompt`). GEPA-optimizable.
 - `tools/prompts/coding-phase.md`: Coding phase instructions (loaded by `build_coding_prompt`). GEPA-optimizable.
 - `tools/prompts/review-phase.md`: Review phase instructions (loaded by `build_review_prompt`). GEPA-optimizable.
+- `tools/resolve-runtime-resource.ts`: Shell-safe runtime resolver for planner/reviewer prompt content plus selection metadata.
 - `tools/prompts/review-general.md`: Default general-purpose review persona prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `shared/lib/review-engine.ts` in normal operating mode).
 - `tools/prompts/review-general-scoped.md`: Degraded-mode scoped review persona prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `shared/lib/review-engine.ts` when operating mode is `constrained` or `survival`).
 - `tools/prompts/initiative-planner.md`: Standard initiative decomposition prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `tools/plan-initiative.ts` via `shared/lib/plan-prompt-selector.ts`). Used when operating mode is `normal`. GEPA-optimizable.
