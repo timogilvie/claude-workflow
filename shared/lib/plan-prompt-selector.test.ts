@@ -39,6 +39,26 @@ function writeQuotaState(status: 'healthy' | 'degrading' | 'exhausted'): void {
         lastReason: null,
         consecutiveLimitErrors: status === 'healthy' ? 0 : 1,
       },
+      'gpt-5.5': {
+        status,
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+        consecutiveLimitErrors: status === 'healthy' ? 0 : 1,
+      },
+      'gpt-5.4': {
+        status,
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+        consecutiveLimitErrors: status === 'healthy' ? 0 : 1,
+      },
     },
   }, null, 2), 'utf-8');
 }

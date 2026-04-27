@@ -89,6 +89,10 @@
         "inputCostPerMTok": 1.75,
         "outputCostPerMTok": 14,
         "cacheReadCostPerMTok": 0.44
+      },
+      "gpt-5.5": {
+        "inputCostPerMTok": 5,
+        "outputCostPerMTok": 30
       }
     },
     "interventionPenalties": {
@@ -116,7 +120,8 @@
       "claude-opus-4-7",
       "claude-haiku-4-5-20251001",
       "gpt-5.3-codex",
-      "gpt-5.4"
+      "gpt-5.4",
+      "gpt-5.5"
     ],
     "comparisonModel": "claude-opus-4-7",
     "autoMergeWinner": false
@@ -144,7 +149,8 @@
       "claude-haiku-4-5-20251001": "claude",
       "gpt-5.3-codex": "codex",
       "gpt-5.4": "codex",
-      "gpt-5.3-codex-spark": "codex"
+      "gpt-5.3-codex-spark": "codex",
+      "gpt-5.5": "codex"
     },
     "mode": "auto",
     "llmModel": "gpt-4o-mini",
@@ -153,7 +159,8 @@
       "planner": [
         "claude-opus-4-7",
         "claude-sonnet-4-6",
-        "gpt-5.4"
+        "gpt-5.4",
+        "gpt-5.5"
       ]
     }
   },

@@ -20,6 +20,7 @@ describe('model-validator', () => {
       // Should include models from .wavemill-config.json pricing
       assert.ok(all.includes('gpt-5.3-codex'), 'Should include gpt-5.3-codex');
       assert.ok(all.includes('gpt-5.4'), 'Should include gpt-5.4');
+      assert.ok(all.includes('gpt-5.5'), 'Should include gpt-5.5');
       assert.ok(all.includes('claude-opus-4-6'), 'Should include claude-opus-4-6');
       assert.ok(all.includes('claude-opus-4-7'), 'Should include claude-opus-4-7');
       assert.ok(all.includes('claude-sonnet-4-6'), 'Should include claude-sonnet-4-6');
@@ -32,6 +33,7 @@ describe('model-validator', () => {
       const claudeModels = byAgent.get('claude') || [];
 
       assert.ok(codexModels.includes('gpt-5.3-codex'), 'Codex should include gpt-5.3-codex');
+      assert.ok(codexModels.includes('gpt-5.5'), 'Codex should include gpt-5.5');
       assert.ok(claudeModels.includes('claude-opus-4-6'), 'Claude should include claude-opus-4-6');
       assert.ok(claudeModels.includes('claude-opus-4-7'), 'Claude should include claude-opus-4-7');
     });
@@ -49,6 +51,7 @@ describe('model-validator', () => {
     it('returns true for known models', () => {
       assert.strictEqual(isValidModel('gpt-5.3-codex', '.'), true);
       assert.strictEqual(isValidModel('gpt-5.4', '.'), true);
+      assert.strictEqual(isValidModel('gpt-5.5', '.'), true);
       assert.strictEqual(isValidModel('claude-opus-4-6', '.'), true);
       assert.strictEqual(isValidModel('claude-opus-4-7', '.'), true);
       assert.strictEqual(isValidModel('claude-sonnet-4-6', '.'), true);
@@ -97,6 +100,9 @@ describe('model-validator', () => {
       });
       assert.doesNotThrow(() => {
         validateModelOrThrow('gpt-5.4', '.');
+      });
+      assert.doesNotThrow(() => {
+        validateModelOrThrow('gpt-5.5', '.');
       });
       assert.doesNotThrow(() => {
         validateModelOrThrow('claude-opus-4-6', '.');

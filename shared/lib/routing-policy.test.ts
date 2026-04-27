@@ -74,6 +74,7 @@ function baseConfig(mode: 'auto' | 'heuristic' = 'auto') {
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.3-codex': 'codex',
         'gpt-5.4': 'codex',
+        'gpt-5.5': 'codex',
       },
     },
     eval: {
@@ -85,6 +86,7 @@ function baseConfig(mode: 'auto' | 'heuristic' = 'auto') {
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
         'gpt-5.4': { inputCostPerMTok: 2.5, outputCostPerMTok: 10, cacheWriteCostPerMTok: 3.125, cacheReadCostPerMTok: 0.625 },
+        'gpt-5.5': { inputCostPerMTok: 5, outputCostPerMTok: 30, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       },
     },
   };
@@ -140,7 +142,7 @@ describe('routing-policy ranking', () => {
       quotaState: makeSnapshot(),
     });
 
-    assert.equal(ranked[0].modelId, 'claude-sonnet-4-6');
+    assert.equal(ranked[0].modelId, 'gpt-5.5');
     assert.equal(ranked[0].viable, true);
   });
 
@@ -148,28 +150,28 @@ describe('routing-policy ranking', () => {
     const ranked = resolveModel({
       taskType: 'coding',
       difficulty: 'moderate',
-      quotaState: makeSnapshot({ 'claude-sonnet-4-6': 'degrading' }),
+      quotaState: makeSnapshot({ 'gpt-5.5': 'degrading' }),
     });
 
-    const degraded = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    const degraded = ranked.find((candidate) => candidate.modelId === 'gpt-5.5');
     assert.ok(degraded);
     assert.equal(degraded.viable, true);
-    assert.equal(degraded.adjustedScore, 76.5);
-    assert.equal(ranked[0].modelId, 'claude-sonnet-4-5-20250929');
+    assert.equal(degraded.adjustedScore, 78.2);
+    assert.equal(ranked[0].modelId, 'gpt-5.4');
   });
 
   it('excludes exhausted primary models and promotes the next viable candidate', () => {
     const ranked = resolveModel({
       taskType: 'coding',
       difficulty: 'moderate',
-      quotaState: makeSnapshot({ 'claude-sonnet-4-6': 'exhausted' }),
+      quotaState: makeSnapshot({ 'gpt-5.5': 'exhausted' }),
     });
 
-    const exhausted = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    const exhausted = ranked.find((candidate) => candidate.modelId === 'gpt-5.5');
     assert.ok(exhausted);
     assert.equal(exhausted.viable, false);
     assert.equal(exhausted.exclusionReason, 'quota-exhausted');
-    assert.equal(ranked[0].modelId, 'claude-sonnet-4-5-20250929');
+    assert.equal(ranked[0].modelId, 'gpt-5.4');
   });
 
   it('falls back to strong generalists on critical tasks when all frontier models are exhausted', () => {
@@ -179,6 +181,8 @@ describe('routing-policy ranking', () => {
       quotaState: makeSnapshot({
         'claude-opus-4-7': 'exhausted',
         'claude-opus-4-6': 'exhausted',
+        'gpt-5.5': 'exhausted',
+        'gpt-5.4': 'exhausted',
       }),
     });
 
@@ -735,11 +739,11 @@ describe('routing-policy integration', () => {
       const availableModels = requestBody?.available_models as Record<string, string[]>;
       assert.deepEqual(
         availableModels.coder_models.sort(),
-        ['claude-opus-4-6', 'claude-opus-4-7'].sort(),
+        ['claude-opus-4-6', 'claude-opus-4-7', 'gpt-5.4', 'gpt-5.5'].sort(),
       );
       assert.deepEqual(
         availableModels.planner_models.sort(),
-        ['claude-opus-4-6', 'claude-opus-4-7'].sort(),
+        ['claude-opus-4-6', 'claude-opus-4-7', 'gpt-5.4', 'gpt-5.5'].sort(),
       );
       assert.equal(decision.signals.taskDifficulty, 'critical');
     } finally {

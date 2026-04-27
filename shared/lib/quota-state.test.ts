@@ -113,13 +113,20 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
           weaknesses: ['api dependency'],
           qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
         },
+        'gpt-5.5': {
+          vendor: 'openai',
+          class: 'frontier',
+          strengths: ['code generation'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 92, coding: 90, review: 90, classify: 72, routing: 74 },
+        },
       },
       ladders: {
-        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+        planning: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
       },
     },
   });
@@ -534,6 +541,14 @@ describe('quota-state', () => {
             status: 'degrading',
             reason: 'aggregate frontier capacity check',
           },
+          'gpt-5.5': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
+          'gpt-5.4': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
         },
       },
     });
@@ -569,15 +584,17 @@ describe('quota-state', () => {
       reason: 'quota_exhausted',
     }, repoDir);
     recordSuccess({ modelId: 'gpt-5.4' }, repoDir);
+    recordSuccess({ modelId: 'gpt-5.5' }, repoDir);
 
     assert.equal(getCurrentOperatingMode(repoDir), 'normal');
     assert.deepEqual(getVendorQuotaBreakdown(readQuotaSnapshot(repoDir), [
       { modelId: 'claude-opus-4-7', vendor: 'anthropic' },
       { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
+      { modelId: 'gpt-5.5', vendor: 'openai' },
       { modelId: 'gpt-5.4', vendor: 'openai' },
     ]), {
       anthropic: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
-      openai: { healthy: 1, degraded: 0, exhausted: 0, total: 1 },
+      openai: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
     });
   });
 
@@ -596,6 +613,10 @@ describe('quota-state', () => {
       modelId: 'gpt-5.4',
       reason: '429 rate_limit',
     }, repoDir);
+    recordLimitError({
+      modelId: 'gpt-5.5',
+      reason: '429 rate_limit',
+    }, repoDir);
 
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
   });
@@ -605,6 +626,7 @@ describe('quota-state', () => {
 
     markExhausted({ modelId: 'claude-opus-4-7', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'claude-opus-4-6', reason: 'quota_exhausted' }, repoDir);
+    markExhausted({ modelId: 'gpt-5.5', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'gpt-5.4', reason: 'quota_exhausted' }, repoDir);
 
     assert.equal(getCurrentOperatingMode(repoDir), 'survival');
