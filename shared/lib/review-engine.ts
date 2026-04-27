@@ -160,8 +160,13 @@ function loadPersonaPromptTemplate(
   });
 
   if (!promptResource.content) {
-    throw new Error(`Review prompt template not found at: ${promptPath}`);
+    throw new Error(
+      `Failed to load prompt template for reviewer: ${persona}. ` +
+      `Expected file at ${promptPath}. ` +
+      `Please ensure the prompt file exists and is readable.`
+    );
   }
+
   const template = promptResource.content;
   _promptTemplateCache.set(promptPath, template);
   return template;

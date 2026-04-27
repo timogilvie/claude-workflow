@@ -103,6 +103,7 @@ export function buildTaskDescriptorForPostCompletion(
     timeSeconds: input.record.timeSeconds || undefined,
     interventionCount: input.record.interventionCount || undefined,
     interventions: input.interventionRecords || undefined,
+    rubricEval: input.record.rubricEval || undefined,
     modelsAvailable: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-sonnet-4-5-20250929', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
     objective: 'balanced',
     maxCostUsd: typeof maxCostUsd === 'number' ? maxCostUsd : undefined,
