@@ -479,7 +479,7 @@ else
 fi
 
 # ============================================================================
-# TEST 4: Runtime prompt resolver integration guards
+# TEST 3a: Runtime prompt resolver integration guards
 # ============================================================================
 echo ""
 echo "=== Runtime Prompt Resolver Guards ==="
