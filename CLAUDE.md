@@ -114,7 +114,9 @@ Available in `~/.claude/commands/`:
 
 Use `docs/prompt-locations.md` as the canonical registry for agent instruction locations that must be updated together.
 
-- `shared/lib/agent-adapters.sh` - `agent_launch_autonomous()` and `agent_launch_interactive()` define mill-mode agent launch behavior. Phase prompts (`build_planning_prompt`, `build_coding_prompt`, `build_review_prompt`) include explicit user feedback handling guidance to prevent premature phase transitions.
+- `shared/lib/agent-adapters.sh` - `agent_launch_autonomous()` and `agent_launch_interactive()` define mill-mode agent launch behavior. Active phase prompts are `build_planning_prompt`, `build_coding_prompt`, and `build_review_prompt`; legacy `build_routing_prompt` and `build_interactive_prompt` are test-only render surfaces, and `build_autonomous_prompt` has been removed.
+- `shared/lib/wavemill-startup-runner.sh` is the active startup launcher. `shared/lib/wavemill-orchestrator.sh` is the deprecated compatibility wrapper.
+- `codex/prompts/*.md` with `codex/src/commands/workflow.js` form an intentional Codex-native parallel workflow rather than a shell prompt builder path.
 - `commands/workflow.md` - Phase 4 owns self-review for the interactive `/workflow` command.
 - `tools/prompts/review-general.md` and `tools/prompts/review-general-scoped.md` - `shared/lib/review-engine.ts` switches between them based on operating mode; constrained/survival mode uses the scoped checklist and can emit `needs_stronger_reviewer`.
 - `commands/bugfix.md` - Bug workflow does not include self-review.
