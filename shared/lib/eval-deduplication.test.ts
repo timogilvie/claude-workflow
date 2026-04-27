@@ -61,6 +61,27 @@ test('deduplicateEvalRecords keeps earliest record per issue/pr pair', () => {
   assert.equal(result.deduplicatedRecords.find((record) => record.issueId === 'HOK-1')?.id, 'b');
 });
 
+test('deduplicateEvalRecords prefers richer rubric provenance over earlier timestamp', () => {
+  const result = deduplicateEvalRecords([
+    makeRecord({
+      id: 'legacy',
+      issueId: 'HOK-1',
+      prUrl: 'https://x/pull/1',
+      timestamp: '2026-03-01T00:00:00Z',
+      rubric_provenance: 'legacy_absent',
+    }),
+    makeRecord({
+      id: 'judge',
+      issueId: 'HOK-1',
+      prUrl: 'https://x/pull/1',
+      timestamp: '2026-03-02T00:00:00Z',
+      rubric_provenance: 'judge',
+    }),
+  ]);
+
+  assert.equal(result.deduplicatedRecords[0]?.id, 'judge');
+});
+
 test('formatDuplicateReport summarizes duplicate groups', () => {
   const result = deduplicateEvalRecords([
     makeRecord({ id: 'a', issueId: 'HOK-1', prUrl: 'https://x/pull/42', timestamp: '2026-03-02T00:00:00Z' }),
@@ -69,7 +90,7 @@ test('formatDuplicateReport summarizes duplicate groups', () => {
 
   const output = formatDuplicateReport(result);
   assert.match(output, /HOK-1 \+ 42/);
-  assert.match(output, /keeping earliest/);
+  assert.match(output, /keeping b/);
 });
 
 test('createEvalBackup uses timestamp-safe suffixes', () => {

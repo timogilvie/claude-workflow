@@ -1246,6 +1246,45 @@ test('Old record without stageOutcomes still validates (backward compat, HOK-140
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
+console.log('\n--- Rubric Provenance Tests (HOK-1408) ---\n');
+
+test('Record with valid rubric_provenance validates and round-trips', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.12.0',
+    rubric_provenance: 'judge',
+    rubricEval: validRubricEval as import('./eval-schema.ts').RubricEval,
+  };
+  const serialized = JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
+  const result = validateAgainstSchema(serialized);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+  assert.equal((serialized as any).rubric_provenance, 'judge');
+});
+
+test('Record with legacy_absent rubric_provenance validates without rubricEval', () => {
+  const record = {
+    ...scenarios[0].record,
+    schemaVersion: '1.12.0',
+    rubric_provenance: 'legacy_absent',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Rejects rubric_provenance with invalid enum value', () => {
+  const bad = {
+    ...scenarios[0].record,
+    schemaVersion: '1.12.0',
+    rubric_provenance: 'unknown_source',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(
+    result.errors.some((e) => e.includes('rubric_provenance')),
+    'Should mention rubric_provenance in error',
+  );
+});
+
 // ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────
