@@ -6,7 +6,30 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from planner_evaluator import parse_planner_output
+from planner_evaluator import PlannerEvaluatorSignature, parse_planner_output
+
+
+PLANNER_RUBRIC_OUTPUT_FIELDS = frozenset(
+    {
+        "plan_score",
+        "quality_band",
+        "reasoning",
+        "component_boundaries",
+        "invariant_coverage",
+        "sequencing_and_dependencies",
+        "risk_and_validation_coverage",
+    }
+)
+
+
+def test_signature_output_fields_match_production_rubric():
+    assert PlannerEvaluatorSignature is not None, "DSPy not installed"
+
+    actual = frozenset(PlannerEvaluatorSignature.output_fields.keys())
+    extra = actual - PLANNER_RUBRIC_OUTPUT_FIELDS
+    missing = PLANNER_RUBRIC_OUTPUT_FIELDS - actual
+
+    assert not extra and not missing, f"Signature mismatch: extra={extra}, missing={missing}"
 
 
 def test_parse_planner_legacy_minimal_json():
@@ -23,6 +46,37 @@ def test_parse_planner_legacy_minimal_json():
     assert result["plan_score"] == 0.82
     assert result["quality_band"] == "good"
     assert result["reasoning"] == "The plan covered the main files and validation."
+
+
+def test_parse_planner_missing_rubric_criterion_handled():
+    result = parse_planner_output(
+        json.dumps({"plan_score": 0.75, "quality_band": "good", "reasoning": "OK plan."})
+    )
+
+    assert result["plan_score"] == 0.75
+    for field in [
+        "component_boundaries",
+        "invariant_coverage",
+        "sequencing_and_dependencies",
+        "risk_and_validation_coverage",
+    ]:
+        assert field not in result or isinstance(result.get(field), (int, float, type(None)))
+
+
+def test_parse_planner_rubric_criterion_out_of_domain():
+    result = parse_planner_output(
+        json.dumps(
+            {
+                "plan_score": 0.8,
+                "quality_band": "good",
+                "reasoning": "Strong plan.",
+                "component_boundaries": 1.5,
+            }
+        )
+    )
+
+    assert result["plan_score"] == 0.8
+    assert result["component_boundaries"] == 1.5
 
 
 def test_parse_planner_derives_from_stage_scores_and_preserves_rubric():
