@@ -81,6 +81,15 @@ export function detectVariedDimensions(
   // Treat empty strings as equivalent to missing values
   const normalize = (val: string) => val.trim() || '';
 
+  // For optional variant fields introduced post-feature-ship: only flag as varied when
+  // both sides have a defined value. A legacy record (undefined) vs a new record ('baseline')
+  // would otherwise produce cross-boundary false positives in variant win-rate statistics.
+  const variantDiffers = (a: string | undefined, b: string | undefined): boolean => {
+    const na = normalize(a || '');
+    const nb = normalize(b || '');
+    return na !== '' && nb !== '' && na !== nb;
+  };
+
   return {
     planner: normalize(primaryRouting.planner) !== normalize(challengerRouting.planner),
     coder: normalize(primaryRouting.coder) !== normalize(challengerRouting.coder),
@@ -88,9 +97,9 @@ export function detectVariedDimensions(
     planDepth: normalize(primaryRouting.planDepth) !== normalize(challengerRouting.planDepth),
     codeDepth: normalize(primaryRouting.codeDepth) !== normalize(challengerRouting.codeDepth),
     reviewMode: normalize(primaryRouting.reviewMode) !== normalize(challengerRouting.reviewMode),
-    routerVariant: normalize(primaryRouting.routerVariant || '') !== normalize(challengerRouting.routerVariant || ''),
-    plannerPromptVariant: normalize(primaryRouting.plannerPromptVariant || '') !== normalize(challengerRouting.plannerPromptVariant || ''),
-    reviewerPromptVariant: normalize(primaryRouting.reviewerPromptVariant || '') !== normalize(challengerRouting.reviewerPromptVariant || ''),
+    routerVariant: variantDiffers(primaryRouting.routerVariant, challengerRouting.routerVariant),
+    plannerPromptVariant: variantDiffers(primaryRouting.plannerPromptVariant, challengerRouting.plannerPromptVariant),
+    reviewerPromptVariant: variantDiffers(primaryRouting.reviewerPromptVariant, challengerRouting.reviewerPromptVariant),
   };
 }
 

@@ -317,69 +317,72 @@ export function attachManifestRef(
 
 export function attachResourceSelections(record: EvalRecord): void {
   const routingDecision = record.routingDecision as (RoutingDecision & { resourceSelections?: RuntimeResourceSelection[] }) | undefined;
-  if (routingDecision?.resourceSelections?.length) {
-    record.resourceSelections = routingDecision.resourceSelections;
-    return;
-  }
+  // Routing decision may carry router-surface entries; manifest carries planner/reviewer prompt entries.
+  // Both sources are merged so no surface is silently omitted when both are present.
+  const routingSelections: RuntimeResourceSelection[] = routingDecision?.resourceSelections ?? [];
 
   const sessionId = process.env.WAVEMILL_SESSION;
-  if (!sessionId) {
-    return;
-  }
+  const manifestSelections: RuntimeResourceSelection[] = [];
 
-  const manifest = getManifest(sessionId);
-  if (!manifest) {
-    return;
-  }
+  if (sessionId) {
+    const manifest = getManifest(sessionId);
+    if (manifest) {
+      for (const ref of manifest.resources) {
+        const resource = getResource(ref.id, ref.version);
+        if (!resource) {
+          continue;
+        }
 
-  const selections: RuntimeResourceSelection[] = [];
-  for (const ref of manifest.resources) {
-    const resource = getResource(ref.id, ref.version);
-    if (!resource) {
-      continue;
-    }
-
-    if (resource.type === 'prompt' && resource.uri === 'tools/prompts/planning-phase.md') {
-      selections.push({
-        surface: 'planner',
-        variant: 'baseline',
-        requestedVariant: 'baseline',
-        resourceRef: ref,
-        uri: resource.uri,
-        fallbackApplied: false,
-      });
-    } else if (resource.type === 'prompt' && resource.uri === 'tools/prompts/review-phase.md') {
-      selections.push({
-        surface: 'reviewer',
-        variant: 'baseline',
-        requestedVariant: 'baseline',
-        resourceRef: ref,
-        uri: resource.uri,
-        fallbackApplied: false,
-      });
-    } else if (resource.type === 'prompt' && resource.name === 'planner-optimized') {
-      selections.push({
-        surface: 'planner',
-        variant: 'optimized',
-        requestedVariant: 'optimized',
-        resourceRef: ref,
-        uri: resource.uri,
-        fallbackApplied: false,
-      });
-    } else if (resource.type === 'prompt' && resource.name === 'reviewer-optimized') {
-      selections.push({
-        surface: 'reviewer',
-        variant: 'optimized',
-        requestedVariant: 'optimized',
-        resourceRef: ref,
-        uri: resource.uri,
-        fallbackApplied: false,
-      });
+        if (resource.type === 'prompt' && resource.uri === 'tools/prompts/planning-phase.md') {
+          manifestSelections.push({
+            surface: 'planner',
+            variant: 'baseline',
+            requestedVariant: 'baseline',
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
+        } else if (resource.type === 'prompt' && resource.uri === 'tools/prompts/review-phase.md') {
+          manifestSelections.push({
+            surface: 'reviewer',
+            variant: 'baseline',
+            requestedVariant: 'baseline',
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
+        } else if (resource.type === 'prompt' && resource.name === 'planner-optimized') {
+          manifestSelections.push({
+            surface: 'planner',
+            variant: 'optimized',
+            requestedVariant: 'optimized',
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
+        } else if (resource.type === 'prompt' && resource.name === 'reviewer-optimized') {
+          manifestSelections.push({
+            surface: 'reviewer',
+            variant: 'optimized',
+            requestedVariant: 'optimized',
+            resourceRef: ref,
+            uri: resource.uri,
+            fallbackApplied: false,
+          });
+        }
+      }
     }
   }
 
-  if (selections.length > 0) {
-    record.resourceSelections = selections;
+  // Routing selections take priority; manifest fills surfaces not already covered.
+  const coveredSurfaces = new Set(routingSelections.map((s) => s.surface));
+  const merged = [
+    ...routingSelections,
+    ...manifestSelections.filter((s) => !coveredSurfaces.has(s.surface)),
+  ];
+
+  if (merged.length > 0) {
+    record.resourceSelections = merged;
   }
 }
 

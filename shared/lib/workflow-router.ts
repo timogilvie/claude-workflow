@@ -1165,7 +1165,12 @@ function registerWorkflowDecisionResources(
 
   for (const selection of decision.resourceSelections || []) {
     if (selection.resourceRef) {
-      recordUse(sessionId, selection.surface === 'router' ? 'planning' : 'unknown', selection.resourceRef, repoDir);
+      const resourcePhase =
+        selection.surface === 'router' ? 'planning' :
+        selection.surface === 'planner' ? 'planning' :
+        selection.surface === 'reviewer' ? 'review' :
+        'coding';
+      recordUse(sessionId, resourcePhase, selection.resourceRef, repoDir);
     }
   }
 }
