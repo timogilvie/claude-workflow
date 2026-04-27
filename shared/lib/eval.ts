@@ -18,6 +18,10 @@ import {
   type PlanCritique,
   type PlanCritiqueDimension,
   type RoutingDecision,
+  type RubricEval,
+  type RubricCriteria,
+  type RubricCriterionScore,
+  type RubricDeterminativeBoundary,
 } from './eval-schema.ts';
 import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
 import { getEvalConfig } from './config.ts';
@@ -33,7 +37,7 @@ const __dirname = dirname(__filename);
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
-const SCHEMA_VERSION = '1.9.0';
+const SCHEMA_VERSION = '1.10.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 
@@ -100,6 +104,7 @@ interface JudgeResponse {
   interventionFlags: string[];
   stageScores?: Record<string, { score: number; rationale: string }>;
   planCritique?: PlanCritique;
+  rubricEval?: RubricEval;
 }
 
 /**
@@ -306,6 +311,70 @@ function parsePlanCritique(value: unknown): PlanCritique | undefined {
   return undefined;
 }
 
+const RUBRIC_DETERMINATIVE_BOUNDARIES = new Set<string>([
+  'no_interventions',
+  'cosmetic_only',
+  'functional_bug',
+  'multiple_bugs',
+  'heavy_intervention',
+]);
+
+const RUBRIC_CRITERIA_KEYS = [
+  'completeness',
+  'correctness',
+  'code_quality',
+  'intervention_impact',
+  'autonomy',
+] as const satisfies readonly (keyof RubricCriteria)[];
+
+function parseRubricCriterionScore(value: unknown): RubricCriterionScore | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as { score?: unknown; rationale?: unknown };
+  if (
+    typeof v.score !== 'number' ||
+    v.score < 0 ||
+    v.score > 1 ||
+    typeof v.rationale !== 'string' ||
+    v.rationale.trim().length === 0
+  ) {
+    return undefined;
+  }
+  return { score: v.score, rationale: v.rationale.trim() };
+}
+
+function parseRubricEval(value: unknown): RubricEval | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+
+  const raw = value as Record<string, unknown>;
+
+  if (raw.schema_version !== '1.0') return undefined;
+  if (typeof raw.rubric_version !== 'string' || raw.rubric_version.trim().length === 0) return undefined;
+
+  const rawCriteria = raw.criteria;
+  if (!rawCriteria || typeof rawCriteria !== 'object') return undefined;
+
+  const criteriaObj = rawCriteria as Record<string, unknown>;
+  const parsedCriteria: Partial<Record<keyof RubricCriteria, RubricCriterionScore>> = {};
+
+  for (const key of RUBRIC_CRITERIA_KEYS) {
+    const parsed = parseRubricCriterionScore(criteriaObj[key]);
+    if (!parsed) return undefined;
+    parsedCriteria[key] = parsed;
+  }
+
+  const determinative_boundary = typeof raw.determinative_boundary === 'string' &&
+    RUBRIC_DETERMINATIVE_BOUNDARIES.has(raw.determinative_boundary)
+    ? (raw.determinative_boundary as RubricDeterminativeBoundary)
+    : undefined;
+
+  return {
+    schema_version: '1.0',
+    rubric_version: raw.rubric_version as string,
+    criteria: parsedCriteria as RubricCriteria,
+    ...(determinative_boundary && { determinative_boundary }),
+  };
+}
+
 function parseJudgeResponse(raw: string): JudgeResponse {
   const parsed = parseJsonFromLLM(raw) as {
     score?: number;
@@ -313,6 +382,7 @@ function parseJudgeResponse(raw: string): JudgeResponse {
     interventionFlags?: string[];
     stageScores?: Record<string, { score?: number; rationale?: string }>;
     planCritique?: unknown;
+    rubricEval?: unknown;
   };
 
   if (typeof parsed.score !== 'number' || parsed.score < 0 || parsed.score > 1) {
@@ -351,6 +421,7 @@ function parseJudgeResponse(raw: string): JudgeResponse {
   }
 
   const planCritique = parsePlanCritique(parsed.planCritique);
+  const rubricEval = parseRubricEval(parsed.rubricEval);
 
   return {
     score: parsed.score,
@@ -358,6 +429,7 @@ function parseJudgeResponse(raw: string): JudgeResponse {
     interventionFlags: parsed.interventionFlags,
     ...(stageScores && { stageScores }),
     ...(planCritique && { planCritique }),
+    ...(rubricEval && { rubricEval }),
   };
 }
 
@@ -451,7 +523,7 @@ export async function evaluateTask(
   const response = await callFn(prompt, model);
 
   // Parse response
-  const { score, rationale, interventionFlags, stageScores, planCritique } = parseJudgeResponse(response.text);
+  const { score, rationale, interventionFlags, stageScores, planCritique, rubricEval } = parseJudgeResponse(response.text);
   const band = getScoreBand(score);
 
   const tokenUsage = response.usage || undefined;
@@ -486,6 +558,7 @@ export async function evaluateTask(
     ...(outcomes && { outcomes }),
     ...(routingDecision && { routingDecision }),
     ...(promptArtifacts.length > 0 && { promptArtifacts }),
+    ...(rubricEval && { rubricEval }),
     metadata: {
       ...metadata,
       interventionFlags,
