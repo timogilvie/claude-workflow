@@ -159,7 +159,14 @@ function loadPersonaPromptTemplate(
     operatingMode,
   });
 
-  const template = promptResource.content!;
+  if (!promptResource.content) {
+    throw new Error(
+      `Failed to load prompt template for reviewer: ${persona}. ` +
+      `Please ensure the prompt file exists for the ${persona} reviewer.`
+    );
+  }
+
+  const template = promptResource.content;
   _promptTemplateCache.set(promptPath, template);
   return template;
 }

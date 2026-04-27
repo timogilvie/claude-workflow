@@ -106,7 +106,7 @@ export function parsePrMetadata(body: string): ParseResult {
         continue;
       }
 
-      metadata[field as 'task' | 'stack'] = rawValue;
+      metadata[field as 'task' | 'stack'] = rawValue.trim();
       continue;
     }
 
