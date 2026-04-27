@@ -8,7 +8,7 @@
  * @module review-engine
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import {
   type ReviewContext,
   type DesignContext,
@@ -158,17 +158,6 @@ function loadPersonaPromptTemplate(
     persona,
     operatingMode,
   });
-
-  if (!existsSync(promptPath)) {
-    throw new Error(
-      `Review prompt template not found for persona "${persona}" at: ${promptPath}\n` +
-      `  This is likely a repository installation issue.\n` +
-      `  Troubleshooting:\n` +
-      `    - Verify the tools/prompts/ directory exists\n` +
-      `    - Check that review-${persona}.md is present in that directory\n` +
-      `    - If running from a symlinked install, verify symlinks are correct`
-    );
-  }
 
   const template = promptResource.content!;
   _promptTemplateCache.set(promptPath, template);
