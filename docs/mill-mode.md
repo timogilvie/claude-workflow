@@ -78,6 +78,32 @@ The current implementation is scaffolded and returns a stub ready result, which 
 
 Use mill mode when your backlog has many independent tasks and your team is comfortable reviewing multiple agent-generated PRs in parallel.
 
+## Branch Topology (Integration Mode)
+
+Integration mode is opt-in through `.wavemill-config.json` with `integration.enabled: true`. The default is `false`, so existing repositories keep the current direct-to-`main` workflow until you enable the new branch policy.
+
+Recommended branch flow:
+
+- `task/*` branches merge into `auto/integration`
+- `auto/integration` is validated as the shared staging branch
+- `auto/integration` promotes into `main`
+
+Minimal config:
+
+```json
+{
+  "integration": {
+    "enabled": true,
+    "integrationBranch": "auto/integration",
+    "promotionBranch": "main",
+    "mergeMethod": "squash",
+    "highRiskPolicy": "manual"
+  }
+}
+```
+
+For the broader controller design, see the [Autonomous Integration Merge Controller Plan](https://linear.app/hokusai/document/autonomous-integration-merge-controller-plan-79e27e27d690).
+
 ## Project Context Integration
 
 Mill mode automatically maintains a `.wavemill/project-context.md` file that helps agents learn from previous work.
