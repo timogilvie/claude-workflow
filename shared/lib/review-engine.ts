@@ -9,9 +9,6 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
 import {
   type ReviewContext,
   type DesignContext,
@@ -20,9 +17,7 @@ import { callClaude, parseJsonFromLLM, ensureClaudeAvailable } from './llm-cli.t
 import { loadWavemillConfig } from './config.ts';
 import type { ReviewProgressReporter } from './review-progress.ts';
 import type { OperatingMode } from './operating-mode.ts';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { loadPromptResourceSync, resolveRuntimeResource } from './resource-retrieval.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Module-level cache
@@ -138,18 +133,25 @@ function loadConfig(repoDir: string): Config {
  * @returns Prompt template string
  */
 function getPersonaPromptPath(persona: ReviewerPersona, operatingMode: OperatingMode = 'normal'): string {
-  if (persona === 'general' && operatingMode !== 'normal') {
-    return join(__dirname, '../../tools/prompts/review-general-scoped.md');
-  }
-
-  return join(__dirname, `../../tools/prompts/review-${persona}.md`);
+  return resolveRuntimeResource({
+    kind: 'prompt',
+    role: 'reviewer',
+    persona,
+    operatingMode,
+  }).path;
 }
 
 function loadPersonaPromptTemplate(
   persona: ReviewerPersona,
   operatingMode: OperatingMode = 'normal'
 ): string {
-  const promptPath = getPersonaPromptPath(persona, operatingMode);
+  const promptResource = loadPromptResourceSync({
+    kind: 'prompt',
+    role: 'reviewer',
+    persona,
+    operatingMode,
+  });
+  const promptPath = promptResource.path;
 
   // Return cached template if available
   if (_promptTemplateCache.has(promptPath)) {
@@ -168,20 +170,7 @@ function loadPersonaPromptTemplate(
     );
   }
 
-  let template: string;
-  try {
-    template = readFileSync(promptPath, 'utf-8');
-  } catch (error) {
-    throw new Error(
-      `Failed to read review prompt template at: ${promptPath}\n` +
-      `  Error: ${(error as Error).message}\n` +
-      `  Possible causes:\n` +
-      `    - File permissions issue\n` +
-      `    - File is corrupted\n` +
-      `  Troubleshooting: Run 'cat ${promptPath}' to verify file is readable`
-    );
-  }
-
+  const template = promptResource.content!;
   _promptTemplateCache.set(promptPath, template);
   return template;
 }

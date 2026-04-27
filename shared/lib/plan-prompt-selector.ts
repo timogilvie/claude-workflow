@@ -1,9 +1,5 @@
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
-import { loadPromptTemplate } from './prompt-utils.ts';
-
-const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools', 'prompts');
+import { loadPromptResource } from './resource-retrieval.ts';
 
 export const PROMPT_BY_MODE: Record<OperatingMode, string> = {
   normal: 'initiative-planner.md',
@@ -20,7 +16,7 @@ export interface InitiativePromptSelection {
 
 export const planPromptSelectorDeps = {
   getCurrentOperatingMode,
-  loadPromptTemplate,
+  loadPromptResource,
   log: (message: string) => console.log(message),
   warn: (message: string) => console.warn(message),
 };
@@ -44,15 +40,19 @@ export async function pickInitiativePrompt(repoDir: string): Promise<InitiativeP
   }
 
   const templateName = PROMPT_BY_MODE[mode];
-  const templatePath = join(PROMPTS_DIR, templateName);
-  const content = await planPromptSelectorDeps.loadPromptTemplate(templatePath, { dir: repoDir });
+  const prompt = await planPromptSelectorDeps.loadPromptResource({
+    kind: 'prompt',
+    role: 'initiative-planner',
+    operatingMode: mode,
+    repoDir,
+  });
 
   planPromptSelectorDeps.log(`plan-decomposer: mode=${mode} template=${templateName}`);
 
   return {
     mode,
     templateName,
-    templatePath,
-    content,
+    templatePath: prompt.path,
+    content: prompt.content!,
   };
 }
