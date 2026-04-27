@@ -1171,10 +1171,65 @@
         "additionalProperties": false
       }
     },
+    "rubricEval": {
+      "type": "object",
+      "description": "Structured rubric criteria evaluation from the judge. Captures per-criterion scores as durable training signal. Present only for records produced after schema v1.10.0.",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "1.0",
+          "description": "Schema version for this rubricEval shape."
+        },
+        "rubric_version": {
+          "type": "string",
+          "description": "Semantic rubric version; bumped when criteria or boundaries change meaningfully."
+        },
+        "criteria": {
+          "type": "object",
+          "description": "Per-criterion rubric scores.",
+          "properties": {
+            "completeness": { "$ref": "#/$defs/RubricCriterionScore" },
+            "correctness": { "$ref": "#/$defs/RubricCriterionScore" },
+            "code_quality": { "$ref": "#/$defs/RubricCriterionScore" },
+            "intervention_impact": { "$ref": "#/$defs/RubricCriterionScore" },
+            "autonomy": { "$ref": "#/$defs/RubricCriterionScore" }
+          },
+          "required": ["completeness", "correctness", "code_quality", "intervention_impact", "autonomy"],
+          "additionalProperties": false
+        },
+        "determinative_boundary": {
+          "type": "string",
+          "enum": ["no_interventions", "cosmetic_only", "functional_bug", "multiple_bugs", "heavy_intervention"],
+          "description": "Which scoring boundary was the binding constraint on the final score."
+        }
+      },
+      "required": ["schema_version", "rubric_version", "criteria"],
+      "additionalProperties": false
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
       "description": "Optional extensibility bag for additional metadata."
+    }
+  },
+  "$defs": {
+    "RubricCriterionScore": {
+      "type": "object",
+      "description": "Score and rationale for a single rubric criterion.",
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Normalized score 0.0–1.0 for this criterion."
+        },
+        "rationale": {
+          "type": "string",
+          "description": "1-sentence rationale from the judge."
+        }
+      },
+      "required": ["score", "rationale"],
+      "additionalProperties": false
     }
   }
 }

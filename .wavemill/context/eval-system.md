@@ -1,7 +1,7 @@
 # Subsystem: eval-system
 
-**Last updated:** 2026-04-18
-**Files touched:** 6
+**Last updated:** 2026-04-27
+**Files touched:** 7
 
 ## Purpose
 
@@ -35,6 +35,23 @@ It now also captures quota-driven cross-model fallback events through the same e
 - Do not introduce required fields for new training metadata.
 - Do not create a parallel fallback-event store unless aggregation consumers are intentionally being split.
 - Do not make eval persistence failures fatal to workflow execution or `llm-cli` request handling.
+
+## RubricEval (1.10.0)
+
+`EvalRecord.rubricEval` is an optional top-level field added in schema v1.10.0. It captures per-criterion scores from the eval judge as durable training signal, converting what was previously prompt-only rubric text into machine-readable data.
+
+Fields:
+
+- `schema_version`: always `"1.0"` for this shape.
+- `rubric_version`: semantic version of the rubric (currently `"1.0"`); bump when criteria labels/weights change.
+- `criteria`: five normalized 0.0–1.0 scores with 1-sentence rationales — `completeness`, `correctness`, `code_quality`, `intervention_impact`, `autonomy`.
+- `determinative_boundary`: optional; which scoring boundary from "Scoring boundaries (strict)" was the binding constraint on the final score.
+
+Compatibility rules:
+
+- `rubricEval` is optional; old records parse without it — absence means pre-1.10.0 record.
+- `rubricVersion` is NOT a separate top-level field; it lives inside `rubricEval.rubric_version`.
+- Neither Hokusai submission payloads nor `taskDescriptor` include rubric criteria — those are evaluation metadata, not routing or outcome signals.
 
 ## Fallback Event Records (1.6.0)
 
@@ -97,4 +114,5 @@ Compatibility and aggregation notes:
 
 ## Recent Changes
 
+- 2026-04-27: Added `rubricEval` to eval schema version `1.10.0` (HOK-1406); per-criterion rubric scores (completeness, correctness, code quality, intervention impact, autonomy) are now persisted as durable training signal alongside the aggregate score. Updated eval-judge.md prompt to emit rubricEval, added parsing in eval.ts, `attachRubricEval()` in eval-record-builder.ts, display in eval-formatter.ts.
 - 2026-04-18: Added `fallbackEvent` to eval schema version `1.6.0` and wired `llm-cli` quota fallback emission into `evals.jsonl`.

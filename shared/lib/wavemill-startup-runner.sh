@@ -107,6 +107,23 @@ EOF
   mv "$tmp" "$result_file"
 }
 
+reset_startup_phase_artifacts() {
+  local feature_dir="$1"
+
+  rm -f \
+    "$feature_dir/.planning-result.json" \
+    "$feature_dir/.coding-result.json" \
+    "$feature_dir/.review-result.json" \
+    "$feature_dir/.ready-result.json" \
+    "$feature_dir/.resolved-phase" \
+    "$feature_dir/.plan-approved" \
+    "$feature_dir/.coding-complete" \
+    "$feature_dir/.review-complete" \
+    "$feature_dir/.ready-complete" \
+    "$feature_dir/.workflow-aborted" \
+    "$feature_dir/plan.md"
+}
+
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
@@ -313,7 +330,7 @@ launch_task_from_plan() {
   local planner_model coder_model reviewer_model plan_depth code_depth review_mode route_max_cost_usd
   local challenge challenge_pair challenge_role challenge_model task_agent win
   local packet_content issue_json issue_description issue_context details_context labels_json
-  local feature_dir status_file coding_prompt instr_file created_window state_written created_new=false
+  local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false
 
   issue="$(echo "$task_json" | jq -r '.issue')"
   slug="$(echo "$task_json" | jq -r '.slug')"
@@ -409,6 +426,7 @@ launch_task_from_plan() {
   status_file="/tmp/${SESSION}-${issue}-status.txt"
   feature_dir="$wt_dir/features/$slug"
   mkdir -p "$feature_dir"
+  reset_startup_phase_artifacts "$feature_dir"
 
   if [[ -f "$details_file" ]]; then
     if [[ "$PLANNING_MODE" == "interactive" ]]; then
@@ -431,50 +449,50 @@ launch_task_from_plan() {
 ${issue_description:-$packet_content}
 $details_context"
 
-  if [[ "$PLANNING_MODE" == "interactive" ]]; then
-    jq -n \
-      --arg taskId "$issue" \
-      --arg title "$title" \
-      --arg description "$packet_content" \
-      --argjson labels "$labels_json" \
-      --arg featureName "$slug" \
-      --arg contextPath "features/$slug/selected-task.json" \
-      '{
-        taskId: $taskId,
-        title: $title,
-        description: $description,
-        labels: $labels,
-        workflowType: "feature",
-        featureName: $featureName,
-        contextPath: $contextPath,
-        selectedAt: (now | todate)
-      }' > "$feature_dir/selected-task.json"
+  jq -n \
+    --arg taskId "$issue" \
+    --arg title "$title" \
+    --arg description "$packet_content" \
+    --argjson labels "$labels_json" \
+    --arg featureName "$slug" \
+    --arg contextPath "features/$slug/selected-task.json" \
+    '{
+      taskId: $taskId,
+      title: $title,
+      description: $description,
+      labels: $labels,
+      workflowType: "feature",
+      featureName: $featureName,
+      contextPath: $contextPath,
+      selectedAt: (now | todate)
+    }' > "$feature_dir/selected-task.json"
 
-    jq -n \
-      --arg planner "${planner_model:-claude-sonnet-4-6}" \
-      --arg coder "${coder_model:-claude-opus-4-7}" \
-      --arg reviewer "${reviewer_model:-claude-sonnet-4-6}" \
-      --arg planDepth "$plan_depth" \
-      --arg codeDepth "$code_depth" \
-      --arg reviewMode "$review_mode" \
-      --argjson maxCostUsd "${route_max_cost_usd:-null}" \
-      '{
-        planner: $planner,
-        coder: $coder,
-        reviewer: $reviewer,
-        planDepth: $planDepth,
-        codeDepth: $codeDepth,
-        reviewMode: $reviewMode
-      } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$feature_dir/.routing-complete"
-    cp "$feature_dir/.routing-complete" "$feature_dir/.initial-route.json"
+  jq -n \
+    --arg planner "${planner_model:-claude-sonnet-4-6}" \
+    --arg coder "${coder_model:-claude-opus-4-7}" \
+    --arg reviewer "${reviewer_model:-claude-sonnet-4-6}" \
+    --arg planDepth "$plan_depth" \
+    --arg codeDepth "$code_depth" \
+    --arg reviewMode "$review_mode" \
+    --argjson maxCostUsd "${route_max_cost_usd:-null}" \
+    '{
+      planner: $planner,
+      coder: $coder,
+      reviewer: $reviewer,
+      planDepth: $planDepth,
+      codeDepth: $codeDepth,
+      reviewMode: $reviewMode
+    } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$feature_dir/.routing-complete"
+  cp "$feature_dir/.routing-complete" "$feature_dir/.initial-route.json"
 
-  fi
-  write_stage_result_local "$feature_dir" "coding" "running" "$task_agent" "${coder_model:-}" "Startup handoff launched coding" || true
+  local planner_agent
+  planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")"
+  write_stage_result_local "$feature_dir" "planning" "running" "$planner_agent" "${planner_model:-claude-sonnet-4-6}" "Startup handoff launched planning" || true
   startup_step "[4/7] Writing task artifacts...  ✓"
 
-  # Persist launched tasks as active coding work in the initial state write so
+  # Persist launched tasks as active planning work in the initial state write so
   # downstream startup checks do not depend on a second jq update succeeding.
-  local persisted_phase="coding"
+  local persisted_phase="planning"
   if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
     "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
     startup_log "✗ $issue FAILED at step [5/7]: saving workflow state"
@@ -491,18 +509,18 @@ $details_context"
   state_written=true
   startup_step "[5/7] Saving workflow state...  ✓"
 
-  coding_prompt="/tmp/${SESSION}-${issue}-coding-prompt.txt"
-  build_coding_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
-    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$task_agent" > "$coding_prompt"
-  if ! agent_launch_interactive "$SESSION" "$win" "$coding_prompt" "$task_agent" "${coder_model:-}"; then
+  planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
+  build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
+    "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$planning_prompt"
+  if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
     [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-    startup_log "✗ $issue FAILED at step [6/7]: launching coding agent"
+    startup_log "✗ $issue FAILED at step [6/7]: launching planning agent"
     return 1
   fi
 
   # Re-persist the launched task after the pane handoff succeeds so the final
-  # workflow record reflects a fully launched coding session.
+  # workflow record reflects a fully launched planning session.
   if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
     "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
     [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true

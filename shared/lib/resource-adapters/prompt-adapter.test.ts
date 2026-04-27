@@ -17,10 +17,17 @@ afterEach(async () => {
 });
 
 describe('prompt-adapter', () => {
-  it('registers prompt templates with extracted names', () => {
-    const ref = registerPromptTemplate('tools/prompts/issue-writer.md', 'hello', tempDir);
+  it('registers prompt templates with extracted names and merged metadata', () => {
+    const ref = registerPromptTemplate('tools/prompts/issue-writer.md', 'hello', tempDir, {
+      metadata: {
+        resourceClass: 'prompt',
+        role: 'issue-writer',
+      },
+    });
     assert.ok(ref);
     const resources = listResources({ type: 'prompt' }, tempDir);
     assert.equal(resources[0].name, 'issue-writer');
+    assert.equal(resources[0].metadata?.resourceClass, 'prompt');
+    assert.equal(resources[0].metadata?.role, 'issue-writer');
   });
 });

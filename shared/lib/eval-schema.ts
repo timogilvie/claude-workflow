@@ -30,7 +30,10 @@
  * - **1.9.0**: Added optional `planCritique` to capture explicit planning
  *   quality dimensions from the eval judge (HOK-1391)
  * - **1.10.0**: Added optional `resourceSelections` for governed runtime
- *   prompt/router artifact attribution (HOK-1380)
+ *   prompt/router artifact attribution (HOK-1380), and `rubricEval` field
+ *   (HOK-1406) to capture per-criterion rubric scores as durable training
+ *   signal; includes rubric version for forward compatibility and
+ *   determinative boundary classification
  *
  * @module eval-schema
  */
@@ -658,6 +661,70 @@ export interface PlanCritique {
 }
 
 /**
+ * Which scoring boundary was the binding constraint on the final score.
+ *
+ * Identifies the rule from "Scoring boundaries (strict)" that capped the
+ * final score, enabling analysis of which boundary applies most often.
+ *
+ * @since 1.10.0
+ */
+export type RubricDeterminativeBoundary =
+  | 'no_interventions'
+  | 'cosmetic_only'
+  | 'functional_bug'
+  | 'multiple_bugs'
+  | 'heavy_intervention';
+
+/**
+ * Score and rationale for a single rubric criterion.
+ *
+ * @since 1.10.0
+ */
+export interface RubricCriterionScore {
+  /** Normalized score 0.0–1.0 for this criterion */
+  score: number;
+  /** 1-sentence rationale from the judge */
+  rationale: string;
+}
+
+/**
+ * Per-criterion rubric scores from the eval judge.
+ *
+ * @since 1.10.0
+ */
+export interface RubricCriteria {
+  /** Were all requirements in the task prompt addressed? */
+  completeness: RubricCriterionScore;
+  /** Does the implementation work correctly? */
+  correctness: RubricCriterionScore;
+  /** Clean, idiomatic, follows project conventions? */
+  code_quality: RubricCriterionScore;
+  /** Combined count + severity penalty (1.0 = no interventions, 0.0 = maximum) */
+  intervention_impact: RubricCriterionScore;
+  /** Holistic judgment of autonomous execution (1.0 = fully autonomous) */
+  autonomy: RubricCriterionScore;
+}
+
+/**
+ * Structured rubric criteria evaluation from the judge.
+ *
+ * Captures per-criterion scores as durable training signal and records
+ * which scoring boundary was the binding constraint on the final score.
+ *
+ * @since 1.10.0
+ */
+export interface RubricEval {
+  /** Schema version for this rubricEval shape (currently "1.0") */
+  schema_version: '1.0';
+  /** Semantic rubric version; bump when criteria/boundaries change meaningfully */
+  rubric_version: string;
+  /** Per-criterion scores */
+  criteria: RubricCriteria;
+  /** Which scoring boundary was the binding constraint on the final score */
+  determinative_boundary?: RubricDeterminativeBoundary;
+}
+
+/**
  * Routing outcome — deterministic record, not judge-scored.
  *
  * Records the routing decision and its realized outcome for offline
@@ -1075,6 +1142,17 @@ export interface EvalRecord {
    * @since 1.4.0
    */
   taskDescriptor?: TaskDescriptor;
+
+  /**
+   * Structured rubric criteria evaluation from the judge.
+   *
+   * Captures per-criterion scores (completeness, correctness, code quality,
+   * intervention impact, autonomy) as durable training signal.
+   * Also records which scoring boundary was the binding constraint.
+   *
+   * @since 1.10.0
+   */
+  rubricEval?: RubricEval;
 
   /**
    * Cross-model fallback telemetry for quota-aware training attribution.

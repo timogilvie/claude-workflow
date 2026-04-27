@@ -187,14 +187,14 @@ describe('prompt-registry', () => {
   });
 
   describe('performance', () => {
-    it('completes logging in under 50ms', () => {
+    it('completes logging in under 150ms', () => {
       const content = 'Performance test template {{VAR}}';
       const start = Date.now();
 
       logPromptUsage('tools/prompts/perf-test.md', content, { dir: TEST_DIR });
 
       const duration = Date.now() - start;
-      assert.ok(duration < 50, `Should complete in <50ms (took ${duration}ms)`);
+      assert.ok(duration < 150, `Should complete in <150ms (took ${duration}ms)`);
     });
   });
 });

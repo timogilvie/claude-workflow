@@ -16,6 +16,7 @@
 import type {
   EvalRecord,
   PlanCritique,
+  RubricEval,
   TaskContext,
   RepoContext,
   StageOutcomes,
@@ -58,6 +59,8 @@ export interface EvalRecordMetadata {
   fallbackEvent?: FallbackEventMetadata | null;
   /** Routing and execution constraints */
   constraints?: EvalConstraints | null;
+  /** Structured rubric criteria evaluation (HOK-1406) */
+  rubricEval?: RubricEval | null;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -397,6 +400,17 @@ export function attachResourceSelections(record: EvalRecord): void {
   }
 }
 
+/**
+ * Attach structured rubric criteria evaluation to the eval record (HOK-1406).
+ *
+ * No-op when rubricEval is undefined, so old records and LLM non-compliance
+ * both leave record.rubricEval unset without errors.
+ */
+export function attachRubricEval(record: EvalRecord, rubricEval?: RubricEval): void {
+  if (!rubricEval) return;
+  record.rubricEval = rubricEval;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
@@ -427,6 +441,9 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachFallbackEvent(record, metadata.fallbackEvent || null);
   attachConstraints(record, metadata.constraints || null);
   attachBudgetViolation(record);
+  if (metadata.rubricEval) {
+    attachRubricEval(record, metadata.rubricEval);
+  }
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
 
