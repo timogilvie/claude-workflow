@@ -154,12 +154,29 @@ export interface HokusaiSubmissionOutcomes {
   intervention_count: number;
 }
 
+export interface HokusaiSubmissionRubricSignals {
+  rubric_version: string;
+  criterion_count: number;
+  mean_score: number;
+  criteria_scores: {
+    completeness: number;
+    correctness: number;
+    code_quality: number;
+    intervention_impact: number;
+    autonomy: number;
+  };
+  determinative_boundary?: string;
+  rubric_provenance?: string;
+}
+
 export interface HokusaiSubmission {
+  schema_version?: string;
   run_id: string;
   task_id: string;
   constraints: { max_cost_usd: number | null };
   route_taken: HokusaiSubmissionRoutes;
   observed_outcomes: HokusaiSubmissionOutcomes;
+  rubric_signals?: HokusaiSubmissionRubricSignals;
 }
 
 // ============================================================================
@@ -481,6 +498,33 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function extractRubricSignals(record: EvalRecord): HokusaiSubmissionRubricSignals | undefined {
+  const rubric = record.taskDescriptor?.rubric;
+
+  if (!rubric?.has_rubric) {
+    return undefined;
+  }
+
+  return {
+    rubric_version: record.rubricEval?.rubric_version ?? 'unknown',
+    criterion_count: rubric.criterion_count,
+    mean_score: rubric.mean_score,
+    criteria_scores: {
+      completeness: rubric.criteria_scores.completeness,
+      correctness: rubric.criteria_scores.correctness,
+      code_quality: rubric.criteria_scores.code_quality,
+      intervention_impact: rubric.criteria_scores.intervention_impact,
+      autonomy: rubric.criteria_scores.autonomy,
+    },
+    ...(rubric.determinative_boundary && {
+      determinative_boundary: rubric.determinative_boundary,
+    }),
+    ...(record.rubric_provenance && {
+      rubric_provenance: record.rubric_provenance,
+    }),
+  };
+}
+
 /**
  * Converts an eval result into the Hokusai training/submission schema.
  *
@@ -508,7 +552,10 @@ export function toHokusaiSubmission(
     return null;
   }
 
+  const rubricSignals = extractRubricSignals(record);
+
   return {
+    schema_version: rubricSignals ? '1.1' : '1.0',
     run_id: record.id,
     task_id: record.issueId,
     constraints: {
@@ -524,7 +571,16 @@ export function toHokusaiSubmission(
       actual_time_seconds: record.timeSeconds,
       intervention_count: record.interventionCount ?? 0,
     },
+    ...(rubricSignals && { rubric_signals: rubricSignals }),
   };
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isBoundedFiniteNumber(value: unknown): value is number {
+  return isNonNegativeFiniteNumber(value) && value <= 1;
 }
 
 /**
@@ -534,6 +590,14 @@ export function validateHokusaiSubmission(
   submission: HokusaiSubmission,
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
+
+  if (
+    submission.schema_version !== undefined
+    && submission.schema_version !== '1.0'
+    && submission.schema_version !== '1.1'
+  ) {
+    errors.push('schema_version must be "1.0" or "1.1"');
+  }
 
   if (!isNonEmptyString(submission.run_id)) {
     errors.push('run_id must be a non-empty string');
@@ -602,6 +666,37 @@ export function validateHokusaiSubmission(
     )
   ) {
     errors.push('constraints.max_cost_usd must be null or a non-negative number');
+  }
+
+  if (submission.rubric_signals) {
+    const rubric = submission.rubric_signals;
+
+    if (!isNonEmptyString(rubric.rubric_version)) {
+      errors.push('rubric_signals.rubric_version must be a non-empty string');
+    }
+
+    if (!isNonNegativeFiniteNumber(rubric.criterion_count)) {
+      errors.push('rubric_signals.criterion_count must be a non-negative number');
+    }
+
+    if (!isNonNegativeFiniteNumber(rubric.mean_score)) {
+      errors.push('rubric_signals.mean_score must be a non-negative number');
+    }
+
+    const criteriaScores = rubric.criteria_scores;
+    const criteriaScoreKeys = [
+      'completeness',
+      'correctness',
+      'code_quality',
+      'intervention_impact',
+      'autonomy',
+    ] as const;
+
+    for (const key of criteriaScoreKeys) {
+      if (!isBoundedFiniteNumber(criteriaScores?.[key])) {
+        errors.push(`rubric_signals.criteria_scores.${key} must be a number between 0 and 1`);
+      }
+    }
   }
 
   return {
