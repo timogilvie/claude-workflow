@@ -13,7 +13,7 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 
 ## Registry
 
-- `shared/lib/agent-adapters.sh`: `agent_launch_autonomous()` and `agent_launch_interactive()` define how mill mode launches agents in autonomous vs phase-launch flows. Codex launchers should use `codex exec ... --dangerously-bypass-approvals-and-sandbox - < prompt_file`, while Claude keeps its interactive CLI path. `build_planning_prompt` and `build_review_prompt` now call `tools/resolve-runtime-resource.ts` before loading prompt content; `build_coding_prompt` still reads `tools/prompts/coding-phase.md` directly.
+- `shared/lib/agent-adapters.sh`: `agent_launch_autonomous()` and `agent_launch_interactive()` define how mill mode launches agents in autonomous vs phase-launch flows. Codex launchers should use `codex exec ... --dangerously-bypass-approvals-and-sandbox - < prompt_file`, while Claude keeps its interactive CLI path. Active phase prompts are `build_planning_prompt`, `build_coding_prompt`, and `build_review_prompt`; `build_planning_prompt` and `build_review_prompt` call `tools/resolve-runtime-resource.ts` before loading prompt content while `build_coding_prompt` still reads `tools/prompts/coding-phase.md` directly. `build_autonomous_prompt` has been removed; `build_routing_prompt` and `build_interactive_prompt` remain legacy test-only render paths.
 - `tools/prompts/planning-phase.md`: Planning phase instructions (loaded by `build_planning_prompt`). GEPA-optimizable.
 - `tools/prompts/coding-phase.md`: Coding phase instructions (loaded by `build_coding_prompt`). GEPA-optimizable.
 - `tools/prompts/review-phase.md`: Review phase instructions (loaded by `build_review_prompt`). GEPA-optimizable.
@@ -29,6 +29,9 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 - `commands/workflow.md`: Phase 4 defines the interactive `/workflow` self-review loop.
 - `commands/bugfix.md`: Phase 5 defines the bugfix self-review loop.
 - `commands/implement-plan.md`: does not define self-review; that behavior is owned by `/workflow`.
+- `shared/lib/wavemill-startup-runner.sh`: active startup launch path used by `wavemill-mill.sh` to enter planning.
+- `shared/lib/wavemill-orchestrator.sh`: deprecated compatibility wrapper that delegates to `wavemill-startup-runner.sh`.
+- `codex/prompts/*.md` plus `codex/src/commands/workflow.js`: intentional Codex-native parallel workflow; these prompts are not built through `shared/lib/agent-adapters.sh`.
 
 ## Typed Lookup Status
 
