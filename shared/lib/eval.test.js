@@ -161,6 +161,119 @@ describe('evaluateTask', () => {
     assert.equal(result.metadata.stageScores.plan.score, 0.84);
   });
 
+  it('stores populated stageScores and schema-valid rubricEval from the judge', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.7,
+      rationale:
+        'The task landed but a human-fixed functional issue capped the score at 0.7.',
+      interventionFlags: [
+        'review_comment:found schema compatibility issue',
+        'post_pr_commit:fixed stage output wording',
+      ],
+      stageScores: {
+        expansion: {
+          score: 0.9,
+          rationale: 'Requirement coverage and ambiguity resolution were strong.',
+        },
+        plan: {
+          score: 0.82,
+          rationale: 'Invariant coverage was solid, but validation planning missed one compatibility risk.',
+        },
+        implementation: {
+          score: 0.68,
+          rationale: 'Requirement completeness was good, but correctness suffered from the human-fixed issue.',
+        },
+        review: {
+          score: 0.8,
+          rationale: 'Issue detection eventually worked, though self-review missed the bug initially.',
+        },
+      },
+      rubricEval: {
+        schema_version: '1.0',
+        rubric_version: '1.0',
+        criteria: {
+          completeness: {
+            score: 0.9,
+            rationale: 'The requested behavior was mostly implemented.',
+          },
+          correctness: {
+            score: 0.68,
+            rationale: 'A human-found compatibility bug reduced correctness.',
+          },
+          code_quality: {
+            score: 0.84,
+            rationale: 'The resulting changes fit the project structure well.',
+          },
+          intervention_impact: {
+            score: 0.66,
+            rationale: 'Human review and a fix meaningfully reduced autonomous execution quality.',
+          },
+          autonomy: {
+            score: 0.7,
+            rationale: 'The workflow was mostly autonomous but not bug-free.',
+          },
+        },
+        determinative_boundary: 'functional_bug',
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Rewrite the eval judge prompt',
+        prReviewOutput: 'One compatibility issue found and fixed',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.deepEqual(result.metadata.stageScores, {
+      expansion: {
+        score: 0.9,
+        rationale: 'Requirement coverage and ambiguity resolution were strong.',
+      },
+      plan: {
+        score: 0.82,
+        rationale: 'Invariant coverage was solid, but validation planning missed one compatibility risk.',
+      },
+      implementation: {
+        score: 0.68,
+        rationale: 'Requirement completeness was good, but correctness suffered from the human-fixed issue.',
+      },
+      review: {
+        score: 0.8,
+        rationale: 'Issue detection eventually worked, though self-review missed the bug initially.',
+      },
+    });
+
+    assert.deepEqual(result.rubricEval, {
+      schema_version: '1.0',
+      rubric_version: '1.0',
+      criteria: {
+        completeness: {
+          score: 0.9,
+          rationale: 'The requested behavior was mostly implemented.',
+        },
+        correctness: {
+          score: 0.68,
+          rationale: 'A human-found compatibility bug reduced correctness.',
+        },
+        code_quality: {
+          score: 0.84,
+          rationale: 'The resulting changes fit the project structure well.',
+        },
+        intervention_impact: {
+          score: 0.66,
+          rationale: 'Human review and a fix meaningfully reduced autonomous execution quality.',
+        },
+        autonomy: {
+          score: 0.7,
+          rationale: 'The workflow was mostly autonomous but not bug-free.',
+        },
+      },
+      determinative_boundary: 'functional_bug',
+    });
+  });
+
   it('omits planCritique when the judge does not return it', async () => {
     const validResponse = JSON.stringify({
       score: 0.8,
