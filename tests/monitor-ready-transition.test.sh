@@ -41,6 +41,7 @@ extract_function "$MILL_SCRIPT" "ready_stage_allows_merge" >> "$MONITOR_FUNC_FIL
 extract_function "$MILL_SCRIPT" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_remediation_launch_head" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_conflict_attention_head" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then
@@ -119,6 +120,18 @@ run_monitor_case() {
         CURRENT_PHASE="ready"
         READY_STATUS="completed"
         touch "$READY_DIR/.conflict-detected"
+        ;;
+      ready_conflict_attention_already_reported)
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        touch "$READY_DIR/.conflict-detected" "$READY_DIR/.conflict-attention-reported"
+        printf "%s\n" "current-head" > "$READY_DIR/.conflict-attention-head"
+        ;;
+      ready_conflict_attention_different_head)
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        touch "$READY_DIR/.conflict-detected" "$READY_DIR/.conflict-attention-reported"
+        printf "%s\n" "old-head" > "$READY_DIR/.conflict-attention-head"
         ;;
       ready_pending_repolls_ci)
         CURRENT_PHASE="ready"
@@ -348,6 +361,15 @@ ready_conflict_output="$(run_monitor_case ready_conflict_rerun)"
 check_contains "ready conflict rerun keeps task in ready" "$ready_conflict_output" "phase=ready"
 check_contains "ready conflict rerun launches ready checks again" "$ready_conflict_output" "ready_launches=1"
 check_contains "ready conflict rerun leaves attention on task" "$ready_conflict_output" "attention=needs-user"
+
+ready_conflict_reported_output="$(run_monitor_case ready_conflict_attention_already_reported)"
+check_contains "reported conflict keeps task in ready" "$ready_conflict_reported_output" "phase=ready"
+check_contains "reported conflict does not relaunch ready" "$ready_conflict_reported_output" "ready_launches=0"
+check_contains "reported conflict leaves attention on task" "$ready_conflict_reported_output" "attention=needs-user"
+
+ready_conflict_different_head_output="$(run_monitor_case ready_conflict_attention_different_head)"
+check_contains "different-head conflict relaunches ready" "$ready_conflict_different_head_output" "ready_launches=1"
+check_contains "different-head conflict leaves attention on task" "$ready_conflict_different_head_output" "attention=needs-user"
 
 ready_pending_repolls_ci_output="$(run_monitor_case ready_pending_repolls_ci)"
 check_contains "pending ready re-polls CI" "$ready_pending_repolls_ci_output" "ready_launches=1"

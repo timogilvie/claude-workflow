@@ -45,7 +45,10 @@ extract_function() {
 }
 
 LAUNCH_FUNC_FILE="$TEST_TMP/launch_ready_phase.sh"
-extract_function "$MILL_SCRIPT" "launch_ready_phase" > "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_conflict_attention_head" > "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "record_ready_conflict_attention" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "clear_ready_conflict_attention" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "launch_ready_phase" >> "$LAUNCH_FUNC_FILE"
 
 if [[ ! -s "$LAUNCH_FUNC_FILE" ]]; then
   echo "Could not extract launch_ready_phase()"
@@ -69,6 +72,17 @@ run_launch_case() {
     STATE_DIR="$CASE_DIR/feature/ready"
     WT_DIR="$CASE_DIR/worktree"
     mkdir -p "$STATE_DIR" "$WT_DIR"
+
+    case "$TEST_CASE" in
+      conflict_persists_after_remediation)
+        touch "$STATE_DIR/.conflict-detected"
+        ;;
+      pass_after_remediation)
+        touch "$STATE_DIR/.conflict-detected" "$STATE_DIR/.conflict-attention-reported"
+        printf "%s\n" "abc123" > "$STATE_DIR/.conflict-attention-head"
+        printf "%s\n" "stale attention" > "$STATE_DIR/.needs-attention"
+        ;;
+    esac
 
     WRITE_STAGE_CALLS=""
     READY_ATTENTION_CALLS=""
@@ -180,6 +194,11 @@ run_launch_case() {
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 1
           ;;
+        conflict_persists_after_remediation)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"merge-conflict\",\"status\":\"fail\",\"message\":\"PR has conflicts\",\"details\":{}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"Merge conflicts detected\",\"mergeConflict\":{\"status\":\"CONFLICTED\",\"message\":\"PR #304 has conflicts with main\",\"mergeable\":\"CONFLICTING\",\"mergeStateStatus\":\"DIRTY\",\"attempts\":1}}"
+          printf "%s\n" "⚠️  MERGE CONFLICT: PR #304 has conflicts with main" >&2
+          return 1
+          ;;
         non_ci_failure)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"release-requirements\",\"status\":\"fail\",\"message\":\"Manual release steps missing\",\"details\":{}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 1
@@ -201,9 +220,17 @@ run_launch_case() {
     [[ -n "$READY_ATTENTION_CALLS" ]] && attention_count=$(printf "%s" "$READY_ATTENTION_CALLS" | grep -c .)
     error_count=0
     [[ -n "$LOG_ERROR_OUTPUT" ]] && error_count=$(printf "%s" "$LOG_ERROR_OUTPUT" | grep -c .)
+    conflict_attention_head=""
+    [[ -f "$STATE_DIR/.conflict-attention-head" ]] && conflict_attention_head=$(cat "$STATE_DIR/.conflict-attention-head")
+    conflict_attention_reported="absent"
+    [[ -f "$STATE_DIR/.conflict-attention-reported" ]] && conflict_attention_reported="present"
+    conflict_detected="absent"
+    [[ -f "$STATE_DIR/.conflict-detected" ]] && conflict_detected="present"
+    needs_attention="absent"
+    [[ -f "$STATE_DIR/.needs-attention" ]] && needs_attention="present"
 
-    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\n" \
-      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT"
+    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\n" \
+      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention"
   ' 2>&1
 }
 
@@ -269,10 +296,22 @@ check_contains "inflight same head returns rc 5" "$output" "rc=5"
 check_contains "inflight same head does not relaunch agent" "$output" "launch_calls=0"
 check_contains "inflight same head does not rewrite stage" "$output" "stage_calls="
 
+output="$(run_launch_case conflict_persists_after_remediation)"
+check_contains "persistent conflict returns failure" "$output" "rc=1"
+check_contains "persistent conflict writes attention" "$output" "PR #304 still has merge conflicts after automatic remediation."
+check_contains "persistent conflict records attention head" "$output" "conflict_attention_head=abc123"
+check_contains "persistent conflict records reported marker" "$output" "conflict_attention_reported=present"
+check_contains "persistent conflict keeps detected marker" "$output" "conflict_detected=present"
+check_contains "persistent conflict logs one terse error" "$output" "Merge conflicts persist for HOK-1300 after remediation attempt"
+
 output="$(run_launch_case pass_after_remediation)"
 check_contains "pass after remediation returns success" "$output" "rc=0"
 check_contains "pass after remediation writes completed stage" "$output" "|ready|completed|"
 check_not_contains "pass after remediation clears remediation artifacts" "$output" "\"remediationAttempts\":"
+check_contains "pass after remediation clears conflict marker" "$output" "conflict_detected=absent"
+check_contains "pass after remediation clears attention head" "$output" "conflict_attention_head="
+check_contains "pass after remediation clears reported marker" "$output" "conflict_attention_reported=absent"
+check_contains "pass after remediation clears needs attention" "$output" "needs_attention=absent"
 
 output="$(run_launch_case clean_with_stderr)"
 check_contains "success stderr is not treated as error" "$output" "error_count=0"
