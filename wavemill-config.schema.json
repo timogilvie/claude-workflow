@@ -626,6 +626,29 @@
           "maximum": 1,
           "description": "Regularization weight blending stage-specific scores with overall eval score during stage-aware routing."
         },
+        "rubricAware": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["off", "shadow", "on"],
+              "default": "off"
+            },
+            "minCoverage": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.3
+            },
+            "weight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.3
+            }
+          },
+          "additionalProperties": false
+        },
         "hokusai": {
           "type": "object",
           "description": "Hokusai API configuration for ML-based workflow routing. Hokusai is only available via API.",
