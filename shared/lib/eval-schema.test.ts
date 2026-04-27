@@ -43,6 +43,112 @@ function test(name: string, fn: () => void) {
   }
 }
 
+/** Resolve a `$ref` against the loaded schema (supports `#/$defs/Name`). */
+function resolveRef(ref: string): Record<string, unknown> | null {
+  if (!ref.startsWith('#/')) return null;
+  const parts = ref.slice(2).split('/');
+  let node: unknown = schema;
+  for (const part of parts) {
+    if (node && typeof node === 'object' && part in (node as Record<string, unknown>)) {
+      node = (node as Record<string, unknown>)[part];
+    } else {
+      return null;
+    }
+  }
+  return (node && typeof node === 'object') ? (node as Record<string, unknown>) : null;
+}
+
+/** Validate a value against a schema node; pushes errors with dotted paths. */
+function validateNode(
+  value: unknown,
+  schemaNode: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if (typeof schemaNode.$ref === 'string') {
+    const resolved = resolveRef(schemaNode.$ref);
+    if (resolved) {
+      validateNode(value, resolved, path, errors);
+      return;
+    }
+  }
+
+  const expectedType = schemaNode.type as string | undefined;
+  if (expectedType === 'string' && typeof value !== 'string') {
+    errors.push(`${path}: expected string, got ${typeof value}`);
+  } else if (expectedType === 'number' && typeof value !== 'number') {
+    errors.push(`${path}: expected number, got ${typeof value}`);
+  } else if (expectedType === 'integer') {
+    if (typeof value !== 'number' || !Number.isInteger(value)) {
+      errors.push(`${path}: expected integer, got ${value}`);
+    }
+  } else if (expectedType === 'boolean' && typeof value !== 'boolean') {
+    errors.push(`${path}: expected boolean, got ${typeof value}`);
+  } else if (expectedType === 'array' && !Array.isArray(value)) {
+    errors.push(`${path}: expected array, got ${typeof value}`);
+  } else if (
+    expectedType === 'object' &&
+    (typeof value !== 'object' || value === null || Array.isArray(value))
+  ) {
+    errors.push(`${path}: expected object, got ${typeof value}`);
+  }
+
+  if (typeof value === 'number') {
+    if (schemaNode.minimum !== undefined && value < (schemaNode.minimum as number)) {
+      errors.push(`${path}: ${value} < minimum ${schemaNode.minimum}`);
+    }
+    if (schemaNode.maximum !== undefined && value > (schemaNode.maximum as number)) {
+      errors.push(`${path}: ${value} > maximum ${schemaNode.maximum}`);
+    }
+  }
+
+  if (schemaNode.const !== undefined && value !== schemaNode.const) {
+    errors.push(`${path}: "${value}" does not match const "${schemaNode.const}"`);
+  }
+
+  if (schemaNode.enum && !(schemaNode.enum as unknown[]).includes(value)) {
+    errors.push(
+      `${path}: "${value}" not in enum [${(schemaNode.enum as string[]).join(', ')}]`,
+    );
+  }
+
+  if (schemaNode.pattern && typeof value === 'string') {
+    if (!new RegExp(schemaNode.pattern as string).test(value)) {
+      errors.push(`${path}: "${value}" does not match pattern ${schemaNode.pattern}`);
+    }
+  }
+
+  if (
+    expectedType === 'object' &&
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  ) {
+    const obj = value as Record<string, unknown>;
+    const nestedProps = (schemaNode.properties || {}) as Record<string, Record<string, unknown>>;
+    const required = (schemaNode.required as string[] | undefined) || [];
+
+    for (const field of required) {
+      if (!(field in obj)) {
+        errors.push(`${path}.${field}: missing required field`);
+      }
+    }
+
+    if (schemaNode.additionalProperties === false) {
+      for (const key of Object.keys(obj)) {
+        if (!(key in nestedProps)) {
+          errors.push(`${path}.${key}: unexpected field`);
+        }
+      }
+    }
+
+    for (const [key, prop] of Object.entries(nestedProps)) {
+      if (!(key in obj)) continue;
+      validateNode(obj[key], prop, `${path}.${key}`, errors);
+    }
+  }
+}
+
 /** Minimal JSON Schema validator for the subset of features we use. */
 function validateAgainstSchema(
   record: Record<string, unknown>,
@@ -70,49 +176,7 @@ function validateAgainstSchema(
     schema.properties as Record<string, Record<string, unknown>>,
   )) {
     if (!(key in record)) continue;
-    const value = record[key];
-
-    // Type check
-    const expectedType = prop.type as string;
-    if (expectedType === 'string' && typeof value !== 'string') {
-      errors.push(`${key}: expected string, got ${typeof value}`);
-    } else if (expectedType === 'number' && typeof value !== 'number') {
-      errors.push(`${key}: expected number, got ${typeof value}`);
-    } else if (expectedType === 'integer') {
-      if (typeof value !== 'number' || !Number.isInteger(value)) {
-        errors.push(`${key}: expected integer, got ${value}`);
-      }
-    } else if (expectedType === 'boolean' && typeof value !== 'boolean') {
-      errors.push(`${key}: expected boolean, got ${typeof value}`);
-    } else if (expectedType === 'array' && !Array.isArray(value)) {
-      errors.push(`${key}: expected array, got ${typeof value}`);
-    } else if (expectedType === 'object' && (typeof value !== 'object' || value === null || Array.isArray(value))) {
-      errors.push(`${key}: expected object, got ${typeof value}`);
-    }
-
-    // Numeric range checks
-    if (typeof value === 'number') {
-      if (prop.minimum !== undefined && value < (prop.minimum as number)) {
-        errors.push(`${key}: ${value} < minimum ${prop.minimum}`);
-      }
-      if (prop.maximum !== undefined && value > (prop.maximum as number)) {
-        errors.push(`${key}: ${value} > maximum ${prop.maximum}`);
-      }
-    }
-
-    // Enum check
-    if (prop.enum && !(prop.enum as unknown[]).includes(value)) {
-      errors.push(
-        `${key}: "${value}" not in enum [${(prop.enum as string[]).join(', ')}]`,
-      );
-    }
-
-    // Pattern check
-    if (prop.pattern && typeof value === 'string') {
-      if (!new RegExp(prop.pattern as string).test(value)) {
-        errors.push(`${key}: "${value}" does not match pattern ${prop.pattern}`);
-      }
-    }
+    validateNode(record[key], prop, key, errors);
   }
 
   return { valid: errors.length === 0, errors };
