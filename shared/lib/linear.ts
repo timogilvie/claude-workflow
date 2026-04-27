@@ -626,6 +626,18 @@ export async function getIssue(identifier: string): Promise<LinearIssue> {
         createdAt
       }
     }
+    relations {
+      nodes {
+        type
+        relatedIssue { id identifier completedAt canceledAt }
+      }
+    }
+    inverseRelations {
+      nodes {
+        type
+        issue { id identifier completedAt canceledAt }
+      }
+    }
     url
     completedAt
     canceledAt
