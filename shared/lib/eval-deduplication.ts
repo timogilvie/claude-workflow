@@ -13,6 +13,28 @@ function getRecordKey(record: EvalRecord): string {
   return `${record.issueId || 'no-issue'}|${record.prUrl || 'no-pr'}`;
 }
 
+function rubricProvenancePriority(record: EvalRecord): number {
+  switch (record.rubric_provenance) {
+    case 'judge':
+      return 3;
+    case 'backfill_derived':
+      return 2;
+    case 'legacy_absent':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function compareDedupCandidates(a: EvalRecord, b: EvalRecord): number {
+  const provenanceDelta = rubricProvenancePriority(b) - rubricProvenancePriority(a);
+  if (provenanceDelta !== 0) {
+    return provenanceDelta;
+  }
+
+  return a.timestamp.localeCompare(b.timestamp);
+}
+
 export function deduplicateEvalRecords(records: EvalRecord[]): DeduplicationResult {
   const groups = new Map<string, EvalRecord[]>();
 
@@ -28,7 +50,7 @@ export function deduplicateEvalRecords(records: EvalRecord[]): DeduplicationResu
   const deduplicatedRecords: EvalRecord[] = [];
 
   for (const [key, group] of groups) {
-    const sortedGroup = [...group].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    const sortedGroup = [...group].sort(compareDedupCandidates);
     if (sortedGroup.length > 1) {
       duplicateGroups.set(key, sortedGroup);
     }
@@ -51,8 +73,10 @@ export function formatDuplicateReport(result: DeduplicationResult): string {
     const [issueId, prUrlRaw] = key.split('|');
     const prUrl = prUrlRaw === 'no-pr' ? '(no PR)' : prUrlRaw;
     const prNumber = prUrl.match(/\/pull\/(\d+)$/)?.[1] || prUrl;
-    const earliest = records[0].timestamp;
-    lines.push(`  ${issueId} + ${prNumber}: ${records.length} records → keeping earliest (${earliest})`);
+    const kept = records[0];
+    lines.push(
+      `  ${issueId} + ${prNumber}: ${records.length} records → keeping ${kept.id || 'preferred record'} (${kept.timestamp})`,
+    );
   }
 
   return lines.join('\n');

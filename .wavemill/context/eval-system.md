@@ -1,13 +1,15 @@
 # Subsystem: eval-system
 
 **Last updated:** 2026-04-27
-**Files touched:** 7
+**Files touched:** 10
 
 ## Purpose
 
 The eval system persists autonomous-workflow outcomes into `.wavemill/evals/evals.jsonl` using an additive schema so downstream readers can aggregate training signals without migrations.
 
 It now also captures quota-driven cross-model fallback events through the same eval pipeline, which keeps prompt attribution, aggregation, and router-training consumers on one record stream.
+
+Historical and aggregated eval datasets now also carry explicit rubric provenance so training consumers can distinguish judge-emitted rubric metadata from legacy records that were later marked as missing rubric.
 
 ## Key Files
 
@@ -17,8 +19,10 @@ It now also captures quota-driven cross-model fallback events through the same e
 | `shared/lib/eval-schema.json` | JSON Schema mirror for validator-style tests | Must stay in sync with `eval-schema.ts`. |
 | `shared/lib/eval.ts` | Builds judge-backed eval records | Owns the top-level `SCHEMA_VERSION`. |
 | `shared/lib/eval-record-builder.ts` | Pure metadata attachment helpers | Null/undefined metadata must remain a no-op. |
+| `shared/lib/eval-backfill.ts` | Historical rubric provenance backfill | Must parse strictly and rewrite atomically. |
 | `shared/lib/eval-persistence.ts` | Appends and reads `evals.jsonl` | Persistence failures should never corrupt prior records. |
 | `shared/lib/llm-cli.ts` | Emits fallback eval records on quota-triggered model swaps | Uses best-effort logging only after fallback events. |
+| `tools/backfill-rubric-eval-records.ts` | CLI wrapper for rubric provenance backfill | Safe to re-run; supports `--dry-run`. |
 
 ## Architectural Constraints
 
@@ -52,6 +56,22 @@ Compatibility rules:
 - `rubricEval` is optional; old records parse without it — absence means pre-1.10.0 record.
 - `rubricVersion` is NOT a separate top-level field; it lives inside `rubricEval.rubric_version`.
 - Neither Hokusai submission payloads nor `taskDescriptor` include rubric criteria — those are evaluation metadata, not routing or outcome signals.
+
+## Rubric Provenance (1.12.0)
+
+`EvalRecord.rubric_provenance` is an optional top-level field added in schema v1.12.0. It makes mixed historical datasets explicit instead of overloading `rubricEval` absence to mean both "legacy row" and "judge omitted rubric".
+
+Values:
+
+- `judge`: `rubricEval` was emitted directly by the eval judge at write time.
+- `backfill_derived`: a later backfill derived rubric semantics from historical data.
+- `legacy_absent`: a historical row was explicitly marked as lacking rubric metadata.
+
+Aggregation and backfill rules:
+
+- Dedup prefers richer provenance: `judge` > `backfill_derived` > `legacy_absent` > unset.
+- The backfill tool marks only previously unmarked rows and preserves unknown fields verbatim.
+- Trainers should treat missing `rubric_provenance` as pre-backfill legacy data if they read old snapshots directly.
 
 ## Fallback Event Records (1.6.0)
 
@@ -97,6 +117,7 @@ Compatibility and aggregation notes:
 
 - Validate both TypeScript and JSON Schema surfaces when adding eval fields.
 - Keep builder tests focused on null-safe attachment behavior.
+- For historical backfills, fail fast on malformed JSONL and write through a temp file plus rename.
 - For `llm-cli` fallback telemetry, use a temp repo and assert directly on `.wavemill/evals/evals.jsonl`.
 - Cover success, all-exhausted, non-quota-abort, and opt-out paths for fallback emission.
 
@@ -114,5 +135,6 @@ Compatibility and aggregation notes:
 
 ## Recent Changes
 
+- 2026-04-27: Added `rubric_provenance` to eval schema version `1.12.0` and `backfill-rubric-eval-records.ts` (HOK-1408); aggregated and historical datasets now preserve rubric provenance explicitly, and dedup prefers rubric-richer duplicates.
 - 2026-04-27: Added `rubricEval` to eval schema version `1.10.0` (HOK-1406); per-criterion rubric scores (completeness, correctness, code quality, intervention impact, autonomy) are now persisted as durable training signal alongside the aggregate score. Updated eval-judge.md prompt to emit rubricEval, added parsing in eval.ts, `attachRubricEval()` in eval-record-builder.ts, display in eval-formatter.ts.
 - 2026-04-18: Added `fallbackEvent` to eval schema version `1.6.0` and wired `llm-cli` quota fallback emission into `evals.jsonl`.

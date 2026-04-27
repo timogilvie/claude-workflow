@@ -31,6 +31,8 @@ for f in \
   constraint-storage.test.ts \
   difficulty-analyzer.test.ts \
   eval-export.test.ts \
+  eval-aggregator.test.ts \
+  eval-backfill.test.ts \
   eval-persistence.test.ts \
   eval-schema.test.ts \
   hokusai-adapter.test.ts \

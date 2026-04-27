@@ -469,6 +469,7 @@ describe('eval-record-builder', () => {
     it('sets record.rubricEval when provided', () => {
       attachRubricEval(baseRecord, validRubricEval);
       expect(baseRecord.rubricEval).toEqual(validRubricEval);
+      expect(baseRecord.rubric_provenance).toBe('judge');
     });
 
     it('enrichEvalRecord leaves rubricEval undefined when not in metadata', () => {
@@ -479,6 +480,7 @@ describe('eval-record-builder', () => {
     it('enrichEvalRecord attaches rubricEval when passed in metadata', () => {
       enrichEvalRecord(baseRecord, { rubricEval: validRubricEval });
       expect(baseRecord.rubricEval).toEqual(validRubricEval);
+      expect(baseRecord.rubric_provenance).toBe('judge');
     });
   });
 });
