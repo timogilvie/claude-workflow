@@ -20,6 +20,7 @@ import path from 'node:path';
 import { findRelevantSubsystems, type SubsystemSearchResult } from './subsystem-search.ts';
 import { errorMessage } from './error-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { resolveMemoryResource } from './resource-retrieval.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -188,45 +189,45 @@ export async function getKeyFilesReference(
   repoPath: string,
   maxLines: number = 1000
 ): Promise<string> {
-  const candidates = [
-    {
-      path: path.join(repoPath, '.wavemill', 'project-context.md'),
-      maxLines: Infinity,
-    }, // Full content
-    {
-      path: path.join(repoPath, '.wavemill', 'codebase-context.md'),
-      maxLines,
-    },
+  // Try hot memory tier first via typed retrieval (registers with registry)
+  try {
+    const hotMemory = await resolveMemoryResource({
+      class: 'memory',
+      tier: 'hot',
+      repoDir: repoPath,
+    });
+    if (hotMemory) {
+      const content = hotMemory.content;
+      const sizeKB = Buffer.byteLength(content, 'utf-8') / 1024;
+      if (sizeKB > 100) {
+        console.warn(
+          `⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (>100KB limit)`
+        );
+        console.warn(
+          '   Consider archiving old "Recent Work" entries to project-context-archive.md'
+        );
+      } else if (sizeKB > 50) {
+        console.warn(
+          `⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (approaching 100KB limit)`
+        );
+      }
+      return `Source: project-context.md\n\n${content}`;
+    }
+  } catch {
+    // Fall through to path-based candidates below
+  }
+
+  // Legacy fallbacks — codebase-context.md and CLAUDE.md (not formal memory tier)
+  const legacyCandidates = [
+    { path: path.join(repoPath, '.wavemill', 'codebase-context.md'), maxLines },
     { path: path.join(repoPath, 'CLAUDE.md'), maxLines },
   ];
 
-  for (const { path: filePath, maxLines: lineLimit } of candidates) {
+  for (const { path: filePath, maxLines: lineLimit } of legacyCandidates) {
     try {
       const content = await fs.readFile(filePath, 'utf-8');
-      const lines = content.split('\n');
-
-      // Validate size for project-context.md
-      if (filePath.includes('project-context.md')) {
-        const sizeKB = Buffer.byteLength(content, 'utf-8') / 1024;
-        if (sizeKB > 100) {
-          console.warn(
-            `⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (>100KB limit)`
-          );
-          console.warn(
-            '   Consider archiving old "Recent Work" entries to project-context-archive.md'
-          );
-          // Still proceed but warn
-        } else if (sizeKB > 50) {
-          console.warn(
-            `⚠️  project-context.md is ${sizeKB.toFixed(0)}KB (approaching 100KB limit)`
-          );
-        }
-      }
-
-      // Extract relevant sections (full content for project-context, limited for others)
-      const limitedLines =
-        lineLimit === Infinity ? lines : lines.slice(0, lineLimit);
-      return `Source: ${path.basename(filePath)}\n\n${limitedLines.join('\n')}`;
+      const lines = content.split('\n').slice(0, lineLimit);
+      return `Source: ${path.basename(filePath)}\n\n${lines.join('\n')}`;
     } catch {
       continue;
     }

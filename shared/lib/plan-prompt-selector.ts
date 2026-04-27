@@ -1,9 +1,6 @@
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
 import { loadPromptTemplate } from './prompt-utils.ts';
-
-const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools', 'prompts');
+import { resolvePromptResource } from './resource-retrieval.ts';
 
 export const PROMPT_BY_MODE: Record<OperatingMode, string> = {
   normal: 'initiative-planner.md',
@@ -43,16 +40,21 @@ export async function pickInitiativePrompt(repoDir: string): Promise<InitiativeP
     planPromptSelectorDeps.warn('plan-decomposer: operating-mode lookup failed, defaulting to normal');
   }
 
-  const templateName = PROMPT_BY_MODE[mode];
-  const templatePath = join(PROMPTS_DIR, templateName);
-  const content = await planPromptSelectorDeps.loadPromptTemplate(templatePath, { dir: repoDir });
+  const resolved = await resolvePromptResource({
+    class: 'prompt',
+    stage: 'initiative-planning',
+    role: 'planner',
+    operatingMode: mode,
+    repoDir,
+  });
 
+  const templateName = PROMPT_BY_MODE[mode];
   planPromptSelectorDeps.log(`plan-decomposer: mode=${mode} template=${templateName}`);
 
   return {
     mode,
     templateName,
-    templatePath,
-    content,
+    templatePath: resolved.path,
+    content: resolved.content,
   };
 }

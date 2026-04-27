@@ -12,6 +12,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
+import { resolvePromptPath } from './resource-retrieval.ts';
 import {
   type ReviewContext,
   type DesignContext,
@@ -138,10 +139,18 @@ function loadConfig(repoDir: string): Config {
  * @returns Prompt template string
  */
 function getPersonaPromptPath(persona: ReviewerPersona, operatingMode: OperatingMode = 'normal'): string {
+  const catalogPath = resolvePromptPath({
+    class: 'prompt',
+    stage: 'review',
+    role: 'reviewer',
+    operatingMode,
+    persona,
+  });
+  if (catalogPath) return catalogPath;
+  // Fallback for personas not yet in the catalog
   if (persona === 'general' && operatingMode !== 'normal') {
     return join(__dirname, '../../tools/prompts/review-general-scoped.md');
   }
-
   return join(__dirname, `../../tools/prompts/review-${persona}.md`);
 }
 
