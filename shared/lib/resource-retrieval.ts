@@ -284,7 +284,9 @@ export async function resolvePromptResource(
   const resourceRef = registerPromptTemplate(filePath, content, request.repoDir, contractMetadata);
 
   // Log to GEPA prompt-registry.jsonl for training attribution.
-  // logPromptUsage internally calls registerPromptTemplate which is idempotent.
+  // logPromptUsage internally calls registerPromptTemplate without contract metadata;
+  // registerResource deduplicates by content hash and returns the existing record on
+  // the second call, so the typed metadata written above is not overwritten.
   logPromptUsage(filePath, content);
 
   const metadata: Record<string, unknown> = {
