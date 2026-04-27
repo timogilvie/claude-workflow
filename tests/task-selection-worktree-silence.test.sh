@@ -57,14 +57,51 @@ extract_function() {
   ' "$source_file"
 }
 
+extract_nth_function() {
+  local source_file="$1"
+  local function_name="$2"
+  local target_count="$3"
+  awk -v name="$function_name" -v target="$target_count" '
+    function brace_delta(line, stripped, opens, closes) {
+      stripped = line
+      gsub(/"([^"\\]|\\.)*"/, "\"\"", stripped)
+      gsub(/\047([^\047\\]|\\.)*\047/, "\047\047", stripped)
+      opens = gsub(/\{/, "{", stripped)
+      closes = gsub(/\}/, "}", stripped)
+      return opens - closes
+    }
+    $0 ~ "^" name "\\(\\)[[:space:]]*\\{" {
+      count++
+      if (count == target) {
+        capture = 1
+        depth = 0
+      }
+    }
+    capture {
+      print
+      depth += brace_delta($0)
+      if (depth == 0) {
+        exit
+      }
+    }
+  ' "$source_file"
+}
+
 TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 LAUNCH_FUNC_FILE="$TEST_TMP/launch_task.sh"
 extract_function "$MILL_SCRIPT" "launch_task" > "$LAUNCH_FUNC_FILE"
+CLEANUP_FUNC_FILE="$TEST_TMP/cleanup_completed_task.sh"
+extract_nth_function "$MILL_SCRIPT" "cleanup_completed_task" 2 > "$CLEANUP_FUNC_FILE"
 
 if [[ ! -s "$LAUNCH_FUNC_FILE" ]]; then
   echo "Could not extract launch_task()"
+  exit 1
+fi
+
+if [[ ! -s "$CLEANUP_FUNC_FILE" ]]; then
+  echo "Could not extract active cleanup_completed_task()"
   exit 1
 fi
 
@@ -170,6 +207,73 @@ EOF
   ' 2>&1
 }
 
+run_cleanup_case() {
+  local case_dir="$TEST_TMP/cleanup"
+  mkdir -p "$case_dir"
+
+  CASE_DIR="$case_dir" CLEANUP_FUNC_FILE="$CLEANUP_FUNC_FILE" bash -lc '
+    set -euo pipefail
+    source "$CLEANUP_FUNC_FILE"
+
+    SESSION="task-selection-test"
+    ISSUE="HOK-1447"
+    SLUG="stray-text-in-task-selector-pane"
+    REPO_DIR="$CASE_DIR/repo"
+    WORKTREE_ROOT="$CASE_DIR/worktrees"
+    MILL_LOG_FILE="$CASE_DIR/mill.log"
+
+    mkdir -p "$REPO_DIR" "$WORKTREE_ROOT/$SLUG"
+    : > "$MILL_LOG_FILE"
+
+    declare -Ag CLEANED=()
+    LOG_OUTPUT=""
+    archive_stage_artifacts() { :; }
+    log() { LOG_OUTPUT+="$*\n"; }
+    log_warn() { LOG_OUTPUT+="warn $*\n"; }
+    remove_task_state() { :; }
+    tmux() { :; }
+
+    git() {
+      if [[ "${1:-}" == "-C" ]]; then
+        shift 2
+      fi
+      case "${1:-}" in
+        show-ref)
+          return 0
+          ;;
+        worktree)
+          case "${2:-}" in
+            remove)
+              printf "%s\n" "Removing worktree stray-text-in-task-selector-pane"
+              ;;
+            prune)
+              printf "%s\n" "Pruned worktree administrative files"
+              ;;
+          esac
+          return 0
+          ;;
+        branch)
+          if [[ "${2:-}" == "-D" ]]; then
+            printf "%s\n" "Deleted branch task/stray-text-in-task-selector-pane (was abc1234)."
+            return 0
+          fi
+          ;;
+        push)
+          printf "%s\n" "To github.com:example/wavemill.git"
+          printf "%s\n" " - [deleted] task/stray-text-in-task-selector-pane"
+          return 0
+          ;;
+      esac
+      return 0
+    }
+
+    cleanup_completed_task "$ISSUE" "$SLUG" "test cleanup"
+
+    mill_log="$(tr "\n" ";" < "$MILL_LOG_FILE")"
+    printf "mill_log=%s\nlogs=%s\n" "$mill_log" "$LOG_OUTPUT"
+  ' 2>&1
+}
+
 echo "=== Task Selection Worktree Silence ==="
 
 output="$(run_launch_case create_success)"
@@ -198,6 +302,13 @@ check_contains "create failure surfaces concise error" "$output" "error_logs=HOK
 check_not_contains "create failure does not leak preparing line to pane" "$output" $'\nPreparing worktree (new branch '\''task/per-vendor-frontier-quota-telemetry'\'')'
 check_not_contains "create failure does not leak tracking line to pane" "$output" $'\nbranch '\''task/per-vendor-frontier-quota-telemetry'\'' set up to track '\''origin/main'\''.'
 check_not_contains "create failure does not leak head line to pane" "$output" $'\nHEAD is now at cb3e98d HOK-1367: Aggregate operating mode across all frontier models (#349)'
+
+output="$(run_cleanup_case)"
+check_contains "cleanup logs branch deletion noise to mill log" "$output" "mill_log=Removing worktree stray-text-in-task-selector-pane;Deleted branch task/stray-text-in-task-selector-pane (was abc1234).;To github.com:example/wavemill.git; - [deleted] task/stray-text-in-task-selector-pane;Pruned worktree administrative files;"
+check_not_contains "cleanup does not leak branch deletion to pane" "$output" $'\nDeleted branch task/stray-text-in-task-selector-pane (was abc1234).'
+check_not_contains "cleanup does not leak worktree remove to pane" "$output" $'\nRemoving worktree stray-text-in-task-selector-pane'
+check_not_contains "cleanup does not leak remote deletion to pane" "$output" $'\n - [deleted] task/stray-text-in-task-selector-pane'
+check_not_contains "cleanup does not leak worktree prune to pane" "$output" $'\nPruned worktree administrative files'
 
 echo
 if [[ "$FAIL" -eq 0 ]]; then
