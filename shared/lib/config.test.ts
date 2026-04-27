@@ -17,11 +17,13 @@ import { createRequire } from 'node:module';
 import {
   loadWavemillConfig,
   clearConfigCache,
+  INTEGRATION_DEFAULTS,
   getChallengeConfig,
   getChallengeSchedulerConfig,
   getAvailableModelsForStage,
   getRouterConfig,
   getEvalConfig,
+  getIntegrationConfig,
   getMillConfig,
   getMaxCostUsd,
   getUiConfig,
@@ -1004,6 +1006,154 @@ test('getReadyConfig respects explicit remediation overrides', () => {
   } finally {
     cleanUp(tmp);
   }
+});
+
+test('getIntegrationConfig returns defaults when section is missing', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, '{}');
+
+    assert.deepEqual(getIntegrationConfig(tmp), INTEGRATION_DEFAULTS);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getIntegrationConfig returns defaults for an empty section', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: {},
+    }));
+
+    assert.deepEqual(getIntegrationConfig(tmp), INTEGRATION_DEFAULTS);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getIntegrationConfig merges partial overrides with defaults', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: {
+        enabled: true,
+        mergeMethod: 'merge',
+      },
+    }));
+
+    assert.deepEqual(getIntegrationConfig(tmp), {
+      ...INTEGRATION_DEFAULTS,
+      enabled: true,
+      mergeMethod: 'merge',
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getIntegrationConfig returns a full valid integration block', () => {
+  const tmp = makeTempRepo();
+  const integration = {
+    enabled: true,
+    integrationBranch: 'auto/staging',
+    promotionBranch: 'release',
+    mergeMethod: 'rebase' as const,
+    deleteBranchAfterMerge: false,
+    haltOnRed: false,
+    highRiskPolicy: 'allow' as const,
+    useMillSession: false,
+  };
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ integration }));
+
+    assert.deepEqual(getIntegrationConfig(tmp), integration);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid integration mergeMethod throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: {
+        mergeMethod: 'fast-forward',
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid integration highRiskPolicy throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: {
+        highRiskPolicy: 'yolo',
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid integration enabled type throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: {
+        enabled: 'yes',
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('repo config remains valid and integration defaults stay opt-in', () => {
+  clearConfigCache();
+  const config = loadWavemillConfig(process.cwd());
+  assert.ok(config);
+  assert.deepEqual(getIntegrationConfig(process.cwd()), INTEGRATION_DEFAULTS);
 });
 
 test('ready remediation maxAttempts must be at least 1', () => {
