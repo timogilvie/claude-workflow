@@ -192,6 +192,7 @@ export function descriptorFromEvalRecord(record: EvalRecord): TaskDescriptor {
         timeSeconds: record.timeSeconds,
         interventionCount: record.interventionCount,
         interventions: record.interventions,
+        rubricEval: record.rubricEval,
       });
 
   descriptorCache.set(record.id, descriptor);
