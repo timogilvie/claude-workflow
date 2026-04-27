@@ -328,6 +328,12 @@ SUCCESS_LAUNCHED="$TMP_ROOT/success-launched.txt"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SUCCESS_MONITOR_SCRIPT"
 chmod +x "$SUCCESS_MONITOR_SCRIPT"
 write_plan "$SUCCESS_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-success" "$SUCCESS_MONITOR_ENV" "$SUCCESS_MONITOR_SCRIPT" "$SUCCESS_STATUS_LOG" "$SUCCESS_LAUNCHED" "[$TASK_ONE_JSON]"
+STALE_FEATURE_DIR="$TEST_REPO/worktrees/alpha-task/features/alpha-task"
+mkdir -p "$STALE_FEATURE_DIR"
+printf '{"stage":"coding","status":"running"}\n' > "$STALE_FEATURE_DIR/.coding-result.json"
+printf '{"stage":"review","status":"running"}\n' > "$STALE_FEATURE_DIR/.review-result.json"
+printf 'stale plan\n' > "$STALE_FEATURE_DIR/plan.md"
+touch "$STALE_FEATURE_DIR/.plan-approved" "$STALE_FEATURE_DIR/.coding-complete"
 
 SUCCESS_OUTPUT="$TMP_ROOT/success-output.txt"
 bash "$RUNNER_SCRIPT" "$SUCCESS_PLAN" > "$SUCCESS_OUTPUT" 2>&1
@@ -343,12 +349,18 @@ fi
 
 SUCCESS_FEATURE_DIR="$TEST_REPO/worktrees/alpha-task/features/alpha-task"
 if jq -e '.stage == "planning" and .status == "running"' "$SUCCESS_FEATURE_DIR/.planning-result.json" >/dev/null 2>&1 \
-  && [[ ! -f "$SUCCESS_FEATURE_DIR/.coding-result.json" ]]; then
-  pass "startup runner launches planning before coding"
+  && [[ ! -f "$SUCCESS_FEATURE_DIR/.coding-result.json" ]] \
+  && [[ ! -f "$SUCCESS_FEATURE_DIR/.review-result.json" ]] \
+  && [[ ! -f "$SUCCESS_FEATURE_DIR/.plan-approved" ]] \
+  && [[ ! -f "$SUCCESS_FEATURE_DIR/.coding-complete" ]] \
+  && [[ ! -f "$SUCCESS_FEATURE_DIR/plan.md" ]]; then
+  pass "startup runner launches planning before coding and clears stale phase artifacts"
 else
   fail "startup runner did not enforce planning-first launch"
   dump_file_on_failure "planning-result" "$SUCCESS_FEATURE_DIR/.planning-result.json"
   dump_file_on_failure "coding-result" "$SUCCESS_FEATURE_DIR/.coding-result.json"
+  dump_file_on_failure "review-result" "$SUCCESS_FEATURE_DIR/.review-result.json"
+  dump_file_on_failure "plan" "$SUCCESS_FEATURE_DIR/plan.md"
 fi
 
 if grep -q 'HOK-1001|In Progress' "$MOCK_LINEAR_LOG"; then

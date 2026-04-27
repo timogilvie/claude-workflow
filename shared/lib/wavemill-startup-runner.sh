@@ -107,6 +107,23 @@ EOF
   mv "$tmp" "$result_file"
 }
 
+reset_startup_phase_artifacts() {
+  local feature_dir="$1"
+
+  rm -f \
+    "$feature_dir/.planning-result.json" \
+    "$feature_dir/.coding-result.json" \
+    "$feature_dir/.review-result.json" \
+    "$feature_dir/.ready-result.json" \
+    "$feature_dir/.resolved-phase" \
+    "$feature_dir/.plan-approved" \
+    "$feature_dir/.coding-complete" \
+    "$feature_dir/.review-complete" \
+    "$feature_dir/.ready-complete" \
+    "$feature_dir/.workflow-aborted" \
+    "$feature_dir/plan.md"
+}
+
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
@@ -409,6 +426,7 @@ launch_task_from_plan() {
   status_file="/tmp/${SESSION}-${issue}-status.txt"
   feature_dir="$wt_dir/features/$slug"
   mkdir -p "$feature_dir"
+  reset_startup_phase_artifacts "$feature_dir"
 
   if [[ -f "$details_file" ]]; then
     if [[ "$PLANNING_MODE" == "interactive" ]]; then
