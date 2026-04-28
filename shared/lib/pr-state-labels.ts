@@ -25,6 +25,11 @@ export const WM_LABELS = {
   risky: 'wm:risky',
   migration: 'wm:migration',
   approved: 'wm:approved',
+  wrongBase: 'wm:wrong-base',
+  metadataInvalid: 'wm:metadata-invalid',
+  migrationRequired: 'wm:migration-required',
+  riskAcknowledged: 'wm:risk-acknowledged',
+  challengeUnresolved: 'wm:challenge-unresolved',
 } as const;
 
 interface GithubLabelDefinition {
@@ -43,6 +48,11 @@ const WM_LABEL_DEFINITIONS: GithubLabelDefinition[] = [
   { name: WM_LABELS.risky, color: '#ee0701', description: 'High-risk change requiring extra review' },
   { name: WM_LABELS.migration, color: '#f9d0c4', description: 'Contains a database migration' },
   { name: WM_LABELS.approved, color: '#0075ca', description: 'Reviewer approved for merge' },
+  { name: WM_LABELS.wrongBase, color: '#b60205', description: 'Targets the wrong base branch for autonomous merge' },
+  { name: WM_LABELS.metadataInvalid, color: '#d93f0b', description: 'PR metadata is missing or invalid' },
+  { name: WM_LABELS.migrationRequired, color: '#fbca04', description: 'Database migration requires Wavemill migration label' },
+  { name: WM_LABELS.riskAcknowledged, color: '#5319e7', description: 'High-risk PR has been explicitly acknowledged' },
+  { name: WM_LABELS.challengeUnresolved, color: '#d73a4a', description: 'Challenge-mode PR is missing a resolved comparison pair' },
 ];
 
 const ACTIVE_STATE_LABELS = [WM_LABELS.ready, WM_LABELS.blocked, WM_LABELS.merging];
