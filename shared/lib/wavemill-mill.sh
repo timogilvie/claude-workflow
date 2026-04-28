@@ -4948,18 +4948,22 @@ monitor_issue_state() {
   task_status=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].status // empty')
   if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
     if [[ "$task_status" == "merged" ]]; then
-      local merged_ready_dir
+      local merged_ready_dir merged_before_ready=false
       merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
       if ! ready_stage_allows_merge "$merged_ready_dir"; then
+        merged_before_ready=true
         ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
         write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
-        set_window_attention_state "$WIN" "needs-user"
-        active_count=$((active_count + 1))
-        return 0
       fi
     fi
 
     set_window_attention_state "$WIN" "clear"
+    if [[ "$task_status" == "merged" && "$merged_before_ready" == "true" ]]; then
+      cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
+      execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+      return 0
+    fi
+
     # When quit is requested, force-clean merged tasks instead of waiting for the
     # user to close the review window (which blocks shutdown indefinitely).
     if [[ "${QUIT_REQUESTED:-false}" != "true" ]] \
@@ -5765,17 +5769,12 @@ monitor_issue_state() {
   # Check completion before phase-specific OPEN handling so merged/closed PRs
   # still trigger eval, cleanup, and Linear updates after the ready stage was added.
   if validate_pr_merge "$PR"; then
-    local merged_ready_dir
+    local merged_ready_dir merged_before_ready=false
     merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
     if ! ready_stage_allows_merge "$merged_ready_dir"; then
+      merged_before_ready=true
       ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
       write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
-      set_window_attention_state "$WIN" "needs-user"
-      # Persist merged status so later polls do not keep re-checking GitHub.
-      current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
-      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged" "$current_agent"
-      active_count=$((active_count + 1))
-      return 0
     fi
 
     log "status" "✓ $ISSUE → PR #$PR MERGED"
@@ -5792,7 +5791,7 @@ monitor_issue_state() {
       fi
     fi
 
-    if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
+    if [[ "$REQUIRE_CONFIRM" == "true" && "$merged_before_ready" != "true" ]]; then
       log "status" "  → Window stays open for review - close it when ready"
       if should_update_linear_state "$ISSUE"; then
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
