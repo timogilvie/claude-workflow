@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -40,11 +40,16 @@ function label(name: string): { name: string } {
 function buildTestOptions(
   prList: GhPrListEntry[],
   healthOverride: IntegrationHealth = { state: 'healthy' },
+  configOverride: Record<string, unknown> = {},
 ): SelectNextCandidateOptions & { cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-tend-'));
+  mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
   writeFileSync(
     join(repoDir, '.wavemill-config.json'),
-    JSON.stringify({ integration: { integrationBranch: 'auto/integration' } }),
+    JSON.stringify({
+      integration: { integrationBranch: 'auto/integration' },
+      ...configOverride,
+    }),
   );
 
   return {
@@ -53,6 +58,19 @@ function buildTestOptions(
     healthChecker: async () => healthOverride,
     cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
   };
+}
+
+function writeWorkflowState(repoDir: string, tasks: Record<string, unknown>): void {
+  mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), JSON.stringify({ tasks }));
+}
+
+function writeChallengeComparisons(repoDir: string, records: object[]): void {
+  mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+  writeFileSync(
+    join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+    records.map((record) => JSON.stringify(record)).join('\n'),
+  );
 }
 
 function candidate(overrides: Partial<TendCandidate> = {}): TendCandidate {
@@ -247,6 +265,197 @@ describe('selectNextCandidate ordering and health', () => {
       assert.equal(decision.eligible.length, 2);
       assert.equal(decision.blocked.length, 3);
       assert.equal(decision.nextPR, 1);
+    });
+  });
+});
+
+describe('challenge-mode gating', () => {
+  it('blocks both challenge PRs when the pair is unresolved', async () => {
+    const first = pr({
+      number: 101,
+      title: 'Primary',
+      headRefName: 'task/primary',
+      body: metadata(['task: HOK-1439', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const second = pr({
+      number: 102,
+      title: 'Challenger',
+      headRefName: 'task/challenger',
+      createdAt: '2026-04-02T00:00:00Z',
+      body: metadata(['task: HOK-1439_c', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const options = buildTestOptions([first, second]);
+    const cleaned: number[] = [];
+    options.loserCleanup = (prNumber) => {
+      cleaned.push(prNumber);
+    };
+    writeWorkflowState(options.repoDir, {
+      HOK_1439: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+      HOK_1439_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.nextPR, null);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [
+          [101, 'challenge:pair-unresolved:no-comparison'],
+          [102, 'challenge:pair-unresolved:no-comparison'],
+        ],
+      );
+      assert.deepEqual(cleaned, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('keeps only the winner eligible and cleans up the loser when auto-merge is enabled', async () => {
+    const first = pr({
+      number: 101,
+      title: 'Primary',
+      headRefName: 'task/primary',
+      body: metadata(['task: HOK-1439', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const second = pr({
+      number: 102,
+      title: 'Challenger',
+      headRefName: 'task/challenger',
+      createdAt: '2026-04-02T00:00:00Z',
+      body: metadata(['task: HOK-1439_c', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const options = buildTestOptions([first, second]);
+    const cleaned: number[] = [];
+    options.loserCleanup = (prNumber) => {
+      cleaned.push(prNumber);
+    };
+    writeWorkflowState(options.repoDir, {
+      HOK_1439: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+      HOK_1439_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+    });
+    writeChallengeComparisons(options.repoDir, [{
+      challengePairId: 'pair-1',
+      primaryPrUrl: 'https://github.com/example/repo/pull/101',
+      challengerPrUrl: 'https://github.com/example/repo/pull/102',
+      winner: 'primary',
+      timestamp: '2026-04-28T12:00:00Z',
+    }]);
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible.map((candidate) => candidate.number), [101]);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[102, 'challenge:loser:pair-1']],
+      );
+      assert.equal(decision.nextPR, 101);
+      assert.deepEqual(cleaned, [102]);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('does not re-run loser cleanup after the loser has been superseded', async () => {
+    const first = pr({
+      number: 101,
+      title: 'Primary',
+      headRefName: 'task/primary',
+      body: metadata(['task: HOK-1439', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const second = pr({
+      number: 102,
+      title: 'Challenger',
+      headRefName: 'task/challenger',
+      createdAt: '2026-04-02T00:00:00Z',
+      labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.superseded)],
+      body: metadata(['task: HOK-1439_c', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const options = buildTestOptions([first, second]);
+    const cleaned: number[] = [];
+    options.loserCleanup = (prNumber) => {
+      cleaned.push(prNumber);
+    };
+    writeWorkflowState(options.repoDir, {
+      HOK_1439: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+      HOK_1439_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+    });
+    writeChallengeComparisons(options.repoDir, [{
+      challengePairId: 'pair-1',
+      primaryPrUrl: 'https://github.com/example/repo/pull/101',
+      challengerPrUrl: 'https://github.com/example/repo/pull/102',
+      winner: 'primary',
+      timestamp: '2026-04-28T12:00:00Z',
+    }]);
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible.map((candidate) => candidate.number), [101]);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[102, 'challenge:loser:pair-1']],
+      );
+      assert.deepEqual(cleaned, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('holds the winner when autoMergeWinner is false and still cleans up the loser', async () => {
+    const first = pr({
+      number: 101,
+      title: 'Primary',
+      headRefName: 'task/primary',
+      body: metadata(['task: HOK-1439', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const second = pr({
+      number: 102,
+      title: 'Challenger',
+      headRefName: 'task/challenger',
+      createdAt: '2026-04-02T00:00:00Z',
+      body: metadata(['task: HOK-1439_c', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const options = buildTestOptions([first, second], { state: 'healthy' }, {
+      challenge: { autoMergeWinner: false },
+    });
+    const cleaned: number[] = [];
+    options.loserCleanup = (prNumber) => {
+      cleaned.push(prNumber);
+    };
+    writeWorkflowState(options.repoDir, {
+      HOK_1439: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+      HOK_1439_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+    });
+    writeChallengeComparisons(options.repoDir, [{
+      challengePairId: 'pair-1',
+      primaryPrUrl: 'https://github.com/example/repo/pull/101',
+      challengerPrUrl: 'https://github.com/example/repo/pull/102',
+      winner: 'primary',
+      timestamp: '2026-04-28T12:00:00Z',
+    }]);
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.nextPR, null);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [
+          [101, 'challenge:winner-held:pair-1'],
+          [102, 'challenge:loser:pair-1'],
+        ],
+      );
+      assert.deepEqual(cleaned, [102]);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('leaves non-challenge PR behavior unchanged', async () => {
+    await withDecision([pr({ number: 201, title: 'Normal PR' })], (decision) => {
+      assert.deepEqual(decision.eligible.map((candidate) => candidate.number), [201]);
+      assert.deepEqual(decision.blocked, []);
+      assert.equal(decision.nextPR, 201);
     });
   });
 });
