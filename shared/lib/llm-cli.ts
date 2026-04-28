@@ -25,7 +25,7 @@ import { appendEvalRecord } from './eval-persistence.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
 import { getScoreBand, type DifficultyBand, type EvalRecord, type FallbackEventMetadata, type FallbackOutcome } from './eval-schema.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
-import { getEffectiveRegistry, getLadder, rankCandidates, type RegistryTaskType } from './model-registry.ts';
+import { getEffectiveRegistry, getLadder, getModel, rankCandidates, type RegistryTaskType } from './model-registry.ts';
 import { getModelStatus, markExhausted, readQuotaSnapshot, recordSuccess } from './quota-state.ts';
 import { fallbackLog } from './router-log.ts';
 
@@ -369,10 +369,12 @@ function resolveCandidateModels(
   options: LLMCallOptions,
 ): { taskType: RegistryTaskType; candidates: string[] } {
   const repoDir = repoDirForOptions(options);
+  const registry = getEffectiveRegistry(repoDir);
+  const isCompatible = (modelId: string): boolean => isModelCompatibleWithProvider(provider, registry, modelId);
 
   if (options.fallbackModels && options.fallbackModels.length > 0) {
     const initial = options.model ? [options.model, ...options.fallbackModels] : options.fallbackModels;
-    const deduped = uniqueModels(initial);
+    const deduped = uniqueModels(initial).filter(isCompatible);
     const available = deduped.filter((modelId) => getModelStatus(modelId, repoDir) !== 'exhausted');
     return {
       taskType: options.taskType ?? FALLBACK_DEFAULT_TASK_TYPE,
@@ -380,7 +382,6 @@ function resolveCandidateModels(
     };
   }
 
-  const registry = getEffectiveRegistry(repoDir);
   const taskType = options.taskType ?? FALLBACK_DEFAULT_TASK_TYPE;
   if (!options.taskType) {
     warnMissingTaskType(provider);
@@ -391,12 +392,33 @@ function resolveCandidateModels(
     ladder = rankCandidates(registry, taskType);
   }
 
-  const deduped = uniqueModels(options.model ? [options.model, ...ladder] : ladder);
+  const deduped = uniqueModels(options.model ? [options.model, ...ladder] : ladder).filter(isCompatible);
   const available = deduped.filter((modelId) => getModelStatus(modelId, repoDir) !== 'exhausted');
   return {
     taskType,
     candidates: available.length > 0 ? available : deduped,
   };
+}
+
+function isModelCompatibleWithProvider(
+  provider: LLMProvider,
+  registry: ReturnType<typeof getEffectiveRegistry>,
+  modelId: string,
+): boolean {
+  const model = getModel(registry, modelId);
+  if (!model || model.vendor === 'custom') {
+    return true;
+  }
+
+  if (provider === 'claude') {
+    return model.vendor === 'anthropic';
+  }
+
+  if (provider === 'codex' || provider === 'openai') {
+    return model.vendor === 'openai';
+  }
+
+  return true;
 }
 
 // ────────────────────────────────────────────────────────────────

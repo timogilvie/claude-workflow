@@ -25,6 +25,16 @@ test('uses cliCmd for explicit Claude command overrides', () => {
   assert.ok(options.cliFlags?.includes('--append-system-prompt'));
 });
 
+test('uses durable Claude settings for packet expansion', () => {
+  const options = buildIssueExpansionCallOptions('/custom/claude');
+  assert.equal(options.taskType, 'planning');
+  assert.equal(options.retry, true);
+  assert.equal(options.maxRetries, 2);
+  assert.equal(options.timeout, 600_000);
+  assert.equal(options.activityTimeout, undefined);
+  assert.equal(options.maxBuffer, 50 * 1024 * 1024);
+});
+
 test('falls back to CLAUDE_CMD when no explicit override is provided', () => {
   const original = process.env.CLAUDE_CMD;
   process.env.CLAUDE_CMD = '/env/claude';
