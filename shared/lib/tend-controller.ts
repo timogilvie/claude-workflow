@@ -224,13 +224,15 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
   };
 }
 
-export function formatStatusLine(decision: TendDecision): string {
-  const health = decision.integrationHealth.reason
-    ? `${decision.integrationHealth.state}:${decision.integrationHealth.reason}`
-    : decision.integrationHealth.state;
-  const next = decision.nextPR === null ? 'none' : `PR#${decision.nextPR}`;
+export function formatStatusLine(
+  decision: TendDecision,
+  opts: { action?: string; lastPR?: number | null } = {},
+): string {
+  const health = decision.integrationHealth.state === 'healthy' ? 'ok' : 'degraded';
+  const last = typeof opts.lastPR === 'number' ? `#${opts.lastPR}` : 'none';
+  const action = opts.action ?? 'idle';
 
-  return `tend: integration=${health} eligible=${decision.eligible.length} blocked=${decision.blocked.length} next=${next}`;
+  return `eligible=${decision.eligible.length} blocked=${decision.blocked.length} health=${health} last=${last} action=${action}`;
 }
 
 export async function executeMerge(

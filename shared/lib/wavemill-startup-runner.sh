@@ -272,6 +272,27 @@ setup_control_dashboard() {
   tmux select-pane -t "$SESSION:control.0"
 }
 
+spawn_integration_window() {
+  local config_file enabled use_mill_session integration_cmd
+
+  config_file="$REPO_DIR/.wavemill-config.json"
+  enabled="$(jq -r '.integration.enabled // false' "$config_file" 2>/dev/null || echo false)"
+  use_mill_session="$(jq -r '.integration.useMillSession // true' "$config_file" 2>/dev/null || echo true)"
+
+  if [[ "$enabled" != "true" || "$use_mill_session" != "true" ]]; then
+    return 0
+  fi
+
+  startup_log "Starting integration window (tend loop)..."
+  printf -v integration_cmd 'exec env WAVEMILL_SESSION=%q WAVEMILL_ISSUE=%q npx tsx %q --loop --repo-dir %q' \
+    "$SESSION" "integration" "$TOOLS_DIR/tend.ts" "$REPO_DIR"
+  tmux new-window -d -t "$SESSION" -n integration -c "$REPO_DIR" "$integration_cmd" >/dev/null
+  tmux set-window-option -u -t "$SESSION:integration" window-status-style >/dev/null 2>&1 || true
+  tmux set-window-option -u -t "$SESSION:integration" window-status-current-style >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION:integration" remain-on-exit off >/dev/null 2>&1 || true
+  startup_log "✓ Integration window running."
+}
+
 should_update_linear_for_task() {
   local challenge_role="$1"
   [[ "$challenge_role" != "challenger" ]]
@@ -587,6 +608,7 @@ main() {
   tasks_file="/tmp/${SESSION}-tasks.txt"
   jq -r '.tasks[] | "\(.issue)|\(.slug)|\(.title)"' "$PLAN_FILE" > "$tasks_file"
   setup_control_dashboard
+  spawn_integration_window
   write_monitor_env "$tasks_file"
 
   launched_count="$(wc -l < "$LAUNCHED_ISSUES_FILE" | tr -d ' ')"

@@ -102,6 +102,8 @@ Minimal config:
 }
 ```
 
+When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `integration` tmux window in the existing session and runs the tend loop there with the normal mill session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
+
 For the broader controller design, see the [Autonomous Integration Merge Controller Plan](https://linear.app/hokusai/document/autonomous-integration-merge-controller-plan-79e27e27d690).
 
 ## Project Context Integration
