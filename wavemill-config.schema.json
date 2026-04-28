@@ -875,6 +875,29 @@
           "type": "boolean",
           "default": true,
           "description": "When true, the integration controller reuses the active mill tmux session for status reporting."
+        },
+        "readyPolicy": {
+          "type": "object",
+          "description": "Eligibility guards for the autonomous merge controller",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "integrationBranch": {
+              "type": "string"
+            },
+            "riskPolicy": {
+              "type": "string",
+              "enum": ["block", "require-label", "auto"],
+              "default": "require-label"
+            },
+            "enforceMigrationCoupling": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

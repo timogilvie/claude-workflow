@@ -1,7 +1,12 @@
 #!/usr/bin/env -S npx tsx
 
+import { getIntegrationReadyPolicy } from '../shared/lib/config.ts';
+import { getPullRequest } from '../shared/lib/github.ts';
+import { getIssueCompletionState } from '../shared/lib/linear.ts';
+import { evaluateReady, type ReadyVerdict } from '../shared/lib/ready-engine.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { runReadyStage } from '../shared/lib/ready-stage.ts';
+import { readChallengeComparisons } from '../shared/lib/challenge-comparison.ts';
 
 runTool({
   name: 'ready',
@@ -14,6 +19,10 @@ runTool({
     'repo-dir': {
       type: 'string',
       description: 'Repository directory (default: current directory)',
+    },
+    json: {
+      type: 'boolean',
+      description: 'Emit machine-readable JSON output',
     },
   },
   examples: [
@@ -33,16 +42,68 @@ runTool({
     const prNumber = extractPrNumber(prInput);
 
     const repoDir = args['repo-dir'] || process.cwd();
-    const result = await runReadyStage({ prNumber, repoDir });
+    const readyPolicy = getIntegrationReadyPolicy(repoDir);
+    let verdict: ReadyVerdict;
 
-    // Output JSON for scripting
-    console.log(JSON.stringify(result, null, 2));
+    if (readyPolicy.enabled) {
+      const pr = getPullRequest(prNumber);
+      verdict = await evaluateReady({
+        pr: {
+          number: pr.number,
+          url: pr.url,
+          baseBranch: pr.baseRefName,
+          body: pr.body || '',
+          labels: pr.labels.map((label) => label.name),
+          mergedAt: pr.mergedAt,
+        },
+        config: {
+          ...readyPolicy,
+          integrationBranch: readyPolicy.integrationBranch || 'auto/integration',
+        },
+        async fetchPrState(dependencyPrNumber) {
+          try {
+            const dependencyPr = getPullRequest(dependencyPrNumber);
+            const state = dependencyPr.mergedAt ? 'MERGED' : dependencyPr.state === 'OPEN' ? 'OPEN' : 'CLOSED';
+            return { state, mergedAt: dependencyPr.mergedAt };
+          } catch (error) {
+            if ((error as Error).message.includes('not found')) {
+              return null;
+            }
+            throw error;
+          }
+        },
+        async fetchLinearIssueState(identifier) {
+          try {
+            const issue = await getIssueCompletionState(identifier);
+            return { completedAt: issue.completedAt ?? null, canceledAt: issue.canceledAt ?? null };
+          } catch (error) {
+            if ((error as Error).message.includes('Issue not found')) {
+              return null;
+            }
+            throw error;
+          }
+        },
+        readChallengeComparisons,
+      });
+    } else {
+      const result = await runReadyStage({ prNumber, repoDir });
+      verdict = {
+        status: result.verdict,
+        reasons: result.summary ? [result.summary] : [],
+        output: { labels: [], comment: '' },
+      };
+    }
 
-    // Exit code based on verdict
-    if (result.verdict === 'fail') {
-      process.exit(1);
-    } else if (result.verdict === 'pending') {
+    if (args.json) {
+      console.log(JSON.stringify(verdict));
+    } else {
+      printHumanVerdict(prNumber, verdict);
+    }
+
+    if (verdict.status === 'fail') {
       process.exit(2);
+    } else if (verdict.status === 'pending') {
+      process.exit(1);
     }
   },
 });
@@ -61,4 +122,20 @@ function extractPrNumber(input: string): number {
   }
 
   throw new Error(`Invalid PR number or URL: ${input}`);
+}
+
+function printHumanVerdict(prNumber: number, verdict: ReadyVerdict): void {
+  console.log(`PR #${prNumber}: ${verdict.status.toUpperCase()}`);
+  if (verdict.reasons.length > 0) {
+    for (const reason of verdict.reasons) {
+      console.log(`- ${reason}`);
+    }
+  }
+  if (verdict.output.labels.length > 0) {
+    console.log(`labels: ${verdict.output.labels.join(', ')}`);
+  }
+  if (verdict.output.comment) {
+    console.log('');
+    console.log(verdict.output.comment);
+  }
 }

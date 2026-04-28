@@ -24,6 +24,7 @@ import {
   getRouterConfig,
   getEvalConfig,
   getIntegrationConfig,
+  getIntegrationReadyPolicy,
   getMillConfig,
   getMaxCostUsd,
   getUiConfig,
@@ -1175,6 +1176,56 @@ test('ready remediation maxAttempts must be at least 1', () => {
     } else {
       const config = loadWavemillConfig(tmp);
       assert.equal(config.ready?.remediation?.maxAttempts, 0);
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('integration ready policy accessor returns defaults with branch fallback', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: {
+        integrationBranch: 'auto/staging',
+        readyPolicy: {
+          enabled: true,
+        },
+      },
+    }));
+
+    assert.deepEqual(getIntegrationReadyPolicy(tmp), {
+      enabled: true,
+      integrationBranch: 'auto/staging',
+      riskPolicy: 'require-label',
+      enforceMigrationCoupling: true,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid integration ready policy risk setting throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: {
+        readyPolicy: {
+          riskPolicy: 'manual',
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
     }
   } finally {
     cleanUp(tmp);

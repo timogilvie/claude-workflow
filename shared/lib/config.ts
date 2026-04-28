@@ -218,6 +218,14 @@ export interface IntegrationConfig {
   haltOnRed: boolean;
   highRiskPolicy: 'block' | 'manual' | 'allow';
   useMillSession: boolean;
+  readyPolicy?: IntegrationReadyPolicyConfig;
+}
+
+export interface IntegrationReadyPolicyConfig {
+  enabled?: boolean;
+  integrationBranch?: string;
+  riskPolicy?: 'block' | 'require-label' | 'auto';
+  enforceMigrationCoupling?: boolean;
 }
 
 export interface LinearConfig {
@@ -713,6 +721,21 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
  */
 export function getIntegrationConfig(repoDir?: string): IntegrationConfig {
   return { ...INTEGRATION_DEFAULTS, ...(loadWavemillConfig(repoDir).integration ?? {}) };
+}
+
+/**
+ * Get the integration ready-policy config section.
+ * Returns defaults with integration-branch fallback.
+ */
+export function getIntegrationReadyPolicy(repoDir?: string): IntegrationReadyPolicyConfig {
+  const integration = getIntegrationConfig(repoDir);
+  const readyPolicy = integration.readyPolicy ?? {};
+  return {
+    enabled: readyPolicy.enabled ?? false,
+    integrationBranch: readyPolicy.integrationBranch ?? integration.integrationBranch,
+    riskPolicy: readyPolicy.riskPolicy ?? 'require-label',
+    enforceMigrationCoupling: readyPolicy.enforceMigrationCoupling ?? true,
+  };
 }
 
 /**
