@@ -44,12 +44,7 @@ export interface ChallengeComparison {
   winner: 'primary' | 'challenger';
   winnerModel: string;
   rationale: string;
-  dimensions: {
-    correctness: { primary: number; challenger: number };
-    codeQuality: { primary: number; challenger: number };
-    completeness: { primary: number; challenger: number };
-    scopeDiscipline: { primary: number; challenger: number };
-  };
+  dimensions: ChallengeComparisonDimensions;
   timestamp: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
@@ -57,6 +52,25 @@ export interface ChallengeComparison {
   challengeType?: ChallengeType;
   workflowInsight?: string;
 }
+
+export interface ChallengeComparisonDimensions {
+  completeness: { primary: number; challenger: number };
+  correctness: { primary: number; challenger: number };
+  code_quality: { primary: number; challenger: number };
+  intervention_impact: { primary: number; challenger: number };
+  autonomy: { primary: number; challenger: number };
+}
+
+interface LegacyChallengeComparisonDimensions {
+  correctness: { primary: number; challenger: number };
+  codeQuality: { primary: number; challenger: number };
+  completeness: { primary: number; challenger: number };
+  scopeDiscipline: { primary: number; challenger: number };
+}
+
+export type StoredChallengeComparison = Omit<ChallengeComparison, 'dimensions'> & {
+  dimensions: ChallengeComparisonDimensions | LegacyChallengeComparisonDimensions;
+};
 
 const DEFAULT_EVALS_DIR = '.wavemill/evals';
 const CHALLENGE_RECORDS_FILENAME = 'challenge-records.jsonl';
@@ -137,11 +151,11 @@ export function appendChallengeComparison(record: ChallengeComparison, dir?: str
   appendJsonlRecord(resolveRecordsFile(dir), record);
 }
 
-export function readChallengeComparisons(dir?: string): ChallengeComparison[] {
+export function readChallengeComparisons(dir?: string): StoredChallengeComparison[] {
   const filePath = resolveRecordsFile(dir);
   if (!existsSync(filePath)) {
     return [];
   }
 
-  return readJsonlFile<ChallengeComparison>(filePath);
+  return readJsonlFile<StoredChallengeComparison>(filePath);
 }

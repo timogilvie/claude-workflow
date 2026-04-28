@@ -1,8 +1,8 @@
-import type { ChallengeComparison } from './challenge-comparison.ts';
+import type { StoredChallengeComparison } from './challenge-comparison.ts';
 import type { EvalRecord } from './eval-schema.ts';
 
 export interface JoinedChallengeRecord {
-  comparison: ChallengeComparison;
+  comparison: StoredChallengeComparison;
   primaryEval?: EvalRecord;
   challengerEval?: EvalRecord;
 }
@@ -62,7 +62,7 @@ function variantFromEval(record: EvalRecord | undefined, surface: 'router' | 'pl
  * Join challenge comparison records with their matching eval records.
  */
 export function joinRecords(
-  comparisons: ChallengeComparison[],
+  comparisons: StoredChallengeComparison[],
   evals: EvalRecord[],
 ): JoinedChallengeRecord[] {
   return comparisons.map((comparison) => {
