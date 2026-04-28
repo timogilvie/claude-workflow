@@ -89,6 +89,7 @@ function buildMergeTestOptions(overrides: {
     calls.push(cmd);
     if (cmd.includes('gh pr list --label')) return '[]';
     if (cmd.includes('git rev-parse --git-common-dir')) return join(repoDir, '.git');
+    if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
     if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
     return '';
   };
@@ -313,7 +314,7 @@ describe('executeMerge', () => {
       assert.ok(hasCall(options.calls, /git worktree add/));
       assert.ok(hasCall(options.calls, /git fetch origin 'auto\/integration'/));
       assert.ok(hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
-      assert.ok(hasCall(options.calls, /git push --force-with-lease origin 'task\/merge-me'/));
+      assert.ok(hasCall(options.calls, /git push --force-with-lease/));
       assert.ok(hasCall(options.calls, /gh pr checks 42/));
       assert.ok(hasCall(options.calls, /gh pr merge 42 --squash --delete-branch/));
       assert.ok(hasCall(options.calls, /git worktree remove --force/));
@@ -426,6 +427,32 @@ describe('executeMerge', () => {
       assert.deepEqual(result, { status: 'skipped', prNumber: 42, haltLoop: false });
       assert.ok(!hasCall(options.calls, /git worktree add/));
       assert.deepEqual(options.labels, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('cleans up worktree on all exit paths', async () => {
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rebase')) throw new Error('rebase failed');
+        return '';
+      },
+    });
+
+    try {
+      await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      // Verify worktree was both added and removed, even though rebase failed
+      assert.ok(hasCall(options.calls, /git worktree add/));
+      assert.ok(hasCall(options.calls, /git worktree remove --force/));
+      // Verify the remove call happened even on error path
+      const addIdx = options.calls.findIndex((c) => c.includes('git worktree add'));
+      const removeIdx = options.calls.findIndex((c) => c.includes('git worktree remove --force'));
+      assert.ok(addIdx >= 0 && removeIdx > addIdx, 'worktree remove should happen after add');
     } finally {
       options.cleanup();
     }

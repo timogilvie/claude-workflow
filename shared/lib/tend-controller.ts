@@ -402,15 +402,45 @@ function rebaseAndPush(
   validateBranchName(prBranch, 'PR branch');
   validateBranchName(integrationBranch, 'integration branch');
 
-  const commands = [
-    `git fetch origin ${escapeShellArg(integrationBranch)} 2>&1`,
-    `git rebase ${escapeShellArg(`origin/${integrationBranch}`)} 2>&1`,
-    `git push --force-with-lease origin ${escapeShellArg(prBranch)} 2>&1`,
-  ];
+  const output: string[] = [];
 
-  return commands
-    .map((command) => String(shellRunner(command, { encoding: 'utf-8', cwd: worktreePath })))
-    .join('\n');
+  shellRunner(
+    `git fetch origin ${escapeShellArg(integrationBranch)} 2>&1`,
+    { encoding: 'utf-8', cwd: worktreePath },
+  );
+  output.push(String(shellRunner(`git fetch origin ${escapeShellArg(integrationBranch)} 2>&1`, {
+    encoding: 'utf-8',
+    cwd: worktreePath,
+  })));
+
+  // Capture the remote SHA before rebase for SHA-keyed force-with-lease
+  const remoteRef = `origin/${integrationBranch}`;
+  const remoteSha = String(shellRunner(`git rev-parse ${escapeShellArg(remoteRef)}`, {
+    encoding: 'utf-8',
+    cwd: worktreePath,
+  })).trim();
+
+  try {
+    output.push(String(shellRunner(
+      `git rebase ${escapeShellArg(remoteRef)} 2>&1`,
+      { encoding: 'utf-8', cwd: worktreePath },
+    )));
+  } catch (error) {
+    // Explicitly abort rebase on failure
+    try {
+      shellRunner('git rebase --abort 2>&1', { encoding: 'utf-8', cwd: worktreePath });
+    } catch {
+      // Rebase abort failure is best-effort
+    }
+    throw error;
+  }
+
+  output.push(String(shellRunner(
+    `git push --force-with-lease=${escapeShellArg(prBranch)}:${escapeShellArg(remoteSha)} origin ${escapeShellArg(prBranch)} 2>&1`,
+    { encoding: 'utf-8', cwd: worktreePath },
+  )));
+
+  return output.join('\n');
 }
 
 async function waitForChecks(
