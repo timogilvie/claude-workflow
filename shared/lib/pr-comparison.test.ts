@@ -40,6 +40,8 @@ test('buildComparisonPrompt includes workflow context when routing metadata diff
 
   assert.match(prompt, /Workflow Context/);
   assert.match(prompt, /Variables that differed: planner/);
+  assert.match(prompt, /intervention_impact/);
+  assert.doesNotMatch(prompt, /scopeDiscipline/);
 });
 
 test('validateComparisonJson trims fields and rejects invalid score payloads', () => {
@@ -48,10 +50,11 @@ test('validateComparisonJson trims fields and rejects invalid score payloads', (
     rationale: ' better result ',
     workflowInsight: ' routing mattered ',
     dimensions: {
-      correctness: { primary: 8, challenger: 6 },
-      codeQuality: { primary: 7, challenger: 6 },
       completeness: { primary: 8, challenger: 7 },
-      scopeDiscipline: { primary: 9, challenger: 7 },
+      correctness: { primary: 8, challenger: 6 },
+      code_quality: { primary: 7, challenger: 6 },
+      intervention_impact: { primary: 9, challenger: 7 },
+      autonomy: { primary: 8, challenger: 7 },
     },
   });
 
@@ -63,13 +66,32 @@ test('validateComparisonJson trims fields and rejects invalid score payloads', (
       winner: 'challenger',
       rationale: 'ok',
       dimensions: {
-        correctness: { primary: 11, challenger: 6 },
-        codeQuality: { primary: 7, challenger: 6 },
         completeness: { primary: 8, challenger: 7 },
-        scopeDiscipline: { primary: 9, challenger: 7 },
+        correctness: { primary: 11, challenger: 6 },
+        code_quality: { primary: 7, challenger: 6 },
+        intervention_impact: { primary: 9, challenger: 7 },
+        autonomy: { primary: 8, challenger: 7 },
       },
     }),
     /Expected integers from 1 to 10/
+  );
+});
+
+test('validateComparisonJson rejects legacy keys', () => {
+  assert.throws(
+    () => validateComparisonJson({
+      winner: 'primary',
+      rationale: 'ok',
+      dimensions: {
+        completeness: { primary: 8, challenger: 7 },
+        correctness: { primary: 8, challenger: 7 },
+        code_quality: { primary: 8, challenger: 7 },
+        intervention_impact: { primary: 8, challenger: 7 },
+        autonomy: { primary: 8, challenger: 7 },
+        scopeDiscipline: { primary: 8, challenger: 7 },
+      },
+    }),
+    /Legacy comparison keys/
   );
 });
 

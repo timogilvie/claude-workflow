@@ -135,6 +135,7 @@ Compatibility and aggregation notes:
 
 ## Recent Changes
 
+- 2026-04-28: Aligned challenge PR comparison judging with the canonical 5-criterion rubric used by per-PR evals (HOK-1450), replacing legacy comparison dimensions and surfacing the same rubric in planning/coding prompts before implementation.
 - 2026-04-27: Added `rubric_provenance` to eval schema version `1.12.0` and `backfill-rubric-eval-records.ts` (HOK-1408); aggregated and historical datasets now preserve rubric provenance explicitly, and dedup prefers rubric-richer duplicates.
 - 2026-04-27: Added `rubricEval` to eval schema version `1.10.0` (HOK-1406); per-criterion rubric scores (completeness, correctness, code quality, intervention impact, autonomy) are now persisted as durable training signal alongside the aggregate score. Updated eval-judge.md prompt to emit rubricEval, added parsing in eval.ts, `attachRubricEval()` in eval-record-builder.ts, display in eval-formatter.ts.
 - 2026-04-18: Added `fallbackEvent` to eval schema version `1.6.0` and wired `llm-cli` quota fallback emission into `evals.jsonl`.

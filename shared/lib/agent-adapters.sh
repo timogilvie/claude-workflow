@@ -194,6 +194,16 @@ agent_completion_text() {
   fi
 }
 
+agent_rubric_snippet() {
+  local tools_dir="$1"
+  local snippet_file="$tools_dir/prompts/agent-rubric-snippet.md"
+  if [[ -f "$snippet_file" ]]; then
+    cat "$snippet_file"
+    return 0
+  fi
+  return 1
+}
+
 # Build the interactive (planning-mode) prompt.
 #
 # Args (positional):
@@ -425,6 +435,7 @@ build_planning_prompt() {
   local feature_dir="$wt_dir/features/$slug"
   local task_context_path="$feature_dir/selected-task.json"
   local plan_path="$feature_dir/plan.md"
+  local rubric_snippet=""
   local abort_feedback_instruction exit_guard_text approved_completion_text
   abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "$feature_dir/.workflow-aborted")"
   exit_guard_text="$(agent_exit_guard_text "$agent_cmd" "the user has explicitly approved your plan")"
@@ -498,6 +509,9 @@ Scope the plan to the minimum viable change:
   elif [[ ! -f "$template_file" ]]; then
     template_content="[ERROR: Planning template not found at $template_file]"
   fi
+  if ! rubric_snippet="$(agent_rubric_snippet "$tools_dir")"; then
+    rubric_snippet=""
+  fi
 
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
@@ -513,6 +527,8 @@ $issue_context
 Throughout your work, periodically update your status by running:
   echo '<short description of what you are doing right now>' > $status_file
 Keep it under 50 chars. Update it at each major step.
+
+$rubric_snippet
 
 $template_content
 
@@ -561,6 +577,7 @@ build_coding_prompt() {
   local code_depth="${10:-medium}" agent_cmd="${11:-claude}" operating_mode="${12:-normal}"
   local feature_dir="$wt_dir/features/$slug"
   local plan_path="$feature_dir/plan.md"
+  local rubric_snippet=""
   local abort_feedback_instruction exit_guard_text coding_completion_text
   abort_feedback_instruction="$(agent_abort_feedback_text "$agent_cmd" "$feature_dir/.workflow-aborted")"
   exit_guard_text="$(agent_exit_guard_text "$agent_cmd" "ALL phase requirements are met")"
@@ -622,6 +639,9 @@ Apply minimal scope. A focused small PR is better than a large incomplete one:
   else
     template_content="[ERROR: Coding template not found at $template_file]"
   fi
+  if ! rubric_snippet="$(agent_rubric_snippet "$tools_dir")"; then
+    rubric_snippet=""
+  fi
 
   cat <<_WVML_PROMPT_
 You are working on: $title ($issue)
@@ -637,6 +657,8 @@ $issue_context
 Throughout your work, periodically update your status by running:
   echo '<short description of what you are doing right now>' > $status_file
 Keep it under 50 chars. Update it at each major step.
+
+$rubric_snippet
 
 $template_content
 

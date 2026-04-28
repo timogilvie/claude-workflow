@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   detectVariedDimensions,
+  type ChallengeComparisonDimensions,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
+import { formatRubricForJudgePrompt } from './rubric.ts';
 import { errorMessage } from './error-utils.ts';
 
 export type ValidatedComparisonResult = Omit<
@@ -104,14 +106,19 @@ Return JSON only with this exact structure:
   "rationale": "short explanation",
   "workflowInsight": "optional observation about how routing differences may have influenced the result",
   "dimensions": {
-    "correctness": { "primary": number, "challenger": number },
-    "codeQuality": { "primary": number, "challenger": number },
     "completeness": { "primary": number, "challenger": number },
-    "scopeDiscipline": { "primary": number, "challenger": number }
+    "correctness": { "primary": number, "challenger": number },
+    "code_quality": { "primary": number, "challenger": number },
+    "intervention_impact": { "primary": number, "challenger": number },
+    "autonomy": { "primary": number, "challenger": number }
   }
 }
 
 Scores must be integers from 1 to 10.
+
+Use these criterion definitions exactly:
+${formatRubricForJudgePrompt()}
+
 ${workflowContext}
 
 Task context:
@@ -145,7 +152,14 @@ export function validateComparisonJson(parsed: any): ValidatedComparisonResult {
   if (workflowInsight !== undefined && typeof workflowInsight !== 'string') {
     throw new Error('workflowInsight must be a string if provided');
   }
-  for (const key of ['correctness', 'codeQuality', 'completeness', 'scopeDiscipline']) {
+  const requiredDimensionKeys: Array<keyof ChallengeComparisonDimensions> = [
+    'completeness',
+    'correctness',
+    'code_quality',
+    'intervention_impact',
+    'autonomy',
+  ];
+  for (const key of requiredDimensionKeys) {
     const dimension = dimensions?.[key];
     if (!dimension || typeof dimension.primary !== 'number' || typeof dimension.challenger !== 'number') {
       throw new Error(`Invalid dimension payload for ${key}`);
@@ -165,7 +179,15 @@ export function validateComparisonJson(parsed: any): ValidatedComparisonResult {
     }
   }
 
-  const result: ValidatedComparisonResult = { winner, rationale: rationale.trim(), dimensions };
+  if (dimensions?.scopeDiscipline !== undefined || dimensions?.codeQuality !== undefined) {
+    throw new Error('Legacy comparison keys are not allowed. Use canonical rubric keys only.');
+  }
+
+  const result: ValidatedComparisonResult = {
+    winner,
+    rationale: rationale.trim(),
+    dimensions: dimensions as ChallengeComparisonDimensions,
+  };
   if (workflowInsight && workflowInsight.trim().length > 0) {
     result.workflowInsight = workflowInsight.trim();
   }
