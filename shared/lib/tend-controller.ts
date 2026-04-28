@@ -93,7 +93,6 @@ const BRANCH_NAME_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const PR_DEPENDENCY_PATTERN = /^PR#(\d+)$/i;
 const FAILING_CHECK_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled']);
 const PASSING_CHECK_CONCLUSIONS = new Set(['success', 'skipped', 'neutral']);
-const PASSING_CHECK_STATES = new Set(['SUCCESS', 'COMPLETED']);
 const CHECK_POLL_INTERVAL_MS = 30_000;
 
 export async function defaultPrFetcher(integrationBranch: string, repoDir: string): Promise<GhPrListEntry[]> {
@@ -339,11 +338,12 @@ export function truncateOutput(output: string, maxLines = 30): string {
 
 export function buildFailureComment(phase: string, excerpt: string): string {
   const title = phase.charAt(0).toUpperCase() + phase.slice(1);
+  const escaped = (excerpt || '(no output)').replace(/```/g, '`  `');
   return [
     `### Wavemill ${title} failed`,
     '',
     '```text',
-    excerpt || '(no output)',
+    escaped,
     '```',
   ].join('\n');
 }
