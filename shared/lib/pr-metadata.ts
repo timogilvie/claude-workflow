@@ -8,6 +8,7 @@ export interface PrMetadata {
   requires?: string[];
   risk?: RiskLevel;
   challenge?: boolean;
+  challengePairId?: string;
 }
 
 export interface PrMetadataError {
@@ -21,9 +22,9 @@ export type ParseResult =
   | { ok: false; errors: PrMetadataError[]; bodyWithoutBlock: string };
 
 const BLOCK_REGEX = /<!-- wavemill-meta\n([\s\S]*?)\n-->/g;
-const LINE_REGEX = /^([a-z_]+):\s*(.*)$/;
+const LINE_REGEX = /^([a-zA-Z_]+):\s*(.*)$/;
 const ARRAY_FIELDS = new Set<keyof PrMetadata>(['depends_on', 'depends_on_linear', 'requires']);
-const STRING_FIELDS = new Set<keyof PrMetadata>(['task', 'stack']);
+const STRING_FIELDS = new Set<keyof PrMetadata>(['task', 'stack', 'challengePairId']);
 const FIELD_ORDER: Array<keyof PrMetadata> = [
   'task',
   'stack',
@@ -32,6 +33,7 @@ const FIELD_ORDER: Array<keyof PrMetadata> = [
   'requires',
   'risk',
   'challenge',
+  'challengePairId',
 ];
 
 function trimBlockAdjacentWhitespace(body: string): string {
@@ -106,7 +108,7 @@ export function parsePrMetadata(body: string): ParseResult {
         continue;
       }
 
-      metadata[field as 'task' | 'stack'] = rawValue.trim();
+      metadata[field as 'task' | 'stack' | 'challengePairId'] = rawValue.trim();
       continue;
     }
 

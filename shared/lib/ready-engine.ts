@@ -31,7 +31,16 @@ export interface ReadyEngineContext {
   readChallengeComparisons: () => ChallengeComparison[];
 }
 
-const KNOWN_METADATA_FIELDS = new Set(['task', 'stack', 'depends_on', 'depends_on_linear', 'requires', 'risk', 'challenge']);
+const KNOWN_METADATA_FIELDS = new Set([
+  'task',
+  'stack',
+  'depends_on',
+  'depends_on_linear',
+  'requires',
+  'risk',
+  'challenge',
+  'challengePairId',
+]);
 
 function aggregateStatus(results: GuardResult[]): ReadyVerdict['status'] {
   if (results.some((result) => result.status === 'fail')) return 'fail';
