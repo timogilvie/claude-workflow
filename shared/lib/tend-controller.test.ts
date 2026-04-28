@@ -496,19 +496,19 @@ describe('selectNextCandidate dependency cycles', () => {
 describe('formatStatusLine', () => {
   it('formats the dry-run status line', async () => {
     await withDecision([pr()], (decision) => {
-      assert.match(formatStatusLine(decision), /^tend: integration=healthy eligible=1 blocked=0 next=PR#1$/);
+      assert.equal(formatStatusLine(decision), 'eligible=1 blocked=0 health=ok last=none action=idle');
     });
   });
 
-  it('includes unhealthy reasons and none when no PR is selected', () => {
+  it('includes degraded health, last merged PR, and action overrides', () => {
     assert.equal(
       formatStatusLine({
         integrationHealth: { state: 'unhealthy', reason: 'ci: failure' },
         eligible: [],
         blocked: [],
         nextPR: null,
-      }),
-      'tend: integration=unhealthy:ci: failure eligible=0 blocked=0 next=none',
+      }, { action: 'merged-#42', lastPR: 42 }),
+      'eligible=0 blocked=0 health=degraded last=#42 action=merged-#42',
     );
   });
 });

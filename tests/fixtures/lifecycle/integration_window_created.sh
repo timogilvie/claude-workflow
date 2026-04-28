@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "SKIP: tmux unavailable"
+  exit 0
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+RUNNER="$REPO_DIR/shared/lib/wavemill-startup-runner.sh"
+TMP_DIR="$(mktemp -d /tmp/wavemill-integration-created.XXXXXX)"
+SESSION="wavemill-integration-created-$$"
+export SESSION
+
+cleanup() {
+  tmux kill-session -t "$SESSION" >/dev/null 2>&1 || true
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+extract_spawn_function() {
+  awk '
+    /^spawn_integration_window\(\) \{/ { capture=1 }
+    capture { print }
+    capture && /^}/ { exit }
+  ' "$RUNNER"
+}
+
+FAKE_BIN="$TMP_DIR/bin"
+REPO_UNDER_TEST="$TMP_DIR/repo"
+TOOLS_DIR="$TMP_DIR/tools"
+STATUS_LOG_FILE="$TMP_DIR/status.log"
+mkdir -p "$FAKE_BIN" "$REPO_UNDER_TEST" "$TOOLS_DIR"
+export REPO_DIR="$REPO_UNDER_TEST" TOOLS_DIR STATUS_LOG_FILE PATH="$FAKE_BIN:$PATH"
+
+cat > "$FAKE_BIN/npx" <<'EOF'
+#!/usr/bin/env bash
+exec -a "npx $* session=${WAVEMILL_SESSION:-unknown}" sleep 300
+EOF
+chmod +x "$FAKE_BIN/npx"
+touch "$TOOLS_DIR/tend.ts"
+
+cat > "$REPO_UNDER_TEST/.wavemill-config.json" <<'EOF'
+{
+  "integration": {
+    "enabled": true,
+    "useMillSession": true
+  }
+}
+EOF
+
+startup_log() {
+  printf '%s\n' "$*" >> "$STATUS_LOG_FILE"
+}
+
+eval "$(extract_spawn_function)"
+
+tmux new-session -d -s "$SESSION" -n control -c "$REPO_UNDER_TEST" 'sleep 300'
+spawn_integration_window
+
+for _ in {1..20}; do
+  if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx 'integration'; then
+    echo "PASS: integration window created"
+    exit 0
+  fi
+  sleep 0.1
+done
+
+echo "FAIL: integration window was not created"
+exit 1
