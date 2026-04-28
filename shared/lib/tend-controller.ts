@@ -249,7 +249,11 @@ export async function executeMerge(
     } catch {
       // Comment posting failure is non-fatal; always release the PR from merging state.
     }
-    deps.releaseToBlocked(candidate.number);
+    try {
+      deps.releaseToBlocked(candidate.number);
+    } catch {
+      // Label update failure is non-fatal; PR will be manually reviewed or auto-retried on next cycle.
+    }
     return { status: 'blocked', prNumber: candidate.number, phase, failureExcerpt, haltLoop: false };
   };
 
