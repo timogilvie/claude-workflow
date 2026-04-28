@@ -32,24 +32,16 @@ function shellHarness(overrides: {
 } = {}): {
   shellRunner: (cmd: string, opts?: { encoding?: string; cwd?: string }) => string;
   calls: string[];
-  bodies: string[];
 } {
   const calls: string[] = [];
-  const bodies: string[] = [];
 
   return {
     calls,
-    bodies,
     shellRunner: (cmd) => {
       calls.push(cmd);
 
       if (cmd === 'mktemp') {
         return '/tmp/promotion-body.txt';
-      }
-
-      if (cmd.includes("cat > '/tmp/promotion-body.txt' <<'EOF'")) {
-        bodies.push(cmd);
-        return '';
       }
 
       if (cmd.includes("git rev-parse 'auto/integration'")) return 'integration-sha\n';
@@ -108,8 +100,10 @@ describe('runPromotion', () => {
       assert.match(result.checkSummary ?? '', /^passing:/);
       assert(shell.calls.some((cmd) => cmd.includes('gh pr edit 77 --body-file')));
       assert(!shell.calls.some((cmd) => cmd.includes('gh pr create')));
-      assert.match(shell.bodies[0] ?? '', /Promotion Summary/);
-      assert.match(shell.bodies[0] ?? '', /PR #101: Add release guardrails/);
+      // Body is written directly via writeFileSync; rm -f is mocked so file persists
+      const writtenBody = readFileSync('/tmp/promotion-body.txt', 'utf-8');
+      assert.match(writtenBody, /Promotion Summary/);
+      assert.match(writtenBody, /PR #101: Add release guardrails/);
     } finally {
       repo.cleanup();
     }

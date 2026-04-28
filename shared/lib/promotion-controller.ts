@@ -1,3 +1,4 @@
+import { writeFileSync } from 'fs';
 import { getIntegrationConfig } from './config.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import { errorMessage } from './error-utils.ts';
@@ -319,7 +320,7 @@ function writeBodyToTempFile(
   repoDir: string,
 ): string {
   const output = String(shellRunner('mktemp', { encoding: 'utf-8', cwd: repoDir })).trim();
-  shellRunner(`cat > ${escapeShellArg(output)} <<'EOF'\n${body}\nEOF`, { encoding: 'utf-8', cwd: repoDir });
+  writeFileSync(output, body);
   return output;
 }
 
