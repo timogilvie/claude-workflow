@@ -908,6 +908,25 @@ else
   fail "normal review prompt unexpectedly includes scoped-review guidance"
 fi
 
+# HOK-1435: integration-aware PR assertions
+if grep -q -- '--base main' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'wavemill-meta' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'wm:ready' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'add-pr-label' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'wavemill' "$PROMPT_RENDER_DIR/review-claude.txt"; then
+  pass "review prompt includes --base, metadata block, wavemill label, and wm:ready"
+else
+  fail "review prompt is missing integration-aware PR requirements"
+fi
+
+if grep -q 'wm:merging' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'wm:merged' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'FORBIDDEN' "$PROMPT_RENDER_DIR/review-claude.txt"; then
+  pass "review prompt forbids wm:merging and wm:merged"
+else
+  fail "review prompt is missing controller-label prohibition"
+fi
+
 EXIT_SEMANTICS_PATTERN='(/exit|remain in session|exit the process|stay running|keep running|close the session|let the session end)'
 
 for template in planning-phase.md coding-phase.md review-phase.md; do

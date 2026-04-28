@@ -42,13 +42,41 @@ The implementation is complete. Your job is to review and create a PR.
    - Re-run the review tool (step 1)
 
 3. **Create a PR** using GitHub CLI with a descriptive title and body:
-   gh pr create --title "{{ISSUE}}: <concise summary>" --body "<PR body>"
+   PR_URL=$(gh pr create --title "{{ISSUE}}: <concise summary>" --base {{BASE_BRANCH}} --body "<PR body>")
+   PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
    The PR body MUST include:
    - A "## Summary" section with 2-4 bullet points describing what changed and why
    - A "## Changes" section listing the key files/modules modified
    - A "## Test plan" section describing how the changes were validated
    - A "## Self-review" section noting the review verdict and iterations run
+   - A Wavemill metadata block as the final element of the PR body:
+     ```
+     <!-- wavemill-meta
+     task: {{ISSUE}}
+     -->
+     ```
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
+
+4. **Add required label to the PR**:
+   ```bash
+   npx tsx {{TOOLS_DIR}}/add-pr-label.ts "$PR_NUMBER" wavemill
+   ```
+
+5. **Add readiness label only when safe**:
+   Add `wm:ready` only if self-review has completed and there is no known failure:
+   - Add when the final self-review exit code is 0
+   - Add when review mode is `none` (review skipped by configuration)
+   - Do NOT add when exit code is 2 (known review tool failure)
+   - If exit code is 1, fix blockers and only add after a re-run returns exit code 0
+   ```bash
+   npx tsx {{TOOLS_DIR}}/add-pr-label.ts "$PR_NUMBER" wm:ready
+   ```
+
+⚠️ FORBIDDEN — controller-only actions:
+- Do NOT add the `wm:merging` label
+- Do NOT add the `wm:merged` label
+- Do NOT merge the PR
+These are reserved for the Wavemill autonomous merge controller.
 
 ### Authorship Attribution
 
@@ -87,6 +115,10 @@ Before creating the PR, determine whether you are the principal author:
 - [ ] Self-review tool executed (unless mode is 'none')
 - [ ] Blockers fixed (if any were found)
 - [ ] PR created with descriptive summary
+- [ ] PR created with `--base {{BASE_BRANCH}}`
+- [ ] PR body contains Wavemill metadata block
+- [ ] `wavemill` label added to PR
+- [ ] `wm:ready` label added (if review passed or skipped)
 - [ ] PR linked to {{ISSUE}}
 
 ### Important Notes
