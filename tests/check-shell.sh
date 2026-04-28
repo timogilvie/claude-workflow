@@ -882,6 +882,29 @@ else
   fail "coding prompt is missing survival-mode confidence guidance"
 fi
 
+if grep -q '## Grading Rubric' "$PROMPT_RENDER_DIR/planning-codex.txt" \
+  && grep -q '## Grading Rubric' "$PROMPT_RENDER_DIR/coding-codex.txt"; then
+  pass "planning and coding prompts render grading rubric section"
+else
+  fail "planning/coding prompt is missing grading rubric section"
+fi
+
+for criterion in completeness correctness code_quality intervention_impact autonomy; do
+  if grep -q "\`$criterion\`" "$PROMPT_RENDER_DIR/planning-codex.txt" \
+    && grep -q "\`$criterion\`" "$PROMPT_RENDER_DIR/coding-codex.txt"; then
+    pass "planning/coding prompts include rubric criterion $criterion"
+  else
+    fail "planning/coding prompts missing rubric criterion $criterion"
+  fi
+done
+
+if grep -q 'scopeDiscipline' "$PROMPT_RENDER_DIR/planning-codex.txt" \
+  || grep -q 'scopeDiscipline' "$PROMPT_RENDER_DIR/coding-codex.txt"; then
+  fail "planning/coding prompts contain legacy scopeDiscipline rubric key"
+else
+  pass "planning/coding prompts exclude legacy scopeDiscipline key"
+fi
+
 if grep -q 'Draft PR fallback' "$PROMPT_RENDER_DIR/review-survival.txt" \
   && grep -q -- '--draft' "$PROMPT_RENDER_DIR/review-survival.txt" \
   && grep -q -- '--operating-mode survival' "$PROMPT_RENDER_DIR/review-survival.txt" \

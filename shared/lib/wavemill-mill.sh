@@ -3921,7 +3921,7 @@ maybe_run_challenge_comparison() {
 
     # Read comparison result from challenge records
     local compare_json winner winner_model rationale
-    local cor_p cor_c qual_p qual_c comp_p comp_c scope_p scope_c
+    local comp_p comp_c cor_p cor_c qual_p qual_c impact_p impact_c auto_p auto_c
     local primary_eval_score challenger_eval_score
     compare_json=$(tail -1 "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" 2>/dev/null)
     winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
@@ -3929,14 +3929,16 @@ maybe_run_challenge_comparison() {
     rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
     primary_eval_score=$(echo "$compare_json" | jq -r '.primaryEvalScore // "—"' 2>/dev/null)
     challenger_eval_score=$(echo "$compare_json" | jq -r '.challengerEvalScore // "—"' 2>/dev/null)
-    cor_p=$(echo "$compare_json" | jq -r '.dimensions.correctness.primary // "—"' 2>/dev/null)
-    cor_c=$(echo "$compare_json" | jq -r '.dimensions.correctness.challenger // "—"' 2>/dev/null)
-    qual_p=$(echo "$compare_json" | jq -r '.dimensions.codeQuality.primary // "—"' 2>/dev/null)
-    qual_c=$(echo "$compare_json" | jq -r '.dimensions.codeQuality.challenger // "—"' 2>/dev/null)
     comp_p=$(echo "$compare_json" | jq -r '.dimensions.completeness.primary // "—"' 2>/dev/null)
     comp_c=$(echo "$compare_json" | jq -r '.dimensions.completeness.challenger // "—"' 2>/dev/null)
-    scope_p=$(echo "$compare_json" | jq -r '.dimensions.scopeDiscipline.primary // "—"' 2>/dev/null)
-    scope_c=$(echo "$compare_json" | jq -r '.dimensions.scopeDiscipline.challenger // "—"' 2>/dev/null)
+    cor_p=$(echo "$compare_json" | jq -r '.dimensions.correctness.primary // "—"' 2>/dev/null)
+    cor_c=$(echo "$compare_json" | jq -r '.dimensions.correctness.challenger // "—"' 2>/dev/null)
+    qual_p=$(echo "$compare_json" | jq -r '.dimensions.code_quality.primary // .dimensions.codeQuality.primary // "—"' 2>/dev/null)
+    qual_c=$(echo "$compare_json" | jq -r '.dimensions.code_quality.challenger // .dimensions.codeQuality.challenger // "—"' 2>/dev/null)
+    impact_p=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.primary // .dimensions.scopeDiscipline.primary // "—"' 2>/dev/null)
+    impact_c=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.challenger // .dimensions.scopeDiscipline.challenger // "—"' 2>/dev/null)
+    auto_p=$(echo "$compare_json" | jq -r '.dimensions.autonomy.primary // "—"' 2>/dev/null)
+    auto_c=$(echo "$compare_json" | jq -r '.dimensions.autonomy.challenger // "—"' 2>/dev/null)
 
     # Shorten model names for display (strip date suffix)
     local disp_primary disp_challenger disp_winner
@@ -3954,10 +3956,11 @@ maybe_run_challenge_comparison() {
     log "status" "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
     log "status" "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
     log "status" "  ├────────────────────────────────────────────────────────────┤"
+    log "status" "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
     log "status" "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
     log "status" "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
-    log "status" "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
-    log "status" "  │  Scope           $(printf '%-20s' "$scope_p") $(printf '%-19s' "$scope_c")│"
+    log "status" "  │  Intervention    $(printf '%-20s' "$impact_p") $(printf '%-19s' "$impact_c")│"
+    log "status" "  │  Autonomy        $(printf '%-20s' "$auto_p") $(printf '%-19s' "$auto_c")│"
     log "status" "  ├────────────────────────────────────────────────────────────┤"
     if [[ "$winner" == "primary" ]]; then
       log "status" "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"

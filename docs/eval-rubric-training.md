@@ -2,6 +2,9 @@
 
 Historical eval datasets now mix rubric-aware and legacy rows. `rubric_provenance` makes that mix explicit so downstream trainers can choose consistent policies instead of inferring intent from missing fields.
 
+Challenge PR comparisons now use the same five canonical rubric criteria as per-PR evals:
+`completeness`, `correctness`, `code_quality`, `intervention_impact`, and `autonomy`.
+
 ## Provenance Values
 
 - `judge`: The eval judge emitted `rubricEval` directly during record creation. This is the highest-confidence source.

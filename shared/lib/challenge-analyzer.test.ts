@@ -5,7 +5,7 @@ import {
   formatChallengeTextOutput,
   joinRecords,
 } from './challenge-analyzer.ts';
-import type { ChallengeComparison } from './challenge-comparison.ts';
+import type { StoredChallengeComparison } from './challenge-comparison.ts';
 import type { EvalRecord } from './eval-schema.ts';
 
 function createEvalRecord(overrides: Partial<EvalRecord>): EvalRecord {
@@ -28,7 +28,7 @@ function createEvalRecord(overrides: Partial<EvalRecord>): EvalRecord {
 }
 
 test('joinRecords pairs challenge comparisons with matching eval records', () => {
-  const comparisons: ChallengeComparison[] = [
+  const comparisons: StoredChallengeComparison[] = [
     {
       challengePairId: 'pair-1',
       primaryModel: 'model-a',
@@ -41,10 +41,11 @@ test('joinRecords pairs challenge comparisons with matching eval records', () =>
       winnerModel: 'model-a',
       rationale: 'A won',
       dimensions: {
-        correctness: { primary: 8, challenger: 6 },
-        codeQuality: { primary: 8, challenger: 6 },
         completeness: { primary: 8, challenger: 6 },
-        scopeDiscipline: { primary: 8, challenger: 6 },
+        correctness: { primary: 8, challenger: 6 },
+        code_quality: { primary: 8, challenger: 6 },
+        intervention_impact: { primary: 8, challenger: 6 },
+        autonomy: { primary: 8, challenger: 6 },
       },
       timestamp: '2026-01-01T00:00:00.000Z',
     },
@@ -62,7 +63,7 @@ test('joinRecords pairs challenge comparisons with matching eval records', () =>
 });
 
 test('computeAggregations calculates role, stage, and cost summaries', () => {
-  const comparisons: ChallengeComparison[] = [
+  const comparisons: StoredChallengeComparison[] = [
     {
       challengePairId: 'pair-1',
       primaryModel: 'model-a',
@@ -75,10 +76,11 @@ test('computeAggregations calculates role, stage, and cost summaries', () => {
       winnerModel: 'model-a',
       rationale: 'A won',
       dimensions: {
-        correctness: { primary: 8, challenger: 6 },
-        codeQuality: { primary: 8, challenger: 6 },
         completeness: { primary: 8, challenger: 6 },
-        scopeDiscipline: { primary: 8, challenger: 6 },
+        correctness: { primary: 8, challenger: 6 },
+        code_quality: { primary: 8, challenger: 6 },
+        intervention_impact: { primary: 8, challenger: 6 },
+        autonomy: { primary: 8, challenger: 6 },
       },
       timestamp: '2026-01-01T00:00:00.000Z',
       primaryRouting: {
@@ -145,4 +147,33 @@ test('computeAggregations calculates role, stage, and cost summaries', () => {
   assert.match(output, /Overall Win Rates:/);
   assert.match(output, /Cost Efficiency:/);
   assert.match(output, /By Planner Resource Variant:/);
+});
+
+test('joinRecords accepts legacy comparison dimensions without crashing', () => {
+  const comparisons: StoredChallengeComparison[] = [
+    {
+      challengePairId: 'pair-legacy',
+      primaryModel: 'model-a',
+      challengerModel: 'model-b',
+      primaryPrUrl: 'https://example.com/pr/10',
+      challengerPrUrl: 'https://example.com/pr/11',
+      primaryEvalScore: 0.75,
+      challengerEvalScore: 0.7,
+      winner: 'primary',
+      winnerModel: 'model-a',
+      rationale: 'legacy row',
+      dimensions: {
+        correctness: { primary: 8, challenger: 7 },
+        codeQuality: { primary: 8, challenger: 7 },
+        completeness: { primary: 8, challenger: 7 },
+        scopeDiscipline: { primary: 8, challenger: 7 },
+      },
+      timestamp: '2026-01-02T00:00:00.000Z',
+    },
+  ];
+
+  const joined = joinRecords(comparisons, []);
+  const stats = computeAggregations(joined);
+  assert.equal(stats.totalComparisons, 1);
+  assert.equal(stats.overallWinRates.get('model-a')?.wins, 1);
 });
