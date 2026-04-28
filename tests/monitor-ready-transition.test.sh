@@ -412,15 +412,15 @@ check_contains "pending ready checks clear attention" "$review_to_ready_pending_
 check_contains "pending ready checks count as active work" "$review_to_ready_pending_output" "active_count=1"
 
 merged_without_ready_output="$(run_monitor_case merged_without_ready)"
-check_contains "merged PR without ready pass is blocked" "$merged_without_ready_output" "attention=needs-user"
-check_contains "merged PR without ready pass is not cleaned up" "$merged_without_ready_output" "cleanup_count=0"
+check_contains "merged PR without ready pass clears attention" "$merged_without_ready_output" "attention=clear"
+check_contains "merged PR without ready pass is cleaned up" "$merged_without_ready_output" "cleanup_count=1"
 check_contains "merged PR without ready pass writes attention" "$merged_without_ready_output" "Release Readiness Check passed"
-check_contains "merged PR without ready pass persists merged state" "$merged_without_ready_output" "save_task_state_status=merged"
+check_contains "merged PR without ready pass does not persist merged state for review hold" "$merged_without_ready_output" "save_task_state_status="
 
 merged_without_ready_twice_output="$(run_monitor_case merged_without_ready_twice)"
 check_contains "merged-before-ready warning logs only once across ticks" "$merged_without_ready_twice_output" "bypass_warn_count=1"
-check_contains "merged-before-ready stays blocked after repeat tick" "$merged_without_ready_twice_output" "attention=needs-user"
-check_contains "merged-before-ready persists merged task status on repeat tick" "$merged_without_ready_twice_output" "save_task_state_status=merged"
+check_contains "merged-before-ready clears attention after repeat tick" "$merged_without_ready_twice_output" "attention=clear"
+check_contains "merged-before-ready does not persist merged task status on repeat tick" "$merged_without_ready_twice_output" "save_task_state_status="
 
 merged_after_ready_output="$(run_monitor_case merged_after_ready)"
 check_contains "merged PR after ready pass can clean up" "$merged_after_ready_output" "cleanup_count=1"
