@@ -244,7 +244,11 @@ export async function executeMerge(
 
   const block = async (phase: string, output: string): Promise<MergeExecutionResult> => {
     const failureExcerpt = truncateOutput(output);
-    postFailureComment(candidate.number, buildFailureComment(phase, failureExcerpt), options.repoDir, deps.shellRunner);
+    try {
+      postFailureComment(candidate.number, buildFailureComment(phase, failureExcerpt), options.repoDir, deps.shellRunner);
+    } catch {
+      // Comment posting failure is non-fatal; always release the PR from merging state.
+    }
     deps.releaseToBlocked(candidate.number);
     return { status: 'blocked', prNumber: candidate.number, phase, failureExcerpt, haltLoop: false };
   };
@@ -404,25 +408,21 @@ function rebaseAndPush(
 
   const output: string[] = [];
 
-  shellRunner(
+  output.push(String(shellRunner(
     `git fetch origin ${escapeShellArg(integrationBranch)} 2>&1`,
     { encoding: 'utf-8', cwd: worktreePath },
-  );
-  output.push(String(shellRunner(`git fetch origin ${escapeShellArg(integrationBranch)} 2>&1`, {
-    encoding: 'utf-8',
-    cwd: worktreePath,
-  })));
+  )));
 
-  // Capture the remote SHA before rebase for SHA-keyed force-with-lease
-  const remoteRef = `origin/${integrationBranch}`;
-  const remoteSha = String(shellRunner(`git rev-parse ${escapeShellArg(remoteRef)}`, {
+  // Capture the PR branch SHA before rebase for SHA-keyed force-with-lease
+  const prRemoteRef = `origin/${prBranch}`;
+  const prBranchSha = String(shellRunner(`git rev-parse ${escapeShellArg(prRemoteRef)}`, {
     encoding: 'utf-8',
     cwd: worktreePath,
   })).trim();
 
   try {
     output.push(String(shellRunner(
-      `git rebase ${escapeShellArg(remoteRef)} 2>&1`,
+      `git rebase ${escapeShellArg(`origin/${integrationBranch}`)} 2>&1`,
       { encoding: 'utf-8', cwd: worktreePath },
     )));
   } catch (error) {
@@ -436,7 +436,7 @@ function rebaseAndPush(
   }
 
   output.push(String(shellRunner(
-    `git push --force-with-lease=${escapeShellArg(prBranch)}:${escapeShellArg(remoteSha)} origin ${escapeShellArg(prBranch)} 2>&1`,
+    `git push --force-with-lease=${escapeShellArg(prBranch)}:${escapeShellArg(prBranchSha)} origin ${escapeShellArg(prBranch)} 2>&1`,
     { encoding: 'utf-8', cwd: worktreePath },
   )));
 
