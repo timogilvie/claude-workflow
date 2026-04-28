@@ -430,7 +430,8 @@ describe('executeMerge', () => {
     });
     try {
       await executeMerge(opts);
-      assert.ok(removedPaths.length > 0, 'gitWorktreeRemove should be called at least once');
+      // Should have at least 2 calls: pre-cleanup (line 647) + finally cleanup (line 719)
+      assert.ok(removedPaths.length >= 2, `Expected at least 2 gitWorktreeRemove calls, got ${removedPaths.length}`);
     } finally {
       opts.cleanup();
     }
