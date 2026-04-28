@@ -5,8 +5,11 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { WM_LABELS } from './pr-state-labels.ts';
 import {
+  executeMerge,
   formatStatusLine,
   selectNextCandidate,
+  type ExecuteMergeOptions,
+  type ExecuteOps,
   type GhPrListEntry,
   type IntegrationHealth,
   type SelectNextCandidateOptions,
@@ -230,5 +233,206 @@ describe('formatStatusLine', () => {
       }),
       'tend: integration=unhealthy:ci: failure eligible=0 blocked=0 next=none',
     );
+  });
+});
+
+// ─── executeMerge ─────────────────────────────────────────────────────────────
+
+function buildExecuteOptions(
+  prList: GhPrListEntry[],
+  opsOverrides: Partial<ExecuteOps> = {},
+  healthOverride: IntegrationHealth = { state: 'healthy' },
+): ExecuteMergeOptions & { cleanup: () => void } {
+  const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-tend-exec-'));
+  writeFileSync(
+    join(repoDir, '.wavemill-config.json'),
+    JSON.stringify({ integration: { integrationBranch: 'auto/integration', mergeMethod: 'squash' } }),
+  );
+
+  const defaultOps: ExecuteOps = {
+    prFetcher: async () => prList,
+    healthChecker: async () => healthOverride,
+    setMerging: () => {},
+    setBlocked: () => {},
+    setMerged: () => {},
+    gitFetch: () => {},
+    gitWorktreeAdd: () => {},
+    gitWorktreeRemove: () => {},
+    gitRebase: () => {},
+    gitRebaseAbort: () => {},
+    gitGetRemoteSha: () => 'abc123sha',
+    gitForcePush: () => {},
+    pollPrChecks: async () => ({ pass: true }),
+    runReadyCheck: async () => ({ pass: true }),
+    mergePr: () => {},
+    postComment: () => {},
+  };
+
+  return {
+    repoDir,
+    ops: { ...defaultOps, ...opsOverrides },
+    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+  };
+}
+
+describe('executeMerge', () => {
+  it('merges successfully (REQ-F1)', async () => {
+    const calls: string[] = [];
+    const prList = [pr({ number: 100, headRefName: 'task/my-feature' })];
+    const opts = buildExecuteOptions(prList, {
+      setMerging: (n) => calls.push(`setMerging:${n}`),
+      gitFetch: () => calls.push('gitFetch'),
+      gitRebase: () => calls.push('gitRebase'),
+      gitForcePush: () => calls.push('gitForcePush'),
+      pollPrChecks: async () => { calls.push('pollPrChecks'); return { pass: true }; },
+      runReadyCheck: async () => { calls.push('runReadyCheck'); return { pass: true }; },
+      mergePr: () => calls.push('mergePr'),
+      setMerged: (n) => calls.push(`setMerged:${n}`),
+    });
+    try {
+      const outcome = await executeMerge(opts);
+      assert.deepEqual(outcome, { status: 'merged', pr: 100 });
+      assert.ok(calls.includes('setMerging:100'), 'setMerging called');
+      assert.ok(calls.includes('gitFetch'), 'gitFetch called');
+      assert.ok(calls.includes('gitRebase'), 'gitRebase called');
+      assert.ok(calls.includes('gitForcePush'), 'gitForcePush called');
+      assert.ok(calls.includes('pollPrChecks'), 'pollPrChecks called');
+      assert.ok(calls.includes('runReadyCheck'), 'runReadyCheck called');
+      assert.ok(calls.includes('mergePr'), 'mergePr called');
+      assert.ok(calls.includes('setMerged:100'), 'setMerged called');
+      const mergingIndex = calls.indexOf('setMerging:100');
+      const mergedIndex = calls.indexOf('setMerged:100');
+      assert.ok(mergingIndex < mergedIndex, 'setMerging happens before setMerged');
+    } finally {
+      opts.cleanup();
+    }
+  });
+
+  it('returns skipped when a PR is already merging (REQ-F2)', async () => {
+    const prList = [
+      pr({ number: 99, labels: [label(WM_LABELS.wavemill), label(WM_LABELS.merging)] }),
+      pr({ number: 100 }),
+    ];
+    const opts = buildExecuteOptions(prList);
+    try {
+      const outcome = await executeMerge(opts);
+      assert.deepEqual(outcome, { status: 'skipped', reason: 'merging-in-progress', activePr: 99 });
+    } finally {
+      opts.cleanup();
+    }
+  });
+
+  it('blocks and continues on rebase failure (REQ-F3)', async () => {
+    const comments: string[] = [];
+    let setBlockedCalled = false;
+    let mergePrCalled = false;
+    const prList = [pr({ number: 100 })];
+    const opts = buildExecuteOptions(prList, {
+      gitRebase: () => { throw new Error('CONFLICT (content)'); },
+      postComment: (_n, body) => { comments.push(body); },
+      setBlocked: () => { setBlockedCalled = true; },
+      mergePr: () => { mergePrCalled = true; },
+    });
+    try {
+      const outcome = await executeMerge(opts);
+      assert.deepEqual(outcome, { status: 'continue', failure: 'rebase', prNumber: 100 });
+      assert.ok(setBlockedCalled, 'setBlocked should be called');
+      assert.ok(comments.some((c) => c.toLowerCase().includes('rebase')), 'comment should mention rebase');
+      assert.ok(!mergePrCalled, 'mergePr should not be called');
+    } finally {
+      opts.cleanup();
+    }
+  });
+
+  it('blocks and continues on PR check failure (REQ-F4)', async () => {
+    const comments: string[] = [];
+    let setBlockedCalled = false;
+    let mergePrCalled = false;
+    const prList = [pr({ number: 100 })];
+    const opts = buildExecuteOptions(prList, {
+      pollPrChecks: async () => ({ pass: false, failed: ['test-suite'] }),
+      postComment: (_n, body) => { comments.push(body); },
+      setBlocked: () => { setBlockedCalled = true; },
+      mergePr: () => { mergePrCalled = true; },
+    });
+    try {
+      const outcome = await executeMerge(opts);
+      assert.deepEqual(outcome, { status: 'continue', failure: 'checks', prNumber: 100 });
+      assert.ok(setBlockedCalled, 'setBlocked should be called');
+      assert.ok(comments.length > 0, 'comment should be posted');
+      assert.ok(!mergePrCalled, 'mergePr should not be called');
+    } finally {
+      opts.cleanup();
+    }
+  });
+
+  it('blocks and continues on ready engine failure (REQ-F5)', async () => {
+    const comments: string[] = [];
+    let setBlockedCalled = false;
+    let mergePrCalled = false;
+    const prList = [pr({ number: 100 })];
+    const opts = buildExecuteOptions(prList, {
+      runReadyCheck: async () => ({ pass: false, reasons: ['deps-unresolved'] }),
+      postComment: (_n, body) => { comments.push(body); },
+      setBlocked: () => { setBlockedCalled = true; },
+      mergePr: () => { mergePrCalled = true; },
+    });
+    try {
+      const outcome = await executeMerge(opts);
+      assert.deepEqual(outcome, { status: 'continue', failure: 'ready', prNumber: 100 });
+      assert.ok(setBlockedCalled, 'setBlocked should be called');
+      assert.ok(comments.some((c) => c.includes('Ready check failed')), 'comment should mention ready check');
+      assert.ok(!mergePrCalled, 'mergePr should not be called');
+    } finally {
+      opts.cleanup();
+    }
+  });
+
+  it('halts when integration goes red after merge (REQ-F6)', async () => {
+    let mergeComplete = false;
+    let setBlockedCalled = false;
+    const prList = [pr({ number: 100 })];
+    const opts = buildExecuteOptions(prList, {
+      healthChecker: async () => {
+        if (mergeComplete) {
+          return { state: 'unhealthy', reason: 'ci: failure' };
+        }
+        return { state: 'healthy' };
+      },
+      mergePr: () => { mergeComplete = true; },
+      setBlocked: () => { setBlockedCalled = true; },
+    });
+    try {
+      const outcome = await executeMerge(opts);
+      assert.deepEqual(outcome, { status: 'halt', reason: 'integration-red', integrationBranch: 'auto/integration' });
+      assert.ok(!setBlockedCalled, 'setBlocked should not be called on integration halt');
+    } finally {
+      opts.cleanup();
+    }
+  });
+
+  it('returns idle when there are no ready PRs', async () => {
+    const opts = buildExecuteOptions([]);
+    try {
+      const outcome = await executeMerge(opts);
+      assert.deepEqual(outcome, { status: 'idle' });
+    } finally {
+      opts.cleanup();
+    }
+  });
+
+  it('cleans up worktree even when rebase fails (REQ-F8)', async () => {
+    const removedPaths: string[] = [];
+    const prList = [pr({ number: 100 })];
+    const opts = buildExecuteOptions(prList, {
+      gitRebase: () => { throw new Error('CONFLICT'); },
+      gitWorktreeRemove: (path) => { removedPaths.push(path); },
+    });
+    try {
+      await executeMerge(opts);
+      assert.ok(removedPaths.length > 0, 'gitWorktreeRemove should be called at least once');
+    } finally {
+      opts.cleanup();
+    }
   });
 });
