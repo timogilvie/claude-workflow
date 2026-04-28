@@ -61,6 +61,7 @@ describe('parsePrMetadata', () => {
       requires: ['ci-green', 'approval'],
       risk: 'medium',
       challenge: false,
+      challengePairId: 'pair-1',
     };
 
     const parsed = parsePrMetadata(renderPrMetadata(metadata));
@@ -208,6 +209,7 @@ describe('renderPrMetadata', () => {
   it('renders fields in deterministic order', () => {
     const rendered = renderPrMetadata({
       challenge: true,
+      challengePairId: 'pair-9',
       risk: 'high',
       requires: ['qa'],
       task: 'HOK-1432',
@@ -227,6 +229,7 @@ describe('renderPrMetadata', () => {
         'requires: ["qa"]',
         'risk: high',
         'challenge: true',
+        'challengePairId: pair-9',
         '-->',
       ].join('\n'),
     );

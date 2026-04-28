@@ -4,6 +4,7 @@ import {
   setWavemillMerged,
   setWavemillMerging,
   setWavemillReady,
+  setWavemillSuperseded,
   WM_LABELS,
 } from './pr-state-labels.ts';
 import { getIntegrationConfig, getIntegrationReadyPolicy } from './config.ts';
@@ -14,6 +15,7 @@ import { extractMetadataBlock, parsePrMetadata, type PrMetadata } from './pr-met
 import { evaluateReady } from './ready-engine.ts';
 import { runReadyStage } from './ready-stage.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { applyChallengePairGates } from './tend-challenge-gate.ts';
 
 export interface TendCandidate {
   number: number;
@@ -82,6 +84,7 @@ export interface SelectNextCandidateOptions {
   repoDir: string;
   prFetcher?: PrFetcher;
   healthChecker?: HealthChecker;
+  loserCleanup?: (prNumber: number, repoDir: string) => void;
 }
 
 interface EligibleWorkItem {
@@ -189,8 +192,30 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
 
   const cycleResult = computeDependencyDepths(eligibleWorkItems);
   blocked.push(...cycleResult.cycleBlocked);
+  eligibleWorkItems = cycleResult.eligible;
 
-  const eligible = cycleResult.eligible
+  const challengeResult = applyChallengePairGates(eligibleWorkItems, blocked, options.repoDir);
+  eligibleWorkItems = challengeResult.eligible;
+  blocked.length = 0;
+  blocked.push(...challengeResult.blocked);
+
+  const cleanupLoser = options.loserCleanup ?? defaultLoserCleanup;
+  for (const loserPr of challengeResult.losers) {
+    try {
+      cleanupLoser(loserPr, options.repoDir);
+    } catch {
+      // Cleanup failure is non-fatal; the loser remains blocked for manual review.
+    }
+  }
+
+  const eligible = eligibleWorkItems
+    .map((item) => ({
+      number: item.pr.number,
+      title: item.pr.title,
+      headBranch: item.pr.headRefName,
+      createdAt: item.pr.createdAt,
+      dependencyDepth: item.dependencyDepth,
+    }))
     .sort((a, b) => a.dependencyDepth - b.dependencyDepth || a.createdAt.localeCompare(b.createdAt));
 
   return {
@@ -569,6 +594,14 @@ function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): Merg
   };
 }
 
+function defaultLoserCleanup(prNumber: number, repoDir: string): void {
+  setWavemillSuperseded(prNumber);
+  execShellCommand(
+    `gh pr close ${prNumber} --comment ${escapeShellArg('Closed: lost challenge comparison.')}`,
+    { encoding: 'utf-8', cwd: repoDir },
+  );
+}
+
 function parseCheckRuns(output: string): Array<{ name?: string; state?: string | null; conclusion?: string | null }> {
   const parsed = JSON.parse(String(output)) as unknown;
   if (!Array.isArray(parsed)) {
@@ -716,7 +749,7 @@ function removeCandidatesWithBlockedDependencies(eligible: EligibleWorkItem[]): 
 }
 
 function computeDependencyDepths(eligible: EligibleWorkItem[]): {
-  eligible: TendCandidate[];
+  eligible: Array<EligibleWorkItem & { dependencyDepth: number }>;
   cycleBlocked: BlockedCandidate[];
 } {
   const itemByNumber = new Map(eligible.map((item) => [item.pr.number, item]));
@@ -764,11 +797,8 @@ function computeDependencyDepths(eligible: EligibleWorkItem[]): {
   const candidates = eligible
     .filter((item) => !cycleMembers.has(item.pr.number))
     .map((item) => ({
-      number: item.pr.number,
-      title: item.pr.title,
-      headBranch: item.pr.headRefName,
-      createdAt: item.pr.createdAt,
       dependencyDepth: depths.get(item.pr.number) ?? 0,
+      ...item,
     }));
 
   return { eligible: candidates, cycleBlocked };
