@@ -5,11 +5,14 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { WM_LABELS } from './pr-state-labels.ts';
 import {
+  executeMerge,
   formatStatusLine,
   selectNextCandidate,
   type GhPrListEntry,
   type IntegrationHealth,
+  type MergeExecutionDeps,
   type SelectNextCandidateOptions,
+  type TendCandidate,
   type TendDecision,
 } from './tend-controller.ts';
 
@@ -50,6 +53,73 @@ function buildTestOptions(
     healthChecker: async () => healthOverride,
     cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
   };
+}
+
+function candidate(overrides: Partial<TendCandidate> = {}): TendCandidate {
+  return {
+    number: 42,
+    title: 'Merge me',
+    headBranch: 'task/merge-me',
+    createdAt: '2026-04-01T00:00:00Z',
+    dependencyDepth: 0,
+    ...overrides,
+  };
+}
+
+function buildMergeTestOptions(overrides: {
+  shellRunner?: MergeExecutionDeps['shellRunner'];
+  readyChecker?: MergeExecutionDeps['readyChecker'];
+  healthChecker?: MergeExecutionDeps['healthChecker'];
+} = {}): {
+  repoDir: string;
+  calls: string[];
+  labels: string[];
+  deps: Partial<MergeExecutionDeps>;
+  cleanup: () => void;
+} {
+  const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-tend-merge-'));
+  writeFileSync(
+    join(repoDir, '.wavemill-config.json'),
+    JSON.stringify({ integration: { integrationBranch: 'auto/integration', mergeMethod: 'squash' } }),
+  );
+
+  const calls: string[] = [];
+  const labels: string[] = [];
+  const defaultShellRunner: MergeExecutionDeps['shellRunner'] = (cmd) => {
+    calls.push(cmd);
+    if (cmd.includes('gh pr list --label')) return '[]';
+    if (cmd.includes('git rev-parse --git-common-dir')) return join(repoDir, '.git');
+    if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+    return '';
+  };
+
+  return {
+    repoDir,
+    calls,
+    labels,
+    deps: {
+      shellRunner: overrides.shellRunner ?? defaultShellRunner,
+      readyChecker: overrides.readyChecker ?? (async () => ({ ready: true })),
+      healthChecker: overrides.healthChecker ?? (async () => ({ state: 'healthy' })),
+      acquireMerging: (prNumber) => {
+        labels.push(`merging:${prNumber}`);
+      },
+      releaseToBlocked: (prNumber) => {
+        labels.push(`blocked:${prNumber}`);
+      },
+      releaseMerged: (prNumber) => {
+        labels.push(`merged:${prNumber}`);
+      },
+      restoreReady: (prNumber) => {
+        labels.push(`ready:${prNumber}`);
+      },
+    },
+    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+  };
+}
+
+function hasCall(calls: string[], pattern: RegExp): boolean {
+  return calls.some((call) => pattern.test(call));
 }
 
 async function withDecision(
@@ -230,5 +300,134 @@ describe('formatStatusLine', () => {
       }),
       'tend: integration=unhealthy:ci: failure eligible=0 blocked=0 next=none',
     );
+  });
+});
+
+describe('executeMerge', () => {
+  it('rebases, pushes, waits, merges, and marks merged', async () => {
+    const options = buildMergeTestOptions();
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.ok(hasCall(options.calls, /git worktree add/));
+      assert.ok(hasCall(options.calls, /git fetch origin 'auto\/integration'/));
+      assert.ok(hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
+      assert.ok(hasCall(options.calls, /git push --force-with-lease origin 'task\/merge-me'/));
+      assert.ok(hasCall(options.calls, /gh pr checks 42/));
+      assert.ok(hasCall(options.calls, /gh pr merge 42 --squash --delete-branch/));
+      assert.ok(hasCall(options.calls, /git worktree remove --force/));
+      assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks and comments when rebase fails', async () => {
+    const options = buildMergeTestOptions();
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      if (cmd.includes('git rebase')) {
+        throw new Error('rebase conflict\nfile.ts');
+      }
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: { ...options.deps, shellRunner },
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'rebase');
+      assert.ok(hasCall(options.calls, /gh pr comment 42 --body/));
+      assert.ok(hasCall(options.calls, /Wavemill Rebase failed/));
+      assert.ok(hasCall(options.calls, /git worktree remove --force/));
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks when PR checks fail and does not merge', async () => {
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'failure' }]);
+        return '';
+      },
+    });
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'checks');
+      assert.ok(!hasCall(options.calls, /gh pr merge/));
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks when the ready re-check fails', async () => {
+    const options = buildMergeTestOptions({
+      readyChecker: async () => ({ ready: false, reason: 'missing risk field' }),
+    });
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'ready');
+      assert.ok(hasCall(options.calls, /missing risk field/));
+      assert.ok(!hasCall(options.calls, /gh pr merge/));
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('halts after merge when integration becomes unhealthy', async () => {
+    const options = buildMergeTestOptions({
+      healthChecker: async () => ({ state: 'unhealthy', reason: 'ci: failure' }),
+    });
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'halted');
+      assert.equal(result.haltLoop, true);
+      assert.equal(result.phase, 'integration');
+      assert.ok(hasCall(options.calls, /gh pr merge 42/));
+      assert.ok(hasCall(options.calls, /gh pr comment 42 --body/));
+      assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('skips when another PR is already marked merging', async () => {
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return JSON.stringify([{ number: 7 }]);
+        return '';
+      },
+    });
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.deepEqual(result, { status: 'skipped', prNumber: 42, haltLoop: false });
+      assert.ok(!hasCall(options.calls, /git worktree add/));
+      assert.deepEqual(options.labels, []);
+    } finally {
+      options.cleanup();
+    }
   });
 });
