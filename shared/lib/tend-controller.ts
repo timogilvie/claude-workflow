@@ -551,8 +551,7 @@ function isFailingCheck(check: { state?: string | null; conclusion?: string | nu
 
 function isPassingCheck(check: { state?: string | null; conclusion?: string | null }): boolean {
   const conclusion = (check.conclusion || '').toLowerCase();
-  const state = (check.state || '').toUpperCase();
-  return PASSING_CHECK_CONCLUSIONS.has(conclusion) || PASSING_CHECK_STATES.has(state);
+  return PASSING_CHECK_CONCLUSIONS.has(conclusion);
 }
 
 function summarizeChecks(checks: Array<{ name?: string; state?: string | null; conclusion?: string | null }>): string {
