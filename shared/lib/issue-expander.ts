@@ -132,6 +132,10 @@ export function buildIssueExpansionCallOptions(cliCmd?: string): LLMCallOptions 
     cliCmd: cliCmd || process.env.CLAUDE_CMD || 'claude',
     taskType: 'planning',
     cliFlags: ISSUE_EXPANDER_CLI_FLAGS,
+    retry: true,
+    maxRetries: 2,
+    timeout: 600_000,
+    maxBuffer: 50 * 1024 * 1024,
   };
 }
 
