@@ -908,6 +908,50 @@ else
   fail "normal review prompt unexpectedly includes scoped-review guidance"
 fi
 
+if grep -q -- '--base main' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q -- '--base main' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "review prompt specifies --base for PR creation"
+else
+  fail "review prompt is missing --base flag for PR creation"
+fi
+
+if grep -q '<!-- wavemill-meta' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q '<!-- wavemill-meta' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "review prompt includes Wavemill metadata block instruction"
+else
+  fail "review prompt is missing Wavemill metadata block instruction"
+fi
+
+if grep -q 'task: HOK-1130' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'task: HOK-1130' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "review prompt metadata block includes rendered issue ID"
+else
+  fail "review prompt metadata block does not include issue ID"
+fi
+
+if grep -q 'label "wavemill"' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'label "wavemill"' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "review prompt instructs adding wavemill label"
+else
+  fail "review prompt is missing wavemill label instruction"
+fi
+
+if grep -q 'wm:ready' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'wm:ready' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "review prompt instructs adding wm:ready label after review passes"
+else
+  fail "review prompt is missing wm:ready label instruction"
+fi
+
+if grep -q 'wm:merging' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'wm:merged' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'wm:merging' "$PROMPT_RENDER_DIR/review-codex.txt" \
+  && grep -q 'wm:merged' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "review prompt prohibits wm:merging and wm:merged labels"
+else
+  fail "review prompt is missing wm:merging/wm:merged prohibition"
+fi
+
 EXIT_SEMANTICS_PATTERN='(/exit|remain in session|exit the process|stay running|keep running|close the session|let the session end)'
 
 for template in planning-phase.md coding-phase.md review-phase.md; do
