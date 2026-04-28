@@ -416,6 +416,46 @@ describe('ready-stage', () => {
         execMock.mock.restore();
       }
     });
+
+    it('returns pass for success and skipped checks', () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
+        JSON.stringify([
+          { name: 'Shell and Unit Tests', state: 'SUCCESS' },
+          { name: 'Lifecycle Tests', state: 'SKIPPED' },
+        ])
+      );
+
+      try {
+        const result = checkCIStatus(42, '/tmp/test');
+        assert.equal(result.status, 'pass');
+        assert.equal(result.message, 'All CI checks passing');
+        assert.deepEqual(result.details, {
+          totalChecks: 2,
+        });
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('includes the offending unknown CI state in the failure message', () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
+        JSON.stringify([{ name: 'Lifecycle Tests', state: 'CANCELLED' }])
+      );
+
+      try {
+        const result = checkCIStatus(42, '/tmp/test');
+        assert.equal(result.status, 'fail');
+        assert.match(result.message, /Unknown CI state for PR #42/);
+        assert.match(result.message, /Lifecycle Tests=CANCELLED/);
+        assert.deepEqual(result.details, {
+          failedChecks: [{ name: 'Lifecycle Tests', state: 'CANCELLED' }],
+          pendingChecks: [],
+          totalChecks: 1,
+        });
+      } finally {
+        execMock.mock.restore();
+      }
+    });
   });
 
   describe('checkMergeConflicts', () => {

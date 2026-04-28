@@ -5,7 +5,7 @@ import { getPullRequest } from '../shared/lib/github.ts';
 import { getIssueCompletionState } from '../shared/lib/linear.ts';
 import { evaluateReady, type ReadyVerdict } from '../shared/lib/ready-engine.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { runReadyStage } from '../shared/lib/ready-stage.ts';
+import { checkMergeConflicts, runReadyStage, type ReadyCheck, type ReadyResult } from '../shared/lib/ready-stage.ts';
 import { readChallengeComparisons } from '../shared/lib/challenge-comparison.ts';
 
 runTool({
@@ -44,6 +44,7 @@ runTool({
     const repoDir = args['repo-dir'] || process.cwd();
     const readyPolicy = getIntegrationReadyPolicy(repoDir);
     let verdict: ReadyVerdict;
+    let output: ReadyResult;
 
     if (readyPolicy.enabled) {
       const pr = getPullRequest(prNumber);
@@ -85,25 +86,30 @@ runTool({
         },
         readChallengeComparisons,
       });
+
+      output = {
+        prNumber,
+        verdict: verdict.status,
+        checks: buildPolicyChecks(verdict),
+        summary: verdict.reasons[0] ?? summarizeVerdict(verdict.status),
+        timestamp: new Date().toISOString(),
+        mergeConflict: await checkMergeConflicts(prNumber, repoDir),
+      };
     } else {
-      const result = await runReadyStage({ prNumber, repoDir });
+      output = await runReadyStage({ prNumber, repoDir });
       verdict = {
-        status: result.verdict,
-        reasons: result.summary ? [result.summary] : [],
+        status: output.verdict,
+        reasons: output.summary ? [output.summary] : [],
         output: { labels: [], comment: '' },
       };
     }
 
-    if (args.json) {
-      console.log(JSON.stringify(verdict));
-    } else {
-      printHumanVerdict(prNumber, verdict);
-    }
+    console.log(JSON.stringify(output));
 
     if (verdict.status === 'fail') {
-      process.exit(2);
-    } else if (verdict.status === 'pending') {
       process.exit(1);
+    } else if (verdict.status === 'pending') {
+      process.exit(2);
     }
   },
 });
@@ -124,18 +130,33 @@ function extractPrNumber(input: string): number {
   throw new Error(`Invalid PR number or URL: ${input}`);
 }
 
-function printHumanVerdict(prNumber: number, verdict: ReadyVerdict): void {
-  console.log(`PR #${prNumber}: ${verdict.status.toUpperCase()}`);
-  if (verdict.reasons.length > 0) {
-    for (const reason of verdict.reasons) {
-      console.log(`- ${reason}`);
-    }
+function buildPolicyChecks(verdict: ReadyVerdict): ReadyCheck[] {
+  if (verdict.reasons.length === 0) {
+    return [{
+      name: 'ready-policy',
+      status: verdict.status,
+      message: summarizeVerdict(verdict.status),
+      details: {},
+    }];
   }
-  if (verdict.output.labels.length > 0) {
-    console.log(`labels: ${verdict.output.labels.join(', ')}`);
+
+  return verdict.reasons.map((reason) => ({
+    name: 'ready-policy',
+    status: verdict.status,
+    message: reason,
+    details: {},
+  }));
+}
+
+function summarizeVerdict(status: ReadyVerdict['status']): string {
+  if (status === 'pass') {
+    return 'All ready policy checks passed';
   }
-  if (verdict.output.comment) {
-    console.log('');
-    console.log(verdict.output.comment);
+  if (status === 'pending') {
+    return 'Ready policy checks are still pending';
   }
+  if (status === 'warn') {
+    return 'Ready policy checks passed with warnings';
+  }
+  return 'Ready policy checks failed';
 }
