@@ -556,12 +556,19 @@ export function checkCIStatus(prNumber: number, repoDir: string): ReadyCheck {
     const failedChecks = checks.filter((check: any) => !passedStates.has(check.state));
     const blockingFailures = failedChecks.filter((check: any) => !pendingStates.has(check.state));
     const pendingChecks = failedChecks.filter((check: any) => pendingStates.has(check.state));
+    const unknownStateFailures = blockingFailures.filter(
+      (check: any) => typeof check.state === 'string' && check.state !== 'FAILURE'
+    );
 
     if (blockingFailures.length > 0) {
+      const message = unknownStateFailures.length > 0
+        ? `Unknown CI state for PR #${prNumber}: ${unknownStateFailures.map((check: any) => `${check.name}=${check.state}`).join(', ')}`
+        : `${blockingFailures.length} CI check(s) failing`;
+
       return {
         name: 'ci-status',
         status: 'fail',
-        message: `${blockingFailures.length} CI check(s) failing`,
+        message,
         details: {
           failedChecks: blockingFailures.map((c: any) => ({ name: c.name, state: c.state })),
           pendingChecks: pendingChecks.map((c: any) => ({ name: c.name, state: c.state })),
