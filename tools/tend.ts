@@ -88,7 +88,10 @@ runTool({
       return;
     }
 
-    const decision = await selectNextCandidate({ repoDir });
+    const decision = await selectNextCandidate({
+      repoDir,
+      loserCleanup: args['dry-run'] ? () => {} : undefined,
+    });
     if (args['dry-run'] || decision.nextPR === null) {
       console.log(formatStatusLine(decision, { action: 'idle' }));
       return;
