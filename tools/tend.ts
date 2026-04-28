@@ -1,6 +1,7 @@
 #!/usr/bin/env -S npx tsx
 
 import { executeMerge, formatStatusLine, selectNextCandidate } from '../shared/lib/tend-controller.ts';
+import { runPromotion } from '../shared/lib/promotion-controller.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 
 const TEND_LOOP_INTERVAL_MS = 60_000;
@@ -39,9 +40,24 @@ runTool({
     'npx tsx tools/tend.ts --once --dry-run',
     'npx tsx tools/tend.ts --once --repo-dir /path/to/repo',
     'npx tsx tools/tend.ts --loop --repo-dir /path/to/repo',
+    'npx tsx tools/tend.ts promote --repo-dir /path/to/repo',
   ],
-  async run({ args }) {
+  positional: {
+    name: 'command',
+    description: 'Optional subcommand (supported: promote)',
+  },
+  async run({ args, positional }) {
+    const subcommand = positional[0];
     if (!args.once && !args.loop) {
+      if (subcommand === 'promote') {
+        const repoDir = String(args['repo-dir'] || process.cwd());
+        const result = await runPromotion({ repoDir, dryRun: args['dry-run'] });
+        console.log(`promote: ${result.status}${result.prUrl ? ` url=${result.prUrl}` : ''}`);
+        if (result.checkSummary) {
+          console.log(`checks: ${result.checkSummary}`);
+        }
+        return;
+      }
       throw new Error('one of --once or --loop is required');
     }
 

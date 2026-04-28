@@ -101,6 +101,15 @@ ${GREEN}Commands:${NC}
              Options:
                ${CYAN}--repo-dir${NC} <path>          Repository directory to inspect
 
+  ${CYAN}tend${NC}      Tend the integration queue or run promotion mode
+             - `wavemill tend --once` runs a single tend pass
+             - `wavemill tend --loop` runs the integration queue loop
+             - `wavemill tend promote` opens or updates the promotion PR
+
+  ${CYAN}promote${NC}   Open or update a promotion PR from integration to main
+             - Reuses shared branch health and PR check helpers
+             - Never auto-merges the promotion PR
+
   ${CYAN}route${NC}     Recommend planner/coder/reviewer workflow
              - Reads task text or a task file
              - Chooses stage-specific models and execution depth
@@ -790,6 +799,30 @@ run_ready() {
   exec npx tsx "$ready_tool" "$@"
 }
 
+run_tend() {
+  local tend_tool="$TOOLS_DIR/tend.ts"
+
+  if [[ ! -f "$tend_tool" ]]; then
+    echo -e "${RED}Error:${NC} Tend tool not found at: $tend_tool" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Tend...${NC}"
+  exec npx tsx "$tend_tool" "$@"
+}
+
+run_promote() {
+  local promote_tool="$TOOLS_DIR/promote.ts"
+
+  if [[ ! -f "$promote_tool" ]]; then
+    echo -e "${RED}Error:${NC} Promote tool not found at: $promote_tool" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Promote...${NC}"
+  exec npx tsx "$promote_tool" "$@"
+}
+
 run_context() {
   local context_script="$LIB_DIR/wavemill-context.sh"
 
@@ -866,6 +899,14 @@ case "${1:-}" in
   ready)
     shift
     run_ready "$@"
+    ;;
+  tend)
+    shift
+    run_tend "$@"
+    ;;
+  promote)
+    shift
+    run_promote "$@"
     ;;
   context)
     run_preflight_checks
