@@ -153,11 +153,11 @@ export function classifyChallengeState(
   };
 }
 
-export function applyChallengePairGates(
-  eligibleItems: ChallengeEligibleWorkItem[],
+export function applyChallengePairGates<T extends ChallengeEligibleWorkItem>(
+  eligibleItems: T[],
   blocked: ChallengeBlockedCandidate[],
   repoDir: string,
-): { eligible: ChallengeEligibleWorkItem[]; blocked: ChallengeBlockedCandidate[]; losers: number[] } {
+): { eligible: T[]; blocked: ChallengeBlockedCandidate[]; losers: number[] } {
   const allPrNumbers = new Set([
     ...eligibleItems.map((item) => item.pr.number),
     ...blocked.map((item) => item.number),
@@ -173,7 +173,7 @@ export function applyChallengePairGates(
   }
 
   const autoMerge = getChallengeConfig(repoDir).autoMergeWinner ?? true;
-  const nextEligible: ChallengeEligibleWorkItem[] = [];
+  const nextEligible: T[] = [];
   const nextBlocked = [...blocked];
   const losers = new Set<number>();
 

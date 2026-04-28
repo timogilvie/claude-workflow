@@ -192,10 +192,8 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
 
   const cycleResult = computeDependencyDepths(eligibleWorkItems);
   blocked.push(...cycleResult.cycleBlocked);
-  eligibleWorkItems = cycleResult.eligible;
 
-  const challengeResult = applyChallengePairGates(eligibleWorkItems, blocked, options.repoDir);
-  eligibleWorkItems = challengeResult.eligible;
+  const challengeResult = applyChallengePairGates(cycleResult.eligible, blocked, options.repoDir);
   blocked.length = 0;
   blocked.push(...challengeResult.blocked);
 
@@ -208,7 +206,7 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
     }
   }
 
-  const eligible = eligibleWorkItems
+  const eligible = challengeResult.eligible
     .map((item) => ({
       number: item.pr.number,
       title: item.pr.title,
