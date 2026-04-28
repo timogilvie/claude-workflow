@@ -426,6 +426,24 @@ describe('quota fallback', () => {
     assert.equal(reviewResult.model, 'model-a');
   });
 
+  it('filters task ladders to models supported by the selected provider', async () => {
+    const { cliPath, logPath } = createMockCli('provider-filter', {
+      'gpt-5.5': { type: 'other', message: 'invalid model for claude cli', code: 1 },
+      'claude-opus-4-7': { type: 'success', text: 'anthropic planning winner' },
+    });
+
+    const result = await callLLM('planning prompt', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      taskType: 'planning',
+    });
+
+    assert.equal(result.model, 'claude-opus-4-7');
+    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-opus-4-7']);
+  });
+
   it('persists a non_quota_error fallback event when a later candidate fails for another reason', async () => {
     const { cliPath } = createMockCli('quota-then-other-error', {
       'model-a': { type: 'quota', message: '429 quota exceeded', code: 1 },
