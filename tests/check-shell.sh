@@ -27,6 +27,7 @@ for f in \
   "$LIB_DIR"/wavemill-*.sh \
   "$LIB_DIR"/agent-adapters.sh \
   "$REPO_DIR"/shared/hooks/*.sh \
+  "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR/wavemill" \
@@ -41,6 +42,21 @@ for f in \
     fail "$(basename "$f") has syntax errors"
   fi
 done
+
+# ============================================================================
+# TEST 1B: State mutation helper behavior
+# ============================================================================
+echo ""
+echo "=== State Mutation Helper ==="
+
+state_mutex_output="$(bash "$REPO_DIR/tests/state-mutex.test.sh" 2>&1)" || state_mutex_status=$?
+state_mutex_status="${state_mutex_status:-0}"
+if [[ "$state_mutex_status" -eq 0 ]]; then
+  pass "state_mutate serializes JSON state updates"
+else
+  fail "state_mutate behavior: $state_mutex_output"
+fi
+unset state_mutex_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check
