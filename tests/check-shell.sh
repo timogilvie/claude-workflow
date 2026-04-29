@@ -681,7 +681,7 @@ fi
 MERGED_BLOCK=$(awk '
   /log "status" "✓ \$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
   in_block { print }
-  in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
+  in_block && /elif \[\[ "\$pr_status" == "CLOSED" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
 if grep -q 'launch_background_post_merge_eval "\$ISSUE" "\$PR"' <<< "$MERGED_BLOCK"; then
   pass "merged PR path launches eval asynchronously"
@@ -693,6 +693,16 @@ if ! grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"' <<< "$ME
   pass "merged PR path no longer runs eval inline"
 else
   fail "merged PR path still runs eval inline"
+fi
+
+if awk '
+  /cleanup_completed_task/ { saw_cleanup=1 }
+  saw_cleanup && /launch_background_post_merge_eval/ { found=1; exit }
+  END { exit !found }
+' <<< "$MERGED_BLOCK"; then
+  pass "post-merge eval is queued after cleanup completes"
+else
+  fail "post-merge eval is launched before cleanup (ordering regression)"
 fi
 
 EXTERNAL_BLOCK=$(awk '
