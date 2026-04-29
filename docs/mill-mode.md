@@ -92,6 +92,9 @@ Minimal config:
 
 ```json
 {
+  "mill": {
+    "baseBranch": "auto/integration"
+  },
   "integration": {
     "enabled": true,
     "integrationBranch": "auto/integration",
@@ -102,7 +105,38 @@ Minimal config:
 }
 ```
 
-When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `integration` tmux window in the existing session and runs the tend loop there with the normal mill session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
+### Autonomous Integration Mode
+
+When `integration.enabled = true`, task PRs stop targeting `main` directly. The autonomous path becomes:
+
+```text
+task/* -> auto/integration -> main
+```
+
+Recommended operator setting:
+
+- Set `mill.baseBranch = "auto/integration"` so new task worktrees start from the same branch that autonomous merges are landing on.
+- If you leave `mill.baseBranch` on `main`, coding still works, but each PR is effectively rebased against `auto/integration` later by `tend`, which increases churn and conflict risk.
+
+The four pipeline stages are:
+
+- `mill`: selects work, creates worktrees, and opens Wavemill PRs against `auto/integration`.
+- `ready`: evaluates policy eligibility for autonomous merge, including metadata, dependency, migration, risk, and challenge guards.
+- `tend`: runs the integration queue, rebases the selected PR onto `auto/integration`, waits for PR checks, reruns ready-policy enforcement, and merges one candidate at a time.
+- `promote`: opens or refreshes the `auto/integration -> main` promotion PR and reports whether that release PR is green.
+
+When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `integration` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
+
+### Challenge-Mode Interaction
+
+Challenge mode adds a second PR for the same task and records a comparison result under `.wavemill/evals`. During tend selection, `tend-challenge-gate.ts` classifies each pair into one of four states:
+
+- not in a challenge pair
+- unresolved pair with no comparison yet
+- winner
+- loser
+
+If the pair is unresolved, tend blocks both sides from autonomous merge. If a winner is recorded and challenge auto-merge is enabled, the winner remains eligible, the loser is marked superseded, and tend closes the loser PR with a cleanup comment. If auto-merge is disabled for winners, the winning PR is still held for manual action.
 
 ## Promotion
 

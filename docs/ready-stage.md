@@ -9,6 +9,8 @@ This stage is available in two forms:
 
 The ready stage now includes live GitHub mergeability detection for open PRs. Merge-conflict state is reported separately from the readiness verdict so operators and the monitor can distinguish conflict remediation from other readiness failures.
 
+When autonomous integration mode is enabled, the ready stage also becomes the policy gate that `tend` rechecks immediately before merge.
+
 ## Overview
 
 The ready stage sits between PR creation and merge:
@@ -220,6 +222,37 @@ Reported merge states:
 - `CONFLICTED`: GitHub reports merge conflicts
 - `UNKNOWN`: GitHub is still computing mergeability after retries
 - `ERROR`: GitHub CLI failed or returned an unexpected state
+
+## Integration Policy Guards
+
+When `integration.readyPolicy.enabled = true`, autonomous merge uses `ready-engine.ts` to evaluate a focused set of policy guards before `tend` merges a PR into `auto/integration`.
+
+The guards are:
+
+- `checkBaseBranch()`: PR must target the configured integration branch.
+- `checkMetadata()`: PR must contain a valid `wavemill-meta` block.
+- `checkDependencies()`: `depends_on` and `depends_on_linear` references must already be satisfied.
+- `checkMigrationCoupling()`: `db:migration` must be paired with `wm:migration` unless coupling is disabled.
+- `checkRiskPolicy()`: high-risk PRs follow the configured risk policy.
+- `checkChallengePairs()`: challenge PRs need a resolved comparison record before autonomous merge.
+
+### Guard Outcomes
+
+| Signal | Ready | Blocked / Pending / Warn |
+|--------|-------|---------------------------|
+| Base branch | PR targets `integration.readyPolicy.integrationBranch` or `integration.integrationBranch` | `fail` if the PR still targets another branch such as `main` |
+| Metadata | Valid `wavemill-meta` block | `fail` if missing or malformed |
+| PR dependency | Referenced `depends_on: ["PR#123"]` PR is merged | `pending` if still open, `fail` if missing or closed without merge |
+| Linear dependency | Referenced issue is completed | `pending` if still incomplete, `fail` if missing or canceled |
+| Migration coupling | no migration labels, or both `db:migration` and `wm:migration` are present | `fail` if `db:migration` is missing `wm:migration`; `warn` if `wm:migration` exists alone |
+| High risk | no high-risk signal, or policy requirements are satisfied | `fail` for `riskPolicy=block`; `pending` for `require-label` without `wm-risk-acknowledged`; `warn` for `riskPolicy=auto` |
+| Challenge pair | PR is not in challenge mode, or a comparison record resolves the pair | `fail` if comparison data is missing or unreadable |
+
+### Integration-Red Blocking
+
+Ready policy is necessary but not sufficient. `tend` also checks the current `auto/integration` branch health before selecting any candidate. If the integration branch CI is red, tend reports `health=degraded`, no PR is eligible, and autonomous merging halts until the branch is green again.
+
+That means a PR can be individually ready and still remain unmerged because the shared integration branch is failing.
 
 ## Automatic Conflict Resolution
 
