@@ -504,6 +504,14 @@ else
   fail "agent adapters are missing static prompt fallback warning"
 fi
 
+if grep -q 'agent_runtime_resource_repo_dir' "$LIB_DIR/agent-adapters.sh" \
+  && grep -q -- '--repo-dir "$resource_repo_dir"' "$LIB_DIR/agent-adapters.sh" \
+  && ! grep -q -- '--repo-dir "$wt_dir" --json' "$LIB_DIR/agent-adapters.sh"; then
+  pass "runtime prompt resolver uses Wavemill resource root instead of task worktree"
+else
+  fail "runtime prompt resolver should not resolve prompt resources from task worktrees"
+fi
+
 # ============================================================================
 # TEST 4: FORCE_MODEL challenge bypass guards
 # ============================================================================
