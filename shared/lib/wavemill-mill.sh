@@ -1528,61 +1528,136 @@ if [[ -n "${FORCE_MODEL:-}" ]]; then
   log "info" "FORCE_MODEL=$FORCE_MODEL - skipping router"
 elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
   ROUTE_TOOL="$TOOLS_DIR/route-task.ts"
+  ROUTE_BATCH_TOOL="$TOOLS_DIR/route-tasks.ts"
   if [[ -f "$ROUTE_TOOL" ]]; then
     log "info" "Running model router..."
     ROUTE_MAX_COST_ARGS=()
     if [[ -n "${DEFAULT_MAX_COST_USD:-}" ]]; then
       ROUTE_MAX_COST_ARGS=(--max-cost "$DEFAULT_MAX_COST_USD")
     fi
-    for t in "${TASKS[@]}"; do
-      IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
-      PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
-      if [[ -f "$PACKET_FILE" ]]; then
-        ROUTE_STDERR="/tmp/${SESSION}-${ISSUE}-route.stderr"
-        rm -f "$ROUTE_STDERR"
-        ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" "${ROUTE_MAX_COST_ARGS[@]}" 2>"$ROUTE_STDERR" || echo "")
-        replay_route_transparency_logs "$ROUTE_STDERR"
-        rm -f "$ROUTE_STDERR"
-        if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
-          PLANNER=$(echo "$ROUTE_JSON" | jq -r '.planner // empty' 2>/dev/null)
-          CODER=$(echo "$ROUTE_JSON" | jq -r '.coder // empty' 2>/dev/null)
-          REVIEWER=$(echo "$ROUTE_JSON" | jq -r '.reviewer // empty' 2>/dev/null)
-          PLAN_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.planDepth // "light"' 2>/dev/null)
-          CODE_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.codeDepth // "medium"' 2>/dev/null)
-          REVIEW_MODE=$(echo "$ROUTE_JSON" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
-          ROUTING_MODE=$(echo "$ROUTE_JSON" | jq -r '.routingMode // "unknown"' 2>/dev/null)
-          NEIGHBOR_COUNT=$(echo "$ROUTE_JSON" | jq -r '.neighborCount // 0' 2>/dev/null)
+    STARTUP_BATCH_ROUTED=false
+    if [[ -f "$ROUTE_BATCH_TOOL" ]]; then
+      ROUTE_BATCH_INPUT="/tmp/${SESSION}-route-batch-input.jsonl"
+      ROUTE_BATCH_OUTPUT="/tmp/${SESSION}-route-batch-output.jsonl"
+      ROUTE_BATCH_STDERR="/tmp/${SESSION}-route-batch.stderr"
+      BATCH_ROUTE_ISSUES=()
+      : > "$ROUTE_BATCH_INPUT"
 
-          log "info" "  $ISSUE: planner=$PLANNER ($PLAN_DEPTH), coder=$CODER ($CODE_DEPTH), reviewer=$REVIEWER ($REVIEW_MODE)"
-          log "info" "          routing=$ROUTING_MODE, neighbors=$NEIGHBOR_COUNT"
-
-          # Store full route for launch-time use
-          echo "$ROUTE_JSON" > "/tmp/${SESSION}-${ISSUE}-route.json"
-
-          # COMPAT: keep model-suggestion.json during the route.json rollout.
-          # Remove this once startup consumers only read route.json via
-          # read_route_json() and no pre-HOK-1197 sessions need the shim.
-          CODER_AGENT=$(agent_resolve_from_model "${CODER:-}")
-          jq -n \
-            --arg model "${CODER:-}" \
-            --arg agent "$CODER_AGENT" \
-            --arg taskType "$(echo "$ROUTE_JSON" | jq -r '.signals.taskType // "unknown"')" \
-            --arg reasoning "$(echo "$ROUTE_JSON" | jq -r '.reasoning[0] // ""')" \
-            --argjson neighborCount "${NEIGHBOR_COUNT:-0}" \
-            --arg routingMode "${ROUTING_MODE:-unknown}" \
-            '{
-              recommendedModel: $model,
-              recommendedAgent: $agent,
-              taskType: $taskType,
-              confidence: (if $neighborCount > 0 then "medium" elif $routingMode == "heuristic-fallback" then "low" else "medium" end),
-              insufficientData: ($neighborCount == 0 and $routingMode == "heuristic-fallback"),
-              reasoning: $reasoning
-            }' > "/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
-        else
-          log "info" "  $ISSUE: Router returned no result, using defaults"
+      for t in "${TASKS[@]}"; do
+        IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+        PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
+        if [[ -f "$PACKET_FILE" ]]; then
+          jq -cn --arg issueId "$ISSUE" --arg file "$PACKET_FILE" '{issueId: $issueId, file: $file}' >> "$ROUTE_BATCH_INPUT"
+          printf '\n' >> "$ROUTE_BATCH_INPUT"
+          BATCH_ROUTE_ISSUES+=("$ISSUE")
         fi
+      done
+
+      if (( ${#BATCH_ROUTE_ISSUES[@]} > 0 )); then
+        rm -f "$ROUTE_BATCH_OUTPUT" "$ROUTE_BATCH_STDERR"
+        if npx tsx "$ROUTE_BATCH_TOOL" --jsonl "$ROUTE_BATCH_INPUT" --repo-dir "$REPO_DIR" "${ROUTE_MAX_COST_ARGS[@]}" >"$ROUTE_BATCH_OUTPUT" 2>"$ROUTE_BATCH_STDERR"; then
+          replay_route_transparency_logs "$ROUTE_BATCH_STDERR"
+          mapfile -t BATCH_ROUTE_LINES < <(grep -v '^[[:space:]]*$' "$ROUTE_BATCH_OUTPUT" 2>/dev/null || true)
+          if (( ${#BATCH_ROUTE_LINES[@]} == ${#BATCH_ROUTE_ISSUES[@]} )); then
+            STARTUP_BATCH_ROUTED=true
+            for idx in "${!BATCH_ROUTE_LINES[@]}"; do
+              ISSUE="${BATCH_ROUTE_ISSUES[$idx]}"
+              ROUTE_JSON="${BATCH_ROUTE_LINES[$idx]}"
+              if ! echo "$ROUTE_JSON" | jq -e '.planner and .coder and .reviewer' >/dev/null 2>&1; then
+                STARTUP_BATCH_ROUTED=false
+                log_warn "  $ISSUE: Batch router returned invalid JSON, falling back to per-task routing"
+                break
+              fi
+
+              PLANNER=$(echo "$ROUTE_JSON" | jq -r '.planner // empty' 2>/dev/null)
+              CODER=$(echo "$ROUTE_JSON" | jq -r '.coder // empty' 2>/dev/null)
+              REVIEWER=$(echo "$ROUTE_JSON" | jq -r '.reviewer // empty' 2>/dev/null)
+              PLAN_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.planDepth // "light"' 2>/dev/null)
+              CODE_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.codeDepth // "medium"' 2>/dev/null)
+              REVIEW_MODE=$(echo "$ROUTE_JSON" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
+              ROUTING_MODE=$(echo "$ROUTE_JSON" | jq -r '.routingMode // "unknown"' 2>/dev/null)
+              NEIGHBOR_COUNT=$(echo "$ROUTE_JSON" | jq -r '.neighborCount // 0' 2>/dev/null)
+
+              log "info" "  $ISSUE: planner=$PLANNER ($PLAN_DEPTH), coder=$CODER ($CODE_DEPTH), reviewer=$REVIEWER ($REVIEW_MODE)"
+              log "info" "          routing=$ROUTING_MODE, neighbors=$NEIGHBOR_COUNT"
+
+              echo "$ROUTE_JSON" > "/tmp/${SESSION}-${ISSUE}-route.json"
+
+              CODER_AGENT=$(agent_resolve_from_model "${CODER:-}")
+              jq -n \
+                --arg model "${CODER:-}" \
+                --arg agent "$CODER_AGENT" \
+                --arg taskType "$(echo "$ROUTE_JSON" | jq -r '.signals.taskType // "unknown"')" \
+                --arg reasoning "$(echo "$ROUTE_JSON" | jq -r '.reasoning[0] // ""')" \
+                --argjson neighborCount "${NEIGHBOR_COUNT:-0}" \
+                --arg routingMode "${ROUTING_MODE:-unknown}" \
+                '{
+                  recommendedModel: $model,
+                  recommendedAgent: $agent,
+                  taskType: $taskType,
+                  confidence: (if $neighborCount > 0 then "medium" elif $routingMode == "heuristic-fallback" then "low" else "medium" end),
+                  insufficientData: ($neighborCount == 0 and $routingMode == "heuristic-fallback"),
+                  reasoning: $reasoning
+                }' > "/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
+            done
+          else
+            log_warn "  Batch router returned ${#BATCH_ROUTE_LINES[@]} result(s) for ${#BATCH_ROUTE_ISSUES[@]} task(s); falling back to per-task routing"
+          fi
+        else
+          replay_route_transparency_logs "$ROUTE_BATCH_STDERR"
+          log_warn "  Batch router failed, falling back to per-task routing"
+        fi
+        rm -f "$ROUTE_BATCH_INPUT" "$ROUTE_BATCH_OUTPUT" "$ROUTE_BATCH_STDERR"
       fi
-    done
+    fi
+
+    if [[ "$STARTUP_BATCH_ROUTED" != "true" ]]; then
+      for t in "${TASKS[@]}"; do
+        IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
+        PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
+        if [[ -f "$PACKET_FILE" ]]; then
+          ROUTE_STDERR="/tmp/${SESSION}-${ISSUE}-route.stderr"
+          rm -f "$ROUTE_STDERR"
+          ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" "${ROUTE_MAX_COST_ARGS[@]}" 2>"$ROUTE_STDERR" || echo "")
+          replay_route_transparency_logs "$ROUTE_STDERR"
+          rm -f "$ROUTE_STDERR"
+          if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
+            PLANNER=$(echo "$ROUTE_JSON" | jq -r '.planner // empty' 2>/dev/null)
+            CODER=$(echo "$ROUTE_JSON" | jq -r '.coder // empty' 2>/dev/null)
+            REVIEWER=$(echo "$ROUTE_JSON" | jq -r '.reviewer // empty' 2>/dev/null)
+            PLAN_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.planDepth // "light"' 2>/dev/null)
+            CODE_DEPTH=$(echo "$ROUTE_JSON" | jq -r '.codeDepth // "medium"' 2>/dev/null)
+            REVIEW_MODE=$(echo "$ROUTE_JSON" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
+            ROUTING_MODE=$(echo "$ROUTE_JSON" | jq -r '.routingMode // "unknown"' 2>/dev/null)
+            NEIGHBOR_COUNT=$(echo "$ROUTE_JSON" | jq -r '.neighborCount // 0' 2>/dev/null)
+
+            log "info" "  $ISSUE: planner=$PLANNER ($PLAN_DEPTH), coder=$CODER ($CODE_DEPTH), reviewer=$REVIEWER ($REVIEW_MODE)"
+            log "info" "          routing=$ROUTING_MODE, neighbors=$NEIGHBOR_COUNT"
+
+            echo "$ROUTE_JSON" > "/tmp/${SESSION}-${ISSUE}-route.json"
+
+            CODER_AGENT=$(agent_resolve_from_model "${CODER:-}")
+            jq -n \
+              --arg model "${CODER:-}" \
+              --arg agent "$CODER_AGENT" \
+              --arg taskType "$(echo "$ROUTE_JSON" | jq -r '.signals.taskType // "unknown"')" \
+              --arg reasoning "$(echo "$ROUTE_JSON" | jq -r '.reasoning[0] // ""')" \
+              --argjson neighborCount "${NEIGHBOR_COUNT:-0}" \
+              --arg routingMode "${ROUTING_MODE:-unknown}" \
+              '{
+                recommendedModel: $model,
+                recommendedAgent: $agent,
+                taskType: $taskType,
+                confidence: (if $neighborCount > 0 then "medium" elif $routingMode == "heuristic-fallback" then "low" else "medium" end),
+                insufficientData: ($neighborCount == 0 and $routingMode == "heuristic-fallback"),
+                reasoning: $reasoning
+              }' > "/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
+          else
+            log "info" "  $ISSUE: Router returned no result, using defaults"
+          fi
+        fi
+      done
+    fi
     echo ""
   fi
 fi
@@ -4170,6 +4245,121 @@ linear_is_completed() {
   [[ "$issue_state" == "Done" || "$issue_state" == "Completed" || "$issue_state" == "Canceled" ]]
 }
 
+prepare_route_input_for_issue() {
+  local issue="$1" slug="$2" title="$3"
+  local linear_issue issue_json issue_desc packet_file feature_dir selected_task_file
+
+  linear_issue=$(get_linear_issue_id "$issue")
+  packet_file="/tmp/${SESSION}-${issue}-taskpacket.md"
+  feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
+  selected_task_file="$feature_dir/selected-task.json"
+
+  if [[ -f "/tmp/${SESSION}-${issue}-issue.json" ]]; then
+    issue_json=$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")
+  else
+    issue_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue.ts" "$linear_issue" --json 2>/dev/null || echo "{}")
+    echo "$issue_json" > "/tmp/${SESSION}-${issue}-issue.json"
+  fi
+
+  issue_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
+
+  if [[ ! -s "$packet_file" ]]; then
+    if [[ -f "$selected_task_file" ]] && jq -e '.title or .description' "$selected_task_file" >/dev/null 2>&1; then
+      jq -r '[(.title // ""), (.description // "")] | map(select(length > 0)) | join("\n\n")' \
+        "$selected_task_file" > "$packet_file" 2>/dev/null || true
+      [[ -s "$packet_file" ]] && log "info" "  Created minimal routing packet from selected-task.json"
+    fi
+  fi
+
+  if [[ ! -s "$packet_file" ]]; then
+    printf '%s\n\n%s\n' "$title" "$issue_desc" > "$packet_file"
+    log "info" "  Created minimal routing packet from title and description"
+  fi
+
+  if [[ -s "$packet_file" ]]; then
+    printf '%s\n' "$packet_file"
+    return 0
+  fi
+
+  return 1
+}
+
+apply_route_json_for_issue() {
+  local issue="$1" route_json="$2" source="${3:-startup-cache}"
+  local route_file="/tmp/${SESSION}-${issue}-route.json"
+  local route_source_file="/tmp/${SESSION}-${issue}-route-source.txt"
+
+  if [[ -z "$route_json" ]] || ! echo "$route_json" | jq -e '.planner and .coder and .reviewer' >/dev/null 2>&1; then
+    return 1
+  fi
+
+  printf '%s\n' "$route_json" > "$route_file"
+  printf '%s\n' "$source" > "$route_source_file"
+  return 0
+}
+
+batch_route_selected_tasks() {
+  local selected_lines="$1"
+  local route_batch_tool="$TOOLS_DIR/route-tasks.ts"
+  local route_jsonl_file route_output_file route_stderr_file
+  local count=0 idx issue slug title packet_file route_json
+  local -a route_issues=()
+  local -a route_lines=()
+  local -a route_max_cost_args=()
+
+  if [[ "${ROUTER_ENABLED:-true}" != "true" ]] || [[ ! -f "$route_batch_tool" ]] || [[ -z "$selected_lines" ]]; then
+    return 1
+  fi
+
+  route_jsonl_file="/tmp/${SESSION}-dynamic-route-batch-input.jsonl"
+  route_output_file="/tmp/${SESSION}-dynamic-route-batch-output.jsonl"
+  route_stderr_file="/tmp/${SESSION}-dynamic-route-batch.stderr"
+
+  [[ -n "${DEFAULT_MAX_COST_USD:-}" ]] && route_max_cost_args=(--max-cost "$DEFAULT_MAX_COST_USD")
+  : > "$route_jsonl_file"
+
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    IFS='|' read -r issue slug title _sel_area _sel_score _sel_blocked <<<"$line"
+    if packet_file=$(prepare_route_input_for_issue "$issue" "$slug" "$title"); then
+      jq -cn --arg issueId "$issue" --arg file "$packet_file" '{issueId: $issueId, file: $file}' >> "$route_jsonl_file"
+      printf '\n' >> "$route_jsonl_file"
+      route_issues+=("$issue")
+      count=$((count + 1))
+    fi
+  done <<<"$selected_lines"
+
+  if (( count < 2 )); then
+    rm -f "$route_jsonl_file" "$route_output_file" "$route_stderr_file"
+    return 1
+  fi
+
+  if ! _with_timeout "$API_TIMEOUT" npx tsx "$route_batch_tool" --jsonl "$route_jsonl_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" >"$route_output_file" 2>"$route_stderr_file"; then
+    replay_route_transparency_logs "$route_stderr_file"
+    rm -f "$route_jsonl_file" "$route_output_file" "$route_stderr_file"
+    return 1
+  fi
+
+  replay_route_transparency_logs "$route_stderr_file"
+  mapfile -t route_lines < <(grep -v '^[[:space:]]*$' "$route_output_file" 2>/dev/null || true)
+  if (( ${#route_lines[@]} != count )); then
+    rm -f "$route_jsonl_file" "$route_output_file" "$route_stderr_file"
+    return 1
+  fi
+
+  for idx in "${!route_lines[@]}"; do
+    issue="${route_issues[$idx]}"
+    route_json="${route_lines[$idx]}"
+    if ! apply_route_json_for_issue "$issue" "$route_json" "batch-cache"; then
+      rm -f "$route_jsonl_file" "$route_output_file" "$route_stderr_file"
+      return 1
+    fi
+  done
+
+  rm -f "$route_jsonl_file" "$route_output_file" "$route_stderr_file"
+  return 0
+}
+
 
 # ============================================================================
 # BACKLOG FETCHING & CANDIDATE SCORING
@@ -4396,6 +4586,7 @@ launch_task() {
     if [[ "${ROUTER_ENABLED:-true}" == "true" ]] && [[ -f "$route_tool" ]]; then
       local selected_task_file="$feature_dir/selected-task.json"
       local saved_route="/tmp/${SESSION}-${issue}-route.json"
+      local saved_route_source_file="/tmp/${SESSION}-${issue}-route-source.txt"
       local routing_log_file="$feature_dir/.routing-debug.log"
       local routing_failure_file="$feature_dir/.routing-failure"
       local route_input_file="$packet_file"
@@ -4437,7 +4628,11 @@ launch_task() {
 
       printf 'issue=%s\npacket=%s\nsaved_route=%s\n' "$issue" "$route_input_file" "$saved_route" >> "$routing_log_file"
 
-      if [[ ! -s "$route_input_file" ]]; then
+      if [[ -f "$saved_route" ]] && [[ -f "$saved_route_source_file" ]] && [[ "$(cat "$saved_route_source_file" 2>/dev/null)" == "batch-cache" ]] && jq -e '.planner and .coder and .reviewer' "$saved_route" >/dev/null 2>&1; then
+        route_json=$(cat "$saved_route" 2>/dev/null || echo "")
+        route_source="batch-cache"
+        log "info" "  Workflow route recovered from batch cache"
+      elif [[ ! -s "$route_input_file" ]]; then
         route_reason="missing_packet"
         log_warn "  Workflow routing skipped: no packet content available"
       else
@@ -4491,8 +4686,13 @@ launch_task() {
 
       if [[ -z "$route_source" ]] && [[ -f "$saved_route" ]] && jq -e '.planner and .coder and .reviewer' "$saved_route" >/dev/null 2>&1; then
         route_json=$(cat "$saved_route" 2>/dev/null || echo "")
-        route_source="startup-cache"
-        log "info" "  Workflow route recovered from startup cache"
+        route_source="$(cat "$saved_route_source_file" 2>/dev/null || echo "startup-cache")"
+        if [[ "$route_source" == "batch-cache" ]]; then
+          log "info" "  Workflow route recovered from batch cache"
+        else
+          route_source="startup-cache"
+          log "info" "  Workflow route recovered from startup cache"
+        fi
       fi
 
       if [[ -z "$route_source" ]] && [[ -s "$route_input_file" ]]; then
@@ -4557,6 +4757,8 @@ launch_task() {
 
         if [[ "$route_source" == "live" ]]; then
           log "info" "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+        elif [[ "$route_source" == "batch-cache" ]]; then
+          log "info" "  Workflow route (from batch cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         elif [[ "$route_source" == "startup-cache" ]]; then
           log "info" "  Workflow route (from startup cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         else
@@ -6345,6 +6547,7 @@ while :; do
           elif [[ -n "$REPLY" ]]; then
             # Parse user selection and launch tasks (up to free_slots)
             launched=0
+            selected_lines=""
             for n in $REPLY; do
               # Validate n is a positive integer to prevent sed injection
               if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
@@ -6360,10 +6563,28 @@ while :; do
                 log_warn "Invalid selection: $n"
                 continue
               fi
+              selected_lines+="${local_line}"$'\n'
+              launched=$((launched + 1))
+            done
+
+            if (( launched > 1 )); then
+              if batch_route_selected_tasks "$selected_lines"; then
+                log "info" "Prepared batch routing for $launched selected tasks"
+              else
+                log_warn "Batch routing failed for selected tasks; falling back to per-task routing"
+              fi
+            fi
+
+            launched=0
+            while IFS= read -r local_line; do
+              [[ -z "$local_line" ]] && continue
               IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
               launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
               launched=$((launched + LAST_LAUNCHED_SLOTS))
-            done
+              if (( launched >= free_slots )); then
+                break
+              fi
+            done <<<"$selected_lines"
             # Invalidate caches after launching so next cycle re-renders
             LAST_BACKLOG_FETCH=0
             LAST_DISPLAY=""
