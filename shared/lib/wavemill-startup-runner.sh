@@ -79,8 +79,29 @@ startup_step() {
   startup_log "  $message"
 }
 
+# _state_spinlock_acquire
+# Acquires a spinlock by repeatedly trying to create the lock file.
+# Fallback when flock is unavailable.
+_state_spinlock_acquire() {
+  local max_spins=500
+  local spins=0
+
+  while [[ -f "${STATE_FILE}.spin" ]] && (( spins < max_spins )); do
+    sleep 0.01
+    (( spins++ ))
+  done
+
+  mkdir -p "$(dirname "${STATE_FILE}")"
+  touch "${STATE_FILE}.spin" 2>/dev/null || true
+}
+
+# _state_spinlock_release
+_state_spinlock_release() {
+  rm -f "${STATE_FILE}.spin" 2>/dev/null || true
+}
+
 # Serialize writes to STATE_FILE across concurrent worker subshells.
-# Falls back to direct execution when flock(1) is unavailable.
+# Uses flock when available; falls back to spinlock.
 _with_state_lock() {
   if command -v flock >/dev/null 2>&1; then
     (
@@ -89,8 +110,12 @@ _with_state_lock() {
     ) 200>"${STATE_FILE}.lock"
     return $?
   else
+    # Spinlock fallback for systems without flock
+    _state_spinlock_acquire
     "$@"
-    return $?
+    local ret=$?
+    _state_spinlock_release
+    return $ret
   fi
 }
 

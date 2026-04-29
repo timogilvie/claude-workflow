@@ -47,6 +47,21 @@ _startup_render_header() {
     "$_STARTUP_W_LINEAR"   "LINEAR"
 }
 
+# Pad a string to display width, accounting for multi-byte UTF-8 characters
+_startup_pad_cell() {
+  local value="$1" width="$2"
+  # Use byte length minus UTF-8 continuation bytes to approximate display width
+  local bytes=${#value}
+  local continuations=$(printf '%s' "$value" | od -A none -t x1 2>/dev/null | grep -o '[89a-f][0-9a-f]' | wc -l)
+  local display_cols=$(( bytes - continuations ))
+  local padding=$(( width - display_cols ))
+
+  printf '%s' "$value"
+  if (( padding > 0 )); then
+    printf '%*s' "$padding" ''
+  fi
+}
+
 # Print one data row with optional error highlighting
 _startup_render_data_row() {
   local issue="$1" route="$2" worktree="$3" deps="$4" \
@@ -62,15 +77,19 @@ _startup_render_data_row() {
     route_fmt="$route"
   fi
 
-  printf '\033[2K\r%s%-*s %-*s %-*s %-*s %-*s %-*s%s\n' \
-    "$red" \
-    "$_STARTUP_W_ISSUE"    "$issue" \
-    "$_STARTUP_W_ROUTE"    "$route_fmt" \
-    "$_STARTUP_W_WORKTREE" "$worktree" \
-    "$_STARTUP_W_DEPS"     "$deps" \
-    "$_STARTUP_W_AGENT"    "$agent" \
-    "$_STARTUP_W_LINEAR"   "$linear" \
-    "$reset"
+  printf '\033[2K\r%s' "$red"
+  _startup_pad_cell "$issue" "$_STARTUP_W_ISSUE"
+  printf ' '
+  _startup_pad_cell "$route_fmt" "$_STARTUP_W_ROUTE"
+  printf ' '
+  _startup_pad_cell "$worktree" "$_STARTUP_W_WORKTREE"
+  printf ' '
+  _startup_pad_cell "$deps" "$_STARTUP_W_DEPS"
+  printf ' '
+  _startup_pad_cell "$agent" "$_STARTUP_W_AGENT"
+  printf ' '
+  _startup_pad_cell "$linear" "$_STARTUP_W_LINEAR"
+  printf '%s\n' "$reset"
 }
 
 # ─── Public API ──────────────────────────────────────────────────────────────
