@@ -72,8 +72,8 @@ The exact check set is repo-specific, but autonomous integration should protect 
 
 The config surface for these rules lives in:
 
-- [`wavemill-config.schema.json`](/Users/timothyogilvie/Dropbox/wavemill/worktrees/add-docs-and-lifecycle-coverage-for-autonomous-integration-mode/wavemill-config.schema.json:833) for `integration` and `integration.readyPolicy`
-- [`docs/ready-stage.md`](/Users/timothyogilvie/Dropbox/wavemill/worktrees/add-docs-and-lifecycle-coverage-for-autonomous-integration-mode/docs/ready-stage.md:1) for the ready-policy guard behavior
+- [`wavemill-config.schema.json`](../wavemill-config.schema.json) for `integration` and `integration.readyPolicy`
+- [`docs/ready-stage.md`](./ready-stage.md) for the ready-policy guard behavior
 
 At minimum, protect:
 

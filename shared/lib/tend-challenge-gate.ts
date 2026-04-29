@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readChallengeComparisons, type StoredChallengeComparison } from './challenge-comparison.ts';
 import { getChallengeConfig } from './config.ts';
+import { errorMessage } from './error-utils.ts';
 import type { PrMetadata } from './pr-metadata.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 
@@ -276,6 +277,3 @@ function parsePrNumberFromUrl(url: string | undefined): number | null {
   return Number.isInteger(prNumber) ? prNumber : null;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
