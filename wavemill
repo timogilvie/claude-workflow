@@ -103,9 +103,9 @@ ${GREEN}Commands:${NC}
                ${CYAN}--repo-dir${NC} <path>          Repository directory to inspect
 
   ${CYAN}tend${NC}      Tend the integration queue or run promotion mode
-             - ${CYAN}wavemill tend --once${NC} runs a single tend pass
-             - ${CYAN}wavemill tend --loop${NC} runs the integration queue loop
-             - ${CYAN}wavemill tend promote${NC} opens or updates the promotion PR
+             - \`wavemill tend --once\` runs a single tend pass
+             - \`wavemill tend --loop\` runs the integration queue loop
+             - \`wavemill tend promote\` opens or updates the promotion PR
 
   ${CYAN}promote${NC}   Open or update a promotion PR from integration to main
              - Reuses shared branch health and PR check helpers
