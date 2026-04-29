@@ -115,6 +115,32 @@ Subcommands:
 
 ## Utility Commands
 
+### `tools/state.ts`
+
+Locked JSON state-file operations for safe concurrent access. Used internally by shell scripts to replace `jq > tmp && mv` patterns with atomic, lock-protected mutations.
+
+Subcommands:
+
+- `get <file> <jq-expr>` — Read value at JSON path (no lock)
+- `set <file> [--arg k v]... [--argjson k v]... -- <jq-expr>` — Run jq expression with locking
+- `merge <file> <json-obj>` — Shallow merge JSON object (locked)
+- `delete <file> <jq-path>` — Delete key at path (locked)
+- `init <file> <json-default>` — Create file with default if missing (locked)
+
+Exit codes:
+
+- 0: Success
+- 2: Lock timeout (contention)
+- 3: Invalid input
+- 4: File/IO error
+
+Example:
+
+```bash
+npx tsx tools/state.ts set /tmp/state.json --arg issue "HOK-123" \
+  -- '.tasks[$issue].status = "done" | .updated = (now | todate)'
+```
+
 ### `wavemill version`
 
 Shows the installed Wavemill version.

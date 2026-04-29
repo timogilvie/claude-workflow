@@ -539,15 +539,14 @@ save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
-  local tmp
-  tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
      --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
      --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
      --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
      --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
      --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
-     '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
+     -- '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
       | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
       | if $challengePair != "" then .tasks[$issue].challengePairId = $challengePair else . end
@@ -558,11 +557,9 @@ save_task_state() {
       | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
       | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
       | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
-      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end' 2>/dev/null; then
+    :
   else
-    rm -f "$tmp"
     log_warn "save_task_state: failed to update $issue"
   fi
 }
@@ -593,38 +590,26 @@ get_next_migration_num() {
 save_migration_reservation() {
   local issue="$1"
   local num="$2"
-  local tmp
-  tmp=$(mktemp) || return 0
-  if jq --arg issue "$issue" --argjson num "$num" \
-     '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-  else
-    rm -f "$tmp"
-  fi
+  npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --arg issue "$issue" --argjson num "$num" \
+     -- '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' 2>/dev/null || true
 }
 
 save_next_migration_num() {
   local num="$1"
-  local tmp
-  tmp=$(mktemp) || return 0
-  if jq --argjson num "$num" '.nextMigrationNum = $num' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-  else
-    rm -f "$tmp"
-  fi
+  npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --argjson num "$num" \
+     -- '.nextMigrationNum = $num' 2>/dev/null || true
 }
 
 
 remove_task_state() {
   local issue="$1"
-  local tmp
-  tmp=$(mktemp) || { log_warn "remove_task_state: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" 'del(.tasks[$issue])' "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+    --arg issue "$issue" \
+    -- 'del(.tasks[$issue])' 2>/dev/null; then
+    :
   else
-    rm -f "$tmp"
     log_warn "remove_task_state: failed to remove $issue"
   fi
 }
@@ -632,14 +617,11 @@ remove_task_state() {
 
 set_task_phase() {
   local issue="$1" phase="$2"
-  local tmp
-  tmp=$(mktemp) || { log_warn "set_task_phase: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" --arg phase "$phase" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --arg issue "$issue" --arg phase "$phase" \
+     -- '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' 2>/dev/null; then
+    :
   else
-    rm -f "$tmp"
     log_warn "set_task_phase: failed to update $issue"
   fi
 }
@@ -1150,13 +1132,10 @@ count_inflight_primary_tasks() {
 }
 
 clear_inflight_tasks_from_state() {
-  local tmp
-  tmp=$(mktemp) || return 1
-  if jq '.tasks = {} | .updated = (now | todate)' "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+    -- '.tasks = {} | .updated = (now | todate)' 2>/dev/null; then
     return 0
   fi
-  rm -f "$tmp"
   return 1
 }
 
@@ -1796,15 +1775,9 @@ replay_route_transparency_logs() {
 save_migration_reservation() {
   local issue="$1"
   local num="$2"
-  local tmp
-  tmp=$(mktemp) || return 0
-  if jq --arg issue "$issue" --argjson num "$num" \
-     '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-  else
-    rm -f "$tmp"
-  fi
+  npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --arg issue "$issue" --argjson num "$num" \
+     -- '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' 2>/dev/null || true
 }
 
 # Duplicated intentionally from the parent script because the monitor runs as a
@@ -2213,42 +2186,34 @@ save_task_state() {
 
 update_free_slots_state() {
   local slots="$1"
-  local tmp
   [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
-  tmp=$(mktemp) || { log_warn "update_free_slots_state: mktemp failed"; return 0; }
-  if jq --argjson slots "$slots" \
-     '.freeSlots = $slots | .updated = (now | todate)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --argjson slots "$slots" \
+     -- '.freeSlots = $slots | .updated = (now | todate)' 2>/dev/null; then
+    :
   else
-    rm -f "$tmp"
     log_warn "update_free_slots_state: failed to update free slots"
   fi
 }
 
 remove_task_state() {
   local issue="$1"
-  local tmp
-  tmp=$(mktemp) || { log_warn "remove_task_state: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" 'del(.tasks[$issue]) | .updated = (now | todate)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+    --arg issue "$issue" \
+    -- 'del(.tasks[$issue]) | .updated = (now | todate)' 2>/dev/null; then
+    :
   else
-    rm -f "$tmp"
     log_warn "remove_task_state: failed to remove $issue"
   fi
 }
 
 set_task_phase() {
   local issue="$1" phase="$2"
-  local tmp
-  tmp=$(mktemp) || { log_warn "set_task_phase: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" --arg phase "$phase" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --arg issue "$issue" --arg phase "$phase" \
+     -- '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' 2>/dev/null; then
+    :
   else
-    rm -f "$tmp"
     log_warn "set_task_phase: failed to update $issue"
   fi
 }
@@ -2276,15 +2241,9 @@ read_state_value() {
 save_migration_reservation() {
   local issue="$1"
   local num="$2"
-  local tmp
-  tmp=$(mktemp) || return 0
-  if jq --arg issue "$issue" --argjson num "$num" \
-     '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-  else
-    rm -f "$tmp"
-  fi
+  npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --arg issue "$issue" --argjson num "$num" \
+     -- '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' 2>/dev/null || true
 }
 
 get_task_phase() {
@@ -2294,28 +2253,22 @@ get_task_phase() {
 
 mark_eval_completed() {
   local issue="$1"
-  local tmp
-  tmp=$(mktemp) || { log_warn "mark_eval_completed: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" \
-     '.tasks[$issue].evalCompleted = true | .tasks[$issue].updated = (now | todate)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --arg issue "$issue" \
+     -- '.tasks[$issue].evalCompleted = true | .tasks[$issue].updated = (now | todate)' 2>/dev/null; then
+    :
   else
-    rm -f "$tmp"
     log_warn "mark_eval_completed: failed to update $issue"
   fi
 }
 
 mark_eval_failed() {
   local issue="$1"
-  local tmp
-  tmp=$(mktemp) || { log_warn "mark_eval_failed: mktemp failed"; return 0; }
-  if jq --arg issue "$issue" \
-     '.tasks[$issue].evalFailed = true | .tasks[$issue].updated = (now | todate)' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+     --arg issue "$issue" \
+     -- '.tasks[$issue].evalFailed = true | .tasks[$issue].updated = (now | todate)' 2>/dev/null; then
+    :
   else
-    rm -f "$tmp"
     log_warn "mark_eval_failed: failed to update $issue"
   fi
 }
@@ -3754,19 +3707,17 @@ check_challenge_sibling_merged() {
 
 mark_challenge_compared() {
   local pair_id="$1"
-  local tmp
-  tmp=$(mktemp) || { log_warn "mark_challenge_compared: mktemp failed"; return 0; }
-  if jq --arg pair "$pair_id" '
-    .tasks |= with_entries(
+  if npx tsx "$TOOLS_DIR/state.ts" set "$STATE_FILE" \
+    --arg pair "$pair_id" \
+    -- '.tasks |= with_entries(
       if (.value.challengePairId // "") == $pair then
         .value.challengeCompared = true
       else
         .
       end
-    )' "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
+    )' 2>/dev/null; then
+    :
   else
-    rm -f "$tmp"
     log_warn "mark_challenge_compared: failed for $pair_id"
   fi
 }
