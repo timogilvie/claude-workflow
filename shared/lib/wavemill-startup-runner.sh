@@ -80,24 +80,24 @@ startup_step() {
 }
 
 # _state_spinlock_acquire
-# Acquires a spinlock by repeatedly trying to create the lock file.
+# Acquires a spinlock using atomic mkdir (only works with directory, not file).
 # Fallback when flock is unavailable.
 _state_spinlock_acquire() {
+  local lock_dir="${STATE_FILE}.lock"
   local max_spins=500
   local spins=0
 
-  while [[ -f "${STATE_FILE}.spin" ]] && (( spins < max_spins )); do
+  # Try to create lock directory atomically; mkdir fails if it already exists
+  while ! mkdir "$lock_dir" 2>/dev/null && (( spins < max_spins )); do
     sleep 0.01
     (( spins++ ))
   done
-
-  mkdir -p "$(dirname "${STATE_FILE}")"
-  touch "${STATE_FILE}.spin" 2>/dev/null || true
 }
 
 # _state_spinlock_release
 _state_spinlock_release() {
-  rm -f "${STATE_FILE}.spin" 2>/dev/null || true
+  local lock_dir="${STATE_FILE}.lock"
+  rmdir "$lock_dir" 2>/dev/null || true
 }
 
 # Serialize writes to STATE_FILE across concurrent worker subshells.

@@ -51,8 +51,9 @@ _startup_render_header() {
 _startup_pad_cell() {
   local value="$1" width="$2"
   # Use byte length minus UTF-8 continuation bytes to approximate display width
+  # Continuation bytes are 10xxxxxx (0x80-0xBF), which is [89ab][0-9a-f] in hex
   local bytes=${#value}
-  local continuations=$(printf '%s' "$value" | od -A none -t x1 2>/dev/null | grep -o '[89a-f][0-9a-f]' | wc -l)
+  local continuations=$(printf '%s' "$value" | od -A none -t x1 2>/dev/null | grep -o '[89ab][0-9a-f]' | wc -l)
   local display_cols=$(( bytes - continuations ))
   local padding=$(( width - display_cols ))
 
@@ -196,26 +197,24 @@ startup_render_set() {
 }
 
 # _startup_spinlock_acquire <lock_file>
-# Acquires a spinlock by repeatedly trying to create the lock file.
-# Simple fallback when flock is unavailable.
+# Acquires a spinlock using atomic mkdir (only works with directory, not file).
+# Fallback when flock is unavailable.
 _startup_spinlock_acquire() {
-  local lock_file="$1"
-  local max_spins=100
+  local lock_dir="$1.lock"
+  local max_spins=500
   local spins=0
 
-  while [[ -f "$lock_file" ]] && (( spins < max_spins )); do
+  # Try to create lock directory atomically; mkdir fails if it already exists
+  while ! mkdir "$lock_dir" 2>/dev/null && (( spins < max_spins )); do
     sleep 0.01
     (( spins++ ))
   done
-
-  # Create lock file atomically (will race but that's ok for debounce)
-  touch "$lock_file" 2>/dev/null || true
 }
 
 # _startup_spinlock_release <lock_file>
 _startup_spinlock_release() {
-  local lock_file="$1"
-  rm -f "$lock_file" 2>/dev/null || true
+  local lock_dir="$1.lock"
+  rmdir "$lock_dir" 2>/dev/null || true
 }
 
 # startup_render_redraw
