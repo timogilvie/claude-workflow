@@ -44,6 +44,7 @@ for f in \
   ready-stage.test.ts \
   repo-context-analyzer.test.ts \
   review-context-gatherer.test.ts \
+  route-batch.test.ts \
   rule-generator.test.ts \
   stage-aware-router.test.ts \
   task-descriptor-backfill.test.ts \

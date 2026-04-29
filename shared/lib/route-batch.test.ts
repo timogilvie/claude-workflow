@@ -1,0 +1,310 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { clearConfigCache } from './config.ts';
+import {
+  getStageAwareRouterDebugState,
+  resetStageAwareRouterDebugState,
+} from './stage-aware-router.ts';
+import { routeBatch } from './route-batch.ts';
+import { routeWorkflowAuto } from './workflow-router.ts';
+
+let passed = 0;
+let failed = 0;
+
+async function test(name: string, fn: () => void | Promise<void>) {
+  try {
+    await fn();
+    passed += 1;
+    console.log(`  PASS  ${name}`);
+  } catch (error) {
+    failed += 1;
+    console.log(`  FAIL  ${name}`);
+    console.log(`        ${(error as Error).message}`);
+  }
+}
+
+function baseConfig(mode: 'auto' | 'stage-aware' = 'auto') {
+  return {
+    router: {
+      enabled: true,
+      mode,
+      minRecords: 1,
+      minModels: 1,
+      kNeighbors: 10,
+      stageBlendWeight: 0.3,
+      defaultAgent: 'claude',
+      agentMap: {
+        'claude-opus-4-7': 'claude',
+        'claude-opus-4-6': 'claude',
+        'claude-sonnet-4-6': 'claude',
+        'claude-haiku-4-5-20251001': 'claude',
+        'gpt-5.3-codex': 'codex',
+        'gpt-5.4': 'codex',
+        'gpt-5.5': 'codex',
+      },
+    },
+    eval: {
+      pricing: {
+        'claude-opus-4-7': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
+        'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
+        'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
+        'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
+        'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
+        'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
+        'gpt-5.5': { inputCostPerMTok: 5, outputCostPerMTok: 30, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
+      },
+    },
+    modelRegistry: {
+      models: {
+        'claude-opus-4-7': {
+          vendor: 'anthropic',
+          class: 'frontier',
+          strengths: ['quality'],
+          weaknesses: [],
+          qualityScores: { planning: 92, coding: 92, review: 92, classify: 78, routing: 72 },
+        },
+        'claude-opus-4-6': {
+          vendor: 'anthropic',
+          class: 'frontier',
+          strengths: ['quality'],
+          weaknesses: [],
+          qualityScores: { planning: 90, coding: 90, review: 90, classify: 76, routing: 70 },
+        },
+        'claude-sonnet-4-6': {
+          vendor: 'anthropic',
+          class: 'strong_generalist',
+          strengths: ['balanced'],
+          weaknesses: [],
+          qualityScores: { planning: 84, coding: 84, review: 84, classify: 75, routing: 70 },
+        },
+        'claude-haiku-4-5-20251001': {
+          vendor: 'anthropic',
+          class: 'fast_economy',
+          strengths: ['cheap'],
+          weaknesses: [],
+          qualityScores: { planning: 72, coding: 72, review: 72, classify: 65, routing: 60 },
+        },
+        'gpt-5.3-codex': {
+          vendor: 'openai',
+          class: 'frontier',
+          strengths: ['coding'],
+          weaknesses: [],
+          qualityScores: { planning: 88, coding: 90, review: 86, classify: 78, routing: 72 },
+        },
+        'gpt-5.4': {
+          vendor: 'openai',
+          class: 'frontier',
+          strengths: ['coding'],
+          weaknesses: [],
+          qualityScores: { planning: 86, coding: 86, review: 84, classify: 76, routing: 70 },
+        },
+        'gpt-5.5': {
+          vendor: 'openai',
+          class: 'frontier',
+          strengths: ['coding'],
+          weaknesses: [],
+          qualityScores: { planning: 90, coding: 92, review: 88, classify: 78, routing: 72 },
+        },
+      },
+      ladders: {
+        planning: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.4'],
+      },
+    },
+  };
+}
+
+function makeEvalRecord(id: string, modelId: string, timestamp: string) {
+  return {
+    id,
+    schemaVersion: '1.0.0',
+    originalPrompt: 'Build backend routing flow with tests',
+    modelId,
+    modelVersion: modelId,
+    score: modelId.includes('haiku') ? 0.72 : 0.9,
+    scoreBand: 'good',
+    timeSeconds: 120,
+    timestamp,
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: 'solid',
+    metadata: {
+      stageScores: {
+        expansion: { score: 0.8, rationale: 'ok' },
+        plan: { score: modelId.includes('haiku') ? 0.7 : 0.9, rationale: 'ok' },
+        implementation: { score: modelId.includes('haiku') ? 0.72 : 0.91, rationale: 'ok' },
+        review: { score: modelId.includes('haiku') ? 0.71 : 0.89, rationale: 'ok' },
+      },
+    },
+    workflowCost: modelId.includes('haiku') ? 1.2 : 4.5,
+    taskDescriptor: {
+      schema_version: '1.0',
+      signals: {
+        heuristic: {
+          task_type: 'feature',
+          languages: ['typescript'],
+          framework_tags: [],
+          files_touched: 5,
+          repo_size_loc: 10000,
+          description_tokens: 160,
+          is_greenfield: false,
+          has_migration: false,
+          has_ui: false,
+          has_tests: true,
+          cross_service: false,
+        },
+        learned: {
+          complexity: 3,
+          domain: 'backend',
+          risk_flags: ['workflow'],
+        },
+      },
+      constraints: {
+        models_available: [],
+        objective: 'balanced',
+      },
+      stages: {
+        planner: { model: modelId, cost_usd: modelId.includes('haiku') ? 0.2 : 0.8 },
+        coder: { model: modelId, cost_usd: modelId.includes('haiku') ? 0.8 : 3.0 },
+        reviewer: { model: modelId, cost_usd: modelId.includes('haiku') ? 0.2 : 0.7 },
+      },
+    },
+  };
+}
+
+function writeQuotaState(repoDir: string, models: Record<string, 'healthy' | 'degrading' | 'exhausted'>) {
+  writeFileSync(join(repoDir, '.wavemill', 'quota-state.json'), JSON.stringify({
+    version: 1,
+    updatedAt: '2026-04-29T12:00:00.000Z',
+    models: Object.fromEntries(
+      Object.entries(models).map(([modelId, status]) => [modelId, {
+        status,
+        remainingEstimate: null,
+        resetAt: null,
+        confidence: 1,
+        lastLimitErrorAt: null,
+        lastSuccessAt: null,
+        lastReason: null,
+        consecutiveLimitErrors: status === 'healthy' ? 0 : 1,
+        requestHistory: [],
+        consecutiveNearLimitSignals: 0,
+        lastNearLimitAt: null,
+        budgetSignal: null,
+      }]),
+    ),
+  }, null, 2));
+}
+
+function makeRepo(mode: 'auto' | 'stage-aware' = 'auto') {
+  const repoDir = mkdtempSync(join(tmpdir(), 'route-batch-test-'));
+  mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(baseConfig(mode)));
+  writeFileSync(join(repoDir, '.wavemill', 'evals', 'evals.jsonl'), [
+    JSON.stringify(makeEvalRecord('1', 'gpt-5.3-codex', '2026-04-20T00:00:00.000Z')),
+    JSON.stringify(makeEvalRecord('2', 'claude-sonnet-4-6', '2026-04-21T00:00:00.000Z')),
+    JSON.stringify(makeEvalRecord('3', 'claude-haiku-4-5-20251001', '2026-04-22T00:00:00.000Z')),
+  ].join('\n') + '\n');
+  clearConfigCache(repoDir);
+
+  return {
+    repoDir,
+    cleanup: () => {
+      clearConfigCache(repoDir);
+      rmSync(repoDir, { recursive: true, force: true });
+    },
+  };
+}
+
+console.log('\n--- route-batch Tests ---\n');
+
+await test('batch decisions match serial auto routing and reuse eval loading', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  const tasks = [
+    { issueId: 'HOK-1', prompt: 'Build routing batch command with tests' },
+    { issueId: 'HOK-2', prompt: 'Optimize startup routing path' },
+    { issueId: 'HOK-3', prompt: 'Persist batch route cache for launch flow' },
+  ];
+
+  try {
+    resetStageAwareRouterDebugState();
+    const batchResults = await routeBatch(tasks, { repoDir, mode: 'auto', additionalEvalsPaths: [] });
+    const batchLoads = getStageAwareRouterDebugState().evalLoadCount;
+
+    resetStageAwareRouterDebugState();
+    const serialDecisions = [];
+    for (const task of tasks) {
+      serialDecisions.push(await routeWorkflowAuto(task.prompt, { repoDir, additionalEvalsPaths: [] }));
+    }
+    const serialLoads = getStageAwareRouterDebugState().evalLoadCount;
+
+    assert.equal(batchResults.length, tasks.length);
+    assert.equal(batchLoads, 1);
+    assert.equal(serialLoads, tasks.length);
+    assert.deepEqual(
+      batchResults.map(({ decision }) => decision),
+      serialDecisions,
+    );
+    assert.deepEqual(
+      batchResults.map(({ task }) => task.issueId),
+      tasks.map(({ issueId }) => issueId),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+await test('auto batch uses constrained degraded routing for every task', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  try {
+    const results = await routeBatch([
+      { issueId: 'HOK-10', prompt: 'Implement routing panel cache' },
+      { issueId: 'HOK-11', prompt: 'Add batch launch fallback handling' },
+    ], { repoDir, mode: 'auto', operatingMode: 'constrained', additionalEvalsPaths: [] });
+
+    for (const { decision } of results) {
+      assert.match(decision.reasoning[0] || '', /Constrained mode:/);
+      assert.doesNotMatch(decision.planner, /gpt-5\.3-codex|opus/i);
+      assert.doesNotMatch(decision.coder, /gpt-5\.3-codex|opus/i);
+      assert.doesNotMatch(decision.reviewer, /gpt-5\.3-codex|opus/i);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+await test('auto batch uses survival degraded routing for every task', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  try {
+    const results = await routeBatch([
+      { issueId: 'HOK-20', prompt: 'Recover routing with reduced model pool' },
+      { issueId: 'HOK-21', prompt: 'Route selected tasks under quota pressure' },
+    ], { repoDir, mode: 'auto', operatingMode: 'survival', additionalEvalsPaths: [] });
+
+    for (const { decision } of results) {
+      assert.match(decision.reasoning[0] || '', /Survival mode:/);
+      assert.match(decision.planner, /haiku/i);
+      assert.match(decision.coder, /haiku/i);
+      assert.match(decision.reviewer, /haiku/i);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+await test('batch rejects missing files', async () => {
+  await assert.rejects(
+    routeBatch([{ issueId: 'HOK-404', file: '/tmp/does-not-exist-route-batch.md' }], { repoDir: process.cwd(), mode: 'auto' }),
+    /ENOENT|no such file/i,
+  );
+});
+
+console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
+if (failed > 0) {
+  process.exit(1);
+}

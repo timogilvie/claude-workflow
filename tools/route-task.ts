@@ -1,36 +1,7 @@
 #!/usr/bin/env -S npx tsx
-
-/**
- * Route Task Tool
- *
- * Produces stage-aware workflow routing guidance for planning, coding, and review.
- *
- * When invoked with `--json`, the output is the canonical persisted startup
- * routing artifact. Shell consumers store it as `/tmp/{SESSION}-{ISSUE}-route.json`
- * and should read that file directly instead of reconstructing routing from the
- * legacy coder-only `model-suggestion.json` shim.
- *
- * Canonical JSON shape:
- * {
- *   planner: string,
- *   coder: string,
- *   reviewer: string,
- *   planDepth: string,
- *   codeDepth: string,
- *   reviewRecommended: string,
- *   routingMode: string,
- *   neighborCount: number,
- *   expectedSuccess: number,
- *   signals: object,
- *   reasoning: string[]
- * }
- */
-
-import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, routeWorkflowStageAware, readTaskPromptFromFile, summarizeWorkflowRoute } from '../shared/lib/workflow-router.ts';
+import { getWavemillAdditionalEvalPaths, routeBatch } from '../shared/lib/route-batch.ts';
+import { readTaskPromptFromFile, summarizeWorkflowRoute } from '../shared/lib/workflow-router.ts';
 
 runTool({
   name: 'route-task',
@@ -82,7 +53,9 @@ runTool({
       }
     } else if (positional.length > 0) {
       prompt = positional.join(' ');
-    } else {
+    }
+
+    if (!args.file && positional.length === 0) {
       throw new Error('Provide a task prompt as argument or via --file. Run with --help for usage information.');
     }
 
@@ -95,32 +68,18 @@ runTool({
         throw new Error(`--max-cost must be a non-negative number, got ${args['max-cost']}`);
       }
     }
-    // Detect wavemill root (route-task.ts is in tools/, so root is one level up)
-    const wavemillRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-    const additionalEvalsPaths: string[] = [];
-
-    // Only add wavemill paths if repoDir is different from wavemill root
-    // (avoid loading same data twice)
-    if (resolve(repoDir) !== resolve(wavemillRoot)) {
-      const aggregatedPath = resolve(wavemillRoot, '.wavemill/evals/aggregated-evals.jsonl');
-      const backfilledPath = resolve(wavemillRoot, '.wavemill/evals/aggregated-evals.backfilled.jsonl');
-
-      if (existsSync(aggregatedPath)) {
-        additionalEvalsPaths.push(aggregatedPath);
-      }
-      if (existsSync(backfilledPath)) {
-        additionalEvalsPaths.push(backfilledPath);
-      }
+    const [result] = await routeBatch([
+      { prompt },
+    ], {
+      repoDir,
+      mode: mode as 'auto' | 'stage-aware' | 'heuristic' | 'hokusai',
+      maxCostUsd,
+      additionalEvalsPaths: getWavemillAdditionalEvalPaths(repoDir),
+    });
+    const decision = result?.decision;
+    if (!decision) {
+      throw new Error('Routing returned no decision');
     }
-
-    const routeOptions = { repoDir, maxCostUsd, additionalEvalsPaths };
-    const decision = mode === 'heuristic'
-      ? routeWorkflow(prompt, routeOptions)
-      : mode === 'stage-aware'
-        ? routeWorkflowStageAware(prompt, routeOptions)
-        : mode === 'hokusai'
-          ? await routeWorkflowHokusai(prompt, routeOptions)
-          : await routeWorkflowAuto(prompt, routeOptions);
 
     // Surface budget violations
     if (decision.budgetViolation) {

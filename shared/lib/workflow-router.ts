@@ -17,7 +17,12 @@ import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import { resolveModel, topViableCandidate } from './routing-policy.ts';
 import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
-import { routeStageAware, type StageAwareDecision } from './stage-aware-router.ts';
+import {
+  routeStageAware,
+  routeStageAwareWithContext,
+  type StageAwareDecision,
+  type StageAwareRouterContext,
+} from './stage-aware-router.ts';
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
 import type { ModelClass } from './model-registry.ts';
 import { policyAdjustmentLog, routerLog } from './router-log.ts';
@@ -983,9 +988,10 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   };
 }
 
-export function routeWorkflowStageAware(
+function routeWorkflowStageAwareInternal(
   prompt: string,
   options?: RouteWorkflowOptions,
+  stageAwareContext?: StageAwareRouterContext,
 ): StageAwareDecision {
   const repoDir = options?.repoDir;
   const characteristics = analyzePrompt(prompt);
@@ -998,7 +1004,7 @@ export function routeWorkflowStageAware(
 
   let stageAwareDecision;
   try {
-    stageAwareDecision = routeStageAware(prompt, {
+    const stageAwareOptions = {
       repoDir,
       modelsAvailable: options?.modelsAvailable,
       plannerModelsAvailable: policyResolution?.policyStagePools.plannerModels,
@@ -1006,7 +1012,10 @@ export function routeWorkflowStageAware(
       reviewerModelsAvailable: policyResolution?.policyStagePools.reviewerModels,
       maxCostUsd: options?.maxCostUsd,
       additionalEvalsPaths: options?.additionalEvalsPaths,
-    });
+    };
+    stageAwareDecision = stageAwareContext
+      ? routeStageAwareWithContext(prompt, stageAwareContext, stageAwareOptions)
+      : routeStageAware(prompt, stageAwareOptions);
   } catch (error) {
     console.warn('[workflow-router] Stage-aware routing failed, falling back to heuristic:', error);
     stageAwareDecision = null;
@@ -1105,6 +1114,21 @@ export function routeWorkflowStageAware(
   return finalDecision;
 }
 
+export function routeWorkflowStageAware(
+  prompt: string,
+  options?: RouteWorkflowOptions,
+): StageAwareDecision {
+  return routeWorkflowStageAwareInternal(prompt, options);
+}
+
+export function routeWorkflowStageAwareWithContext(
+  prompt: string,
+  options: RouteWorkflowOptions | undefined,
+  stageAwareContext: StageAwareRouterContext,
+): StageAwareDecision {
+  return routeWorkflowStageAwareInternal(prompt, options, stageAwareContext);
+}
+
 function buildDegradedModelPool(
   mode: Extract<OperatingMode, 'constrained' | 'survival'>,
   repoDir?: string,
@@ -1178,10 +1202,11 @@ function registerWorkflowDecisionResources(
   }
 }
 
-export function routeWorkflowDegraded(
+function routeWorkflowDegradedInternal(
   prompt: string,
   options: RouteWorkflowOptions = {},
   mode: Extract<OperatingMode, 'constrained' | 'survival'>,
+  stageAwareContext?: StageAwareRouterContext,
 ): StageAwareDecision {
   logDegradedRoutingDecision(mode, options.repoDir);
   const degradedPool = buildDegradedModelPool(mode, options.repoDir);
@@ -1203,9 +1228,28 @@ export function routeWorkflowDegraded(
     : 'Constrained mode: frontier models degrading. Restricted to sonnet/haiku and KNN signal. LLM difficulty classification skipped.';
 
   return prependReasoning(
-    routeWorkflowStageAware(prompt, degradedOptions),
+    stageAwareContext
+      ? routeWorkflowStageAwareWithContext(prompt, degradedOptions, stageAwareContext)
+      : routeWorkflowStageAware(prompt, degradedOptions),
     rationale,
   );
+}
+
+export function routeWorkflowDegraded(
+  prompt: string,
+  options: RouteWorkflowOptions = {},
+  mode: Extract<OperatingMode, 'constrained' | 'survival'>,
+): StageAwareDecision {
+  return routeWorkflowDegradedInternal(prompt, options, mode);
+}
+
+export function routeWorkflowDegradedWithContext(
+  prompt: string,
+  options: RouteWorkflowOptions = {},
+  mode: Extract<OperatingMode, 'constrained' | 'survival'>,
+  stageAwareContext: StageAwareRouterContext,
+): StageAwareDecision {
+  return routeWorkflowDegradedInternal(prompt, options, mode, stageAwareContext);
 }
 
 export function tryPolicyResolution(
@@ -1349,9 +1393,22 @@ export async function routeWorkflowAuto(
   prompt: string,
   options?: RouteWorkflowOptions,
 ): Promise<StageAwareDecision> {
-  const operatingMode = getCurrentOperatingMode(options?.repoDir);
+  return routeWorkflowAutoWithContext(prompt, options);
+}
+
+export async function routeWorkflowAutoWithContext(
+  prompt: string,
+  options?: RouteWorkflowOptions,
+  context?: {
+    operatingMode?: OperatingMode;
+    stageAwareContext?: StageAwareRouterContext;
+  },
+): Promise<StageAwareDecision> {
+  const operatingMode = context?.operatingMode ?? getCurrentOperatingMode(options?.repoDir);
   if (operatingMode === 'constrained' || operatingMode === 'survival') {
-    return routeWorkflowDegraded(prompt, options, operatingMode);
+    return context?.stageAwareContext
+      ? routeWorkflowDegradedWithContext(prompt, options, operatingMode, context.stageAwareContext)
+      : routeWorkflowDegraded(prompt, options, operatingMode);
   }
 
   const hokusaiConfig = getHokusaiRouterConfig(options?.repoDir);
@@ -1373,7 +1430,9 @@ export async function routeWorkflowAuto(
     return finalDecision;
   }
 
-  const decision = routeWorkflowStageAware(prompt, options);
+  const decision = context?.stageAwareContext
+    ? routeWorkflowStageAwareWithContext(prompt, options, context.stageAwareContext)
+    : routeWorkflowStageAware(prompt, options);
   logFinalFrontierSubstitution(decision, options?.repoDir);
   return decision;
 }
