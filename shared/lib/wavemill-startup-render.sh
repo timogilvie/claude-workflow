@@ -118,15 +118,28 @@ startup_render_init() {
   fi
 }
 
+# _startup_state_level <value>
+# Maps a cell value to a numeric state level for monotonic advancement checking.
+# Levels: 0=blank/dash, 1=in-progress glyph, 2=completion (✓ or error).
+_startup_state_level() {
+  local value="$1"
+  case "$value" in
+    ""|-|"—") echo 0 ;;
+    "✓"|"error") echo 2 ;;
+    *) echo 1 ;; # Treat any other non-empty value as in-progress
+  esac
+}
+
 # startup_render_set <row_idx> <field> <value>
 # Updates a single field in a row file and triggers a debounced table redraw.
+# Enforces monotonic advancement: cells can only advance to higher states.
 # row_idx is 0-based. In plain mode this is a no-op.
 startup_render_set() {
   local row_idx="$1" field="$2" value="$3"
   [[ "${STARTUP_RENDER_MODE:-plain}" == "plain" ]] && return 0
 
-  # Strip control characters to prevent terminal injection
-  value="$(printf '%s' "$value" | tr -d '\000-\010\012-\037')"
+  # Strip control characters to prevent terminal injection (includes TAB)
+  value="$(printf '%s' "$value" | tr -d '\000-\011\013-\037')"
 
   local row_file="$STARTUP_RENDER_ROWS_DIR/row-${row_idx}"
 
@@ -139,6 +152,16 @@ startup_render_set() {
   if [[ -f "$row_file" ]]; then
     IFS=$'\t' read -r -a parts < "$row_file" 2>/dev/null || true
     while (( ${#parts[@]} < 7 )); do parts+=(""); done
+  fi
+
+  local current_val="${parts[$fidx]}"
+  local current_level new_level
+  current_level=$(_startup_state_level "$current_val")
+  new_level=$(_startup_state_level "$value")
+
+  # Only allow advancement or same state; prevent regression
+  if (( new_level < current_level )); then
+    return 0  # Silently ignore regression attempts
   fi
 
   parts[$fidx]="$value"
