@@ -43,6 +43,7 @@ UNSET_VARS="SESSION MAX_PARALLEL POLL_SECONDS BASE_BRANCH AGENT_CMD WORKTREE_ROO
   REQUIRE_CONFIRM PLANNING_MODE MAX_RETRIES RETRY_DELAY MAX_SELECT MAX_DISPLAY
   PROJECT_NAME LINEAR_PROJECT PLAN_MAX_DISPLAY PLAN_RESEARCH PLAN_MODEL ROUTER_ENABLED
   ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD DASHBOARD_VERBOSITY DASHBOARD_LOG_TO_FILE
+  GIT_FETCH_TTL_SECONDS
   _WAVEMILL_CONFIG_LOADED"
 
 # ============================================================================
@@ -57,6 +58,7 @@ eval "$(
   load_config "$TMP"
   echo "D_SESSION='$SESSION'"
   echo "D_MAX_PARALLEL='$MAX_PARALLEL'"
+  echo "D_GIT_FETCH_TTL_SECONDS='$GIT_FETCH_TTL_SECONDS'"
   echo "D_BASE_BRANCH='$BASE_BRANCH'"
   echo "D_AGENT_CMD='$AGENT_CMD'"
   echo "D_REQUIRE_CONFIRM='$REQUIRE_CONFIRM'"
@@ -69,6 +71,7 @@ eval "$(
 
 check_matches "default SESSION" '^wavemill-' "$D_SESSION"
 check "default MAX_PARALLEL" "7" "$D_MAX_PARALLEL"
+check "default GIT_FETCH_TTL_SECONDS" "60" "$D_GIT_FETCH_TTL_SECONDS"
 check "default BASE_BRANCH" "main" "$D_BASE_BRANCH"
 check "default AGENT_CMD" "claude" "$D_AGENT_CMD"
 check "default REQUIRE_CONFIRM" "true" "$D_REQUIRE_CONFIRM"
@@ -88,6 +91,9 @@ cat > "$TMP/.wavemill-config.json" << 'EOF'
 {
   "linear": {
     "project": "Repo Project"
+  },
+  "git": {
+    "fetchTtlSeconds": 15
   },
   "mill": {
     "session": "custom-session",
@@ -113,6 +119,7 @@ eval "$(
   load_config "$TMP"
   echo "R_SESSION='$SESSION'"
   echo "R_MAX_PARALLEL='$MAX_PARALLEL'"
+  echo "R_GIT_FETCH_TTL_SECONDS='$GIT_FETCH_TTL_SECONDS'"
   echo "R_BASE_BRANCH='$BASE_BRANCH'"
   echo "R_AGENT_CMD='$AGENT_CMD'"
   echo "R_MAX_SELECT='$MAX_SELECT'"
@@ -124,6 +131,7 @@ eval "$(
 
 check "repo SESSION override" "custom-session" "$R_SESSION"
 check "repo MAX_PARALLEL override" "5" "$R_MAX_PARALLEL"
+check "repo GIT_FETCH_TTL_SECONDS override" "15" "$R_GIT_FETCH_TTL_SECONDS"
 check "repo BASE_BRANCH override" "develop" "$R_BASE_BRANCH"
 check "repo AGENT_CMD override" "codex" "$R_AGENT_CMD"
 check "repo MAX_SELECT override" "2" "$R_MAX_SELECT"
@@ -137,6 +145,9 @@ write_repo_override_config() {
 {
   "linear": {
     "project": "Repo Project"
+  },
+  "git": {
+    "fetchTtlSeconds": 15
   },
   "mill": {
     "session": "custom-session",
@@ -192,16 +203,19 @@ eval "$(
   export HOME="$FAKE_HOME"
   export SESSION="env-session"
   export MAX_PARALLEL="7"
+  export GIT_FETCH_TTL_SECONDS="0"
   unset _WAVEMILL_CONFIG_LOADED 2>/dev/null || true
   source "$COMMON"
   load_config "$TMP"
   echo "E_SESSION='$SESSION'"
   echo "E_MAX_PARALLEL='$MAX_PARALLEL'"
+  echo "E_GIT_FETCH_TTL_SECONDS='$GIT_FETCH_TTL_SECONDS'"
   echo "E_AGENT_CMD='$AGENT_CMD'"
 )"
 
 check "env SESSION override" "env-session" "$E_SESSION"
 check "env MAX_PARALLEL override" "7" "$E_MAX_PARALLEL"
+check "env GIT_FETCH_TTL_SECONDS override" "0" "$E_GIT_FETCH_TTL_SECONDS"
 # AGENT_CMD should come from repo config since we didn't set it as env var
 check "repo AGENT_CMD preserved" "codex" "$E_AGENT_CMD"
 
