@@ -799,6 +799,18 @@ trap 'rm -rf "$PROMPT_RENDER_DIR"' EXIT
 
 source "$LIB_DIR/agent-adapters.sh"
 
+PATH="/usr/bin:/bin" build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "medium" "codex" \
+  > "$PROMPT_RENDER_DIR/planning-no-npx.txt" \
+  2> "$PROMPT_RENDER_DIR/planning-no-npx.err"
+if grep -q 'Failed to resolve planner runtime resource' "$PROMPT_RENDER_DIR/planning-no-npx.err"; then
+  fail "baseline planning prompt render should not require npx runtime resolver"
+else
+  pass "baseline planning prompt render skips runtime resolver when selection is disabled"
+fi
+
 build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
   "Issue Description:
 Test
