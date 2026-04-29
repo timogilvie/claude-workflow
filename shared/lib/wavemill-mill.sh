@@ -5780,18 +5780,21 @@ monitor_issue_state() {
     log "status" "✓ $ISSUE → PR #$PR MERGED"
     set_window_attention_state "$WIN" "clear"
 
-    # Post-merge eval (non-blocking: always exits 0)
+    # Capture eval eligibility before cleanup removes task state.
+    local _eval_needed=false
     if [[ "$AUTO_EVAL" == "true" ]]; then
-      eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
-      if [[ "$eval_completed" == "false" ]]; then
-        log "info" "  📊 Running post-merge eval..."
-        launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
-      else
-        log "debug" "  ✓ Eval already completed for $ISSUE"
-      fi
+      local _eval_completed
+      _eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
+      [[ "$_eval_completed" == "false" ]] && _eval_needed=true
     fi
 
     if [[ "$REQUIRE_CONFIRM" == "true" && "$merged_before_ready" != "true" ]]; then
+      if [[ "$_eval_needed" == "true" ]]; then
+        log "info" "  📊 Running post-merge eval..."
+        launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
+      elif [[ "$AUTO_EVAL" == "true" ]]; then
+        log "debug" "  ✓ Eval already completed for $ISSUE"
+      fi
       log "status" "  → Window stays open for review - close it when ready"
       if should_update_linear_state "$ISSUE"; then
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
@@ -5807,6 +5810,12 @@ monitor_issue_state() {
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
     fi
     cleanup_completed_task "$ISSUE" "$SLUG"
+    if [[ "$_eval_needed" == "true" ]]; then
+      log "info" "  📊 Eval queued in background"
+      launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
+    elif [[ "$AUTO_EVAL" == "true" ]]; then
+      log "debug" "  ✓ Eval already completed for $ISSUE"
+    fi
     return 0
   elif [[ "$pr_status" == "CLOSED" ]]; then
     log_warn "$ISSUE → PR #$PR CLOSED without merge"
