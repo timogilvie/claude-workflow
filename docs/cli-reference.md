@@ -30,7 +30,55 @@ Runs targeted LLM-powered review on a PR or shows review metrics.
 
 ### `wavemill ready`
 
-Runs merge-readiness checks for a PR and reports whether it is safe to merge right now.
+Runs merge-readiness checks for a PR and reports whether it is safe to merge right now. In autonomous integration mode, this is the same policy surface `tend` uses for dependency, migration, risk, and challenge guards.
+
+For direct development use:
+
+```bash
+wavemill ready <pr> --repo-dir <repo>
+npx tsx tools/ready.ts <pr> --repo-dir <repo>
+```
+
+Flags:
+
+- `--repo-dir <path>`: inspect a repository other than the current working directory
+
+## Autonomous Integration
+
+### `wavemill tend`
+
+Runs one pass or a continuous loop over PRs targeting the integration branch.
+
+```bash
+wavemill tend --once --repo-dir <repo>
+wavemill tend --loop --repo-dir <repo>
+wavemill tend --once --dry-run --repo-dir <repo>
+```
+
+Flags:
+
+- `--once`: run a single controller pass and exit
+- `--loop`: run continuously inside the mill tmux session
+- `--dry-run`: print queue status without mutating labels, branches, or PRs
+- `--repo-dir <path>`: repository directory to inspect
+
+Subcommands:
+
+- `promote`: open or refresh the promotion PR from the integration branch to the promotion branch
+
+### `wavemill promote`
+
+Direct entry point for promotion mode.
+
+```bash
+wavemill promote --repo-dir <repo>
+wavemill promote --dry-run --repo-dir <repo>
+```
+
+Flags:
+
+- `--dry-run`: print promotion status without mutating GitHub state
+- `--repo-dir <path>`: repository directory to inspect
 
 ## Routing And Learning
 
@@ -75,20 +123,6 @@ Shows the installed Wavemill version.
 
 Shows the built-in help output.
 
-## Development Entry Points
-
-These are documented because they are useful during development in addition to the public CLI.
-
-### Ready Stage
-
-The ready stage runs automatically inside `wavemill mill` between review and merge, and is also available as `wavemill ready <pr>`.
-
-For direct development use:
-
-```bash
-npx tsx tools/ready.ts <pr>
-```
-
 ## Choosing The Right Command
 
 - Start with `wavemill init` once per repository.
@@ -96,10 +130,13 @@ npx tsx tools/ready.ts <pr>
 - Use `wavemill expand` when task packets need manual preparation.
 - Use `wavemill plan` when epics are too large to mill directly.
 - Use `wavemill review` or `wavemill eval` when you want targeted inspection.
+- Use `wavemill tend` when you need to inspect or drive the `auto/integration` queue.
+- Use `wavemill promote` when you are ready to move `auto/integration` toward `main`.
 - Use `wavemill route` or `wavemill hokusai` when you are tuning the learning system.
 
 ## See Also
 
+- [Autonomous Integration](autonomous-integration.md) — branch protection, promotion cadence, and rollback guidance
 - [Getting Started](getting-started.md) — first-time setup
 - [Mill Mode](mill-mode.md) — core workflow
 - [Routing & Hokusai](routing-and-hokusai.md) — self-improving routing
