@@ -8,6 +8,7 @@ import {
   readTaskPromptFromFile,
   routeWorkflow,
   routeWorkflowAutoWithContext,
+  routeWorkflowDegraded,
   routeWorkflowDegradedWithContext,
   routeWorkflowHokusai,
   routeWorkflowStageAwareWithContext,
@@ -160,7 +161,7 @@ async function routeTaskInBatch(
 
   if (operatingMode === 'constrained' || operatingMode === 'survival') {
     if (!stageAwareContext) {
-      throw new Error(`Stage-aware context was not prepared for ${operatingMode} batch routing`);
+      return routeWorkflowDegraded(prompt, options, operatingMode);
     }
     return routeWorkflowDegradedWithContext(prompt, options, operatingMode, stageAwareContext);
   }
