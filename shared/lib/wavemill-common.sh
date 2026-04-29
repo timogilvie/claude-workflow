@@ -556,9 +556,11 @@ pretrust_directory() {
 # Args: $1 = state_file, $2 = issue_id, $3 = phase (planning|executing|pr-review|merged)
 set_task_phase() {
   local state_file="$1" issue="$2" phase="$3"
-  state_mutate "$state_file" \
-    '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
-    --arg issue "$issue" --arg phase "$phase"
+  local tmp
+  tmp=$(mktemp)
+  jq --arg issue "$issue" --arg phase "$phase" \
+     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+     "$state_file" > "$tmp" && mv "$tmp" "$state_file"
 }
 
 # ============================================================================
@@ -667,48 +669,4 @@ configure_agent_hooks() {
       log "debug" "  Generic agent status tracking via process monitor"
       ;;
   esac
-}
-
-# Mutate a JSON state file under a portable POSIX lock.
-# Usage: state_mutate <state_path> <jq_filter> [jq_args...]
-state_mutate() {
-  local state_path="$1" jq_filter="$2"
-  shift 2
-
-  local lock_dir="${state_path}.lock"
-  local tmp_file="${state_path}.tmp.$$.$RANDOM"
-  local err_file="/tmp/wavemill-state-mutate-$$.$RANDOM.err"
-  local max_retries="${STATE_MUTATE_MAX_RETRIES:-50}"
-  local sleep_seconds="${STATE_MUTATE_SLEEP_SECONDS:-0.1}"
-  local retry=0
-
-  if [[ ! -f "$state_path" ]]; then
-    echo "state_mutate: state file not found: $state_path" >&2
-    return 1
-  fi
-
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    retry=$((retry + 1))
-    if (( retry >= max_retries )); then
-      echo "state_mutate: lock timeout on $state_path after $max_retries retries" >&2
-      return 1
-    fi
-    sleep "$sleep_seconds"
-  done
-
-  local status=0
-  if jq "$@" "$jq_filter" "$state_path" > "$tmp_file" 2>"$err_file"; then
-    mv "$tmp_file" "$state_path" || status=$?
-  else
-    status=$?
-    cat "$err_file" >&2
-  fi
-
-  rm -f "$tmp_file" "$err_file"
-  if ! rmdir "$lock_dir" 2>/dev/null && (( status == 0 )); then
-    echo "state_mutate: failed to release lock: $lock_dir" >&2
-    return 1
-  fi
-
-  return "$status"
 }
