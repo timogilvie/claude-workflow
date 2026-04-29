@@ -204,6 +204,17 @@ agent_rubric_snippet() {
   return 1
 }
 
+agent_runtime_resource_repo_dir() {
+  local tools_dir="$1"
+  local root="${tools_dir%/tools}"
+
+  if [[ -d "$root" ]]; then
+    (cd "$root" && pwd)
+  else
+    printf '%s\n' "$root"
+  fi
+}
+
 # Build the interactive (planning-mode) prompt.
 #
 # Args (positional):
@@ -484,7 +495,9 @@ Scope the plan to the minimum viable change:
   local resolver_tool="$tools_dir/resolve-runtime-resource.ts"
   if [[ -f "$resolver_tool" ]]; then
     local resolved_json
-    if resolved_json="$(npx tsx "$resolver_tool" --surface planner --repo-dir "$wt_dir" --json 2>/dev/null)" \
+    local resource_repo_dir
+    resource_repo_dir="$(agent_runtime_resource_repo_dir "$tools_dir")"
+    if resolved_json="$(npx tsx "$resolver_tool" --surface planner --repo-dir "$resource_repo_dir" --json 2>/dev/null)" \
       && template_content="$(printf '%s' "$resolved_json" | jq -er '.content')" ; then
       :
     else
@@ -900,7 +913,9 @@ The reviewer is operating in degraded scoped-review mode.
   local resolver_tool="$tools_dir/resolve-runtime-resource.ts"
   if [[ -f "$resolver_tool" ]]; then
     local resolved_json
-    if resolved_json="$(npx tsx "$resolver_tool" --surface reviewer --repo-dir "$wt_dir" --json 2>/dev/null)" \
+    local resource_repo_dir
+    resource_repo_dir="$(agent_runtime_resource_repo_dir "$tools_dir")"
+    if resolved_json="$(npx tsx "$resolver_tool" --surface reviewer --repo-dir "$resource_repo_dir" --json 2>/dev/null)" \
       && template_content="$(printf '%s' "$resolved_json" | jq -er '.content')" ; then
       :
     else
