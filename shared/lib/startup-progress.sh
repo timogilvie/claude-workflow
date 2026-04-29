@@ -132,9 +132,14 @@ _progress_render_reader() {
   }
 
   _progress_draw_table
-  while IFS=$'\t' read -r id col state detail || [[ -n "${id:-}" ]]; do
+  while true; do
+    if ! IFS=$'\t' read -t 0.1 -r id col state detail 2>/dev/null; then
+      _progress_draw_table
+      continue
+    fi
     if [[ "$id" == "__finish__" ]]; then
       finished=1
+      _progress_draw_table
       break
     fi
     [[ "$id" =~ ^[0-9]+$ ]] || continue
@@ -144,12 +149,22 @@ _progress_render_reader() {
       cells["$id:$col"]="$state"
       details["$id:$col"]="$(_progress_clean_detail "${detail:-}")"
     fi
+    while IFS=$'\t' read -t 0 -r id col state detail 2>/dev/null; do
+      if [[ "$id" == "__finish__" ]]; then
+        finished=1
+        break
+      fi
+      [[ "$id" =~ ^[0-9]+$ ]] || continue
+      if [[ "$col" == "issue" ]]; then
+        issues["$id"]="$(_progress_clean_detail "$state")"
+      else
+        cells["$id:$col"]="$state"
+        details["$id:$col"]="$(_progress_clean_detail "${detail:-}")"
+      fi
+    done
     _progress_draw_table
+    (( finished == 1 )) && break
   done < "$fifo"
-
-  if (( finished == 1 )); then
-    _progress_draw_table
-  fi
 }
 
 progress_start() {
