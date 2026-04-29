@@ -149,7 +149,7 @@ _progress_render_reader() {
       cells["$id:$col"]="$state"
       details["$id:$col"]="$(_progress_clean_detail "${detail:-}")"
     fi
-    while IFS=$'\t' read -t 0 -r id col state detail 2>/dev/null; do
+    while IFS=$'\t' read -t 0.001 -r id col state detail 2>/dev/null; do
       if [[ "$id" == "__finish__" ]]; then
         finished=1
         break
