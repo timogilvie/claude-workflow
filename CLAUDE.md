@@ -126,6 +126,12 @@ Use `docs/prompt-locations.md` as the canonical registry for agent instruction l
 
 Wavemill tracks agent lifecycle using a JSON status file contract at `/tmp/wavemill-${SESSION}-${ISSUE}.hook`. This replaces tmux pane liveness checks with richer state reporting (working/idle/waiting/error) and supports staleness detection via timestamps.
 
+## State Mutation
+
+All JSON state read-modify-write updates must use `state_mutate` from `shared/lib/wavemill-common.sh` in shell or `mutateJsonState` from `shared/lib/state-mutex.ts` in TypeScript. These helpers serialize concurrent writers with a file lock before writing a temporary file and atomically renaming it into place.
+
+Append-only files such as JSONL logs and `.wavemill/registry/` entries remain lock-free. Hook status files at `/tmp/wavemill-*.hook` also keep their existing single-writer temporary-file pattern.
+
 ### Architecture
 
 **Shared Protocol** ([wavemill-hook-protocol.sh](shared/hooks/wavemill-hook-protocol.sh)):
