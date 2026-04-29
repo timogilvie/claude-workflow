@@ -138,8 +138,8 @@ startup_render_set() {
   local row_idx="$1" field="$2" value="$3"
   [[ "${STARTUP_RENDER_MODE:-plain}" == "plain" ]] && return 0
 
-  # Strip control characters to prevent terminal injection (includes TAB)
-  value="$(printf '%s' "$value" | tr -d '\000-\011\013-\037')"
+  # Strip control characters and newline to prevent terminal injection and line corruption
+  value="$(printf '%s' "$value" | tr -d '\000-\037\177')"
 
   local row_file="$STARTUP_RENDER_ROWS_DIR/row-${row_idx}"
 

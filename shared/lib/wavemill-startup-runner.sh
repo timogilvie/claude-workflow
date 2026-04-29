@@ -661,8 +661,9 @@ main() {
 
     # Wait for a slot to open before launching the next worker
     while (( running >= WAVEMILL_STARTUP_CONCURRENCY )); do
-      wait -n 2>/dev/null || true
-      running=$(( running - 1 ))
+      if wait -n 2>/dev/null; then
+        running=$(( running - 1 ))
+      fi
     done
 
     (

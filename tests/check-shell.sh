@@ -2279,6 +2279,7 @@ echo "=== Startup Render Lifecycle Fixtures ==="
 for fixture in \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_render_plain_mode.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_render_bounded_concurrency.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/startup_render_monotonic.sh" \
 ; do
   if [[ ! -f "$fixture" ]]; then
     fail "Missing startup render fixture $(basename "$fixture")"
