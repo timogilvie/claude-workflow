@@ -104,6 +104,24 @@ Minimal config:
 
 When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `integration` tmux window in the existing session and runs the tend loop there with the normal mill session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
 
+## Promotion
+
+Promotion mode reuses the tend controller's branch-health and PR-check helpers to manage the shared `integration -> main` release PR without auto-merging it.
+
+Use either command form:
+
+```bash
+wavemill tend promote --repo-dir <repo>
+wavemill promote --repo-dir <repo>
+```
+
+Behavior:
+
+- opens or updates a PR from `integration.integrationBranch` to `integration.promotionBranch`
+- refreshes a managed `Promotion Summary` section in the PR body with recent merged Wavemill PRs and recent integration commits
+- reuses the shared check waiter to report whether the promotion PR is passing, pending, or failing
+- leaves merge policy separate from task PR merge policy by never calling auto-merge here
+
 For the broader controller design, see the [Autonomous Integration Merge Controller Plan](https://linear.app/hokusai/document/autonomous-integration-merge-controller-plan-79e27e27d690).
 
 ## Project Context Integration

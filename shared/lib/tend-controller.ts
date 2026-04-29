@@ -79,6 +79,10 @@ export interface GhPrListEntry {
 
 export type HealthChecker = (integrationBranch: string, repoDir: string) => Promise<IntegrationHealth>;
 export type PrFetcher = (integrationBranch: string, repoDir: string) => Promise<GhPrListEntry[]>;
+export interface CheckWaitResult {
+  outcome: 'pass' | 'fail' | 'timeout';
+  summary: string;
+}
 
 export interface SelectNextCandidateOptions {
   repoDir: string;
@@ -472,15 +476,15 @@ function rebaseAndPush(
   return output.join('\n');
 }
 
-async function waitForChecks(
+export async function waitForChecks(
   prNumber: number,
   repoDir: string,
   shellRunner: MergeExecutionDeps['shellRunner'],
   timeoutMs = 30 * 60 * 1000,
-): Promise<{ outcome: 'pass' | 'fail' | 'timeout'; summary: string }> {
+): Promise<CheckWaitResult> {
   const deadline = Date.now() + timeoutMs;
 
-  while (Date.now() <= deadline) {
+  while (true) {
     const output = shellRunner(
       `gh pr checks ${prNumber} --json name,state,conclusion`,
       { encoding: 'utf-8', cwd: repoDir },
@@ -495,13 +499,15 @@ async function waitForChecks(
       return { outcome: 'pass', summary: summarizeChecks(checks) };
     }
 
+    if (Date.now() >= deadline) {
+      return {
+        outcome: 'timeout',
+        summary: summarizeChecks(checks),
+      };
+    }
+
     await sleep(CHECK_POLL_INTERVAL_MS);
   }
-
-  return {
-    outcome: 'timeout',
-    summary: `Timed out waiting for PR #${prNumber} checks.`,
-  };
 }
 
 async function defaultRunReadyCheck(
