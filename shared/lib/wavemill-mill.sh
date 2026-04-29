@@ -539,7 +539,14 @@ save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
-  if ! state_mutate "$STATE_FILE" \
+  local tmp
+  tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
+     --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
+     --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
+     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
+     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
       | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
@@ -552,12 +559,10 @@ save_task_state() {
       | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
       | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
       | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end' \
-     --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
-     --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
-     --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
-     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode"; then
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "save_task_state: failed to update $issue"
   fi
 }
@@ -588,20 +593,38 @@ get_next_migration_num() {
 save_migration_reservation() {
   local issue="$1"
   local num="$2"
-  state_mutate "$STATE_FILE" \
-    '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
-    --arg issue "$issue" --argjson num "$num" >/dev/null || true
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --arg issue "$issue" --argjson num "$num" \
+     '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 save_next_migration_num() {
   local num="$1"
-  state_mutate "$STATE_FILE" '.nextMigrationNum = $num' --argjson num "$num" >/dev/null || true
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --argjson num "$num" '.nextMigrationNum = $num' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 
 remove_task_state() {
   local issue="$1"
-  if ! state_mutate "$STATE_FILE" 'del(.tasks[$issue])' --arg issue "$issue"; then
+  local tmp
+  tmp=$(mktemp) || { log_warn "remove_task_state: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" 'del(.tasks[$issue])' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "remove_task_state: failed to remove $issue"
   fi
 }
@@ -609,9 +632,14 @@ remove_task_state() {
 
 set_task_phase() {
   local issue="$1" phase="$2"
-  if ! state_mutate "$STATE_FILE" \
+  local tmp
+  tmp=$(mktemp) || { log_warn "set_task_phase: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" --arg phase "$phase" \
      '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
-     --arg issue "$issue" --arg phase "$phase"; then
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "set_task_phase: failed to update $issue"
   fi
 }
@@ -1049,9 +1077,15 @@ cleanup_stale_tasks() {
               printf 'Eval process exited with code %s\n' "$?"
             } >>"$eval_log" 2>&1 || true
             # Mark eval completed in state (harmless if task already removed)
-            state_mutate "$STATE_FILE" \
-              '.tasks[$issue].evalCompleted = true | .tasks[$issue].updated = (now | todate)' \
-              --arg issue "$issue" >/dev/null 2>&1 || true
+            local tmp
+            tmp=$(mktemp) || true
+            if [[ -n "${tmp:-}" ]] && jq --arg issue "$issue" \
+               '.tasks[$issue].evalCompleted = true | .tasks[$issue].updated = (now | todate)' \
+               "$STATE_FILE" > "$tmp" 2>/dev/null; then
+              mv "$tmp" "$STATE_FILE"
+            else
+              rm -f "${tmp:-}"
+            fi
           ) >/dev/null 2>&1 &
     log "debug" "  ↳ Eval running in background; log: $eval_log"
         fi
@@ -1116,7 +1150,14 @@ count_inflight_primary_tasks() {
 }
 
 clear_inflight_tasks_from_state() {
-  state_mutate "$STATE_FILE" '.tasks = {} | .updated = (now | todate)'
+  local tmp
+  tmp=$(mktemp) || return 1
+  if jq '.tasks = {} | .updated = (now | todate)' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
 }
 
 stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
@@ -1755,9 +1796,15 @@ replay_route_transparency_logs() {
 save_migration_reservation() {
   local issue="$1"
   local num="$2"
-  state_mutate "$STATE_FILE" \
-    '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
-    --arg issue "$issue" --argjson num "$num" >/dev/null || true
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --arg issue "$issue" --argjson num "$num" \
+     '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 # Duplicated intentionally from the parent script because the monitor runs as a
@@ -2109,8 +2156,16 @@ save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-active}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
+  local tmp
+  tmp=$(mktemp) || { log_warn "save_task_state: mktemp failed"; return 0; }
 
-  if ! state_mutate "$STATE_FILE" \
+  if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" \
+     --arg agent "$agent" --arg linearIssue "$linear_issue" --arg challenge "$challenge" \
+     --arg challengePair "$challenge_pair" --arg challengeRole "$challenge_role" \
+     --arg challengeModel "$challenge_model" \
+     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
+     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
      '(.tasks[$issue].agent // "") as $old_agent |
       (.tasks[$issue].phase // "executing") as $old_phase |
       (.tasks[$issue].evalCompleted // false) as $old_eval |
@@ -2148,42 +2203,52 @@ save_task_state() {
         evalCompleted: $old_eval,
         challengeCompared: $old_challenge_compared,
         updated: (now | todate)
-      }' \
-     --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" \
-     --arg agent "$agent" --arg linearIssue "$linear_issue" --arg challenge "$challenge" \
-     --arg challengePair "$challenge_pair" --arg challengeRole "$challenge_role" \
-     --arg challengeModel "$challenge_model" \
-     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode"; then
+      }' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "save_task_state: failed to save $issue"
   fi
 }
 
 update_free_slots_state() {
   local slots="$1"
+  local tmp
   [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
-  if ! state_mutate "$STATE_FILE" \
+  tmp=$(mktemp) || { log_warn "update_free_slots_state: mktemp failed"; return 0; }
+  if jq --argjson slots "$slots" \
      '.freeSlots = $slots | .updated = (now | todate)' \
-     --argjson slots "$slots"; then
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "update_free_slots_state: failed to update free slots"
   fi
 }
 
 remove_task_state() {
   local issue="$1"
-  if ! state_mutate "$STATE_FILE" \
-     'del(.tasks[$issue]) | .updated = (now | todate)' \
-     --arg issue "$issue"; then
+  local tmp
+  tmp=$(mktemp) || { log_warn "remove_task_state: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" 'del(.tasks[$issue]) | .updated = (now | todate)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "remove_task_state: failed to remove $issue"
   fi
 }
 
 set_task_phase() {
   local issue="$1" phase="$2"
-  if ! state_mutate "$STATE_FILE" \
+  local tmp
+  tmp=$(mktemp) || { log_warn "set_task_phase: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" --arg phase "$phase" \
      '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
-     --arg issue "$issue" --arg phase "$phase"; then
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "set_task_phase: failed to update $issue"
   fi
 }
@@ -2211,9 +2276,15 @@ read_state_value() {
 save_migration_reservation() {
   local issue="$1"
   local num="$2"
-  state_mutate "$STATE_FILE" \
-    '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
-    --arg issue "$issue" --argjson num "$num" >/dev/null || true
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --arg issue "$issue" --argjson num "$num" \
+     '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 get_task_phase() {
@@ -2223,18 +2294,28 @@ get_task_phase() {
 
 mark_eval_completed() {
   local issue="$1"
-  if ! state_mutate "$STATE_FILE" \
+  local tmp
+  tmp=$(mktemp) || { log_warn "mark_eval_completed: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" \
      '.tasks[$issue].evalCompleted = true | .tasks[$issue].updated = (now | todate)' \
-     --arg issue "$issue"; then
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "mark_eval_completed: failed to update $issue"
   fi
 }
 
 mark_eval_failed() {
   local issue="$1"
-  if ! state_mutate "$STATE_FILE" \
+  local tmp
+  tmp=$(mktemp) || { log_warn "mark_eval_failed: mktemp failed"; return 0; }
+  if jq --arg issue "$issue" \
      '.tasks[$issue].evalFailed = true | .tasks[$issue].updated = (now | todate)' \
-     --arg issue "$issue"; then
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "mark_eval_failed: failed to update $issue"
   fi
 }
@@ -3673,14 +3754,19 @@ check_challenge_sibling_merged() {
 
 mark_challenge_compared() {
   local pair_id="$1"
-  if ! state_mutate "$STATE_FILE" '
+  local tmp
+  tmp=$(mktemp) || { log_warn "mark_challenge_compared: mktemp failed"; return 0; }
+  if jq --arg pair "$pair_id" '
     .tasks |= with_entries(
       if (.value.challengePairId // "") == $pair then
         .value.challengeCompared = true
       else
         .
       end
-    )' --arg pair "$pair_id"; then
+    )' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+  else
+    rm -f "$tmp"
     log_warn "mark_challenge_compared: failed for $pair_id"
   fi
 }
@@ -4221,9 +4307,14 @@ launch_task() {
     echo "CRITICAL: This number has been reserved to avoid conflicts with parallel tasks." >> "$packet_file"
 
     # Persist reservation so subsequent launches continue the sequence
-    if ! state_mutate "$STATE_FILE" \
+    local _mig_tmp
+    _mig_tmp=$(mktemp) || true
+    if [[ -n "$_mig_tmp" ]] && jq --arg issue "$issue" --argjson num "$next_num" \
        '.migrationReservations[$issue] = $num | .nextMigrationNum = ($num + 1)' \
-       --arg issue "$issue" --argjson num "$next_num"; then
+       "$STATE_FILE" > "$_mig_tmp" 2>/dev/null; then
+      mv "$_mig_tmp" "$STATE_FILE"
+    else
+      rm -f "$_mig_tmp"
       log_warn "Failed to persist migration reservation for $issue"
     fi
 

@@ -96,7 +96,6 @@ JSON
 
 bash -lc '
   set -euo pipefail
-  source "$3/shared/lib/wavemill-common.sh"
   source "$1"
 
   SESSION="challenge-comparison-state-test"
@@ -149,7 +148,7 @@ bash -lc '
   maybe_run_challenge_comparison "pair-1_c"
 
   printf "%s\n%s\n%s\n" "$compared_after_merge" "$status_after_merge" "$COMPARE_CALLS"
-' bash "$FUNCTION_FILE" "$STATE_FILE" "$REPO_DIR" > "$TEST_DIR/output.txt"
+' bash "$FUNCTION_FILE" "$STATE_FILE" > "$TEST_DIR/output.txt"
 
 mapfile -t RESULTS < "$TEST_DIR/output.txt"
 
