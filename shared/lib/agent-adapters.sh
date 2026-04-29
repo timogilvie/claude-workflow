@@ -79,6 +79,39 @@ agent_hooks_dir() {
   echo "${script_dir%/lib}/hooks"
 }
 
+agent_runtime_resource_selection_enabled() {
+  local repo_dir="$1"
+  local surface="$2"
+  local config_file="$repo_dir/.wavemill-config.json"
+
+  [[ -f "$config_file" ]] || return 1
+
+  # Runtime resource selection is disabled by default in config.ts. Keep the
+  # shell path aligned so baseline prompt rendering does not depend on npx/tsx.
+  if command -v jq >/dev/null 2>&1; then
+    jq -e --arg surface "$surface" '
+      (.resources.runtimeSelection.enabled == true)
+      and (.resources.runtimeSelection.surfaces[$surface].enabled != false)
+    ' "$config_file" >/dev/null 2>&1
+    return $?
+  fi
+
+  # If jq is unavailable, preserve the previous behavior and let the resolver
+  # make the policy decision.
+  return 0
+}
+
+agent_run_tsx_tool() {
+  local tool="$1"
+  shift
+
+  if command -v tsx >/dev/null 2>&1; then
+    tsx "$tool" "$@"
+  else
+    npx tsx "$tool" "$@"
+  fi
+}
+
 agent_resolve_dashboard_pid() {
   local session="${1:-}"
 
@@ -493,11 +526,11 @@ Scope the plan to the minimum viable change:
   local template_file="$tools_dir/prompts/planning-phase.md"
   local template_content
   local resolver_tool="$tools_dir/resolve-runtime-resource.ts"
-  if [[ -f "$resolver_tool" ]]; then
+  local resource_repo_dir
+  resource_repo_dir="$(agent_runtime_resource_repo_dir "$tools_dir")"
+  if [[ -f "$resolver_tool" ]] && agent_runtime_resource_selection_enabled "$resource_repo_dir" "planner"; then
     local resolved_json
-    local resource_repo_dir
-    resource_repo_dir="$(agent_runtime_resource_repo_dir "$tools_dir")"
-    if resolved_json="$(npx tsx "$resolver_tool" --surface planner --repo-dir "$resource_repo_dir" --json 2>/dev/null)" \
+    if resolved_json="$(agent_run_tsx_tool "$resolver_tool" --surface planner --repo-dir "$resource_repo_dir" --json 2>/dev/null)" \
       && template_content="$(printf '%s' "$resolved_json" | jq -er '.content')" ; then
       :
     else
@@ -911,11 +944,11 @@ The reviewer is operating in degraded scoped-review mode.
   local template_file="$tools_dir/prompts/review-phase.md"
   local template_content
   local resolver_tool="$tools_dir/resolve-runtime-resource.ts"
-  if [[ -f "$resolver_tool" ]]; then
+  local resource_repo_dir
+  resource_repo_dir="$(agent_runtime_resource_repo_dir "$tools_dir")"
+  if [[ -f "$resolver_tool" ]] && agent_runtime_resource_selection_enabled "$resource_repo_dir" "reviewer"; then
     local resolved_json
-    local resource_repo_dir
-    resource_repo_dir="$(agent_runtime_resource_repo_dir "$tools_dir")"
-    if resolved_json="$(npx tsx "$resolver_tool" --surface reviewer --repo-dir "$resource_repo_dir" --json 2>/dev/null)" \
+    if resolved_json="$(agent_run_tsx_tool "$resolver_tool" --surface reviewer --repo-dir "$resource_repo_dir" --json 2>/dev/null)" \
       && template_content="$(printf '%s' "$resolved_json" | jq -er '.content')" ; then
       :
     else
