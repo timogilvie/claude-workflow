@@ -35,6 +35,7 @@ Use supporting commands when you need to prepare work, inspect outcomes, or inte
 - [`wavemill review`](review-mode.md) for targeted PR review
 - [`wavemill eval`](eval-mode.md) for performance analysis
 - [`wavemill route`](routing-and-hokusai.md) for inspecting routing decisions
+- [Autonomous Integration](autonomous-integration.md) for routing task PRs through `auto/integration`
 - [Adding Models](model-additions.md) for the maintainer checklist when new models become available
 - [`wavemill context`](cli-reference.md) for maintaining agent-readable project memory
 

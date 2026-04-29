@@ -32,6 +32,40 @@ Runs targeted LLM-powered review on a PR or shows review metrics.
 
 Runs merge-readiness checks for a PR and reports whether it is safe to merge right now.
 
+## Integration Mode Tools
+
+### `wavemill tend`
+
+Runs the autonomous integration merge controller. The controller looks for `wm:ready` Wavemill PRs targeting the configured integration branch, selects one eligible PR, rebases it onto the integration branch, waits for checks, reruns readiness, and merges it.
+
+Common options:
+
+- `--once`: run one controller pass and exit
+- `--loop`: run continuously, normally inside the mill tmux session
+- `--dry-run`: print the queue status without merging or closing challenge losers
+- `--repo-dir <path>`: operate on a repository other than the current directory
+
+Examples:
+
+```bash
+wavemill tend --once --repo-dir .
+wavemill tend --loop --repo-dir /path/to/repo
+wavemill tend --once --dry-run
+```
+
+### `wavemill promote`
+
+Opens or updates the promotion PR from `integration.integrationBranch` to `integration.promotionBranch`. Promotion reports the PR URL when available and prints the current check summary, but it does not auto-merge the promotion PR.
+
+Use either command form:
+
+```bash
+wavemill promote --repo-dir .
+wavemill tend promote --repo-dir .
+```
+
+Exit code is `0` when the promotion command completed, including cases where checks are pending or failing and the status is reported for the operator. Argument or runtime errors exit non-zero through the shared tool runner.
+
 ## Routing And Learning
 
 ### `wavemill route`

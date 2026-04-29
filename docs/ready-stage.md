@@ -268,6 +268,24 @@ Practical operator interpretation:
 
 For conflicted PRs, the monitor attempts a narrow in-place remediation before escalating to the operator.
 
+## Ready in Integration Mode
+
+When autonomous integration mode is enabled, the ready stage becomes the policy gate for `wavemill tend`. A passing ready result means the task PR may enter the integration queue; it does not mean the PR can bypass the one-at-a-time tend controller.
+
+The integration-ready policy lives under `integration.readyPolicy`:
+
+- `enabled`: when true, tend reruns the ready-engine policy immediately before merge.
+- `riskPolicy`: controls high-risk work with `block`, `require-label`, or `auto`.
+- `enforceMigrationCoupling`: keeps `db:migration` and Wavemill migration labels in sync for autonomous merge.
+
+Integration-mode signals surface as ready results:
+
+- blocked dependency: `depends_on` or `depends_on_linear` references are pending, missing, canceled, or closed without merge.
+- approval requirement: high-risk work with `riskPolicy: "require-label"` waits for the acknowledgement label.
+- integration red halt: `wavemill tend` stops selecting work when `auto/integration` is unhealthy; ready remains the per-PR gate, but the branch-health gate wins before candidate selection.
+
+`integration.haltOnRed` should normally remain enabled. A red integration branch means new task PRs cannot be evaluated against a trustworthy base, so the tend loop idles or halts until CI is repaired.
+
 ## Merge-Gating Policy
 
 Policy for repositories adopting the ready stage:

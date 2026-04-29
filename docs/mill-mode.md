@@ -82,6 +82,8 @@ Use mill mode when your backlog has many independent tasks and your team is comf
 
 Integration mode is opt-in through `.wavemill-config.json` with `integration.enabled: true`. The default is `false`, so existing repositories keep the current direct-to-`main` workflow until you enable the new branch policy.
 
+When `mill.baseBranch` is set to `auto/integration`, generated task PRs target `auto/integration` instead of `main`. That makes the integration branch the queue head for Wavemill work: review still happens on individual task PRs, but autonomous merge decisions are made against the shared integration branch, and `main` advances only through promotion.
+
 Recommended branch flow:
 
 - `task/*` branches merge into `auto/integration`
@@ -102,7 +104,46 @@ Minimal config:
 }
 ```
 
+The autonomous pipeline has four tools:
+
+- `wavemill mill` creates and monitors task work, using `mill.baseBranch` as the PR base.
+- `wavemill ready` applies merge-readiness policy to a reviewed task PR.
+- `wavemill tend` selects one eligible ready PR at a time, rebases it onto `auto/integration`, waits for checks, re-runs ready policy, and merges it.
+- `wavemill promote` opens or updates the controlled `auto/integration -> main` promotion PR.
+
 When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `integration` tmux window in the existing session and runs the tend loop there with the normal mill session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
+
+### High-Risk Policy
+
+High-risk handling is intentionally conservative. PRs with `risk: high` in the `wavemill-meta` block or the `Risk: High` label are evaluated by the ready policy in `shared/lib/ready-engine.ts`.
+
+There are two related settings:
+
+- `integration.highRiskPolicy: "block" | "manual" | "allow"` documents the repository's autonomous integration stance for high-risk work.
+- `integration.readyPolicy.riskPolicy: "block" | "require-label" | "auto"` is the ready-engine gate used by the controller when ready policy is enabled.
+
+Use `block` for repositories where high-risk work must never merge autonomously. Use `manual` or `require-label` when a human must add the acknowledgement label before the tend loop can continue. Use `allow` or `auto` only when branch protection, review policy, and rollback expectations make automatic merge acceptable.
+
+`integration.haltOnRed` should normally stay `true`. A red `auto/integration` branch means the controller must stop selecting more work until the shared branch is repaired; otherwise unrelated task PRs can be stacked on top of a known-bad base.
+
+### Challenge Mode
+
+Challenge-mode PRs carry challenge metadata in workflow state and PR metadata. The tend controller delegates pair evaluation to `shared/lib/tend-challenge-gate.ts`.
+
+When a pair has no comparison result, both candidates are held. Once a comparison record exists, the winner can remain eligible for autonomous merge when challenge config permits it. The loser is blocked with a `challenge:loser:<pair>` reason and, in mutating tend runs, is marked superseded and closed with a challenge-loss comment.
+
+If `challenge.autoMergeWinner` is `false`, the winner is also held after comparison so an operator can make the final merge decision.
+
+### Dependency and Approval Guards
+
+The ready policy in `shared/lib/ready-engine.ts` guards dependencies and approval requirements before tend merges:
+
+- `depends_on` PR references must point to dependencies that have already merged or are still eligible in dependency order.
+- `depends_on_linear` dependencies must be completed and not canceled.
+- high-risk work can require the `wm:risk-acknowledged` label.
+- migration coupling can require Wavemill migration labels when `db:migration` is present.
+
+The tend selector also refuses PRs with unresolved dependency metadata, missing metadata, draft state, `wm:blocked`, or missing `wm:ready`. This keeps the one-at-a-time merge controller from using `auto/integration` as a bypass around the ready stage.
 
 ## Promotion
 
