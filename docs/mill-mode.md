@@ -29,6 +29,24 @@ MAX_PARALLEL=5 wavemill mill
 AGENT_CMD=codex wavemill mill
 ```
 
+## Startup Progress Table
+
+During task launch, `wavemill mill` shows a live startup table on stderr:
+
+```text
+issue | route | worktree | deps | agent | linear
+```
+
+Each row is a task. The columns track routing handoff, worktree creation, dependency installation, agent launch, and the Linear state update. Cells move through `.`, `…`, `✓`, `✗`, and `-` for pending, running, done, failed, and skipped.
+
+Startup launches tasks concurrently by phase. The default startup worker limit is `4`; override it with:
+
+```bash
+WAVEMILL_STARTUP_CONCURRENCY=8 wavemill mill
+```
+
+Values are clamped to `1` through `16`. Use `wavemill mill --no-progress` to force the legacy `[N/M] launching ...` status lines. The table is also disabled automatically when stderr is not a TTY, such as in CI logs or redirected output.
+
 ## Why Mill Mode Is The Core Workflow
 
 Mill mode combines the pieces that make Wavemill useful as a software factory:
