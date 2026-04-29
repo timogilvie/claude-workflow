@@ -588,6 +588,48 @@ warn_once_per_session() {
   printf '%s\n' "$warning_key" >> "$warning_file" 2>/dev/null || true
 }
 
+wavemill_lock_run() {
+  local lock_name="$1"
+  shift
+
+  local session="${SESSION:-global}"
+  local lock_root="/tmp/wavemill-${session}-locks"
+  mkdir -p "$lock_root"
+
+  if command -v flock >/dev/null 2>&1; then
+    local lock_file="$lock_root/${lock_name}"
+    touch "$lock_file"
+    { flock -x 9; "$@"; } 9>"$lock_file"
+    return
+  fi
+
+  local lock_dir="$lock_root/${lock_name}.lk"
+  local ttl=30 attempts=0
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    local mtime now
+    mtime="$(stat -f '%m' "$lock_dir" 2>/dev/null || stat -c '%Y' "$lock_dir" 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    if [[ $((now - mtime)) -gt $ttl ]]; then
+      rmdir "$lock_dir" 2>/dev/null || true
+      continue
+    fi
+    sleep "0.$((RANDOM % 3 + 1))"
+    attempts=$((attempts + 1))
+    if [[ "$attempts" -gt 100 ]]; then
+      if declare -F startup_log >/dev/null 2>&1; then
+        startup_log "Warning: wavemill_lock_run timeout on $lock_name; proceeding unlocked"
+      fi
+      "$@"
+      return
+    fi
+  done
+
+  "$@"
+  local rc=$?
+  rmdir "$lock_dir" 2>/dev/null || true
+  return "$rc"
+}
+
 # Configure agent hooks for status tracking in a worktree-specific settings file.
 # This writes to .claude/settings.local.json (gitignored) so hooks only affect
 # wavemill-launched agents, not standalone Claude usage.
