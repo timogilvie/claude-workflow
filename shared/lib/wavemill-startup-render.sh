@@ -120,12 +120,12 @@ startup_render_init() {
 
 # _startup_state_level <value>
 # Maps a cell value to a numeric state level for monotonic advancement checking.
-# Levels: 0=blank/dash, 1=in-progress glyph, 2=completion (✓ or error).
+# Levels: 0=blank/dash, 1=in-progress glyph, 2=completion (✓, ✗, or error).
 _startup_state_level() {
   local value="$1"
   case "$value" in
     ""|-|"—") echo 0 ;;
-    "✓"|"error") echo 2 ;;
+    "✓"|"✗"|"error") echo 2 ;;
     *) echo 1 ;; # Treat any other non-empty value as in-progress
   esac
 }

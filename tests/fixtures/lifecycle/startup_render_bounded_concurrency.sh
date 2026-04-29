@@ -77,8 +77,12 @@ while IFS= read -r task_json; do
   idx=$(( idx + 1 ))
 
   while (( running >= WAVEMILL_STARTUP_CONCURRENCY )); do
-    wait -n 2>/dev/null || true
-    running=$(( running - 1 ))
+    # Try wait -n first; fall back to plain wait for older bash
+    if wait -n 2>/dev/null; then
+      running=$(( running - 1 ))
+    elif wait 2>/dev/null; then
+      running=$(( running - 1 ))
+    fi
   done
 
   (

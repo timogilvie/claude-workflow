@@ -85,8 +85,8 @@ ansi_output="$(
 if [[ -z "$ansi_output" ]]; then
   echo "PASS: startup_render_set is a no-op in plain mode (no stdout)"
 else
-  # Check for ANSI escape sequences specifically
-  if printf '%s' "$ansi_output" | grep -qP '\x1b\['; then
+  # Check for ANSI escape sequences (ESC = \x1b = \033)
+  if printf '%s' "$ansi_output" | grep -q $'\033\['; then
     echo "FAIL: startup_render_set emitted ANSI escapes in plain mode"
     exit 1
   else

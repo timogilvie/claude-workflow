@@ -661,7 +661,10 @@ main() {
 
     # Wait for a slot to open before launching the next worker
     while (( running >= WAVEMILL_STARTUP_CONCURRENCY )); do
+      # Try wait -n (bash 4.3+) first; fall back to plain wait for older shells
       if wait -n 2>/dev/null; then
+        running=$(( running - 1 ))
+      elif wait 2>/dev/null; then
         running=$(( running - 1 ))
       fi
     done
