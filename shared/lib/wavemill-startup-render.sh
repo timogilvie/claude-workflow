@@ -176,9 +176,32 @@ startup_render_set() {
   startup_render_redraw
 }
 
+# _startup_spinlock_acquire <lock_file>
+# Acquires a spinlock by repeatedly trying to create the lock file.
+# Simple fallback when flock is unavailable.
+_startup_spinlock_acquire() {
+  local lock_file="$1"
+  local max_spins=100
+  local spins=0
+
+  while [[ -f "$lock_file" ]] && (( spins < max_spins )); do
+    sleep 0.01
+    (( spins++ ))
+  done
+
+  # Create lock file atomically (will race but that's ok for debounce)
+  touch "$lock_file" 2>/dev/null || true
+}
+
+# _startup_spinlock_release <lock_file>
+_startup_spinlock_release() {
+  local lock_file="$1"
+  rm -f "$lock_file" 2>/dev/null || true
+}
+
 # startup_render_redraw
 # Redraws the full table in place, debounced to no faster than 50ms.
-# Uses flock when available to serialize concurrent redraws.
+# Uses flock when available to serialize concurrent redraws; falls back to spinlock.
 startup_render_redraw() {
   [[ "${STARTUP_RENDER_MODE:-plain}" != "tty" ]] && return 0
 
@@ -188,7 +211,10 @@ startup_render_redraw() {
       _startup_render_do_redraw
     ) 200>"$STARTUP_RENDER_DRAW_LOCK"
   else
+    # Spinlock fallback: serialize without flock
+    _startup_spinlock_acquire "$STARTUP_RENDER_DRAW_LOCK.spin"
     _startup_render_do_redraw
+    _startup_spinlock_release "$STARTUP_RENDER_DRAW_LOCK.spin"
   fi
 }
 

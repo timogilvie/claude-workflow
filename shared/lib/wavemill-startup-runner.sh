@@ -661,11 +661,13 @@ main() {
 
     # Wait for a slot to open before launching the next worker
     while (( running >= WAVEMILL_STARTUP_CONCURRENCY )); do
-      # Try wait -n (bash 4.3+) first; fall back to plain wait for older shells
+      # bash 4.3+ has wait -n; older bash uses jobs to recount
       if wait -n 2>/dev/null; then
         running=$(( running - 1 ))
-      elif wait 2>/dev/null; then
-        running=$(( running - 1 ))
+      else
+        # Fallback for bash < 4.3: wait briefly and recount via jobs
+        sleep 0.1
+        running=$(jobs -r | wc -l) # Recount active background jobs
       fi
     done
 

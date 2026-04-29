@@ -13,8 +13,8 @@ if [[ ! -f "$RENDER_LIB" ]]; then
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1 && ! command -v jq >/dev/null 2>&1; then
-  echo "SKIP: python3 or jq required for plan generation"
+if ! command -v python3 >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+  echo "SKIP: python3 and jq required for plan generation"
   exit 0
 fi
 
@@ -77,11 +77,13 @@ while IFS= read -r task_json; do
   idx=$(( idx + 1 ))
 
   while (( running >= WAVEMILL_STARTUP_CONCURRENCY )); do
-    # Try wait -n first; fall back to plain wait for older bash
+    # bash 4.3+ has wait -n; older bash uses jobs to recount
     if wait -n 2>/dev/null; then
       running=$(( running - 1 ))
-    elif wait 2>/dev/null; then
-      running=$(( running - 1 ))
+    else
+      # Fallback for bash < 4.3: wait briefly and recount via jobs
+      sleep 0.1
+      running=$(jobs -r | wc -l)
     fi
   done
 
