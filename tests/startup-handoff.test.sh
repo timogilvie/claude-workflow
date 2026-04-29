@@ -82,6 +82,54 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'npx %s\n' "$*" >> "${MOCK_NPX_LOG:?}"
+
+# Emulate the state CLI by running the equivalent jq operation directly so
+# tests can observe persisted workflow-state mutations without needing the
+# real state.ts dependencies (tsx, state-store, file locks).
+if [[ "${1:-}" == "tsx" && "${2:-}" == */state.ts ]]; then
+  shift 2
+  case "${1:-}" in
+    set)
+      file="$2"
+      shift 2
+      jq_args=()
+      while [[ $# -gt 0 && "$1" != "--" ]]; do
+        jq_args+=("$1")
+        shift
+      done
+      [[ "${1:-}" == "--" ]] && shift
+      expr="${1:-}"
+      tmp="$(mktemp)"
+      if jq "${jq_args[@]}" "$expr" "$file" > "$tmp"; then
+        mv "$tmp" "$file"
+        exit 0
+      fi
+      rm -f "$tmp"
+      exit 1
+      ;;
+    init)
+      file="$2"
+      default_json="$3"
+      [[ ! -f "$file" ]] && printf '%s' "$default_json" > "$file"
+      exit 0
+      ;;
+    get)
+      jq "$3" "$2"
+      exit 0
+      ;;
+    delete)
+      file="$2"
+      tmp="$(mktemp)"
+      if jq "del($3) | .updated = (now | todate)" "$file" > "$tmp"; then
+        mv "$tmp" "$file"
+        exit 0
+      fi
+      rm -f "$tmp"
+      exit 1
+      ;;
+  esac
+fi
+
 if [[ "$*" == *"set-issue-state.ts"* ]]; then
   printf '%s|%s\n' "${3:-}" "${4:-}" >> "${MOCK_LINEAR_LOG:?}"
 fi
