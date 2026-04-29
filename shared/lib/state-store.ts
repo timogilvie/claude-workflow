@@ -229,7 +229,8 @@ export async function atomicWriteJson(filePath: string, value: unknown): Promise
 export async function getValue(filePath: string, jqPath: string): Promise<unknown> {
   try {
     const content = await fs.readFile(filePath, 'utf-8');
-    const result = execSync(`jq -r '${jqPath}'`, {
+    const escapedPath = jqPath.replace(/'/g, "'\\''");
+    const result = execSync(`jq -r '${escapedPath}'`, {
       input: content,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'ignore']
@@ -309,18 +310,8 @@ export async function runJqLocked(
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true, mode: 0o755 });
 
-    // Read current content (or use empty object if file doesn't exist)
-    let input: string;
-    try {
-      input = await fs.readFile(filePath, 'utf-8');
-    } catch (err: unknown) {
-      const error = err as NodeJS.ErrnoException;
-      if (error.code === 'ENOENT') {
-        input = '{}';
-      } else {
-        throw error;
-      }
-    }
+    // Convert current to JSON string (withFileLock already read and parsed the file)
+    const input = JSON.stringify(current);
 
     // Run jq with the expression
     const escapedExpr = jqExpression.replace(/'/g, "'\\''");

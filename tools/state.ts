@@ -4,6 +4,7 @@
 
 import * as path from 'node:path';
 import * as os from 'node:os';
+import * as fs from 'node:fs/promises';
 import { getValue, initIfMissing, runJqLocked, atomicWriteJson, withFileLock } from '../shared/lib/state-store.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 
@@ -12,7 +13,7 @@ const EXIT_SUCCESS = 0, EXIT_LOCK_TIMEOUT = 2, EXIT_INVALID_INPUT = 3, EXIT_IO_E
 function validatePath(filePath: string): void {
   const norm = path.normalize(path.resolve(filePath));
   const repo = process.cwd();
-  if (norm.includes('..') || (!norm.startsWith(repo + path.sep) && !norm.startsWith('/tmp/') && !norm.startsWith(os.tmpdir()))) {
+  if (!norm.startsWith(repo + path.sep) && !norm.startsWith('/tmp/') && !norm.startsWith(os.tmpdir())) {
     throw new Error('Invalid path');
   }
 }
@@ -49,6 +50,15 @@ See docs/cli-reference.md for full docs`);
       case 'get': {
         if (rest.length !== 1) {
           throw new Error('get requires exactly one argument: <jq-expr>');
+        }
+        try {
+          await fs.stat(filePath);
+        } catch (err: unknown) {
+          const e = err as NodeJS.ErrnoException;
+          if (e.code === 'ENOENT') {
+            throw new Error(`File not found: ${filePath}`);
+          }
+          throw err;
         }
         const [jqExpr] = rest;
         const value = await getValue(filePath, jqExpr);
