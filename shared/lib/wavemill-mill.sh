@@ -1396,7 +1396,7 @@ if (( ${#TASKS[@]} > 0 )); then
   # Pre-allocate migration numbers for parallel work
   # Fetch first so we scan the latest state of the base branch (not stale local files)
   log "debug" "Fetching latest $BASE_BRANCH for migration scan..."
-  git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" 2>/dev/null || true
+  wavemill_fetch_base_branch "$BASE_BRANCH" --force 2>/dev/null || true
 
   # Scan the git tree (not local filesystem) for the highest existing migration number
   HIGHEST=$(scan_highest_migration)
@@ -4374,8 +4374,8 @@ launch_task() {
   local packet_content
   packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
 
-  # Fetch latest base branch
-  git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" 2>/dev/null || true
+  # Refresh base branch on a TTL so repeated dynamic launches avoid redundant fetches.
+  wavemill_fetch_base_branch "$BASE_BRANCH" 2>/dev/null || true
 
   # ── Migration detection for dynamically launched tasks ──────────────
   # Detection: 1) label match  2) raw description keywords
@@ -6606,7 +6606,7 @@ chmod +x "$MONITOR_SCRIPT"
 
 # Fetch latest base branch so worktrees start from up-to-date main
 log "info" "Fetching latest $BASE_BRANCH from remote..."
-git -C "$REPO_DIR" fetch origin "$BASE_BRANCH"
+wavemill_fetch_base_branch "$BASE_BRANCH" --force
 
 : > "$STATUS_LOG_FILE"
 : > "$LAUNCHED_ISSUES_FILE"
