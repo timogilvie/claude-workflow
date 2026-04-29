@@ -79,46 +79,6 @@ startup_step() {
   startup_log "  $message"
 }
 
-# _state_spinlock_acquire
-# Acquires a spinlock using atomic mkdir (only works with directory, not file).
-# Fallback when flock is unavailable.
-_state_spinlock_acquire() {
-  local lock_dir="${STATE_FILE}.lock"
-  local max_spins=500
-  local spins=0
-
-  # Try to create lock directory atomically; mkdir fails if it already exists
-  while ! mkdir "$lock_dir" 2>/dev/null && (( spins < max_spins )); do
-    sleep 0.01
-    (( spins++ ))
-  done
-}
-
-# _state_spinlock_release
-_state_spinlock_release() {
-  local lock_dir="${STATE_FILE}.lock"
-  rmdir "$lock_dir" 2>/dev/null || true
-}
-
-# Serialize writes to STATE_FILE across concurrent worker subshells.
-# Uses flock when available; falls back to spinlock.
-_with_state_lock() {
-  if command -v flock >/dev/null 2>&1; then
-    (
-      flock -x 200
-      "$@"
-    ) 200>"${STATE_FILE}.lock"
-    return $?
-  else
-    # Spinlock fallback for systems without flock
-    _state_spinlock_acquire
-    "$@"
-    local ret=$?
-    _state_spinlock_release
-    return $ret
-  fi
-}
-
 write_stage_result_local() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}"
@@ -579,7 +539,7 @@ $details_context"
   # Persist launched tasks as active planning work in the initial state write so
   # downstream startup checks do not depend on a second jq update succeeding.
   local persisted_phase="planning"
-  if ! _with_state_lock save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
+  if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
     "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
     startup_log "✗ $issue FAILED at step [5/7]: saving workflow state"
     startup_render_set "$row_idx" status "error"
@@ -587,8 +547,8 @@ $details_context"
     return 1
   fi
 
-  if ! _with_state_lock set_task_phase_local "$issue" "$persisted_phase"; then
-    _with_state_lock remove_task_state "$issue" >/dev/null 2>&1 || true
+  if ! set_task_phase_local "$issue" "$persisted_phase"; then
+    remove_task_state "$issue" >/dev/null 2>&1 || true
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED at step [5/7]: setting phase"
     startup_render_set "$row_idx" status "error"
@@ -603,7 +563,7 @@ $details_context"
 
   startup_render_set "$row_idx" agent "$task_agent"
   if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
-    [[ -n "${state_written:-}" ]] && _with_state_lock remove_task_state "$issue" >/dev/null 2>&1 || true
+    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED at step [6/7]: launching planning agent"
     startup_render_set "$row_idx" status "error"
@@ -613,9 +573,9 @@ $details_context"
 
   # Re-persist the launched task after the pane handoff succeeds so the final
   # workflow record reflects a fully launched planning session.
-  if ! _with_state_lock save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
+  if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
     "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
-    [[ -n "${state_written:-}" ]] && _with_state_lock remove_task_state "$issue" >/dev/null 2>&1 || true
+    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED after step [6/7]: re-saving workflow state"
     startup_render_set "$row_idx" status "error"
@@ -625,7 +585,7 @@ $details_context"
 
   if should_update_linear_for_task "$challenge_role"; then
     if ! linear_set_state "$linear_issue" "In Progress"; then
-      [[ -n "${state_written:-}" ]] && _with_state_lock remove_task_state "$issue" >/dev/null 2>&1 || true
+      [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
       tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
       startup_log "✗ $issue FAILED at step [7/7]: setting Linear → In Progress"
       startup_render_set "$row_idx" status "error"
@@ -640,8 +600,8 @@ $details_context"
   # Reassert the launched phase after agent dispatch and Linear updates so the
   # final persisted state reflects active coding work even if a helper touched
   # workflow-state during startup.
-  if ! _with_state_lock set_task_phase_local "$issue" "$persisted_phase"; then
-    [[ -n "${state_written:-}" ]] && _with_state_lock remove_task_state "$issue" >/dev/null 2>&1 || true
+  if ! set_task_phase_local "$issue" "$persisted_phase"; then
+    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED at step [7/7]: finalizing workflow state"
     startup_render_set "$row_idx" status "error"
