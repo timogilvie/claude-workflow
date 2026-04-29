@@ -12,6 +12,10 @@ if [[ -z "$PLAN_FILE" || ! -f "$PLAN_FILE" ]]; then
   exit 1
 fi
 
+if [[ ! -t 2 ]]; then
+  export WAVEMILL_NO_PROGRESS=1
+fi
+
 SESSION="$(jq -r '.session' "$PLAN_FILE")"
 REPO_DIR="$(jq -r '.repoDir' "$PLAN_FILE")"
 BASE_BRANCH="$(jq -r '.baseBranch' "$PLAN_FILE")"
@@ -52,6 +56,7 @@ export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
 
 source "$LIB_DIR/wavemill-common.sh"
 source "$LIB_DIR/agent-adapters.sh"
+source "$LIB_DIR/startup-progress.sh"
 
 write_shell_assignment() {
   local name="$1" value="${2-}"
@@ -61,6 +66,10 @@ write_shell_assignment() {
 
 startup_log() {
   local line="$*"
+  if [[ -n "${STARTUP_TASK_LOG_FILE:-}" ]]; then
+    printf '%s\n' "$line" >> "$STARTUP_TASK_LOG_FILE" 2>/dev/null || true
+    return 0
+  fi
   # DO NOT add printf to stdout here - causes [1/7] messages to bleed into monitor pane (HOK-1282)
   # Startup messages are already displayed in pane 2 via tail -f of STATUS_LOG_FILE
   [[ -n "${STATUS_LOG_FILE:-}" ]] && printf '%s\n' "$line" >> "$STATUS_LOG_FILE" 2>/dev/null || true
@@ -107,6 +116,24 @@ EOF
   mv "$tmp" "$result_file"
 }
 
+startup_state_lock_acquire() {
+  local lock_dir="${STATE_FILE}.lock"
+  local attempt
+  for attempt in {1..200}; do
+    if mkdir "$lock_dir" 2>/dev/null; then
+      STARTUP_STATE_LOCK_DIR="$lock_dir"
+      return 0
+    fi
+    sleep 0.05
+  done
+  return 1
+}
+
+startup_state_lock_release() {
+  [[ -n "${STARTUP_STATE_LOCK_DIR:-}" ]] && rmdir "$STARTUP_STATE_LOCK_DIR" 2>/dev/null || true
+  STARTUP_STATE_LOCK_DIR=""
+}
+
 reset_startup_phase_artifacts() {
   local feature_dir="$1"
 
@@ -129,7 +156,8 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}" phase="${19:-}"
   local tmp
-  tmp=$(mktemp) || return 1
+  startup_state_lock_acquire || return 1
+  tmp=$(mktemp) || { startup_state_lock_release; return 1; }
   if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
      --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
      --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
@@ -159,29 +187,35 @@ save_task_state() {
       | if $phase != "" then .tasks[$issue].phase = $phase else . end' \
      "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
+    startup_state_lock_release
     return 0
   fi
   rm -f "$tmp"
+  startup_state_lock_release
   return 1
 }
 
 remove_task_state() {
   local issue="$1"
   local tmp
-  tmp=$(mktemp) || return 1
+  startup_state_lock_acquire || return 1
+  tmp=$(mktemp) || { startup_state_lock_release; return 1; }
   if jq --arg issue "$issue" 'del(.tasks[$issue]) | .updated = (now | todate)' \
     "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
+    startup_state_lock_release
     return 0
   fi
   rm -f "$tmp"
+  startup_state_lock_release
   return 1
 }
 
 set_task_phase_local() {
   local issue="$1" phase="$2"
   local tmp
-  tmp=$(mktemp) || return 1
+  startup_state_lock_acquire || return 1
+  tmp=$(mktemp) || { startup_state_lock_release; return 1; }
   if jq --arg issue "$issue" --arg phase "$phase" \
     '.tasks[$issue] = ((.tasks[$issue] // {}) + {
       phase: $phase,
@@ -189,9 +223,11 @@ set_task_phase_local() {
     })' \
     "$STATE_FILE" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$STATE_FILE"
+    startup_state_lock_release
     return 0
   fi
   rm -f "$tmp"
+  startup_state_lock_release
   return 1
 }
 
@@ -298,6 +334,27 @@ should_update_linear_for_task() {
   [[ "$challenge_role" != "challenger" ]]
 }
 
+startup_mark_remaining_skipped() {
+  local task_id="$1" current_col="$2"
+  local cols=(route worktree deps agent linear)
+  local seen_current=false col
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" == "1" ]] && return 0
+  for col in "${cols[@]}"; do
+    if [[ "$col" == "$current_col" ]]; then
+      seen_current=true
+      continue
+    fi
+    [[ "$seen_current" == "true" ]] && progress_update "$task_id" "$col" skipped
+  done
+}
+
+startup_phase_failed() {
+  local task_id="$1" col="$2" issue="$3" message="$4"
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$task_id" "$col" failed "$message"
+  startup_mark_remaining_skipped "$task_id" "$col"
+  startup_log "✗ $issue FAILED at $col: $message"
+}
+
 # Install JS deps in a worktree when a lockfile is present and node_modules is
 # missing. Worktrees created by `git worktree add` start without node_modules,
 # so test scripts that depend on local .bin binaries (jest, ts-node, etc.) fail
@@ -335,7 +392,7 @@ ensure_worktree_dependencies() {
   if ! (cd "$wt_dir" && eval "$install_cmd") >/dev/null 2>"$install_stderr"; then
     startup_log "✗ $issue FAILED at step [1.5/7]: $pm install"
     [[ -s "$install_stderr" ]] && tail -n 40 "$install_stderr" | sed 's/^/  '"$pm"': /' >> "$STATUS_LOG_FILE"
-    [[ -s "$install_stderr" ]] && tail -n 40 "$install_stderr" | sed 's/^/  '"$pm"': /'
+    [[ -s "$install_stderr" && -n "${STARTUP_TASK_LOG_FILE:-}" ]] && tail -n 40 "$install_stderr" | sed 's/^/  '"$pm"': /' >> "$STARTUP_TASK_LOG_FILE"
     rm -f "$install_stderr"
     startup_log "  Task will not be launched. Retry with: wavemill mill"
     return 1
@@ -345,7 +402,7 @@ ensure_worktree_dependencies() {
   return 0
 }
 
-launch_task_from_plan() {
+startup_run_task_phases() {
   local task_json="$1" ordinal="$2" total="$3"
   local issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file
   local planner_model coder_model reviewer_model plan_depth code_depth review_mode route_max_cost_usd
@@ -353,7 +410,10 @@ launch_task_from_plan() {
   local packet_content issue_json issue_description issue_context details_context labels_json
   local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false
 
+  local startup_id
+  startup_id="$(echo "$task_json" | jq -r '.startupId // empty')"
   issue="$(echo "$task_json" | jq -r '.issue')"
+  [[ -z "$startup_id" || "$startup_id" == "null" ]] && startup_id="${ordinal:-1}"
   slug="$(echo "$task_json" | jq -r '.slug')"
   title="$(echo "$task_json" | jq -r '.title')"
   branch="$(echo "$task_json" | jq -r '.branch')"
@@ -374,22 +434,41 @@ launch_task_from_plan() {
   challenge_role="$(echo "$task_json" | jq -r '.challengeRole // empty')"
   challenge_model="$(echo "$task_json" | jq -r '.challengeModel // empty')"
   task_agent="$(echo "$task_json" | jq -r '.agent // empty')"
+  STARTUP_TASK_LOG_FILE=""
+  if [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]]; then
+    STARTUP_TASK_LOG_FILE="/tmp/wavemill-${SESSION}-${issue}.startup.log"
+    : > "$STARTUP_TASK_LOG_FILE"
+    progress_update "$startup_id" issue "$issue"
+    progress_update "$startup_id" route running
+  fi
+
+  if ! [[ "$issue" =~ ^[A-Z]+-[0-9]+$|^[a-z0-9-]+$ ]]; then
+    startup_phase_failed "$startup_id" route "$issue" "invalid issue id"
+    return 1
+  fi
 
   [[ -z "$task_agent" ]] && task_agent="$AGENT_CMD"
   [[ -z "$coder_model" && -n "$challenge_model" ]] && coder_model="$challenge_model"
   [[ -z "$coder_model" && -n "$FORCE_MODEL" ]] && coder_model="$FORCE_MODEL"
 
   if ! agent_validate "$task_agent"; then
-    startup_log "✗ $issue FAILED before launch: agent '$task_agent' is unavailable"
+    startup_phase_failed "$startup_id" route "$issue" "agent unavailable"
     return 1
   fi
   if [[ "$task_agent" != "$AGENT_CMD" ]] && ! agent_check_auth "$task_agent"; then
-    startup_log "✗ $issue FAILED before launch: agent '$task_agent' is not authenticated"
+    startup_phase_failed "$startup_id" route "$issue" "agent unauthenticated"
     return 1
   fi
 
-  startup_log ""
-  startup_log "── Task ${ordinal}/${total}: $issue ($slug) ──"
+  if [[ "${WAVEMILL_NO_PROGRESS:-0}" == "1" ]]; then
+    startup_log ""
+    startup_log "── Task ${ordinal}/${total}: $issue ($slug) ──"
+    startup_log "[${ordinal}/${total}] launching $issue"
+  else
+    startup_log "── Task $issue ($slug) ──"
+    progress_update "$startup_id" route done
+    progress_update "$startup_id" worktree running
+  fi
 
   if [[ -d "$wt_dir" ]]; then
     startup_step "[1/7] Reusing worktree...       ✓"
@@ -398,20 +477,20 @@ launch_task_from_plan() {
     worktree_stderr="$(mktemp)"
     if git show-ref --verify --quiet "refs/heads/$branch"; then
       if ! git worktree add "$wt_dir" "$branch" >/dev/null 2>"$worktree_stderr"; then
-        startup_log "✗ $issue FAILED at step [1/7]: worktree creation"
+        startup_phase_failed "$startup_id" worktree "$issue" "worktree creation"
         startup_log "  Error: failed to attach existing branch $branch"
         [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
-        [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr"
+        [[ -s "$worktree_stderr" && -n "${STARTUP_TASK_LOG_FILE:-}" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STARTUP_TASK_LOG_FILE"
         rm -f "$worktree_stderr"
         startup_log "  Task will not be launched. Retry with: wavemill mill"
         return 1
       fi
     else
       if ! git worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >/dev/null 2>"$worktree_stderr"; then
-        startup_log "✗ $issue FAILED at step [1/7]: worktree creation"
+        startup_phase_failed "$startup_id" worktree "$issue" "worktree creation"
         startup_log "  Error: failed to create $branch from origin/$BASE_BRANCH"
         [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
-        [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr"
+        [[ -s "$worktree_stderr" && -n "${STARTUP_TASK_LOG_FILE:-}" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STARTUP_TASK_LOG_FILE"
         rm -f "$worktree_stderr"
         startup_log "  Task will not be launched. Retry with: wavemill mill"
         return 1
@@ -421,13 +500,18 @@ launch_task_from_plan() {
     rm -f "$worktree_stderr"
     startup_step "[1/7] Creating worktree...     ✓"
   fi
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" worktree done
 
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps running
   if ! ensure_worktree_dependencies "$wt_dir" "$issue"; then
     [[ -n "${created_new:-}" && "$created_new" == "true" ]] && \
       git worktree remove --force "$wt_dir" >/dev/null 2>&1 || true
+    startup_phase_failed "$startup_id" deps "$issue" "dependency install"
     return 1
   fi
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps done
 
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent running
   AGENT_CMD="$task_agent"
   pretrust_directory "$wt_dir"
   startup_step "[2/7] Pre-trusting directory... ✓"
@@ -516,7 +600,7 @@ $details_context"
   local persisted_phase="planning"
   if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
     "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
-    startup_log "✗ $issue FAILED at step [5/7]: saving workflow state"
+    startup_phase_failed "$startup_id" agent "$issue" "saving workflow state"
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     return 1
   fi
@@ -524,7 +608,7 @@ $details_context"
   if ! set_task_phase_local "$issue" "$persisted_phase"; then
     remove_task_state "$issue" >/dev/null 2>&1 || true
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-    startup_log "✗ $issue FAILED at step [5/7]: setting phase"
+    startup_phase_failed "$startup_id" agent "$issue" "setting phase"
     return 1
   fi
   state_written=true
@@ -536,7 +620,7 @@ $details_context"
   if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
     [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-    startup_log "✗ $issue FAILED at step [6/7]: launching planning agent"
+    startup_phase_failed "$startup_id" agent "$issue" "launching planning agent"
     return 1
   fi
 
@@ -546,16 +630,18 @@ $details_context"
     "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
     [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-    startup_log "✗ $issue FAILED after step [6/7]: re-saving workflow state"
+    startup_phase_failed "$startup_id" agent "$issue" "re-saving workflow state"
     return 1
   fi
   startup_step "[6/7] Launching agent...        ✓"
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent done
 
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" linear running
   if should_update_linear_for_task "$challenge_role"; then
     if ! linear_set_state "$linear_issue" "In Progress"; then
       [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
       tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-      startup_log "✗ $issue FAILED at step [7/7]: setting Linear → In Progress"
+      startup_phase_failed "$startup_id" linear "$issue" "setting Linear In Progress"
       return 1
     fi
   fi
@@ -566,18 +652,20 @@ $details_context"
   if ! set_task_phase_local "$issue" "$persisted_phase"; then
     [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-    startup_log "✗ $issue FAILED at step [7/7]: finalizing workflow state"
+    startup_phase_failed "$startup_id" linear "$issue" "finalizing workflow state"
     return 1
   fi
   startup_step "[7/7] Setting Linear → In Progress... ✓"
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" linear done
 
   printf '%s\n' "$issue" >> "$LAUNCHED_ISSUES_FILE"
   startup_log "✓ $issue launched (${coder_model:-$planner_model}, phase: $persisted_phase)"
+  STARTUP_TASK_LOG_FILE=""
   return 0
 }
 
 main() {
-  local task_count idx tasks_file monitor_cmd task_json resumed_count launched_count
+  local task_count idx tasks_file monitor_cmd task_json resumed_count launched_count pool_exit
 
   ensure_state_file
   : > "$STATUS_LOG_FILE"
@@ -598,12 +686,25 @@ main() {
     startup_log "No new tasks selected. Resuming $resumed_count in-flight task(s) from previous session."
   fi
 
-  idx=0
-  while IFS= read -r task_json; do
-    [[ -z "$task_json" ]] && continue
-    idx=$((idx + 1))
-    launch_task_from_plan "$task_json" "$idx" "$task_count" || true
-  done < <(jq -c '.tasks[]' "$PLAN_FILE")
+  if [[ "${WAVEMILL_NO_PROGRESS:-0}" == "1" ]]; then
+    idx=0
+    while IFS= read -r task_json; do
+      [[ -z "$task_json" ]] && continue
+      idx=$((idx + 1))
+      startup_run_task_phases "$task_json" "$idx" "$task_count" || true
+    done < <(jq -c '.tasks[]' "$PLAN_FILE")
+  elif [[ "$task_count" -gt 0 ]]; then
+    local task_list=()
+    mapfile -t task_list < <(jq -c '.tasks | to_entries[] | .value + {startupId: (.key + 1)}' "$PLAN_FILE")
+    progress_start "$task_count"
+    worker_pool_run "${WAVEMILL_STARTUP_CONCURRENCY:-4}" startup_run_task_phases "${task_list[@]}"
+    pool_exit=$?
+    progress_finish
+    if [[ "$pool_exit" -ne 0 ]]; then
+      startup_log "One or more startup tasks failed; see /tmp/wavemill-${SESSION}-*.startup.log for details."
+      exit "$pool_exit"
+    fi
+  fi
 
   tasks_file="/tmp/${SESSION}-tasks.txt"
   jq -r '.tasks[] | "\(.issue)|\(.slug)|\(.title)"' "$PLAN_FILE" > "$tasks_file"

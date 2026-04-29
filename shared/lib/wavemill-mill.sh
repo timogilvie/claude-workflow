@@ -22,6 +22,22 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$PWD}"
 
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-progress)
+      export WAVEMILL_NO_PROGRESS=1
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ ! -t 2 ]]; then
+  export WAVEMILL_NO_PROGRESS=1
+fi
+
 # Source common library and load layered config
 # Resolution: env vars > .wavemill-config.json > ~/.wavemill/config.json > defaults
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -269,6 +285,7 @@ create_tmux_session() {
   tmux set-option -t "$SESSION:control" remain-on-exit on 2>/dev/null || true
   tmux set-environment -t "$SESSION" REPO_DIR "$REPO_DIR"
   tmux set-environment -t "$SESSION" WAVEMILL_MILL_ACTIVE "$REPO_DIR"
+  [[ -n "${WAVEMILL_NO_PROGRESS:-}" ]] && tmux set-environment -t "$SESSION" WAVEMILL_NO_PROGRESS "$WAVEMILL_NO_PROGRESS"
   if [[ -x "$next_done_script" ]]; then
     tmux bind-key -T prefix N run-shell "WAVEMILL_SESSION='#{session_name}' '$next_done_script'"
   fi

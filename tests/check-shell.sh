@@ -25,6 +25,7 @@ echo "=== Syntax Check (bash -n) ==="
 
 for f in \
   "$LIB_DIR"/wavemill-*.sh \
+  "$LIB_DIR"/startup-progress.sh \
   "$LIB_DIR"/agent-adapters.sh \
   "$REPO_DIR"/shared/hooks/*.sh \
   "$REPO_DIR/wavemill" \
@@ -179,6 +180,24 @@ if grep -q 'printf -v STARTUP_CMD '\''%q %q'\''' "$MILL_SCRIPT"; then
 else
   fail "startup runner tmux launch command is not shell-escaped"
 fi
+
+# ============================================================================
+# TEST 2C: Startup progress fixtures
+# ============================================================================
+echo ""
+echo "=== Startup Progress Fixtures ==="
+
+for fixture in "$REPO_DIR"/tests/fixtures/startup/*.sh; do
+  if [[ ! -f "$fixture" ]]; then
+    fail "Startup fixture not found: $fixture"
+    continue
+  fi
+  if bash -n "$fixture" 2>/dev/null && bash "$fixture" >/dev/null 2>&1; then
+    pass "$(basename "$fixture")"
+  else
+    fail "$(basename "$fixture") failed"
+  fi
+done
 
 # ============================================================================
 # TEST 3: Monitor PR-detection regression guards

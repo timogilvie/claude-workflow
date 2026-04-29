@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+source "$REPO_DIR/shared/lib/startup-progress.sh"
+
+SESSION="startup-render-$$"
+export SESSION WAVEMILL_NO_PROGRESS=0
+
+out="$(mktemp)"
+progress_start 2 2>"$out"
+progress_update 1 issue HOK-1
+progress_update 2 issue HOK-2
+progress_update 1 route running
+progress_update 1 route done
+progress_update 1 worktree done
+progress_update 1 deps done
+progress_update 1 agent done
+progress_update 1 linear done
+progress_update 2 route done
+progress_update 2 worktree failed
+progress_update 2 deps skipped
+progress_update 2 agent skipped
+progress_update 2 linear skipped
+progress_finish
+
+if ! grep -q 'issue | route | worktree | deps | agent | linear' "$out"; then
+  echo "missing progress table header" >&2
+  exit 1
+fi
+if ! grep -q 'HOK-1' "$out" || ! grep -q 'HOK-2' "$out"; then
+  echo "missing issue rows" >&2
+  exit 1
+fi
+if grep -q 'running' "$out"; then
+  echo "renderer leaked raw running state" >&2
+  exit 1
+fi
+if ! grep -q 'Startup: 1 done, 1 failed, 2 total' "$out"; then
+  echo "missing final summary" >&2
+  exit 1
+fi
+
+rm -f "$out"
