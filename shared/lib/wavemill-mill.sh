@@ -3811,12 +3811,16 @@ maybe_run_challenge_eval() {
 }
 
 launch_background_post_merge_eval() {
-  local issue="$1" pr="$2" branch="$3" slug="$4" issue_ref="$5" reason="$6"
+  local issue="$1" pr="$2" branch="$3" slug="$4" issue_ref="$5" reason="$6" preresolved_agent="${7:-}"
   local eval_agent eval_log rc
 
-  validate_agent_set "$issue"
-  eval_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
-  [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+  if [[ -n "$preresolved_agent" ]]; then
+    eval_agent="$preresolved_agent"
+  else
+    validate_agent_set "$issue"
+    eval_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
+    [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+  fi
 
   eval_log="/tmp/${SESSION}-eval-${issue}.log"
   : >"$eval_log"
@@ -5780,12 +5784,16 @@ monitor_issue_state() {
     log "status" "✓ $ISSUE → PR #$PR MERGED"
     set_window_attention_state "$WIN" "clear"
 
-    # Capture eval eligibility before cleanup removes task state.
-    local _eval_needed=false
+    # Capture eval eligibility and agent before cleanup removes task state.
+    local _eval_needed=false _eval_agent=""
     if [[ "$AUTO_EVAL" == "true" ]]; then
       local _eval_completed
       _eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
-      [[ "$_eval_completed" == "false" ]] && _eval_needed=true
+      if [[ "$_eval_completed" == "false" ]]; then
+        _eval_needed=true
+        _eval_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
+        [[ -z "$_eval_agent" ]] && _eval_agent="$AGENT_CMD"
+      fi
     fi
 
     if [[ "$REQUIRE_CONFIRM" == "true" && "$merged_before_ready" != "true" ]]; then
@@ -5812,7 +5820,7 @@ monitor_issue_state() {
     cleanup_completed_task "$ISSUE" "$SLUG"
     if [[ "$_eval_needed" == "true" ]]; then
       log "info" "  📊 Eval queued in background"
-      launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
+      launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge" "$_eval_agent"
     elif [[ "$AUTO_EVAL" == "true" ]]; then
       log "debug" "  ✓ Eval already completed for $ISSUE"
     fi
