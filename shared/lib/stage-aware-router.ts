@@ -45,6 +45,12 @@ export interface StageAwareDecision extends WorkflowRouteDecision {
   shadowDecision?: StageAwareDecision | null;
 }
 
+export interface StageAwareRouterContext {
+  repoDir: string;
+  routerConfig: ReturnType<typeof getRouterConfig>;
+  records: EvalRecord[];
+}
+
 export interface ScoredNeighbor {
   record: EvalRecord;
   descriptor: TaskDescriptor;
@@ -89,6 +95,17 @@ const DEFAULT_MIN_MODELS = 2;
 const DEFAULT_STAGE_BLEND_WEIGHT = 0.3;
 const DEFAULT_RUBRIC_AWARE_MIN_COVERAGE = 0.3;
 const DEFAULT_RUBRIC_AWARE_WEIGHT = 0.3;
+const stageAwareRouterDebugState = {
+  evalLoadCount: 0,
+};
+
+export function resetStageAwareRouterDebugState(): void {
+  stageAwareRouterDebugState.evalLoadCount = 0;
+}
+
+export function getStageAwareRouterDebugState(): { evalLoadCount: number } {
+  return { ...stageAwareRouterDebugState };
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -310,6 +327,7 @@ function shouldReplaceHistoricalRecord(
  * prefers records with more signals, then higher-priority sources, then newer timestamps.
  */
 export function loadStageAwareEvalRecords(options: StageAwareOptions = {}): EvalRecord[] {
+  stageAwareRouterDebugState.evalLoadCount += 1;
   const repoDir = options.repoDir || process.cwd();
   const recordsByKey = new Map<string, { record: EvalRecord; source: HistoricalEvalSource }>();
 
@@ -332,6 +350,19 @@ export function loadStageAwareEvalRecords(options: StageAwareOptions = {}): Eval
   }
 
   return [...recordsByKey.values()].map(({ record }) => record);
+}
+
+export function loadStageAwareRouterContext(options: StageAwareOptions = {}): StageAwareRouterContext {
+  const repoDir = options.repoDir || process.cwd();
+
+  return {
+    repoDir,
+    routerConfig: getRouterConfig(repoDir),
+    records: loadStageAwareEvalRecords({
+      ...options,
+      repoDir,
+    }),
+  };
 }
 
 function stageScoreFromRecord(
@@ -677,11 +708,19 @@ export function routeStageAware(
   prompt: string,
   options: StageAwareOptions = {},
 ): StageAwareDecision | null {
-  const repoDir = options.repoDir || process.cwd();
-  const routerConfig = getRouterConfig(repoDir);
-  const plannerModels = getAvailableModelsForStage(routerConfig, 'planner');
-  const coderModels = getAvailableModelsForStage(routerConfig, 'coder');
-  const reviewerModels = getAvailableModelsForStage(routerConfig, 'reviewer');
+  const context = loadStageAwareRouterContext(options);
+  return routeStageAwareWithContext(prompt, context, options);
+}
+
+export function routeStageAwareWithContext(
+  prompt: string,
+  context: StageAwareRouterContext,
+  options: StageAwareOptions = {},
+): StageAwareDecision | null {
+  const { repoDir, routerConfig, records } = context;
+  const plannerModels = getAvailableModelsForStage(routerConfig, 'planner') || [];
+  const coderModels = getAvailableModelsForStage(routerConfig, 'coder') || [];
+  const reviewerModels = getAvailableModelsForStage(routerConfig, 'reviewer') || [];
   const kNeighbors = options.kNeighbors || routerConfig.kNeighbors || DEFAULT_K_NEIGHBORS;
   const minRecords = options.minRecords || routerConfig.minRecords || DEFAULT_MIN_RECORDS;
   const minModels = options.minModels || routerConfig.minModels || DEFAULT_MIN_MODELS;
@@ -706,11 +745,6 @@ export function routeStageAware(
     modelsAvailable: options.modelsAvailable,
     maxCostUsd: options.maxCostUsd,
     ...options.queryInput,
-  });
-
-  const records = loadStageAwareEvalRecords({
-    ...options,
-    repoDir,
   });
 
   if (records.length < minRecords) {

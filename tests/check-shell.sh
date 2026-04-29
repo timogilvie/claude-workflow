@@ -132,7 +132,7 @@ else
       | grep -vE '^(pipefail|euo|noglob|errexit|nounset)$' \
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
-      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting)$' \
+      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling)$' \
       | grep -vE '^(bad|internal|marking|rate|service|timed|too|using|wavemill)$')
 
     # Check which called names look like they could be custom functions
@@ -2140,6 +2140,20 @@ if grep -q 'selected-task.json' "$MILL_SCRIPT" && grep -q 'Created minimal routi
   pass "routing can rebuild a packet from selected-task metadata"
 else
   fail "routing packet fallback from selected-task.json is missing"
+fi
+
+if grep -q 'route-tasks.ts' "$MILL_SCRIPT" && grep -q 'route-task.ts' "$MILL_SCRIPT"; then
+  pass "mill script uses batch routing with single-task fallback"
+else
+  fail "batch routing or single-task fallback is missing"
+fi
+
+if grep -q 'prepare_route_input_for_issue()' "$MILL_SCRIPT" \
+  && grep -q 'apply_route_json_for_issue()' "$MILL_SCRIPT" \
+  && grep -q 'batch_route_selected_tasks()' "$MILL_SCRIPT"; then
+  pass "interactive routing batch helpers are defined"
+else
+  fail "interactive routing batch helper definitions are missing"
 fi
 
 if grep -q -- '--mode heuristic' "$MILL_SCRIPT"; then
