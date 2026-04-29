@@ -17,6 +17,18 @@
         }
       }
     },
+    "git": {
+      "type": "object",
+      "description": "Git behavior shared across wavemill workflows.",
+      "properties": {
+        "fetchTtlSeconds": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 0,
+          "description": "Seconds to reuse a successful base-branch fetch before fetching again. Set to 0 to always fetch."
+        }
+      }
+    },
     "mill": {
       "type": "object",
       "description": "Settings for the 'wavemill mill' command.",

@@ -41,6 +41,10 @@ export interface MillConfig {
   defaultMaxCostUsd?: number;
 }
 
+export interface GitConfig {
+  fetchTtlSeconds?: number;
+}
+
 export interface ExpandConfig {
   maxSelect?: number;
   maxDisplay?: number;
@@ -333,6 +337,7 @@ export interface BudgetConfig {
 export interface WavemillConfig {
   configVersion?: string;
   linear?: LinearConfig;
+  git?: GitConfig;
   mill?: MillConfig;
   expand?: ExpandConfig;
   plan?: PlanConfig;

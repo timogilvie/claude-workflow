@@ -701,13 +701,18 @@ test('getMillConfig returns mill section', () => {
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
+      git: {
+        fetchTtlSeconds: 30,
+      },
       mill: { maxParallel: 5, baseBranch: 'develop', defaultMaxCostUsd: 12.5 }
     }));
 
     const millConfig = getMillConfig(tmp);
+    const config = loadWavemillConfig(tmp);
     assert.equal(millConfig.maxParallel, 5);
     assert.equal(millConfig.baseBranch, 'develop');
     assert.equal(millConfig.defaultMaxCostUsd, 12.5);
+    assert.equal(config.git?.fetchTtlSeconds, 30);
   } finally {
     cleanUp(tmp);
   }
@@ -745,6 +750,12 @@ test('shell defaults define a 25 USD mill budget', () => {
   const commonLib = join(process.cwd(), 'shared', 'lib', 'wavemill-common.sh');
   const content = readFileSync(commonLib, 'utf-8');
   assert.match(content, /"defaultMaxCostUsd": 25(?:\.00)?/);
+});
+
+test('shell defaults define a 60 second git fetch TTL', () => {
+  const commonLib = join(process.cwd(), 'shared', 'lib', 'wavemill-common.sh');
+  const content = readFileSync(commonLib, 'utf-8');
+  assert.match(content, /"fetchTtlSeconds": 60/);
 });
 
 test('getDashboardConfig returns dashboard section', () => {

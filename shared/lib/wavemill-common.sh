@@ -9,6 +9,9 @@
 # Hardcoded defaults (ultimate fallbacks)
 _WAVEMILL_DEFAULTS='{
   "linear": { "project": "" },
+  "git": {
+    "fetchTtlSeconds": 60
+  },
   "mill": {
     "session": "",
     "maxParallel": 7,
@@ -53,7 +56,8 @@ _WAVEMILL_DEFAULTS='{
 #
 # Sets: SESSION, MAX_PARALLEL, POLL_SECONDS, BASE_BRANCH, WORKTREE_ROOT,
 #        AGENT_CMD, REQUIRE_CONFIRM, PLANNING_MODE, MAX_RETRIES, RETRY_DELAY,
-#        PROJECT_NAME, MAX_SELECT, MAX_DISPLAY, SETUP_CMD
+#        PROJECT_NAME, MAX_SELECT, MAX_DISPLAY, SETUP_CMD,
+#        GIT_FETCH_TTL_SECONDS
 #
 # Args: $1 = repo directory (default: $PWD)
 load_config() {
@@ -81,6 +85,7 @@ load_config() {
     ($defaults * $user * $repo) as $c |
     [
       "_CFG_PROJECT=\($c.linear.project // "" | @sh)",
+      "_CFG_GIT_FETCH_TTL_SECONDS=\($c.git.fetchTtlSeconds // 60)",
       "_CFG_SESSION=\($c.mill.session | @sh)",
       "_CFG_MAX_PARALLEL=\($c.mill.maxParallel)",
       "_CFG_POLL_SECONDS=\($c.mill.pollSeconds)",
@@ -148,6 +153,7 @@ load_config() {
   fi
   MAX_PARALLEL="${MAX_PARALLEL:-$_CFG_MAX_PARALLEL}"
   POLL_SECONDS="${POLL_SECONDS:-$_CFG_POLL_SECONDS}"
+  GIT_FETCH_TTL_SECONDS="${GIT_FETCH_TTL_SECONDS:-$_CFG_GIT_FETCH_TTL_SECONDS}"
   BASE_BRANCH="${BASE_BRANCH:-$_CFG_BASE_BRANCH}"
   AGENT_CMD="${AGENT_CMD:-$_CFG_AGENT_CMD}"
   REQUIRE_CONFIRM="${REQUIRE_CONFIRM:-$_CFG_REQUIRE_CONFIRM}"
@@ -187,6 +193,7 @@ load_config() {
 
   # Export for child processes (orchestrator, monitor, agents)
   export SESSION MAX_PARALLEL POLL_SECONDS BASE_BRANCH WORKTREE_ROOT
+  export GIT_FETCH_TTL_SECONDS
   export AGENT_CMD REQUIRE_CONFIRM PLANNING_MODE MAX_RETRIES RETRY_DELAY
   export PROJECT_NAME MAX_SELECT MAX_DISPLAY PLAN_MAX_DISPLAY PLAN_RESEARCH PLAN_MODEL
   export DASHBOARD_VERBOSITY DASHBOARD_LOG_TO_FILE
@@ -195,7 +202,7 @@ load_config() {
   export ROUTER_ENABLED ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD DEFAULT_MAX_COST_USD
 
   # Clean up temp variables
-  unset _CFG_PROJECT _CFG_SESSION _CFG_MAX_PARALLEL _CFG_POLL_SECONDS
+  unset _CFG_PROJECT _CFG_GIT_FETCH_TTL_SECONDS _CFG_SESSION _CFG_MAX_PARALLEL _CFG_POLL_SECONDS
   unset _CFG_BASE_BRANCH _CFG_WORKTREE_ROOT _CFG_AGENT_CMD _CFG_REQUIRE_CONFIRM
   unset _CFG_PLANNING_MODE _CFG_MAX_RETRIES _CFG_RETRY_DELAY _CFG_MAX_SELECT _CFG_MAX_DISPLAY
   unset _CFG_PLAN_MAX_DISPLAY _CFG_PLAN_RESEARCH _CFG_PLAN_MODEL
@@ -206,6 +213,68 @@ load_config() {
 
   # Sentinel so downstream scripts can skip re-loading
   _WAVEMILL_CONFIG_LOADED=1
+}
+
+wavemill_fetch_base_branch() {
+  local base_branch="${1:-}"
+  shift || true
+
+  local force_fetch="false"
+  while (( $# > 0 )); do
+    case "$1" in
+      --force)
+        force_fetch="true"
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  [[ -n "$base_branch" ]] || return 1
+
+  local ttl="${GIT_FETCH_TTL_SECONDS:-60}"
+  if [[ ! "$ttl" =~ ^[0-9]+$ ]]; then
+    ttl=60
+  fi
+
+  local now last_fetch_at
+  now="$(date +%s)"
+
+  if [[ "$force_fetch" != "true" ]] && (( ttl > 0 )) && [[ -r "${STATE_FILE:-}" ]] && [[ -s "${STATE_FILE:-}" ]]; then
+    if last_fetch_at=$(jq -r --arg branch "$base_branch" '.baseBranchFetchCache[$branch].last_fetch_at // empty' "$STATE_FILE" 2>/dev/null); then
+      if [[ "$last_fetch_at" =~ ^[0-9]+$ ]] && (( now - last_fetch_at < ttl )); then
+        return 0
+      fi
+    fi
+  fi
+
+  local fetch_rc=0
+  git -C "$REPO_DIR" fetch origin "$base_branch" || fetch_rc=$?
+  if (( fetch_rc != 0 )); then
+    return "$fetch_rc"
+  fi
+
+  if [[ -n "${STATE_FILE:-}" ]]; then
+    local state_dir tmp
+    state_dir="$(dirname "$STATE_FILE")"
+    mkdir -p "$state_dir" 2>/dev/null || true
+    tmp="$(mktemp "${state_dir%/}/fetch-cache.XXXXXX")" || return 0
+
+    if [[ ! -s "$STATE_FILE" ]]; then
+      printf '{"tasks":{}}\n' > "$STATE_FILE" 2>/dev/null || true
+    fi
+
+    if jq --arg branch "$base_branch" --argjson fetchedAt "$now" \
+      '.baseBranchFetchCache = (.baseBranchFetchCache // {})
+       | .baseBranchFetchCache[$branch] = ((.baseBranchFetchCache[$branch] // {}) + {last_fetch_at: $fetchedAt})' \
+      "$STATE_FILE" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$STATE_FILE"
+    else
+      rm -f "$tmp"
+    fi
+  fi
 }
 
 # Backwards-compatible wrapper for callers that haven't migrated to load_config()

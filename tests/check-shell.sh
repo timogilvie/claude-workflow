@@ -181,6 +181,62 @@ else
 fi
 
 # ============================================================================
+# TEST 2C: Base-branch fetch cache guards
+# ============================================================================
+echo ""
+echo "=== Base Branch Fetch Cache Guards ==="
+
+COMMON_SCRIPT="$LIB_DIR/wavemill-common.sh"
+
+if grep -q '^wavemill_fetch_base_branch()' "$COMMON_SCRIPT"; then
+  pass "wavemill_fetch_base_branch helper is defined"
+else
+  fail "wavemill-common.sh is missing wavemill_fetch_base_branch helper"
+fi
+
+if grep -q 'baseBranchFetchCache' "$COMMON_SCRIPT" && grep -q 'last_fetch_at' "$COMMON_SCRIPT"; then
+  pass "fetch cache stores per-branch last_fetch_at state"
+else
+  fail "fetch cache state persistence is missing"
+fi
+
+if grep -q '"fetchTtlSeconds": 60' "$COMMON_SCRIPT" && grep -q '_CFG_GIT_FETCH_TTL_SECONDS' "$COMMON_SCRIPT"; then
+  pass "git fetch TTL config is loaded with default"
+else
+  fail "git fetch TTL config is not wired through load_config"
+fi
+
+if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" --force 2>/dev/null || true' "$MILL_SCRIPT"; then
+  pass "startup migration scan uses forced fetch helper"
+else
+  fail "startup migration scan is not using forced fetch helper"
+fi
+
+if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" 2>/dev/null || true' "$MILL_SCRIPT"; then
+  pass "dynamic task launch uses cached fetch helper"
+else
+  fail "dynamic task launch is not using cached fetch helper"
+fi
+
+if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" --force' "$MILL_SCRIPT"; then
+  pass "startup session fetch uses forced fetch helper"
+else
+  fail "startup session fetch is not using forced fetch helper"
+fi
+
+LAUNCH_TASK_BLOCK=$(awk '
+  /^launch_task\(\) \{/ { in_fn=1 }
+  in_fn { print }
+  in_fn && /^\}/ { exit }
+' "$MILL_SCRIPT")
+
+if grep -q 'git -C "\$REPO_DIR" fetch origin "\$BASE_BRANCH"' <<< "$LAUNCH_TASK_BLOCK"; then
+  fail "launch_task still has raw git fetch"
+else
+  pass "launch_task no longer performs raw git fetch"
+fi
+
+# ============================================================================
 # TEST 3: Monitor PR-detection regression guards
 # ============================================================================
 echo ""
