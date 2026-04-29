@@ -556,11 +556,9 @@ pretrust_directory() {
 # Args: $1 = state_file, $2 = issue_id, $3 = phase (planning|executing|pr-review|merged)
 set_task_phase() {
   local state_file="$1" issue="$2" phase="$3"
-  local tmp
-  tmp=$(mktemp)
-  jq --arg issue "$issue" --arg phase "$phase" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
-     "$state_file" > "$tmp" && mv "$tmp" "$state_file"
+  state_mutate "$state_file" \
+    '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+    --arg issue "$issue" --arg phase "$phase"
 }
 
 # ============================================================================
@@ -586,6 +584,48 @@ warn_once_per_session() {
 
   log "warn" "$message"
   printf '%s\n' "$warning_key" >> "$warning_file" 2>/dev/null || true
+}
+
+wavemill_lock_run() {
+  local lock_name="$1"
+  shift
+
+  local session="${SESSION:-global}"
+  local lock_root="/tmp/wavemill-${session}-locks"
+  mkdir -p "$lock_root"
+
+  if command -v flock >/dev/null 2>&1; then
+    local lock_file="$lock_root/${lock_name}"
+    touch "$lock_file"
+    { flock -x 9; "$@"; } 9>"$lock_file"
+    return
+  fi
+
+  local lock_dir="$lock_root/${lock_name}.lk"
+  local ttl=30 attempts=0
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    local mtime now
+    mtime="$(stat -c '%Y' "$lock_dir" 2>/dev/null || stat -f '%m' "$lock_dir" 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    if [[ $((now - mtime)) -gt $ttl ]]; then
+      rmdir "$lock_dir" 2>/dev/null || true
+      continue
+    fi
+    sleep "0.$((RANDOM % 3 + 1))"
+    attempts=$((attempts + 1))
+    if [[ "$attempts" -gt 100 ]]; then
+      if declare -F startup_log >/dev/null 2>&1; then
+        startup_log "Warning: wavemill_lock_run timeout on $lock_name; proceeding unlocked"
+      fi
+      "$@"
+      return
+    fi
+  done
+
+  "$@"
+  local rc=$?
+  rmdir "$lock_dir" 2>/dev/null || true
+  return "$rc"
 }
 
 # Configure agent hooks for status tracking in a worktree-specific settings file.
@@ -669,4 +709,48 @@ configure_agent_hooks() {
       log "debug" "  Generic agent status tracking via process monitor"
       ;;
   esac
+}
+
+# Mutate a JSON state file under a portable POSIX lock.
+# Usage: state_mutate <state_path> <jq_filter> [jq_args...]
+state_mutate() {
+  local state_path="$1" jq_filter="$2"
+  shift 2
+
+  local lock_dir="${state_path}.lock"
+  local tmp_file="${state_path}.tmp.$$.$RANDOM"
+  local err_file="/tmp/wavemill-state-mutate-$$.$RANDOM.err"
+  local max_retries="${STATE_MUTATE_MAX_RETRIES:-50}"
+  local sleep_seconds="${STATE_MUTATE_SLEEP_SECONDS:-0.1}"
+  local retry=0
+
+  if [[ ! -f "$state_path" ]]; then
+    echo "state_mutate: state file not found: $state_path" >&2
+    return 1
+  fi
+
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    retry=$((retry + 1))
+    if (( retry >= max_retries )); then
+      echo "state_mutate: lock timeout on $state_path after $max_retries retries" >&2
+      return 1
+    fi
+    sleep "$sleep_seconds"
+  done
+
+  local status=0
+  if jq "$@" "$jq_filter" "$state_path" > "$tmp_file" 2>"$err_file"; then
+    mv "$tmp_file" "$state_path" || status=$?
+  else
+    status=$?
+    cat "$err_file" >&2
+  fi
+
+  rm -f "$tmp_file" "$err_file"
+  if ! rmdir "$lock_dir" 2>/dev/null && (( status == 0 )); then
+    echo "state_mutate: failed to release lock: $lock_dir" >&2
+    return 1
+  fi
+
+  return "$status"
 }

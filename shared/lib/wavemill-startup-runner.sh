@@ -136,15 +136,8 @@ save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}" phase="${19:-}"
-  local tmp
-  tmp=$(mktemp) || return 1
-  if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
-     --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
-     --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
-     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" --arg phase "$phase" \
-     '.tasks[$issue] = (.tasks[$issue] // {}) + {
+  state_mutate "$STATE_FILE" \
+    '.tasks[$issue] = (.tasks[$issue] // {}) + {
         slug: $slug,
         branch: $branch,
         worktree: $worktree,
@@ -165,42 +158,27 @@ save_task_state() {
       | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
       | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end
       | if $phase != "" then .tasks[$issue].phase = $phase else . end' \
-     "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-    return 0
-  fi
-  rm -f "$tmp"
-  return 1
+    --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+    --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
+    --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
+    --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
+    --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
+    --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" --arg phase "$phase"
 }
 
 remove_task_state() {
   local issue="$1"
-  local tmp
-  tmp=$(mktemp) || return 1
-  if jq --arg issue "$issue" 'del(.tasks[$issue]) | .updated = (now | todate)' \
-    "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-    return 0
-  fi
-  rm -f "$tmp"
-  return 1
+  state_mutate "$STATE_FILE" 'del(.tasks[$issue]) | .updated = (now | todate)' --arg issue "$issue"
 }
 
 set_task_phase_local() {
   local issue="$1" phase="$2"
-  local tmp
-  tmp=$(mktemp) || return 1
-  if jq --arg issue "$issue" --arg phase "$phase" \
+  state_mutate "$STATE_FILE" \
     '.tasks[$issue] = ((.tasks[$issue] // {}) + {
       phase: $phase,
       updated: (now | todate)
     })' \
-    "$STATE_FILE" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$STATE_FILE"
-    return 0
-  fi
-  rm -f "$tmp"
-  return 1
+    --arg issue "$issue" --arg phase "$phase"
 }
 
 linear_set_state() {
@@ -458,7 +436,7 @@ launch_task_from_plan() {
   startup_step "[2/7] Pre-trusting directory... ✓"
 
   win="$issue-$slug"
-  tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" >/dev/null
+  wavemill_lock_run "tmux-win" tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" >/dev/null
   tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
   tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
   tmux set-option -t "$SESSION:$win" remain-on-exit on >/dev/null 2>&1 || true
@@ -539,7 +517,7 @@ $details_context"
   # Persist launched tasks as active planning work in the initial state write so
   # downstream startup checks do not depend on a second jq update succeeding.
   local persisted_phase="planning"
-  if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
+  if ! wavemill_lock_run "state" save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
     "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
     startup_log "✗ $issue FAILED at step [5/7]: saving workflow state"
     startup_render_set "$row_idx" status "error"
@@ -547,8 +525,8 @@ $details_context"
     return 1
   fi
 
-  if ! set_task_phase_local "$issue" "$persisted_phase"; then
-    remove_task_state "$issue" >/dev/null 2>&1 || true
+  if ! wavemill_lock_run "state" set_task_phase_local "$issue" "$persisted_phase"; then
+    wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED at step [5/7]: setting phase"
     startup_render_set "$row_idx" status "error"
@@ -563,7 +541,7 @@ $details_context"
 
   startup_render_set "$row_idx" agent "$task_agent"
   if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
-    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+    [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED at step [6/7]: launching planning agent"
     startup_render_set "$row_idx" status "error"
@@ -573,9 +551,9 @@ $details_context"
 
   # Re-persist the launched task after the pane handoff succeeds so the final
   # workflow record reflects a fully launched planning session.
-  if ! save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
+  if ! wavemill_lock_run "state" save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
     "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
-    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+    [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED after step [6/7]: re-saving workflow state"
     startup_render_set "$row_idx" status "error"
@@ -585,7 +563,7 @@ $details_context"
 
   if should_update_linear_for_task "$challenge_role"; then
     if ! linear_set_state "$linear_issue" "In Progress"; then
-      [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+      [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
       tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
       startup_log "✗ $issue FAILED at step [7/7]: setting Linear → In Progress"
       startup_render_set "$row_idx" status "error"
@@ -600,8 +578,8 @@ $details_context"
   # Reassert the launched phase after agent dispatch and Linear updates so the
   # final persisted state reflects active coding work even if a helper touched
   # workflow-state during startup.
-  if ! set_task_phase_local "$issue" "$persisted_phase"; then
-    [[ -n "${state_written:-}" ]] && remove_task_state "$issue" >/dev/null 2>&1 || true
+  if ! wavemill_lock_run "state" set_task_phase_local "$issue" "$persisted_phase"; then
+    [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
     startup_log "✗ $issue FAILED at step [7/7]: finalizing workflow state"
     startup_render_set "$row_idx" status "error"
@@ -614,9 +592,84 @@ $details_context"
   return 0
 }
 
+launch_startup_concurrent() {
+  local task_count="$1"
+  local pool_size="${WAVEMILL_STARTUP_CONCURRENCY:-4}"
+
+  if ! [[ "$pool_size" =~ ^[1-9][0-9]*$ ]]; then
+    startup_log "Error: WAVEMILL_STARTUP_CONCURRENCY must be a positive integer (got $pool_size)"
+    return 2
+  fi
+  if [[ "$task_count" -eq 0 ]]; then
+    return 0
+  fi
+  [[ "$pool_size" -gt "$task_count" ]] && pool_size="$task_count"
+
+  local status_dir
+  status_dir="$(mktemp -d "/tmp/wavemill-${SESSION}-worker-status-XXXXXX")"
+
+  local idx=0
+  local -a bg_pids=()
+
+  while IFS= read -r task_json; do
+    [[ -z "$task_json" ]] && continue
+    idx=$((idx + 1))
+
+    local issue exit_file
+    issue="$(printf '%s' "$task_json" | jq -r '.issue')"
+    exit_file="$status_dir/${issue}.exit"
+
+    while [[ "${#bg_pids[@]}" -ge "$pool_size" ]]; do
+      local -a new_bg=()
+      local pid
+      for pid in "${bg_pids[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+          new_bg+=("$pid")
+        else
+          wait "$pid" 2>/dev/null || true
+        fi
+      done
+      bg_pids=("${new_bg[@]}")
+      [[ "${#bg_pids[@]}" -ge "$pool_size" ]] && sleep 0.2
+    done
+
+    (
+      local rc=0
+      launch_task_from_plan "$task_json" "$idx" "$task_count" || rc=$?
+      printf '%s\n' "$rc" > "$exit_file"
+    ) &
+    bg_pids+=("$!")
+  done < <(jq -c '.tasks[]' "$PLAN_FILE")
+
+  local pid
+  for pid in "${bg_pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+
+  local any_failed=0
+  while IFS= read -r task_json; do
+    [[ -z "$task_json" ]] && continue
+
+    local issue rc_file rc
+    issue="$(printf '%s' "$task_json" | jq -r '.issue')"
+    rc_file="$status_dir/${issue}.exit"
+    if [[ -f "$rc_file" ]]; then
+      rc="$(cat "$rc_file")"
+    else
+      rc=1
+    fi
+    if [[ "$rc" -ne 0 ]]; then
+      startup_log "✗ $issue launch failed (worker exit $rc)"
+      any_failed=1
+    fi
+  done < <(jq -c '.tasks[]' "$PLAN_FILE")
+
+  rm -rf "$status_dir"
+  return "$any_failed"
+}
+
 main() {
-  local task_count idx=0 tasks_file monitor_cmd task_json resumed_count launched_count
-  local running=0
+  local task_count tasks_file monitor_cmd resumed_count launched_count
 
   ensure_state_file
   : > "$STATUS_LOG_FILE"
@@ -639,29 +692,7 @@ main() {
 
   startup_render_init "$SESSION" "$task_count"
 
-  # Bounded worker pool: launch up to WAVEMILL_STARTUP_CONCURRENCY tasks at once
-  while IFS= read -r task_json; do
-    [[ -z "$task_json" ]] && continue
-    idx=$(( idx + 1 ))
-
-    # Wait for a slot to open before launching the next worker
-    while (( running >= WAVEMILL_STARTUP_CONCURRENCY )); do
-      # bash 4.3+ has wait -n; older bash uses jobs to recount
-      if wait -n 2>/dev/null; then
-        running=$(( running - 1 ))
-      else
-        # Fallback for bash < 4.3: wait briefly and recount via jobs
-        sleep 0.1
-        running=$(jobs -r | wc -l) # Recount active background jobs
-      fi
-    done
-
-    (
-      launch_task_from_plan "$task_json" "$idx" "$task_count" || true
-    ) &
-    running=$(( running + 1 ))
-
-  done < <(jq -c '.tasks[]' "$PLAN_FILE")
+  launch_startup_concurrent "$task_count" || true
 
   # Drain remaining workers
   wait
