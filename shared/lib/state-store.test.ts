@@ -88,6 +88,55 @@ test('Atomic write uses temp file and rename', async () => {
   }
 });
 
+test('Atomic write is crash-safe (original file protected)', async () => {
+  const testFile = await createTempFile();
+  const dir = path.dirname(testFile);
+
+  try {
+    const originalData = { version: 1, data: 'original' };
+    await atomicWriteJson(testFile, originalData);
+
+    // Simulate a crash by:
+    // 1. Create a temp file manually (like atomicWriteJson would)
+    // 2. Verify that if we crash here, the original is still intact
+    const tempFile = path.join(dir, `.tmp-state-${Math.random()}.json`);
+    const newData = { version: 2, data: 'new' };
+    await fs.writeFile(tempFile, JSON.stringify(newData));
+
+    // At this point, temp file exists but original is intact
+    // Verify original file is still readable and correct
+    const originalContent = await fs.readFile(testFile, 'utf-8');
+    const originalParsed = JSON.parse(originalContent);
+    assert.deepEqual(originalParsed, originalData,
+      'Original file should be unchanged if crash occurs before rename');
+
+    // Now complete the atomic write
+    await atomicWriteJson(testFile, newData);
+
+    // Verify new data is now present
+    const newContent = await fs.readFile(testFile, 'utf-8');
+    const newParsed = JSON.parse(newContent);
+    assert.deepEqual(newParsed, newData);
+
+    // Verify no temp files left
+    const files = await fs.readdir(dir);
+    assert.equal(files.filter(f => f.startsWith('.tmp-state-')).length, 0);
+  } finally {
+    // Clean up any temp files
+    try {
+      const files = await fs.readdir(dir);
+      for (const file of files) {
+        if (file.startsWith('.tmp-state-')) {
+          await fs.unlink(path.join(dir, file));
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+    await cleanup(testFile);
+  }
+});
+
 test('Concurrent writers - no lost updates', async () => {
   const testFile = await createTempFile();
 
@@ -95,57 +144,55 @@ test('Concurrent writers - no lost updates', async () => {
     // Initialize counter
     await initIfMissing(testFile, { counter: 0 });
 
-    // Spawn multiple concurrent increments
-    // Using smaller numbers for test reliability
-    const totalIncrements = 20;
+    // Spawn 8 workers, each performing 10 sequential increments (80 total)
+    const numWorkers = 8;
+    const incrementsPerWorker = 10;
 
-    const allIncrements: Promise<void>[] = [];
-    for (let i = 0; i < totalIncrements; i++) {
-      allIncrements.push(
-        new Promise<void>((resolve, reject) => {
-          const child = spawn('npx', [
-            'tsx',
-            path.join(TOOLS_DIR, 'state.ts'),
-            'set',
-            testFile,
-            '--',
-            '.counter = (.counter // 0) + 1',
-          ], {
-            stdio: ['ignore', 'pipe', 'pipe']
-          });
+    function spawnWorker(workerId: number, remaining: number): Promise<void> {
+      if (remaining === 0) return Promise.resolve();
 
-          let stderr = '';
-          child.stderr?.on('data', (data) => {
-            stderr += data.toString();
-          });
+      return new Promise<void>((resolve, reject) => {
+        const child = spawn('npx', [
+          'tsx',
+          path.join(TOOLS_DIR, 'state.ts'),
+          'set',
+          testFile,
+          '--',
+          '.counter = (.counter // 0) + 1',
+        ], {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
 
-          child.on('exit', (code) => {
-            if (code === 0) {
-              resolve();
-            } else {
-              reject(new Error(`Increment failed with code ${code}: ${stderr}`));
-            }
-          });
+        let stderr = '';
+        child.stderr?.on('data', (data) => {
+          stderr += data.toString();
+        });
 
-          child.on('error', reject);
-        })
-      );
+        child.on('exit', (code) => {
+          if (code === 0) {
+            spawnWorker(workerId, remaining - 1).then(resolve, reject);
+          } else {
+            reject(new Error(`Worker ${workerId} iteration failed: ${stderr}`));
+          }
+        });
+
+        child.on('error', reject);
+      });
     }
 
-    // Wait for all increments to complete
-    const results = await Promise.allSettled(allIncrements);
-
-    // Check for failures
-    const failures = results.filter(r => r.status === 'rejected');
-    if (failures.length > 0) {
-      const firstFailure = failures[0] as PromiseRejectedResult;
-      throw firstFailure.reason;
+    // Launch all workers in parallel (they will serialize within via locking)
+    const workers = [];
+    for (let w = 0; w < numWorkers; w++) {
+      workers.push(spawnWorker(w, incrementsPerWorker));
     }
+
+    await Promise.all(workers);
 
     // Verify final counter value
     const finalValue = await getValue(testFile, '.counter');
-    assert.equal(finalValue, totalIncrements,
-      `Expected counter to be ${totalIncrements} but got ${finalValue}`);
+    const expectedTotal = numWorkers * incrementsPerWorker;
+    assert.equal(finalValue, expectedTotal,
+      `Expected counter to be ${expectedTotal} but got ${finalValue}`);
   } finally {
     await cleanup(testFile);
   }

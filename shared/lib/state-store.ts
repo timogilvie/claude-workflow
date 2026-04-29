@@ -323,7 +323,8 @@ export async function runJqLocked(
     }
 
     // Run jq with the expression
-    const result = execSync(`jq ${jqArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')} '${jqExpression}'`, {
+    const escapedExpr = jqExpression.replace(/'/g, "'\\''");
+    const result = execSync(`jq ${jqArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')} '${escapedExpr}'`, {
       input,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe']
