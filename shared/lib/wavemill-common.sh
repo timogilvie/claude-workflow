@@ -607,7 +607,7 @@ wavemill_lock_run() {
   local ttl=30 attempts=0
   while ! mkdir "$lock_dir" 2>/dev/null; do
     local mtime now
-    mtime="$(stat -f '%m' "$lock_dir" 2>/dev/null || stat -c '%Y' "$lock_dir" 2>/dev/null || echo 0)"
+    mtime="$(stat -c '%Y' "$lock_dir" 2>/dev/null || stat -f '%m' "$lock_dir" 2>/dev/null || echo 0)"
     now="$(date +%s)"
     if [[ $((now - mtime)) -gt $ttl ]]; then
       rmdir "$lock_dir" 2>/dev/null || true
