@@ -40,6 +40,7 @@ ${GREEN}Commands:${NC}
              - Continuously prompts for next batch
              Options:
                ${CYAN}--agent <name>${NC}  Agent CLI to use (claude, codex, ...)
+               ${CYAN}--no-progress${NC}   Use legacy startup status lines
 
   ${CYAN}expand${NC}    Batch expand Linear issues
              - Shows ranked backlog candidates
@@ -873,6 +874,10 @@ case "${1:-}" in
           export AGENT_CMD="$2"
           export AGENT_CMD_EXPLICIT=true
           shift 2
+          ;;
+        --no-progress)
+          export WAVEMILL_NO_PROGRESS=1
+          shift
           ;;
         *)
           break

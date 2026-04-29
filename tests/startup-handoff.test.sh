@@ -210,6 +210,7 @@ mkdir -p "$TMP_ROOT/home/.claude" "$TMP_ROOT/home/.codex"
 cp "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/wavemill-common.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/agent-adapters.sh" "$TEST_REPO/shared/lib/"
+cp "$REPO_DIR/shared/lib/startup-progress.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/model-validator.ts" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/wavemill-status.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/tools/prompts/"*.md "$TEST_REPO/tools/prompts/"
@@ -466,7 +467,7 @@ else
   fail "startup runner updated Linear for a failed task launch"
 fi
 
-if grep -q 'FAILED at step' "$FAIL_STATUS_LOG" && grep -q '── Task 2/2: HOK-1002' "$FAIL_STATUS_LOG"; then
+if grep -q 'FAILED at worktree: worktree creation' "$FAIL_STATUS_LOG" && grep -q '── Task 2/2: HOK-1002' "$FAIL_STATUS_LOG"; then
   pass "startup failures stay visible in the tmux startup log output"
 else
   fail "startup failure logging is missing from the control-pane output"

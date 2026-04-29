@@ -100,6 +100,7 @@ create_test_repo() {
   local repo_dir="$1"
   mkdir -p "$repo_dir/shared/lib" "$repo_dir/tools/prompts" "$repo_dir/worktrees" "$repo_dir/.claude"
   cp "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" "$repo_dir/shared/lib/"
+  cp "$REPO_DIR/shared/lib/startup-progress.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-common.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/agent-adapters.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/model-validator.ts" "$repo_dir/shared/lib/"
