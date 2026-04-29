@@ -128,8 +128,15 @@ save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}" phase="${19:-}"
-  state_mutate "$STATE_FILE" \
-    '.tasks[$issue] = (.tasks[$issue] // {}) + {
+  local tmp
+  tmp=$(mktemp) || return 1
+  if jq --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
+     --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
+     --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
+     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
+     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" --arg phase "$phase" \
+     '.tasks[$issue] = (.tasks[$issue] // {}) + {
         slug: $slug,
         branch: $branch,
         worktree: $worktree,
@@ -150,27 +157,42 @@ save_task_state() {
       | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
       | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end
       | if $phase != "" then .tasks[$issue].phase = $phase else . end' \
-    --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-    --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
-    --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
-    --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
-    --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-    --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" --arg phase "$phase"
+     "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
 }
 
 remove_task_state() {
   local issue="$1"
-  state_mutate "$STATE_FILE" 'del(.tasks[$issue]) | .updated = (now | todate)' --arg issue "$issue"
+  local tmp
+  tmp=$(mktemp) || return 1
+  if jq --arg issue "$issue" 'del(.tasks[$issue]) | .updated = (now | todate)' \
+    "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
 }
 
 set_task_phase_local() {
   local issue="$1" phase="$2"
-  state_mutate "$STATE_FILE" \
+  local tmp
+  tmp=$(mktemp) || return 1
+  if jq --arg issue "$issue" --arg phase "$phase" \
     '.tasks[$issue] = ((.tasks[$issue] // {}) + {
       phase: $phase,
       updated: (now | todate)
     })' \
-    --arg issue "$issue" --arg phase "$phase"
+    "$STATE_FILE" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$STATE_FILE"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
 }
 
 linear_set_state() {
