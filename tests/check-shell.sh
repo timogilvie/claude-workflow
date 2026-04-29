@@ -133,7 +133,7 @@ else
       | grep -vE '^(pipefail|euo|noglob|errexit|nounset)$' \
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
-      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting)$' \
+      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling)$' \
       | grep -vE '^(bad|internal|marking|rate|service|timed|too|using|wavemill)$')
 
     # Check which called names look like they could be custom functions
@@ -216,6 +216,62 @@ for fixture in "$REPO_DIR"/tests/fixtures/startup/*.sh; do
     fail "$(basename "$fixture") failed"
   fi
 done
+
+# ============================================================================
+# TEST 2D: Base-branch fetch cache guards
+# ============================================================================
+echo ""
+echo "=== Base Branch Fetch Cache Guards ==="
+
+COMMON_SCRIPT="$LIB_DIR/wavemill-common.sh"
+
+if grep -q '^wavemill_fetch_base_branch()' "$COMMON_SCRIPT"; then
+  pass "wavemill_fetch_base_branch helper is defined"
+else
+  fail "wavemill-common.sh is missing wavemill_fetch_base_branch helper"
+fi
+
+if grep -q 'baseBranchFetchCache' "$COMMON_SCRIPT" && grep -q 'last_fetch_at' "$COMMON_SCRIPT"; then
+  pass "fetch cache stores per-branch last_fetch_at state"
+else
+  fail "fetch cache state persistence is missing"
+fi
+
+if grep -q '"fetchTtlSeconds": 60' "$COMMON_SCRIPT" && grep -q '_CFG_GIT_FETCH_TTL_SECONDS' "$COMMON_SCRIPT"; then
+  pass "git fetch TTL config is loaded with default"
+else
+  fail "git fetch TTL config is not wired through load_config"
+fi
+
+if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" --force 2>/dev/null || true' "$MILL_SCRIPT"; then
+  pass "startup migration scan uses forced fetch helper"
+else
+  fail "startup migration scan is not using forced fetch helper"
+fi
+
+if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" 2>/dev/null || true' "$MILL_SCRIPT"; then
+  pass "dynamic task launch uses cached fetch helper"
+else
+  fail "dynamic task launch is not using cached fetch helper"
+fi
+
+if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" --force' "$MILL_SCRIPT"; then
+  pass "startup session fetch uses forced fetch helper"
+else
+  fail "startup session fetch is not using forced fetch helper"
+fi
+
+LAUNCH_TASK_BLOCK=$(awk '
+  /^launch_task\(\) \{/ { in_fn=1 }
+  in_fn { print }
+  in_fn && /^\}/ { exit }
+' "$MILL_SCRIPT")
+
+if grep -q 'git -C "\$REPO_DIR" fetch origin "\$BASE_BRANCH"' <<< "$LAUNCH_TASK_BLOCK"; then
+  fail "launch_task still has raw git fetch"
+else
+  pass "launch_task no longer performs raw git fetch"
+fi
 
 # ============================================================================
 # TEST 3: Monitor PR-detection regression guards
@@ -644,7 +700,7 @@ fi
 MERGED_BLOCK=$(awk '
   /log "status" "✓ \$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
   in_block { print }
-  in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
+  in_block && /elif \[\[ "\$pr_status" == "CLOSED" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
 if grep -q 'launch_background_post_merge_eval "\$ISSUE" "\$PR"' <<< "$MERGED_BLOCK"; then
   pass "merged PR path launches eval asynchronously"
@@ -656,6 +712,16 @@ if ! grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"' <<< "$ME
   pass "merged PR path no longer runs eval inline"
 else
   fail "merged PR path still runs eval inline"
+fi
+
+if awk '
+  /cleanup_completed_task/ { saw_cleanup=1 }
+  saw_cleanup && /launch_background_post_merge_eval/ { found=1; exit }
+  END { exit !found }
+' <<< "$MERGED_BLOCK"; then
+  pass "post-merge eval is queued after cleanup completes"
+else
+  fail "post-merge eval is launched before cleanup (ordering regression)"
 fi
 
 EXTERNAL_BLOCK=$(awk '
@@ -2159,6 +2225,20 @@ if grep -q 'selected-task.json' "$MILL_SCRIPT" && grep -q 'Created minimal routi
   pass "routing can rebuild a packet from selected-task metadata"
 else
   fail "routing packet fallback from selected-task.json is missing"
+fi
+
+if grep -q 'route-tasks.ts' "$MILL_SCRIPT" && grep -q 'route-task.ts' "$MILL_SCRIPT"; then
+  pass "mill script uses batch routing with single-task fallback"
+else
+  fail "batch routing or single-task fallback is missing"
+fi
+
+if grep -q 'prepare_route_input_for_issue()' "$MILL_SCRIPT" \
+  && grep -q 'apply_route_json_for_issue()' "$MILL_SCRIPT" \
+  && grep -q 'batch_route_selected_tasks()' "$MILL_SCRIPT"; then
+  pass "interactive routing batch helpers are defined"
+else
+  fail "interactive routing batch helper definitions are missing"
 fi
 
 if grep -q -- '--mode heuristic' "$MILL_SCRIPT"; then
