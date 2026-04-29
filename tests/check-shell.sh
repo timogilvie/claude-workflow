@@ -2200,6 +2200,106 @@ for fixture in \
 done
 
 # ============================================================================
+# TEST 15: Startup render helper — syntax and structure guards
+# ============================================================================
+echo ""
+echo "=== Startup Render Helper Guards ==="
+
+RENDER_SCRIPT="$LIB_DIR/wavemill-startup-render.sh"
+RUNNER_SCRIPT="$LIB_DIR/wavemill-startup-runner.sh"
+
+if [[ ! -f "$RENDER_SCRIPT" ]]; then
+  fail "wavemill-startup-render.sh not found"
+else
+  if bash -n "$RENDER_SCRIPT" 2>/dev/null; then
+    pass "wavemill-startup-render.sh has no syntax errors"
+  else
+    fail "wavemill-startup-render.sh has syntax errors: $(bash -n "$RENDER_SCRIPT" 2>&1 | head -3)"
+  fi
+
+  if grep -q 'startup_render_init()' "$RENDER_SCRIPT"; then
+    pass "startup_render_init() defined in wavemill-startup-render.sh"
+  else
+    fail "startup_render_init() missing from wavemill-startup-render.sh"
+  fi
+
+  if grep -q 'startup_render_finalize()' "$RENDER_SCRIPT"; then
+    pass "startup_render_finalize() defined in wavemill-startup-render.sh"
+  else
+    fail "startup_render_finalize() missing from wavemill-startup-render.sh"
+  fi
+
+  if grep -q 'startup_render_set()' "$RENDER_SCRIPT"; then
+    pass "startup_render_set() defined in wavemill-startup-render.sh"
+  else
+    fail "startup_render_set() missing from wavemill-startup-render.sh"
+  fi
+fi
+
+if [[ ! -f "$RUNNER_SCRIPT" ]]; then
+  fail "wavemill-startup-runner.sh not found for render integration checks"
+else
+  if grep -q 'wavemill-startup-render.sh' "$RUNNER_SCRIPT"; then
+    pass "wavemill-startup-runner.sh sources wavemill-startup-render.sh"
+  else
+    fail "wavemill-startup-runner.sh does not source wavemill-startup-render.sh"
+  fi
+
+  if grep -q 'startup_render_init' "$RUNNER_SCRIPT"; then
+    pass "startup_render_init called in wavemill-startup-runner.sh"
+  else
+    fail "startup_render_init not called in wavemill-startup-runner.sh"
+  fi
+
+  if grep -q 'startup_render_finalize' "$RUNNER_SCRIPT"; then
+    pass "startup_render_finalize called in wavemill-startup-runner.sh"
+  else
+    fail "startup_render_finalize not called in wavemill-startup-runner.sh"
+  fi
+
+  if grep -q 'WAVEMILL_STARTUP_CONCURRENCY' "$RUNNER_SCRIPT"; then
+    pass "WAVEMILL_STARTUP_CONCURRENCY present in wavemill-startup-runner.sh"
+  else
+    fail "WAVEMILL_STARTUP_CONCURRENCY missing from wavemill-startup-runner.sh"
+  fi
+
+  if grep -qE 'WAVEMILL_STARTUP_CONCURRENCY.*<.*1|integer.*>=.*1|must be an integer' "$RUNNER_SCRIPT"; then
+    pass "WAVEMILL_STARTUP_CONCURRENCY validation present in wavemill-startup-runner.sh"
+  else
+    fail "WAVEMILL_STARTUP_CONCURRENCY validation missing from wavemill-startup-runner.sh"
+  fi
+fi
+
+# ============================================================================
+# TEST 16: Startup render lifecycle fixtures
+# ============================================================================
+echo ""
+echo "=== Startup Render Lifecycle Fixtures ==="
+
+for fixture in \
+  "$REPO_DIR/tests/fixtures/lifecycle/startup_render_plain_mode.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/startup_render_bounded_concurrency.sh" \
+; do
+  if [[ ! -f "$fixture" ]]; then
+    fail "Missing startup render fixture $(basename "$fixture")"
+    continue
+  fi
+
+  fixture_output="$(bash "$fixture" 2>&1)" || fixture_status=$?
+  fixture_status="${fixture_status:-0}"
+
+  if [[ "$fixture_output" == SKIP:* ]]; then
+    skip "$(basename "$fixture"): ${fixture_output#SKIP: }"
+  elif [[ "$fixture_status" -eq 0 ]]; then
+    pass "$(basename "$fixture")"
+  else
+    fail "$(basename "$fixture"): $fixture_output"
+  fi
+
+  unset fixture_status
+done
+
+# ============================================================================
 # RESULTS
 # ============================================================================
 echo ""

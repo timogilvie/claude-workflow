@@ -27,7 +27,47 @@ Common overrides:
 ```bash
 MAX_PARALLEL=5 wavemill mill
 AGENT_CMD=codex wavemill mill
+WAVEMILL_STARTUP_CONCURRENCY=6 wavemill mill
 ```
+
+## Startup Progress Table
+
+When stdout is a TTY, `wavemill mill` shows a live table during startup instead of serial `[1/7]` step lines:
+
+```
+ISSUE      ROUTE          WORKTREE   DEPS    AGENT     LINEAR
+HOK-1234   claude-opus    ✓          ✓       claude    ● In Progress
+HOK-1235   claude-sonnet  ⏳         —       —         —
+HOK-1236   claude-haiku   ✓          ✓       claude    ● In Progress
+```
+
+Columns update in place as each task advances through its launch steps. Rows with a failed step are highlighted in red.
+
+**Column meanings:**
+
+| Column | Description |
+|--------|-------------|
+| ISSUE | Linear issue ID |
+| ROUTE | Coder model assigned by the router |
+| WORKTREE | `⏳` creating / `✓` ready / `✗` failed |
+| DEPS | `⏳` installing / `✓` ready / `—` no lockfile |
+| AGENT | Agent type (`claude`, `codex`) once launched |
+| LINEAR | `⏳` pending / `● In Progress` after state update |
+
+**Plain mode** is used automatically when stdout is not a TTY, `NO_COLOR` is set, `TERM=dumb`, or `tput` is unavailable. In plain mode, step-by-step lines are written to the status log file as before. You can also force it explicitly:
+
+```bash
+WAVEMILL_STARTUP_RENDER=plain wavemill mill
+```
+
+**Concurrency** — tasks are launched with a bounded worker pool. The default parallelism during startup is 4; override with:
+
+```bash
+WAVEMILL_STARTUP_CONCURRENCY=8 wavemill mill   # launch up to 8 tasks at once
+WAVEMILL_STARTUP_CONCURRENCY=1 wavemill mill   # serial (original behaviour)
+```
+
+`WAVEMILL_STARTUP_CONCURRENCY` must be an integer ≥ 1; the script exits with an error otherwise.
 
 ## Why Mill Mode Is The Core Workflow
 
