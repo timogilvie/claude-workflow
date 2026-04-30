@@ -3,7 +3,8 @@
 #
 # Usage: wavemill-status.sh <session> <worktree_root> [state_file]
 #
-# Displays a compact per-task summary refreshing every 3 seconds:
+# Displays a compact per-task summary refreshing every 2 seconds by default
+# (override with WAVEMILL_DASHBOARD_REFRESH_SECONDS=1..10):
 #   ISSUE   TASK           TIME   PHASE         AGENT      PR
 #   WAV-42  hero-cta        12m   📋 planning   ● running  —
 #   WAV-55  nav-a11y         8m   🔨 executing  ● running  #147 ✓
@@ -18,7 +19,8 @@ STATE_FILE="${3:-}"
 WAVEMILL_REDRAW=0
 trap 'WAVEMILL_REDRAW=1' USR1
 
-REFRESH=10
+DEFAULT_REFRESH=2
+MAX_REFRESH=10
 PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 PR_TTL=15
 
@@ -27,6 +29,25 @@ G='\033[32m'; Y='\033[33m'; R='\033[31m'; D='\033[90m'; B='\033[1m'; N='\033[0m'
 # Erase from cursor to end-of-line after each rendered row so shorter redraws
 # cannot leave stale terminal cells behind.
 EL='\033[K'
+
+resolve_dashboard_refresh_seconds() {
+  local raw_refresh="${WAVEMILL_DASHBOARD_REFRESH_SECONDS:-$DEFAULT_REFRESH}"
+
+  if [[ "$raw_refresh" =~ ^[0-9]+$ ]] && (( raw_refresh >= 1 && raw_refresh <= MAX_REFRESH )); then
+    printf '%s\n' "$raw_refresh"
+    return 0
+  fi
+
+  if [[ "${WAVEMILL_DASHBOARD_REFRESH_WARNED:-0}" -eq 0 ]]; then
+    printf 'wavemill: invalid WAVEMILL_DASHBOARD_REFRESH_SECONDS=%s, using default %s\n' \
+      "$raw_refresh" "$DEFAULT_REFRESH" >&2
+    WAVEMILL_DASHBOARD_REFRESH_WARNED=1
+  fi
+
+  printf '%s\n' "$DEFAULT_REFRESH"
+}
+
+REFRESH="$(resolve_dashboard_refresh_seconds)"
 
 # Hide cursor during rendering
 tput civis 2>/dev/null || true
