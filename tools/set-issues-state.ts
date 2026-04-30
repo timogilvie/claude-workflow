@@ -30,5 +30,8 @@ runTool({
     const stateName = options.state || 'In Progress';
     const result = await setIssuesState(positional, stateName);
     console.log(JSON.stringify(result, null, 2));
+    if (result.failed.length > 0) {
+      process.exit(1);
+    }
   },
 });

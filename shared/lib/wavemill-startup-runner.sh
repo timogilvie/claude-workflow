@@ -210,9 +210,17 @@ linear_batch_set_state() {
   local state="$1"
   shift || true
   local -a issues=("$@")
+  local output exit_code=0
   [[ "$DRY_RUN" == "true" ]] && return 0
   [[ "${#issues[@]}" -eq 0 ]] && return 0
-  if ! npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" >/dev/null 2>&1; then
+
+  output="$(npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" 2>/dev/null)" || exit_code=$?
+
+  if jq -e '.failed | length > 0' >/dev/null 2>&1 <<<"$output"; then
+    while IFS= read -r failure; do
+      startup_log "WARN: Linear state update to '$state' failed for $failure"
+    done < <(jq -r '.failed[] | "\(.issueId): \(.error)"' <<<"$output")
+  elif [[ "$exit_code" -ne 0 ]]; then
     startup_log "WARN: Batch Linear state update to '$state' failed for ${#issues[@]} issue(s)"
   fi
   return 0
