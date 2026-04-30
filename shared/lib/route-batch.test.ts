@@ -247,9 +247,18 @@ await test('batch decisions match serial auto routing and reuse eval loading', a
     assert.equal(batchLoads, 1);
     assert.equal(serialLoads, tasks.length);
     assert.deepEqual(
-      batchResults.map(({ decision }) => decision),
+      batchResults.map(({ decision }) => {
+        const { provenance: _provenance, ...rest } = decision as typeof decision & { provenance?: unknown };
+        return rest;
+      }),
       serialDecisions,
     );
+    for (const { decision } of batchResults) {
+      assert.ok(decision.provenance);
+      assert.equal(decision.provenance?.source, 'live');
+      assert.equal(decision.provenance?.inputKind, 'issue');
+      assert.match(decision.provenance?.inputHash || '', /^[a-f0-9]{64}$/);
+    }
     assert.deepEqual(
       batchResults.map(({ task }) => task.issueId),
       tasks.map(({ issueId }) => issueId),
@@ -302,6 +311,23 @@ await test('batch rejects missing files', async () => {
     routeBatch([{ issueId: 'HOK-404', file: '/tmp/does-not-exist-route-batch.md' }], { repoDir: process.cwd(), mode: 'auto' }),
     /ENOENT|no such file/i,
   );
+});
+
+await test('file-based task includes provenance path/hash and stable hash', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  const packetPath = join(repoDir, 'task-packet.md');
+  writeFileSync(packetPath, 'Persist route provenance and input hash.\n');
+  try {
+    const [first] = await routeBatch([{ issueId: 'HOK-1511', file: packetPath }], { repoDir, mode: 'auto', additionalEvalsPaths: [] });
+    const [second] = await routeBatch([{ issueId: 'HOK-1511', file: packetPath }], { repoDir, mode: 'auto', additionalEvalsPaths: [] });
+    assert.equal(first.decision.provenance?.source, 'expanded');
+    assert.equal(first.decision.provenance?.inputKind, 'task-packet');
+    assert.equal(first.decision.provenance?.inputPath, packetPath);
+    assert.match(first.decision.provenance?.inputHash || '', /^[a-f0-9]{64}$/);
+    assert.equal(first.decision.provenance?.inputHash, second.decision.provenance?.inputHash);
+  } finally {
+    cleanup();
+  }
 });
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);

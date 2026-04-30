@@ -4238,10 +4238,31 @@ apply_route_json_for_issue() {
   local issue="$1" route_json="$2" source="${3:-startup-cache}"
   local route_file="/tmp/${SESSION}-${issue}-route.json"
   local route_source_file="/tmp/${SESSION}-${issue}-route-source.txt"
+  local input_kind="cache"
+  local route_mode
+  route_mode="$(_global_operating_mode)"
 
   if [[ -z "$route_json" ]] || ! echo "$route_json" | jq -e '.planner and .coder and .reviewer' >/dev/null 2>&1; then
     return 1
   fi
+
+  if [[ "$source" == "heuristic-fallback" ]]; then
+    input_kind="heuristic"
+  fi
+
+  route_json="$(echo "$route_json" | jq -c \
+    --arg source "$source" \
+    --arg inputKind "$input_kind" \
+    --arg routerMode "$route_mode" \
+    '(.provenance // {}) as $p
+    | .provenance = ($p + {
+        source: $source,
+        inputKind: ($p.inputKind // $inputKind),
+        inputPath: ($p.inputPath // ""),
+        inputHash: ($p.inputHash // ""),
+        routedAt: ($p.routedAt // (now | todateiso8601)),
+        routerMode: ($p.routerMode // $routerMode)
+      })')"
 
   printf '%s\n' "$route_json" > "$route_file"
   printf '%s\n' "$source" > "$route_source_file"
@@ -4272,7 +4293,12 @@ batch_route_selected_tasks() {
     [[ -z "$line" ]] && continue
     IFS='|' read -r issue slug title _sel_area _sel_score _sel_blocked <<<"$line"
     if packet_file=$(prepare_route_input_for_issue "$issue" "$slug" "$title"); then
-      jq -cn --arg issueId "$issue" --arg file "$packet_file" '{issueId: $issueId, file: $file}' >> "$route_jsonl_file"
+      jq -cn \
+        --arg issueId "$issue" \
+        --arg file "$packet_file" \
+        --arg source "expanded" \
+        --arg inputKind "task-packet" \
+        '{issueId: $issueId, file: $file, source: $source, inputKind: $inputKind}' >> "$route_jsonl_file"
       printf '\n' >> "$route_jsonl_file"
       route_issues+=("$issue")
       count=$((count + 1))
@@ -4585,13 +4611,13 @@ launch_task() {
           printf '\n[attempt %d] live route\n' "$route_attempt" >> "$routing_log_file"
           rm -f "$route_stderr_file"
           if [[ "$route_debug_enabled" == "true" ]]; then
-            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
+            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" --source live --input-kind task-packet "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
               route_rc=0
             else
               route_rc=$?
             fi
           else
-            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
+            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" --source live --input-kind task-packet "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
               route_rc=0
             else
               route_rc=$?
@@ -4644,13 +4670,13 @@ launch_task() {
         printf '\n[heuristic fallback]\n' >> "$routing_log_file"
         rm -f "$route_stderr_file"
         if [[ "$route_debug_enabled" == "true" ]]; then
-          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2>"$route_stderr_file"); then
+          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" --source heuristic-fallback --input-kind heuristic "${route_max_cost_args[@]}" 2>"$route_stderr_file"); then
             route_rc=0
           else
             route_rc=$?
           fi
         else
-          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" "${route_max_cost_args[@]}" 2>"$route_stderr_file"); then
+          if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --mode heuristic --file "$route_input_file" --repo-dir "$REPO_DIR" --source heuristic-fallback --input-kind heuristic "${route_max_cost_args[@]}" 2>"$route_stderr_file"); then
             route_rc=0
           else
             route_rc=$?
@@ -4969,6 +4995,15 @@ Implement from the issue description plus direct codebase analysis."
     --arg planDepth "${plan_depth:-light}" \
     --arg codeDepth "${code_depth:-medium}" \
     --arg reviewMode "${review_mode:-static}" \
+    --arg source "bootstrap" \
+    --arg inputKind "issue" \
+    --arg inputPath "features/$slug/selected-task.json" \
+    --arg provenanceSource "$(read_route_json "$SESSION" "$issue" "source" "")" \
+    --arg provenanceInputKind "$(read_route_json "$SESSION" "$issue" "inputKind" "")" \
+    --arg provenanceInputPath "$(read_route_json "$SESSION" "$issue" "inputPath" "")" \
+    --arg provenanceInputHash "$(read_route_json "$SESSION" "$issue" "inputHash" "")" \
+    --arg provenanceRoutedAt "$(read_route_json "$SESSION" "$issue" "routedAt" "")" \
+    --arg provenanceRouterMode "$(read_route_json "$SESSION" "$issue" "routerMode" "")" \
     --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
     '{
       planner: $planner,
@@ -4976,11 +5011,24 @@ Implement from the issue description plus direct codebase analysis."
       reviewer: $reviewer,
       planDepth: $planDepth,
       codeDepth: $codeDepth,
-      reviewMode: $reviewMode
+      reviewMode: $reviewMode,
+      reviewRecommended: $reviewMode,
+      provenance: {
+        source: (if $provenanceSource == "" then $source else $provenanceSource end),
+        inputKind: (if $provenanceInputKind == "" then $inputKind else $provenanceInputKind end),
+        inputPath: (if $provenanceInputPath == "" then $inputPath else $provenanceInputPath end),
+        inputHash: $provenanceInputHash,
+        routedAt: (if $provenanceRoutedAt == "" then (now | todateiso8601) else $provenanceRoutedAt end),
+        routerMode: (if $provenanceRouterMode == "" then "normal" else $provenanceRouterMode end)
+      }
     } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$routing_file"
 
   # Save initial route for eval comparison (routed on raw description)
-  cp "$routing_file" "$feature_dir/.initial-route.json"
+  if [[ -f "$feature_dir/.initial-route.json" ]]; then
+    log "info" "  Keeping existing .initial-route.json for $issue"
+  else
+    cp "$routing_file" "$feature_dir/.initial-route.json"
+  fi
 
   # Launch planning phase directly with the routed model (skip routing agent)
   local resolved_planner_agent

@@ -572,6 +572,9 @@ $details_context"
     --arg planDepth "$plan_depth" \
     --arg codeDepth "$code_depth" \
     --arg reviewMode "$review_mode" \
+    --arg source "bootstrap" \
+    --arg inputKind "issue" \
+    --arg inputPath "features/$slug/selected-task.json" \
     --argjson maxCostUsd "${route_max_cost_usd:-null}" \
     '{
       planner: $planner,
@@ -579,9 +582,22 @@ $details_context"
       reviewer: $reviewer,
       planDepth: $planDepth,
       codeDepth: $codeDepth,
-      reviewMode: $reviewMode
+      reviewMode: $reviewMode,
+      reviewRecommended: $reviewMode,
+      provenance: {
+        source: $source,
+        inputKind: $inputKind,
+        inputPath: $inputPath,
+        inputHash: "",
+        routedAt: (now | todateiso8601),
+        routerMode: "normal"
+      }
     } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$feature_dir/.routing-complete"
-  cp "$feature_dir/.routing-complete" "$feature_dir/.initial-route.json"
+  if [[ -f "$feature_dir/.initial-route.json" ]]; then
+    startup_log "  Keeping existing .initial-route.json for $issue"
+  else
+    cp "$feature_dir/.routing-complete" "$feature_dir/.initial-route.json"
+  fi
 
   local planner_agent
   planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")"
