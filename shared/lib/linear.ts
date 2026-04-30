@@ -69,6 +69,8 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
+  // This should never execute when maxAttempts >= 1, but required for TypeScript
+  throw new Error('withRetry exhausted attempts');
 }
 
 /**
