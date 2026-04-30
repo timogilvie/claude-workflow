@@ -415,7 +415,7 @@ startup_run_task_phases() {
     progress_update "$startup_id" route running
   fi
 
-  if ! [[ "$issue" =~ ^[A-Z]+-[0-9]+$|^[a-z0-9-]+$ ]]; then
+  if ! [[ "$issue" =~ ^[A-Z]+-[0-9]+(_c)?$|^[a-z0-9-]+$ ]]; then
     startup_phase_failed "$startup_id" route "$issue" "invalid issue id"
     return 1
   fi
@@ -449,7 +449,7 @@ startup_run_task_phases() {
     local worktree_stderr
     worktree_stderr="$(mktemp)"
     if git show-ref --verify --quiet "refs/heads/$branch"; then
-      if ! git worktree add "$wt_dir" "$branch" >/dev/null 2>"$worktree_stderr"; then
+      if ! wavemill_lock_run "git-worktree" git worktree add "$wt_dir" "$branch" >/dev/null 2>"$worktree_stderr"; then
         startup_phase_failed "$startup_id" worktree "$issue" "worktree creation"
         startup_log "  Error: failed to attach existing branch $branch"
         [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
@@ -459,7 +459,7 @@ startup_run_task_phases() {
         return 1
       fi
     else
-      if ! git worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >/dev/null 2>"$worktree_stderr"; then
+      if ! wavemill_lock_run "git-worktree" git worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >/dev/null 2>"$worktree_stderr"; then
         startup_phase_failed "$startup_id" worktree "$issue" "worktree creation"
         startup_log "  Error: failed to create $branch from origin/$BASE_BRANCH"
         [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
@@ -751,7 +751,6 @@ main() {
     progress_finish
     if [[ "$pool_exit" -ne 0 ]]; then
       startup_log "One or more startup tasks failed; see /tmp/wavemill-${SESSION}-*.startup.log for details."
-      exit "$pool_exit"
     fi
   fi
 
