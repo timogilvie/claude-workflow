@@ -2433,6 +2433,34 @@ for fixture in \
 done
 
 # ============================================================================
+# TEST 16: Monitor PR cache fixture
+# ============================================================================
+echo ""
+echo "=== Monitor PR Cache Fixtures ==="
+
+for fixture in \
+  "$REPO_DIR/tests/fixtures/lifecycle/monitor_pr_cache_single_fetch.sh" \
+; do
+  if [[ ! -f "$fixture" ]]; then
+    fail "Missing PR cache fixture $(basename "$fixture")"
+    continue
+  fi
+
+  fixture_output="$(bash "$fixture" 2>&1)" || fixture_status=$?
+  fixture_status="${fixture_status:-0}"
+
+  if [[ "$fixture_output" == SKIP:* ]]; then
+    skip "$(basename "$fixture"): ${fixture_output#SKIP: }"
+  elif [[ "$fixture_status" -eq 0 ]]; then
+    pass "$(basename "$fixture")"
+  else
+    fail "$(basename "$fixture"): $fixture_output"
+  fi
+
+  unset fixture_status
+done
+
+# ============================================================================
 # RESULTS
 # ============================================================================
 echo ""
