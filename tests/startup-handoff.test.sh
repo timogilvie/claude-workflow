@@ -82,7 +82,28 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'npx %s\n' "$*" >> "${MOCK_NPX_LOG:?}"
-if [[ "$*" == *"set-issue-state.ts"* ]]; then
+if [[ "$*" == *"set-issues-state.ts"* ]]; then
+  state="In Progress"
+  issues=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state)
+        state="${2:-}"
+        shift 2
+        ;;
+      -*)
+        shift
+        ;;
+      *)
+        issues+=("$1")
+        shift
+        ;;
+    esac
+  done
+  for issue in "${issues[@]}"; do
+    printf '%s|%s\n' "$issue" "$state" >> "${MOCK_LINEAR_LOG:?}"
+  done
+elif [[ "$*" == *"set-issue-state.ts"* ]]; then
   printf '%s|%s\n' "${3:-}" "${4:-}" >> "${MOCK_LINEAR_LOG:?}"
 fi
 exit 0
