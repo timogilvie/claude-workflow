@@ -8,6 +8,7 @@
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql';
 const REQUEST_TIMEOUT_MS = 15_000;
+const teamStateCache = new Map<string, Map<string, string>>();
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -288,6 +289,38 @@ async function fetchIssueByIdentifier(identifier: string, fieldsFragment: string
   return issue;
 }
 
+async function getTeamWorkflowStates(teamId: string): Promise<Map<string, string>> {
+  const cached = teamStateCache.get(teamId);
+  if (cached) {
+    return cached;
+  }
+
+  const data = await request(
+    `
+      query($teamId: String!) {
+        team(id: $teamId) {
+          states {
+            nodes {
+              id
+              name
+            }
+          }
+        }
+      }
+    `,
+    { teamId },
+  );
+
+  const states = (data.team as { states?: { nodes?: Array<{ id: string; name: string }> } } | undefined)
+    ?.states?.nodes || [];
+  const byName = new Map<string, string>();
+  for (const state of states) {
+    byName.set(state.name.toLowerCase(), state.id);
+  }
+  teamStateCache.set(teamId, byName);
+  return byName;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Public API
 // ────────────────────────────────────────────────────────────────
@@ -462,23 +495,101 @@ export async function getBacklogForScoring(projectName?: string): Promise<Linear
  * @returns Update result
  */
 export async function setIssueState(identifier: string, stateName: string): Promise<{ success: boolean; issue: LinearIssue }> {
-  // Single query: fetch issue id + all team workflow states in one round-trip
   const issue = await fetchIssueByIdentifier(identifier, `
     id
     team {
       id
-      states { nodes { id name } }
     }
   `);
+  const states = await getTeamWorkflowStates(issue.team.id);
+  const targetStateId = states.get(stateName.toLowerCase());
 
-  const states = issue.team?.states?.nodes || [];
-  const targetState = states.find(s => s.name.toLowerCase() === stateName.toLowerCase());
-
-  if (!targetState) {
-    throw new Error(`State "${stateName}" not found. Available: ${states.map(s => s.name).join(', ')}`);
+  if (!targetStateId) {
+    const available = [...states.keys()].join(', ');
+    throw new Error(`State "${stateName}" not found. Available: ${available}`);
   }
 
-  return await updateIssue(issue.id, { stateId: targetState.id });
+  return await updateIssue(issue.id, { stateId: targetStateId });
+}
+
+export async function setIssuesState(
+  identifiers: string[],
+  stateName: string,
+): Promise<{ updated: string[]; failed: Array<{ issueId: string; error: string }> }> {
+  if (identifiers.length === 0) {
+    return { updated: [], failed: [] };
+  }
+
+  const data = await request(
+    `
+      query($identifiers: [String!]) {
+        issues(filter: { identifier: { in: $identifiers } }, first: 250) {
+          nodes {
+            id
+            identifier
+            team {
+              id
+            }
+          }
+        }
+      }
+    `,
+    { identifiers },
+  );
+
+  const issues = (data.issues as {
+    nodes?: Array<{ id: string; identifier: string; team: { id: string } }>;
+  } | undefined)?.nodes || [];
+
+  const issueByIdentifier = new Map(issues.map((issue) => [issue.identifier, issue]));
+  const missing = identifiers.filter((identifier) => !issueByIdentifier.has(identifier));
+  const failed: Array<{ issueId: string; error: string }> = missing.map((identifier) => ({
+    issueId: identifier,
+    error: `Issue not found: ${identifier}`,
+  }));
+  const updated: string[] = [];
+
+  const statesByTeam = new Map<string, Map<string, string>>();
+  const teamIds = [...new Set(issues.map((issue) => issue.team.id))];
+  await Promise.all(teamIds.map(async (teamId) => {
+    statesByTeam.set(teamId, await getTeamWorkflowStates(teamId));
+  }));
+
+  const planned = issues.map((issue) => {
+    const stateId = statesByTeam.get(issue.team.id)?.get(stateName.toLowerCase());
+    if (!stateId) {
+      failed.push({
+        issueId: issue.identifier,
+        error: `State "${stateName}" not found for team ${issue.team.id}`,
+      });
+      return null;
+    }
+    return { issue, stateId };
+  }).filter((item): item is { issue: { id: string; identifier: string; team: { id: string } }; stateId: string } => item !== null);
+
+  const results = await Promise.allSettled(
+    planned.map(({ issue, stateId }) => updateIssue(issue.id, { stateId })),
+  );
+
+  for (let i = 0; i < results.length; i += 1) {
+    const result = results[i];
+    const issue = planned[i].issue;
+    if (result.status === 'fulfilled' && result.value.success) {
+      updated.push(issue.identifier);
+    } else if (result.status === 'fulfilled') {
+      failed.push({
+        issueId: issue.identifier,
+        error: 'Failed to update issue state',
+      });
+    } else {
+      failed.push({
+        issueId: issue.identifier,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    }
+  }
+
+  return { updated, failed };
 }
 
 /**

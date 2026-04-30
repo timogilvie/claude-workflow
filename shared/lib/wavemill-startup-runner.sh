@@ -206,6 +206,16 @@ linear_set_state() {
   npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1
 }
 
+linear_batch_set_state() {
+  local state="$1"
+  shift || true
+  local -a issues=("$@")
+  [[ "$DRY_RUN" == "true" ]] && return 0
+  [[ "${#issues[@]}" -eq 0 ]] && return 0
+  npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" >/dev/null 2>&1 || true
+  return 0
+}
+
 ensure_state_file() {
   mkdir -p "$STATE_DIR"
   if [[ ! -f "$STATE_FILE" ]]; then
@@ -610,14 +620,6 @@ $details_context"
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent done
 
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" linear running
-  if should_update_linear_for_task "$challenge_role"; then
-    if ! linear_set_state "$linear_issue" "In Progress"; then
-      [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
-      tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
-      startup_phase_failed "$startup_id" linear "$issue" "setting Linear In Progress"
-      return 1
-    fi
-  fi
 
   # Reassert the launched phase after agent dispatch and Linear updates so the
   # final persisted state reflects active coding work even if a helper touched
@@ -715,6 +717,7 @@ launch_startup_concurrent() {
 
 main() {
   local task_count idx tasks_file monitor_cmd task_json resumed_count launched_count pool_exit
+  local -a linear_batch_ids=()
 
   ensure_state_file
   : > "$STATUS_LOG_FILE"
@@ -733,6 +736,16 @@ main() {
   if [[ "$task_count" -eq 0 ]]; then
     resumed_count="$(jq '(.tasks // {}) | length' "$STATE_FILE" 2>/dev/null || echo 0)"
     startup_log "No new tasks selected. Resuming $resumed_count in-flight task(s) from previous session."
+  elif [[ "$DRY_RUN" != "true" ]]; then
+    mapfile -t linear_batch_ids < <(
+      jq -r '.tasks[]
+        | select((.challengeRole // "") != "challenger")
+        | (.linearIssueId // .issue)' "$PLAN_FILE"
+    )
+    if [[ "${#linear_batch_ids[@]}" -gt 0 ]]; then
+      startup_log "Setting Linear state for ${#linear_batch_ids[@]} issue(s) in one batch call..."
+      linear_batch_set_state "In Progress" "${linear_batch_ids[@]}"
+    fi
   fi
 
   if [[ "${WAVEMILL_NO_PROGRESS:-0}" == "1" ]]; then
