@@ -15,6 +15,7 @@
 
 import type {
   EvalRecord,
+  EligibilityErrorCode,
   PlanCritique,
   RubricEval,
   TaskContext,
@@ -152,6 +153,88 @@ export function attachWorkflowCostMetadata(
       ...failure.diagnostics,
     };
   }
+}
+
+const TRAINING_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
+  'missing_model_identity',
+  'missing_outcome',
+  'missing_routing',
+  'missing_task_descriptor',
+];
+
+const BUDGET_EVAL_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
+  'missing_budget_snapshot',
+  'missing_cost',
+  'missing_routing',
+];
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function hasBudgetSnapshot(record: EvalRecord): boolean {
+  return record.constraints !== undefined || typeof record.budgetViolated === 'boolean';
+}
+
+/**
+ * Compute deterministic eligibility diagnostics for downstream exports.
+ */
+export function computeEligibility(record: EvalRecord): {
+  trainingEligible: boolean;
+  budgetEvalEligible: boolean;
+  eligibilityErrors: EligibilityErrorCode[];
+} {
+  const errors = new Set<EligibilityErrorCode>();
+
+  if (!record.routingDecision) {
+    errors.add('missing_routing');
+  }
+
+  if (!record.taskDescriptor) {
+    errors.add('missing_task_descriptor');
+  }
+
+  if (!isNonEmptyString(record.modelId)) {
+    errors.add('missing_model_identity');
+  }
+
+  if (!record.outcomes) {
+    errors.add('missing_outcome');
+  }
+
+  if (typeof record.workflowCost !== 'number' || !Number.isFinite(record.workflowCost)) {
+    errors.add('missing_cost');
+  }
+
+  if (!hasBudgetSnapshot(record)) {
+    errors.add('missing_budget_snapshot');
+  }
+
+  const eligibilityErrors = [...errors].sort();
+  const trainingEligible = !TRAINING_ELIGIBILITY_CODES.some((code) => errors.has(code));
+  const budgetEvalEligible = !BUDGET_EVAL_ELIGIBILITY_CODES.some((code) => errors.has(code));
+
+  return {
+    trainingEligible,
+    budgetEvalEligible,
+    eligibilityErrors,
+  };
+}
+
+/**
+ * Attach deterministic export eligibility diagnostics to an eval record.
+ *
+ * Overwrites any existing eligibility fields so repeated calls are idempotent.
+ */
+export function attachEligibility(record: EvalRecord | null | undefined): void {
+  if (!record) {
+    return;
+  }
+
+  const eligibility = computeEligibility(record);
+  record.trainingEligible = eligibility.trainingEligible;
+  record.budgetEvalEligible = eligibility.budgetEvalEligible;
+  record.eligibilityErrors = eligibility.eligibilityErrors;
 }
 
 /**
@@ -460,6 +543,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   }
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
+  attachEligibility(record);
 
   // Extract stageScores from record metadata (set by evaluateTask)
   const stageScores = record.metadata?.stageScores as
