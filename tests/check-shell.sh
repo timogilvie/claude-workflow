@@ -2479,6 +2479,7 @@ echo "=== Monitor PR Cache Fixtures ==="
 
 for fixture in \
   "$REPO_DIR/tests/fixtures/lifecycle/monitor_pr_cache_single_fetch.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/monitor_pr_cache_no_stderr_in_pane.sh" \
 ; do
   if [[ ! -f "$fixture" ]]; then
     fail "Missing PR cache fixture $(basename "$fixture")"
