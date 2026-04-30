@@ -278,6 +278,42 @@ else
 fi
 
 # ============================================================================
+# TEST 2E: Backlog cache guards
+# ============================================================================
+echo ""
+echo "=== Backlog Cache Guards ==="
+
+if grep -q '^issue_payload_is_complete()' "$COMMON_SCRIPT"; then
+  pass "issue_payload_is_complete helper is defined"
+else
+  fail "wavemill-common.sh is missing issue_payload_is_complete helper"
+fi
+
+if grep -q '^issue_payload_is_fresh()' "$COMMON_SCRIPT"; then
+  pass "issue_payload_is_fresh helper is defined"
+else
+  fail "wavemill-common.sh is missing issue_payload_is_fresh helper"
+fi
+
+if grep -qF 'BACKLOG_FETCH_TS=$(date +%s)' "$MILL_SCRIPT"; then
+  pass "backlog fetch timestamp is captured"
+else
+  fail "wavemill-mill.sh does not capture backlog fetch timestamp"
+fi
+
+if grep -q 'issue_payload_is_complete' "$MILL_SCRIPT" && grep -q 'issue_payload_is_fresh' "$MILL_SCRIPT"; then
+  pass "startup issue details path checks cache completeness and freshness"
+else
+  fail "startup issue details path does not guard backlog cache use"
+fi
+
+if grep -q 'WAVEMILL_BACKLOG_CACHE_TTL_SECONDS' "$MILL_SCRIPT"; then
+  pass "backlog cache TTL environment override is wired"
+else
+  fail "wavemill-mill.sh is missing WAVEMILL_BACKLOG_CACHE_TTL_SECONDS"
+fi
+
+# ============================================================================
 # TEST 3: Monitor PR-detection regression guards
 # ============================================================================
 echo ""

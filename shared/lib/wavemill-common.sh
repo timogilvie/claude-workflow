@@ -419,6 +419,35 @@ is_task_packet() {
   echo "$description" | grep -qE "(##+ (1\\.|Objective)|##+ What|##+ Technical Context|##+ Success Criteria|## Task Packet|Quick Reference|## Detailed Sections)"
 }
 
+issue_payload_is_complete() {
+  local issue_json="$1"
+  [[ -n "$issue_json" ]] || return 1
+
+  echo "$issue_json" | jq -e '
+    type == "object"
+    and (.identifier | type == "string" and length > 0)
+    and (.title | type == "string" and length > 0)
+    and has("description")
+    and (.labels | type == "object" and (.nodes | type == "array"))
+    and (.relations | type == "object" and (.nodes | type == "array"))
+    and (.inverseRelations | type == "object" and (.nodes | type == "array"))
+  ' >/dev/null 2>&1
+}
+
+issue_payload_is_fresh() {
+  local fetch_ts="${1:-0}"
+  local ttl_seconds="${2:-0}"
+  local now
+
+  [[ "$fetch_ts" =~ ^[0-9]+$ ]] || return 1
+  [[ "$ttl_seconds" =~ ^[0-9]+$ ]] || return 1
+  (( fetch_ts > 0 )) || return 1
+  (( ttl_seconds > 0 )) || return 1
+
+  now=$(date +%s)
+  (( now - fetch_ts <= ttl_seconds ))
+}
+
 # ============================================================================
 # PRIORITY SCORING ALGORITHM
 # ============================================================================

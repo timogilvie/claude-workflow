@@ -1253,12 +1253,14 @@ fi
 
 
 TASKS=()
+BACKLOG_FETCH_TS=0
 if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
   log "info" "Fetching backlog..."
   BACKLOG="$(linear_list_backlog)" || {
     log_error "Failed to fetch backlog from Linear. Check your LINEAR_API_KEY and network."
     exit 1
   }
+  BACKLOG_FETCH_TS=$(date +%s)
 
   if [[ -z "$BACKLOG" ]] || [[ "$BACKLOG" == "[]" ]]; then
     log "status" "No backlog items returned from Linear."
@@ -1424,15 +1426,51 @@ if (( ${#TASKS[@]} > 0 )); then
 
   # ── Phase 1: Fetch issue details in parallel ──────────────────────────────
   log "info" "Fetching issue details..."
+  BACKLOG_CACHE_TTL="${WAVEMILL_BACKLOG_CACHE_TTL_SECONDS:-300}"
+  _phase1_result_dir=$(mktemp -d "/tmp/wavemill-${SESSION}-phase1.XXXXXX")
   for t in "${TASKS[@]}"; do
     IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
     (
-      json=$(linear_get_issue "$ISSUE" 2>/dev/null || echo "{}")
-      echo "$json" > "/tmp/${SESSION}-${ISSUE}-issue.json"
+      backlog_row=""
+      if [[ -n "${BACKLOG:-}" ]]; then
+        backlog_row=$(echo "$BACKLOG" | jq -c --arg id "$ISSUE" \
+          '.[] | select(.identifier == $id)' 2>/dev/null || echo "")
+      fi
+
+      if [[ -n "$backlog_row" ]] \
+        && issue_payload_is_complete "$backlog_row" \
+        && issue_payload_is_fresh "${BACKLOG_FETCH_TS:-0}" "$BACKLOG_CACHE_TTL"; then
+        echo "$backlog_row" > "/tmp/${SESSION}-${ISSUE}-issue.json"
+        echo "cached" > "$_phase1_result_dir/$ISSUE"
+      else
+        json=$(linear_get_issue "$ISSUE" 2>/dev/null || echo "{}")
+        echo "$json" > "/tmp/${SESSION}-${ISSUE}-issue.json"
+        echo "fetched" > "$_phase1_result_dir/$ISSUE"
+      fi
     ) &
   done
   wait
-  log "info" "  ✓ All issues fetched"
+
+  _cache_count=0
+  _fetch_count=0
+  for t in "${TASKS[@]}"; do
+    IFS='|' read -r ISSUE _ _ <<<"$t"
+    r=$(cat "$_phase1_result_dir/$ISSUE" 2>/dev/null || echo "fetched")
+    if [[ "$r" == "cached" ]]; then
+      _cache_count=$((_cache_count + 1))
+    else
+      _fetch_count=$((_fetch_count + 1))
+    fi
+  done
+  rm -rf "$_phase1_result_dir"
+
+  if (( _cache_count > 0 && _fetch_count == 0 )); then
+    log "info" "  ✓ All issues ready (${_cache_count} from backlog cache, 0 fetched)"
+  elif (( _fetch_count > 0 && _cache_count == 0 )); then
+    log "info" "  ✓ All issues fetched via Linear API (${_fetch_count})"
+  else
+    log "info" "  ✓ All issues ready (${_cache_count} cached, ${_fetch_count} fetched)"
+  fi
 
 
   # ── Phase 2: Write task packets (no expansion — agent expands in-pane) ────
