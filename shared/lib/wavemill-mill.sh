@@ -5023,11 +5023,13 @@ Implement from the issue description plus direct codebase analysis."
       }
     } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$routing_file"
 
-  # Save initial route for eval comparison (routed on raw description)
+  # Save initial route for eval comparison (routed on raw description).
+  # Always stamp source='bootstrap' regardless of what the batch router recorded,
+  # so .initial-route.json remains unambiguous bootstrap evidence.
   if [[ -f "$feature_dir/.initial-route.json" ]]; then
     log "info" "  Keeping existing .initial-route.json for $issue"
   else
-    cp "$routing_file" "$feature_dir/.initial-route.json"
+    jq '.provenance.source = "bootstrap"' "$routing_file" > "$feature_dir/.initial-route.json"
   fi
 
   # Launch planning phase directly with the routed model (skip routing agent)

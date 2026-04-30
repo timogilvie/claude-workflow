@@ -565,6 +565,9 @@ $details_context"
       selectedAt: (now | todate)
     }' > "$feature_dir/selected-task.json"
 
+  local bootstrap_router_mode
+  bootstrap_router_mode="$(npx tsx "$TOOLS_DIR/get-operating-mode.ts" global --repo-dir "$REPO_DIR" 2>/dev/null || echo "normal")"
+
   jq -n \
     --arg planner "${planner_model:-claude-sonnet-4-6}" \
     --arg coder "${coder_model:-claude-opus-4-7}" \
@@ -575,6 +578,7 @@ $details_context"
     --arg source "bootstrap" \
     --arg inputKind "issue" \
     --arg inputPath "features/$slug/selected-task.json" \
+    --arg routerMode "$bootstrap_router_mode" \
     --argjson maxCostUsd "${route_max_cost_usd:-null}" \
     '{
       planner: $planner,
@@ -590,7 +594,7 @@ $details_context"
         inputPath: $inputPath,
         inputHash: "",
         routedAt: (now | todateiso8601),
-        routerMode: "normal"
+        routerMode: $routerMode
       }
     } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$feature_dir/.routing-complete"
   if [[ -f "$feature_dir/.initial-route.json" ]]; then
