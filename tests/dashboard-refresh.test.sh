@@ -7,7 +7,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-STATUS_SH="$REPO_DIR/shared/lib/wavemill-status.sh"
+
+# Portable millisecond timestamp: python3 on macOS/Darwin, date +%s%N on Linux.
+ts_ms() { python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || echo $(( $(date +%s) * 1000 )); }
+export -f ts_ms
 
 PASS=0
 FAIL=0
@@ -151,7 +154,7 @@ if bash -c '
   iterations=0
   while (( iterations < 3 )); do
     trap "" USR1
-    date +%s%N >> "$REDRAW_LOG"
+    ts_ms >> "$REDRAW_LOG"
     (( iterations += 1 ))
     trap "WAVEMILL_REDRAW=1" USR1
     WAVEMILL_REDRAW=0
@@ -165,8 +168,7 @@ if bash -c '
   prev=""
   while IFS= read -r ts; do
     if [[ -n "$prev" ]]; then
-      delta_ns=$(( ts - prev ))
-      delta_ms=$(( delta_ns / 1000000 ))
+      delta_ms=$(( ts - prev ))
       (( delta_ms >= 1500 && delta_ms <= 3500 )) || exit 1
     fi
     prev="$ts"
@@ -193,7 +195,7 @@ if bash -c '
   WAVEMILL_REDRAW=0
 
   render_stub() {
-    date +%s%N >> "$REDRAW_LOG"
+    ts_ms >> "$REDRAW_LOG"
   }
 
   (
@@ -218,7 +220,7 @@ if bash -c '
 
   # Record pre-signal time and send USR1
   sleep 0.2
-  date +%s%N > "$SIGNAL_TS_FILE"
+  ts_ms > "$SIGNAL_TS_FILE"
   kill -USR1 "$loop_pid" 2>/dev/null
 
   # Wait for second render (the signal-driven one)
@@ -236,8 +238,7 @@ if bash -c '
 
   signal_ts=$(cat "$SIGNAL_TS_FILE")
   second_render=$(sed -n "2p" "$REDRAW_LOG")
-  latency_ns=$(( second_render - signal_ts ))
-  latency_ms=$(( latency_ns / 1000000 ))
+  latency_ms=$(( second_render - signal_ts ))
 
   # Must redraw within 500ms of signal
   (( latency_ms >= 0 && latency_ms <= 500 )) || exit 1
@@ -262,7 +263,7 @@ if bash -c '
   WAVEMILL_REDRAW=0
 
   render_stub() {
-    date +%s%N >> "$REDRAW_LOG"
+    ts_ms >> "$REDRAW_LOG"
   }
 
   (
@@ -372,7 +373,7 @@ else
       rm -f "$SIGNAL_FILE"
     }
 
-    (trap "touch \"$SIGNAL_FILE\"; exit 0" USR1; while :; do :; done) &
+    (trap "touch \"$SIGNAL_FILE\"; exit 0" USR1; while :; do sleep 0.1 & wait $! 2>/dev/null || true; done) &
     listener_pid=$!
     sleep 0.05
 
