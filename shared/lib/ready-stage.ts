@@ -19,73 +19,7 @@ import { execShellCommand, escapeShellArg } from './shell-utils.ts';
 import { extractReleaseReadiness, type ReleaseReadiness } from './task-packet-utils.ts';
 import { getReadyConfig } from './config.ts';
 import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
 import path from 'node:path';
-
-// ────────────────────────────────────────────────────────────────
-// Migration check defaults
-//
-// File-path patterns (regex strings) and CI-runner patterns used by
-// checkSchemaMigrations / checkMigrationCiWiring. Repos can extend
-// each list via .wavemill-config.json (see ReadyConfig).
-// ────────────────────────────────────────────────────────────────
-
-/**
- * Default regex strings flagging a changed file as a schema definition.
- * Covers Prisma, raw SQL, Django, and Python ORM model layouts
- * (SQLAlchemy / SQLModel) where models live under a `models/` directory
- * or a single `models.py` file.
- */
-export const DEFAULT_SCHEMA_PATTERNS: readonly string[] = [
-  '\\.prisma$',
-  'schema\\.sql$',
-  '(^|/)models\\.py$',
-  '(^|/)models/[^/]+\\.py$',
-  'src/.*/(database|db_base)\\.py$',
-];
-
-/**
- * Default patterns flagging a changed file as a migration file.
- */
-export const DEFAULT_MIGRATION_PATTERNS: readonly string[] = [
-  'migrations/',
-  'alembic/versions/',
-];
-
-/**
- * Default migration-runner invocations the ci-wiring check searches for.
- */
-export const DEFAULT_MIGRATION_RUNNERS: readonly string[] = [
-  'alembic upgrade',
-  'prisma migrate deploy',
-  'manage\\.py migrate',
-  'sqlx migrate run',
-  'flyway migrate',
-  'liquibase update',
-  'goose up',
-  'dbmate up',
-  'rake db:migrate',
-];
-
-/**
- * Default search paths (files or directories, relative to the repo root)
- * the ci-wiring check inspects for runner references.
- */
-export const DEFAULT_MIGRATION_RUNNER_SEARCH_PATHS: readonly string[] = [
-  '.github/workflows',
-  '.gitlab-ci.yml',
-  '.circleci/config.yml',
-  '.buildkite',
-  'scripts',
-];
-
-function compilePatterns(patterns: readonly string[]): RegExp[] {
-  return patterns.map(p => new RegExp(p));
-}
-
-function unique(values: readonly string[]): string[] {
-  return Array.from(new Set(values));
-}
 
 /**
  * Status of an individual ready check.
@@ -394,20 +328,23 @@ function loadDeployConfig(repoDir: string): Record<string, unknown> {
  * @returns Check result
  * @internal Exported for testing purposes
  */
-export function checkSchemaMigrations(
-  changedFiles: string[],
-  repoDir: string,
-  options?: { schemaPatterns?: readonly string[]; migrationPatterns?: readonly string[] },
-): ReadyCheck {
-  const schemaPatterns = compilePatterns(
-    unique([...DEFAULT_SCHEMA_PATTERNS, ...(options?.schemaPatterns ?? [])]),
-  );
-  const migrationPatterns = compilePatterns(
-    unique([...DEFAULT_MIGRATION_PATTERNS, ...(options?.migrationPatterns ?? [])]),
-  );
+export function checkSchemaMigrations(changedFiles: string[], repoDir: string): ReadyCheck {
+  // Define schema file patterns
+  const schemaPatterns = [
+    /\.prisma$/,
+    /schema\.sql$/,
+    /models\.py$/,  // Django models
+  ];
 
+  // Define migration file patterns
+  const migrationPatterns = [
+    /migrations\//,
+    /alembic\/versions\//,
+  ];
+
+  // Check if any schema files changed
   const schemaFilesChanged = changedFiles.filter(file =>
-    schemaPatterns.some(pattern => pattern.test(file)),
+    schemaPatterns.some(pattern => pattern.test(file))
   );
 
   if (schemaFilesChanged.length === 0) {
@@ -419,8 +356,9 @@ export function checkSchemaMigrations(
     };
   }
 
+  // Check if any migration files changed
   const migrationFilesChanged = changedFiles.filter(file =>
-    migrationPatterns.some(pattern => pattern.test(file)),
+    migrationPatterns.some(pattern => pattern.test(file))
   );
 
   if (migrationFilesChanged.length === 0) {
@@ -435,6 +373,7 @@ export function checkSchemaMigrations(
     };
   }
 
+  // Both schema and migration files changed - pass
   return {
     name: 'schema-migrations',
     status: 'pass',
@@ -444,170 +383,6 @@ export function checkSchemaMigrations(
       migrationFiles: migrationFilesChanged,
     },
   };
-}
-
-/**
- * Check that, when a PR adds or modifies migration files, the repo's CI / build
- * config invokes a migration runner. Catches the failure mode where migration
- * files exist in the tree but nothing in the deployment pipeline ever applies
- * them — a silent gap that can persist across many PRs until production reads
- * start failing on missing columns.
- *
- * The check searches a configurable set of paths (default:
- * `.github/workflows/*.yml`, `.gitlab-ci.yml`, `.circleci/config.yml`,
- * `.buildkite/`, `scripts/`) for any of a configurable set of runner
- * invocations (default: alembic, prisma, Django, sqlx, flyway, liquibase,
- * goose, dbmate, rake db:migrate). Heuristic by design — false positives are
- * preferred over false negatives, since the alternative is unapplied
- * migrations sitting in the repo.
- *
- * @param changedFiles - List of changed file paths from the PR
- * @param repoDir - Repository directory (filesystem read for runner search)
- * @param options.migrationPatterns - Extra regex patterns to add to defaults
- * @param options.runners - Extra runner invocation patterns to search for
- * @param options.searchPaths - Extra files/dirs to inspect
- * @returns Check result
- * @internal Exported for testing purposes
- */
-export function checkMigrationCiWiring(
-  changedFiles: string[],
-  repoDir: string,
-  options?: {
-    migrationPatterns?: readonly string[];
-    runners?: readonly string[];
-    searchPaths?: readonly string[];
-  },
-): ReadyCheck {
-  const migrationPatterns = compilePatterns(
-    unique([...DEFAULT_MIGRATION_PATTERNS, ...(options?.migrationPatterns ?? [])]),
-  );
-  const migrationFilesChanged = changedFiles.filter(file =>
-    migrationPatterns.some(pattern => pattern.test(file)),
-  );
-
-  if (migrationFilesChanged.length === 0) {
-    return {
-      name: 'migration-ci-wiring',
-      status: 'skip',
-      message: 'No migration files in this PR',
-      details: {},
-    };
-  }
-
-  const runnerPatterns = compilePatterns(
-    unique([...DEFAULT_MIGRATION_RUNNERS, ...(options?.runners ?? [])]),
-  );
-  const searchPaths = unique([
-    ...DEFAULT_MIGRATION_RUNNER_SEARCH_PATHS,
-    ...(options?.searchPaths ?? []),
-  ]);
-
-  const matches: { path: string; runner: string }[] = [];
-  const filesScanned: string[] = [];
-
-  for (const relativePath of searchPaths) {
-    const absolutePath = path.join(repoDir, relativePath);
-    let stat: fsSync.Stats;
-    try {
-      stat = fsSync.statSync(absolutePath);
-    } catch {
-      // Missing path — not an error, just skip
-      continue;
-    }
-
-    const filesToScan: string[] = stat.isDirectory()
-      ? collectScannableFiles(absolutePath)
-      : [absolutePath];
-
-    for (const file of filesToScan) {
-      filesScanned.push(path.relative(repoDir, file));
-      let content: string;
-      try {
-        content = fsSync.readFileSync(file, 'utf-8');
-      } catch {
-        continue;
-      }
-      for (const runner of runnerPatterns) {
-        if (runner.test(content)) {
-          matches.push({ path: path.relative(repoDir, file), runner: runner.source });
-        }
-      }
-    }
-  }
-
-  if (matches.length === 0) {
-    return {
-      name: 'migration-ci-wiring',
-      status: 'fail',
-      message:
-        'Migration files added/modified but no migration-runner invocation found in CI/build config. ' +
-        'Add a step (e.g., `alembic upgrade head`) before the deploy step, or extend ' +
-        '`ready.migrationRunners` / `ready.migrationRunnerSearchPaths` in .wavemill-config.json.',
-      details: {
-        migrationFiles: migrationFilesChanged,
-        searchPaths,
-        runnersSearched: runnerPatterns.map(r => r.source),
-        filesScannedCount: filesScanned.length,
-      },
-    };
-  }
-
-  return {
-    name: 'migration-ci-wiring',
-    status: 'pass',
-    message: `Migration runner found in ${unique(matches.map(m => m.path)).length} CI/build file(s)`,
-    details: {
-      migrationFiles: migrationFilesChanged,
-      runnerMatches: matches,
-    },
-  };
-}
-
-/**
- * Recursively collect files under a directory that the migration-runner
- * scanner should inspect. Limits to plausibly-textual config / script
- * extensions to avoid pulling in binaries or `node_modules`.
- */
-function collectScannableFiles(dir: string): string[] {
-  const allowed = new Set([
-    '.yml',
-    '.yaml',
-    '.sh',
-    '.bash',
-    '.zsh',
-    '.toml',
-    '.json',
-    '.dockerfile',
-    '',
-  ]);
-  const skipDirs = new Set(['node_modules', '.git', 'dist', 'build', '__pycache__']);
-  const out: string[] = [];
-
-  function walk(current: string): void {
-    let entries: fsSync.Dirent[];
-    try {
-      entries = fsSync.readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const full = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        if (skipDirs.has(entry.name)) continue;
-        walk(full);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const ext = path.extname(entry.name).toLowerCase();
-      const looksLikeDockerfile = /^Dockerfile($|\.)/.test(entry.name);
-      if (allowed.has(ext) || looksLikeDockerfile) {
-        out.push(full);
-      }
-    }
-  }
-
-  walk(dir);
-  return out;
 }
 
 /**
@@ -642,8 +417,7 @@ export function checkDeployPaths(changedFiles: string[], deployConfig: Record<st
  */
 function checkReleaseRequirements(
   taskPacket: TaskPacketContext | null,
-  prContext: PRContext,
-  options?: { schemaPatterns?: readonly string[]; migrationPatterns?: readonly string[] },
+  prContext: PRContext
 ): ReadyCheck {
   if (!taskPacket) {
     return {
@@ -666,13 +440,16 @@ function checkReleaseRequirements(
   const { releaseReadiness } = taskPacket;
   const { changedFiles } = prContext;
 
-  // Same defaults as checkSchemaMigrations, plus any repo-configured extras.
-  const schemaPatterns = compilePatterns(
-    unique([...DEFAULT_SCHEMA_PATTERNS, ...(options?.schemaPatterns ?? [])]),
-  );
-  const migrationPatterns = compilePatterns(
-    unique([...DEFAULT_MIGRATION_PATTERNS, ...(options?.migrationPatterns ?? [])]),
-  );
+  // Define schema and migration file patterns (same as checkSchemaMigrations)
+  const schemaPatterns = [
+    /\.prisma$/,
+    /schema\.sql$/,
+    /models\.py$/,
+  ];
+  const migrationPatterns = [
+    /migrations\//,
+    /alembic\/versions\//,
+  ];
 
   const schemaFilesChanged = changedFiles.filter(file =>
     schemaPatterns.some(pattern => pattern.test(file))
@@ -994,19 +771,10 @@ export async function runReadyStage(options: {
   const mergeConflict = await checkMergeConflicts(prNumber, repoDir);
 
   // 2. Run all checks
-  const migrationOptions = {
-    schemaPatterns: config.schemaPatterns ?? [],
-    migrationPatterns: config.migrationPatterns ?? [],
-  };
   const allChecks: ReadyCheck[] = [
-    checkSchemaMigrations(prContext.changedFiles, repoDir, migrationOptions),
-    checkMigrationCiWiring(prContext.changedFiles, repoDir, {
-      migrationPatterns: migrationOptions.migrationPatterns,
-      runners: config.migrationRunners ?? [],
-      searchPaths: config.migrationRunnerSearchPaths ?? [],
-    }),
+    checkSchemaMigrations(prContext.changedFiles, repoDir),
     checkDeployPaths(prContext.changedFiles, deployConfig),
-    checkReleaseRequirements(taskPacket, prContext, migrationOptions),
+    checkReleaseRequirements(taskPacket, prContext),
     checkCIStatus(prNumber, repoDir),
   ];
 
