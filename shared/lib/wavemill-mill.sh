@@ -6570,63 +6570,52 @@ while :; do
           if [[ "$SELECT_SHOW_ALL" == "true" ]]; then
             select_from=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
           fi
-          if [[ "$REPLY" =~ ^[Qq] ]]; then
-            if (( active_count == 0 )); then
-              quit_and_kill_session "Quitting."
-            elif [[ "$QUIT_REQUESTED" == "true" ]]; then
-              quit_and_kill_session "Force quitting ($active_count task(s) still active)."
+          # Parse user selection and launch tasks (up to free_slots)
+          launched=0
+          selected_lines=""
+          for n in $REPLY; do
+            # Validate n is a positive integer to prevent sed injection
+            if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
+              log_warn "Invalid selection: $n (must be a number)"
+              continue
+            fi
+            if (( launched >= free_slots )); then
+              log_warn "No more free slots — skipping remaining selections"
+              break
+            fi
+            local_line=$(echo "$select_from" | sed -n "${n}p")
+            if [[ -z "$local_line" ]]; then
+              log_warn "Invalid selection: $n"
+              continue
+            fi
+            selected_lines+="${local_line}"$'\n'
+            launched=$((launched + 1))
+          done
+
+          if (( launched > 1 )); then
+            if batch_route_selected_tasks "$selected_lines"; then
+              log "info" "Prepared batch routing for $launched selected tasks"
             else
-              log "status" "Will quit after $active_count active task(s) finish. Press q again to force quit."
-              QUIT_REQUESTED=true
+              log_warn "Batch routing failed for selected tasks; falling back to per-task routing"
             fi
-          elif [[ -n "$REPLY" ]]; then
-            # Parse user selection and launch tasks (up to free_slots)
-            launched=0
-            selected_lines=""
-            for n in $REPLY; do
-              # Validate n is a positive integer to prevent sed injection
-              if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
-                log_warn "Invalid selection: $n (must be a number)"
-                continue
-              fi
-              if (( launched >= free_slots )); then
-                log_warn "No more free slots — skipping remaining selections"
-                break
-              fi
-              local_line=$(echo "$select_from" | sed -n "${n}p")
-              if [[ -z "$local_line" ]]; then
-                log_warn "Invalid selection: $n"
-                continue
-              fi
-              selected_lines+="${local_line}"$'\n'
-              launched=$((launched + 1))
-            done
-
-            if (( launched > 1 )); then
-              if batch_route_selected_tasks "$selected_lines"; then
-                log "info" "Prepared batch routing for $launched selected tasks"
-              else
-                log_warn "Batch routing failed for selected tasks; falling back to per-task routing"
-              fi
-            fi
-
-            launched=0
-            while IFS= read -r local_line; do
-              [[ -z "$local_line" ]] && continue
-              IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
-              launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
-              launched=$((launched + LAST_LAUNCHED_SLOTS))
-              if (( launched >= free_slots )); then
-                break
-              fi
-            done <<<"$selected_lines"
-            # Invalidate caches after launching so next cycle re-renders
-            LAST_BACKLOG_FETCH=0
-            LAST_DISPLAY=""
-            LAST_WAITING_MSG=""  # Clear waiting state
-            SELECT_SHOW_ALL=false
-            clear_task_list_display
           fi
+
+          launched=0
+          while IFS= read -r local_line; do
+            [[ -z "$local_line" ]] && continue
+            IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
+            launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+            launched=$((launched + LAST_LAUNCHED_SLOTS))
+            if (( launched >= free_slots )); then
+              break
+            fi
+          done <<<"$selected_lines"
+          # Invalidate caches after launching so next cycle re-renders
+          LAST_BACKLOG_FETCH=0
+          LAST_DISPLAY=""
+          LAST_WAITING_MSG=""  # Clear waiting state
+          SELECT_SHOW_ALL=false
+          clear_task_list_display
         fi
         sleep "$POLL_SECONDS"
       else
