@@ -80,6 +80,8 @@ mkdir -p "$MILL_LOG_DIR"
 MILL_LOG_FILE="$MILL_LOG_DIR/mill-${SESSION}.log"
 TOOLS_DIR="${TOOLS_DIR:-$REPO_DIR/tools}"
 LIB_DIR="${LIB_DIR:-$REPO_DIR/shared/lib}"
+MONITOR_PR_CACHE="/tmp/${SESSION}-pr-cache.json"
+export MONITOR_PR_CACHE
 EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
 
 trim_outer_whitespace() {
@@ -889,12 +891,6 @@ smart_select_from_candidates() {
 # ============================================================================
 # GITHUB API WITH RETRY AND VALIDATION
 # ============================================================================
-
-
-find_pr_for_branch() {
-  local branch="$1"
-  gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || true
-}
 
 
 pr_state() {
@@ -4127,6 +4123,12 @@ cleanup_completed_task() {
 
 find_pr_for_branch() {
   local branch="$1"
+  local cached
+  cached=$(wavemill_pr_lookup_by_branch "$branch")
+  if [[ -n "$cached" ]]; then
+    echo "$cached"
+    return
+  fi
   _with_timeout "$API_TIMEOUT" gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || echo ""
 }
 
@@ -6423,6 +6425,7 @@ while :; do
   _update_effective_max_parallel
   drain_command_events
   check_control_pane_health
+  wavemill_pr_cache_refresh
   active_count=0
   active_challenger_count=0
 

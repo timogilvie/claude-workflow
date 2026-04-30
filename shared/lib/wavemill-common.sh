@@ -322,6 +322,28 @@ has_any_healthy_model() {
 }
 
 # ============================================================================
+# PR CACHE HELPERS
+# ============================================================================
+
+wavemill_pr_cache_refresh() {
+  local session="${SESSION:-wavemill}"
+  local cache_file="${MONITOR_PR_CACHE:-/tmp/${session}-pr-cache.json}"
+  gh pr list --json number,headRefName,state,statusCheckRollup --limit 50 \
+    < /dev/null 2>/dev/null > "${cache_file}.tmp" \
+    && mv "${cache_file}.tmp" "${cache_file}" || true
+}
+
+wavemill_pr_lookup_by_branch() {
+  local branch="${1:-}"
+  local session="${SESSION:-wavemill}"
+  local cache_file="${MONITOR_PR_CACHE:-/tmp/${session}-pr-cache.json}"
+  [[ -n "$branch" && -f "$cache_file" ]] || return 0
+  jq -r --arg b "$branch" \
+    '.[] | select(.headRefName == $b) | .number' \
+    "${cache_file}" 2>/dev/null | head -1
+}
+
+# ============================================================================
 # GITHUB HELPERS
 # ============================================================================
 
