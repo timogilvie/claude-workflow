@@ -5059,6 +5059,7 @@ log "info" "  Type 'q' to quit, or 'touch $STATE_DIR/.stop-loop' to stop"
 printf '\033[1mTask Backlog\033[0m\n'
 
 QUIT_REQUESTED=false
+_active_count_prev=0
 LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
@@ -5143,6 +5144,23 @@ consume_next_command() {
     COMMAND_QUEUE=("${COMMAND_QUEUE[@]:1}")
   fi
   return 0
+}
+
+poll_sleep() {
+  local secs="${1:-$POLL_SECONDS}" elapsed
+  if ! [[ "$secs" =~ ^[0-9]+$ ]]; then
+    sleep "$secs"
+    return 0
+  fi
+  elapsed=0
+  while (( elapsed < secs )); do
+    sleep 1
+    elapsed=$((elapsed + 1))
+    drain_command_events
+    if [[ " ${COMMAND_QUEUE[*]} " == *" quit "* ]]; then
+      return 0
+    fi
+  done
 }
 
 monitor_issue_state() {
@@ -6437,6 +6455,24 @@ while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
   _update_effective_max_parallel
   drain_command_events
+  while consume_next_command; do
+    case "$REPLY" in
+      quit)
+        if [[ "$QUIT_REQUESTED" == "true" ]]; then
+          quit_and_kill_session "Force quitting (${_active_count_prev} task(s) still active)."
+        elif (( _active_count_prev == 0 )); then
+          quit_and_kill_session "Quitting."
+        else
+          log "status" "Will quit after ${_active_count_prev} active task(s) finish. Press q again to force quit."
+          QUIT_REQUESTED=true
+        fi
+        ;;
+      *)
+        COMMAND_QUEUE=("$REPLY" "${COMMAND_QUEUE[@]+"${COMMAND_QUEUE[@]}"}")
+        break
+        ;;
+    esac
+  done
   check_control_pane_health
   wavemill_pr_cache_refresh
   active_count=0
@@ -6458,6 +6494,7 @@ while :; do
       active_challenger_count=$((active_challenger_count + 1))
     fi
   done
+  _active_count_prev=$active_count
 
   # ── Phase B: Check for stop signal ──────────────────────────────────
   if [[ -f "$STATE_DIR/.stop-loop" ]]; then
@@ -6466,7 +6503,7 @@ while :; do
       quit_and_kill_session "Stop signal detected and all tasks complete. Exiting."
     fi
     log "status" "Stop signal detected. Finishing $active_count active task(s)..."
-    sleep "$POLL_SECONDS"
+    poll_sleep "$POLL_SECONDS"
     continue
   fi
 
@@ -6480,7 +6517,7 @@ while :; do
         quit_and_kill_session "Force quitting ($active_count task(s) still active)."
       fi
     fi
-    sleep "$POLL_SECONDS"
+    poll_sleep "$POLL_SECONDS"
     continue
   fi
 
@@ -6633,7 +6670,7 @@ while :; do
           SELECT_SHOW_ALL=false
           clear_task_list_display
         fi
-        sleep "$POLL_SECONDS"
+        poll_sleep "$POLL_SECONDS"
       else
         # All candidates are already active
         clear_task_list_display
@@ -6646,9 +6683,9 @@ while :; do
           if consume_next_command && [[ "$REPLY" == "quit" ]]; then
             quit_and_kill_session
           fi
-          sleep "$POLL_SECONDS"
+          poll_sleep "$POLL_SECONDS"
         else
-          sleep "$POLL_SECONDS"
+          poll_sleep "$POLL_SECONDS"
         fi
       fi
     else
@@ -6665,15 +6702,15 @@ while :; do
         if consume_next_command && [[ "$REPLY" == "quit" ]]; then
           quit_and_kill_session
         fi
-        sleep "$POLL_SECONDS"
+        poll_sleep "$POLL_SECONDS"
       else
-        sleep "$POLL_SECONDS"
+        poll_sleep "$POLL_SECONDS"
       fi
     fi
   else
     # All slots full — just monitor
     clear_task_list_display
-    sleep "$POLL_SECONDS"
+    poll_sleep "$POLL_SECONDS"
   fi
 done
 MONITOR_EOF
