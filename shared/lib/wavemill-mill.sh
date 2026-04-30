@@ -6433,10 +6433,35 @@ check_control_pane_health() {
   done <<<"$dead_panes"
 }
 
+# ── Interruptible sleep for responsive quit handling ──────────────────
+WAVEMILL_SLEEP_PID=""
+
+_wake_from_sleep() {
+  [[ -n "${WAVEMILL_SLEEP_PID:-}" ]] && kill "${WAVEMILL_SLEEP_PID}" 2>/dev/null || true
+  WAVEMILL_SLEEP_PID=""
+}
+trap '_wake_from_sleep' USR1
+
+interruptible_sleep() {
+  local secs="$1"
+  sleep "$secs" &
+  WAVEMILL_SLEEP_PID=$!
+  wait "${WAVEMILL_SLEEP_PID}" 2>/dev/null || true
+  WAVEMILL_SLEEP_PID=""
+}
+
 while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
   _update_effective_max_parallel
   drain_command_events
+
+  # Fast-path for quit-now (double-q instant quit)
+  for _qi in "${!COMMAND_QUEUE[@]}"; do
+    if [[ "${COMMAND_QUEUE[$_qi]}" == "quit-now" ]]; then
+      quit_and_kill_session "Instant quit (double-q)."
+    fi
+  done
+
   check_control_pane_health
   wavemill_pr_cache_refresh
   active_count=0
@@ -6466,7 +6491,7 @@ while :; do
       quit_and_kill_session "Stop signal detected and all tasks complete. Exiting."
     fi
     log "status" "Stop signal detected. Finishing $active_count active task(s)..."
-    sleep "$POLL_SECONDS"
+    interruptible_sleep "$POLL_SECONDS"
     continue
   fi
 
@@ -6476,11 +6501,16 @@ while :; do
     fi
     # Still have active tasks — keep monitoring but accept 'q' for force-quit
     if consume_next_command; then
-      if [[ "$REPLY" == "quit" ]]; then
-        quit_and_kill_session "Force quitting ($active_count task(s) still active)."
-      fi
+      case "$REPLY" in
+        quit-now)
+          quit_and_kill_session "Instant quit (double-q)."
+          ;;
+        quit)
+          quit_and_kill_session "Force quitting ($active_count task(s) still active)."
+          ;;
+      esac
     fi
-    sleep "$POLL_SECONDS"
+    interruptible_sleep "$POLL_SECONDS"
     continue
   fi
 
@@ -6633,7 +6663,7 @@ while :; do
           SELECT_SHOW_ALL=false
           clear_task_list_display
         fi
-        sleep "$POLL_SECONDS"
+        interruptible_sleep "$POLL_SECONDS"
       else
         # All candidates are already active
         clear_task_list_display
@@ -6643,12 +6673,16 @@ while :; do
             log "status" "$waiting_msg"
             LAST_WAITING_MSG="$waiting_msg"
           fi
-          if consume_next_command && [[ "$REPLY" == "quit" ]]; then
-            quit_and_kill_session
+          if consume_next_command; then
+            case "$REPLY" in
+              quit-now|quit)
+                quit_and_kill_session
+                ;;
+            esac
           fi
-          sleep "$POLL_SECONDS"
+          interruptible_sleep "$POLL_SECONDS"
         else
-          sleep "$POLL_SECONDS"
+          interruptible_sleep "$POLL_SECONDS"
         fi
       fi
     else
@@ -6662,18 +6696,37 @@ while :; do
         fi
         # Invalidate cache so we re-fetch next cycle
         LAST_BACKLOG_FETCH=0
-        if consume_next_command && [[ "$REPLY" == "quit" ]]; then
-          quit_and_kill_session
+        if consume_next_command; then
+          case "$REPLY" in
+            quit-now|quit)
+              quit_and_kill_session
+              ;;
+          esac
         fi
-        sleep "$POLL_SECONDS"
+        interruptible_sleep "$POLL_SECONDS"
       else
-        sleep "$POLL_SECONDS"
+        interruptible_sleep "$POLL_SECONDS"
       fi
     fi
   else
     # All slots full — just monitor
     clear_task_list_display
-    sleep "$POLL_SECONDS"
+    if consume_next_command; then
+      case "$REPLY" in
+        quit-now)
+          quit_and_kill_session "Instant quit (double-q)."
+          ;;
+        quit)
+          if [[ "$QUIT_REQUESTED" == "true" ]]; then
+            quit_and_kill_session "Force quitting ($active_count task(s) still active)."
+          else
+            log "status" "Will quit after $active_count active task(s) finish. Press q again to force quit."
+            QUIT_REQUESTED=true
+          fi
+          ;;
+      esac
+    fi
+    interruptible_sleep "$POLL_SECONDS"
   fi
 done
 MONITOR_EOF
@@ -6695,7 +6748,7 @@ MONITOR_EOF
 # Investigation steps performed:
 # 1. ✓ Ran `bash -n shared/lib/wavemill-mill.sh` → PASS (no syntax errors found)
 # 2. ✓ Ran `bash -n` on the extracted monitor heredoc content → PASS
-# 3. ✓ Examined the reported lines: `sleep "$POLL_SECONDS"` and
+# 3. ✓ Examined the reported lines: `interruptible_sleep "$POLL_SECONDS"` and
 #      `log "info" "  Type 'q' in control window to quit"` are syntactically correct
 # 4. ✓ Checked git history: No missing quote fix exists between the report and current HEAD
 # 5. ✓ Searched for invalid 'local' keywords outside function context → NONE FOUND
