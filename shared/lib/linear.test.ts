@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { setIssueState, setIssuesState } from './linear.ts';
+import { setIssueState, setIssuesState, updateIssue } from './linear.ts';
 
 type GraphQLPayload = {
   query: string;
@@ -154,7 +154,7 @@ test('setIssuesState returns failed entries on mutation errors without throwing'
   }
 });
 
-test('setIssuesState surfaces Linear userErrors for failed mutations', async () => {
+test('setIssuesState reports a generic error when Linear returns success false', async () => {
   process.env.LINEAR_API_KEY = 'test';
 
   const restore = installFetchMock((payload) => {
@@ -174,8 +174,7 @@ test('setIssuesState surfaces Linear userErrors for failed mutations', async () 
       return {
         issueUpdate: {
           success: false,
-          userErrors: [{ message: 'Issue cannot transition from Backlog', field: ['stateId'] }],
-          issue: { id: 'bad-id', identifier: 'HOK-502', url: 'u' },
+          issue: null,
         },
       };
     }
@@ -187,7 +186,31 @@ test('setIssuesState surfaces Linear userErrors for failed mutations', async () 
     assert.deepEqual(result.updated, []);
     assert.equal(result.failed.length, 1);
     assert.equal(result.failed[0].issueId, 'HOK-502');
-    assert.equal(result.failed[0].error, 'Issue cannot transition from Backlog');
+    assert.equal(result.failed[0].error, 'Failed to update issue state');
+  } finally {
+    restore();
+  }
+});
+
+test('updateIssue mutation does not request userErrors', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  let capturedQuery = '';
+
+  const restore = installFetchMock((payload) => {
+    capturedQuery = payload.query;
+    return {
+      issueUpdate: {
+        success: true,
+        issue: { id: 'issue-1', identifier: 'HOK-601', url: 'u' },
+      },
+    };
+  });
+
+  try {
+    const result = await updateIssue('issue-1', { stateId: 'state-1' });
+    assert.equal(result.success, true);
+    assert.match(capturedQuery, /success/);
+    assert.doesNotMatch(capturedQuery, /userErrors/);
   } finally {
     restore();
   }
