@@ -31,6 +31,9 @@ for f in \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_translates_keystrokes.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_pane_respawn.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/monitor_consumes_command_file.sh \
   "$REPO_DIR/wavemill" \
 ; do
   if [[ ! -f "$f" ]]; then
@@ -757,6 +760,15 @@ if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
   pass "startup runner builds task, dashboard, and log control panes"
 else
   fail "startup runner is missing the 3-pane control layout wiring"
+fi
+
+if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
+  && grep -q 'WAVEMILL_SESSION=' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'wavemill-input-reader.sh' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q '</dev/null &' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  pass "control.0 launches monitor non-interactively plus input reader"
+else
+  fail "control.0 does not launch the monitor/input-reader wrapper"
 fi
 
 # ============================================================================

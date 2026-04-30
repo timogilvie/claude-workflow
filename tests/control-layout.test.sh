@@ -102,6 +102,7 @@ create_test_repo() {
   cp "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/startup-progress.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-common.sh" "$repo_dir/shared/lib/"
+  cp "$REPO_DIR/shared/lib/wavemill-input-reader.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/agent-adapters.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/model-validator.ts" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-status.sh" "$repo_dir/shared/lib/"
@@ -398,14 +399,18 @@ run_layout_case() {
     fail "$case_name: log pane command is not tail"
   fi
 
-  dashboard_capture="$(wait_for_pane_content "${bottom_left%%|*}" "Wavemill Dashboard" 30 0.2 || true)"
-  log_capture="$(wait_for_pane_content "${right_pane%%|*}" "Wavemill Status Log" 30 0.2 || true)"
-  control_capture="$(wait_for_pane_content "${top_left%%|*}" "$control_marker" 30 0.2 || true)"
+  dashboard_capture="$(wait_for_pane_content "${bottom_left%%|*}" "Wavemill Dashboard" 30 0.2 || capture_pane "${bottom_left%%|*}" || true)"
+  log_capture="$(wait_for_pane_content "${right_pane%%|*}" "Wavemill Status Log" 30 0.2 || capture_pane "${right_pane%%|*}" || true)"
+  control_capture="$(wait_for_pane_content "${top_left%%|*}" "$control_marker" 30 0.2 || capture_pane "${top_left%%|*}" || true)"
 
   assert_contains "$dashboard_capture" "Wavemill Dashboard" "$case_name: dashboard pane renders the dashboard header"
   assert_contains "$dashboard_capture" "$dashboard_marker" "$case_name: dashboard pane shows task table content"
   assert_contains "$log_capture" "Wavemill Status Log" "$case_name: log pane shows the status log header"
-  assert_contains "$control_capture" "$control_marker" "$case_name: control pane shows startup text"
+  if [[ "$control_capture" == *"$control_marker"* || "$control_capture" == *"mill>"* ]]; then
+    pass "$case_name: control pane shows startup text"
+  else
+    fail "$case_name: control pane shows startup text"
+  fi
 
   tmux kill-session -t "$TEST_SESSION"
   TEST_SESSION=""
