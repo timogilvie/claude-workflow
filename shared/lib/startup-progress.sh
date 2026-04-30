@@ -109,7 +109,7 @@ _progress_render_reader() {
   done
 
   _progress_draw_table() {
-    local rows_done=0 rows_failed=0 row_state issue_label symbol suffix separator
+    local rows_done=0 rows_failed=0 row_state issue_label symbol suffix separator extra=0
     issue_width=5
     for ((i = 1; i <= task_count; i++)); do
       issue_label="${issues[$i]:-$i}"
@@ -129,12 +129,16 @@ _progress_render_reader() {
         symbol="$(_progress_state_symbol "$state")"
         suffix="${details["$i:$col"]:-}"
         [[ -n "$suffix" ]] && symbol="$symbol $suffix"
+        extra=0
+        case "$state" in
+          done | running | failed) extra=2 ;;
+        esac
         case "$col" in
-          route) _progress_emit ' %-5.5s |' "$symbol" ;;
-          worktree) _progress_emit ' %-8.8s |' "$symbol" ;;
-          deps) _progress_emit ' %-4.4s |' "$symbol" ;;
-          agent) _progress_emit ' %-5.5s |' "$symbol" ;;
-          linear) _progress_emit ' %-5.5s' "$symbol" ;;
+          route) _progress_emit " %-$((5 + extra)).$((5 + extra))s |" "$symbol" ;;
+          worktree) _progress_emit " %-$((8 + extra)).$((8 + extra))s |" "$symbol" ;;
+          deps) _progress_emit " %-$((4 + extra)).$((4 + extra))s |" "$symbol" ;;
+          agent) _progress_emit " %-$((5 + extra)).$((5 + extra))s |" "$symbol" ;;
+          linear) _progress_emit " %-$((6 + extra)).$((6 + extra))s" "$symbol" ;;
         esac
         [[ "$state" == "failed" ]] && row_state="failed"
         [[ "$state" != "done" && "$state" != "skipped" ]] && [[ "$row_state" != "failed" ]] && row_state="active"
