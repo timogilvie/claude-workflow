@@ -92,6 +92,14 @@ The current implementation is scaffolded and returns a stub ready result, which 
 - `touch ~/.wavemill/.stop-loop` stop after current cycle
 - `Ctrl+C` interrupt and reset in-progress tasks
 
+## Control Layout And Input
+
+- Mill keeps the same three visible control panes:
+- `control.0` monitor + command input (`1 3`, `m`, `q`)
+- `control.1` dashboard
+- `control.2` status log
+- Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
+
 ## When to Prefer Mill Mode
 
 Use mill mode when your backlog has many independent tasks and your team is comfortable reviewing multiple agent-generated PRs in parallel.

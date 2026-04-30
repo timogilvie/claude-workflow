@@ -5048,6 +5048,11 @@ LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
 TASK_LIST_RENDERED=0  # track task list cursor region in control pane
+SELECT_SHOW_ALL=false
+declare -a COMMAND_QUEUE=()
+COMMAND_FILE="$(wavemill_command_file_path "$SESSION")"
+COMMAND_OFFSET_FILE="$(wavemill_command_offset_path "$SESSION")"
+COMMAND_OFFSET_WARNED=false
 
 clear_task_list_display() {
   if (( TASK_LIST_RENDERED == 1 )); then
@@ -5055,6 +5060,74 @@ clear_task_list_display() {
     tput ed 2>/dev/null || printf '\033[J'
     TASK_LIST_RENDERED=0
   fi
+}
+
+read_command_offset() {
+  local line_count offset_raw
+  line_count=0
+  [[ -f "$COMMAND_FILE" ]] && line_count=$(wc -l < "$COMMAND_FILE" 2>/dev/null | tr -d ' ')
+  [[ "$line_count" =~ ^[0-9]+$ ]] || line_count=0
+
+  if [[ ! -f "$COMMAND_OFFSET_FILE" ]]; then
+    if (( line_count > 0 )); then
+      [[ "$COMMAND_OFFSET_WARNED" == "false" ]] && log_warn "Command offset missing (init at EOF)."
+      COMMAND_OFFSET_WARNED=true
+      echo "$line_count"
+      return 0
+    fi
+    echo "0"
+    return 0
+  fi
+
+  offset_raw="$(cat "$COMMAND_OFFSET_FILE" 2>/dev/null || echo "0")"
+  if ! [[ "$offset_raw" =~ ^[0-9]+$ ]]; then
+    echo "$line_count"
+    return 0
+  fi
+  if (( offset_raw > line_count )); then
+    echo "$line_count"
+    return 0
+  fi
+  echo "$offset_raw"
+}
+
+write_command_offset() {
+  local new_offset="$1" tmp
+  tmp="$(mktemp "/tmp/wavemill-${SESSION}-commands.offset.XXXXXX")" || return 1
+  printf '%s\n' "$new_offset" > "$tmp"
+  mv "$tmp" "$COMMAND_OFFSET_FILE"
+}
+
+drain_command_events() {
+  local line_count offset start new_lines final_offset
+  [[ -f "$COMMAND_FILE" ]] || return 0
+  line_count=$(wc -l < "$COMMAND_FILE" 2>/dev/null | tr -d ' ')
+  [[ "$line_count" =~ ^[0-9]+$ ]] || line_count=0
+  offset="$(read_command_offset)"
+  [[ "$offset" =~ ^[0-9]+$ ]] || offset=0
+  (( line_count <= offset )) && return 0
+
+  start=$((offset + 1))
+  new_lines="$(sed -n "${start},${line_count}p" "$COMMAND_FILE" 2>/dev/null || true)"
+  while IFS= read -r evt; do
+    [[ -z "$evt" ]] && continue
+    COMMAND_QUEUE+=("$evt")
+  done <<< "$new_lines"
+  final_offset=$line_count
+  write_command_offset "$final_offset" || true
+}
+
+consume_next_command() {
+  if (( ${#COMMAND_QUEUE[@]} == 0 )); then
+    return 1
+  fi
+  REPLY="${COMMAND_QUEUE[0]}"
+  if (( ${#COMMAND_QUEUE[@]} == 1 )); then
+    COMMAND_QUEUE=()
+  else
+    COMMAND_QUEUE=("${COMMAND_QUEUE[@]:1}")
+  fi
+  return 0
 }
 
 monitor_issue_state() {
@@ -6348,6 +6421,7 @@ check_control_pane_health() {
 while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
   _update_effective_max_parallel
+  drain_command_events
   check_control_pane_health
   active_count=0
   active_challenger_count=0
@@ -6385,11 +6459,12 @@ while :; do
       quit_and_kill_session "All tasks complete. Exiting."
     fi
     # Still have active tasks — keep monitoring but accept 'q' for force-quit
-    if read -rsn1 -t "$POLL_SECONDS" REPLY 2>/dev/null; then
-      if [[ "$REPLY" =~ ^[Qq] ]]; then
+    if consume_next_command; then
+      if [[ "$REPLY" == "quit" ]]; then
         quit_and_kill_session "Force quitting ($active_count task(s) still active)."
       fi
     fi
+    sleep "$POLL_SECONDS"
     continue
   fi
 
@@ -6415,6 +6490,7 @@ while :; do
         # Only re-render the prompt when the display would actually change
         display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
+          SELECT_SHOW_ALL=false
           if (( TASK_LIST_RENDERED == 1 )); then
             tput rc 2>/dev/null || true
             tput ed 2>/dev/null || printf '\033[J'
@@ -6446,97 +6522,102 @@ while :; do
 
         # Default: selection against unblocked list only
         select_from="$avail_unblocked"
-
-        if read -t "$POLL_SECONDS" -r REPLY; then
-          # Strip ANSI escape sequences (e.g. arrow keys buffered during wait)
-          REPLY=$(printf '%s' "$REPLY" | LC_ALL=C tr -d '\033' | sed 's/\[[A-Za-z0-9;]*//g')
-
-          # Handle 'm' to show all tasks including blocked
-          if [[ "$REPLY" =~ ^[mM] ]]; then
-            clear_task_list_display
-            all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
-            echo ""
-            log "info" "All tasks:"
-            ln=0
-            while IFS= read -r mline; do
-              ln=$((ln + 1))
-              IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
-              if (( mblocked > 0 )); then
-                printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
-              else
-                printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
-              fi
-            done <<<"$all_avail"
-            echo ""
-            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
-            select_from="$all_avail"
-            # Re-read for actual selection
-            if read -t "$POLL_SECONDS" -r REPLY; then
-              REPLY=$(printf '%s' "$REPLY" | LC_ALL=C tr -d '\033' | sed 's/\[[A-Za-z0-9;]*//g')
-            else
-              REPLY=""
-            fi
-          fi
-
-          if [[ "$REPLY" =~ ^[Qq] ]]; then
-            if (( active_count == 0 )); then
-              quit_and_kill_session "Quitting."
-            elif [[ "$QUIT_REQUESTED" == "true" ]]; then
-              quit_and_kill_session "Force quitting ($active_count task(s) still active)."
-            else
-              log "status" "Will quit after $active_count active task(s) finish. Press q again to force quit."
-              QUIT_REQUESTED=true
-            fi
-          elif [[ -n "$REPLY" ]]; then
-            # Parse user selection and launch tasks (up to free_slots)
-            launched=0
-            selected_lines=""
-            for n in $REPLY; do
-              # Validate n is a positive integer to prevent sed injection
-              if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
-                log_warn "Invalid selection: $n (must be a number)"
-                continue
-              fi
-              if (( launched >= free_slots )); then
-                log_warn "No more free slots — skipping remaining selections"
-                break
-              fi
-              local_line=$(echo "$select_from" | sed -n "${n}p")
-              if [[ -z "$local_line" ]]; then
-                log_warn "Invalid selection: $n"
-                continue
-              fi
-              selected_lines+="${local_line}"$'\n'
-              launched=$((launched + 1))
-            done
-
-            if (( launched > 1 )); then
-              if batch_route_selected_tasks "$selected_lines"; then
-                log "info" "Prepared batch routing for $launched selected tasks"
-              else
-                log_warn "Batch routing failed for selected tasks; falling back to per-task routing"
-              fi
-            fi
-
-            launched=0
-            while IFS= read -r local_line; do
-              [[ -z "$local_line" ]] && continue
-              IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
-              launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
-              launched=$((launched + LAST_LAUNCHED_SLOTS))
-              if (( launched >= free_slots )); then
-                break
-              fi
-            done <<<"$selected_lines"
-            # Invalidate caches after launching so next cycle re-renders
-            LAST_BACKLOG_FETCH=0
-            LAST_DISPLAY=""
-            LAST_WAITING_MSG=""  # Clear waiting state
-            clear_task_list_display
-          fi
-          # User pressed Enter with no input — just continue monitoring
+        if [[ "$SELECT_SHOW_ALL" == "true" ]]; then
+          select_from=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
         fi
-        # read timed out — continue monitoring
+
+        REPLY=""
+        if consume_next_command; then
+          case "$REPLY" in
+            select\ *) REPLY="${REPLY#select }" ;;
+            more) REPLY="m" ;;
+            quit) REPLY="q" ;;
+            unknown\ *) REPLY="unknown ${REPLY#unknown }" ;;
+            *) REPLY="" ;;
+          esac
+        fi
+
+        if [[ "$REPLY" =~ ^[Qq]$ ]]; then
+          if (( active_count == 0 )); then
+            quit_and_kill_session "Quitting."
+          elif [[ "$QUIT_REQUESTED" == "true" ]]; then
+            quit_and_kill_session "Force quitting ($active_count task(s) still active)."
+          else
+            log "status" "Will quit after $active_count active task(s) finish. Press q again to force quit."
+            QUIT_REQUESTED=true
+          fi
+        elif [[ "$REPLY" =~ ^[mM]$ ]]; then
+          clear_task_list_display
+          all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
+          echo ""
+          log "info" "All tasks:"
+          ln=0
+          while IFS= read -r mline; do
+            ln=$((ln + 1))
+            IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
+            if (( mblocked > 0 )); then
+              printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
+            else
+              printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
+            fi
+          done <<<"$all_avail"
+          echo ""
+          echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+          SELECT_SHOW_ALL=true
+        elif [[ "$REPLY" =~ ^unknown\  ]]; then
+          log_warn "Unknown input: ${REPLY#unknown }"
+        elif [[ -n "$REPLY" ]]; then
+          if [[ "$SELECT_SHOW_ALL" == "true" ]]; then
+            select_from=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
+          fi
+          # Parse user selection and launch tasks (up to free_slots)
+          launched=0
+          selected_lines=""
+          for n in $REPLY; do
+            # Validate n is a positive integer to prevent sed injection
+            if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
+              log_warn "Invalid selection: $n (must be a number)"
+              continue
+            fi
+            if (( launched >= free_slots )); then
+              log_warn "No more free slots — skipping remaining selections"
+              break
+            fi
+            local_line=$(echo "$select_from" | sed -n "${n}p")
+            if [[ -z "$local_line" ]]; then
+              log_warn "Invalid selection: $n"
+              continue
+            fi
+            selected_lines+="${local_line}"$'\n'
+            launched=$((launched + 1))
+          done
+
+          if (( launched > 1 )); then
+            if batch_route_selected_tasks "$selected_lines"; then
+              log "info" "Prepared batch routing for $launched selected tasks"
+            else
+              log_warn "Batch routing failed for selected tasks; falling back to per-task routing"
+            fi
+          fi
+
+          launched=0
+          while IFS= read -r local_line; do
+            [[ -z "$local_line" ]] && continue
+            IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
+            launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+            launched=$((launched + LAST_LAUNCHED_SLOTS))
+            if (( launched >= free_slots )); then
+              break
+            fi
+          done <<<"$selected_lines"
+          # Invalidate caches after launching so next cycle re-renders
+          LAST_BACKLOG_FETCH=0
+          LAST_DISPLAY=""
+          LAST_WAITING_MSG=""  # Clear waiting state
+          SELECT_SHOW_ALL=false
+          clear_task_list_display
+        fi
+        sleep "$POLL_SECONDS"
       else
         # All candidates are already active
         clear_task_list_display
@@ -6546,9 +6627,10 @@ while :; do
             log "status" "$waiting_msg"
             LAST_WAITING_MSG="$waiting_msg"
           fi
-          if read -t "$POLL_SECONDS" -r REPLY; then
-            [[ "$REPLY" =~ ^[Qq] ]] && quit_and_kill_session
+          if consume_next_command && [[ "$REPLY" == "quit" ]]; then
+            quit_and_kill_session
           fi
+          sleep "$POLL_SECONDS"
         else
           sleep "$POLL_SECONDS"
         fi
@@ -6564,9 +6646,10 @@ while :; do
         fi
         # Invalidate cache so we re-fetch next cycle
         LAST_BACKLOG_FETCH=0
-        if read -t "$POLL_SECONDS" -r REPLY; then
-          [[ "$REPLY" =~ ^[Qq] ]] && quit_and_kill_session
+        if consume_next_command && [[ "$REPLY" == "quit" ]]; then
+          quit_and_kill_session
         fi
+        sleep "$POLL_SECONDS"
       else
         sleep "$POLL_SECONDS"
       fi

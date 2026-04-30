@@ -396,6 +396,16 @@ read_route_json() {
   echo "$default_value"
 }
 
+wavemill_command_file_path() {
+  local session="$1"
+  printf '/tmp/wavemill-%s-commands\n' "$session"
+}
+
+wavemill_command_offset_path() {
+  local session="$1"
+  printf '/tmp/wavemill-%s-commands.offset\n' "$session"
+}
+
 # ============================================================================
 # TASK PACKET DETECTION
 # ============================================================================
