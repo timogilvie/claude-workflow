@@ -10,7 +10,7 @@ export SESSION WAVEMILL_NO_PROGRESS=0
 out="$(mktemp)"
 progress_start 2 2>"$out"
 progress_update 1 issue HOK-1
-progress_update 2 issue HOK-2
+progress_update 2 issue HOK-2_c
 progress_update 1 route running
 progress_update 1 route done
 progress_update 1 worktree done
@@ -24,12 +24,16 @@ progress_update 2 agent skipped
 progress_update 2 linear skipped
 progress_finish
 
-if ! grep -q 'issue | route | worktree | deps | agent | linear' "$out"; then
+if ! grep -q 'issue .*| route | worktree | deps | agent | linear' "$out"; then
   echo "missing progress table header" >&2
   exit 1
 fi
-if ! grep -q 'HOK-1' "$out" || ! grep -q 'HOK-2' "$out"; then
+if ! grep -q 'HOK-1' "$out" || ! grep -q 'HOK-2_c' "$out"; then
   echo "missing issue rows" >&2
+  exit 1
+fi
+if ! grep -q 'HOK-1   |' "$out"; then
+  echo "non-challenge issue row did not reserve challenge suffix spacing" >&2
   exit 1
 fi
 if grep -q 'running' "$out"; then
@@ -65,6 +69,11 @@ fi
 render_count="$(grep -c 'issue | route | worktree | deps | agent | linear' "$file_out")"
 if [[ "$render_count" -gt 8 ]]; then
   echo "file renderer redrew too often: $render_count renders" >&2
+  exit 1
+fi
+clear_count="$(perl -0777 -ne 'print scalar(() = /\e\[H\e\[J/g)' "$file_out")"
+if [[ "$clear_count" -lt 2 ]]; then
+  echo "file renderer did not emit terminal refresh sequences" >&2
   exit 1
 fi
 
