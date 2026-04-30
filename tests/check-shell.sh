@@ -32,6 +32,7 @@ for f in \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/monitor_pr_cache_single_fetch.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_translates_keystrokes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_pane_respawn.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/monitor_consumes_command_file.sh \
@@ -276,6 +277,77 @@ if grep -q 'git -C "\$REPO_DIR" fetch origin "\$BASE_BRANCH"' <<< "$LAUNCH_TASK_
 else
   pass "launch_task no longer performs raw git fetch"
 fi
+
+# ============================================================================
+# TEST 2E: Monitor PR cache guards
+# ============================================================================
+echo ""
+echo "=== Monitor PR Cache Guards ==="
+
+if grep -q '^refresh_cycle_pr_cache()' "$MILL_SCRIPT"; then
+  pass "refresh_cycle_pr_cache helper is defined in mill"
+else
+  fail "mill is missing refresh_cycle_pr_cache helper"
+fi
+
+if grep -q '^lookup_pr_in_cycle_cache()' "$MILL_SCRIPT"; then
+  pass "lookup_pr_in_cycle_cache helper is defined in mill"
+else
+  fail "mill is missing lookup_pr_in_cycle_cache helper"
+fi
+
+if grep -q 'MILL_PR_CACHE_TTL=30' "$MILL_SCRIPT" && grep -q 'CYCLE_PR_CACHE_FETCHED_AT=0' "$MILL_SCRIPT"; then
+  pass "monitor PR cache stores TTL state across cycles"
+else
+  fail "monitor PR cache TTL state is missing"
+fi
+
+FIND_PR_BLOCK=$(awk '
+  /^find_pr_for_branch\(\) \{/ { capture=1 }
+  capture { print }
+  capture && /^\}/ { exit }
+' <<< "$HEREDOC_CONTENT")
+if grep -q 'lookup_pr_in_cycle_cache' <<< "$FIND_PR_BLOCK"; then
+  pass "find_pr_for_branch reads from cycle cache"
+else
+  fail "find_pr_for_branch does not use cycle cache"
+fi
+
+CHECK_PR_EXISTS_BLOCK=$(awk '
+  /^check_pr_exists\(\) \{/ { capture=1 }
+  capture { print }
+  capture && /^\}/ { exit }
+' "$MILL_SCRIPT")
+if grep -q 'find_pr_for_branch' <<< "$CHECK_PR_EXISTS_BLOCK"; then
+  pass "check_pr_exists delegates to cached PR lookup"
+else
+  fail "check_pr_exists does not delegate to cached PR lookup"
+fi
+
+MONITOR_LOOP_BLOCK=$(awk '
+  /^while :; do$/ { in_loop=1 }
+  in_loop { print }
+  in_loop && /^done$/ { exit }
+' <<< "$HEREDOC_CONTENT")
+if grep -q 'refresh_cycle_pr_cache' <<< "$MONITOR_LOOP_BLOCK"; then
+  pass "monitor loop refreshes PR cache before scanning issues"
+else
+  fail "monitor loop does not refresh PR cache before scanning issues"
+fi
+
+FIXTURE="$REPO_DIR/tests/fixtures/lifecycle/monitor_pr_cache_single_fetch.sh"
+if [[ -f "$FIXTURE" ]]; then
+  fixture_output="$(bash "$FIXTURE" 2>&1)" || fixture_status=$?
+  fixture_status="${fixture_status:-0}"
+  if [[ "$fixture_status" -eq 0 ]]; then
+    pass "monitor_pr_cache_single_fetch"
+  else
+    fail "monitor_pr_cache_single_fetch: $fixture_output"
+  fi
+else
+  fail "Missing fixture: monitor_pr_cache_single_fetch.sh"
+fi
+unset fixture_status
 
 # ============================================================================
 # TEST 3: Monitor PR-detection regression guards

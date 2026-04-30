@@ -4125,8 +4125,41 @@ cleanup_completed_task() {
 # ============================================================================
 # Functions for PR detection and merge validation.
 
+# TTL-based PR cache refreshed at most once per MILL_PR_CACHE_TTL seconds.
+CYCLE_PR_CACHE=""
+CYCLE_PR_CACHE_FETCHED_AT=0
+MILL_PR_CACHE_TTL=30
+
+refresh_cycle_pr_cache() {
+  local now
+  now=$(date +%s)
+  if [[ -n "$CYCLE_PR_CACHE" ]] && (( now - CYCLE_PR_CACHE_FETCHED_AT < MILL_PR_CACHE_TTL )); then
+    return 0
+  fi
+
+  local raw
+  raw=$(_with_timeout "$API_TIMEOUT" gh pr list --state all \
+    --json number,headRefName --limit 100 < /dev/null 2>/dev/null) || true
+  CYCLE_PR_CACHE="${raw:-}"
+  CYCLE_PR_CACHE_FETCHED_AT="$now"
+}
+
+lookup_pr_in_cycle_cache() {
+  local branch="$1"
+  [[ -n "$CYCLE_PR_CACHE" ]] || return 0
+  printf '%s\n' "$CYCLE_PR_CACHE" | \
+    jq -r --arg b "$branch" '.[] | select(.headRefName == $b) | .number' \
+    2>/dev/null | head -1
+}
+
 find_pr_for_branch() {
   local branch="$1"
+  local cached
+  cached=$(lookup_pr_in_cycle_cache "$branch")
+  if [[ -n "$cached" ]]; then
+    printf '%s\n' "$cached"
+    return
+  fi
   _with_timeout "$API_TIMEOUT" gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || echo ""
 }
 
@@ -4142,6 +4175,14 @@ validate_pr_merge() {
   state=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr" --json state --jq '.state' 2>/dev/null || echo "")
   [[ "$state" == "MERGED" ]] && return 0
   return 1
+}
+
+check_pr_exists() {
+  local branch="$1"
+  [[ -z "$branch" ]] && return 1
+  local pr_number
+  pr_number=$(find_pr_for_branch "$branch")
+  [[ -n "$pr_number" ]]
 }
 
 
@@ -6426,6 +6467,7 @@ while :; do
   active_count=0
   active_challenger_count=0
 
+  refresh_cycle_pr_cache
   for ISSUE in "${!BRANCH_BY_ISSUE[@]}"; do
     [[ -n "${CLEANED[$ISSUE]:-}" ]] && continue
     set +e

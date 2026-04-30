@@ -36,7 +36,7 @@ resolve_refresh_case() {
   err_file="$(mktemp)"
   if [[ -n "$value" ]]; then
     refresh_output="$(
-      WAVEMILL_DASHBOARD_REFRESH_SECONDS="$value" bash -lc '
+      WAVEMILL_DASHBOARD_REFRESH_SECONDS="$value" bash --noprofile --norc -c '
         set -euo pipefail
         set -- test-session /tmp
         tput() { :; }
@@ -46,7 +46,7 @@ resolve_refresh_case() {
     )"
   else
     refresh_output="$(
-      bash -lc '
+      bash --noprofile --norc -c '
         set -euo pipefail
         set -- test-session /tmp
         unset WAVEMILL_DASHBOARD_REFRESH_SECONDS
@@ -69,7 +69,7 @@ run_dashboard_probe() {
   WAVEMILL_DASHBOARD_REFRESH_SECONDS=2 \
   OUTPUT_FILE="$output_file" \
   STOP_FILE="$stop_file" \
-  bash -lc '
+  bash --noprofile --norc -c '
     set -euo pipefail
     set -- test-session /tmp
     tput() { :; }
@@ -222,7 +222,7 @@ echo ""
 echo "=== Hook Notify Contract ==="
 
 HOOK_PROTOCOL_LIB="$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh"
-if bash -lc '
+if bash --noprofile --norc -c '
   set -euo pipefail
   source "'"$HOOK_PROTOCOL_LIB"'"
 
@@ -256,7 +256,7 @@ else
   fail "successful hook writes did not notify exactly once per write"
 fi
 
-if bash -lc '
+if bash --noprofile --norc -c '
   set -euo pipefail
   source "'"$HOOK_PROTOCOL_LIB"'"
 
