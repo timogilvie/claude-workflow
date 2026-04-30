@@ -533,7 +533,7 @@ issue_payload_is_complete() {
   local ok
   ok=$(printf '%s' "$json" | jq -e --argjson required_fields "$field_filter" '
     . as $record |
-    ($required_fields | all(. as $field | (($record[$field] // "") | type) == "string" and ($record[$field] != "")))
+    ($required_fields | all(. as $field | (($record[$field] // "") != "")))
     and ((.labels.nodes | type) == "array")
   ' 2>/dev/null) || return 1
 

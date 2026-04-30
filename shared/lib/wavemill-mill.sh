@@ -1427,7 +1427,7 @@ if (( ${#TASKS[@]} > 0 )); then
   for t in "${TASKS[@]}"; do
     IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
     (
-      local backlog_record="" json
+      backlog_record="" json
 
       if [[ -n "${BACKLOG:-}" ]]; then
         backlog_record=$(printf '%s' "$BACKLOG" | jq -c --arg id "$ISSUE" \
