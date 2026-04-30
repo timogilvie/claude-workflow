@@ -28,6 +28,7 @@ for f in \
   "$LIB_DIR"/startup-progress.sh \
   "$LIB_DIR"/agent-adapters.sh \
   "$REPO_DIR"/shared/hooks/*.sh \
+  "$REPO_DIR"/tests/dashboard-refresh.test.sh \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
@@ -2229,6 +2230,65 @@ else
     fail "dashboard USR1 trap did not flip redraw flag"
   fi
 fi
+
+# ============================================================================
+# TEST 17: Dashboard refresh interval guards
+# ============================================================================
+echo ""
+echo "=== Dashboard Refresh Guards ==="
+
+STATUS_SCRIPT="$LIB_DIR/wavemill-status.sh"
+if [[ ! -f "$STATUS_SCRIPT" ]]; then
+  fail "wavemill-status.sh not found for dashboard refresh checks"
+else
+  if grep -q '^DEFAULT_REFRESH=2$' "$STATUS_SCRIPT"; then
+    pass "dashboard default refresh is 2 seconds"
+  else
+    fail "dashboard default refresh is not 2 seconds"
+  fi
+
+  if grep -q '^MAX_REFRESH=10$' "$STATUS_SCRIPT"; then
+    pass "dashboard refresh upper bound is 10 seconds"
+  else
+    fail "dashboard refresh upper bound is not 10 seconds"
+  fi
+
+  if grep -q 'WAVEMILL_DASHBOARD_REFRESH_SECONDS' "$STATUS_SCRIPT"; then
+    pass "dashboard refresh interval is configurable via environment"
+  else
+    fail "dashboard refresh interval is missing env override support"
+  fi
+
+  if grep -q 'sleep "\$REFRESH" &' "$STATUS_SCRIPT" && grep -q 'wait "\$SLEEP_PID"' "$STATUS_SCRIPT"; then
+    pass "dashboard loop keeps interruptible sleep/wait pattern"
+  else
+    fail "dashboard loop is missing interruptible sleep/wait pattern"
+  fi
+
+  if grep -q 'Refreshes every \${REFRESH}s' "$STATUS_SCRIPT"; then
+    pass "dashboard footer reports resolved refresh interval"
+  else
+    fail "dashboard footer does not report resolved refresh interval"
+  fi
+
+  if grep -q '^REFRESH=10$' "$STATUS_SCRIPT"; then
+    fail "stale 10 second dashboard refresh constant is still present"
+  else
+    pass "stale 10 second dashboard refresh constant removed"
+  fi
+fi
+
+echo ""
+echo "=== Dashboard Refresh Test ==="
+
+dashboard_refresh_output="$(bash "$REPO_DIR/tests/dashboard-refresh.test.sh" 2>&1)" || dashboard_refresh_status=$?
+dashboard_refresh_status="${dashboard_refresh_status:-0}"
+if [[ "$dashboard_refresh_status" -eq 0 ]]; then
+  pass "dashboard refresh integration test"
+else
+  fail "dashboard refresh integration test: $dashboard_refresh_output"
+fi
+unset dashboard_refresh_status
 
 # ============================================================================
 # TEST 6: Routing resilience regression guards
