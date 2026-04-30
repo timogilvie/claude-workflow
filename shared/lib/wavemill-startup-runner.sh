@@ -738,16 +738,6 @@ main() {
   if [[ "$task_count" -eq 0 ]]; then
     resumed_count="$(jq '(.tasks // {}) | length' "$STATE_FILE" 2>/dev/null || echo 0)"
     startup_log "No new tasks selected. Resuming $resumed_count in-flight task(s) from previous session."
-  elif [[ "$DRY_RUN" != "true" ]]; then
-    mapfile -t linear_batch_ids < <(
-      jq -r '.tasks[]
-        | select((.challengeRole // "") != "challenger")
-        | (.linearIssueId // .issue)' "$PLAN_FILE"
-    )
-    if [[ "${#linear_batch_ids[@]}" -gt 0 ]]; then
-      startup_log "Setting Linear state for ${#linear_batch_ids[@]} issue(s) in one batch call..."
-      linear_batch_set_state "In Progress" "${linear_batch_ids[@]}"
-    fi
   fi
 
   if [[ "${WAVEMILL_NO_PROGRESS:-0}" == "1" ]]; then
@@ -776,6 +766,20 @@ main() {
   write_monitor_env "$tasks_file"
 
   launched_count="$(wc -l < "$LAUNCHED_ISSUES_FILE" | tr -d ' ')"
+  if [[ "$DRY_RUN" != "true" && "$launched_count" -gt 0 ]]; then
+    while IFS= read -r launched_issue; do
+      [[ -z "$launched_issue" ]] && continue
+      linear_id="$(jq -r --arg issue "$launched_issue" '.tasks[]
+        | select(.issue == $issue and ((.challengeRole // "") != "challenger"))
+        | (.linearIssueId // .issue)' "$PLAN_FILE" | head -n 1)"
+      [[ -n "$linear_id" && "$linear_id" != "null" ]] && linear_batch_ids+=("$linear_id")
+    done < "$LAUNCHED_ISSUES_FILE"
+    if [[ "${#linear_batch_ids[@]}" -gt 0 ]]; then
+      startup_log "Setting Linear state for ${#linear_batch_ids[@]} launched issue(s) in one batch call..."
+      linear_batch_set_state "In Progress" "${linear_batch_ids[@]}"
+    fi
+  fi
+
   if [[ "$launched_count" -eq 0 && "${resumed_count:-0}" -eq 0 ]]; then
     startup_log ""
     startup_log "No tasks launched. Keeping startup diagnostics visible in control window."
