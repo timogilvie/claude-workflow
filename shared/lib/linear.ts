@@ -515,7 +515,6 @@ export async function setIssueState(identifier: string, stateName: string): Prom
 type LinearIssueUpdateResult = {
   success: boolean;
   issue: LinearIssue;
-  userErrors?: Array<{ message: string; field?: string[] }>;
 };
 
 export async function setIssuesState(
@@ -608,7 +607,7 @@ export async function setIssuesState(
     } else if (result.status === 'fulfilled') {
       failed.push({
         issueId: issue.identifier,
-        error: result.value.userErrors?.[0]?.message || 'Failed to update issue state',
+        error: 'Failed to update issue state',
       });
     } else {
       failed.push({
@@ -841,10 +840,6 @@ export async function updateIssue(issueId: string, input: IssueUpdateInput): Pro
       mutation($issueId: String!, $input: IssueUpdateInput!) {
         issueUpdate(id: $issueId, input: $input) {
           success
-          userErrors {
-            message
-            field
-          }
           issue {
             id
             identifier

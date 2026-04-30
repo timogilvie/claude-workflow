@@ -154,7 +154,7 @@ test('setIssuesState returns failed entries on mutation errors without throwing'
   }
 });
 
-test('setIssuesState surfaces Linear userErrors for failed mutations', async () => {
+test('setIssuesState reports generic error on failed mutations', async () => {
   process.env.LINEAR_API_KEY = 'test';
 
   const restore = installFetchMock((payload) => {
@@ -174,7 +174,6 @@ test('setIssuesState surfaces Linear userErrors for failed mutations', async () 
       return {
         issueUpdate: {
           success: false,
-          userErrors: [{ message: 'Issue cannot transition from Backlog', field: ['stateId'] }],
           issue: { id: 'bad-id', identifier: 'HOK-502', url: 'u' },
         },
       };
@@ -187,7 +186,7 @@ test('setIssuesState surfaces Linear userErrors for failed mutations', async () 
     assert.deepEqual(result.updated, []);
     assert.equal(result.failed.length, 1);
     assert.equal(result.failed[0].issueId, 'HOK-502');
-    assert.equal(result.failed[0].error, 'Issue cannot transition from Backlog');
+    assert.equal(result.failed[0].error, 'Failed to update issue state');
   } finally {
     restore();
   }
