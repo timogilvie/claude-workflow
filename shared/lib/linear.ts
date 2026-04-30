@@ -512,6 +512,12 @@ export async function setIssueState(identifier: string, stateName: string): Prom
   return await updateIssue(issue.id, { stateId: targetStateId });
 }
 
+type LinearIssueUpdateResult = {
+  success: boolean;
+  issue: LinearIssue;
+  userErrors?: Array<{ message: string; field?: string[] }>;
+};
+
 export async function setIssuesState(
   identifiers: string[],
   stateName: string,
@@ -602,7 +608,7 @@ export async function setIssuesState(
     } else if (result.status === 'fulfilled') {
       failed.push({
         issueId: issue.identifier,
-        error: 'Failed to update issue state',
+        error: result.value.userErrors?.[0]?.message || 'Failed to update issue state',
       });
     } else {
       failed.push({
@@ -829,12 +835,16 @@ export async function getIssueForLabeling(identifier: string): Promise<LinearIss
  * await updateIssue(issueId, { title: "New title", priority: 2 });
  * ```
  */
-export async function updateIssue(issueId: string, input: IssueUpdateInput): Promise<{ success: boolean; issue: LinearIssue }> {
+export async function updateIssue(issueId: string, input: IssueUpdateInput): Promise<LinearIssueUpdateResult> {
   const data = await request(
     `
       mutation($issueId: String!, $input: IssueUpdateInput!) {
         issueUpdate(id: $issueId, input: $input) {
           success
+          userErrors {
+            message
+            field
+          }
           issue {
             id
             identifier
@@ -846,7 +856,7 @@ export async function updateIssue(issueId: string, input: IssueUpdateInput): Pro
     { issueId, input },
   );
 
-  const result = data.issueUpdate as { success: boolean; issue: LinearIssue };
+  const result = data.issueUpdate as LinearIssueUpdateResult;
   return result;
 }
 

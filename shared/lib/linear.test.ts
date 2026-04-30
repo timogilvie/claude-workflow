@@ -148,6 +148,46 @@ test('setIssuesState returns failed entries on mutation errors without throwing'
     assert.deepEqual(result.updated, ['HOK-401']);
     assert.equal(result.failed.length, 1);
     assert.equal(result.failed[0].issueId, 'HOK-402');
+    assert.equal(result.failed[0].error, 'Failed to update issue state');
+  } finally {
+    restore();
+  }
+});
+
+test('setIssuesState surfaces Linear userErrors for failed mutations', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+
+  const restore = installFetchMock((payload) => {
+    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+      return {
+        issues: {
+          nodes: [
+            { id: 'bad-id', identifier: 'HOK-502', team: { id: 't5' } },
+          ],
+        },
+      };
+    }
+    if (payload.query.includes('query($teamId: String!)')) {
+      return { team: { states: { nodes: [{ id: 'state-t5', name: 'In Progress' }] } } };
+    }
+    if (payload.query.includes('mutation($issueId: String!, $input: IssueUpdateInput!)')) {
+      return {
+        issueUpdate: {
+          success: false,
+          userErrors: [{ message: 'Issue cannot transition from Backlog', field: ['stateId'] }],
+          issue: { id: 'bad-id', identifier: 'HOK-502', url: 'u' },
+        },
+      };
+    }
+    throw new Error(`Unhandled query: ${payload.query}`);
+  });
+
+  try {
+    const result = await setIssuesState(['HOK-502'], 'In Progress');
+    assert.deepEqual(result.updated, []);
+    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed[0].issueId, 'HOK-502');
+    assert.equal(result.failed[0].error, 'Issue cannot transition from Backlog');
   } finally {
     restore();
   }
