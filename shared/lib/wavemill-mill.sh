@@ -5029,7 +5029,9 @@ Implement from the issue description plus direct codebase analysis."
   if [[ -f "$feature_dir/.initial-route.json" ]]; then
     log "info" "  Keeping existing .initial-route.json for $issue"
   else
-    jq '.provenance.source = "bootstrap"' "$routing_file" > "$feature_dir/.initial-route.json"
+    local initial_route_tmp="$feature_dir/.initial-route.json.tmp"
+    jq '.provenance.source = "bootstrap"' "$routing_file" > "$initial_route_tmp" \
+      && mv "$initial_route_tmp" "$feature_dir/.initial-route.json"
   fi
 
   # Launch planning phase directly with the routed model (skip routing agent)
