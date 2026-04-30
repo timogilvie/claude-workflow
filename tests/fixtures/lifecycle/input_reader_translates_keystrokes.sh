@@ -29,8 +29,8 @@ select 1 3
 more
 more
 quit
-quit
-quit
+quit-now
+quit-now
 unknown 1 foo 3
 unknown hello world
 OUT
