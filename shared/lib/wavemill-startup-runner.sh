@@ -212,9 +212,31 @@ linear_batch_set_state() {
   local -a issues=("$@")
   [[ "$DRY_RUN" == "true" ]] && return 0
   [[ "${#issues[@]}" -eq 0 ]] && return 0
-  if ! npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" >/dev/null 2>&1; then
-    startup_log "WARN: Batch Linear state update to '$state' failed for ${#issues[@]} issue(s)"
+
+  local total="${#issues[@]}"
+  local err_file result_json exit_code=0
+  err_file=$(mktemp)
+  result_json=$(npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" 2>"$err_file") || exit_code=$?
+
+  local succeeded_count=0 failed_count=0 failed_details=""
+  if [[ -n "$result_json" ]] && command -v jq >/dev/null 2>&1; then
+    succeeded_count=$(printf '%s' "$result_json" | jq -r '.updated | length' 2>/dev/null || echo 0)
+    failed_count=$(printf '%s' "$result_json" | jq -r '.failed | length' 2>/dev/null || echo 0)
+    failed_details=$(printf '%s' "$result_json" | jq -r '.failed[] | "\(.issueId): \(.error)"' 2>/dev/null | head -5 | tr '\n' '; ' || echo "")
   fi
+
+  if [[ "$exit_code" -ne 0 && "$failed_count" -eq 0 ]]; then
+    # Tool crashed before returning JSON — surface the captured stderr
+    local err_msg
+    err_msg=$(head -3 "$err_file" 2>/dev/null | tr '\n' ' ' || echo "unknown error")
+    startup_log "WARN: Batch Linear state update to '$state' failed: ${err_msg:-unknown error}"
+  elif [[ "$failed_count" -gt 0 ]]; then
+    startup_log "WARN: Batch Linear state update to '$state' failed for $failed_count/$total issue(s)"
+    [[ -n "$failed_details" ]] && startup_log "  Failed: $failed_details"
+    [[ "$succeeded_count" -gt 0 ]] && startup_log "INFO: Linear state '$state' applied to $succeeded_count/$total issue(s)"
+  fi
+
+  rm -f "$err_file"
   return 0
 }
 

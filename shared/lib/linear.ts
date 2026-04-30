@@ -10,6 +10,86 @@ const LINEAR_ENDPOINT = 'https://api.linear.app/graphql';
 const REQUEST_TIMEOUT_MS = 15_000;
 const teamStateCache = new Map<string, Map<string, string>>();
 
+/**
+ * HTTP-level error from a Linear API request.
+ *
+ * Distinguishes transport/HTTP failures (5xx, 429) from GraphQL `errors[]`
+ * payloads so retry logic can target only the recoverable cases.
+ */
+export class HttpError extends Error {
+  status: number;
+  statusText: string;
+  body: string;
+  retryAfter?: string;
+
+  constructor(status: number, statusText: string, body: string, retryAfter?: string) {
+    super(`HTTP ${status} ${statusText}: ${body.slice(0, 200)}`);
+    this.name = 'HttpError';
+    this.status = status;
+    this.statusText = statusText;
+    this.body = body;
+    this.retryAfter = retryAfter;
+  }
+}
+
+function isTransient(err: unknown): boolean {
+  if (err instanceof HttpError) return err.status >= 500 || err.status === 429;
+  if (err instanceof Error) {
+    if (err.name === 'AbortError' || err.name === 'TimeoutError') return true;
+    // fetch network failures surface as TypeError("fetch failed") with a cause
+    if (err.name === 'TypeError' && /fetch failed|network|ECONN|ETIMEDOUT|ENOTFOUND/i.test(err.message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parseRetryAfter(value: string | undefined): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30_000);
+  const dateMs = Date.parse(value);
+  if (Number.isFinite(dateMs)) return Math.max(0, Math.min(dateMs - Date.now(), 30_000));
+  return null;
+}
+
+async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransient(err) || attempt === maxAttempts) {
+        throw err;
+      }
+      // Backoff: 250ms, 750ms, 2250ms (× 3^(attempt-1)) with ±25% jitter
+      const base = 250 * Math.pow(3, attempt - 1);
+      const jitter = base * (0.75 + Math.random() * 0.5);
+      const retryAfterMs = err instanceof HttpError ? parseRetryAfter(err.retryAfter) : null;
+      const delay = retryAfterMs !== null ? retryAfterMs : Math.round(jitter);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Strip the Linear API key out of any error message before logging.
+ *
+ * The key is otherwise unlikely to leak (we never include it in messages),
+ * but defense-in-depth: anything that bubbled out of the network stack
+ * could theoretically embed the auth header.
+ */
+export function sanitizeError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const key = process.env.LINEAR_API_KEY;
+  if (key && key.length > 8) {
+    return raw.split(key).join('[REDACTED]');
+  }
+  return raw;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────
@@ -245,6 +325,11 @@ async function request(query: string, variables?: Record<string, unknown>): Prom
     body: JSON.stringify({ query, variables }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new HttpError(res.status, res.statusText, body, res.headers.get('retry-after') ?? undefined);
+  }
 
   const data = await res.json() as { data?: GraphQLData; errors?: Array<{ message: string }> };
   if (data.errors) {
@@ -531,7 +616,7 @@ export async function setIssuesState(
     const chunk = identifiers.slice(offset, offset + PAGE_SIZE);
     let data: Record<string, unknown>;
     try {
-      data = await request(
+      data = await withRetry(() => request(
         `
           query($identifiers: [String!]) {
             issues(filter: { identifier: { in: $identifiers } }, first: ${PAGE_SIZE}) {
@@ -546,9 +631,9 @@ export async function setIssuesState(
           }
         `,
         { identifiers: chunk },
-      );
+      ));
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      const error = sanitizeError(err);
       for (const identifier of chunk) {
         failed.push({ issueId: identifier, error: `Failed to fetch issue: ${error}` });
         fetchedIdentifiers.add(identifier);
@@ -572,26 +657,43 @@ export async function setIssuesState(
     failed.push({ issueId: identifier, error: `Issue not found: ${identifier}` });
   }
 
+  // Look up team workflow states sequentially so a single team's failure
+  // (rate limit, network blip) only affects that team's issues, not the
+  // entire batch. Promise.all would have rejected the whole call.
   const statesByTeam = new Map<string, Map<string, string>>();
+  const failedTeams = new Set<string>();
   const teamIds = [...new Set(issues.map((issue) => issue.team.id))];
-  await Promise.all(teamIds.map(async (teamId) => {
-    statesByTeam.set(teamId, await getTeamWorkflowStates(teamId));
-  }));
-
-  const planned = issues.map((issue) => {
-    const stateId = statesByTeam.get(issue.team.id)?.get(stateName.toLowerCase());
-    if (!stateId) {
-      failed.push({
-        issueId: issue.identifier,
-        error: `State "${stateName}" not found for team ${issue.team.id}`,
-      });
-      return null;
+  for (const teamId of teamIds) {
+    try {
+      statesByTeam.set(teamId, await withRetry(() => getTeamWorkflowStates(teamId)));
+    } catch (err) {
+      failedTeams.add(teamId);
+      const error = sanitizeError(err);
+      for (const issue of issues.filter((i) => i.team.id === teamId)) {
+        failed.push({
+          issueId: issue.identifier,
+          error: `Failed to fetch team states: ${error}`,
+        });
+      }
     }
-    return { issue, stateId };
-  }).filter((item): item is { issue: { id: string; identifier: string; team: { id: string } }; stateId: string } => item !== null);
+  }
+
+  const planned = issues
+    .filter((issue) => !failedTeams.has(issue.team.id))
+    .map((issue) => {
+      const stateId = statesByTeam.get(issue.team.id)?.get(stateName.toLowerCase());
+      if (!stateId) {
+        failed.push({
+          issueId: issue.identifier,
+          error: `State "${stateName}" not found for team ${issue.team.id}`,
+        });
+        return null;
+      }
+      return { issue, stateId };
+    }).filter((item): item is { issue: { id: string; identifier: string; team: { id: string } }; stateId: string } => item !== null);
 
   const results = await Promise.allSettled(
-    planned.map(({ issue, stateId }) => updateIssue(issue.id, { stateId })),
+    planned.map(({ issue, stateId }) => withRetry(() => updateIssue(issue.id, { stateId }))),
   );
 
   for (let i = 0; i < results.length; i += 1) {
@@ -607,7 +709,7 @@ export async function setIssuesState(
     } else {
       failed.push({
         issueId: issue.identifier,
-        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        error: sanitizeError(result.reason),
       });
     }
   }

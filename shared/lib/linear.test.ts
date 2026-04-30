@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { setIssueState, setIssuesState } from './linear.ts';
+import { HttpError, sanitizeError, setIssueState, setIssuesState } from './linear.ts';
 
 type GraphQLPayload = {
   query: string;
@@ -22,6 +22,35 @@ function installFetchMock(handler: (payload: GraphQLPayload) => unknown | Promis
   return () => {
     globalThis.fetch = originalFetch;
   };
+}
+
+/**
+ * Lower-level fetch mock that lets the handler return a full Response so
+ * tests can simulate HTTP-level failures (5xx, 429) and verify retry behavior.
+ */
+function installRawFetchMock(
+  handler: (payload: GraphQLPayload, callIndex: number) => Response | Promise<Response>,
+) {
+  const originalFetch = globalThis.fetch;
+  let callIndex = 0;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const body = (init?.body || '{}').toString();
+    const payload = JSON.parse(body) as GraphQLPayload;
+    const idx = callIndex;
+    callIndex += 1;
+    return await handler(payload, idx);
+  }) as typeof fetch;
+
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+function jsonResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify({ data }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 test('setIssueState caches team workflow states across calls', async () => {
@@ -151,4 +180,164 @@ test('setIssuesState returns failed entries on mutation errors without throwing'
   } finally {
     restore();
   }
+});
+
+test('setIssuesState retries transient 5xx and succeeds', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  let updateAttempts = 0;
+  let lookupAttempts = 0;
+
+  const restore = installRawFetchMock((payload) => {
+    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+      lookupAttempts += 1;
+      // First lookup attempt fails 503, second succeeds
+      if (lookupAttempts === 1) {
+        return new Response('upstream busy', { status: 503, statusText: 'Service Unavailable' });
+      }
+      return jsonResponse({
+        issues: {
+          nodes: [{ id: 'i-501', identifier: 'HOK-501', team: { id: 't-retry-1' } }],
+        },
+      });
+    }
+    if (payload.query.includes('query($teamId: String!)')) {
+      return jsonResponse({ team: { states: { nodes: [{ id: 's-retry', name: 'In Progress' }] } } });
+    }
+    if (payload.query.includes('mutation($issueId: String!, $input: IssueUpdateInput!)')) {
+      updateAttempts += 1;
+      return jsonResponse({
+        issueUpdate: { success: true, issue: { id: 'i-501', identifier: 'HOK-501', url: 'u' } },
+      });
+    }
+    throw new Error(`Unhandled query: ${payload.query}`);
+  });
+
+  try {
+    const result = await setIssuesState(['HOK-501'], 'In Progress');
+    assert.deepEqual(result.failed, []);
+    assert.deepEqual(result.updated, ['HOK-501']);
+    assert.equal(lookupAttempts, 2, 'lookup should have been retried');
+    assert.equal(updateAttempts, 1);
+  } finally {
+    restore();
+  }
+});
+
+test('setIssuesState does not retry hard 4xx errors', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  let lookupAttempts = 0;
+
+  const restore = installRawFetchMock((payload) => {
+    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+      lookupAttempts += 1;
+      return new Response('bad request', { status: 422, statusText: 'Unprocessable Entity' });
+    }
+    throw new Error(`Unhandled query: ${payload.query}`);
+  });
+
+  try {
+    const result = await setIssuesState(['HOK-601'], 'In Progress');
+    assert.equal(lookupAttempts, 1, '4xx must not be retried');
+    assert.deepEqual(result.updated, []);
+    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed[0].issueId, 'HOK-601');
+    assert.match(result.failed[0].error, /Failed to fetch issue/);
+  } finally {
+    restore();
+  }
+});
+
+test('setIssuesState gracefully handles per-team state lookup failure', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+
+  const restore = installRawFetchMock((payload) => {
+    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+      return jsonResponse({
+        issues: {
+          nodes: [
+            { id: 'i1', identifier: 'HOK-701', team: { id: 't-good-1' } },
+            { id: 'i2', identifier: 'HOK-702', team: { id: 't-bad-1' } },
+          ],
+        },
+      });
+    }
+    if (payload.query.includes('query($teamId: String!)')) {
+      const teamId = String(payload.variables?.teamId || '');
+      if (teamId === 't-bad-1') {
+        // All retries fail with 500 → graceful degradation
+        return new Response('boom', { status: 500, statusText: 'Internal Server Error' });
+      }
+      return jsonResponse({ team: { states: { nodes: [{ id: 's-good', name: 'In Progress' }] } } });
+    }
+    if (payload.query.includes('mutation($issueId: String!, $input: IssueUpdateInput!)')) {
+      return jsonResponse({
+        issueUpdate: { success: true, issue: { id: 'i1', identifier: 'HOK-701', url: 'u' } },
+      });
+    }
+    throw new Error(`Unhandled query: ${payload.query}`);
+  });
+
+  try {
+    const result = await setIssuesState(['HOK-701', 'HOK-702'], 'In Progress');
+    // Good team's issue still updated despite the bad team's failure
+    assert.deepEqual(result.updated, ['HOK-701']);
+    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed[0].issueId, 'HOK-702');
+    assert.match(result.failed[0].error, /Failed to fetch team states/);
+  } finally {
+    restore();
+  }
+});
+
+test('setIssuesState returns failures (does not throw) when all team state lookups fail', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+
+  const restore = installRawFetchMock((payload) => {
+    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+      return jsonResponse({
+        issues: {
+          nodes: [
+            { id: 'i1', identifier: 'HOK-801', team: { id: 't-down-1' } },
+            { id: 'i2', identifier: 'HOK-802', team: { id: 't-down-1' } },
+          ],
+        },
+      });
+    }
+    if (payload.query.includes('query($teamId: String!)')) {
+      return new Response('down', { status: 503, statusText: 'Service Unavailable' });
+    }
+    throw new Error(`Unhandled query: ${payload.query}`);
+  });
+
+  try {
+    // Must NOT throw — this is the regression we're guarding
+    const result = await setIssuesState(['HOK-801', 'HOK-802'], 'In Progress');
+    assert.deepEqual(result.updated, []);
+    assert.equal(result.failed.length, 2);
+    assert.deepEqual(result.failed.map((f) => f.issueId).sort(), ['HOK-801', 'HOK-802']);
+  } finally {
+    restore();
+  }
+});
+
+test('sanitizeError redacts the Linear API key from error messages', () => {
+  const original = process.env.LINEAR_API_KEY;
+  process.env.LINEAR_API_KEY = 'lin_api_supersecretkey_1234567890';
+
+  try {
+    const err = new Error(`auth failed using ${process.env.LINEAR_API_KEY}`);
+    const msg = sanitizeError(err);
+    assert.ok(!msg.includes('lin_api_supersecretkey_1234567890'), 'API key must be redacted');
+    assert.ok(msg.includes('[REDACTED]'));
+  } finally {
+    process.env.LINEAR_API_KEY = original;
+  }
+});
+
+test('HttpError carries status, statusText, and retryAfter', () => {
+  const err = new HttpError(429, 'Too Many Requests', '{"error":"rate limited"}', '5');
+  assert.equal(err.status, 429);
+  assert.equal(err.statusText, 'Too Many Requests');
+  assert.equal(err.retryAfter, '5');
+  assert.ok(err.message.includes('429'));
 });
