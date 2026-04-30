@@ -212,7 +212,9 @@ linear_batch_set_state() {
   local -a issues=("$@")
   [[ "$DRY_RUN" == "true" ]] && return 0
   [[ "${#issues[@]}" -eq 0 ]] && return 0
-  npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" >/dev/null 2>&1 || true
+  if ! npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" >/dev/null 2>&1; then
+    startup_log "WARN: Batch Linear state update to '$state' failed for ${#issues[@]} issue(s)"
+  fi
   return 0
 }
 
