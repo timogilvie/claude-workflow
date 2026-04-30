@@ -146,7 +146,7 @@ _progress_render_reader() {
   _progress_draw_table
   while true; do
     if ! IFS=$'\t' read -t 0.1 -r id col state detail 2>/dev/null; then
-      _progress_draw_table
+      [[ -z "${output_file:-}" ]] && _progress_draw_table
       continue
     fi
     if [[ "$id" == "__finish__" ]]; then
