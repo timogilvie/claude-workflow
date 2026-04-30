@@ -267,6 +267,30 @@ export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
   remediation?: ReadyRemediationConfig;
+  /**
+   * Regex strings (matched against changed file paths) that flag a file as a
+   * schema definition. Merged with the framework-aware defaults; the union is
+   * used when the schema-migrations check decides whether a migration is
+   * expected.
+   */
+  schemaPatterns?: string[];
+  /**
+   * Regex strings that flag a changed file as a migration file. Merged with
+   * defaults (`migrations/`, `alembic/versions/`).
+   */
+  migrationPatterns?: string[];
+  /**
+   * Regex strings the migration-ci-wiring check searches for inside CI / build
+   * config to confirm a migration runner exists. Merged with defaults
+   * (`alembic upgrade`, `prisma migrate deploy`, etc.).
+   */
+  migrationRunners?: string[];
+  /**
+   * Glob patterns (relative to the repo root) of files the migration-ci-wiring
+   * check inspects for runner references. Merged with defaults
+   * (`.github/workflows/*.yml`).
+   */
+  migrationRunnerSearchPaths?: string[];
 }
 
 export interface ReadyRemediationConfig {
@@ -717,6 +741,10 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
       maxAttempts: config.ready?.remediation?.maxAttempts ?? 3,
       agentCmd: config.ready?.remediation?.agentCmd ?? '',
     },
+    schemaPatterns: config.ready?.schemaPatterns ?? [],
+    migrationPatterns: config.ready?.migrationPatterns ?? [],
+    migrationRunners: config.ready?.migrationRunners ?? [],
+    migrationRunnerSearchPaths: config.ready?.migrationRunnerSearchPaths ?? [],
   };
 }
 
