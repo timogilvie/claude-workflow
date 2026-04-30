@@ -512,6 +512,7 @@ score_and_rank_issues() {
 
 # Fields mill startup reads from issue.json. Keep this aligned with the
 # startup consumers before broadening backlog-payload reuse.
+# Note: labels.nodes is also required (checked separately in jq filter below)
 _WAVEMILL_REQUIRED_ISSUE_FIELDS=(identifier title description)
 
 # issue_payload_is_complete <json>
