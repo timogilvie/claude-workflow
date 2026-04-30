@@ -36,7 +36,7 @@ resolve_refresh_case() {
   err_file="$(mktemp)"
   if [[ -n "$value" ]]; then
     refresh_output="$(
-      WAVEMILL_DASHBOARD_REFRESH_SECONDS="$value" bash -lc '
+      WAVEMILL_DASHBOARD_REFRESH_SECONDS="$value" bash -c '
         set -euo pipefail
         set -- test-session /tmp
         tput() { :; }
@@ -46,7 +46,7 @@ resolve_refresh_case() {
     )"
   else
     refresh_output="$(
-      bash -lc '
+      bash -c '
         set -euo pipefail
         set -- test-session /tmp
         unset WAVEMILL_DASHBOARD_REFRESH_SECONDS
@@ -69,7 +69,7 @@ run_dashboard_probe() {
   WAVEMILL_DASHBOARD_REFRESH_SECONDS=2 \
   OUTPUT_FILE="$output_file" \
   STOP_FILE="$stop_file" \
-  bash -lc '
+  bash -c '
     set -euo pipefail
     set -- test-session /tmp
     tput() { :; }
