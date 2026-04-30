@@ -90,7 +90,7 @@ _progress_render_reader() {
   local fifo="$1" task_count="$2" output_file="${3:-}"
   local columns=(route worktree deps agent linear)
   local -A cells details issues
-  local i col id state detail finished=0
+  local i col id state detail finished=0 issue_width=5
 
   _progress_emit() {
     if [[ -n "${output_file:-}" ]]; then
@@ -109,17 +109,20 @@ _progress_render_reader() {
   done
 
   _progress_draw_table() {
-    local rows_done=0 rows_failed=0 row_state issue_label symbol suffix
-    if [[ -z "${output_file:-}" ]]; then
-      _progress_emit '\033[H\033[J'
-    else
-      _progress_emit '\n'
-    fi
-    _progress_emit 'issue | route | worktree | deps | agent | linear\n'
-    _progress_emit '%s\n' '------+-------+----------+------+-------+-------'
+    local rows_done=0 rows_failed=0 row_state issue_label symbol suffix separator
+    issue_width=5
     for ((i = 1; i <= task_count; i++)); do
       issue_label="${issues[$i]:-$i}"
-      _progress_emit '%-5s |' "$issue_label"
+      [[ "${#issue_label}" -gt "$issue_width" ]] && issue_width="${#issue_label}"
+    done
+    printf -v separator '%*s' "$issue_width" ''
+    separator="${separator// /-}"
+    _progress_emit '\033[H\033[J'
+    _progress_emit "%-${issue_width}s | route | worktree | deps | agent | linear\n" "issue"
+    _progress_emit '%s\n' "${separator}-+-------+----------+------+-------+-------"
+    for ((i = 1; i <= task_count; i++)); do
+      issue_label="${issues[$i]:-$i}"
+      _progress_emit "%-${issue_width}s |" "$issue_label"
       row_state="done"
       for col in "${columns[@]}"; do
         state="${cells["$i:$col"]:-pending}"
