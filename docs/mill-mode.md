@@ -86,6 +86,16 @@ In that phase, the monitor is responsible for:
 
 The current implementation is scaffolded and returns a stub ready result, which keeps the workflow backwards-compatible while the full readiness engine is built out. For operator details, see [Ready Stage](ready-stage.md).
 
+## Dashboard Refresh
+
+The control dashboard polls every 2 seconds by default. Hook-driven `USR1` signals provide sub-second updates when agents write status. Override the poll cadence with:
+
+```bash
+WAVEMILL_DASHBOARD_REFRESH_SECONDS=3 wavemill mill
+```
+
+Accepted values: integers 1 through 10. Invalid values fall back to 2 with a warning.
+
 ## Operator Controls
 
 - `Ctrl+B D` detach from `tmux`

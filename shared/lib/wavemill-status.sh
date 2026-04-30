@@ -3,7 +3,7 @@
 #
 # Usage: wavemill-status.sh <session> <worktree_root> [state_file]
 #
-# Displays a compact per-task summary refreshing every 3 seconds:
+# Displays a compact per-task summary refreshing every 2 seconds (configurable):
 #   ISSUE   TASK           TIME   PHASE         AGENT      PR
 #   WAV-42  hero-cta        12m   📋 planning   ● running  —
 #   WAV-55  nav-a11y         8m   🔨 executing  ● running  #147 ✓
@@ -18,7 +18,20 @@ STATE_FILE="${3:-}"
 WAVEMILL_REDRAW=0
 trap 'WAVEMILL_REDRAW=1' USR1
 
-REFRESH=10
+WAVEMILL_DASHBOARD_REFRESH_DEFAULT=2
+WAVEMILL_DASHBOARD_REFRESH_MAX=10
+
+resolve_dashboard_refresh_seconds() {
+  local raw="${WAVEMILL_DASHBOARD_REFRESH_SECONDS:-$WAVEMILL_DASHBOARD_REFRESH_DEFAULT}"
+  if ! [[ "$raw" =~ ^[0-9]+$ ]] || (( raw < 1 || raw > WAVEMILL_DASHBOARD_REFRESH_MAX )); then
+    echo "wavemill: invalid WAVEMILL_DASHBOARD_REFRESH_SECONDS=$raw, using default $WAVEMILL_DASHBOARD_REFRESH_DEFAULT" >&2
+    echo "$WAVEMILL_DASHBOARD_REFRESH_DEFAULT"
+    return 0
+  fi
+  echo "$raw"
+}
+
+REFRESH="$(resolve_dashboard_refresh_seconds)"
 PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 PR_TTL=15
 
@@ -513,7 +526,7 @@ render_dashboard() {
     render_active_section
   fi
 
-  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
+  printf "${EL}\n${D}Poll ${REFRESH}s + USR1 │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
 }
 
 run_dashboard() {

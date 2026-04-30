@@ -29,6 +29,7 @@ for f in \
   "$LIB_DIR"/agent-adapters.sh \
   "$REPO_DIR"/shared/hooks/*.sh \
   "$REPO_DIR"/tests/state-mutex.test.sh \
+  "$REPO_DIR"/tests/dashboard-refresh.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR/wavemill" \
@@ -2359,6 +2360,28 @@ for fixture in \
 
   unset fixture_status
 done
+
+# ============================================================================
+# TEST 17: Dashboard refresh runtime tests
+# ============================================================================
+echo ""
+echo "=== Dashboard Refresh Tests ==="
+
+DASHBOARD_REFRESH_TEST="$REPO_DIR/tests/dashboard-refresh.test.sh"
+if [[ ! -f "$DASHBOARD_REFRESH_TEST" ]]; then
+  fail "Missing dashboard-refresh.test.sh"
+else
+  fixture_output="$(bash "$DASHBOARD_REFRESH_TEST" 2>&1)" || fixture_status=$?
+  fixture_status="${fixture_status:-0}"
+
+  if [[ "$fixture_status" -eq 0 ]]; then
+    pass "dashboard-refresh.test.sh"
+  else
+    fail "dashboard-refresh.test.sh: $fixture_output"
+  fi
+
+  unset fixture_status
+fi
 
 # ============================================================================
 # RESULTS
