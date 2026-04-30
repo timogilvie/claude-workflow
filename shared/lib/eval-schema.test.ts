@@ -1285,6 +1285,17 @@ test('Rejects rubric_provenance with invalid enum value', () => {
   );
 });
 
+test('Record with provider metadata validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    schemaVersion: '1.14.0',
+    provider: 'deepseek',
+    endpoint: 'https://api.deepseek.com/anthropic',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
 // ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────

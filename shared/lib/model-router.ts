@@ -305,6 +305,7 @@ export function resolveAgent(
 ): string {
   if (agentMap[modelId]) return agentMap[modelId];
   if (modelId.startsWith('claude-')) return 'claude';
+  if (modelId.startsWith('deepseek-')) return 'claude';
   if (modelId.startsWith('gpt-') || /^o\d/.test(modelId)) return 'codex';
   return defaultAgent;
 }

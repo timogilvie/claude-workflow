@@ -16,6 +16,7 @@ import { resolveFromMainRepo } from './git-utils.ts';
 import { computeModelCost, loadPricingTable } from './workflow-cost.ts';
 import type { WorkflowRouteDecision, PlanDepth, CodeDepth, ReviewMode } from './workflow-router.ts';
 import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
+import { filterDeepSeekModels } from './deepseek-provider.ts';
 
 export interface StageAwareConstraints {
   modelsAvailable?: string[];
@@ -718,9 +719,40 @@ export function routeStageAwareWithContext(
   options: StageAwareOptions = {},
 ): StageAwareDecision | null {
   const { repoDir, routerConfig, records } = context;
-  const plannerModels = getAvailableModelsForStage(routerConfig, 'planner') || [];
-  const coderModels = getAvailableModelsForStage(routerConfig, 'coder') || [];
-  const reviewerModels = getAvailableModelsForStage(routerConfig, 'reviewer') || [];
+  const plannerModels = filterDeepSeekModels(
+    getAvailableModelsForStage(routerConfig, 'planner') || [],
+    repoDir,
+    'planner',
+  ).models;
+  const coderModels = filterDeepSeekModels(
+    getAvailableModelsForStage(routerConfig, 'coder') || [],
+    repoDir,
+    'coder',
+  ).models;
+  const reviewerModels = filterDeepSeekModels(
+    getAvailableModelsForStage(routerConfig, 'reviewer') || [],
+    repoDir,
+    'reviewer',
+  ).models;
+  const filteredModelsAvailable = filterDeepSeekModels(
+    options.modelsAvailable || [],
+    repoDir,
+  ).models;
+  const filteredPlannerOptions = filterDeepSeekModels(
+    options.plannerModelsAvailable || [],
+    repoDir,
+    'planner',
+  ).models;
+  const filteredCoderOptions = filterDeepSeekModels(
+    options.coderModelsAvailable || [],
+    repoDir,
+    'coder',
+  ).models;
+  const filteredReviewerOptions = filterDeepSeekModels(
+    options.reviewerModelsAvailable || [],
+    repoDir,
+    'reviewer',
+  ).models;
   const kNeighbors = options.kNeighbors || routerConfig.kNeighbors || DEFAULT_K_NEIGHBORS;
   const minRecords = options.minRecords || routerConfig.minRecords || DEFAULT_MIN_RECORDS;
   const minModels = options.minModels || routerConfig.minModels || DEFAULT_MIN_MODELS;
@@ -742,7 +774,7 @@ export function routeStageAwareWithContext(
   );
   const queryDescriptor = buildTaskDescriptor({
     originalPrompt: prompt,
-    modelsAvailable: options.modelsAvailable,
+    modelsAvailable: filteredModelsAvailable,
     maxCostUsd: options.maxCostUsd,
     ...options.queryInput,
   });
@@ -767,19 +799,19 @@ export function routeStageAwareWithContext(
   const rubricScoringWeight = rubricAwareMode === 'on' && rubricHasSufficientCoverage ? rubricAwareWeight : 0;
 
   const { selection } = rankModelsPerStage(neighbors, {
-    modelsAvailable: options.modelsAvailable,
-    plannerModelsAvailable: options.plannerModelsAvailable ?? plannerModels,
-    coderModelsAvailable: options.coderModelsAvailable ?? coderModels,
-    reviewerModelsAvailable: options.reviewerModelsAvailable ?? reviewerModels,
+    modelsAvailable: filteredModelsAvailable,
+    plannerModelsAvailable: filteredPlannerOptions.length > 0 ? filteredPlannerOptions : plannerModels,
+    coderModelsAvailable: filteredCoderOptions.length > 0 ? filteredCoderOptions : coderModels,
+    reviewerModelsAvailable: filteredReviewerOptions.length > 0 ? filteredReviewerOptions : reviewerModels,
     maxCostUsd: options.maxCostUsd,
   }, stageBlendWeight, rubricScoringWeight);
 
   if (!selection) {
     const hasModelConstraints =
-      (options.modelsAvailable && options.modelsAvailable.length > 0) ||
-      (options.plannerModelsAvailable && options.plannerModelsAvailable.length > 0) ||
-      (options.coderModelsAvailable && options.coderModelsAvailable.length > 0) ||
-      (options.reviewerModelsAvailable && options.reviewerModelsAvailable.length > 0) ||
+      filteredModelsAvailable.length > 0 ||
+      filteredPlannerOptions.length > 0 ||
+      filteredCoderOptions.length > 0 ||
+      filteredReviewerOptions.length > 0 ||
       plannerModels.length > 0 ||
       coderModels.length > 0 ||
       reviewerModels.length > 0;
@@ -849,10 +881,10 @@ export function routeStageAwareWithContext(
     if (rubricAwareMode === 'shadow') {
       if (rubricHasSufficientCoverage) {
         const { selection: shadowSelection } = rankModelsPerStage(neighbors, {
-          modelsAvailable: options.modelsAvailable,
-          plannerModelsAvailable: options.plannerModelsAvailable ?? plannerModels,
-          coderModelsAvailable: options.coderModelsAvailable ?? coderModels,
-          reviewerModelsAvailable: options.reviewerModelsAvailable ?? reviewerModels,
+          modelsAvailable: filteredModelsAvailable,
+          plannerModelsAvailable: filteredPlannerOptions.length > 0 ? filteredPlannerOptions : plannerModels,
+          coderModelsAvailable: filteredCoderOptions.length > 0 ? filteredCoderOptions : coderModels,
+          reviewerModelsAvailable: filteredReviewerOptions.length > 0 ? filteredReviewerOptions : reviewerModels,
           maxCostUsd: options.maxCostUsd,
         }, stageBlendWeight, rubricAwareWeight);
         decision.shadowDecision = shadowSelection

@@ -9,7 +9,7 @@
  * @module workflow-cost
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { getSessionAdapter, detectAgentType, type AgentType } from './session-adapters.ts';
@@ -103,6 +103,42 @@ export function encodeProjectDir(worktreePath: string): string {
 export function resolveProjectsDir(worktreePath: string): string {
   const encoded = encodeProjectDir(worktreePath);
   return join(homedir(), '.claude', 'projects', encoded);
+}
+
+export function resolveProjectsDirs(worktreePath: string): string[] {
+  const encoded = encodeProjectDir(worktreePath);
+  const dirs = [resolveProjectsDir(worktreePath)];
+  const runsDir = join(resolve(worktreePath), '.wavemill', 'runs');
+
+  if (!existsSync(runsDir)) {
+    return dirs;
+  }
+
+  try {
+    for (const runEntry of readdirSync(runsDir, { withFileTypes: true })) {
+      if (!runEntry.isDirectory()) {
+        continue;
+      }
+
+      const providerProjectsDir = join(
+        runsDir,
+        runEntry.name,
+        'providers',
+        'deepseek',
+        'home',
+        '.claude',
+        'projects',
+        encoded,
+      );
+      if (existsSync(providerProjectsDir)) {
+        dirs.push(providerProjectsDir);
+      }
+    }
+  } catch {
+    return dirs;
+  }
+
+  return [...new Set(dirs)];
 }
 
 // ────────────────────────────────────────────────────────────────

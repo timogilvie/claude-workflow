@@ -30,7 +30,9 @@ import {
   getUiConfig,
   getPermissionsConfig,
   getDashboardConfig,
+  getDeepSeekProviderConfig,
   getHokusaiSubmissionConfig,
+  getProvidersConfig,
   getReadyConfig,
   getModelRegistryConfig,
   getQuotaConfig,
@@ -180,6 +182,14 @@ test('valid config passes validation', () => {
       },
       challenge: { enabled: true, rate: 0.25, models: ['claude-opus-4-6', 'gpt-5.3-codex'] },
       challengeScheduler: { enabled: true, confidenceThreshold: 0.65, newModelChallengeCount: 4 },
+      providers: {
+        deepseek: {
+          enabled: true,
+          apiKeyEnv: 'DEEPSEEK_API_KEY',
+          models: ['deepseek-v4-pro'],
+          stages: ['coder'],
+        },
+      },
       eval: { evalsDir: '.wavemill/evals' },
       mill: { maxParallel: 5 },
     }));
@@ -188,6 +198,7 @@ test('valid config passes validation', () => {
     assert.equal(config.challenge?.enabled, true);
     assert.equal(config.challenge?.rate, 0.25);
     assert.equal(config.challengeScheduler?.confidenceThreshold, 0.65);
+    assert.equal(config.providers?.deepseek?.enabled, true);
     assert.equal(config.modelRegistry?.models?.['claude-opus-4-7']?.qualityScores?.coding, 99);
     assert.deepEqual(config.modelRegistry?.ladders?.review, ['claude-opus-4-7', 'claude-sonnet-4-6']);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
@@ -273,6 +284,74 @@ test('invalid type in config throws validation error', () => {
         loadWavemillConfig(tmp);
       });
     }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('missing providers block loads with empty provider accessors', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ router: { enabled: true } }));
+    assert.deepEqual(getProvidersConfig(tmp), {});
+    assert.deepEqual(getDeepSeekProviderConfig(tmp), {});
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('enabled deepseek provider without apiKeyEnv fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      providers: {
+        deepseek: {
+          enabled: true,
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('deepseek provider accessor returns typed config', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      providers: {
+        deepseek: {
+          enabled: true,
+          apiKeyEnv: 'CUSTOM_DEEPSEEK_KEY',
+          baseUrl: 'https://api.deepseek.com/anthropic',
+          models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+          stages: ['planner', 'coder'],
+          effortLevel: 'high',
+        },
+      },
+    }));
+
+    assert.deepEqual(getDeepSeekProviderConfig(tmp), {
+      enabled: true,
+      apiKeyEnv: 'CUSTOM_DEEPSEEK_KEY',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+      stages: ['planner', 'coder'],
+      effortLevel: 'high',
+    });
   } finally {
     cleanUp(tmp);
   }

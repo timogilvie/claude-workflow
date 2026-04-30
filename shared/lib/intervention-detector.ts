@@ -11,7 +11,7 @@
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { resolveProjectsDir } from './workflow-cost.ts';
+import { resolveProjectsDirs } from './workflow-cost.ts';
 import { loadWavemillConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 import { fetchPrReviews, resolveOwnerRepo } from './github.ts';
@@ -476,14 +476,16 @@ export function detectSessionRedirects(worktreePath: string, branchName: string)
   const event: InterventionEvent = { type: 'session_redirect', count: 0, details: [], timestamps: [] };
 
   try {
-    const projectsDir = resolveProjectsDir(worktreePath);
-    if (!existsSync(projectsDir)) return event;
+    const projectsDirs = resolveProjectsDirs(worktreePath).filter((projectsDir) => existsSync(projectsDir));
+    if (projectsDirs.length === 0) return event;
 
     let sessionFiles: string[];
     try {
-      sessionFiles = readdirSync(projectsDir)
-        .filter((f) => f.endsWith('.jsonl'))
-        .map((f) => join(projectsDir, f));
+      sessionFiles = projectsDirs.flatMap((projectsDir) =>
+        readdirSync(projectsDir)
+          .filter((f) => f.endsWith('.jsonl'))
+          .map((f) => join(projectsDir, f))
+      );
     } catch {
       return event;
     }

@@ -44,6 +44,8 @@
  *   (HOK-1409) to propagate rubric-derived features (criterion count, mean
  *   score, per-criterion scores, determinative boundary) into privacy-safe
  *   descriptor data for router training
+ * - **1.14.0**: Added optional `provider` and `endpoint` metadata for
+ *   Claude-compatible provider attribution (HOK-1485)
  *
  * @module eval-schema
  */
@@ -1050,6 +1052,12 @@ export interface EvalRecord {
 
   /** Provider used by the LLM judge for this eval (e.g. "anthropic") */
   judgeProvider?: string;
+
+  /** Execution provider for the evaluated workflow (e.g. "deepseek") */
+  provider?: string;
+
+  /** API endpoint used by the evaluated workflow when provider-specific */
+  endpoint?: string;
 
   /** Numeric score between 0 and 1 (inclusive) */
   score: number;

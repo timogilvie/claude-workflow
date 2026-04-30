@@ -15,6 +15,7 @@ import { resolveEvalsDir } from './evals-paths.ts';
 import { execShellCommand } from './shell-utils.ts';
 import { detectAndFormatInterventions } from './intervention-detector.ts';
 import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
+import { getDeepSeekProviderMetadata } from './deepseek-provider.ts';
 import { runEvalAnalysis } from './eval-analysis.ts';
 import { callClaude } from './llm-cli.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
@@ -124,6 +125,8 @@ export function enrichPostCompletionRecord(
 
   enrichEvalRecord(record, {
     agentType: input.agentType,
+    provider: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.provider,
+    endpoint: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.endpoint,
     challengePairId: input.challengePairId,
     difficulty: input.difficultyData,
     taskContext: input.taskContextData,

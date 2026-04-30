@@ -1742,6 +1742,7 @@ if [[ ! -f "$ADAPTER_LIB" ]]; then
   fail "agent-adapters.sh not found"
 else
   TOOLS_DIR="$REPO_DIR/tools"
+  REPO_DIR_ORIG="$REPO_DIR"
   export TOOLS_DIR REPO_DIR
   # shellcheck source=/dev/null
   source "$ADAPTER_LIB"
@@ -1783,6 +1784,51 @@ else
   else
     fail "interactive launcher failed for valid model test"
   fi
+
+  deepseek_repo="$(mktemp -d)"
+  cat > "$deepseek_repo/.wavemill-config.json" <<'EOF'
+{
+  "providers": {
+    "deepseek": {
+      "enabled": true,
+      "apiKeyEnv": "TEST_DEEPSEEK_KEY",
+      "models": ["deepseek-v4-pro"],
+      "stages": ["planner", "coder", "reviewer"],
+      "effortLevel": "high"
+    }
+  }
+}
+EOF
+  export TEST_DEEPSEEK_KEY="deepseek-test-secret"
+  REPO_DIR="$deepseek_repo"
+
+  rm -f "$launcher_file"
+  if agent_launch_interactive "$launch_session" "window" "$prompt_file" "claude" "deepseek-v4-pro" "" "" "HOK-1485"; then
+    if [[ -f "$launcher_file" ]] \
+      && grep -q "ANTHROPIC_BASE_URL='https://api.deepseek.com/anthropic'" "$launcher_file" \
+      && grep -q "api_key_env='TEST_DEEPSEEK_KEY'" "$launcher_file" \
+      && grep -q "CLAUDE_CODE_EFFORT_LEVEL='high'" "$launcher_file" \
+      && grep -q "/.wavemill/runs/HOK-1485/providers/deepseek/home" "$launcher_file" \
+      && ! grep -q 'deepseek-test-secret' "$launcher_file"; then
+      pass "interactive launcher isolates DeepSeek Claude runs without persisting the API key"
+    else
+      fail "interactive launcher did not configure the DeepSeek Claude provider correctly"
+    fi
+  else
+    fail "interactive launcher failed for DeepSeek provider test"
+  fi
+
+  unset TEST_DEEPSEEK_KEY
+  rm -f "$launcher_file"
+  if agent_launch_interactive "$launch_session" "window" "$prompt_file" "claude" "deepseek-v4-pro" "" "" "HOK-1485"; then
+    fail "interactive launcher succeeded without the DeepSeek API key"
+  else
+    pass "interactive launcher fails fast when the DeepSeek API key is missing"
+  fi
+
+  rm -rf "$deepseek_repo"
+  REPO_DIR="$REPO_DIR_ORIG"
+  export REPO_DIR
 
   rm -f "$prompt_file" "$launcher_file"
 fi

@@ -213,6 +213,21 @@ export interface ReviewConfig {
   enabled?: boolean;
 }
 
+export type DeepSeekProviderStage = keyof AvailableModelsConfig;
+
+export interface DeepSeekProviderConfig {
+  enabled?: boolean;
+  apiKeyEnv?: string;
+  baseUrl?: string;
+  models?: string[];
+  stages?: DeepSeekProviderStage[];
+  effortLevel?: 'low' | 'medium' | 'high';
+}
+
+export interface ProvidersConfig {
+  deepseek?: DeepSeekProviderConfig;
+}
+
 export interface IntegrationConfig {
   enabled: boolean;
   integrationBranch: string;
@@ -352,6 +367,7 @@ export interface WavemillConfig {
   constraints?: ConstraintsConfig;
   ui?: UiConfig;
   review?: ReviewConfig;
+  providers?: ProvidersConfig;
   integration?: Partial<IntegrationConfig>;
   ready?: ReadyConfig;
   permissions?: PermissionsConfig;
@@ -797,6 +813,22 @@ export function getPlanConfig(repoDir?: string): PlanConfig {
  */
 export function getDashboardConfig(repoDir?: string): DashboardConfig {
   return loadWavemillConfig(repoDir).dashboard || {};
+}
+
+/**
+ * Get the provider config section.
+ * Returns empty object if not configured.
+ */
+export function getProvidersConfig(repoDir?: string): ProvidersConfig {
+  return loadWavemillConfig(repoDir).providers || {};
+}
+
+/**
+ * Get the DeepSeek provider config section.
+ * Returns empty object if not configured.
+ */
+export function getDeepSeekProviderConfig(repoDir?: string): DeepSeekProviderConfig {
+  return loadWavemillConfig(repoDir).providers?.deepseek || {};
 }
 
 /**

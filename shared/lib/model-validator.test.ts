@@ -24,6 +24,7 @@ describe('model-validator', () => {
       assert.ok(all.includes('claude-opus-4-6'), 'Should include claude-opus-4-6');
       assert.ok(all.includes('claude-opus-4-7'), 'Should include claude-opus-4-7');
       assert.ok(all.includes('claude-sonnet-4-6'), 'Should include claude-sonnet-4-6');
+      assert.ok(all.includes('deepseek-v4-pro'), 'Should include deepseek-v4-pro');
     });
 
     it('groups models by agent', () => {
@@ -36,6 +37,7 @@ describe('model-validator', () => {
       assert.ok(codexModels.includes('gpt-5.5'), 'Codex should include gpt-5.5');
       assert.ok(claudeModels.includes('claude-opus-4-6'), 'Claude should include claude-opus-4-6');
       assert.ok(claudeModels.includes('claude-opus-4-7'), 'Claude should include claude-opus-4-7');
+      assert.ok(claudeModels.includes('deepseek-v4-pro'), 'Claude should include deepseek-v4-pro');
     });
 
     it('deduplicates models from pricing and agentMap', () => {
@@ -55,6 +57,7 @@ describe('model-validator', () => {
       assert.strictEqual(isValidModel('claude-opus-4-6', '.'), true);
       assert.strictEqual(isValidModel('claude-opus-4-7', '.'), true);
       assert.strictEqual(isValidModel('claude-sonnet-4-6', '.'), true);
+      assert.strictEqual(isValidModel('deepseek-v4-pro', '.'), true);
     });
 
     it('returns false for unknown models', () => {
@@ -109,6 +112,9 @@ describe('model-validator', () => {
       });
       assert.doesNotThrow(() => {
         validateModelOrThrow('claude-opus-4-7', '.');
+      });
+      assert.doesNotThrow(() => {
+        validateModelOrThrow('deepseek-v4-pro', '.');
       });
     });
 

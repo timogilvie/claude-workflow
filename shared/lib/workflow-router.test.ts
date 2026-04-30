@@ -254,6 +254,123 @@ await test('heuristic routing honors stage-specific planner and reviewer pools',
   }
 });
 
+await test('filters DeepSeek models from routing when provider is disabled', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      availableModels: {
+        planner: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
+        coder: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
+        reviewer: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
+      },
+    },
+    providers: {
+      deepseek: {
+        enabled: false,
+        apiKeyEnv: 'TEST_DEEPSEEK_KEY',
+        models: ['deepseek-v4-pro'],
+        stages: ['planner', 'coder', 'reviewer'],
+      },
+    },
+    eval: {
+      pricing: {
+        ...baseConfig().eval.pricing,
+        'deepseek-v4-pro': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+    },
+  });
+  try {
+    const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
+    assert.equal(decision.coder, 'claude-sonnet-4-6');
+    assert.ok(decision.reasoning.some((line) => line.includes('providers.deepseek.enabled')));
+  } finally {
+    cleanup();
+  }
+});
+
+await test('allows DeepSeek routing for configured stages when provider is enabled and key is present', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      availableModels: {
+        planner: ['claude-sonnet-4-6'],
+        coder: ['deepseek-v4-pro'],
+        reviewer: ['claude-sonnet-4-6'],
+      },
+    },
+    providers: {
+      deepseek: {
+        enabled: true,
+        apiKeyEnv: 'TEST_DEEPSEEK_KEY',
+        models: ['deepseek-v4-pro'],
+        stages: ['coder'],
+      },
+    },
+    eval: {
+      pricing: {
+        ...baseConfig().eval.pricing,
+        'deepseek-v4-pro': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+    },
+  });
+  const originalKey = process.env.TEST_DEEPSEEK_KEY;
+  process.env.TEST_DEEPSEEK_KEY = 'test-key';
+  try {
+    const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
+    assert.equal(decision.coder, 'deepseek-v4-pro');
+    assert.equal(decision.planner, 'claude-sonnet-4-6');
+    assert.equal(decision.reviewer, 'claude-sonnet-4-6');
+  } finally {
+    if (originalKey === undefined) {
+      delete process.env.TEST_DEEPSEEK_KEY;
+    } else {
+      process.env.TEST_DEEPSEEK_KEY = originalKey;
+    }
+    cleanup();
+  }
+});
+
+await test('falls back from DeepSeek when enabled but API key is missing', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      availableModels: {
+        planner: ['claude-sonnet-4-6'],
+        coder: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
+        reviewer: ['claude-sonnet-4-6'],
+      },
+    },
+    providers: {
+      deepseek: {
+        enabled: true,
+        apiKeyEnv: 'TEST_DEEPSEEK_KEY',
+        models: ['deepseek-v4-pro'],
+        stages: ['coder'],
+      },
+    },
+    eval: {
+      pricing: {
+        ...baseConfig().eval.pricing,
+        'deepseek-v4-pro': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+    },
+  });
+  const originalKey = process.env.TEST_DEEPSEEK_KEY;
+  delete process.env.TEST_DEEPSEEK_KEY;
+  try {
+    const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
+    assert.equal(decision.coder, 'claude-sonnet-4-6');
+    assert.ok(decision.reasoning.some((line) => line.includes('TEST_DEEPSEEK_KEY')));
+  } finally {
+    if (originalKey === undefined) {
+      delete process.env.TEST_DEEPSEEK_KEY;
+    } else {
+      process.env.TEST_DEEPSEEK_KEY = originalKey;
+    }
+    cleanup();
+  }
+});
+
 await test('heuristic routing confidence varies across prompts instead of staying constant', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
@@ -540,7 +657,7 @@ await test('policy routing logs class downgrade without same-class metadata', as
         { repoDir, taskDifficulty: 'hard', skipDifficultyClassification: true }
       ))
     );
-    assert.match(stderr, /\[planner] policy adjustment: gpt-5\.5 -> claude-sonnet-4-6 \(quota=degrading\)/);
+    assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: gpt-5\.5 -> claude-sonnet-4-6 \(quota=degrading\)/);
     assert.doesNotMatch(stderr, /same-class=/);
   } finally {
     cleanup();

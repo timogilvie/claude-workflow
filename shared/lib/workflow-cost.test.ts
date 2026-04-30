@@ -15,6 +15,7 @@ import {
   computeModelCost,
   computeWorkflowCost,
   recalculateWorkflowCost,
+  resolveProjectsDirs,
   type ModelPricing,
   type WorkflowCostResult,
 } from './workflow-cost.ts';
@@ -265,6 +266,31 @@ test('Aggregates tokens per model separately', () => {
   assert.equal(models['claude-opus-4-6'].outputTokens, 200);
   assert.equal(models['claude-haiku-4-5-20251001'].inputTokens, 200);
   assert.equal(models['claude-haiku-4-5-20251001'].outputTokens, 100);
+});
+
+test('resolveProjectsDirs includes DeepSeek provider transcript roots', () => {
+  const { worktreePath, cleanup } = createTempProjectDir();
+  try {
+    const encoded = encodeProjectDir(worktreePath);
+    const providerProjectsDir = join(
+      worktreePath,
+      '.wavemill',
+      'runs',
+      'HOK-1485',
+      'providers',
+      'deepseek',
+      'home',
+      '.claude',
+      'projects',
+      encoded,
+    );
+    mkdirSync(providerProjectsDir, { recursive: true });
+
+    const dirs = resolveProjectsDirs(worktreePath);
+    assert.ok(dirs.includes(providerProjectsDir));
+  } finally {
+    cleanup();
+  }
 });
 
 test('Handles malformed JSONL lines gracefully', () => {

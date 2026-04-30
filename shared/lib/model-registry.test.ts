@@ -46,6 +46,10 @@ describe('model-registry', () => {
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
       'claude-haiku-4-5-20251001',
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
+      'deepseek-chat',
+      'deepseek-reasoner',
       'gpt-5.5',
       'gpt-5.4',
     ];
@@ -73,6 +77,7 @@ describe('model-registry', () => {
     assert.equal(getLadder(DEFAULT_MODEL_REGISTRY, 'review')[0], 'claude-opus-4-7');
     assert.deepEqual(getLadder(DEFAULT_MODEL_REGISTRY, 'classify'), [
       'claude-haiku-4-5-20251001',
+      'deepseek-v4-flash',
       'claude-sonnet-4-6',
       'gpt-5.5',
       'gpt-5.4',
@@ -190,7 +195,14 @@ describe('model-registry', () => {
       excluded: ['claude-sonnet-4-6'],
     });
 
-    assert.deepEqual(once, ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-haiku-4-5-20251001']);
+    assert.deepEqual(once, [
+      'claude-opus-4-7',
+      'gpt-5.5',
+      'gpt-5.4',
+      'deepseek-v4-pro',
+      'deepseek-reasoner',
+      'claude-haiku-4-5-20251001',
+    ]);
     assert.equal(JSON.stringify(once), JSON.stringify(twice));
     assert.equal(JSON.stringify(twice), JSON.stringify(thrice));
   });
@@ -205,7 +217,7 @@ describe('model-registry', () => {
   it('rankCandidates returns an empty ladder when every candidate is excluded', () => {
     assert.deepEqual(
       rankCandidates(DEFAULT_MODEL_REGISTRY, 'classify', {
-        excluded: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
+        excluded: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
       }),
       []
     );
@@ -215,10 +227,19 @@ describe('model-registry', () => {
     assert.deepEqual(rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding'), [
       'gpt-5.5',
       'gpt-5.4',
+      'deepseek-v4-pro',
       'claude-sonnet-4-6',
       'claude-opus-4-7',
+      'deepseek-chat',
+      'deepseek-v4-flash',
       'claude-haiku-4-5-20251001',
     ]);
+  });
+
+  it('registers DeepSeek models with deepseek vendor metadata', () => {
+    for (const modelId of ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']) {
+      assert.equal(DEFAULT_MODEL_REGISTRY.models[modelId]?.vendor, 'deepseek');
+    }
   });
 
   it('mergeModelRegistry applies field overrides without mutating defaults', () => {

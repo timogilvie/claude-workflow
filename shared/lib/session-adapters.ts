@@ -14,7 +14,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { readJsonlFile } from './jsonl-utils.ts';
-import { resolveProjectsDir } from './workflow-cost.ts';
+import { resolveProjectsDirs } from './workflow-cost.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Common types
@@ -57,38 +57,43 @@ export interface SessionAdapter {
 // ────────────────────────────────────────────────────────────────
 
 /**
- * Reads Claude Code session files from ~/.claude/projects/<encoded-path>/.
+ * Reads Claude Code session files from ~/.claude/projects/<encoded-path>/ and
+ * any Wavemill-managed DeepSeek provider homes under .wavemill/runs/*.
  * Filters by type === 'assistant' and gitBranch, aggregates per-turn
  * message.usage token counts per model.
  */
 export class ClaudeSessionAdapter implements SessionAdapter {
   scan(opts: SessionScanOptions): SessionUsageResult | null {
     const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
-    const projectsDir = resolveProjectsDir(opts.worktreePath);
+    const projectsDirs = resolveProjectsDirs(opts.worktreePath);
 
     if (debug) {
       console.log(`[DEBUG_COST] ClaudeSessionAdapter.scan:`);
       console.log(`[DEBUG_COST]   worktreePath: ${opts.worktreePath}`);
       console.log(`[DEBUG_COST]   branchName: ${opts.branchName}`);
-      console.log(`[DEBUG_COST]   projectsDir: ${projectsDir}`);
+      console.log(`[DEBUG_COST]   projectsDirs: ${projectsDirs.join(', ')}`);
     }
 
-    if (!existsSync(projectsDir)) {
+    const existingProjectsDirs = projectsDirs.filter((projectsDir) => existsSync(projectsDir));
+
+    if (existingProjectsDirs.length === 0) {
       if (debug) {
-        console.log(`[DEBUG_COST]   ❌ Projects directory does not exist`);
+        console.log(`[DEBUG_COST]   ❌ Projects directories do not exist`);
       }
       return null;
     }
 
     if (debug) {
-      console.log(`[DEBUG_COST]   ✓ Projects directory exists`);
+      console.log(`[DEBUG_COST]   ✓ Found ${existingProjectsDirs.length} projects director${existingProjectsDirs.length === 1 ? 'y' : 'ies'}`);
     }
 
     let sessionFiles: string[];
     try {
-      sessionFiles = readdirSync(projectsDir)
-        .filter((f) => f.endsWith('.jsonl'))
-        .map((f) => join(projectsDir, f));
+      sessionFiles = existingProjectsDirs.flatMap((projectsDir) =>
+        readdirSync(projectsDir)
+          .filter((f) => f.endsWith('.jsonl'))
+          .map((f) => join(projectsDir, f))
+      );
     } catch (err) {
       if (debug) {
         console.log(`[DEBUG_COST]   ❌ Failed to read directory: ${err}`);
