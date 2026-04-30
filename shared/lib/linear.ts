@@ -54,12 +54,10 @@ function parseRetryAfter(value: string | undefined): number | null {
 }
 
 async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
-  let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       return await fn();
     } catch (err) {
-      lastErr = err;
       if (!isTransient(err) || attempt === maxAttempts) {
         throw err;
       }
@@ -71,7 +69,6 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
-  throw lastErr;
 }
 
 /**
