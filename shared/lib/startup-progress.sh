@@ -87,10 +87,18 @@ _progress_clean_detail() {
 }
 
 _progress_render_reader() {
-  local fifo="$1" task_count="$2"
+  local fifo="$1" task_count="$2" output_file="${3:-}"
   local columns=(route worktree deps agent linear)
   local -A cells details issues
   local i col id state detail finished=0
+
+  _progress_emit() {
+    if [[ -n "${output_file:-}" ]]; then
+      printf "$@" >> "$output_file"
+    else
+      printf "$@" >&2
+    fi
+  }
 
   for ((i = 1; i <= task_count; i++)); do
     issues["$i"]="$i"
@@ -102,12 +110,16 @@ _progress_render_reader() {
 
   _progress_draw_table() {
     local rows_done=0 rows_failed=0 row_state issue_label symbol suffix
-    printf '\033[H\033[J' >&2
-    printf 'issue | route | worktree | deps | agent | linear\n' >&2
-    printf '%s\n' '------+-------+----------+------+-------+-------' >&2
+    if [[ -z "${output_file:-}" ]]; then
+      _progress_emit '\033[H\033[J'
+    else
+      _progress_emit '\n'
+    fi
+    _progress_emit 'issue | route | worktree | deps | agent | linear\n'
+    _progress_emit '%s\n' '------+-------+----------+------+-------+-------'
     for ((i = 1; i <= task_count; i++)); do
       issue_label="${issues[$i]:-$i}"
-      printf '%-5s |' "$issue_label" >&2
+      _progress_emit '%-5s |' "$issue_label"
       row_state="done"
       for col in "${columns[@]}"; do
         state="${cells["$i:$col"]:-pending}"
@@ -115,20 +127,20 @@ _progress_render_reader() {
         suffix="${details["$i:$col"]:-}"
         [[ -n "$suffix" ]] && symbol="$symbol $suffix"
         case "$col" in
-          route) printf ' %-5.5s |' "$symbol" >&2 ;;
-          worktree) printf ' %-8.8s |' "$symbol" >&2 ;;
-          deps) printf ' %-4.4s |' "$symbol" >&2 ;;
-          agent) printf ' %-5.5s |' "$symbol" >&2 ;;
-          linear) printf ' %-5.5s' "$symbol" >&2 ;;
+          route) _progress_emit ' %-5.5s |' "$symbol" ;;
+          worktree) _progress_emit ' %-8.8s |' "$symbol" ;;
+          deps) _progress_emit ' %-4.4s |' "$symbol" ;;
+          agent) _progress_emit ' %-5.5s |' "$symbol" ;;
+          linear) _progress_emit ' %-5.5s' "$symbol" ;;
         esac
         [[ "$state" == "failed" ]] && row_state="failed"
         [[ "$state" != "done" && "$state" != "skipped" ]] && [[ "$row_state" != "failed" ]] && row_state="active"
       done
-      printf '\n' >&2
+      _progress_emit '\n'
       [[ "$row_state" == "done" ]] && rows_done=$((rows_done + 1))
       [[ "$row_state" == "failed" ]] && rows_failed=$((rows_failed + 1))
     done
-    printf 'Startup: %s done, %s failed, %s total\n' "$rows_done" "$rows_failed" "$task_count" >&2
+    _progress_emit 'Startup: %s done, %s failed, %s total\n' "$rows_done" "$rows_failed" "$task_count"
   }
 
   _progress_draw_table
@@ -168,12 +180,12 @@ _progress_render_reader() {
 }
 
 progress_start() {
-  local task_count="$1"
+  local task_count="$1" output_file="${2:-${WAVEMILL_STARTUP_PROGRESS_FILE:-}}"
   [[ "${WAVEMILL_NO_PROGRESS:-0}" == "1" ]] && return 0
   PROGRESS_FIFO="/tmp/wavemill-${SESSION:-$$}-startup-progress.fifo"
   rm -f "$PROGRESS_FIFO"
   mkfifo "$PROGRESS_FIFO"
-  _progress_render_reader "$PROGRESS_FIFO" "$task_count" &
+  _progress_render_reader "$PROGRESS_FIFO" "$task_count" "$output_file" &
   PROGRESS_READER_PID=$!
   exec {_PROGRESS_FD}>"$PROGRESS_FIFO"
   export PROGRESS_FIFO PROGRESS_READER_PID _PROGRESS_FD

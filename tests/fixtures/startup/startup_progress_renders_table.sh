@@ -42,3 +42,25 @@ if ! grep -q 'Startup: 1 done, 1 failed, 2 total' "$out"; then
 fi
 
 rm -f "$out"
+
+file_out="$(mktemp)"
+file_err="$(mktemp)"
+progress_start 1 "$file_out" 2>"$file_err"
+progress_update 1 issue HOK-3
+progress_update 1 route done
+progress_update 1 worktree done
+progress_update 1 deps done
+progress_update 1 agent done
+progress_update 1 linear done
+progress_finish
+
+if [[ -s "$file_err" ]]; then
+  echo "file renderer leaked progress output to stderr" >&2
+  exit 1
+fi
+if ! grep -q 'Startup: 1 done, 0 failed, 1 total' "$file_out"; then
+  echo "file renderer did not write final progress summary" >&2
+  exit 1
+fi
+
+rm -f "$file_out" "$file_err"

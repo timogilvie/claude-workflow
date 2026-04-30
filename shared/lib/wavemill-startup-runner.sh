@@ -372,7 +372,7 @@ ensure_worktree_dependencies() {
 }
 
 startup_run_task_phases() {
-  local task_json="$1" ordinal="$2" total="$3"
+  local task_json="$1" ordinal="${2:-}" total="${3:-}"
   local issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file
   local planner_model coder_model reviewer_model plan_depth code_depth review_mode route_max_cost_usd
   local challenge challenge_pair challenge_role challenge_model task_agent win
@@ -383,6 +383,10 @@ startup_run_task_phases() {
   startup_id="$(echo "$task_json" | jq -r '.startupId // empty')"
   issue="$(echo "$task_json" | jq -r '.issue')"
   [[ -z "$startup_id" || "$startup_id" == "null" ]] && startup_id="${ordinal:-1}"
+  [[ -z "$ordinal" ]] && ordinal="$startup_id"
+  if [[ -z "$total" ]]; then
+    total="$(echo "$task_json" | jq -r '.startupTotal // empty')"
+  fi
   slug="$(echo "$task_json" | jq -r '.slug')"
   title="$(echo "$task_json" | jq -r '.title')"
   branch="$(echo "$task_json" | jq -r '.branch')"
@@ -740,8 +744,8 @@ main() {
     done < <(jq -c '.tasks[]' "$PLAN_FILE")
   elif [[ "$task_count" -gt 0 ]]; then
     local task_list=()
-    mapfile -t task_list < <(jq -c '.tasks | to_entries[] | .value + {startupId: (.key + 1)}' "$PLAN_FILE")
-    progress_start "$task_count"
+    mapfile -t task_list < <(jq -c --argjson total "$task_count" '.tasks | to_entries[] | .value + {startupId: (.key + 1), startupTotal: $total}' "$PLAN_FILE")
+    progress_start "$task_count" "$STATUS_LOG_FILE"
     worker_pool_run "${WAVEMILL_STARTUP_CONCURRENCY:-4}" startup_run_task_phases "${task_list[@]}"
     pool_exit=$?
     progress_finish
