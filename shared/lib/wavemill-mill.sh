@@ -1422,13 +1422,26 @@ if (( ${#TASKS[@]} > 0 )); then
   log "debug" "Next available migration number: $NEXT_MIGRATION_NUM (highest in origin/$BASE_BRANCH: $HIGHEST)"
 
 
-  # ── Phase 1: Fetch issue details in parallel ──────────────────────────────
+  # ── Phase 1: Fetch issue details (reuse backlog payload when possible) ───
   log "info" "Fetching issue details..."
   for t in "${TASKS[@]}"; do
     IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
     (
-      json=$(linear_get_issue "$ISSUE" 2>/dev/null || echo "{}")
-      echo "$json" > "/tmp/${SESSION}-${ISSUE}-issue.json"
+      backlog_record=""
+
+      if [[ -n "${BACKLOG:-}" ]]; then
+        backlog_record=$(printf '%s' "$BACKLOG" | jq -c --arg id "$ISSUE" \
+          '.[] | select(.identifier == $id)' 2>/dev/null || true)
+      fi
+
+      if [[ -n "$backlog_record" ]] && issue_payload_is_complete "$backlog_record"; then
+        log "debug" "  $ISSUE: reuse-backlog (skipping re-fetch)"
+        printf '%s\n' "$backlog_record" > "/tmp/${SESSION}-${ISSUE}-issue.json"
+      else
+        log "debug" "  $ISSUE: refetch"
+        json=$(linear_get_issue "$ISSUE" 2>/dev/null || echo "{}")
+        printf '%s\n' "$json" > "/tmp/${SESSION}-${ISSUE}-issue.json"
+      fi
     ) &
   done
   wait
