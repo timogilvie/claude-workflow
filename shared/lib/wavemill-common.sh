@@ -335,7 +335,11 @@ wavemill_pr_cache_refresh() {
   tmp_file="$(mktemp "${cache_file}.tmp.XXXXXX" 2>/dev/null)" || return 0
   if gh pr list --json number,headRefName,state,statusCheckRollup --limit 50 \
        < /dev/null 2>/dev/null > "$tmp_file"; then
-    mv "$tmp_file" "$cache_file" 2>/dev/null || rm -f "$tmp_file"
+    if [[ -s "$tmp_file" ]]; then
+      mv "$tmp_file" "$cache_file" 2>/dev/null || rm -f "$tmp_file"
+    else
+      rm -f "$tmp_file"
+    fi
   else
     rm -f "$tmp_file"
   fi
