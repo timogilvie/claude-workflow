@@ -1357,7 +1357,13 @@ _agent_log_debug() {
 }
 
 _agent_log_warn() {
-  echo "$(date '+%H:%M:%S') WARN: $*" >&2
+  local msg
+  msg="$(date '+%H:%M:%S') WARN: $*"
+  if [[ -n "${STATUS_LOG_FILE:-}" ]]; then
+    printf '%s\n' "$msg" >> "$STATUS_LOG_FILE" 2>/dev/null || printf '%s\n' "$msg" >&2
+  else
+    printf '%s\n' "$msg" >&2
+  fi
 }
 
 _pane_current_command() {
