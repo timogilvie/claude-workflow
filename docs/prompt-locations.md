@@ -30,6 +30,7 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 - `commands/bugfix.md`: Phase 5 defines the bugfix self-review loop.
 - `commands/implement-plan.md`: does not define self-review; that behavior is owned by `/workflow`.
 - `shared/lib/wavemill-startup-runner.sh`: active startup launch path used by `wavemill-mill.sh` to enter planning.
+- `docs/routing-contract.md`: bootstrap, expanded, and authoritative execution route lifecycle for mill-mode routing.
 - `shared/lib/wavemill-orchestrator.sh`: deprecated compatibility wrapper that delegates to `wavemill-startup-runner.sh`.
 - `codex/prompts/*.md` plus `codex/src/commands/workflow.js`: intentional Codex-native parallel workflow; these prompts are not built through `shared/lib/agent-adapters.sh`.
 
