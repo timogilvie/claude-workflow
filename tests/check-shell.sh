@@ -573,6 +573,45 @@ else
   else
     fail "read_state_value is missing a zero-byte state-file guard"
   fi
+
+  if grep -qE '^poll_sleep\(\) \{' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor defines interruptible poll_sleep helper"
+  else
+    fail "monitor is missing interruptible poll_sleep helper"
+  fi
+
+  if grep -qF '_active_count_prev=0' <<< "$HEREDOC_CONTENT" \
+    && grep -qF '_active_count_prev=$active_count' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor tracks previous active count for eager quit handling"
+  else
+    fail "monitor is missing previous active-count tracking for quit handling"
+  fi
+
+  if awk '
+    /drain_command_events/ { saw_drain=1; next }
+    saw_drain && /while consume_next_command; do/ { found=1; exit }
+    saw_drain && /check_control_pane_health/ { exit }
+    END { exit !found }
+  ' <<< "$MONITOR_LOOP_BLOCK"; then
+    pass "monitor eagerly consumes quit commands after draining input"
+  else
+    fail "monitor does not eagerly handle queued quit commands"
+  fi
+
+  if grep -qF 'Press q again to force quit.' <<< "$HEREDOC_CONTENT" \
+    && grep -qF 'Force quitting (${_active_count_prev} task(s) still active).' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor restores double-q force quit messaging and handling"
+  else
+    fail "monitor is missing double-q force quit handling"
+  fi
+
+  RAW_POLL_SLEEPS=$(grep -cE '^[[:space:]]*sleep "\$POLL_SECONDS"$' <<< "$MONITOR_LOOP_BLOCK" || true)
+  INTERRUPTIBLE_POLL_SLEEPS=$(grep -cE '^[[:space:]]*poll_sleep "\$POLL_SECONDS"$' <<< "$MONITOR_LOOP_BLOCK" || true)
+  if [[ "$RAW_POLL_SLEEPS" -eq 0 && "$INTERRUPTIBLE_POLL_SLEEPS" -eq 8 ]]; then
+    pass "monitor uses interruptible poll_sleep in every poll branch"
+  else
+    fail "monitor poll branches are not fully using interruptible poll_sleep"
+  fi
 fi
 
 # ============================================================================

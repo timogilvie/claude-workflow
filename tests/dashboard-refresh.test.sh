@@ -222,7 +222,7 @@ echo ""
 echo "=== Hook Notify Contract ==="
 
 HOOK_PROTOCOL_LIB="$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh"
-if bash -lc '
+if bash -c '
   set -euo pipefail
   source "'"$HOOK_PROTOCOL_LIB"'"
 
@@ -256,7 +256,7 @@ else
   fail "successful hook writes did not notify exactly once per write"
 fi
 
-if bash -lc '
+if bash -c '
   set -euo pipefail
   source "'"$HOOK_PROTOCOL_LIB"'"
 
