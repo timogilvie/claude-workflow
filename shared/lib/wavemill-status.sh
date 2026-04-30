@@ -61,8 +61,16 @@ refresh_pr_cache() {
   local mtime=0
   [[ -f "$PR_CACHE" ]] && mtime=$(stat -f %m "$PR_CACHE" 2>/dev/null || echo 0)
   if (( now - mtime >= PR_TTL )); then
-    gh pr list --json number,headRefName,state,statusCheckRollup --limit 50 \
-      < /dev/null 2>/dev/null > "${PR_CACHE}.tmp" && mv "${PR_CACHE}.tmp" "$PR_CACHE" || true
+    local tmp_file
+    # Per-writer tmp file so this dashboard refresh does not race the monitor's
+    # wavemill_pr_cache_refresh on a shared "${PR_CACHE}.tmp" path.
+    tmp_file=$(mktemp "${PR_CACHE}.tmp.XXXXXX" 2>/dev/null) || return 0
+    if gh pr list --json number,headRefName,state,statusCheckRollup --limit 50 \
+         < /dev/null 2>/dev/null > "$tmp_file"; then
+      mv "$tmp_file" "$PR_CACHE" 2>/dev/null || rm -f "$tmp_file"
+    else
+      rm -f "$tmp_file"
+    fi
   fi
 }
 

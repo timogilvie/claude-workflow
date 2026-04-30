@@ -328,9 +328,17 @@ has_any_healthy_model() {
 wavemill_pr_cache_refresh() {
   local session="${SESSION:-wavemill}"
   local cache_file="${MONITOR_PR_CACHE:-/tmp/${session}-pr-cache.json}"
-  gh pr list --json number,headRefName,state,statusCheckRollup --limit 50 \
-    < /dev/null 2>/dev/null > "${cache_file}.tmp" \
-    && mv "${cache_file}.tmp" "${cache_file}" || true
+  local tmp_file
+  # Per-writer tmp file: monitor and dashboard both refresh this cache, and a
+  # shared "${cache_file}.tmp" leads to a race where one writer's mv consumes
+  # the file before the other's mv runs.
+  tmp_file="$(mktemp "${cache_file}.tmp.XXXXXX" 2>/dev/null)" || return 0
+  if gh pr list --json number,headRefName,state,statusCheckRollup --limit 50 \
+       < /dev/null 2>/dev/null > "$tmp_file"; then
+    mv "$tmp_file" "$cache_file" 2>/dev/null || rm -f "$tmp_file"
+  else
+    rm -f "$tmp_file"
+  fi
 }
 
 wavemill_pr_lookup_by_branch() {

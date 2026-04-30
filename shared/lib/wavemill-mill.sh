@@ -5084,23 +5084,32 @@ read_command_offset() {
   [[ -f "$COMMAND_FILE" ]] && line_count=$(wc -l < "$COMMAND_FILE" 2>/dev/null | tr -d ' ')
   [[ "$line_count" =~ ^[0-9]+$ ]] || line_count=0
 
+  # Persist any init-at-EOF decision: returning $line_count without writing it
+  # back leaves drain_command_events permanently stuck at "line_count <= offset"
+  # because every subsequent read recomputes the same EOF position.
   if [[ ! -f "$COMMAND_OFFSET_FILE" ]]; then
     if (( line_count > 0 )); then
       [[ "$COMMAND_OFFSET_WARNED" == "false" ]] && log_warn "Command offset missing (init at EOF)."
       COMMAND_OFFSET_WARNED=true
+      write_command_offset "$line_count" || true
       echo "$line_count"
       return 0
     fi
+    write_command_offset "0" || true
     echo "0"
     return 0
   fi
 
   offset_raw="$(cat "$COMMAND_OFFSET_FILE" 2>/dev/null || echo "0")"
   if ! [[ "$offset_raw" =~ ^[0-9]+$ ]]; then
+    [[ "$COMMAND_OFFSET_WARNED" == "false" ]] && log_warn "Command offset invalid (init at EOF)."
+    COMMAND_OFFSET_WARNED=true
+    write_command_offset "$line_count" || true
     echo "$line_count"
     return 0
   fi
   if (( offset_raw > line_count )); then
+    write_command_offset "$line_count" || true
     echo "$line_count"
     return 0
   fi
