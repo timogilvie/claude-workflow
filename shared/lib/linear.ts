@@ -633,10 +633,22 @@ export async function setIssuesState(
         { identifiers: chunk },
       ));
     } catch (err) {
-      const error = sanitizeError(err);
+      const batchError = sanitizeError(err);
+      // Per-issue fallback: try to fetch each issue individually
       for (const identifier of chunk) {
-        failed.push({ issueId: identifier, error: `Failed to fetch issue: ${error}` });
-        fetchedIdentifiers.add(identifier);
+        try {
+          const issue = await withRetry(() => fetchIssueByIdentifier(identifier, 'id identifier team { id }'));
+          fetchedIdentifiers.add(identifier);
+          allNodes.push({
+            id: issue.id,
+            identifier: issue.identifier,
+            team: { id: (issue.team as { id: string }).id },
+          });
+        } catch (perIssueErr) {
+          const error = sanitizeError(perIssueErr);
+          failed.push({ issueId: identifier, error: `Failed to fetch issue: ${error}` });
+          fetchedIdentifiers.add(identifier);
+        }
       }
       continue;
     }
