@@ -510,6 +510,36 @@ score_and_rank_issues() {
   '
 }
 
+# Fields mill startup reads from issue.json. Keep this aligned with the
+# startup consumers before broadening backlog-payload reuse.
+_WAVEMILL_REQUIRED_ISSUE_FIELDS=(identifier title description)
+
+# issue_payload_is_complete <json>
+# Exit 0 when startup can safely reuse the backlog payload as issue.json.
+# Accepts JSON as $1 or on stdin.
+issue_payload_is_complete() {
+  local json="${1:-}"
+  if [[ -z "$json" ]]; then
+    json=$(cat)
+  fi
+
+  local field_filter field
+  field_filter='['
+  for field in "${_WAVEMILL_REQUIRED_ISSUE_FIELDS[@]}"; do
+    field_filter+="\"$field\","
+  done
+  field_filter="${field_filter%,}]"
+
+  local ok
+  ok=$(printf '%s' "$json" | jq -e --argjson required_fields "$field_filter" '
+    . as $record |
+    ($required_fields | all(. as $field | (($record[$field] // "") | type) == "string" and ($record[$field] != "")))
+    and ((.labels.nodes | type) == "array")
+  ' 2>/dev/null) || return 1
+
+  [[ "$ok" == "true" ]]
+}
+
 # ============================================================================
 # ISSUE EXPANSION
 # ============================================================================
