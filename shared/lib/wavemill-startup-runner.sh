@@ -794,7 +794,7 @@ main() {
   cmd_file="$(wavemill_command_file_path "$SESSION")"
   offset_file="$(wavemill_command_offset_path "$SESSION")"
   printf -v monitor_cmd '%q -lc %q' "/opt/homebrew/bin/bash" \
-    "clear; : >> $(printf '%q' "$cmd_file"); : >> $(printf '%q' "$offset_file"); $(printf '%q %q' "$MONITOR_SCRIPT" "$MONITOR_ENV") </dev/null & monitor_pid=\$!; trap 'kill \"\$monitor_pid\" >/dev/null 2>&1 || true' EXIT INT TERM; exec env WAVEMILL_SESSION=$(printf '%q' "$SESSION") $(printf '%q %q' "$input_reader_script" "$SESSION")"
+    "clear; : > $(printf '%q' "$cmd_file"); printf '0\\n' > $(printf '%q' "$offset_file"); $(printf '%q %q' "$MONITOR_SCRIPT" "$MONITOR_ENV") </dev/null & monitor_pid=\$!; trap 'kill \"\$monitor_pid\" >/dev/null 2>&1 || true' EXIT INT TERM; exec env WAVEMILL_SESSION=$(printf '%q' "$SESSION") $(printf '%q %q' "$input_reader_script" "$SESSION")"
   tmux respawn-pane -k -t "$SESSION:control.0" "$monitor_cmd"
 }
 
