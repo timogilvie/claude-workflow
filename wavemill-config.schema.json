@@ -460,6 +460,30 @@
             }
           },
           "additionalProperties": false
+        },
+        "schemaPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra regex patterns (matched against changed file paths) that flag a file as a schema definition. Merged with framework-aware defaults."
+        },
+        "migrationPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra regex patterns that flag a changed file as a migration file. Merged with defaults (migrations/, alembic/versions/)."
+        },
+        "migrationRunners": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra regex patterns the migration-ci-wiring check searches for inside CI / build config to confirm a migration runner exists."
+        },
+        "migrationRunnerSearchPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra glob patterns (relative to the repo root) of files the migration-ci-wiring check inspects for runner references. Merged with default .github/workflows/*.yml."
         }
       },
       "additionalProperties": false
