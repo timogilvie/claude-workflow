@@ -27,7 +27,10 @@ Common overrides:
 ```bash
 MAX_PARALLEL=5 wavemill mill
 AGENT_CMD=codex wavemill mill
+WAVEMILL_DASHBOARD_REFRESH_SECONDS=3 wavemill mill
 ```
+
+`WAVEMILL_DASHBOARD_REFRESH_SECONDS` accepts integer values from `1` through `10`. Invalid values fall back to the default `2` second dashboard refresh cadence.
 
 ## Startup Progress Table
 
