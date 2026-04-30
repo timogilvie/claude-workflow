@@ -759,6 +759,21 @@ else
   fail "startup runner is missing the 3-pane control layout wiring"
 fi
 
+if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
+  && grep -Fq '^[A-Z]+-[0-9]+(_c)?$|^[a-z0-9-]+$' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  pass "startup runner accepts challenge task identifiers"
+else
+  fail "startup runner rejects challenge task identifiers"
+fi
+
+if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
+  && grep -q 'wavemill_lock_run "git-worktree" git worktree add "\$wt_dir" "\$branch"' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'wavemill_lock_run "git-worktree" git worktree add "\$wt_dir" -b "\$branch" "origin/\$BASE_BRANCH"' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  pass "startup runner serializes git worktree creation"
+else
+  fail "startup runner does not serialize git worktree creation"
+fi
+
 # ============================================================================
 # TEST 6: Dashboard planning-review status guards
 # ============================================================================

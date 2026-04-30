@@ -62,5 +62,10 @@ if ! grep -q 'Startup: 1 done, 0 failed, 1 total' "$file_out"; then
   echo "file renderer did not write final progress summary" >&2
   exit 1
 fi
+render_count="$(grep -c 'issue | route | worktree | deps | agent | linear' "$file_out")"
+if [[ "$render_count" -gt 8 ]]; then
+  echo "file renderer redrew too often: $render_count renders" >&2
+  exit 1
+fi
 
 rm -f "$file_out" "$file_err"

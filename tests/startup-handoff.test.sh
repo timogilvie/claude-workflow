@@ -451,7 +451,7 @@ write_plan "$FAIL_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-failure
 
 FAIL_OUTPUT="$TMP_ROOT/failure-output.txt"
 export FAIL_WORKTREE_MATCH="broken-task"
-bash "$RUNNER_SCRIPT" "$FAIL_PLAN" > "$FAIL_OUTPUT" 2>&1
+WAVEMILL_NO_PROGRESS=0 bash "$RUNNER_SCRIPT" "$FAIL_PLAN" > "$FAIL_OUTPUT" 2>&1
 unset FAIL_WORKTREE_MATCH
 
 if jq -e '.tasks["HOK-1001"]' "$STATE_FILE" >/dev/null 2>&1 \
@@ -471,6 +471,12 @@ if grep -q 'FAILED at worktree: worktree creation' "$FAIL_STATUS_LOG" && grep -q
   pass "startup failures stay visible in the tmux startup log output"
 else
   fail "startup failure logging is missing from the control-pane output"
+fi
+
+if grep -q "respawn-pane -k -t startup-failure:control.0" "$MOCK_TMUX_LOG"; then
+  pass "startup runner still launches the monitor after partial startup failure"
+else
+  fail "startup runner did not hand off to the monitor after partial startup failure"
 fi
 
 echo ""
