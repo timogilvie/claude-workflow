@@ -520,34 +520,57 @@ export async function setIssuesState(
     return { updated: [], failed: [] };
   }
 
-  const data = await request(
-    `
-      query($identifiers: [String!]) {
-        issues(filter: { identifier: { in: $identifiers } }, first: 250) {
-          nodes {
-            id
-            identifier
-            team {
-              id
+  const failed: Array<{ issueId: string; error: string }> = [];
+  const updated: string[] = [];
+  const PAGE_SIZE = 250;
+  const fetchedIdentifiers = new Set<string>();
+  const allNodes: Array<{ id: string; identifier: string; team: { id: string } }> = [];
+
+  // Fetch in pages to avoid the 250-node GraphQL limit
+  for (let offset = 0; offset < identifiers.length; offset += PAGE_SIZE) {
+    const chunk = identifiers.slice(offset, offset + PAGE_SIZE);
+    let data: Record<string, unknown>;
+    try {
+      data = await request(
+        `
+          query($identifiers: [String!]) {
+            issues(filter: { identifier: { in: $identifiers } }, first: ${PAGE_SIZE}) {
+              nodes {
+                id
+                identifier
+                team {
+                  id
+                }
+              }
             }
           }
-        }
+        `,
+        { identifiers: chunk },
+      );
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      for (const identifier of chunk) {
+        failed.push({ issueId: identifier, error: `Failed to fetch issue: ${error}` });
+        fetchedIdentifiers.add(identifier);
       }
-    `,
-    { identifiers },
-  );
+      continue;
+    }
+    const nodes = (data.issues as {
+      nodes?: Array<{ id: string; identifier: string; team: { id: string } }>;
+    } | undefined)?.nodes || [];
+    for (const node of nodes) {
+      fetchedIdentifiers.add(node.identifier);
+    }
+    allNodes.push(...nodes);
+  }
 
-  const issues = (data.issues as {
-    nodes?: Array<{ id: string; identifier: string; team: { id: string } }>;
-  } | undefined)?.nodes || [];
+  const issues = allNodes;
 
-  const issueByIdentifier = new Map(issues.map((issue) => [issue.identifier, issue]));
-  const missing = identifiers.filter((identifier) => !issueByIdentifier.has(identifier));
-  const failed: Array<{ issueId: string; error: string }> = missing.map((identifier) => ({
-    issueId: identifier,
-    error: `Issue not found: ${identifier}`,
-  }));
-  const updated: string[] = [];
+  // Any identifier not returned by the API (and not already in failed) was not found
+  const missing = identifiers.filter((id) => !fetchedIdentifiers.has(id));
+  for (const identifier of missing) {
+    failed.push({ issueId: identifier, error: `Issue not found: ${identifier}` });
+  }
 
   const statesByTeam = new Map<string, Map<string, string>>();
   const teamIds = [...new Set(issues.map((issue) => issue.team.id))];
