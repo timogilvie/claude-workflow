@@ -5166,7 +5166,7 @@ poll_sleep() {
     sleep 1
     elapsed=$((elapsed + 1))
     drain_command_events
-    if [[ " ${COMMAND_QUEUE[*]} " == *" quit "* ]]; then
+    if (( ${#COMMAND_QUEUE[@]} > 0 )); then
       return 0
     fi
   done
