@@ -13,7 +13,7 @@
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, basename, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
-import type { EvalRecord } from './eval-schema.ts';
+import type { EvalRecord, WavemillRouterDiagnostics } from './eval-schema.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 
 function rubricProvenancePriority(record: EvalRecord): number {
@@ -470,4 +470,72 @@ export function formatAggregationReport(result: AggregationResult): string {
   }
 
   return lines.join('\n');
+}
+
+export interface MintEligibilityEvaluation {
+  eligible: boolean;
+  reason?: string;
+  threshold?: number;
+  maxInvalidRouteRate?: number;
+  scoreableCoverage: number;
+  invalidRouteRate: number;
+}
+
+export interface MintEligibilityOptions {
+  enabled?: boolean;
+  coverageThreshold?: number;
+  maxInvalidRouteRate?: number;
+}
+
+const DEFAULT_MINT_COVERAGE_THRESHOLD = 0.8;
+const DEFAULT_MINT_INVALID_ROUTE_RATE = 0.2;
+
+export function meetsMintEligibility(
+  diagnostics: Pick<WavemillRouterDiagnostics, 'scoreable_coverage' | 'invalid_route_rate'> | null | undefined,
+  config?: MintEligibilityOptions,
+): MintEligibilityEvaluation {
+  const scoreableCoverage = diagnostics?.scoreable_coverage ?? 0;
+  const invalidRouteRate = diagnostics?.invalid_route_rate ?? 0;
+
+  if (config?.enabled === false) {
+    return {
+      eligible: true,
+      reason: 'mint gating disabled',
+      scoreableCoverage,
+      invalidRouteRate,
+    };
+  }
+
+  const threshold = config?.coverageThreshold ?? DEFAULT_MINT_COVERAGE_THRESHOLD;
+  const maxInvalidRouteRate = config?.maxInvalidRouteRate ?? DEFAULT_MINT_INVALID_ROUTE_RATE;
+
+  if (scoreableCoverage < threshold) {
+    return {
+      eligible: false,
+      reason: 'scoreable coverage below threshold',
+      threshold,
+      maxInvalidRouteRate,
+      scoreableCoverage,
+      invalidRouteRate,
+    };
+  }
+
+  if (invalidRouteRate > maxInvalidRouteRate) {
+    return {
+      eligible: false,
+      reason: 'invalid route rate above threshold',
+      threshold,
+      maxInvalidRouteRate,
+      scoreableCoverage,
+      invalidRouteRate,
+    };
+  }
+
+  return {
+    eligible: true,
+    threshold,
+    maxInvalidRouteRate,
+    scoreableCoverage,
+    invalidRouteRate,
+  };
 }

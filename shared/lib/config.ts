@@ -129,12 +129,19 @@ export interface InterventionPenaltiesConfig {
   sessionRedirect?: number;
 }
 
+export interface MintEligibilityConfig {
+  enabled?: boolean;
+  coverageThreshold?: number;
+  maxInvalidRouteRate?: number;
+}
+
 export interface EvalConfig {
   aggregation?: AggregationConfig;
   evalsDir?: string;
   judge?: JudgeConfig;
   pricing?: Record<string, PricingEntry>;
   interventionPenalties?: InterventionPenaltiesConfig;
+  mintEligibility?: MintEligibilityConfig;
 }
 
 export interface DifficultyClassifierConfig {
@@ -705,6 +712,10 @@ export function getChallengeSchedulerConfig(repoDir?: string): ChallengeSchedule
  */
 export function getEvalConfig(repoDir?: string): EvalConfig {
   return loadWavemillConfig(repoDir).eval || {};
+}
+
+export function getMintEligibilityConfig(repoDir?: string): MintEligibilityConfig | undefined {
+  return getEvalConfig(repoDir).mintEligibility;
 }
 
 /**

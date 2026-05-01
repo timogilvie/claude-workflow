@@ -1310,6 +1310,40 @@ test('Eligibility fields validate and schema stays in parity', () => {
   ]);
 });
 
+test('Wavemill router fields validate and schema stays in parity', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.15.0',
+    workflow_success_rate_under_budget: 0.75,
+    wavemill_router_diagnostics: {
+      scoreable_coverage: 0.8,
+      invalid_route_rate: 0.1,
+      budget_compliance_rate: 0.9,
+      completion_success_rate: 0.85,
+      total_cost_usd: 12.34,
+      timing_p50_ms: 450,
+      timing_p95_ms: 1200,
+      intervention_rate: 0.25,
+      intervention_count: 2,
+      total_records: 10,
+      scoreable_records: 8,
+      invalid_route_records: 1,
+    },
+    wavemill_router_scoring: {
+      scorer_id: 'hokusai.scorers.wavemill.success_rate_under_budget:v1',
+      measurement_policy: 'replay_exact_match',
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.workflow_success_rate_under_budget?.type, 'number');
+  assert.equal(properties.wavemill_router_diagnostics?.$ref, '#/$defs/WavemillRouterDiagnostics');
+  assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
+});
+
 // ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────
