@@ -2,7 +2,8 @@
  * Tests for eval-record-builder module.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import assert from 'node:assert/strict';
+import { beforeEach, describe, it } from 'node:test';
 import type { EvalRecord } from './eval-schema.ts';
 import {
   attachEligibility,
@@ -21,6 +22,41 @@ import {
   enrichEvalRecord,
 } from './eval-record-builder.ts';
 import type { RubricEval } from './eval-schema.ts';
+
+function expect(actual: unknown) {
+  return {
+    toBe(expected: unknown) {
+      assert.equal(actual, expected);
+    },
+    toEqual(expected: unknown) {
+      assert.deepEqual(actual, expected);
+    },
+    toBeUndefined() {
+      assert.equal(actual, undefined);
+    },
+    toContain(expected: unknown) {
+      if (Array.isArray(actual)) {
+        assert.ok(actual.includes(expected));
+        return;
+      }
+      if (typeof actual === 'string') {
+        assert.ok(actual.includes(String(expected)));
+        return;
+      }
+      assert.fail('expected value to be an array or string');
+    },
+    not: {
+      toThrow() {
+        assert.equal(typeof actual, 'function');
+        assert.doesNotThrow(actual as () => void);
+      },
+      toHaveProperty(property: string) {
+        assert.equal(actual !== null && typeof actual === 'object', true);
+        assert.equal(Object.prototype.hasOwnProperty.call(actual, property), false);
+      },
+    },
+  };
+}
 
 describe('eval-record-builder', () => {
   let baseRecord: EvalRecord;
