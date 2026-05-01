@@ -10,6 +10,7 @@ import {
   getTaskPacketArtifactPaths,
   splitTaskPacket,
   isValidTaskPacket,
+  isTaskPacketContent,
   isTaskPacketFile,
   writeTaskPacketArtifacts,
   extractReleaseReadiness,
@@ -172,6 +173,22 @@ describe('isTaskPacketFile', () => {
 
   test('handles paths without directory', () => {
     expect(isTaskPacketFile('task-packet.md')).toBe(true);
+  });
+});
+
+describe('isTaskPacketContent', () => {
+  test('recognizes legacy section formats', () => {
+    expect(isTaskPacketContent('## 1. Objective\n\nBuild feature')).toBe(true);
+    expect(isTaskPacketContent('## Technical Context\n\nNotes')).toBe(true);
+  });
+
+  test('recognizes progressive-disclosure markers', () => {
+    expect(isTaskPacketContent('Quick Reference\n\n- Item')).toBe(true);
+    expect(isTaskPacketContent('## Detailed Sections\n\n## 1. Objective')).toBe(true);
+  });
+
+  test('returns false for raw issue text', () => {
+    expect(isTaskPacketContent('Fix failing webhook retries in staging')).toBe(false);
   });
 });
 

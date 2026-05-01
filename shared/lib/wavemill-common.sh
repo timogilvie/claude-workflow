@@ -666,6 +666,57 @@ apply_expanded_route_if_present() {
   return 0
 }
 
+# Gate: check expansion handshake before plan→code transition.
+# Args: <feature_dir> <issue> <repo_dir>
+# Returns 0 (pass or warn) or 1 (block).
+mill_check_expansion_handshake() {
+  local feature_dir="$1" issue="$2" repo_dir="$3"
+  local packet_file="$feature_dir/task-packet.md"
+  local route_file="$feature_dir/.post-expansion-route.json"
+  local packet_content=""
+
+  if [[ -f "$packet_file" ]]; then
+    packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
+  fi
+
+  if is_task_packet "$packet_content"; then
+    log "info" "[expansion-handshake] PASS issue=$issue reason=already-expanded"
+    return 0
+  fi
+
+  if [[ -f "$route_file" ]] && validate_expanded_route_artifact "$route_file"; then
+    log "info" "[expansion-handshake] PASS issue=$issue reason=expanded-route-present"
+    return 0
+  fi
+
+  local reason="missing"
+  if [[ -f "$route_file" ]]; then
+    if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
+      reason="invalid-json"
+    else
+      reason="missing-required-field"
+    fi
+  fi
+
+  local policy="block"
+  local config_file="$repo_dir/.wavemill-config.json"
+  if [[ -f "$config_file" ]]; then
+    local cfg_policy
+    cfg_policy=$(jq -r '.mill.expansionHandshake.policy // "block"' "$config_file" 2>/dev/null || echo "block")
+    if [[ "$cfg_policy" == "warn" ]]; then
+      policy="warn"
+    fi
+  fi
+
+  if [[ "$policy" == "warn" ]]; then
+    log "warn" "[expansion-handshake] WARN issue=$issue reason=$reason policy=warn"
+    return 0
+  fi
+
+  log "warn" "[expansion-handshake] BLOCKED issue=$issue reason=$reason recover=\"wavemill expand $issue\""
+  return 1
+}
+
 wavemill_command_file_path() {
   local session="$1"
   printf '/tmp/wavemill-%s-commands\n' "$session"

@@ -64,7 +64,10 @@
           "type": "string",
           "default": "claude",
           "description": "Agent CLI to use. Built-in support for 'claude' and 'codex'. Other CLIs work via generic tmux passthrough. Can be overridden with --agent flag or AGENT_CMD env var.",
-          "examples": ["claude", "codex"]
+          "examples": [
+            "claude",
+            "codex"
+          ]
         },
         "requireConfirm": {
           "type": "boolean",
@@ -73,7 +76,9 @@
         },
         "planningMode": {
           "type": "string",
-          "enum": ["interactive"],
+          "enum": [
+            "interactive"
+          ],
           "default": "interactive",
           "description": "How to handle the planning phase. Interactive planning launches a dedicated planning phase in tmux before implementation."
         },
@@ -93,12 +98,32 @@
           "type": "string",
           "default": "",
           "description": "Shell command to run in each new worktree before agent launch (e.g., 'npm install'). Skipped when resuming an existing worktree.",
-          "examples": ["npm install", "pnpm install", "pip install -r requirements.txt"]
+          "examples": [
+            "npm install",
+            "pnpm install",
+            "pip install -r requirements.txt"
+          ]
         },
         "defaultMaxCostUsd": {
           "type": "number",
           "minimum": 0,
           "description": "Default per-task cost budget guideline in USD. When unset, the built-in default is 25.00. Repository config can still override the value, and omitting the field from routing data means no explicit cost constraint for that run."
+        },
+        "expansionHandshake": {
+          "type": "object",
+          "description": "Controls gating of raw-issue-text tasks at the plan\u2192code transition.",
+          "properties": {
+            "policy": {
+              "type": "string",
+              "enum": [
+                "block",
+                "warn"
+              ],
+              "default": "block",
+              "description": "block (default): halt transition. warn: proceed with a warning log line."
+            }
+          },
+          "additionalProperties": false
         }
       }
     },
@@ -158,7 +183,12 @@
       "properties": {
         "verbosity": {
           "type": "string",
-          "enum": ["error", "status", "info", "debug"],
+          "enum": [
+            "error",
+            "status",
+            "info",
+            "debug"
+          ],
           "default": "info",
           "description": "Minimum log level shown in the mill control pane. 'error' shows only errors, 'status' shows key workflow transitions, 'info' adds routine progress, and 'debug' shows detailed diagnostic output."
         },
@@ -180,7 +210,9 @@
           "properties": {
             "repos": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "default": [],
               "description": "Absolute paths to repository directories to aggregate evals from."
             },
@@ -210,7 +242,9 @@
             "provider": {
               "type": "string",
               "default": "anthropic",
-              "enum": ["anthropic"],
+              "enum": [
+                "anthropic"
+              ],
               "description": "LLM provider for the eval judge. Currently only 'anthropic' is supported."
             }
           },
@@ -243,7 +277,10 @@
                 "description": "Cost in USD per million cache read input tokens. Defaults to 0.1x inputCostPerMTok."
               }
             },
-            "required": ["inputCostPerMTok", "outputCostPerMTok"],
+            "required": [
+              "inputCostPerMTok",
+              "outputCostPerMTok"
+            ],
             "additionalProperties": false
           }
         },
@@ -267,7 +304,7 @@
             },
             "manualEdit": {
               "type": "number",
-              "default": 0.10,
+              "default": 0.1,
               "minimum": 0,
               "maximum": 1,
               "description": "Penalty per manual file edit (commit not attributed to the agent)."
@@ -295,7 +332,7 @@
             },
             "selfReviewBlocker": {
               "type": "number",
-              "default": 0.20,
+              "default": 0.2,
               "minimum": 0,
               "maximum": 1,
               "description": "Penalty per blocker-severity finding in self-review (critical issue that blocks PR, such as security vulnerabilities or correctness bugs)."
@@ -373,7 +410,7 @@
         },
         "rate": {
           "type": "number",
-          "default": 0.10,
+          "default": 0.1,
           "minimum": 0,
           "maximum": 1,
           "description": "Probability that a selected mill task becomes a challenge task."
@@ -481,12 +518,20 @@
               "description": "Workflow stages allowed to use DeepSeek.",
               "items": {
                 "type": "string",
-                "enum": ["planner", "coder", "reviewer"]
+                "enum": [
+                  "planner",
+                  "coder",
+                  "reviewer"
+                ]
               }
             },
             "effortLevel": {
               "type": "string",
-              "enum": ["low", "medium", "high"],
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
               "default": "medium",
               "description": "Claude Code effort level to request when using the DeepSeek provider path."
             }
@@ -496,12 +541,18 @@
             {
               "if": {
                 "properties": {
-                  "enabled": { "const": true }
+                  "enabled": {
+                    "const": true
+                  }
                 },
-                "required": ["enabled"]
+                "required": [
+                  "enabled"
+                ]
               },
               "then": {
-                "required": ["apiKeyEnv"]
+                "required": [
+                  "apiKeyEnv"
+                ]
               }
             }
           ]
@@ -515,20 +566,29 @@
       "properties": {
         "checks": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "List of check names to run (empty = all available checks)"
         },
         "requiredChecks": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Checks that must pass for merge approval (subset of checks)"
         },
         "migrationPatterns": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["migrations/", "alembic/versions/"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "migrations/",
+            "alembic/versions/"
+          ],
           "description": "Regex patterns used to identify migration files across the repository."
         },
         "remediation": {
@@ -573,24 +633,52 @@
               },
               "class": {
                 "type": "string",
-                "enum": ["frontier", "strong_generalist", "fast_economy"]
+                "enum": [
+                  "frontier",
+                  "strong_generalist",
+                  "fast_economy"
+                ]
               },
               "strengths": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
               "weaknesses": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
               "qualityScores": {
                 "type": "object",
                 "properties": {
-                  "routing": { "type": "number", "minimum": 0, "maximum": 100 },
-                  "planning": { "type": "number", "minimum": 0, "maximum": 100 },
-                  "coding": { "type": "number", "minimum": 0, "maximum": 100 },
-                  "review": { "type": "number", "minimum": 0, "maximum": 100 },
-                  "classify": { "type": "number", "minimum": 0, "maximum": 100 }
+                  "routing": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "planning": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "coding": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "review": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "classify": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  }
                 },
                 "additionalProperties": false
               },
@@ -614,7 +702,10 @@
                     "minimum": 0
                   }
                 },
-                "required": ["inputCostPerMTok", "outputCostPerMTok"],
+                "required": [
+                  "inputCostPerMTok",
+                  "outputCostPerMTok"
+                ],
                 "additionalProperties": false
               },
               "defaultLadderEligible": {
@@ -638,23 +729,33 @@
           "properties": {
             "routing": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "planning": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "coding": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "review": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
             "classify": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             }
           },
           "additionalProperties": false
@@ -690,7 +791,9 @@
         },
         "models": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data."
         },
@@ -700,17 +803,23 @@
           "properties": {
             "planner": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Models available for the planning stage."
             },
             "coder": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Models available for the coding stage."
             },
             "reviewer": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Models available for the review stage."
             }
           },
@@ -720,7 +829,10 @@
           "type": "string",
           "default": "claude",
           "description": "Fallback agent CLI when router has insufficient data or no agentMap entry matches the recommended model.",
-          "examples": ["claude", "codex"]
+          "examples": [
+            "claude",
+            "codex"
+          ]
         },
         "agentMap": {
           "type": "object",
@@ -732,7 +844,13 @@
         },
         "mode": {
           "type": "string",
-          "enum": ["heuristic", "llm", "auto", "stage-aware", "hokusai"],
+          "enum": [
+            "heuristic",
+            "llm",
+            "auto",
+            "stage-aware",
+            "hokusai"
+          ],
           "default": "auto",
           "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, 'hokusai' calls the Hokusai API for ML-based routing, and 'auto' prefers Hokusai when configured before falling back to stage-aware and heuristic."
         },
@@ -743,7 +861,10 @@
         },
         "llmProvider": {
           "type": "string",
-          "enum": ["openai", "anthropic"],
+          "enum": [
+            "openai",
+            "anthropic"
+          ],
           "default": "openai",
           "description": "API provider for LLM routing calls. OpenAI recommended (gpt-4o-mini is fast and cheap)."
         },
@@ -770,7 +891,11 @@
           "properties": {
             "mode": {
               "type": "string",
-              "enum": ["off", "shadow", "on"],
+              "enum": [
+                "off",
+                "shadow",
+                "on"
+              ],
               "default": "off"
             },
             "minCoverage": {
@@ -807,7 +932,9 @@
               "description": "Request timeout in milliseconds."
             }
           },
-          "required": ["endpoint"],
+          "required": [
+            "endpoint"
+          ],
           "additionalProperties": false
         },
         "difficulty": {
@@ -877,7 +1004,10 @@
             },
             "provider": {
               "type": "string",
-              "enum": ["claude-cli", "anthropic"],
+              "enum": [
+                "claude-cli",
+                "anthropic"
+              ],
               "default": "claude-cli",
               "description": "LLM provider for Layer 2 validation. 'claude-cli' uses local subscription, 'anthropic' uses API key."
             }
@@ -886,7 +1016,11 @@
         },
         "onFailure": {
           "type": "string",
-          "enum": ["conservative", "auto-fix", "proceed"],
+          "enum": [
+            "conservative",
+            "auto-fix",
+            "proceed"
+          ],
           "default": "conservative",
           "description": "Behavior when validation fails: 'conservative' (skip update), 'auto-fix' (retry expansion with feedback), 'proceed' (update anyway with warnings attached)."
         }
@@ -961,9 +1095,17 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["general", "security", "performance", "correctness", "design"]
+            "enum": [
+              "general",
+              "security",
+              "performance",
+              "correctness",
+              "design"
+            ]
           },
-          "default": ["general"],
+          "default": [
+            "general"
+          ],
           "description": "Active reviewer personas for code review. Each persona focuses on specific concerns. The 'design' persona requires ui.creativeDirection: true to be enabled."
         }
       },
@@ -990,7 +1132,11 @@
         },
         "mergeMethod": {
           "type": "string",
-          "enum": ["merge", "squash", "rebase"],
+          "enum": [
+            "merge",
+            "squash",
+            "rebase"
+          ],
           "default": "squash",
           "description": "Merge strategy for promoting the integration branch to the promotion branch."
         },
@@ -1006,7 +1152,11 @@
         },
         "highRiskPolicy": {
           "type": "string",
-          "enum": ["block", "manual", "allow"],
+          "enum": [
+            "block",
+            "manual",
+            "allow"
+          ],
           "default": "manual",
           "description": "Policy for handling high-risk PRs: 'block' prevents merge, 'manual' requires human approval, 'allow' permits autonomous merge."
         },
@@ -1028,7 +1178,11 @@
             },
             "riskPolicy": {
               "type": "string",
-              "enum": ["block", "require-label", "auto"],
+              "enum": [
+                "block",
+                "require-label",
+                "auto"
+              ],
               "default": "require-label"
             },
             "enforceMigrationCoupling": {
@@ -1047,7 +1201,9 @@
       "properties": {
         "autoApprovePatterns": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Command patterns that are auto-approved without user confirmation. Supports glob patterns (e.g., 'git status*', 'gh pr view*'). Patterns are matched against the full command string."
         },
@@ -1083,7 +1239,11 @@
             "properties": {
               "status": {
                 "type": "string",
-                "enum": ["healthy", "degrading", "exhausted"]
+                "enum": [
+                  "healthy",
+                  "degrading",
+                  "exhausted"
+                ]
               },
               "reason": {
                 "type": "string"
@@ -1093,7 +1253,9 @@
                 "description": "ISO-8601 date/time when this manual override expires."
               }
             },
-            "required": ["status"],
+            "required": [
+              "status"
+            ],
             "additionalProperties": false
           }
         },
@@ -1294,7 +1456,11 @@
             },
             "defaultVariant": {
               "type": "string",
-              "enum": ["baseline", "optimized", "canary"]
+              "enum": [
+                "baseline",
+                "optimized",
+                "canary"
+              ]
             },
             "fallbackToBaseline": {
               "type": "boolean"
@@ -1307,9 +1473,15 @@
             "surfaces": {
               "type": "object",
               "properties": {
-                "router": { "$ref": "#/definitions/runtimeSurfaceConfig" },
-                "planner": { "$ref": "#/definitions/runtimeSurfaceConfig" },
-                "reviewer": { "$ref": "#/definitions/runtimeSurfaceConfig" }
+                "router": {
+                  "$ref": "#/definitions/runtimeSurfaceConfig"
+                },
+                "planner": {
+                  "$ref": "#/definitions/runtimeSurfaceConfig"
+                },
+                "reviewer": {
+                  "$ref": "#/definitions/runtimeSurfaceConfig"
+                }
               },
               "additionalProperties": false
             }
@@ -1329,7 +1501,11 @@
         },
         "variant": {
           "type": "string",
-          "enum": ["baseline", "optimized", "canary"]
+          "enum": [
+            "baseline",
+            "optimized",
+            "canary"
+          ]
         },
         "resourceId": {
           "type": "string"
