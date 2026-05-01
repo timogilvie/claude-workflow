@@ -1,0 +1,7 @@
+[
+  { "id": "HOK-10", "title": "Foundation task" },
+  { "id": "HOK-11", "title": "Depends on foundation", "dependsOn": ["HOK-10"] },
+  { "id": "HOK-12", "title": "Also depends on foundation", "dependsOn": ["HOK-10"] },
+  { "id": "HOK-13", "title": "Shares surface with HOK-11", "sharedSurface": ["HOK-11"] },
+  { "id": "HOK-14", "title": "Broken dependency", "dependsOn": ["HOK-99"] }
+]
