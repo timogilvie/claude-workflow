@@ -94,12 +94,13 @@ export function buildQueuePlan(edges: DependencyEdge[], result: PlanResult): Que
     result.triage.filter((record) => record.reason !== 'duplicate').flatMap((record) => [record.edge.from, record.edge.to]),
   );
   const queues = result.queues.filter((queue) => !triagedTaskIds.has(queue.taskId));
+  const nonTriagedEdges = edges.filter((edge) => !triagedTaskIds.has(edge.from) && !triagedTaskIds.has(edge.to));
   return {
     availableNow: queues.filter((queue) => queue.ancestors.length === 0).map((queue) => queue.taskId),
     queuedAfterDependencies: queues
       .filter((queue) => queue.ancestors.length > 0)
       .map((queue) => ({ taskId: queue.taskId, ancestors: queue.ancestors })),
-    avoidRunningTogether: clusterSharedSurface(edges),
+    avoidRunningTogether: clusterSharedSurface(nonTriagedEdges),
     needsTriage: result.triage,
   };
 }
