@@ -11,7 +11,7 @@ import {
   type DeepSeekLauncherEnv,
 } from './deepseek-launcher.ts';
 import { getDeepSeekLauncherConfig, getDeepSeekProviderConfig } from './config.ts';
-import { resolveProjectsDirs } from './workflow-cost.ts';
+import { encodeProjectDir } from './workflow-cost.ts';
 
 const DEFAULT_SESSION = 'smoke';
 const DEFAULT_ISSUE = 'HOK-1489';
@@ -70,12 +70,14 @@ function latestMtimeMs(root: string): number {
 }
 
 function hasProviderTranscript(worktreePath: string, env: DeepSeekLauncherEnv): boolean {
-  return resolveProjectsDirs(worktreePath).some((projectsDir) => {
-    if (!projectsDir.startsWith(env.WAVEMILL_DEEPSEEK_STATE_DIR)) {
-      return false;
-    }
-    return existsSync(projectsDir) && readdirSync(projectsDir).some((name) => name.endsWith('.jsonl'));
-  });
+  const projectsDir = join(
+    env.WAVEMILL_DEEPSEEK_STATE_DIR,
+    'home',
+    '.claude',
+    'projects',
+    encodeProjectDir(worktreePath),
+  );
+  return existsSync(projectsDir) && readdirSync(projectsDir).some((name) => name.endsWith('.jsonl'));
 }
 
 function resolveKeyEnvVar(repoDir: string): string {
