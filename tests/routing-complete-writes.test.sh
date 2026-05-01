@@ -56,6 +56,13 @@ else
   fail "mill is missing expanded-route apply call sites"
 fi
 
+if grep -Fq 'reroute_expanded_packets_for_coding_handoff' "$MILL_SCRIPT" \
+  && grep -Fq -- '--expanded-jsonl' "$MILL_SCRIPT"; then
+  pass "mill batches expanded reroute through route-tasks expanded mode"
+else
+  fail "mill is missing expanded reroute batch handoff"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 

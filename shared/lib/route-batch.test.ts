@@ -7,7 +7,7 @@ import {
   getStageAwareRouterDebugState,
   resetStageAwareRouterDebugState,
 } from './stage-aware-router.ts';
-import { routeBatch } from './route-batch.ts';
+import { routeBatch, routeExpandedPackets } from './route-batch.ts';
 import { routeWorkflowAuto } from './workflow-router.ts';
 
 let passed = 0;
@@ -325,6 +325,127 @@ await test('file-based task includes provenance path/hash and stable hash', asyn
     assert.equal(first.decision.provenance?.inputPath, packetPath);
     assert.match(first.decision.provenance?.inputHash || '', /^[a-f0-9]{64}$/);
     assert.equal(first.decision.provenance?.inputHash, second.decision.provenance?.inputHash);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('expanded reroute batches misses and loads shared context once', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  try {
+    const packetFiles = ['a', 'b', 'c'].map((suffix) => {
+      const packetFile = join(repoDir, `${suffix}-task-packet.md`);
+      writeFileSync(packetFile, `Packet ${suffix}\n`);
+      return packetFile;
+    });
+
+    resetStageAwareRouterDebugState();
+    const results = await routeExpandedPackets(packetFiles.map((packetFile, index) => ({
+      issueId: `HOK-${index + 100}`,
+      packetFile,
+      outputFile: join(repoDir, `output-${index}.json`),
+    })), { repoDir, mode: 'auto', additionalEvalsPaths: [] });
+
+    assert.equal(results.length, 3);
+    assert.equal(getStageAwareRouterDebugState().evalLoadCount, 1);
+    for (const result of results) {
+      assert.equal(result.route_source, 'batch');
+      assert.equal(result.cache_hit, false);
+      assert.ok(result.decision);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+await test('expanded reroute reuses cache and skips router for unchanged packets', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  try {
+    const packetFile = join(repoDir, 'cached-task-packet.md');
+    writeFileSync(packetFile, 'Cached packet\n');
+
+    const first = await routeExpandedPackets([{ issueId: 'HOK-200', packetFile }], {
+      repoDir,
+      mode: 'auto',
+      additionalEvalsPaths: [],
+    });
+    assert.equal(first[0]?.route_source, 'single');
+
+    resetStageAwareRouterDebugState();
+    const second = await routeExpandedPackets([{ issueId: 'HOK-200', packetFile }], {
+      repoDir,
+      mode: 'auto',
+      additionalEvalsPaths: [],
+    });
+    assert.equal(second[0]?.route_source, 'cache');
+    assert.equal(second[0]?.cache_hit, true);
+    assert.equal(getStageAwareRouterDebugState().evalLoadCount, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('expanded reroute falls back to single-task routing after batch failure', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  try {
+    const packetFiles = ['a', 'b'].map((suffix) => {
+      const packetFile = join(repoDir, `${suffix}-fallback-task-packet.md`);
+      writeFileSync(packetFile, `Packet ${suffix}\n`);
+      return packetFile;
+    });
+
+    const results = await routeExpandedPackets(packetFiles.map((packetFile, index) => ({
+      issueId: `HOK-${index + 300}`,
+      packetFile,
+    })), {
+      repoDir,
+      mode: 'auto',
+      additionalEvalsPaths: [],
+      async routeBatchImpl(tasks, options) {
+        if (tasks.length > 1) {
+          throw new Error('simulated batch failure');
+        }
+        return routeBatch(tasks, options);
+      },
+    });
+
+    for (const result of results) {
+      assert.equal(result.route_source, 'single');
+      assert.ok(result.decision);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+await test('expanded reroute retries only missing batch results individually', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  try {
+    const packetFiles = ['a', 'b', 'c'].map((suffix) => {
+      const packetFile = join(repoDir, `${suffix}-partial-task-packet.md`);
+      writeFileSync(packetFile, `Packet ${suffix}\n`);
+      return packetFile;
+    });
+
+    const results = await routeExpandedPackets(packetFiles.map((packetFile, index) => ({
+      issueId: `HOK-${index + 400}`,
+      packetFile,
+    })), {
+      repoDir,
+      mode: 'auto',
+      additionalEvalsPaths: [],
+      async routeBatchImpl(tasks, options) {
+        const routed = await routeBatch(tasks, options);
+        if (tasks.length > 1) {
+          return routed.slice(0, 2);
+        }
+        return routed;
+      },
+    });
+
+    assert.equal(results.filter((result) => result.route_source === 'batch').length, 2);
+    assert.equal(results.filter((result) => result.route_source === 'single').length, 1);
+    assert.equal(results.filter((result) => result.error).length, 0);
   } finally {
     cleanup();
   }

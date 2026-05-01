@@ -2,8 +2,20 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getHokusaiRouterConfig } from './config.ts';
+import {
+  lookupExpandedRouteCache,
+  readExpandedPacketContent,
+  recordExpandedRouteCache,
+  type ExpandedPacketFiles,
+} from './expanded-route-cache.ts';
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
-import { buildRouteProvenance, withRouteProvenance, type RouteInputKind, type RouteSource } from './route-artifact.ts';
+import {
+  buildRouteProvenance,
+  withExpandedRouteMetadata,
+  withRouteProvenance,
+  type RouteInputKind,
+  type RouteSource,
+} from './route-artifact.ts';
 import { loadStageAwareRouterContext, type StageAwareRouterContext } from './stage-aware-router.ts';
 import {
   readTaskPromptFromFile,
@@ -43,6 +55,30 @@ export interface RouteBatchOptions extends RouteWorkflowOptions {
 export interface RouteBatchResult {
   task: RouteBatchTask;
   decision: WorkflowRouteDecision;
+}
+
+export interface ExpandedRouteTask extends ExpandedPacketFiles {
+  issueId: string;
+  slug?: string;
+  featureDir?: string;
+  outputFile?: string;
+}
+
+export interface ExpandedRouteTaskResult {
+  input: ExpandedRouteTask;
+  outputFile: string;
+  packet_hash?: string;
+  cache_hit: boolean;
+  route_source?: 'batch' | 'single' | 'cache';
+  decision?: WorkflowRouteDecision;
+  error?: string;
+}
+
+export interface RouteExpandedPacketsOptions extends RouteBatchOptions {
+  routeBatchImpl?: (
+    tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind }>,
+    options?: RouteBatchOptions,
+  ) => Promise<RouteBatchResult[]>;
 }
 
 function resolveWavemillRoot(): string {
@@ -224,4 +260,195 @@ export async function routeBatch(
   }
 
   return results;
+}
+
+interface PreparedExpandedRouteTask extends ExpandedRouteTask {
+  outputFile: string;
+  prompt: string;
+  provenancePath: string;
+  packet_hash: string;
+  key: string;
+}
+
+function expandedRouteTaskKey(task: ExpandedRouteTask, index: number): string {
+  return task.issueId || task.outputFile || task.featureDir || task.packetFile || `expanded-${index}`;
+}
+
+function resolveExpandedRouteOutputFile(task: ExpandedRouteTask): string {
+  if (task.outputFile) {
+    return task.outputFile;
+  }
+  if (task.featureDir) {
+    return resolve(task.featureDir, '.post-expansion-route.json');
+  }
+  if (task.packetFile) {
+    return resolve(dirname(task.packetFile), '.post-expansion-route.json');
+  }
+  if (task.headerFile) {
+    return resolve(dirname(task.headerFile), '.post-expansion-route.json');
+  }
+  throw new Error(`Expanded route task ${task.issueId} is missing outputFile and featureDir`);
+}
+
+async function routeExpandedTaskSet(
+  tasks: PreparedExpandedRouteTask[],
+  options: RouteExpandedPacketsOptions,
+): Promise<Map<string, WorkflowRouteDecision>> {
+  if (tasks.length === 0) {
+    return new Map();
+  }
+
+  const router = options.routeBatchImpl ?? routeBatch;
+  const resolvedOptions = buildRouteBatchWorkflowOptions(options);
+  const results = await router(
+    tasks.map((task) => ({
+      issueId: task.issueId,
+      prompt: task.prompt,
+      file: task.provenancePath,
+      source: 'expanded',
+      inputKind: 'task-packet',
+    })),
+    resolvedOptions,
+  );
+
+  const decisions = new Map<string, WorkflowRouteDecision>();
+  for (const result of results) {
+    const key = tasks.find((task) => task.issueId === result.task.issueId && task.provenancePath === result.task.file)?.key;
+    if (key) {
+      decisions.set(key, result.decision);
+    }
+  }
+  return decisions;
+}
+
+export async function routeExpandedPackets(
+  tasks: ExpandedRouteTask[],
+  options: RouteExpandedPacketsOptions = {},
+): Promise<ExpandedRouteTaskResult[]> {
+  const resolvedOptions = buildRouteBatchWorkflowOptions(options);
+  const repoDir = resolvedOptions.repoDir || process.cwd();
+  const mode = resolvedOptions.mode || 'auto';
+  const operatingMode = mode === 'auto'
+    ? (resolvedOptions.operatingMode ?? getCurrentOperatingMode(repoDir))
+    : (resolvedOptions.operatingMode ?? getCurrentOperatingMode(repoDir));
+
+  const prepared: PreparedExpandedRouteTask[] = tasks.map((task, index) => {
+    const content = readExpandedPacketContent(task);
+    return {
+      ...task,
+      prompt: content.prompt,
+      provenancePath: content.provenancePath,
+      packet_hash: content.hash,
+      outputFile: resolveExpandedRouteOutputFile(task),
+      key: expandedRouteTaskKey(task, index),
+    };
+  });
+
+  const results = new Map<string, ExpandedRouteTaskResult>();
+  const misses: PreparedExpandedRouteTask[] = [];
+
+  for (const task of prepared) {
+    const cached = lookupExpandedRouteCache(repoDir, task.packet_hash, operatingMode);
+    if (!cached) {
+      misses.push(task);
+      continue;
+    }
+
+    results.set(task.key, {
+      input: task,
+      outputFile: task.outputFile,
+      packet_hash: task.packet_hash,
+      cache_hit: true,
+      route_source: 'cache',
+      decision: withExpandedRouteMetadata(cached.decision, {
+        cache_hit: true,
+        route_source: 'cache',
+        packet_hash: task.packet_hash,
+      }),
+    });
+  }
+
+  const recordFreshDecision = async (
+    task: PreparedExpandedRouteTask,
+    decision: WorkflowRouteDecision,
+    routeSource: 'batch' | 'single',
+  ): Promise<void> => {
+    const decorated = withExpandedRouteMetadata(decision, {
+      cache_hit: false,
+      route_source: routeSource,
+      packet_hash: task.packet_hash,
+    });
+    await recordExpandedRouteCache(repoDir, {
+      packet_hash: task.packet_hash,
+      decision: decorated,
+      operating_mode: operatingMode,
+      recorded_at: new Date().toISOString(),
+      input_version: '1',
+    });
+    results.set(task.key, {
+      input: task,
+      outputFile: task.outputFile,
+      packet_hash: task.packet_hash,
+      cache_hit: false,
+      route_source: routeSource,
+      decision: decorated,
+    });
+  };
+
+  const routeIndividually = async (tasksToRoute: PreparedExpandedRouteTask[]): Promise<void> => {
+    for (const task of tasksToRoute) {
+      try {
+        const singleMap = await routeExpandedTaskSet([task], resolvedOptions);
+        const decision = singleMap.get(task.key);
+        if (!decision) {
+          results.set(task.key, {
+            input: task,
+            outputFile: task.outputFile,
+            packet_hash: task.packet_hash,
+            cache_hit: false,
+            error: `Routing returned no decision for ${task.issueId}`,
+          });
+          continue;
+        }
+        await recordFreshDecision(task, decision, 'single');
+      } catch (error) {
+        results.set(task.key, {
+          input: task,
+          outputFile: task.outputFile,
+          packet_hash: task.packet_hash,
+          cache_hit: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  };
+
+  if (misses.length === 1) {
+    await routeIndividually(misses);
+  } else if (misses.length > 1) {
+    try {
+      const batchDecisions = await routeExpandedTaskSet(misses, resolvedOptions);
+      const missingFromBatch = misses.filter((task) => !batchDecisions.has(task.key));
+      for (const task of misses) {
+        const decision = batchDecisions.get(task.key);
+        if (!decision) {
+          continue;
+        }
+        await recordFreshDecision(task, decision, 'batch');
+      }
+      if (missingFromBatch.length > 0) {
+        await routeIndividually(missingFromBatch);
+      }
+    } catch {
+      await routeIndividually(misses);
+    }
+  }
+
+  return prepared.map((task) => results.get(task.key) ?? {
+    input: task,
+    outputFile: task.outputFile,
+    packet_hash: task.packet_hash,
+    cache_hit: false,
+    error: `Routing returned no result for ${task.issueId}`,
+  });
 }

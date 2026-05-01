@@ -1,8 +1,15 @@
 #!/usr/bin/env -S npx tsx
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { stdin as input } from 'node:process';
-import { routeBatch, getWavemillAdditionalEvalPaths, tasksFromPlan } from '../shared/lib/route-batch.ts';
+import {
+  routeBatch,
+  getWavemillAdditionalEvalPaths,
+  routeExpandedPackets,
+  tasksFromPlan,
+  type ExpandedRouteTask,
+} from '../shared/lib/route-batch.ts';
 import type { RouteInputKind, RouteSource } from '../shared/lib/route-artifact.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 
@@ -12,6 +19,16 @@ interface RouteBatchTaskInput {
   file?: string;
   source?: RouteSource;
   inputKind?: RouteInputKind;
+}
+
+interface ExpandedRouteTaskInput {
+  issueId?: string;
+  slug?: string;
+  featureDir?: string;
+  packetFile?: string;
+  headerFile?: string;
+  detailsFile?: string;
+  outputFile?: string;
 }
 
 async function readStdin(): Promise<string> {
@@ -54,6 +71,54 @@ async function readJsonlTasks(path: string): Promise<RouteBatchTaskInput[]> {
   return tasks;
 }
 
+async function readExpandedJsonlTasks(path: string): Promise<ExpandedRouteTask[]> {
+  const content = path === '-'
+    ? await readStdin()
+    : readFileSync(path, 'utf-8');
+
+  const tasks: ExpandedRouteTask[] = [];
+  const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  for (const [index, line] of lines.entries()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      throw new Error(`Invalid expanded JSONL at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error(`Invalid expanded JSONL at line ${index + 1}: expected object`);
+    }
+
+    const item = parsed as ExpandedRouteTaskInput;
+    if (typeof item.issueId !== 'string' || item.issueId.trim() === '') {
+      throw new Error(`Invalid expanded JSONL at line ${index + 1}: issueId is required`);
+    }
+
+    const packetFile = typeof item.packetFile === 'string' ? item.packetFile : undefined;
+    const headerFile = typeof item.headerFile === 'string' ? item.headerFile : undefined;
+    const detailsFile = typeof item.detailsFile === 'string' ? item.detailsFile : undefined;
+
+    if (!packetFile && !(headerFile && detailsFile)) {
+      throw new Error(
+        `Invalid expanded JSONL at line ${index + 1}: provide packetFile or both headerFile and detailsFile`,
+      );
+    }
+
+    tasks.push({
+      issueId: item.issueId,
+      slug: typeof item.slug === 'string' ? item.slug : undefined,
+      featureDir: typeof item.featureDir === 'string' ? item.featureDir : undefined,
+      packetFile,
+      headerFile,
+      detailsFile,
+      outputFile: typeof item.outputFile === 'string' ? item.outputFile : undefined,
+    });
+  }
+
+  return tasks;
+}
+
 runTool({
   name: 'route-tasks',
   description: 'Batch route multiple task prompts or packet files as JSONL',
@@ -61,6 +126,10 @@ runTool({
     jsonl: {
       type: 'string',
       description: 'Route one JSON object per line from a file or stdin (-)',
+    },
+    'expanded-jsonl': {
+      type: 'string',
+      description: 'Expanded packet reroute JSONL input from a file or stdin (-)',
     },
     plan: {
       type: 'string',
@@ -86,12 +155,15 @@ runTool({
     '# Route launch-plan tasks',
     'npx tsx tools/route-tasks.ts --plan /tmp/session-launch-plan.json',
     '',
+    '# Reroute expanded packets and write .post-expansion-route.json artifacts',
+    'npx tsx tools/route-tasks.ts --expanded-jsonl /tmp/expanded-route-input.jsonl',
+    '',
     '# Route JSONL from stdin',
     'cat /tmp/route-input.jsonl | npx tsx tools/route-tasks.ts --jsonl -',
   ],
   async run({ args }) {
-    if ((args.jsonl ? 1 : 0) + (args.plan ? 1 : 0) !== 1) {
-      throw new Error('Provide exactly one of --jsonl or --plan.');
+    if ((args.jsonl ? 1 : 0) + (args.plan ? 1 : 0) + (args['expanded-jsonl'] ? 1 : 0) !== 1) {
+      throw new Error('Provide exactly one of --jsonl, --expanded-jsonl, or --plan.');
     }
 
     const repoDir = args['repo-dir'] || process.cwd();
@@ -102,6 +174,48 @@ runTool({
       if (!Number.isFinite(maxCostUsd) || maxCostUsd < 0) {
         throw new Error(`--max-cost must be a non-negative number, got ${args['max-cost']}`);
       }
+    }
+
+    if (args['expanded-jsonl']) {
+      const tasks = await readExpandedJsonlTasks(args['expanded-jsonl']);
+      if (tasks.length === 0) {
+        return;
+      }
+
+      const results = await routeExpandedPackets(tasks, {
+        repoDir,
+        mode,
+        maxCostUsd,
+        additionalEvalsPaths: getWavemillAdditionalEvalPaths(repoDir),
+      });
+
+      let hadErrors = false;
+      for (const result of results) {
+        if (result.error || !result.decision) {
+          hadErrors = true;
+          console.error(`[router] expanded reroute failed issue=${result.input.issueId} error=${result.error || 'missing decision'}`);
+          continue;
+        }
+
+        mkdirSync(dirname(resolve(result.outputFile)), { recursive: true });
+        writeFileSync(result.outputFile, `${JSON.stringify(result.decision, null, 2)}\n`, 'utf-8');
+        console.error(
+          `[router] route_source=${result.route_source} packet_hash=${(result.packet_hash || '').slice(0, 12)} issue=${result.input.issueId}`,
+        );
+        console.log(JSON.stringify({
+          issueId: result.input.issueId,
+          outputFile: result.outputFile,
+          cache_hit: result.cache_hit,
+          route_source: result.route_source,
+          packet_hash: result.packet_hash,
+          ...result.decision,
+        }));
+      }
+
+      if (hadErrors) {
+        process.exitCode = 1;
+      }
+      return;
     }
 
     const tasks = args.jsonl

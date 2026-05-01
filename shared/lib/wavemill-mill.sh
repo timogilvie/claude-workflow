@@ -3033,6 +3033,9 @@ _restore_inflight_task_window_if_missing() {
         "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
     coding)
+      if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
+        log_warn "$issue → expanded reroute helper failed, attempting promotion from existing artifacts"
+      fi
       if ! apply_expanded_route_if_present "$feature_dir" "$issue" "$slug" "$wt_dir" "$STATE_FILE"; then
         log_warn "$issue → expanded route invalid; using existing execution state for coding relaunch"
       fi
@@ -4342,6 +4345,103 @@ batch_route_selected_tasks() {
   return 0
 }
 
+append_expanded_reroute_input() {
+  local jsonl_file="$1" issue="$2" slug="$3" feature_dir="$4"
+  local output_file="$feature_dir/.post-expansion-route.json"
+  local full_packet="$feature_dir/task-packet.md"
+  local header_file="$feature_dir/task-packet-header.md"
+  local details_file="$feature_dir/task-packet-details.md"
+
+  if [[ -f "$full_packet" ]]; then
+    jq -cn \
+      --arg issueId "$issue" \
+      --arg slug "$slug" \
+      --arg featureDir "$feature_dir" \
+      --arg packetFile "$full_packet" \
+      --arg outputFile "$output_file" \
+      '{issueId: $issueId, slug: $slug, featureDir: $featureDir, packetFile: $packetFile, outputFile: $outputFile}' >> "$jsonl_file"
+    printf '\n' >> "$jsonl_file"
+    return 0
+  fi
+
+  if [[ -f "$header_file" && -f "$details_file" ]]; then
+    jq -cn \
+      --arg issueId "$issue" \
+      --arg slug "$slug" \
+      --arg featureDir "$feature_dir" \
+      --arg headerFile "$header_file" \
+      --arg detailsFile "$details_file" \
+      --arg outputFile "$output_file" \
+      '{issueId: $issueId, slug: $slug, featureDir: $featureDir, headerFile: $headerFile, detailsFile: $detailsFile, outputFile: $outputFile}' >> "$jsonl_file"
+    printf '\n' >> "$jsonl_file"
+    return 0
+  fi
+
+  return 1
+}
+
+reroute_expanded_packets_for_coding_handoff() {
+  local current_issue="$1" current_slug="$2" current_feature_dir="$3"
+  local route_batch_tool="$TOOLS_DIR/route-tasks.ts"
+  local input_file output_file stderr_file
+  local -a route_max_cost_args=()
+  local count=0
+
+  if [[ ! -f "$route_batch_tool" ]]; then
+    return 1
+  fi
+
+  input_file="/tmp/${SESSION}-${current_issue}-expanded-reroute-input.jsonl"
+  output_file="/tmp/${SESSION}-${current_issue}-expanded-reroute-output.jsonl"
+  stderr_file="/tmp/${SESSION}-${current_issue}-expanded-reroute.stderr"
+  : > "$input_file"
+
+  if ! append_expanded_reroute_input "$input_file" "$current_issue" "$current_slug" "$current_feature_dir"; then
+    rm -f "$input_file" "$output_file" "$stderr_file"
+    return 1
+  fi
+  count=$((count + 1))
+
+  if [[ -f "${STATE_FILE:-}" ]]; then
+    while IFS=$'\t' read -r issue slug worktree; do
+      [[ -n "$issue" && -n "$slug" && -n "$worktree" ]] || continue
+      [[ "$issue" == "$current_issue" ]] && continue
+
+      local feature_dir="$worktree/features/$slug"
+      [[ -d "$feature_dir" ]] || continue
+      [[ -f "$feature_dir/.post-expansion-route.json" ]] && continue
+      [[ -f "$feature_dir/.coding-result.json" ]] && continue
+      [[ -f "$feature_dir/.planning-result.json" ]] || continue
+      if ! jq -e '.status == "completed"' "$feature_dir/.planning-result.json" >/dev/null 2>&1; then
+        continue
+      fi
+
+      if append_expanded_reroute_input "$input_file" "$issue" "$slug" "$feature_dir"; then
+        count=$((count + 1))
+      fi
+    done < <(jq -r '.tasks | to_entries[] | [.key, (.value.slug // ""), (.value.worktree // "")] | @tsv' "$STATE_FILE" 2>/dev/null || true)
+  fi
+
+  [[ -n "${DEFAULT_MAX_COST_USD:-}" ]] && route_max_cost_args=(--max-cost "$DEFAULT_MAX_COST_USD")
+
+  if ! _with_timeout "$API_TIMEOUT" npx tsx "$route_batch_tool" \
+    --expanded-jsonl "$input_file" \
+    --repo-dir "$REPO_DIR" \
+    "${route_max_cost_args[@]}" >"$output_file" 2>"$stderr_file"; then
+    replay_route_transparency_logs "$stderr_file"
+    if [[ -f "$current_feature_dir/.post-expansion-route.json" ]]; then
+      rm -f "$input_file" "$output_file" "$stderr_file"
+      return 0
+    fi
+    rm -f "$input_file" "$output_file" "$stderr_file"
+    return 1
+  fi
+
+  replay_route_transparency_logs "$stderr_file"
+  rm -f "$input_file" "$output_file" "$stderr_file"
+  return 0
+}
+
 
 # ============================================================================
 # BACKLOG FETCHING & CANDIDATE SCORING
@@ -5579,6 +5679,9 @@ monitor_issue_state() {
             # Record approval via approve_plan (HOK-1193: controller-owned stage result)
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
+            if ! reroute_expanded_packets_for_coding_handoff "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
+              log_warn "$ISSUE → expanded reroute helper failed, attempting promotion from existing artifacts"
+            fi
             if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
               log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"
             fi

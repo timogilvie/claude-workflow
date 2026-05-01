@@ -24,6 +24,9 @@ export interface RouteProvenance {
 
 export interface RouteDecisionWithProvenance extends WorkflowRouteDecision {
   provenance?: RouteProvenance;
+  cache_hit?: boolean;
+  route_source?: 'batch' | 'single' | 'cache';
+  packet_hash?: string;
 }
 
 export interface BuildRouteProvenanceParams {
@@ -61,6 +64,16 @@ export function withRouteProvenance<T extends WorkflowRouteDecision>(decision: T
   };
 }
 
+export function withExpandedRouteMetadata<T extends WorkflowRouteDecision>(
+  decision: T,
+  metadata: Pick<RouteDecisionWithProvenance, 'cache_hit' | 'route_source' | 'packet_hash'>,
+): T & Pick<RouteDecisionWithProvenance, 'cache_hit' | 'route_source' | 'packet_hash'> {
+  return {
+    ...decision,
+    ...metadata,
+  };
+}
+
 export interface NormalizedExpandedRouteArtifact {
   coder: string;
   codeDepth: string;
@@ -71,6 +84,9 @@ export interface NormalizedExpandedRouteArtifact {
 export interface RouteArtifactSnapshot extends NormalizedExpandedRouteArtifact {
   planDepth?: string;
   planner?: string;
+  cache_hit?: boolean;
+  route_source?: 'batch' | 'single' | 'cache';
+  packet_hash?: string;
 }
 
 export type ExpandedRouteValidation = {
@@ -128,6 +144,34 @@ export function validateExpandedRouteArtifact(value: unknown): ExpandedRouteVali
     };
   }
 
+  if (typeof artifact.cache_hit !== 'undefined' && typeof artifact.cache_hit !== 'boolean') {
+    invalid.push('cache_hit');
+  }
+
+  if (
+    typeof artifact.route_source !== 'undefined'
+    && artifact.route_source !== 'batch'
+    && artifact.route_source !== 'single'
+    && artifact.route_source !== 'cache'
+  ) {
+    invalid.push('route_source');
+  }
+
+  if (
+    typeof artifact.packet_hash !== 'undefined'
+    && (typeof artifact.packet_hash !== 'string' || !/^[a-f0-9]{64}$/.test(artifact.packet_hash))
+  ) {
+    invalid.push('packet_hash');
+  }
+
+  if (invalid.length > 0) {
+    return {
+      valid: false,
+      missing,
+      invalid,
+    };
+  }
+
   return {
     valid: true,
     missing: [],
@@ -167,6 +211,11 @@ function parseBootstrapRouteArtifact(value: unknown): RouteArtifactSnapshot | nu
     reviewMode,
     planDepth: readString(artifact.planDepth),
     planner: readString(artifact.planner),
+    cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
+    route_source: artifact.route_source === 'batch' || artifact.route_source === 'single' || artifact.route_source === 'cache'
+      ? artifact.route_source
+      : undefined,
+    packet_hash: typeof artifact.packet_hash === 'string' ? artifact.packet_hash : undefined,
   };
 }
 
@@ -200,6 +249,11 @@ export function readBothRouteArtifacts(featureDir: string): {
         ...validation.normalized,
         planDepth: readString(artifact.planDepth),
         planner: readString(artifact.planner),
+        cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
+        route_source: artifact.route_source === 'batch' || artifact.route_source === 'single' || artifact.route_source === 'cache'
+          ? artifact.route_source
+          : undefined,
+        packet_hash: typeof artifact.packet_hash === 'string' ? artifact.packet_hash : undefined,
       };
     }
   }
