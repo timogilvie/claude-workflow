@@ -1069,6 +1069,7 @@ test('getReadyConfig returns empty check lists by default', () => {
     const readyConfig = getReadyConfig(tmp);
     assert.deepEqual(readyConfig.checks, []);
     assert.deepEqual(readyConfig.requiredChecks, []);
+    assert.deepEqual(readyConfig.migrationPatterns, ['migrations/', 'alembic/versions/']);
   } finally {
     cleanUp(tmp);
   }
@@ -1105,6 +1106,23 @@ test('getReadyConfig honors explicit check lists', () => {
     const readyConfig = getReadyConfig(tmp);
     assert.deepEqual(readyConfig.checks, ['ci-status', 'merge-conflicts']);
     assert.deepEqual(readyConfig.requiredChecks, ['merge-conflicts']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getReadyConfig honors explicit migration patterns', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        migrationPatterns: ['db/revisions/', 'custom_migrations/']
+      }
+    }));
+
+    const readyConfig = getReadyConfig(tmp);
+    assert.deepEqual(readyConfig.migrationPatterns, ['db/revisions/', 'custom_migrations/']);
   } finally {
     cleanUp(tmp);
   }

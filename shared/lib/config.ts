@@ -292,6 +292,7 @@ export interface QuotaConfig {
 export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
+  migrationPatterns?: string[];
   remediation?: ReadyRemediationConfig;
 }
 
@@ -400,6 +401,11 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
   highRiskPolicy: 'manual',
   useMillSession: true,
 };
+
+export const DEFAULT_READY_MIGRATION_PATTERNS = [
+  'migrations/',
+  'alembic/versions/',
+] as const;
 
 // ────────────────────────────────────────────────────────────────
 // Schema Validation
@@ -743,6 +749,7 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
   return {
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
+    migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
     remediation: {
       enabled: config.ready?.remediation?.enabled ?? true,
       maxAttempts: config.ready?.remediation?.maxAttempts ?? 3,
