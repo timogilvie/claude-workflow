@@ -2475,6 +2475,7 @@ for fixture in \
   "$REPO_DIR/tests/fixtures/lifecycle/tend_merges_one_at_a_time.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/tend_surfaces_rebase_conflict.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/tend_challenge_winner_merges_loser_cleanup.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/tend_status_line_not_repeated.sh" \
 ; do
   if [[ ! -f "$fixture" ]]; then
     fail "Missing tend fixture $(basename "$fixture")"
