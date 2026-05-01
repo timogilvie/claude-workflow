@@ -108,7 +108,7 @@ EOF
 )
 
 render_prompt_under_test() {
-  local available="$1" avail_unblocked avail_blocked avail_blocked_count queue_plan_json grouped_display
+  local available="$1" avail_unblocked avail_blocked avail_blocked_count queue_plan_json
   avail_unblocked=$(echo "$available" | awk -F'|' '$6 == 0 || $6 == ""')
   avail_blocked=$(echo "$available" | awk -F'|' '$6 > 0')
   avail_blocked_count=0
@@ -116,15 +116,17 @@ render_prompt_under_test() {
 
   echo "Next tasks:"
   queue_plan_json=""
-  grouped_display=""
+  GROUPED_DISPLAY=""
+  GROUPED_SELECT_FROM=""
   if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
-    if grouped_display=$(render_grouped_task_list "$queue_plan_json" "$available"); then
-      echo "$grouped_display"
+    render_grouped_task_list "$queue_plan_json" "$available"
+    if [[ -n "$GROUPED_DISPLAY" ]]; then
+      echo "$GROUPED_DISPLAY"
       select_from="$GROUPED_SELECT_FROM"
       USING_GROUPED_VIEW=true
     fi
   fi
-  if [[ -z "$grouped_display" ]]; then
+  if [[ -z "$GROUPED_DISPLAY" ]]; then
     USING_GROUPED_VIEW=false
     [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
     if [[ -n "$avail_unblocked" ]]; then
@@ -173,7 +175,10 @@ test_grouped_render_with_fixture_output() {
     set -euo pipefail
     # shellcheck source=/dev/null
     source "$FUNCTIONS_FILE"
+    GROUPED_DISPLAY=""
+    GROUPED_SELECT_FROM=""
     render_grouped_task_list "$QUEUE_PLAN" "$CANDIDATES"
+    echo "$GROUPED_DISPLAY"
     echo
     echo "---SELECT---"
     printf "%s\n" "$GROUPED_SELECT_FROM"
@@ -217,7 +222,7 @@ test_fallback_when_queue_analysis_fails() {
     # shellcheck source=/dev/null
     source "$FUNCTIONS_FILE"
     render_prompt_under_test() {
-      local available="$1" avail_unblocked avail_blocked avail_blocked_count queue_plan_json grouped_display
+      local available="$1" avail_unblocked avail_blocked avail_blocked_count queue_plan_json
       avail_unblocked=$(echo "$available" | awk -F'"'"'|'"'"' '"'"'$6 == 0 || $6 == ""'"'"')
       avail_blocked=$(echo "$available" | awk -F'"'"'|'"'"' '"'"'$6 > 0'"'"')
       avail_blocked_count=0
@@ -225,15 +230,17 @@ test_fallback_when_queue_analysis_fails() {
 
       echo "Next tasks:"
       queue_plan_json=""
-      grouped_display=""
+      GROUPED_DISPLAY=""
+      GROUPED_SELECT_FROM=""
       if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
-        if grouped_display=$(render_grouped_task_list "$queue_plan_json" "$available"); then
-          echo "$grouped_display"
+        render_grouped_task_list "$queue_plan_json" "$available"
+        if [[ -n "$GROUPED_DISPLAY" ]]; then
+          echo "$GROUPED_DISPLAY"
           select_from="$GROUPED_SELECT_FROM"
           USING_GROUPED_VIEW=true
         fi
       fi
-      if [[ -z "$grouped_display" ]]; then
+      if [[ -z "$GROUPED_DISPLAY" ]]; then
         USING_GROUPED_VIEW=false
         [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
         if [[ -n "$avail_unblocked" ]]; then
@@ -252,6 +259,7 @@ test_fallback_when_queue_analysis_fails() {
     USING_GROUPED_VIEW=false
     SELECT_SHOW_ALL=false
     GROUPED_SELECT_FROM=""
+    GROUPED_DISPLAY=""
     render_prompt_under_test "$CANDIDATES"
   ' >"$stdout" 2>"$stderr"
 
