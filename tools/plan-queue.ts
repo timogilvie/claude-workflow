@@ -27,9 +27,9 @@ export function normalizeBacklog(raw: unknown): { tasks: TaskInput[]; edges: Dep
     const tasks: TaskInput[] = [];
     const edges: DependencyEdge[] = [];
     for (const item of raw as RawLinearIssue[]) {
-      if (!item || typeof item !== 'object') throw new Error('Error: backlog must be an array of task objects');
+      if (!item || typeof item !== 'object') throw new Error('backlog must be an array of task objects');
       const id = typeof item.identifier === 'string' ? item.identifier : typeof item.id === 'string' ? item.id : '';
-      if (!id) throw new Error('Error: each task must include id or identifier');
+      if (!id) throw new Error('each task must include id or identifier');
       tasks.push({ id });
 
       const relations = Array.isArray(item.relations?.nodes) ? item.relations.nodes as RawLinearRelation[] : [];
@@ -45,15 +45,15 @@ export function normalizeBacklog(raw: unknown): { tasks: TaskInput[]; edges: Dep
 
   if (raw && typeof raw === 'object') {
     const obj = raw as RawBacklogObject;
-    if (!Array.isArray(obj.tasks)) throw new Error('Error: backlog object must include tasks[]');
-    if (obj.edges !== undefined && !Array.isArray(obj.edges)) throw new Error('Error: backlog object edges must be an array');
+    if (!Array.isArray(obj.tasks)) throw new Error('backlog object must include tasks[]');
+    if (obj.edges !== undefined && !Array.isArray(obj.edges)) throw new Error('backlog object edges must be an array');
     return {
       tasks: obj.tasks as TaskInput[],
       edges: (obj.edges ?? []) as DependencyEdge[],
     };
   }
 
-  throw new Error('Error: backlog must be an array of tasks or {tasks,edges} object');
+  throw new Error('backlog must be an array of tasks or {tasks,edges} object');
 }
 
 export function formatPreview(result: PlanResult, edges: DependencyEdge[]): string {
@@ -78,15 +78,15 @@ export function formatPreview(result: PlanResult, edges: DependencyEdge[]): stri
 }
 
 async function loadInput(backlogPath?: string, project?: string): Promise<unknown> {
-  if (backlogPath && project) throw new Error('Error: provide only one of --backlog or --project');
+  if (backlogPath && project) throw new Error('provide only one of --backlog or --project');
   if (backlogPath) return JSON.parse(readFileSync(backlogPath, 'utf-8'));
   if (project) return await getBacklogForScoring(project);
   if (!process.stdin.isTTY) {
     const text = await readStdin();
-    if (!text.trim()) throw new Error('Error: stdin is empty');
+    if (!text.trim()) throw new Error('stdin is empty');
     return JSON.parse(text);
   }
-  throw new Error('Error: no input provided. Use --backlog, --project, or pipe JSON via stdin.');
+  throw new Error('no input provided. Use --backlog, --project, or pipe JSON via stdin.');
 }
 
 function main(): void {
