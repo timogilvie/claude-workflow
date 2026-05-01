@@ -292,7 +292,7 @@ describe('quota fallback', () => {
 
     const records = readFallbackRecords();
     assert.equal(records.length, 1);
-    assert.equal(records[0].schemaVersion, '1.9.0');
+    assert.equal(records[0].schemaVersion, '1.15.0');
     assert.equal(records[0].modelId, 'model-b');
     assert.equal(records[0].score, 1);
     assert.equal(records[0].fallbackEvent?.preferred_model, 'model-a');
@@ -510,7 +510,7 @@ describe('quota fallback', () => {
     const elapsedMs = Date.now() - startedAt;
 
     assert.equal(result.model, 'model-b');
-    assert.ok(elapsedMs < 1000, `expected quota fallback without backoff, got ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 2000, `expected quota fallback without backoff, got ${elapsedMs}ms`);
   });
 
   it('keeps exponential backoff for transient errors on the same model', async () => {

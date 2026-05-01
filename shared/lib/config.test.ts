@@ -33,6 +33,7 @@ import {
   getHokusaiSubmissionConfig,
   getReadyConfig,
   getModelRegistryConfig,
+  getMintEligibilityConfig,
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
 } from './config.ts';
@@ -691,6 +692,27 @@ test('getEvalConfig returns eval section', () => {
     const evalConfig = getEvalConfig(tmp);
     assert.equal(evalConfig.evalsDir, '.wavemill/evals');
     assert.equal(evalConfig.judge?.model, 'claude-haiku-4-5-20251001');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getMintEligibilityConfig returns eval mintEligibility section', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: {
+        mintEligibility: {
+          coverageThreshold: 0.9,
+          maxInvalidRouteRate: 0.05,
+        },
+      },
+    }));
+
+    const mintConfig = getMintEligibilityConfig(tmp);
+    assert.equal(mintConfig?.coverageThreshold, 0.9);
+    assert.equal(mintConfig?.maxInvalidRouteRate, 0.05);
   } finally {
     cleanUp(tmp);
   }

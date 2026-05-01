@@ -302,6 +302,29 @@
             }
           },
           "additionalProperties": false
+        },
+        "mintEligibility": {
+          "type": "object",
+          "description": "Coverage gates for minting Wavemill router benchmark results into downstream eligibility-sensitive flows.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "When false, disable mint eligibility gating for router eval outputs."
+            },
+            "coverageThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Minimum scoreable coverage required for mint eligibility. Defaults to 0.8 when omitted."
+            },
+            "maxInvalidRouteRate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Maximum invalid route rate allowed for mint eligibility. Defaults to 0.2 when omitted."
+            }
+          },
+          "additionalProperties": false
         }
       }
     },

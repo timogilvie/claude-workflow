@@ -1,0 +1,11 @@
+{
+  "issueId": "HOK-2001",
+  "planner": "gpt-5.5",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6",
+  "maxCostUsd": 3,
+  "task": {
+    "issueId": "HOK-2001",
+    "prompt": "Implement the scorer and keep router diagnostics strict."
+  }
+}

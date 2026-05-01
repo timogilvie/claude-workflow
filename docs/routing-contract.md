@@ -20,6 +20,10 @@ HOK-1510 is documentation-only. It does not change runtime behavior. The promoti
 - No change to the current startup behavior that treats `/tmp/{SESSION}-{ISSUE}-route.json` as the active startup routing artifact.
 - No change to challenge-mode pairing, operator overrides, or phase launch behavior in this issue.
 
+## Scoring Format Requirement
+
+Route artifacts used for Wavemill router benchmark scoring must be strict JSON files. Runtime readers may remain lenient and classify malformed artifacts as `invalid_route`, but benchmark inputs are only scoreable when the artifact parses as JSON and contains the required route fields.
+
 ## Current Lifecycle
 
 ### Startup Runner
@@ -56,13 +60,13 @@ Resume uses persisted execution state, not a rerun of expansion routing. `detect
 
 ### Eval Artifact Archival
 
-`archive_stage_artifacts()` copies `features/<slug>/.routing-complete` to `.wavemill/evals/artifacts/<issue>/routing-complete.json` and `features/<slug>/.post-expansion-route.json` to `.wavemill/evals/artifacts/<issue>/post-expansion-route.json`. `shared/lib/eval-context-gatherer.ts` currently loads `.routing-complete` or archived `routing-complete.json` as the routing decision; it archives but does not treat `post-expansion-route.json` as the authoritative execution route.
+`archive_stage_artifacts()` copies `features/<slug>/.routing-complete` to `.wavemill/evals/artifacts/<issue>/routing-complete.json` and `features/<slug>/.post-expansion-route.json` to `.wavemill/evals/artifacts/<issue>/post-expansion-route.json`. `shared/lib/eval-context-gatherer.ts` currently loads `.routing-complete` or archived `routing-complete.json` as the routing decision; it archives but does not treat `post-expansion-route.json` as the authoritative execution route. The Wavemill router benchmark may read both forms, but malformed JSON is classified as `invalid_route` instead of being silently skipped.
 
 ## Route Read/Write Audit
 
 | Location | File / function | R/W | Current stage | Purpose |
 | --- | --- | --- | --- | --- |
-| `/tmp/${SESSION}-${ISSUE}-route.json` | `shared/lib/wavemill-mill.sh::apply_route_json_for_issue`, startup route calls, `read_route_json()` in `shared/lib/wavemill-common.sh` | read + write | startup, dynamic launch, challenge prep | Session-scoped bootstrap route artifact used during launch before worktree routing state exists. |
+| `/tmp/${SESSION}-${ISSUE}-route.json` | `shared/lib/wavemill-mill.sh::apply_route_json_for_issue`, startup route calls, `read_route_json()` in `shared/lib/wavemill-common.sh` | read + write | startup, dynamic launch, challenge prep | Session-scoped bootstrap route artifact used during launch before worktree routing state exists. It is not the only canonical route artifact for downstream scoring. |
 | `/tmp/${SESSION}-${ISSUE}-model-suggestion.json` | `shared/lib/wavemill-mill.sh` startup/dynamic compatibility writes, `read_route_json()` fallback | read + write | startup compatibility | Deprecated coder-only fallback shim for older consumers. |
 | `/tmp/${SESSION}-${ISSUE}-route-source.txt` | `shared/lib/wavemill-mill.sh::apply_route_json_for_issue`, `launch_task()` | read + write | startup, dynamic launch | Records whether the current `/tmp` bootstrap route came from batch cache, startup cache, or live routing. |
 | `/tmp/${SESSION}-route-batch-input.jsonl` and `/tmp/${SESSION}-route-batch-output.jsonl` | `shared/lib/wavemill-mill.sh` startup batch routing | write + read | startup | Batch bootstrap routing inputs and outputs for concurrent startup launch. |

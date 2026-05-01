@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { EvalRecord, RubricEval } from './eval-schema.ts';
-import { deduplicateByHash } from './eval-aggregator.ts';
+import { deduplicateByHash, meetsMintEligibility } from './eval-aggregator.ts';
 
 let passed = 0;
 let failed = 0;
@@ -87,6 +87,41 @@ test('deduplicateByHash prefers judge provenance over earlier legacy record', ()
 
   assert.equal(result.duplicatesRemoved, 1);
   assert.equal(result.deduplicatedRecords[0]?.id, 'judge');
+});
+
+test('meetsMintEligibility blocks low coverage by default', () => {
+  const result = meetsMintEligibility({
+    scoreable_coverage: 0.79,
+    invalid_route_rate: 0.01,
+  });
+
+  assert.equal(result.eligible, false);
+  assert.equal(result.reason, 'scoreable coverage below threshold');
+  assert.equal(result.threshold, 0.8);
+});
+
+test('meetsMintEligibility blocks excessive invalid routes', () => {
+  const result = meetsMintEligibility({
+    scoreable_coverage: 0.95,
+    invalid_route_rate: 0.3,
+  });
+
+  assert.equal(result.eligible, false);
+  assert.equal(result.reason, 'invalid route rate above threshold');
+  assert.equal(result.maxInvalidRouteRate, 0.2);
+});
+
+test('meetsMintEligibility can be disabled explicitly', () => {
+  const result = meetsMintEligibility(
+    {
+      scoreable_coverage: 0.1,
+      invalid_route_rate: 0.9,
+    },
+    { enabled: false },
+  );
+
+  assert.equal(result.eligible, true);
+  assert.equal(result.reason, 'mint gating disabled');
 });
 
 process.on('exit', () => {
