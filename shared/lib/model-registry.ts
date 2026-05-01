@@ -284,6 +284,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['compatibility alias for existing DeepSeek integrations'],
       weaknesses: ['compatibility alias', 'future deprecation risk'],
       qualityScores: scores(46, 70, 76, 68, 40),
+      agent: 'claude',
     },
     'deepseek-reasoner': {
       vendor: 'deepseek',
@@ -291,6 +292,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['reasoning-oriented compatibility alias'],
       weaknesses: ['compatibility alias', 'future deprecation risk'],
       qualityScores: scores(44, 78, 74, 70, 36),
+      agent: 'claude',
     },
   },
   ladders: {

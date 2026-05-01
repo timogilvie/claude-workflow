@@ -4073,12 +4073,22 @@ archive_stage_artifacts() {
     fi
 
     # Routing decision
-    [[ -f "$feature_dir/.routing-complete" ]] && \
-      cp "$feature_dir/.routing-complete" "$archive_dir/routing-complete.json" 2>/dev/null || true
+    if [[ -f "$feature_dir/.routing-complete" ]]; then
+      if jq -e . "$feature_dir/.routing-complete" >/dev/null 2>&1; then
+        cp "$feature_dir/.routing-complete" "$archive_dir/routing-complete.json" 2>/dev/null || true
+      else
+        log_warn "  Skipping invalid route artifact archive: $feature_dir/.routing-complete"
+      fi
+    fi
 
     # Post-expansion route
-    [[ -f "$feature_dir/.post-expansion-route.json" ]] && \
-      cp "$feature_dir/.post-expansion-route.json" "$archive_dir/post-expansion-route.json" 2>/dev/null || true
+    if [[ -f "$feature_dir/.post-expansion-route.json" ]]; then
+      if jq -e . "$feature_dir/.post-expansion-route.json" >/dev/null 2>&1; then
+        cp "$feature_dir/.post-expansion-route.json" "$archive_dir/post-expansion-route.json" 2>/dev/null || true
+      else
+        log_warn "  Skipping invalid route artifact archive: $feature_dir/.post-expansion-route.json"
+      fi
+    fi
   fi
 
   # Count archived files for logging
@@ -5127,7 +5137,8 @@ Implement from the issue description plus direct codebase analysis."
         routedAt: (if $provenanceRoutedAt == "" then (now | todateiso8601) else $provenanceRoutedAt end),
         routerMode: (if $provenanceRouterMode == "" then "normal" else $provenanceRouterMode end)
       }
-    } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$routing_file"
+    } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' \
+    | write_json_artifact "$routing_file"
 
   # Save initial route for eval comparison (routed on raw description).
   # Always stamp source='bootstrap' regardless of what the batch router recorded,
@@ -5135,9 +5146,8 @@ Implement from the issue description plus direct codebase analysis."
   if [[ -f "$feature_dir/.initial-route.json" ]]; then
     log "info" "  Keeping existing .initial-route.json for $issue"
   else
-    local initial_route_tmp="$feature_dir/.initial-route.json.tmp"
-    jq '.provenance.source = "bootstrap"' "$routing_file" > "$initial_route_tmp" \
-      && mv "$initial_route_tmp" "$feature_dir/.initial-route.json"
+    jq '.provenance.source = "bootstrap"' "$routing_file" \
+      | write_json_artifact "$feature_dir/.initial-route.json"
   fi
 
   # Launch planning phase directly with the routed model (skip routing agent)
