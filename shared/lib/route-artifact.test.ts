@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
-import { buildRouteProvenance, validateExpandedRouteArtifact } from './route-artifact.ts';
+import { buildRouteProvenance, stringifyRouteArtifact, validateExpandedRouteArtifact, writeRouteArtifact } from './route-artifact.ts';
 
 test('same input bytes produce same sha256', () => {
   const a = buildRouteProvenance({
@@ -131,4 +134,30 @@ test('validateExpandedRouteArtifact rejects blank execution fields', () => {
   assert.equal(result.valid, false);
   assert.deepEqual(result.missing, []);
   assert.deepEqual(result.invalid, ['coder']);
+});
+
+test('stringifyRouteArtifact returns strict JSON with trailing newline', () => {
+  const output = stringifyRouteArtifact({ coder: 'gpt-5.4', nested: { ok: true } });
+
+  assert.match(output, /^\{/);
+  assert.match(output, /\n$/);
+  assert.doesNotThrow(() => JSON.parse(output));
+});
+
+test('writeRouteArtifact writes strict JSON bytes parseable as-is', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'route-artifact-'));
+  try {
+    const target = join(dir, '.routing-complete');
+    writeRouteArtifact(target, { coder: 'gpt-5.4', reviewMode: 'llm' });
+
+    const written = readFileSync(target, 'utf-8');
+    assert.equal(written.trimStart().startsWith('{'), true);
+    assert.doesNotThrow(() => JSON.parse(written));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeRouteArtifact rejects non-serializable top-level payloads', () => {
+  assert.throws(() => writeRouteArtifact(join(tmpdir(), 'unused.json'), undefined), /serialize to a JSON document/);
 });
