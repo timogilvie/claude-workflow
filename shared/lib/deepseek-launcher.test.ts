@@ -411,6 +411,38 @@ test('uses ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY as the resolved key', () =
 });
 
 // ────────────────────────────────────────────────────────────────
+// REQ-F5: env injection validation (HOK-1489)
+// Verify ANTHROPIC_BASE_URL, auth env var, and ANTHROPIC_MODEL are all
+// present in the launcher env without making a real network call.
+// ────────────────────────────────────────────────────────────────
+
+test('REQ-F5: ANTHROPIC_BASE_URL points to DeepSeek endpoint (no network call)', () => {
+  const tmp = makeTempRepo();
+  try {
+    const env = buildDeepSeekLauncherEnv({
+      repoDir: tmp,
+      session: 'sess1',
+      issue: 'HOK-1489',
+      processEnv: { DEEPSEEK_API_KEY: 'sk-test' },
+    });
+    assert.ok(
+      env.ANTHROPIC_BASE_URL.startsWith('https://api.deepseek.com'),
+      `ANTHROPIC_BASE_URL should point to DeepSeek, got: ${env.ANTHROPIC_BASE_URL}`,
+    );
+    assert.ok(
+      typeof env.ANTHROPIC_AUTH_TOKEN === 'string' && env.ANTHROPIC_AUTH_TOKEN.length > 0,
+      'ANTHROPIC_AUTH_TOKEN must be a non-empty string',
+    );
+    assert.ok(
+      typeof env.ANTHROPIC_MODEL === 'string' && env.ANTHROPIC_MODEL.length > 0,
+      'ANTHROPIC_MODEL must be set',
+    );
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
 // Results
 // ────────────────────────────────────────────────────────────────
 

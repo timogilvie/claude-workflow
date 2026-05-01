@@ -1,6 +1,5 @@
 import {
   buildDeepSeekDryRunPlan,
-  DEEPSEEK_SMOKE_SKIP_MESSAGE,
   runDeepSeekSmoke,
 } from '../shared/lib/deepseek-smoke.ts';
 
