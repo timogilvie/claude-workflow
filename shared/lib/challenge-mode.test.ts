@@ -3,13 +3,16 @@ import type { WorkflowRouteDecision } from './workflow-router.ts';
 import {
   canRunChallenge,
   chooseDistinctChallengerModel,
+  routeChangedMaterially,
   deriveChallengeBranch,
   deriveChallengeSlug,
   deriveChallengerKey,
   getChallengeModelPool,
+  pickChallengeWorkflowsWithContext,
   pickChallengeModels,
   pickChallengeWorkflows,
 } from './challenge-mode.ts';
+import type { RouteArtifactSnapshot } from './route-artifact.ts';
 
 let passed = 0;
 let failed = 0;
@@ -227,6 +230,191 @@ test('pickChallengeWorkflows returns null when fewer than two distinct models ex
     },
   );
   assert.equal(pair, null);
+});
+
+test('routeChangedMaterially ignores model swaps within same class', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    coder: 'claude-sonnet-4-5-20250929',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-7',
+    codeDepth: 'medium',
+    reviewMode: 'static+llm',
+  };
+
+  assert.deepEqual(routeChangedMaterially(bootstrap, expanded), { changed: false, reasons: [] });
+});
+
+test('routeChangedMaterially detects class and depth changes', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-4-5-20250929',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'llm',
+  };
+
+  assert.deepEqual(routeChangedMaterially(bootstrap, expanded), {
+    changed: true,
+    reasons: ['coder_class', 'code_depth', 'reviewer_class'],
+  });
+});
+
+test('routeChangedMaterially compares unknown models by exact id', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    coder: 'custom-a',
+    reviewer: 'custom-reviewer',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'custom-b',
+    reviewer: 'custom-reviewer',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+
+  assert.deepEqual(routeChangedMaterially(bootstrap, expanded), {
+    changed: true,
+    reasons: ['coder_class'],
+  });
+});
+
+test('pickChallengeWorkflowsWithContext uses bootstrap route when expanded route is absent', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    planner: 'gpt-5.4',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-6',
+    planDepth: 'deep',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['claude-sonnet-4-6', 'gpt-5.4'],
+    {
+      pairId: 'HOK-976',
+      issueId: 'HOK-976',
+      slug: 'bootstrap-only',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-sonnet-4-6',
+      randomFn: () => 0,
+    },
+    { bootstrap, expanded: null },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.routeContext.decisionSource, 'bootstrap');
+  assert.equal(pair!.primary.planner, 'gpt-5.4');
+  assert.equal(pair!.primary.planDepth, 'deep');
+  assert.equal(pair!.primary.reviewer, 'claude-opus-4-6');
+});
+
+test('pickChallengeWorkflowsWithContext uses expanded route when bootstrap is unavailable', () => {
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'static',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['gpt-5.4', 'claude-sonnet-4-6'],
+    {
+      pairId: 'HOK-977',
+      issueId: 'HOK-977',
+      slug: 'expanded-only',
+      prompt: 'irrelevant',
+      randomFn: () => 0,
+    },
+    { bootstrap: null, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.routeContext.decisionSource, 'expanded');
+  assert.equal(pair!.primary.model, 'gpt-5.4');
+  assert.equal(pair!.primary.codeDepth, 'deep');
+});
+
+test('pickChallengeWorkflowsWithContext preserves bootstrap participants when route is not materially different', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    planner: 'claude-opus-4-6',
+    coder: 'claude-sonnet-4-5-20250929',
+    reviewer: 'claude-opus-4-6',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-7',
+    codeDepth: 'medium',
+    reviewMode: 'static+llm',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['claude-sonnet-4-6', 'gpt-5.4'],
+    {
+      pairId: 'HOK-978',
+      issueId: 'HOK-978',
+      slug: 'preserved',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-sonnet-4-5-20250929',
+      randomFn: () => 0,
+    },
+    { bootstrap, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.routeContext.decisionSource, 'preserved');
+  assert.equal(pair!.primary.model, 'claude-sonnet-4-5-20250929');
+  assert.equal(pair!.routeContext.refreshRationale, 'expanded route matches bootstrap on coder class/depth');
+});
+
+test('pickChallengeWorkflowsWithContext refreshes participants when expanded route changes materially', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    planner: 'claude-opus-4-6',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-4-5-20250929',
+    planDepth: 'deep',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'static',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['gpt-5.4', 'claude-sonnet-4-6'],
+    {
+      pairId: 'HOK-979',
+      issueId: 'HOK-979',
+      slug: 'refreshed',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-sonnet-4-6',
+      randomFn: () => 0,
+    },
+    { bootstrap, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.routeContext.decisionSource, 'expanded');
+  assert.equal(pair!.primary.model, 'gpt-5.4');
+  assert.equal(pair!.primary.codeDepth, 'deep');
+  assert.equal(pair!.primary.planner, 'claude-opus-4-6');
+  assert.equal(pair!.primary.planDepth, 'deep');
 });
 
 process.on('exit', () => {

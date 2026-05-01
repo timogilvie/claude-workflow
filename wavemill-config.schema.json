@@ -525,6 +525,12 @@
           "default": [],
           "description": "Checks that must pass for merge approval (subset of checks)"
         },
+        "migrationPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["migrations/", "alembic/versions/"],
+          "description": "Regex patterns used to identify migration files across the repository."
+        },
         "remediation": {
           "type": "object",
           "description": "Automatic remediation settings for fixable ready-check failures.",

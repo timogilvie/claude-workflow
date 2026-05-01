@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
-import { buildRouteProvenance, stringifyRouteArtifact, validateExpandedRouteArtifact, writeRouteArtifact } from './route-artifact.ts';
+import {
+  buildRouteProvenance,
+  readBothRouteArtifacts,
+  stringifyRouteArtifact,
+  validateExpandedRouteArtifact,
+  writeRouteArtifact,
+} from './route-artifact.ts';
 
 test('same input bytes produce same sha256', () => {
   const a = buildRouteProvenance({
@@ -160,4 +166,97 @@ test('writeRouteArtifact writes strict JSON bytes parseable as-is', () => {
 
 test('writeRouteArtifact rejects non-serializable top-level payloads', () => {
   assert.throws(() => writeRouteArtifact(join(tmpdir(), 'unused.json'), undefined), /serialize to a JSON document/);
+});
+
+function makeFeatureDir(): string {
+  const root = mkdtempSync(join(tmpdir(), 'route-artifact-'));
+  const featureDir = join(root, 'features', 'demo');
+  mkdirSync(featureDir, { recursive: true });
+  return featureDir;
+}
+
+test('readBothRouteArtifacts returns both snapshots when present', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+    planner: 'gpt-5.4',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-6',
+    planDepth: 'deep',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  }));
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-4-5-20250929',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+  }));
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.deepEqual(result.bootstrap, {
+    planner: 'gpt-5.4',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-6',
+    planDepth: 'deep',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  });
+  assert.deepEqual(result.expanded, {
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-4-5-20250929',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+    planDepth: undefined,
+    planner: undefined,
+  });
+});
+
+test('readBothRouteArtifacts returns null for missing sides independently', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  }));
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.equal(result.bootstrap?.coder, 'claude-sonnet-4-6');
+  assert.equal(result.expanded, null);
+});
+
+test('readBothRouteArtifacts reads expanded-only artifacts', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewRecommended: 'static',
+  }));
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.equal(result.bootstrap, null);
+  assert.deepEqual(result.expanded, {
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'static',
+    planDepth: undefined,
+    planner: undefined,
+  });
+});
+
+test('readBothRouteArtifacts returns null for malformed artifacts without throwing', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.initial-route.json'), '{');
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+    coder: '',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'static',
+  }));
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.equal(result.bootstrap, null);
+  assert.equal(result.expanded, null);
 });

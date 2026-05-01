@@ -1697,6 +1697,9 @@ for t in "${TASKS[@]}"; do
     _rs=$((STARTUP_SLOT_LIMIT - slots_used))
     (( _rs < 2 )) && _rs=2
     challenge_args=(--issue "$ISSUE" --slug "$SLUG" --title "$TITLE" --repo-dir "$REPO_DIR" --remaining-slots "$_rs")
+    if [[ -d "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" ]]; then
+      challenge_args+=(--feature-dir "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}")
+    fi
     [[ -n "$rec_model" ]] && challenge_args+=(--primary-model "$rec_model")
     challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
     challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
@@ -5596,8 +5599,57 @@ monitor_issue_state() {
             else
               coder_model=$(read_phase_config "$FEATURE_DIR" "coding" "model")
               [[ -z "$coder_model" ]] && coder_model=$(get_task_meta "$ISSUE" "coderModel")
-              # For challenge tasks, the challenge model MUST override the routed coder
               challenge_coder=$(get_task_meta "$ISSUE" "challengeModel")
+              if [[ -n "$challenge_coder" ]] && [[ -f "$FEATURE_DIR/.post-expansion-route.json" ]]; then
+                refresh_title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+                if [[ -z "$refresh_title" ]]; then
+                  issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+                  refresh_title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+                fi
+                refreshed_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" \
+                  --issue "$ISSUE" \
+                  --slug "$SLUG" \
+                  --title "$refresh_title" \
+                  --repo-dir "$REPO_DIR" \
+                  --remaining-slots 2 \
+                  --primary-model "$challenge_coder" \
+                  --feature-dir "$FEATURE_DIR" 2>/dev/null || echo "")
+                refreshed_source=$(echo "$refreshed_plan" | jq -r '.decisionSource // "bootstrap"' 2>/dev/null || echo "bootstrap")
+                if [[ "$refreshed_source" == "expanded" ]]; then
+                  new_primary=$(echo "$refreshed_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
+                  new_challenger_key=$(echo "$refreshed_plan" | jq -r '.entries[1].key // empty' 2>/dev/null)
+                  new_challenger_model=$(echo "$refreshed_plan" | jq -r '.entries[1].model // empty' 2>/dev/null)
+
+                  if [[ -n "$new_primary" ]]; then
+                    current_pr=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].pr // ""')
+                    current_status=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].status // ""')
+                    current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
+                    current_linear_issue=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].linearIssueId // ""')
+                    save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$current_pr" "$current_status" "$current_agent" "$current_linear_issue" \
+                      "true" "$ISSUE" "primary" "$new_primary"
+                    challenge_coder="$new_primary"
+                  fi
+
+                  if [[ -n "$new_challenger_key" ]] && [[ -n "$new_challenger_model" ]]; then
+                    challenger_slug=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].slug // ""')
+                    challenger_branch=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].branch // ""')
+                    challenger_worktree=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].worktree // ""')
+                    challenger_pr=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].pr // ""')
+                    challenger_status=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].status // ""')
+                    challenger_agent=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].agent // ""')
+                    challenger_linear_issue=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].linearIssueId // ""')
+                    if [[ -n "$challenger_slug" ]] && [[ -n "$challenger_branch" ]] && [[ -n "$challenger_worktree" ]]; then
+                      save_task_state "$new_challenger_key" "$challenger_slug" "$challenger_branch" "$challenger_worktree" "$challenger_pr" "$challenger_status" "$challenger_agent" "$challenger_linear_issue" \
+                        "true" "$ISSUE" "challenger" "$new_challenger_model"
+                    fi
+                  fi
+
+                  log "status" "  $ISSUE: Challenge participants refreshed (expanded route): ${new_primary:-$challenge_coder} vs ${new_challenger_model:-unknown}"
+                elif [[ "$refreshed_source" == "preserved" ]]; then
+                  log "debug" "  $ISSUE: Challenge participants preserved after expanded routing"
+                fi
+              fi
+              # For challenge tasks, the challenge model MUST override the routed coder
               if [[ -n "$challenge_coder" ]]; then
                 coder_model="$challenge_coder"
               fi

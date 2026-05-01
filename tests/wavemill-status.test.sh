@@ -102,6 +102,7 @@ mkdir -p \
   "$WORKTREES_DIR/coding-task/features/coding-task" \
   "$WORKTREES_DIR/review-task/features/review-task" \
   "$WORKTREES_DIR/ready-task/features/ready-task" \
+  "$WORKTREES_DIR/ready-conflict-task/features/ready-conflict-task" \
   "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task" \
   "$WORKTREES_DIR/ready-failed-task/features/ready-failed-task" \
   "$WORKTREES_DIR/stale-task/features/stale-task"
@@ -462,6 +463,63 @@ if grep -q 'HOK-1302.*ready-task.*🚦 ready.*● running' "$OUTPUT_READY"; then
   pass "shows ready phase with emoji"
 else
   fail "ready phase row is missing emoji"
+fi
+
+STATE_FILE_READY_CONFLICT="$TMP_DIR/state-ready-conflict.json"
+cat > "$STATE_FILE_READY_CONFLICT" <<EOF
+{
+  "tasks": {
+    "HOK-1305": {
+      "slug": "ready-conflict-task",
+      "branch": "task/ready-conflict-task",
+      "worktree": "$WORKTREES_DIR/ready-conflict-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+BEHAVIOR_READY_CONFLICT="$TMP_DIR/behavior-ready-conflict.json"
+cat > "$BEHAVIOR_READY_CONFLICT" <<'EOF'
+{
+  "pane": {
+    "HOK-1305-ready-conflict-task": "11"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {
+    "task/ready-conflict-task": "413|OPEN"
+  },
+  "checks": {
+    "task/ready-conflict-task": "pass"
+  }
+}
+EOF
+
+touch "$WORKTREES_DIR/ready-conflict-task/features/ready-conflict-task/.conflict-detected"
+
+OUTPUT_READY_CONFLICT="$TMP_DIR/output-ready-conflict.txt"
+run_render "$STATE_FILE_READY_CONFLICT" "$WORKTREES_DIR" "$BEHAVIOR_READY_CONFLICT" "$OUTPUT_READY_CONFLICT"
+
+if grep -q 'HOK-1305.*ready-conflict-task.*⚠ ready.*● running.*#413 ⚠' "$OUTPUT_READY_CONFLICT" \
+  && ! grep -q 'HOK-1305.*ready-conflict-task.*🚦 ready.*● running.*#413 ✓' "$OUTPUT_READY_CONFLICT"; then
+  pass "shows conflicted ready tasks with warning indicators"
+else
+  fail "conflicted ready task still looks mergeable"
+fi
+
+rm -f "$WORKTREES_DIR/ready-conflict-task/features/ready-conflict-task/.conflict-detected"
+OUTPUT_READY_RECOVERED="$TMP_DIR/output-ready-recovered.txt"
+run_render "$STATE_FILE_READY_CONFLICT" "$WORKTREES_DIR" "$BEHAVIOR_READY_CONFLICT" "$OUTPUT_READY_RECOVERED"
+
+if grep -q 'HOK-1305.*ready-conflict-task.*🚦 ready.*● running.*#413 ✓' "$OUTPUT_READY_RECOVERED" \
+  && ! grep -q 'HOK-1305.*ready-conflict-task.*⚠ ready.*● running.*#413 ⚠' "$OUTPUT_READY_RECOVERED"; then
+  pass "restores mergeable ready styling after conflict clears"
+else
+  fail "ready styling did not recover after conflict cleared"
 fi
 
 cat > "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task/.ready-result.json" <<'EOF'

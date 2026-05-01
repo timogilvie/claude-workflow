@@ -337,6 +337,7 @@ Configuration cases:
 - `ready` missing from `.wavemill-config.json`: all available ready checks can run
 - `ready.checks`: restricts the set of checks to run
 - `ready.requiredChecks`: marks a subset of checks as merge-blocking
+- `ready.migrationPatterns`: overrides the regex patterns used to discover migration files for migration-related checks
 
 Workflow expectations:
 
@@ -349,7 +350,8 @@ Minimal explicit configuration:
 {
   "ready": {
     "checks": [],
-    "requiredChecks": []
+    "requiredChecks": [],
+    "migrationPatterns": ["migrations/", "alembic/versions/"]
   }
 }
 ```

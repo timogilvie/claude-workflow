@@ -17,7 +17,7 @@
 
 import { execShellCommand, escapeShellArg } from './shell-utils.ts';
 import { extractReleaseReadiness, type ReleaseReadiness } from './task-packet-utils.ts';
-import { getReadyConfig } from './config.ts';
+import { DEFAULT_READY_MIGRATION_PATTERNS, getReadyConfig } from './config.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -106,6 +106,11 @@ export interface ReadyStageConfig {
    * Other checks can warn but won't fail the verdict.
    */
   requiredChecks?: string[];
+
+  /**
+   * Regex patterns used to identify migration files in the repository.
+   */
+  migrationPatterns?: string[];
 }
 
 /**
@@ -161,6 +166,195 @@ export const readyStageDeps = {
   execShellCommand,
   sleep,
 };
+
+interface MigrationRevision {
+  file: string;
+  revision: string;
+  downRevision: string | null;
+}
+
+interface MigrationGraphCycle {
+  revisions: string[];
+  files: string[];
+}
+
+const DEFAULT_SCHEMA_PATTERNS = [
+  /\.prisma$/,
+  /schema\.sql$/,
+  /models\.py$/,
+];
+
+const MIGRATION_SCAN_IGNORED_DIRS = new Set([
+  '.git',
+  '.wavemill',
+  'node_modules',
+]);
+
+function compileMigrationPatterns(
+  patternSources: string[]
+): { patterns: RegExp[] } | { error: string; pattern: string } {
+  const patterns: RegExp[] = [];
+
+  for (const source of patternSources) {
+    try {
+      patterns.push(new RegExp(source));
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : String(error),
+        pattern: source,
+      };
+    }
+  }
+
+  return { patterns };
+}
+
+function getMigrationPatternsOrCheck(patternSources: string[], checkName: string): RegExp[] | ReadyCheck {
+  const compiled = compileMigrationPatterns(patternSources);
+  if ('error' in compiled) {
+    return {
+      name: checkName,
+      status: 'fail',
+      message: `Invalid ready.migrationPatterns entry: ${compiled.pattern}`,
+      details: {
+        pattern: compiled.pattern,
+        error: compiled.error,
+      },
+    };
+  }
+  return compiled.patterns;
+}
+
+function findMigrationFiles(changedFiles: string[], migrationPatterns: RegExp[]): string[] {
+  return changedFiles.filter(file => migrationPatterns.some(pattern => pattern.test(file)));
+}
+
+async function collectMigrationFiles(repoDir: string, migrationPatterns: RegExp[]): Promise<string[]> {
+  const matchedFiles: string[] = [];
+  const pendingDirs = [repoDir];
+
+  while (pendingDirs.length > 0) {
+    const currentDir = pendingDirs.pop();
+    if (!currentDir) {
+      continue;
+    }
+
+    const entries = await fs.readdir(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        if (!MIGRATION_SCAN_IGNORED_DIRS.has(entry.name)) {
+          pendingDirs.push(entryPath);
+        }
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const relativePath = path.relative(repoDir, entryPath).split(path.sep).join('/');
+      if (migrationPatterns.some(pattern => pattern.test(relativePath))) {
+        matchedFiles.push(relativePath);
+      }
+    }
+  }
+
+  matchedFiles.sort();
+  return matchedFiles;
+}
+
+function parseMigrationRevision(file: string, content: string): MigrationRevision | { error: string; details: Record<string, unknown> } {
+  const revisionMatch = content.match(/^\s*revision\s*=\s*(['"])([^'"]+)\1/m);
+  if (!revisionMatch) {
+    return {
+      error: 'Migration file is missing a parseable revision',
+      details: { file },
+    };
+  }
+
+  const downRevisionLineMatch = content.match(/^\s*down_revision\s*=\s*(.+)$/m);
+  if (!downRevisionLineMatch) {
+    return {
+      error: 'Migration file is missing down_revision',
+      details: { file, revision: revisionMatch[2] },
+    };
+  }
+
+  const downRevisionValue = downRevisionLineMatch[1]?.trim() ?? '';
+  let downRevision: string | null;
+  if (downRevisionValue === 'None') {
+    downRevision = null;
+  } else {
+    const downRevisionMatch = downRevisionValue.match(/^(['"])([^'"]+)\1$/);
+    if (!downRevisionMatch) {
+      return {
+        error: 'Migration file has an unsupported down_revision format',
+        details: {
+          file,
+          revision: revisionMatch[2],
+          downRevision: downRevisionValue,
+        },
+      };
+    }
+    downRevision = downRevisionMatch[2];
+  }
+
+  return {
+    file,
+    revision: revisionMatch[2]!,
+    downRevision,
+  };
+}
+
+function detectMigrationCycle(revisions: Map<string, MigrationRevision>): MigrationGraphCycle | null {
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const stack: string[] = [];
+
+  function visit(revisionId: string): MigrationGraphCycle | null {
+    if (visiting.has(revisionId)) {
+      const cycleStartIndex = stack.indexOf(revisionId);
+      const cycleRevisions = [...stack.slice(cycleStartIndex), revisionId];
+      return {
+        revisions: cycleRevisions,
+        files: cycleRevisions
+          .slice(0, -1)
+          .map(id => revisions.get(id)?.file)
+          .filter((file): file is string => Boolean(file)),
+      };
+    }
+
+    if (visited.has(revisionId)) {
+      return null;
+    }
+
+    visiting.add(revisionId);
+    stack.push(revisionId);
+
+    const node = revisions.get(revisionId);
+    if (node?.downRevision && revisions.has(node.downRevision)) {
+      const cycle = visit(node.downRevision);
+      if (cycle) {
+        return cycle;
+      }
+    }
+
+    stack.pop();
+    visiting.delete(revisionId);
+    visited.add(revisionId);
+    return null;
+  }
+
+  for (const revisionId of [...revisions.keys()].sort()) {
+    const cycle = visit(revisionId);
+    if (cycle) {
+      return cycle;
+    }
+  }
+
+  return null;
+}
 
 // ────────────────────────────────────────────────────────────────
 // Context Gathering Functions
@@ -329,22 +523,9 @@ function loadDeployConfig(repoDir: string): Record<string, unknown> {
  * @internal Exported for testing purposes
  */
 export function checkSchemaMigrations(changedFiles: string[], repoDir: string): ReadyCheck {
-  // Define schema file patterns
-  const schemaPatterns = [
-    /\.prisma$/,
-    /schema\.sql$/,
-    /models\.py$/,  // Django models
-  ];
-
-  // Define migration file patterns
-  const migrationPatterns = [
-    /migrations\//,
-    /alembic\/versions\//,
-  ];
-
   // Check if any schema files changed
   const schemaFilesChanged = changedFiles.filter(file =>
-    schemaPatterns.some(pattern => pattern.test(file))
+    DEFAULT_SCHEMA_PATTERNS.some(pattern => pattern.test(file))
   );
 
   if (schemaFilesChanged.length === 0) {
@@ -357,9 +538,14 @@ export function checkSchemaMigrations(changedFiles: string[], repoDir: string): 
   }
 
   // Check if any migration files changed
-  const migrationFilesChanged = changedFiles.filter(file =>
-    migrationPatterns.some(pattern => pattern.test(file))
+  const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
+    getReadyConfig(repoDir).migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    'schema-migrations'
   );
+  if (!Array.isArray(migrationPatternsOrCheck)) {
+    return migrationPatternsOrCheck;
+  }
+  const migrationFilesChanged = findMigrationFiles(changedFiles, migrationPatternsOrCheck);
 
   if (migrationFilesChanged.length === 0) {
     return {
@@ -417,7 +603,8 @@ export function checkDeployPaths(changedFiles: string[], deployConfig: Record<st
  */
 function checkReleaseRequirements(
   taskPacket: TaskPacketContext | null,
-  prContext: PRContext
+  prContext: PRContext,
+  repoDir: string
 ): ReadyCheck {
   if (!taskPacket) {
     return {
@@ -441,22 +628,17 @@ function checkReleaseRequirements(
   const { changedFiles } = prContext;
 
   // Define schema and migration file patterns (same as checkSchemaMigrations)
-  const schemaPatterns = [
-    /\.prisma$/,
-    /schema\.sql$/,
-    /models\.py$/,
-  ];
-  const migrationPatterns = [
-    /migrations\//,
-    /alembic\/versions\//,
-  ];
-
   const schemaFilesChanged = changedFiles.filter(file =>
-    schemaPatterns.some(pattern => pattern.test(file))
+    DEFAULT_SCHEMA_PATTERNS.some(pattern => pattern.test(file))
   );
-  const migrationFilesChanged = changedFiles.filter(file =>
-    migrationPatterns.some(pattern => pattern.test(file))
+  const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
+    getReadyConfig(repoDir).migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    'release-requirements'
   );
+  if (!Array.isArray(migrationPatternsOrCheck)) {
+    return migrationPatternsOrCheck;
+  }
+  const migrationFilesChanged = findMigrationFiles(changedFiles, migrationPatternsOrCheck);
 
   // Check database change risk
   if (releaseReadiness.databaseChangeRisk === 'required') {
@@ -521,6 +703,150 @@ function checkReleaseRequirements(
     status: 'pass',
     message: 'Release requirements met',
     details,
+  };
+}
+
+export async function checkMigrationChainIntegrity(
+  repoDir: string,
+  migrationPatternSources: string[] = [...DEFAULT_READY_MIGRATION_PATTERNS]
+): Promise<ReadyCheck> {
+  const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
+    migrationPatternSources,
+    'migration-chain-integrity'
+  );
+  if (!Array.isArray(migrationPatternsOrCheck)) {
+    return migrationPatternsOrCheck;
+  }
+
+  const migrationFiles = await collectMigrationFiles(repoDir, migrationPatternsOrCheck);
+  if (migrationFiles.length === 0) {
+    return {
+      name: 'migration-chain-integrity',
+      status: 'skip',
+      message: 'No migration files found in repository',
+      details: {},
+    };
+  }
+
+  const revisions = new Map<string, MigrationRevision>();
+  const duplicateRevisions = new Map<string, string[]>();
+
+  for (const relativeFile of migrationFiles) {
+    const filePath = path.join(repoDir, relativeFile);
+    const content = await fs.readFile(filePath, 'utf-8');
+    const parsed = parseMigrationRevision(relativeFile, content);
+    if ('error' in parsed) {
+      return {
+        name: 'migration-chain-integrity',
+        status: 'fail',
+        message: parsed.error,
+        details: {
+          migrationFiles,
+          ...parsed.details,
+        },
+      };
+    }
+
+    const existing = revisions.get(parsed.revision);
+    if (existing) {
+      duplicateRevisions.set(parsed.revision, [existing.file, parsed.file]);
+      continue;
+    }
+
+    revisions.set(parsed.revision, parsed);
+  }
+
+  if (duplicateRevisions.size > 0) {
+    return {
+      name: 'migration-chain-integrity',
+      status: 'fail',
+      message: 'Duplicate migration revision IDs found',
+      details: {
+        migrationFiles,
+        duplicateRevisions: [...duplicateRevisions.entries()].map(([revision, files]) => ({
+          revision,
+          files,
+        })),
+      },
+    };
+  }
+
+  const missingDownRevisions = [...revisions.values()]
+    .filter(revision => revision.downRevision !== null && !revisions.has(revision.downRevision))
+    .map(revision => ({
+      file: revision.file,
+      revision: revision.revision,
+      downRevision: revision.downRevision,
+    }));
+  if (missingDownRevisions.length > 0) {
+    return {
+      name: 'migration-chain-integrity',
+      status: 'fail',
+      message: 'Migration chain has unresolved down_revision references',
+      details: {
+        migrationFiles,
+        missingDownRevisions,
+      },
+    };
+  }
+
+  const cycle = detectMigrationCycle(revisions);
+  if (cycle) {
+    return {
+      name: 'migration-chain-integrity',
+      status: 'fail',
+      message: 'Migration chain contains a cycle',
+      details: {
+        migrationFiles,
+        cycle,
+      },
+    };
+  }
+
+  const referencedDownRevisions = new Set(
+    [...revisions.values()]
+      .map(revision => revision.downRevision)
+      .filter((revision): revision is string => revision !== null)
+  );
+  const heads = [...revisions.values()]
+    .filter(revision => !referencedDownRevisions.has(revision.revision))
+    .map(revision => ({ revision: revision.revision, file: revision.file }));
+  if (heads.length !== 1) {
+    return {
+      name: 'migration-chain-integrity',
+      status: 'fail',
+      message: `Migration chain must have exactly one head, found ${heads.length}`,
+      details: {
+        migrationFiles,
+        heads,
+      },
+    };
+  }
+
+  const roots = [...revisions.values()]
+    .filter(revision => revision.downRevision === null)
+    .map(revision => ({ revision: revision.revision, file: revision.file }));
+  if (roots.length !== 1) {
+    return {
+      name: 'migration-chain-integrity',
+      status: 'fail',
+      message: `Migration chain must have exactly one root, found ${roots.length}`,
+      details: {
+        migrationFiles,
+        roots,
+      },
+    };
+  }
+
+  return {
+    name: 'migration-chain-integrity',
+    status: 'pass',
+    message: 'Migration chain is well-formed',
+    details: {
+      migrationFiles,
+      heads,
+      roots,
+    },
   };
 }
 
@@ -773,8 +1099,9 @@ export async function runReadyStage(options: {
   // 2. Run all checks
   const allChecks: ReadyCheck[] = [
     checkSchemaMigrations(prContext.changedFiles, repoDir),
+    await checkMigrationChainIntegrity(repoDir, config.migrationPatterns),
     checkDeployPaths(prContext.changedFiles, deployConfig),
-    checkReleaseRequirements(taskPacket, prContext),
+    checkReleaseRequirements(taskPacket, prContext, repoDir),
     checkCIStatus(prNumber, repoDir),
   ];
 
