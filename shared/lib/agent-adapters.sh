@@ -170,6 +170,105 @@ agent_deepseek_state_dir() {
   printf '%s\n' "$repo_dir/.wavemill/runs/$run_key/providers/deepseek"
 }
 
+agent_deepseek_manifest_path() {
+  local provider_root="$1"
+  printf '%s\n' "$provider_root/state.json"
+}
+
+agent_write_deepseek_claude_launcher() {
+  local launcher="$1"
+  local session="$2"
+  local issue="$3"
+  local window="$4"
+  local dashboard_pid="$5"
+  local provider_root="$6"
+  local base_url="$7"
+  local api_key_env="$8"
+  local model="$9"
+  local effort_level="${10:-medium}"
+  local launch_mode="${11:-interactive}"
+  local input_path="${12:-}"
+  local model_flag="${13:-}"
+  local agent_flags="${14:-}"
+  local provider_home="$provider_root/home"
+  local xdg_config_home="$provider_root/xdg/config"
+  local xdg_data_home="$provider_root/xdg/data"
+  local claude_config_dir="$provider_home/.claude"
+  local manifest_path
+  manifest_path="$(agent_deepseek_manifest_path "$provider_root")"
+
+  cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
+provider_root='$provider_root'
+provider_home='$provider_home'
+xdg_config_home='$xdg_config_home'
+xdg_data_home='$xdg_data_home'
+claude_config_dir='$claude_config_dir'
+manifest_path='$manifest_path'
+api_key_env='$api_key_env'
+api_key_value="\${!api_key_env:-}"
+if [[ -z "\${api_key_value//[[:space:]]/}" ]]; then
+  echo "[deepseek-launcher] ERROR: DeepSeek model '$model' requires \$api_key_env to be set; launch aborted." >&2
+  exit 2
+fi
+mkdir -p "\$provider_root" "\$provider_home" "\$xdg_config_home" "\$xdg_data_home" "\$claude_config_dir"
+chmod 700 "\$provider_root" "\$provider_home" "\$xdg_config_home" "\$xdg_data_home" "\$claude_config_dir" 2>/dev/null || true
+export HOME="\$provider_home"
+export XDG_CONFIG_HOME="\$xdg_config_home"
+export XDG_DATA_HOME="\$xdg_data_home"
+export CLAUDE_CONFIG_DIR="\$claude_config_dir"
+export WAVEMILL_DEEPSEEK_PROVIDER_ROOT="\$provider_root"
+export WAVEMILL_DEEPSEEK_STATE_FILE="\$manifest_path"
+export WAVEMILL_DEEPSEEK_API_KEY_ENV="\$api_key_env"
+export ANTHROPIC_BASE_URL='$base_url'
+export ANTHROPIC_AUTH_TOKEN="\$api_key_value"
+export ANTHROPIC_API_KEY="\$api_key_value"
+export ANTHROPIC_MODEL='$model'
+export ANTHROPIC_DEFAULT_OPUS_MODEL='$model'
+export ANTHROPIC_DEFAULT_SONNET_MODEL='$model'
+export ANTHROPIC_DEFAULT_HAIKU_MODEL='$model'
+export CLAUDE_CODE_SUBAGENT_MODEL='$model'
+export CLAUDE_CODE_EFFORT_LEVEL='${effort_level:-medium}'
+node <<'NODE'
+const fs = require('node:fs');
+
+const manifestPath = process.env.WAVEMILL_DEEPSEEK_STATE_FILE;
+const payload = {
+  provider: 'deepseek',
+  issue: process.env.WAVEMILL_ISSUE || '',
+  session: process.env.WAVEMILL_SESSION || '',
+  phase: process.env.WAVEMILL_PHASE || '',
+  providerRoot: process.env.WAVEMILL_DEEPSEEK_PROVIDER_ROOT || '',
+  home: process.env.HOME || '',
+  claudeConfigDir: process.env.CLAUDE_CONFIG_DIR || '',
+  xdgConfigHome: process.env.XDG_CONFIG_HOME || '',
+  xdgDataHome: process.env.XDG_DATA_HOME || '',
+  baseUrl: process.env.ANTHROPIC_BASE_URL || '',
+  model: process.env.ANTHROPIC_MODEL || '',
+  apiKeyEnv: process.env.WAVEMILL_DEEPSEEK_API_KEY_ENV || '',
+};
+
+fs.writeFileSync(manifestPath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+NODE
+LAUNCHEOF
+
+  if [[ "$launch_mode" == "autonomous" ]]; then
+    printf "%s\n" "cat '$input_path' | claude${model_flag} --dangerously-skip-permissions" >> "$launcher"
+  else
+    printf "%s\n" "claude${model_flag}${agent_flags} --dangerously-skip-permissions \"\$(cat '$input_path')\"" >> "$launcher"
+  fi
+
+  cat >> "$launcher" <<'LAUNCHEOF'
+echo "[wavemill] Agent exited ($?)"
+LAUNCHEOF
+  chmod +x "$launcher"
+}
+
 agent_validate_deepseek_launch() {
   local model="$1"
   local repo_dir="${2:-${REPO_DIR:-$(pwd)}}"
@@ -191,8 +290,8 @@ agent_validate_deepseek_launch() {
   fi
 
   if [[ "$has_api_key" != "true" ]]; then
-    echo "Error: DeepSeek model '$model' requires ${api_key_env:-DEEPSEEK_API_KEY} to be set" >&2
-    return 1
+    echo "[deepseek-launcher] ERROR: DeepSeek model '$model' requires ${api_key_env:-DEEPSEEK_API_KEY} to be set; launch aborted." >&2
+    return 2
   fi
 
   return 0
@@ -1154,52 +1253,16 @@ agent_launch_autonomous() {
         if ! agent_validate_deepseek_launch "$model" "$repo_dir"; then
           return 1
         fi
-        local provider_json base_url api_key_env effort_level provider_root provider_home xdg_config_home xdg_data_home launcher
+        local provider_json base_url api_key_env effort_level provider_root launcher
         provider_json="$(agent_deepseek_config "$repo_dir")" || return 1
         base_url="$(agent_json_get "$provider_json" baseUrl)"
         api_key_env="$(agent_json_get "$provider_json" apiKeyEnv)"
         effort_level="$(agent_json_get "$provider_json" effortLevel)"
         provider_root="$(agent_deepseek_state_dir "$repo_dir" "$session" "$issue")"
-        provider_home="$provider_root/home"
-        xdg_config_home="$provider_root/xdg/config"
-        xdg_data_home="$provider_root/xdg/data"
         launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
-        cat > "$launcher" <<LAUNCHEOF
-#!/bin/bash
-set -euo pipefail
-export WAVEMILL_SESSION='$session'
-export WAVEMILL_ISSUE='$issue'
-export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
-provider_root='$provider_root'
-provider_home='$provider_home'
-xdg_config_home='$xdg_config_home'
-xdg_data_home='$xdg_data_home'
-api_key_env='$api_key_env'
-api_key_value="\${!api_key_env:-}"
-if [[ -z "\$api_key_value" ]]; then
-  echo "Error: DeepSeek model '$model' requires \$api_key_env to be set" >&2
-  exit 1
-fi
-mkdir -p "\$provider_home" "\$xdg_config_home" "\$xdg_data_home"
-chmod 700 "\$provider_root" "\$provider_home" "\$xdg_config_home" "\$xdg_data_home" 2>/dev/null || true
-export HOME="\$provider_home"
-export XDG_CONFIG_HOME="\$xdg_config_home"
-export XDG_DATA_HOME="\$xdg_data_home"
-export WAVEMILL_DEEPSEEK_PROVIDER_ROOT="\$provider_root"
-export ANTHROPIC_BASE_URL='$base_url'
-export ANTHROPIC_AUTH_TOKEN="\$api_key_value"
-export ANTHROPIC_API_KEY="\$api_key_value"
-export ANTHROPIC_MODEL='$model'
-export ANTHROPIC_DEFAULT_OPUS_MODEL='$model'
-export ANTHROPIC_DEFAULT_SONNET_MODEL='$model'
-export ANTHROPIC_DEFAULT_HAIKU_MODEL='$model'
-export CLAUDE_CODE_SUBAGENT_MODEL='$model'
-export CLAUDE_CODE_EFFORT_LEVEL='${effort_level:-medium}'
-cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions
-echo "[wavemill] Agent exited (\$?)"
-LAUNCHEOF
-        chmod +x "$launcher"
+        agent_write_deepseek_claude_launcher \
+          "$launcher" "$session" "$issue" "$window" "$dashboard_pid" "$provider_root" \
+          "$base_url" "$api_key_env" "$model" "$effort_level" "autonomous" "$instr_file" "$model_flag"
         tmux send-keys -t "$session:$window" -l -- "$launcher"
         tmux send-keys -t "$session:$window" C-m
       else
@@ -1411,50 +1474,15 @@ agent_launch_interactive() {
   case "$agent_cmd" in
     claude)
       if agent_model_is_deepseek "$model"; then
-        local provider_json base_url api_key_env effort_level provider_root provider_home xdg_config_home xdg_data_home
+        local provider_json base_url api_key_env effort_level provider_root
         provider_json="$(agent_deepseek_config "$repo_dir")" || return 1
         base_url="$(agent_json_get "$provider_json" baseUrl)"
         api_key_env="$(agent_json_get "$provider_json" apiKeyEnv)"
         effort_level="$(agent_json_get "$provider_json" effortLevel)"
         provider_root="$(agent_deepseek_state_dir "$repo_dir" "$session" "$issue")"
-        provider_home="$provider_root/home"
-        xdg_config_home="$provider_root/xdg/config"
-        xdg_data_home="$provider_root/xdg/data"
-        cat > "$launcher" <<LAUNCHEOF
-#!/bin/bash
-set -euo pipefail
-export WAVEMILL_SESSION='$session'
-export WAVEMILL_ISSUE='$issue'
-export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
-provider_root='$provider_root'
-provider_home='$provider_home'
-xdg_config_home='$xdg_config_home'
-xdg_data_home='$xdg_data_home'
-api_key_env='$api_key_env'
-api_key_value="\${!api_key_env:-}"
-if [[ -z "\$api_key_value" ]]; then
-  echo "Error: DeepSeek model '$model' requires \$api_key_env to be set" >&2
-  exit 1
-fi
-mkdir -p "\$provider_home" "\$xdg_config_home" "\$xdg_data_home"
-chmod 700 "\$provider_root" "\$provider_home" "\$xdg_config_home" "\$xdg_data_home" 2>/dev/null || true
-export HOME="\$provider_home"
-export XDG_CONFIG_HOME="\$xdg_config_home"
-export XDG_DATA_HOME="\$xdg_data_home"
-export WAVEMILL_DEEPSEEK_PROVIDER_ROOT="\$provider_root"
-export ANTHROPIC_BASE_URL='$base_url'
-export ANTHROPIC_AUTH_TOKEN="\$api_key_value"
-export ANTHROPIC_API_KEY="\$api_key_value"
-export ANTHROPIC_MODEL='$model'
-export ANTHROPIC_DEFAULT_OPUS_MODEL='$model'
-export ANTHROPIC_DEFAULT_SONNET_MODEL='$model'
-export ANTHROPIC_DEFAULT_HAIKU_MODEL='$model'
-export CLAUDE_CODE_SUBAGENT_MODEL='$model'
-export CLAUDE_CODE_EFFORT_LEVEL='${effort_level:-medium}'
-claude${model_flag}${agent_flags} --dangerously-skip-permissions "\$(cat '$prompt_file')"
-echo "[wavemill] Agent exited (\$?)"
-LAUNCHEOF
+        agent_write_deepseek_claude_launcher \
+          "$launcher" "$session" "$issue" "$window" "$dashboard_pid" "$provider_root" \
+          "$base_url" "$api_key_env" "$model" "$effort_level" "interactive" "$prompt_file" "$model_flag" "$agent_flags"
       else
         cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash

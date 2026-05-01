@@ -6,7 +6,7 @@ DeepSeek support in Wavemill is implemented as a Claude-compatible provider path
 
 ## Required setup
 
-Set a DeepSeek API key in your shell:
+Set a DeepSeek API key in your shell, or configure a different env var name through `providers.deepseek.apiKeyEnv`:
 
 ```bash
 export DEEPSEEK_API_KEY=...
@@ -47,9 +47,12 @@ The aliases are retained for compatibility, but DeepSeek currently documents the
 ## Runtime behavior
 
 - Wavemill sets `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`.
-- Wavemill passes `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, the Claude default model aliases, `CLAUDE_CODE_SUBAGENT_MODEL`, and `CLAUDE_CODE_EFFORT_LEVEL` only to the child `claude` process.
+- Wavemill passes `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, the Claude default model aliases, `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL`, and `CLAUDE_CONFIG_DIR` only to the child `claude` process.
 - Claude state is isolated under `.wavemill/runs/<issue-or-session>/providers/deepseek/`.
+- Wavemill writes a non-secret manifest to `.wavemill/runs/<issue-or-session>/providers/deepseek/state.json` so the isolated state location is discoverable outside the launched process.
+- If the configured key env var is unset, empty, or whitespace-only, Wavemill aborts before tmux dispatch with a clear DeepSeek launcher error.
 - Routing filters DeepSeek models unless the provider is enabled, the configured key env var is present, and the target stage is allowlisted in `providers.deepseek.stages`.
+- The literal API key value is never written to the launcher script or the manifest.
 
 ## Limitations
 
@@ -80,6 +83,7 @@ Expected result:
 - exit code `0`
 - stdout `OK`
 - a workflow transcript is written under the isolated DeepSeek provider home
+- `.wavemill/runs/<issue-or-session>/providers/deepseek/state.json` records the isolated state paths
 - no files under the real `~/.claude` are newer than the pre-smoke marker
 
 ## Manual validation

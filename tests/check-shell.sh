@@ -1756,14 +1756,19 @@ else
 
   agent_prepare_pane_for_launch() { return 0; }
   agent_verify_launch() { return 0; }
-  tmux() { :; }
+  tmux_log="/tmp/check-shell-tmux-$$.log"
+  tmux() {
+    printf '%s\n' "$*" >> "$tmux_log"
+    :
+  }
 
   launch_session="check-shell-$$"
   prompt_file="/tmp/${launch_session}-prompt.txt"
   launcher_file="/tmp/${launch_session}-$(basename "$prompt_file" .txt)-launcher.sh"
-  trap 'rm -f "$prompt_file" "$launcher_file"' EXIT
+  autonomous_launcher="/tmp/${launch_session}-HOK-1485-autonomous-launcher.sh"
+  trap 'rm -f "$prompt_file" "$launcher_file" "$autonomous_launcher" "$tmux_log"' EXIT
   printf 'test prompt\n' > "$prompt_file"
-  rm -f "$launcher_file"
+  rm -f "$launcher_file" "$autonomous_launcher" "$tmux_log"
 
   if agent_launch_interactive "$launch_session" "window" "$prompt_file" "codex" "deep" "" ""; then
     if [[ -f "$launcher_file" ]] \
@@ -1810,12 +1815,20 @@ EOF
   REPO_DIR="$deepseek_repo"
 
   rm -f "$launcher_file"
+  : > "$tmux_log"
   if agent_launch_interactive "$launch_session" "window" "$prompt_file" "claude" "deepseek-v4-pro" "" "" "HOK-1485"; then
     if [[ -f "$launcher_file" ]] \
       && grep -q "ANTHROPIC_BASE_URL='https://api.deepseek.com/anthropic'" "$launcher_file" \
       && grep -q "api_key_env='TEST_DEEPSEEK_KEY'" "$launcher_file" \
+      && grep -q "export CLAUDE_CONFIG_DIR=\"\$claude_config_dir\"" "$launcher_file" \
+      && grep -q "mkdir -p \"\$provider_root\" \"\$provider_home\" \"\$xdg_config_home\" \"\$xdg_data_home\" \"\$claude_config_dir\"" "$launcher_file" \
+      && grep -q "chmod 700 \"\$provider_root\" \"\$provider_home\" \"\$xdg_config_home\" \"\$xdg_data_home\" \"\$claude_config_dir\"" "$launcher_file" \
+      && grep -q "manifest_path='.*/\\.wavemill/runs/HOK-1485/providers/deepseek/state.json'" "$launcher_file" \
+      && grep -q "export WAVEMILL_DEEPSEEK_STATE_FILE=\"\$manifest_path\"" "$launcher_file" \
       && grep -q "CLAUDE_CODE_EFFORT_LEVEL='high'" "$launcher_file" \
       && grep -q "/.wavemill/runs/HOK-1485/providers/deepseek/home" "$launcher_file" \
+      && grep -q "claudeConfigDir" "$launcher_file" \
+      && grep -q "apiKeyEnv" "$launcher_file" \
       && ! grep -q 'deepseek-test-secret' "$launcher_file"; then
       pass "interactive launcher isolates DeepSeek Claude runs without persisting the API key"
     else
@@ -1825,19 +1838,55 @@ EOF
     fail "interactive launcher failed for DeepSeek provider test"
   fi
 
-  unset TEST_DEEPSEEK_KEY
+  rm -f "$autonomous_launcher"
+  : > "$tmux_log"
+  if agent_launch_autonomous "$launch_session" "window" "$prompt_file" "claude" "deepseek-v4-pro" "HOK-1485"; then
+    if [[ -f "$autonomous_launcher" ]] \
+      && grep -q "export CLAUDE_CONFIG_DIR=\"\$claude_config_dir\"" "$autonomous_launcher" \
+      && grep -q "manifest_path='.*/\\.wavemill/runs/HOK-1485/providers/deepseek/state.json'" "$autonomous_launcher" \
+      && grep -q "cat '$prompt_file' | claude --model deepseek-v4-pro --dangerously-skip-permissions" "$autonomous_launcher" \
+      && grep -q "CLAUDE_CODE_SUBAGENT_MODEL='deepseek-v4-pro'" "$autonomous_launcher" \
+      && ! grep -q 'deepseek-test-secret' "$autonomous_launcher"; then
+      pass "autonomous launcher configures the DeepSeek Claude provider without persisting the API key"
+    else
+      fail "autonomous launcher did not configure the DeepSeek Claude provider correctly"
+    fi
+  else
+    fail "autonomous launcher failed for DeepSeek provider test"
+  fi
+
+  export TEST_DEEPSEEK_KEY='   '
   rm -f "$launcher_file"
+  : > "$tmux_log"
   if agent_launch_interactive "$launch_session" "window" "$prompt_file" "claude" "deepseek-v4-pro" "" "" "HOK-1485"; then
     fail "interactive launcher succeeded without the DeepSeek API key"
   else
-    pass "interactive launcher fails fast when the DeepSeek API key is missing"
+    if [[ ! -s "$tmux_log" ]]; then
+      pass "interactive launcher fails fast when the DeepSeek API key is missing"
+    else
+      fail "interactive launcher attempted tmux dispatch after DeepSeek key validation failed"
+    fi
   fi
+
+  rm -f "$autonomous_launcher"
+  : > "$tmux_log"
+  if agent_launch_autonomous "$launch_session" "window" "$prompt_file" "claude" "deepseek-v4-pro" "HOK-1485"; then
+    fail "autonomous launcher succeeded without the DeepSeek API key"
+  else
+    if [[ ! -s "$tmux_log" ]]; then
+      pass "autonomous launcher fails before tmux dispatch when the DeepSeek API key is missing"
+    else
+      fail "autonomous launcher attempted tmux dispatch after DeepSeek key validation failed"
+    fi
+  fi
+
+  unset TEST_DEEPSEEK_KEY
 
   rm -rf "$deepseek_repo"
   REPO_DIR="$REPO_DIR_ORIG"
   export REPO_DIR
 
-  rm -f "$prompt_file" "$launcher_file"
+  rm -f "$prompt_file" "$launcher_file" "$autonomous_launcher" "$tmux_log"
 fi
 
 # ============================================================================
