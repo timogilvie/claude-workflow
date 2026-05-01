@@ -5,12 +5,15 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import {
+  configuredDeepSeekModelIds,
   DEFAULT_MODEL_REGISTRY,
   getEffectiveRegistry,
   getLadder,
   getModel,
+  isKnownModelId,
   mergeModelRegistry,
   rankCandidates,
+  validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
 
@@ -46,6 +49,9 @@ describe('model-registry', () => {
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
       'claude-haiku-4-5-20251001',
+      'deepseek-v4-flash',
+      'deepseek-v4-pro',
+      'deepseek-v4-pro[1m]',
       'gpt-5.5',
       'gpt-5.4',
     ];
@@ -77,6 +83,20 @@ describe('model-registry', () => {
       'gpt-5.5',
       'gpt-5.4',
     ]);
+  });
+
+  it('keeps DeepSeek models out of derived default ladders', () => {
+    const registry: ModelRegistry = {
+      models: {
+        ...DEFAULT_MODEL_REGISTRY.models,
+      },
+      ladders: {},
+    };
+
+    const codingLadder = getLadder(registry, 'coding');
+    assert.ok(!codingLadder.includes('deepseek-v4-pro'));
+    assert.ok(!codingLadder.includes('deepseek-v4-pro[1m]'));
+    assert.ok(!codingLadder.includes('deepseek-v4-flash'));
   });
 
   it('getLadder derives a deterministic fallback order from scores', () => {
@@ -254,8 +274,10 @@ describe('model-registry', () => {
 
   it('mergeModelRegistry returns a structural clone for empty overrides', () => {
     const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {});
-    assert.deepEqual(merged, DEFAULT_MODEL_REGISTRY);
     assert.notEqual(merged, DEFAULT_MODEL_REGISTRY);
+    assert.deepEqual(getLadder(merged, 'routing'), getLadder(DEFAULT_MODEL_REGISTRY, 'routing'));
+    assert.deepEqual(Object.keys(merged.models).sort(), Object.keys(DEFAULT_MODEL_REGISTRY.models).sort());
+    assert.notEqual(merged.models['claude-opus-4-7'], DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7']);
   });
 
   it('mergeModelRegistry can add a new model ID', () => {
@@ -279,6 +301,35 @@ describe('model-registry', () => {
 
     assert.equal(merged.models['gpt-5.6'].vendor, 'openai');
     assert.equal(merged.models['gpt-5.6'].qualityScores.planning, 90);
+  });
+
+  it('exposes DeepSeek metadata in the default registry', () => {
+    const pro = DEFAULT_MODEL_REGISTRY.models['deepseek-v4-pro'];
+    const flash = DEFAULT_MODEL_REGISTRY.models['deepseek-v4-flash'];
+    const oneMillion = DEFAULT_MODEL_REGISTRY.models['deepseek-v4-pro[1m]'];
+
+    assert.equal(pro.vendor, 'deepseek');
+    assert.equal(pro.class, 'strong_generalist');
+    assert.equal(pro.defaultLadderEligible, false);
+    assert.equal(pro.contextWindowTokens, 1_000_000);
+    assert.equal(pro.agent, 'claude');
+    assert.equal(pro.pricing?.inputCostPerMTok, 0.435);
+    assert.equal(pro.pricing?.outputCostPerMTok, 0.87);
+    assert.equal(flash.class, 'fast_economy');
+    assert.equal(flash.pricing?.inputCostPerMTok, 0.14);
+    assert.equal(oneMillion.contextWindowTokens, 1_000_000);
+  });
+
+  it('recognizes configured DeepSeek IDs and validates bracket syntax', () => {
+    assert.deepEqual(configuredDeepSeekModelIds(DEFAULT_MODEL_REGISTRY), [
+      'deepseek-v4-flash',
+      'deepseek-v4-pro',
+      'deepseek-v4-pro[1m]',
+    ]);
+    assert.equal(isKnownModelId(DEFAULT_MODEL_REGISTRY, 'deepseek-v4-pro[1m]'), true);
+    assert.doesNotThrow(() => validateModelId('deepseek-v4-pro[1m]'));
+    assert.throws(() => validateModelId('deepseek-v4-pro[]'), /Invalid model ID/);
+    assert.throws(() => validateModelId('DEEPSEEK-V4-PRO'), /Invalid model ID/);
   });
 
   it('filters unknown ladder IDs while warning once', () => {

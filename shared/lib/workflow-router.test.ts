@@ -254,6 +254,97 @@ await test('heuristic routing honors stage-specific planner and reviewer pools',
   }
 });
 
+await test('default routing does not surface DeepSeek without explicit opt-in', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Implement a backend workflow feature with tests.',
+      { repoDir, skipDifficultyClassification: true },
+    );
+    assert.notEqual(decision.planner, 'deepseek-v4-pro');
+    assert.notEqual(decision.coder, 'deepseek-v4-pro');
+    assert.notEqual(decision.reviewer, 'deepseek-v4-flash');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('explicit modelsAvailable opt-in can return DeepSeek', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow(
+      'Implement a backend workflow feature with tests.',
+      {
+        repoDir,
+        modelsAvailable: ['deepseek-v4-flash'],
+        plannerModelsAvailable: ['deepseek-v4-flash'],
+        coderModelsAvailable: ['deepseek-v4-flash'],
+        reviewerModelsAvailable: ['deepseek-v4-flash'],
+        skipDifficultyClassification: true,
+      },
+    );
+    assert.equal(decision.planner, 'deepseek-v4-flash');
+    assert.equal(decision.coder, 'deepseek-v4-flash');
+    assert.equal(decision.reviewer, 'deepseek-v4-flash');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('unknown DeepSeek in stage availability fails clearly', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      availableModels: {
+        planner: ['deepseek-v4-ultra'],
+      },
+    },
+  });
+  try {
+    assert.throws(
+      () => routeWorkflow('Implement a backend workflow feature with tests.', { repoDir }),
+      /Unknown DeepSeek model "deepseek-v4-ultra"/,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+await test('policy routing can return DeepSeek when explicitly configured', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      models: ['deepseek-v4-pro'],
+      difficulty: {
+        enabled: false,
+      },
+    },
+  });
+  try {
+    writeQuotaState(repoDir, {
+      'claude-opus-4-7': 'exhausted',
+      'claude-opus-4-6': 'exhausted',
+      'claude-sonnet-4-6': 'exhausted',
+      'claude-sonnet-4-5-20250929': 'exhausted',
+      'claude-haiku-4-5-20251001': 'exhausted',
+      'gpt-5.3-codex': 'exhausted',
+      'gpt-5.5': 'exhausted',
+      'gpt-5.4': 'exhausted',
+      'deepseek-v4-pro': 'healthy',
+    });
+    const decision = tryPolicyResolution(
+      'Implement a backend workflow feature with tests.',
+      { repoDir, taskDifficulty: 'moderate' },
+    );
+    assert.ok(decision);
+    assert.equal(decision?.planner, 'deepseek-v4-pro');
+    assert.equal(decision?.coder, 'deepseek-v4-pro');
+    assert.equal(decision?.reviewer, 'deepseek-v4-pro');
+  } finally {
+    cleanup();
+  }
+});
+
 await test('heuristic routing confidence varies across prompts instead of staying constant', () => {
   const { repoDir, cleanup } = makeRepo();
   try {

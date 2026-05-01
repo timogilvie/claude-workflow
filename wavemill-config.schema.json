@@ -500,6 +500,40 @@
                   "classify": { "type": "number", "minimum": 0, "maximum": 100 }
                 },
                 "additionalProperties": false
+              },
+              "pricing": {
+                "type": "object",
+                "properties": {
+                  "inputCostPerMTok": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "outputCostPerMTok": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheWriteCostPerMTok": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheReadCostPerMTok": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": ["inputCostPerMTok", "outputCostPerMTok"],
+                "additionalProperties": false
+              },
+              "defaultLadderEligible": {
+                "type": "boolean"
+              },
+              "contextWindowTokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "agent": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "additionalProperties": false

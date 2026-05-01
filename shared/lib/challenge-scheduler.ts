@@ -11,7 +11,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { EvalRecord } from './eval-schema.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
-import { loadPricingTable } from './workflow-cost.ts';
+import { loadConfiguredPricingTable } from './workflow-cost.ts';
 import type { StageAwareDecision } from './stage-aware-router.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 import { loadRouterConfig } from './model-router.ts';
@@ -112,7 +112,7 @@ function getAvailableModels(
   repoDir?: string,
 ): string[] {
   const routerConfig = loadRouterConfig(repoDir);
-  const pricingModels = Object.keys(loadPricingTable(repoDir));
+  const pricingModels = Object.keys(loadConfiguredPricingTable(repoDir));
   return [...new Set([
     ...(routerConfig.models || []),
     ...pricingModels,

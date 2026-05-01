@@ -19,6 +19,14 @@ import { loadWavemillConfig } from './config.ts';
 import { aggregateEvals } from './eval-aggregator.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
+import {
+  configuredDeepSeekModelIds,
+  DEFAULT_MODEL_REGISTRY,
+  getEffectiveRegistry,
+  getModel,
+  isDeepSeekLikeModelId,
+  ModelValidationError,
+} from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -302,10 +310,24 @@ export function resolveAgent(
   modelId: string,
   agentMap: Record<string, string>,
   defaultAgent: string,
+  repoDir?: string,
 ): string {
   if (agentMap[modelId]) return agentMap[modelId];
+  const registry = repoDir ? getEffectiveRegistry(repoDir) : DEFAULT_MODEL_REGISTRY;
+  const capabilities = getModel(registry, modelId);
+  if (capabilities?.agent) return capabilities.agent;
   if (modelId.startsWith('claude-')) return 'claude';
   if (modelId.startsWith('gpt-') || /^o\d/.test(modelId)) return 'codex';
+  if (isDeepSeekLikeModelId(modelId)) {
+    const configured = configuredDeepSeekModelIds(registry);
+    const configuredList = configured.length > 0
+      ? `\n\nConfigured DeepSeek models:\n${configured.map((candidate) => `  • ${candidate}`).join('\n')}`
+      : '';
+    throw new ModelValidationError(
+      modelId,
+      `Error: Unknown DeepSeek model "${modelId}"${configuredList}`,
+    );
+  }
   return defaultAgent;
 }
 
