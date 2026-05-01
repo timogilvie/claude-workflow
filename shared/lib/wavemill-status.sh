@@ -169,6 +169,22 @@ get_ready_display_status() {
   jq -r '.status // empty' "$result_file" 2>/dev/null || true
 }
 
+is_ready_conflicted() {
+  local worktree="$1" slug="$2"
+  local feature_dir=""
+  local dir
+
+  for dir in features bugs; do
+    if [[ -d "$worktree/$dir/$slug" ]]; then
+      feature_dir="$worktree/$dir/$slug"
+      [[ -f "$feature_dir/.conflict-detected" ]] && return 0
+      return 1
+    fi
+  done
+
+  [[ -f "$worktree/features/$slug/.conflict-detected" ]]
+}
+
 ready_attention_detail() {
   local worktree="$1" slug="$2"
   local feature_dir="$worktree/features/$slug"
@@ -388,13 +404,17 @@ render_task_row() {
       MERGED) pr_str="${G}#${pr_num} MERGED${N}" ;;
       CLOSED) pr_str="${R}#${pr_num} CLOSED${N}" ;;
       OPEN)
-        checks=$(pr_checks "$branch")
-        case "$checks" in
-          pass)    pr_str="${G}#${pr_num} ✓${N}" ;;
-          fail)    pr_str="${R}#${pr_num} ✗${N}" ;;
-          pending) pr_str="${Y}#${pr_num} …${N}" ;;
-          *)       pr_str="#${pr_num}" ;;
-        esac
+        if is_ready_conflicted "$worktree" "$slug"; then
+          pr_str="${Y}#${pr_num} ⚠${N}"
+        else
+          checks=$(pr_checks "$branch")
+          case "$checks" in
+            pass)    pr_str="${G}#${pr_num} ✓${N}" ;;
+            fail)    pr_str="${R}#${pr_num} ✗${N}" ;;
+            pending) pr_str="${Y}#${pr_num} …${N}" ;;
+            *)       pr_str="#${pr_num}" ;;
+          esac
+        fi
         ;;
     esac
   fi
@@ -414,12 +434,16 @@ render_task_row() {
     coding)    phase_str="${G}💻 coding${N}" ;;
     review)    phase_str="${Y}🔍 review${N}" ;;
     ready)
-      ready_status=$(get_ready_display_status "$worktree" "$slug")
-      case "$ready_status" in
-        failed|aborted) phase_str="${R}🚦 ready${N}" ;;
-        completed)      phase_str="${Y}🚦 ready${N}" ;;
-        *)              phase_str="${G}🚦 ready${N}" ;;
-      esac
+      if is_ready_conflicted "$worktree" "$slug"; then
+        phase_str="${Y}⚠ ready${N}"
+      else
+        ready_status=$(get_ready_display_status "$worktree" "$slug")
+        case "$ready_status" in
+          failed|aborted) phase_str="${R}🚦 ready${N}" ;;
+          completed)      phase_str="${Y}🚦 ready${N}" ;;
+          *)              phase_str="${G}🚦 ready${N}" ;;
+        esac
+      fi
       ;;
     *)         phase_str="${D}$task_phase${N}" ;;
   esac
