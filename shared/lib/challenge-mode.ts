@@ -1,8 +1,11 @@
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
+import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import { resolveAgent } from './model-router.ts';
+import type { RouteArtifactSnapshot } from './route-artifact.ts';
 import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
+export type ChallengeDecisionSource = 'bootstrap' | 'expanded' | 'preserved';
 
 export interface ChallengeTaskEntry {
   key: string;
@@ -25,6 +28,14 @@ export interface ChallengePairSelection {
   pairId: string;
   primary: ChallengeTaskEntry;
   challenger: ChallengeTaskEntry;
+  routeContext?: ChallengeRouteContext;
+}
+
+export interface ChallengeRouteContext {
+  decisionSource: ChallengeDecisionSource;
+  bootstrapRoute?: RouteArtifactSnapshot;
+  expandedRoute?: RouteArtifactSnapshot;
+  refreshRationale?: string;
 }
 
 function uniqueNonEmpty(values: string[]): string[] {
@@ -234,6 +245,209 @@ export function pickChallengeWorkflows(
       planDepth: routing.planDepth,
       codeDepth: routing.codeDepth,
       reviewMode: routing.reviewRecommended,
+    },
+  };
+}
+
+function resolveOptionalAgent(
+  modelId: string | undefined,
+  agentMap: Record<string, string>,
+  defaultAgent: string,
+  repoDir?: string,
+): string {
+  if (!modelId) {
+    return '';
+  }
+  return resolveAgent(modelId, agentMap, defaultAgent, repoDir);
+}
+
+function applyRouteSnapshot(
+  pair: ChallengePairSelection,
+  route: RouteArtifactSnapshot,
+  agentMap: Record<string, string>,
+  defaultAgent: string,
+  repoDir?: string,
+  fallback?: RouteArtifactSnapshot | null,
+): ChallengePairSelection {
+  const planner = route.planner || fallback?.planner || '';
+  const planDepth = route.planDepth || fallback?.planDepth || '';
+
+  const withRoute = (entry: ChallengeTaskEntry): ChallengeTaskEntry => ({
+    ...entry,
+    planner,
+    plannerAgent: resolveOptionalAgent(planner, agentMap, defaultAgent, repoDir),
+    reviewer: route.reviewer,
+    reviewerAgent: resolveOptionalAgent(route.reviewer, agentMap, defaultAgent, repoDir),
+    planDepth,
+    codeDepth: route.codeDepth,
+    reviewMode: route.reviewMode,
+  });
+
+  return {
+    ...pair,
+    primary: withRoute(pair.primary),
+    challenger: withRoute(pair.challenger),
+  };
+}
+
+function buildPairFromRouteSnapshot(
+  pool: string[],
+  opts: {
+    pairId: string;
+    issueId: string;
+    slug: string;
+    primaryModel?: string;
+    agentMap?: Record<string, string>;
+    defaultAgent?: string;
+    randomFn?: () => number;
+    repoDir?: string;
+  },
+  route: RouteArtifactSnapshot,
+  fallback?: RouteArtifactSnapshot | null,
+): ChallengePairSelection | null {
+  const pair = pickChallengeModels(pool, {
+    pairId: opts.pairId,
+    issueId: opts.issueId,
+    slug: opts.slug,
+    primaryModel: opts.primaryModel?.trim() || route.coder,
+    agentMap: opts.agentMap,
+    defaultAgent: opts.defaultAgent,
+    randomFn: opts.randomFn,
+  });
+
+  if (!pair) {
+    return null;
+  }
+
+  return applyRouteSnapshot(
+    pair,
+    route,
+    opts.agentMap || {},
+    opts.defaultAgent || 'claude',
+    opts.repoDir,
+    fallback,
+  );
+}
+
+function modelClassOrId(modelId: string, repoDir?: string): string {
+  const registry = getEffectiveRegistry(repoDir);
+  return getModel(registry, modelId)?.class || modelId;
+}
+
+export function routeChangedMaterially(
+  bootstrap: RouteArtifactSnapshot,
+  expanded: RouteArtifactSnapshot,
+  repoDir?: string,
+): { changed: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+
+  if (modelClassOrId(bootstrap.coder, repoDir) !== modelClassOrId(expanded.coder, repoDir)) {
+    reasons.push('coder_class');
+  }
+
+  if (bootstrap.codeDepth !== expanded.codeDepth) {
+    reasons.push('code_depth');
+  }
+
+  if (modelClassOrId(bootstrap.reviewer, repoDir) !== modelClassOrId(expanded.reviewer, repoDir)) {
+    reasons.push('reviewer_class');
+  }
+
+  return {
+    changed: reasons.length > 0,
+    reasons,
+  };
+}
+
+export function pickChallengeWorkflowsWithContext(
+  pool: string[],
+  opts: {
+    pairId: string;
+    issueId: string;
+    slug: string;
+    prompt: string;
+    primaryModel?: string;
+    agentMap?: Record<string, string>;
+    defaultAgent?: string;
+    randomFn?: () => number;
+    repoDir?: string;
+    routeFn?: (prompt: string, options?: { repoDir?: string }) => WorkflowRouteDecision;
+  },
+  routeArtifacts: {
+    bootstrap: RouteArtifactSnapshot | null;
+    expanded: RouteArtifactSnapshot | null;
+  },
+): (ChallengePairSelection & { routeContext: ChallengeRouteContext }) | null {
+  const bootstrapRoute = routeArtifacts.bootstrap || undefined;
+  const expandedRoute = routeArtifacts.expanded || undefined;
+
+  if (!expandedRoute) {
+    const pair = bootstrapRoute
+      ? buildPairFromRouteSnapshot(pool, opts, bootstrapRoute)
+      : pickChallengeWorkflows(pool, opts);
+    if (!pair) {
+      return null;
+    }
+    return {
+      ...pair,
+      routeContext: {
+        decisionSource: 'bootstrap',
+        ...(bootstrapRoute ? { bootstrapRoute } : {}),
+      },
+    };
+  }
+
+  if (!bootstrapRoute) {
+    const pair = buildPairFromRouteSnapshot(pool, {
+      ...opts,
+      primaryModel: expandedRoute.coder,
+    }, expandedRoute);
+    if (!pair) {
+      return null;
+    }
+    return {
+      ...pair,
+      routeContext: {
+        decisionSource: 'expanded',
+        expandedRoute,
+      },
+    };
+  }
+
+  const materiality = routeChangedMaterially(bootstrapRoute, expandedRoute, opts.repoDir);
+  if (materiality.changed) {
+    const pair = buildPairFromRouteSnapshot(pool, {
+      ...opts,
+      primaryModel: expandedRoute.coder,
+    }, expandedRoute, bootstrapRoute);
+    if (!pair) {
+      return null;
+    }
+    return {
+      ...pair,
+      routeContext: {
+        decisionSource: 'expanded',
+        bootstrapRoute,
+        expandedRoute,
+      },
+    };
+  }
+
+  const pair = buildPairFromRouteSnapshot(pool, {
+    ...opts,
+    primaryModel: opts.primaryModel?.trim() || bootstrapRoute.coder,
+  }, bootstrapRoute);
+  if (!pair) {
+    return null;
+  }
+
+  return {
+    ...pair,
+    routeContext: {
+      decisionSource: 'preserved',
+      bootstrapRoute,
+      expandedRoute,
+      refreshRationale: 'expanded route matches bootstrap on coder class/depth',
     },
   };
 }

@@ -2,8 +2,15 @@
 
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
-import { pickChallengeModels, pickChallengeWorkflows, getChallengeModelPool, canRunChallenge } from '../shared/lib/challenge-mode.ts';
+import {
+  pickChallengeModels,
+  pickChallengeWorkflows,
+  pickChallengeWorkflowsWithContext,
+  getChallengeModelPool,
+  canRunChallenge,
+} from '../shared/lib/challenge-mode.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
+import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
 import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
 
 runTool({
@@ -18,6 +25,7 @@ runTool({
     'remaining-slots': { type: 'string', description: 'Available mill slots before launch' },
     'repo-dir': { type: 'string', description: 'Repository directory' },
     file: { type: 'string', description: 'Task packet file path (for routing)' },
+    'feature-dir': { type: 'string', description: 'Feature directory for reading route artifacts' },
   },
   async run({ args }) {
     const repoDir = (args['repo-dir'] as string) || process.cwd();
@@ -28,6 +36,7 @@ runTool({
     const primaryModel = (args['primary-model'] as string | undefined)?.trim() || undefined;
     const remainingSlots = Number(args['remaining-slots'] || '1');
     const taskFile = args.file as string | undefined;
+    const featureDir = args['feature-dir'] as string | undefined;
 
     if (!issue || !slug || !title) {
       throw new Error('--issue, --slug, and --title are required');
@@ -49,6 +58,7 @@ runTool({
       title,
       mode: 'single',
       slotsRequired: 1,
+      decisionSource: 'bootstrap',
       reason: 'challenge_disabled',
       single: {
         key: issue,
@@ -89,7 +99,21 @@ runTool({
 
     // If task file provided, use workflow routing for both sides
     let pair;
-    if (taskFile) {
+    if (featureDir) {
+      const routeArtifacts = readBothRouteArtifacts(featureDir);
+      pair = pickChallengeWorkflowsWithContext(pool, {
+        pairId: issue,
+        issueId: issue,
+        slug,
+        prompt: title,
+        primaryModel,
+        agentMap: router.agentMap,
+        defaultAgent,
+        repoDir,
+      }, routeArtifacts);
+    }
+
+    if (!pair && taskFile) {
       try {
         const prompt = readTaskPromptFromFile(taskFile);
         pair = pickChallengeWorkflows(pool, {
@@ -137,8 +161,10 @@ runTool({
       title,
       mode: 'challenge',
       slotsRequired: 2,
+      decisionSource: pair.routeContext?.decisionSource || 'bootstrap',
       reason: 'selected',
       primaryModel,
+      routeContext: pair.routeContext,
       entries: [pair.primary, pair.challenger],
     }));
   },

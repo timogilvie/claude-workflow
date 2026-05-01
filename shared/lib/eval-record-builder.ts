@@ -14,6 +14,7 @@
  */
 
 import type {
+  EvalChallengeRouteContext,
   EvalRecord,
   EligibilityErrorCode,
   PlanCritique,
@@ -29,6 +30,7 @@ import type {
   RubricCriterion,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
+import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
 import { getManifest, getManifestRef } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
@@ -50,6 +52,8 @@ export interface EvalRecordMetadata {
   endpoint?: string;
   /** Shared challenge pair identifier */
   challengePairId?: string;
+  /** Challenge route provenance for evals */
+  challengeRouteContext?: ChallengeRouteContext | null;
   /** Difficulty analysis results */
   difficulty?: DifficultyAnalysis | null;
   /** Task context analysis results */
@@ -98,6 +102,46 @@ export function attachChallengePairId(record: EvalRecord, challengePairId?: stri
   if (challengePairId) {
     record.challengePairId = challengePairId;
   }
+}
+
+function toEvalChallengeRouteContext(
+  challengeRouteContext: ChallengeRouteContext,
+): EvalChallengeRouteContext {
+  const bootstrapRoute = challengeRouteContext.bootstrapRoute
+    ? {
+        coder: challengeRouteContext.bootstrapRoute.coder,
+        codeDepth: challengeRouteContext.bootstrapRoute.codeDepth,
+        reviewer: challengeRouteContext.bootstrapRoute.reviewer,
+        reviewMode: challengeRouteContext.bootstrapRoute.reviewMode,
+      }
+    : undefined;
+  const expandedRoute = challengeRouteContext.expandedRoute
+    ? {
+        coder: challengeRouteContext.expandedRoute.coder,
+        codeDepth: challengeRouteContext.expandedRoute.codeDepth,
+        reviewer: challengeRouteContext.expandedRoute.reviewer,
+        reviewMode: challengeRouteContext.expandedRoute.reviewMode,
+      }
+    : undefined;
+
+  return {
+    decisionSource: challengeRouteContext.decisionSource,
+    ...(bootstrapRoute ? { bootstrapRoute } : {}),
+    ...(expandedRoute ? { expandedRoute } : {}),
+    ...(challengeRouteContext.refreshRationale
+      ? { refreshRationale: challengeRouteContext.refreshRationale }
+      : {}),
+  };
+}
+
+export function attachChallengeRouteContext(
+  record: EvalRecord,
+  challengeRouteContext?: ChallengeRouteContext | null,
+): void {
+  if (!challengeRouteContext) {
+    return;
+  }
+  record.challengeRouteContext = toEvalChallengeRouteContext(challengeRouteContext);
 }
 
 /**
@@ -548,6 +592,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachAgentType(record, metadata.agentType);
   attachProviderMetadata(record, metadata.provider, metadata.endpoint);
   attachChallengePairId(record, metadata.challengePairId);
+  attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);

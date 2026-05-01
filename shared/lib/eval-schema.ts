@@ -53,6 +53,9 @@
  *   `EvalRecord` (HOK-1507), including
  *   `workflow_success_rate_under_budget`, structured router diagnostics, and
  *   scorer/policy attribution metadata
+ * - **1.16.0**: Added optional `challengeRouteContext` field to `EvalRecord`
+ *   (HOK-1515) so challenge evals retain both bootstrap and expanded routing
+ *   provenance when participant selection is refreshed or preserved
  *
  * @module eval-schema
  */
@@ -1068,6 +1071,23 @@ export interface WavemillRouterScoringMetadata {
   measurement_policy: WavemillRouterMeasurementPolicy;
 }
 
+export interface EvalChallengeRouteContext {
+  decisionSource: 'bootstrap' | 'expanded' | 'preserved';
+  bootstrapRoute?: {
+    coder: string;
+    codeDepth: string;
+    reviewer: string;
+    reviewMode: string;
+  };
+  expandedRoute?: {
+    coder: string;
+    codeDepth: string;
+    reviewer: string;
+    reviewMode: string;
+  };
+  refreshRationale?: string;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
@@ -1286,6 +1306,16 @@ export interface EvalRecord {
    * @since 1.12.0
    */
   rubric_provenance?: RubricProvenance;
+
+  /**
+   * Challenge-mode routing context for eval training.
+   *
+   * Records which route source determined challenge participants and what
+   * bootstrap and expanded artifacts were available at decision time.
+   *
+   * @since 1.16.0
+   */
+  challengeRouteContext?: EvalChallengeRouteContext;
 
   /**
    * Cross-model fallback telemetry for quota-aware training attribution.
