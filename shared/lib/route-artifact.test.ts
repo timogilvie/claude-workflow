@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildRouteProvenance } from './route-artifact.ts';
+import { buildRouteProvenance, validateExpandedRouteArtifact } from './route-artifact.ts';
 
 test('same input bytes produce same sha256', () => {
   const a = buildRouteProvenance({
@@ -68,4 +68,67 @@ test('heuristic fallback convention uses empty hash/path without input', () => {
   assert.equal(item.inputKind, 'heuristic');
   assert.equal(item.inputPath, '');
   assert.equal(item.inputHash, '');
+});
+
+test('validateExpandedRouteArtifact accepts execution fields', () => {
+  const result = validateExpandedRouteArtifact({
+    coder: 'gpt-5.4',
+    codeDepth: 'deep',
+    reviewer: 'claude-sonnet-4-6',
+    reviewMode: 'static+llm',
+    extra: true,
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.invalid, []);
+  assert.deepEqual(result.normalized, {
+    coder: 'gpt-5.4',
+    codeDepth: 'deep',
+    reviewer: 'claude-sonnet-4-6',
+    reviewMode: 'static+llm',
+  });
+});
+
+test('validateExpandedRouteArtifact falls back from reviewRecommended', () => {
+  const result = validateExpandedRouteArtifact({
+    coder: 'gpt-5.4',
+    codeDepth: 'medium',
+    reviewer: 'claude-sonnet-4-6',
+    reviewRecommended: 'llm',
+  });
+
+  assert.equal(result.valid, true);
+  assert.equal(result.normalized?.reviewMode, 'llm');
+});
+
+test('validateExpandedRouteArtifact reports missing required fields', () => {
+  const result = validateExpandedRouteArtifact({
+    coder: 'gpt-5.4',
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.missing.sort(), ['codeDepth', 'reviewMode', 'reviewer']);
+  assert.deepEqual(result.invalid, []);
+});
+
+test('validateExpandedRouteArtifact rejects non-object values', () => {
+  const result = validateExpandedRouteArtifact(null);
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.invalid, ['artifact']);
+});
+
+test('validateExpandedRouteArtifact rejects blank execution fields', () => {
+  const result = validateExpandedRouteArtifact({
+    coder: '',
+    codeDepth: 'medium',
+    reviewer: 'claude-sonnet-4-6',
+    reviewMode: 'static',
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.invalid, ['coder']);
 });

@@ -454,6 +454,191 @@ read_route_json() {
   echo "$default_value"
 }
 
+find_expanded_route_artifact() {
+  local feature_dir="$1"
+  local route_file=""
+
+  for route_file in \
+    "$feature_dir/.post-expansion-route.json" \
+    "$feature_dir/.expanded-route.json"; do
+    if [[ -f "$route_file" ]]; then
+      printf '%s\n' "$route_file"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+validate_expanded_route_artifact() {
+  local route_file="$1"
+
+  [[ -n "$route_file" && -f "$route_file" ]] || return 1
+
+  jq -e '
+    type == "object"
+    and (.coder | type == "string" and length > 0)
+    and (.codeDepth | type == "string" and length > 0)
+    and (.reviewer | type == "string" and length > 0)
+    and ((.reviewMode // .reviewRecommended // "") | type == "string" and length > 0)
+  ' "$route_file" >/dev/null 2>&1
+}
+
+ensure_phase_config_state_file() {
+  local feature_dir="$1"
+  local config_file="$feature_dir/.phase-config.json"
+
+  if [[ -f "$config_file" ]] && jq empty "$config_file" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  mkdir -p "$feature_dir"
+  cat > "$config_file" <<'EOF'
+{
+  "planning": {
+    "model": "",
+    "agent": "",
+    "depth": ""
+  },
+  "coding": {
+    "model": "",
+    "agent": "",
+    "depth": ""
+  },
+  "review": {
+    "model": "",
+    "agent": "",
+    "mode": ""
+  },
+  "resolvedAt": "",
+  "forceModel": null
+}
+EOF
+}
+
+apply_expanded_route_if_present() {
+  local feature_dir="$1" issue="$2" slug="$3" worktree_dir="$4" state_file="${5:-${STATE_FILE:-}}"
+  local route_file routing_file phase_config_file planner_model plan_depth coder_model code_depth reviewer_model review_mode
+  local planner_agent="" coder_agent="" reviewer_agent=""
+
+  route_file="$(find_expanded_route_artifact "$feature_dir" 2>/dev/null || true)"
+  [[ -n "$route_file" ]] || return 0
+
+  if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
+    log "warn" "expanded route invalid: $route_file (malformed JSON)"
+    return 1
+  fi
+
+  if ! validate_expanded_route_artifact "$route_file"; then
+    log "warn" "expanded route invalid: $route_file (missing required execution fields)"
+    return 1
+  fi
+
+  routing_file="$feature_dir/.routing-complete"
+  phase_config_file="$feature_dir/.phase-config.json"
+
+  if [[ -f "$routing_file" && ! -f "$feature_dir/.initial-route.json" ]]; then
+    cp "$routing_file" "$feature_dir/.initial-route.json"
+  fi
+
+  if [[ ! -f "$routing_file" ]]; then
+    printf '{}\n' > "$routing_file"
+  fi
+
+  if ! state_mutate "$routing_file" \
+    '. as $base
+     | $route[0] as $route
+     | $base + $route
+     | .reviewMode = ($route.reviewMode // $route.reviewRecommended // $base.reviewMode // $base.reviewRecommended // "")
+     | .reviewRecommended = .reviewMode
+     | .provenance = (($base.provenance // {}) + ($route.provenance // {}) + {
+         source: "expanded",
+         appliedFrom: $routeFile,
+         appliedAt: (
+           if (($base.provenance.appliedFrom // "") == $routeFile)
+             and (($base.coder // "") == ($route.coder // ""))
+             and (($base.codeDepth // "") == ($route.codeDepth // ""))
+             and (($base.reviewer // "") == ($route.reviewer // ""))
+             and (($base.reviewMode // $base.reviewRecommended // "") == ($route.reviewMode // $route.reviewRecommended // ""))
+           then ($base.provenance.appliedAt // (now | todateiso8601))
+           else (now | todateiso8601)
+           end
+         )
+       })' \
+    --arg routeFile "$route_file" \
+    --slurpfile route "$route_file"; then
+    log "warn" "expanded route invalid: $route_file (failed to update .routing-complete)"
+    return 1
+  fi
+
+  planner_model="$(jq -r '.planner // empty' "$routing_file" 2>/dev/null || true)"
+  plan_depth="$(jq -r '.planDepth // empty' "$routing_file" 2>/dev/null || true)"
+  coder_model="$(jq -r '.coder // empty' "$routing_file" 2>/dev/null || true)"
+  code_depth="$(jq -r '.codeDepth // empty' "$routing_file" 2>/dev/null || true)"
+  reviewer_model="$(jq -r '.reviewer // empty' "$routing_file" 2>/dev/null || true)"
+  review_mode="$(jq -r '(.reviewMode // .reviewRecommended // empty)' "$routing_file" 2>/dev/null || true)"
+
+  ensure_phase_config_state_file "$feature_dir"
+
+  if declare -F agent_resolve_from_model >/dev/null 2>&1; then
+    [[ -n "$planner_model" ]] && planner_agent="$(agent_resolve_from_model "$planner_model")"
+    [[ -n "$coder_model" ]] && coder_agent="$(agent_resolve_from_model "$coder_model")"
+    [[ -n "$reviewer_model" ]] && reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+  fi
+
+  if ! state_mutate "$phase_config_file" \
+    '.planning.model = $plannerModel
+     | .planning.agent = $plannerAgent
+     | .planning.depth = $planDepth
+     | .coding.model = $coderModel
+     | .coding.agent = $coderAgent
+     | .coding.depth = $codeDepth
+     | .review.model = $reviewerModel
+     | .review.agent = $reviewerAgent
+     | .review.mode = $reviewMode
+     | .resolvedAt = (if (.resolvedAt // "") == "" then (now | todateiso8601) else .resolvedAt end)
+     | .forceModel = (.forceModel // null)' \
+    --arg plannerModel "$planner_model" \
+    --arg plannerAgent "$planner_agent" \
+    --arg planDepth "$plan_depth" \
+    --arg coderModel "$coder_model" \
+    --arg coderAgent "$coder_agent" \
+    --arg codeDepth "$code_depth" \
+    --arg reviewerModel "$reviewer_model" \
+    --arg reviewerAgent "$reviewer_agent" \
+    --arg reviewMode "$review_mode"; then
+    log "warn" "expanded route invalid: $route_file (failed to update .phase-config.json)"
+    return 1
+  fi
+
+  if [[ -n "$state_file" && -f "$state_file" ]]; then
+    if ! state_mutate "$state_file" \
+      '.tasks[$issue].plannerModel = $plannerModel
+       | .tasks[$issue].coderModel = $coderModel
+       | .tasks[$issue].reviewerModel = $reviewerModel
+       | .tasks[$issue].planDepth = $planDepth
+       | .tasks[$issue].codeDepth = $codeDepth
+       | .tasks[$issue].reviewMode = $reviewMode
+       | .tasks[$issue].slug = (.tasks[$issue].slug // $slug)
+       | .tasks[$issue].worktree = (.tasks[$issue].worktree // $worktree)
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" \
+      --arg slug "$slug" \
+      --arg worktree "$worktree_dir" \
+      --arg plannerModel "$planner_model" \
+      --arg coderModel "$coder_model" \
+      --arg reviewerModel "$reviewer_model" \
+      --arg planDepth "$plan_depth" \
+      --arg codeDepth "$code_depth" \
+      --arg reviewMode "$review_mode"; then
+      log "warn" "expanded route invalid: $route_file (failed to update workflow state)"
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
 wavemill_command_file_path() {
   local session="$1"
   printf '/tmp/wavemill-%s-commands\n' "$session"

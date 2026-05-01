@@ -105,6 +105,10 @@ export interface ModelCapabilitiesOverride {
   strengths?: string[];
   weaknesses?: string[];
   qualityScores?: Partial<Record<RegistryTaskType, number>>;
+  pricing?: PricingEntry;
+  defaultLadderEligible?: boolean;
+  contextWindowTokens?: number;
+  agent?: string;
 }
 
 export interface ModelRegistryConfig {

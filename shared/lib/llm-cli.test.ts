@@ -510,7 +510,7 @@ describe('quota fallback', () => {
     const elapsedMs = Date.now() - startedAt;
 
     assert.equal(result.model, 'model-b');
-    assert.ok(elapsedMs < 2000, `expected quota fallback without backoff, got ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 2000, `expected quota fallback without 2s backoff, got ${elapsedMs}ms`);
   });
 
   it('keeps exponential backoff for transient errors on the same model', async () => {
