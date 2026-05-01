@@ -4649,7 +4649,7 @@ render_grouped_task_list() {
   (( counter > 0 )) || return 1
 
   GROUPED_SELECT_FROM="${select_lines%$'\n'}"
-  printf '%s' "${output%$'\n'}"
+  GROUPED_DISPLAY="${output%$'\n'}"
 }
 
 
@@ -5399,6 +5399,7 @@ TASK_LIST_RENDERED=0  # track task list cursor region in control pane
 SELECT_SHOW_ALL=false
 USING_GROUPED_VIEW=false
 GROUPED_SELECT_FROM=""
+GROUPED_DISPLAY=""
 declare -a COMMAND_QUEUE=()
 COMMAND_FILE="$(wavemill_command_file_path "$SESSION")"
 COMMAND_OFFSET_FILE="$(wavemill_command_offset_path "$SESSION")"
@@ -6962,15 +6963,17 @@ while :; do
           fi
           echo "Next tasks:"
           queue_plan_json=""
-          grouped_display=""
+          GROUPED_DISPLAY=""
+          GROUPED_SELECT_FROM=""
           if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
-            if grouped_display=$(render_grouped_task_list "$queue_plan_json" "$available"); then
-              echo "$grouped_display"
+            render_grouped_task_list "$queue_plan_json" "$available"
+            if [[ -n "$GROUPED_DISPLAY" ]]; then
+              echo "$GROUPED_DISPLAY"
               select_from="$GROUPED_SELECT_FROM"
               USING_GROUPED_VIEW=true
             fi
           fi
-          if [[ -z "$grouped_display" ]]; then
+          if [[ -z "$GROUPED_DISPLAY" ]]; then
             USING_GROUPED_VIEW=false
             [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
             if [[ -n "$avail_unblocked" ]]; then
