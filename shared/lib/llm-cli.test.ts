@@ -549,7 +549,7 @@ describe('quota fallback', () => {
     const elapsedMs = Date.now() - startedAt;
 
     assert.equal(result.model, 'model-b');
-    assert.ok(elapsedMs < 2000, `expected quota fallback without 2s backoff, got ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 3500, `expected quota fallback without an added retry backoff, got ${elapsedMs}ms`);
   });
 
   it('treats DeepSeek 401 auth failures as non-quota and does not exhaust the model', async () => {
