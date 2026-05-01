@@ -256,8 +256,14 @@ Healthy runs do not emit extra routing noise.
 ## Routing Artifact Contract
 
 At startup, `wavemill mill` runs `route-task.ts --json` per task and persists the result
-as `/tmp/{SESSION}-{ISSUE}-route.json`. This is the **canonical routing artifact** —
-all downstream consumers should read it via `read_route_json()` from `wavemill-common.sh`.
+as `/tmp/{SESSION}-{ISSUE}-route.json`. This is the canonical **bootstrap** routing artifact
+used during launch before feature-local execution state exists.
+
+After planning expands the task packet, the controller looks for
+`features/<slug>/.post-expansion-route.json` first and `features/<slug>/.expanded-route.json`
+second. A valid expanded route is promoted into `features/<slug>/.routing-complete`,
+`features/<slug>/.phase-config.json`, and `.wavemill/workflow-state.json` before coding
+launches. `.initial-route.json` remains the preserved bootstrap snapshot for provenance.
 
 ### Fields
 
@@ -298,6 +304,7 @@ all downstream consumers should read it via `read_route_json()` from `wavemill-c
 | Orchestrator compatibility wrapper | `wavemill-orchestrator.sh` | planner, coder, reviewer, planDepth, codeDepth, reviewRecommended, routingMode |
 | Orchestrator (interactive) | `wavemill-orchestrator.sh` | Full route (runs router inline) |
 | Monitor launch_task() | `wavemill-mill.sh` | Full route (re-routes or reads cached) |
+| Expanded-route promotion | `wavemill-common.sh::apply_expanded_route_if_present` | coder, codeDepth, reviewer, reviewMode/reviewRecommended plus any optional route metadata |
 
 ### Fallback Chain
 
@@ -306,6 +313,10 @@ all downstream consumers should read it via `read_route_json()` from `wavemill-c
 `model-suggestion.json` is a **deprecated** compatibility shim that only carries the `coder`
 model (as `recommendedModel`). It will be removed in a future PR once all consumers have
 been confirmed to work with `route.json`.
+
+If the expanded-route artifact is malformed or missing required execution fields, promotion
+fails closed with an `expanded route invalid` warning and the existing bootstrap execution
+state remains in place.
 
 ## See Also
 

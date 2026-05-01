@@ -4,9 +4,7 @@ title: Routing Contract
 
 # Routing Contract
 
-This note documents the current Wavemill routing lifecycle and defines the target contract for bootstrap routing, expanded routing, and the authoritative execution route.
-
-HOK-1510 is documentation-only. It does not change runtime behavior. The promotion rules described here are the target contract for follow-up implementation work.
+This note documents the current Wavemill routing lifecycle and the runtime contract for bootstrap routing, expanded routing, and the authoritative execution route.
 
 ## Purpose
 
@@ -16,9 +14,9 @@ HOK-1510 is documentation-only. It does not change runtime behavior. The promoti
 
 ## Non-Goals
 
-- No changes to `shared/`, `tools/`, agent prompts, resume logic, or eval schemas in this issue.
-- No change to the current startup behavior that treats `/tmp/{SESSION}-{ISSUE}-route.json` as the active startup routing artifact.
-- No change to challenge-mode pairing, operator overrides, or phase launch behavior in this issue.
+- No rerouting during resume. Resume only reapplies an already persisted expanded route artifact when one exists.
+- No change to challenge-mode pairing semantics or operator overrides such as `FORCE_MODEL`.
+- No eval schema change beyond preserving the existing archived artifacts.
 
 ## Current Lifecycle
 
@@ -32,19 +30,19 @@ HOK-1510 is documentation-only. It does not change runtime behavior. The promoti
 
 ### Planning Expansion
 
-`tools/prompts/planning-phase.md` instructs the planner to route the expanded `task-packet.md` and save the result as `features/<slug>/.post-expansion-route.json`. That file is explicit post-expansion provenance today, but current controller code does not promote it into `.routing-complete`, `.phase-config.json`, or task state before coding and review launch.
+`tools/prompts/planning-phase.md` instructs the planner to route the expanded `task-packet.md` and save the result as `features/<slug>/.post-expansion-route.json`. The controller now promotes that artifact, or falls back to `features/<slug>/.expanded-route.json`, before coding launches and before a coding-phase resume relaunch.
 
 ### Routing-To-Planning Transition
 
-Today the bootstrap route is what planning launches with. In startup and dynamic flows, the controller persists the pre-expansion route into `.routing-complete`, `.initial-route.json`, and task state before the planning agent starts.
+The bootstrap route is what planning launches with. In startup and dynamic flows, the controller persists the pre-expansion route into `.routing-complete`, `.initial-route.json`, and task state before the planning agent starts.
 
 ### Planning-To-Coding Transition
 
-In `shared/lib/wavemill-mill.sh`, the `planning)` branch checks `resolved_phase == "coding"`, validates the planning output, records plan approval, reads coding model and depth from `.phase-config.json` or task state, calls `set_task_phase "$ISSUE" "coding"`, and then calls `launch_coding_phase()`. This is the controller handoff where the expanded route must be promoted before coding starts.
+In `shared/lib/wavemill-mill.sh`, the `planning)` branch checks `resolved_phase == "coding"`, validates the planning output, records plan approval, applies any valid expanded route artifact into `.routing-complete`, `.phase-config.json`, and workflow state, then reads coding model and depth and launches coding. This is the authoritative promotion point.
 
 ### Coding-To-Review Transition
 
-The `coding)` branch follows the same pattern for review: it reads reviewer model and mode from `.phase-config.json` or task state, calls `set_task_phase "$ISSUE" "review"`, and launches `launch_review_phase()`. Because review currently reads the same persisted execution settings, stale bootstrap values can carry through if the expanded route was never promoted earlier.
+The `coding)` branch reads reviewer model and mode from `.phase-config.json` or task state, calls `set_task_phase "$ISSUE" "review"`, and launches `launch_review_phase()`. Because the planning handoff now rewrites those execution surfaces first, review inherits the expanded reviewer and review mode automatically.
 
 ### Challenge Mode
 
@@ -52,7 +50,7 @@ Challenge selection currently derives paired workflow settings from the active r
 
 ### Resume Behavior
 
-Resume uses persisted execution state, not a rerun of expansion routing. `detect_inflight_tasks()` reads `.wavemill/workflow-state.json`, `_restore_inflight_task_window_if_missing()` relaunches planning or coding from `.phase-config.json` first and task state second, and `restore_review_task_window()` rebuilds the review shell around the existing PR-backed task state. If only bootstrap values were ever persisted, resume will reuse those bootstrap values.
+Resume uses persisted execution state, not a rerun of expansion routing. `detect_inflight_tasks()` reads `.wavemill/workflow-state.json`, `_restore_inflight_task_window_if_missing()` relaunches planning or coding from `.phase-config.json` first and task state second, and coding relaunch now reapplies a valid expanded route artifact before reading those fields. `restore_review_task_window()` rebuilds the review shell around the existing PR-backed task state.
 
 ### Eval Artifact Archival
 
@@ -67,11 +65,12 @@ Resume uses persisted execution state, not a rerun of expansion routing. `detect
 | `/tmp/${SESSION}-${ISSUE}-route-source.txt` | `shared/lib/wavemill-mill.sh::apply_route_json_for_issue`, `launch_task()` | read + write | startup, dynamic launch | Records whether the current `/tmp` bootstrap route came from batch cache, startup cache, or live routing. |
 | `/tmp/${SESSION}-route-batch-input.jsonl` and `/tmp/${SESSION}-route-batch-output.jsonl` | `shared/lib/wavemill-mill.sh` startup batch routing | write + read | startup | Batch bootstrap routing inputs and outputs for concurrent startup launch. |
 | `/tmp/${SESSION}-dynamic-route-batch-input.jsonl` and `/tmp/${SESSION}-dynamic-route-batch-output.jsonl` | `shared/lib/wavemill-mill.sh::batch_route_selected_tasks` | write + read | dynamic multi-select | Batch bootstrap routing inputs and outputs for interactive launch. |
-| `features/<slug>/.routing-complete` | `shared/lib/wavemill-startup-runner.sh`, `shared/lib/wavemill-mill.sh::launch_task`, `shared/lib/eval-context-gatherer.ts` | read + write | post-bootstrap, resume, eval | Current persisted route decision consumed as the feature-local execution route, even though it usually still reflects bootstrap routing. |
+| `features/<slug>/.routing-complete` | `shared/lib/wavemill-startup-runner.sh`, `shared/lib/wavemill-mill.sh::launch_task`, `shared/lib/wavemill-common.sh::apply_expanded_route_if_present`, `shared/lib/eval-context-gatherer.ts` | read + write | post-bootstrap, coding handoff, resume, eval | Feature-local authoritative execution route. Starts as bootstrap and is overwritten with the expanded route after successful promotion. |
 | `features/<slug>/.initial-route.json` | `shared/lib/wavemill-startup-runner.sh`, `shared/lib/wavemill-mill.sh::launch_task` | write | startup, dynamic launch | Explicit bootstrap provenance snapshot captured before expansion. |
-| `features/<slug>/.post-expansion-route.json` | `tools/prompts/planning-phase.md`, archived by `archive_stage_artifacts()` | write + archive | planning completion, eval provenance | Explicit expanded-packet route snapshot captured after task-packet expansion. |
-| `features/<slug>/.phase-config.json` | `shared/lib/wavemill-mill.sh::write_phase_config`, `read_phase_config`, resume helpers, coding/review transitions | read + write | planning handoff, coding, review, resume | Resolved per-stage execution settings used by downstream phase launches. |
-| `.wavemill/workflow-state.json` | `save_task_state()`, `set_task_phase()`, `get_task_meta()`, resume helpers | read + write | launch, phase transitions, resume, challenge | Durable task ledger for planner/coder/reviewer models, depths, review mode, challenge metadata, PR state, and active phase. |
+| `features/<slug>/.post-expansion-route.json` | `tools/prompts/planning-phase.md`, `shared/lib/wavemill-common.sh::apply_expanded_route_if_present`, archived by `archive_stage_artifacts()` | write + read + archive | planning completion, coding handoff, resume, eval provenance | Preferred expanded-packet route snapshot captured after task-packet expansion. |
+| `features/<slug>/.expanded-route.json` | legacy/manual producers, `shared/lib/wavemill-common.sh::apply_expanded_route_if_present` | read | coding handoff, resume | Backward-compatible fallback expanded-route artifact when `.post-expansion-route.json` is absent. |
+| `features/<slug>/.phase-config.json` | `shared/lib/wavemill-mill.sh::write_phase_config`, `read_phase_config`, resume helpers, `shared/lib/wavemill-common.sh::apply_expanded_route_if_present` | read + write | planning handoff, coding, review, resume | Resolved per-stage execution settings used by downstream phase launches. Rewritten from the authoritative execution route before coding begins. |
+| `.wavemill/workflow-state.json` | `save_task_state()`, `set_task_phase()`, `get_task_meta()`, resume helpers, `shared/lib/wavemill-common.sh::apply_expanded_route_if_present` | read + write | launch, phase transitions, resume, challenge | Durable task ledger for planner/coder/reviewer models, depths, review mode, challenge metadata, PR state, and active phase. Expanded-route promotion updates the execution fields in place. |
 | `.wavemill/evals/artifacts/<issue>/routing-complete.json` | `archive_stage_artifacts()`, `eval-context-gatherer.ts` | read + write | cleanup, post-run eval | Archived copy of the current feature-local routing decision used by eval context loading. |
 | `.wavemill/evals/artifacts/<issue>/post-expansion-route.json` | `archive_stage_artifacts()` | write | cleanup, provenance | Archived expanded-route snapshot retained for later route-drift analysis, but not loaded as the active routing decision today. |
 
@@ -85,15 +84,13 @@ If a Linear description already contains unusually rich detail, the route is sti
 
 ### Expanded Route
 
-The expanded route is the route produced from `task-packet.md` after planning expansion and saved as `.post-expansion-route.json`.
+The expanded route is the route produced from `task-packet.md` after planning expansion and saved as `.post-expansion-route.json`. If that file does not exist, the controller may use `.expanded-route.json` as a backward-compatible fallback.
 
-If planning fails, expansion is incomplete, or `.post-expansion-route.json` is missing or malformed, no promotion occurs and execution falls back to the bootstrap route.
+If planning fails, expansion is incomplete, or the discovered expanded-route artifact is malformed or missing required execution fields, no promotion occurs. The controller emits an `expanded route invalid` warning and execution remains on the previously persisted bootstrap route.
 
 ### Authoritative Execution Route
 
 The authoritative execution route is the route consumed by coding, review, resume, challenge follow-on behavior, and eval context that claims to represent the execution workflow.
-
-Target rule:
 
 - Before expansion succeeds, the authoritative execution route is the bootstrap route.
 - After expansion succeeds, the authoritative execution route must equal the expanded route.
@@ -103,16 +100,16 @@ Target rule:
 
 The required promotion point is the planning-to-coding controller handoff in `shared/lib/wavemill-mill.sh` when the `planning)` branch sees `resolved_phase == "coding"`.
 
-Target ordering at that handoff:
+Ordering at that handoff:
 
 1. Validate planning output and approval state.
-2. If `.post-expansion-route.json` is valid, promote it to the authoritative execution route.
+2. If `.post-expansion-route.json` or `.expanded-route.json` is valid, promote it to the authoritative execution route, preferring `.post-expansion-route.json`.
 3. Persist that promoted route into the execution-state surfaces used by later phases.
 4. Only then read coding model and depth.
 5. Only then call `set_task_phase "$ISSUE" "coding"`.
 6. Only then call `launch_coding_phase()`.
 
-Promotion should update the surfaces that coding, review, resume, and eval treat as execution state: `.routing-complete`, `.phase-config.json`, and `.wavemill/workflow-state.json`.
+Promotion updates the surfaces that coding, review, resume, and eval treat as execution state: `.routing-complete`, `.phase-config.json`, and `.wavemill/workflow-state.json`.
 
 ## Field Mutability
 
@@ -120,7 +117,7 @@ Promotion should update the surfaces that coding, review, resume, and eval treat
 
 | Classification | Fields | Contract |
 | --- | --- | --- |
-| immutable | issue id, slug, original Linear issue id, bootstrap source, bootstrap capture time or source hash if added later, challenge pair identity | Expansion must not rewrite provenance or pair identity. |
+| immutable | issue id, slug, original Linear issue id, bootstrap snapshot in `.initial-route.json`, challenge pair identity | Expansion must not rewrite bootstrap evidence or pair identity. |
 | mutable-after-expansion | planner, coder, reviewer, planDepth, codeDepth, reviewRecommended or reviewMode, expectedSuccess, confidence, expectedCost, routingMode, neighborCount, signals, reasoning, challengeRecommendation | These fields may change when the richer task packet changes the route. |
 | derived | resolved agent commands, `.phase-config.json` stage blocks, task-state execution fields, eval conversion fields | These should be regenerated from the authoritative execution route rather than treated as independent source-of-truth inputs. |
 
@@ -140,15 +137,8 @@ Eval archival should continue retaining both `routing-complete.json` and `post-e
 | --- | --- | --- |
 | startup runner | Writes bootstrap route to `.routing-complete` and `.initial-route.json` before planning. | Same bootstrap behavior, but clearly scoped as planning-launch input and provenance. |
 | dynamic launch | Uses `/tmp` route cache or live route on raw/minimal packet, then writes `.routing-complete` and `.initial-route.json`. | Same bootstrap capture, followed by later promotion if expansion succeeds. |
-| planning expansion | Writes `.post-expansion-route.json` only. | Writes `.post-expansion-route.json` and promotes it before coding/review execution begins. |
-| coding and review launch | Read `.phase-config.json` or task state, which may still reflect bootstrap routing. | Read only authoritative execution state derived from the promoted expanded route. |
+| planning expansion | Writes `.post-expansion-route.json` only. | Writes `.post-expansion-route.json`, and the controller promotes it before coding/review execution begins. |
+| coding and review launch | Read `.phase-config.json` or task state, which may still reflect bootstrap routing. | Read authoritative execution state derived from the promoted expanded route. |
 | challenge mode | Uses launch-time route and persists challenge-specific overrides. | Preserve distinct coder identities, but source shared planner/reviewer/depth values from the authoritative execution route after promotion. |
 | resume | Relaunches from `.phase-config.json` or task state, even if they still hold bootstrap values. | Relaunches from the promoted authoritative route, keeping bootstrap and expanded artifacts only as provenance. |
 | eval archival | Archives both `.routing-complete` and `.post-expansion-route.json`, but loads only `.routing-complete` as routing decision. | Preserve both artifacts and make the bootstrap-versus-expanded distinction explicit for later analysis. |
-
-## Deferred Implementation
-
-- Promote `.post-expansion-route.json` into `.routing-complete`, `.phase-config.json`, and `.wavemill/workflow-state.json` at the planning-to-coding handoff.
-- Update resume and challenge handling so every downstream launch reads the authoritative execution route consistently.
-- Clarify or revise `docs/mill-mode.md` wording that currently describes `/tmp/{SESSION}-{ISSUE}-route.json` as canonical, so it is explicitly canonical for bootstrap routing rather than all execution routing.
-- Update eval loading or schema only if future runtime work needs first-class bootstrap-versus-expanded route provenance.
