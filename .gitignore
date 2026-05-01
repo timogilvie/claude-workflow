@@ -2,6 +2,10 @@
 .env
 tools/.env
 
+# Per-developer local config overlay (deep-merged onto .wavemill-config.json
+# at load time — see shared/lib/config.ts)
+.wavemill-config.local.json
+
 # Dependencies
 node_modules/
 tools/node_modules/

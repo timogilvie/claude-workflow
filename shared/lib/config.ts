@@ -591,43 +591,69 @@ export function loadWavemillConfig(repoDir?: string): WavemillConfig {
 
   // Load config file
   const configPath = resolve(absRepoDir, '.wavemill-config.json');
+  const localConfigPath = resolve(absRepoDir, '.wavemill-config.local.json');
 
-  // Missing file is not an error (all fields are optional)
-  if (!existsSync(configPath)) {
-    const emptyConfig: WavemillConfig = {};
-    configCache.set(absRepoDir, emptyConfig);
-    return emptyConfig;
-  }
-
-  // Read and parse
-  let parsed: unknown;
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    parsed = JSON.parse(content);
-  } catch (err) {
-    const message = errorMessage(err);
-    throw new Error(
-      `Failed to parse .wavemill-config.json at ${configPath}: ${message}`
-    );
-  }
+  // Missing base file is not an error (all fields are optional). A `.local.json`
+  // alone with no base is also valid — it acts as the entire config.
+  const base = existsSync(configPath) ? readAndParseConfig(configPath) : {};
+  const overlay = existsSync(localConfigPath) ? readAndParseConfig(localConfigPath) : null;
+  const merged = overlay ? deepMergeConfig(base, overlay) : base;
 
   // Migrate legacy configs that still carry the removed skip-planning mode.
   if (
-    typeof parsed === 'object' &&
-    parsed !== null &&
-    'mill' in parsed &&
-    typeof (parsed as { mill?: { planningMode?: string } }).mill === 'object' &&
-    (parsed as { mill?: { planningMode?: string } }).mill?.planningMode === 'skip'
+    typeof merged === 'object' &&
+    merged !== null &&
+    'mill' in merged &&
+    typeof (merged as { mill?: { planningMode?: string } }).mill === 'object' &&
+    (merged as { mill?: { planningMode?: string } }).mill?.planningMode === 'skip'
   ) {
-    (parsed as { mill: { planningMode: 'interactive' } }).mill.planningMode = 'interactive';
+    (merged as { mill: { planningMode: 'interactive' } }).mill.planningMode = 'interactive';
   }
 
-  // Validate against schema
-  validateConfig(parsed);
+  // Validate the merged result against the schema. The overlay file is partial,
+  // so validating it alone would be too permissive; validating the merge catches
+  // type mismatches and unknown keys regardless of which file contributed them.
+  validateConfig(merged);
 
   // Cache and return
-  configCache.set(absRepoDir, parsed);
-  return parsed;
+  configCache.set(absRepoDir, merged);
+  return merged;
+}
+
+function readAndParseConfig(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8'));
+  } catch (err) {
+    throw new Error(`Failed to parse ${path}: ${errorMessage(err)}`);
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Deep-merge an overlay config onto a base config. Used to apply
+ * `.wavemill-config.local.json` on top of `.wavemill-config.json`.
+ *
+ * - Objects: recursively merged, overlay keys win.
+ * - Arrays: replaced entirely by the overlay (no concatenation). This keeps
+ *   precedence predictable for arrays like `permissions.autoApprovePatterns`
+ *   or `eval.aggregation.repos` where users typically want full control.
+ * - Primitives and `null`: overlay value wins.
+ */
+function deepMergeConfig(base: unknown, overlay: unknown): unknown {
+  if (!isPlainObject(base) || !isPlainObject(overlay)) return overlay;
+  const result: Record<string, unknown> = { ...base };
+  for (const [key, overlayValue] of Object.entries(overlay)) {
+    const baseValue = base[key];
+    if (isPlainObject(baseValue) && isPlainObject(overlayValue)) {
+      result[key] = deepMergeConfig(baseValue, overlayValue);
+    } else {
+      result[key] = overlayValue;
+    }
+  }
+  return result;
 }
 
 /**

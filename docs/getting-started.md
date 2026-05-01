@@ -93,6 +93,25 @@ wavemill hokusai enable
 
 Hokusai is optional. Wavemill still improves from your own repository data without it.
 
+### Per-Developer Config Overrides
+
+If you want a different config than the one committed in `.wavemill-config.json` — for example, to dogfood autonomous integration on a repo where the shipping default keeps it off — drop the overrides in `.wavemill-config.local.json` next to it. The local file is gitignored, deep-merged on top of the base at load time, and validated against the same schema.
+
+```json
+// .wavemill-config.local.json
+{
+  "integration": {
+    "enabled": true,
+    "readyPolicy": { "enabled": true }
+  },
+  "mill": {
+    "baseBranch": "auto/integration"
+  }
+}
+```
+
+Merge rules: nested objects are recursively merged, arrays are replaced entirely (not concatenated), and primitive values from the local file win. The local file alone is also valid — if you have no committed config but a local one, it acts as the whole config.
+
 ### Config Versioning
 
 The config includes a `configVersion` field to track format compatibility. When running `wavemill mill`, `expand`, or `plan`, you'll be prompted to upgrade if your config is outdated.
