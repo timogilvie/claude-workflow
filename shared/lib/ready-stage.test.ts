@@ -8,6 +8,7 @@ import {
   checkMergeConflicts,
   checkCIStatus,
   checkSchemaMigrations,
+  checkMigrationChainIntegrity,
   checkDeployPaths,
   computeVerdict,
   checkLegacyMarkers,
@@ -27,6 +28,14 @@ function assertIso8601(timestamp: string) {
     'timestamp should be ISO 8601 UTC format'
   );
   assert.ok(!Number.isNaN(new Date(timestamp).getTime()));
+}
+
+async function writeRepoFiles(repoDir: string, files: Record<string, string>) {
+  for (const [relativePath, content] of Object.entries(files)) {
+    const filePath = path.join(repoDir, relativePath);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, content, 'utf-8');
+  }
 }
 
 describe('ready-stage', () => {
@@ -253,6 +262,135 @@ describe('ready-stage', () => {
       assert.equal(result.status, 'skip');
       assert.equal(result.name, 'deploy-paths');
       assert.match(result.message, /not configured/);
+    });
+  });
+
+  describe('checkMigrationChainIntegrity', () => {
+    let repoDir: string;
+
+    beforeEach(async () => {
+      repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-migrations-'));
+    });
+
+    afterEach(async () => {
+      await fs.rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('passes on a valid linear chain', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'pass');
+      assert.equal(result.name, 'migration-chain-integrity');
+    });
+
+    it('fails on duplicate revision IDs', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/001_duplicate.py': 'revision = "001"\ndown_revision = None\n',
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'fail');
+      assert.match(result.message, /Duplicate migration revision IDs/);
+      assert.ok(Array.isArray(result.details?.duplicateRevisions));
+    });
+
+    it('fails on dangling down_revision', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'fail');
+      assert.match(result.message, /unresolved down_revision/);
+    });
+
+    it('fails when the graph has two heads', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_a.py': 'revision = "002_a"\ndown_revision = "001"\n',
+        'migrations/versions/002_b.py': 'revision = "002_b"\ndown_revision = "001"\n',
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'fail');
+      assert.match(result.message, /exactly one head/);
+      assert.equal((result.details?.heads as unknown[])?.length, 2);
+    });
+
+    it('fails when the graph has a cycle', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_a.py': 'revision = "001"\ndown_revision = "003"\n',
+        'migrations/versions/002_b.py': 'revision = "002"\ndown_revision = "001"\n',
+        'migrations/versions/003_c.py': 'revision = "003"\ndown_revision = "002"\n',
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'fail');
+      assert.match(result.message, /contains a cycle/);
+      assert.ok(result.details?.cycle);
+    });
+
+    it('skips when the repository has no migration files', async () => {
+      await writeRepoFiles(repoDir, {
+        'src/app.ts': 'export const ok = true;\n',
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /No migration files/);
+    });
+
+    it('honors configured migration patterns', async () => {
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            migrationPatterns: ['db/revisions/'],
+            checks: ['migration-chain-integrity'],
+          },
+        }),
+        'db/revisions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'db/revisions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+            });
+          }
+
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return '';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.equal(result.verdict, 'pass');
+        assert.equal(result.checks[0]?.name, 'migration-chain-integrity');
+        assert.equal(result.checks[0]?.status, 'pass');
+      } finally {
+        execMock.mock.restore();
+      }
     });
   });
 
@@ -885,6 +1023,54 @@ describe('ready-stage', () => {
         assert.equal(result.verdict, 'pending');
         assert.equal(result.summary, 'CI checks still in progress - will retry');
         assert.equal(result.checks[0]?.status, 'pending');
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('honors the ready.checks allowlist for migration-chain-integrity', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            checks: ['ci-status'],
+            requiredChecks: ['ci-status'],
+          },
+        }),
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+            });
+          }
+
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return '';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.deepEqual(result.checks.map(check => check.name), ['ci-status']);
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });
