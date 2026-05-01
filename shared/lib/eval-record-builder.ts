@@ -15,6 +15,8 @@
 
 import type {
   EvalChallengeRouteContext,
+  EvalRouteArtifact,
+  EvalRouteProvenance,
   EvalRecord,
   EligibilityErrorCode,
   PlanCritique,
@@ -58,6 +60,8 @@ export interface EvalRecordMetadata {
   challengePairId?: string;
   /** Challenge route provenance for evals */
   challengeRouteContext?: ChallengeRouteContext | null;
+  /** General route provenance for all evals */
+  routeProvenance?: EvalRouteProvenance | null;
   /** Difficulty analysis results */
   difficulty?: DifficultyAnalysis | null;
   /** Task context analysis results */
@@ -138,6 +142,44 @@ function toEvalChallengeRouteContext(
   };
 }
 
+function toEvalRouteArtifact(route: EvalRouteArtifact): EvalRouteArtifact {
+  return {
+    coder: route.coder,
+    codeDepth: route.codeDepth,
+    reviewer: route.reviewer,
+    reviewMode: route.reviewMode,
+  };
+}
+
+function toEvalRouteProvenance(routeProvenance: EvalRouteProvenance): EvalRouteProvenance {
+  return {
+    ...(routeProvenance.bootstrapRoute
+      ? { bootstrapRoute: toEvalRouteArtifact(routeProvenance.bootstrapRoute) }
+      : {}),
+    ...(routeProvenance.expandedRoute
+      ? { expandedRoute: toEvalRouteArtifact(routeProvenance.expandedRoute) }
+      : {}),
+    ...(routeProvenance.activeRoute
+      ? { activeRoute: toEvalRouteArtifact(routeProvenance.activeRoute) }
+      : {}),
+    ...(typeof routeProvenance.routeChanged === 'boolean'
+      ? { routeChanged: routeProvenance.routeChanged }
+      : {}),
+    ...(routeProvenance.decisionSource
+      ? { decisionSource: routeProvenance.decisionSource }
+      : {}),
+    ...(typeof routeProvenance.expandedCacheHit === 'boolean'
+      ? { expandedCacheHit: routeProvenance.expandedCacheHit }
+      : {}),
+    ...(routeProvenance.packetHash
+      ? { packetHash: routeProvenance.packetHash }
+      : {}),
+    ...(routeProvenance.routeSource
+      ? { routeSource: routeProvenance.routeSource }
+      : {}),
+  };
+}
+
 export function attachChallengeRouteContext(
   record: EvalRecord,
   challengeRouteContext?: ChallengeRouteContext | null,
@@ -146,6 +188,16 @@ export function attachChallengeRouteContext(
     return;
   }
   record.challengeRouteContext = toEvalChallengeRouteContext(challengeRouteContext);
+}
+
+export function attachRouteProvenance(
+  record: EvalRecord,
+  routeProvenance?: EvalRouteProvenance | null,
+): void {
+  if (!routeProvenance) {
+    return;
+  }
+  record.routeProvenance = toEvalRouteProvenance(routeProvenance);
 }
 
 /**
@@ -614,6 +666,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachProviderMetadata(record, metadata.provider, metadata.endpoint);
   attachChallengePairId(record, metadata.challengePairId);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
+  attachRouteProvenance(record, metadata.routeProvenance);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);

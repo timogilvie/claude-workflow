@@ -1,7 +1,6 @@
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
-import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import { resolveAgent } from './model-router.ts';
-import type { RouteArtifactSnapshot } from './route-artifact.ts';
+import { routeChangedMaterially, type RouteArtifactSnapshot } from './route-artifact.ts';
 import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
@@ -327,36 +326,6 @@ function buildPairFromRouteSnapshot(
     opts.repoDir,
     fallback,
   );
-}
-
-function modelClassOrId(modelId: string, repoDir?: string): string {
-  const registry = getEffectiveRegistry(repoDir);
-  return getModel(registry, modelId)?.class || modelId;
-}
-
-export function routeChangedMaterially(
-  bootstrap: RouteArtifactSnapshot,
-  expanded: RouteArtifactSnapshot,
-  repoDir?: string,
-): { changed: boolean; reasons: string[] } {
-  const reasons: string[] = [];
-
-  if (modelClassOrId(bootstrap.coder, repoDir) !== modelClassOrId(expanded.coder, repoDir)) {
-    reasons.push('coder_class');
-  }
-
-  if (bootstrap.codeDepth !== expanded.codeDepth) {
-    reasons.push('code_depth');
-  }
-
-  if (modelClassOrId(bootstrap.reviewer, repoDir) !== modelClassOrId(expanded.reviewer, repoDir)) {
-    reasons.push('reviewer_class');
-  }
-
-  return {
-    changed: reasons.length > 0,
-    reasons,
-  };
 }
 
 export function pickChallengeWorkflowsWithContext(

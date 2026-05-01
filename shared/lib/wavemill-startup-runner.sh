@@ -604,6 +604,11 @@ $details_context"
     jq '.provenance.source = "bootstrap"' "$feature_dir/.routing-complete" \
       | write_json_artifact "$feature_dir/.initial-route.json"
   fi
+  local bootstrap_route
+  bootstrap_route="$(route_lifecycle_route_id "$feature_dir/.initial-route.json" 2>/dev/null || true)"
+  if [[ -n "$bootstrap_route" ]]; then
+    startup_log "route.lifecycle: event=bootstrap_assigned issue=$issue route=\"$bootstrap_route\""
+  fi
 
   local planner_agent
   planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")"

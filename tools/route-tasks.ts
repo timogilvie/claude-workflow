@@ -31,6 +31,10 @@ interface ExpandedRouteTaskInput {
   outputFile?: string;
 }
 
+function formatRouteSignature(decision: { coder?: string; codeDepth?: string; reviewer?: string; reviewMode?: string; reviewRecommended?: string }): string {
+  return `coder=${decision.coder || ''},codeDepth=${decision.codeDepth || ''},reviewer=${decision.reviewer || ''},reviewMode=${decision.reviewMode || decision.reviewRecommended || ''}`;
+}
+
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of input) {
@@ -194,11 +198,22 @@ runTool({
         if (result.error || !result.decision) {
           hadErrors = true;
           console.error(`[router] expanded reroute failed issue=${result.input.issueId} error=${result.error || 'missing decision'}`);
+          console.error(`[router] route.lifecycle: event=expansion_failed issue=${result.input.issueId} reason=routing_error`);
           continue;
         }
 
         mkdirSync(dirname(resolve(result.outputFile)), { recursive: true });
         writeFileSync(result.outputFile, `${JSON.stringify(result.decision, null, 2)}\n`, 'utf-8');
+        const routeSignature = formatRouteSignature(result.decision);
+        if (result.cache_hit) {
+          console.error(
+            `[router] route.lifecycle: event=expansion_cache_hit issue=${result.input.issueId} route="${routeSignature}" packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
+          );
+        } else {
+          console.error(
+            `[router] route.lifecycle: event=expanded_assigned issue=${result.input.issueId} route="${routeSignature}" source=${result.route_source || 'single'} packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
+          );
+        }
         console.error(
           `[router] route_source=${result.route_source} packet_hash=${(result.packet_hash || '').slice(0, 12)} issue=${result.input.issueId}`,
         );

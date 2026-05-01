@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
 export type RouteSource =
@@ -108,6 +109,30 @@ export interface RouteArtifactSnapshot extends NormalizedExpandedRouteArtifact {
   cache_hit?: boolean;
   route_source?: 'batch' | 'single' | 'cache';
   packet_hash?: string;
+}
+
+export interface RouteArtifactView {
+  coder: string;
+  codeDepth: string;
+  reviewer: string;
+  reviewMode: string;
+}
+
+export interface RouteLifecycleArtifacts {
+  bootstrap: RouteArtifactSnapshot | null;
+  expanded: RouteArtifactSnapshot | null;
+  active: RouteArtifactSnapshot | null;
+}
+
+export interface RouteLifecycleProvenance {
+  bootstrapRoute?: RouteArtifactView;
+  expandedRoute?: RouteArtifactView;
+  activeRoute?: RouteArtifactView;
+  routeChanged?: boolean;
+  decisionSource?: 'bootstrap' | 'expanded' | 'preserved';
+  expandedCacheHit?: boolean;
+  packetHash?: string;
+  routeSource?: 'batch' | 'single' | 'cache';
 }
 
 export type ExpandedRouteValidation = {
@@ -252,36 +277,191 @@ function loadJson(filePath: string): unknown | null {
   }
 }
 
+function parseExpandedRouteArtifact(value: unknown): RouteArtifactSnapshot | null {
+  if (value === null) {
+    return null;
+  }
+
+  const validation = validateExpandedRouteArtifact(value);
+  if (!validation.valid || !validation.normalized) {
+    return null;
+  }
+
+  const artifact = value as Record<string, unknown>;
+  return {
+    ...validation.normalized,
+    planDepth: readString(artifact.planDepth),
+    planner: readString(artifact.planner),
+    cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
+    route_source: artifact.route_source === 'batch' || artifact.route_source === 'single' || artifact.route_source === 'cache'
+      ? artifact.route_source
+      : undefined,
+    packet_hash: typeof artifact.packet_hash === 'string' ? artifact.packet_hash : undefined,
+  };
+}
+
+function loadBootstrapRouteArtifact(filePath: string): RouteArtifactSnapshot | null {
+  return parseBootstrapRouteArtifact(loadJson(filePath));
+}
+
+function loadExpandedRouteArtifact(filePath: string): RouteArtifactSnapshot | null {
+  return parseExpandedRouteArtifact(loadJson(filePath));
+}
+
 export function readBothRouteArtifacts(featureDir: string): {
   bootstrap: RouteArtifactSnapshot | null;
   expanded: RouteArtifactSnapshot | null;
 } {
-  const bootstrapRaw = loadJson(join(featureDir, '.initial-route.json'));
-  const expandedRaw = loadJson(join(featureDir, '.post-expansion-route.json'));
+  return {
+    bootstrap: loadBootstrapRouteArtifact(join(featureDir, '.initial-route.json')),
+    expanded: loadExpandedRouteArtifact(join(featureDir, '.post-expansion-route.json')),
+  };
+}
 
-  const bootstrap = parseBootstrapRouteArtifact(bootstrapRaw);
-
-  let expanded: RouteArtifactSnapshot | null = null;
-  if (expandedRaw !== null) {
-    const validation = validateExpandedRouteArtifact(expandedRaw);
-    if (validation.valid && validation.normalized) {
-      const artifact = expandedRaw as Record<string, unknown>;
-      expanded = {
-        ...validation.normalized,
-        planDepth: readString(artifact.planDepth),
-        planner: readString(artifact.planner),
-        cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
-        route_source: artifact.route_source === 'batch' || artifact.route_source === 'single' || artifact.route_source === 'cache'
-          ? artifact.route_source
-          : undefined,
-        packet_hash: typeof artifact.packet_hash === 'string' ? artifact.packet_hash : undefined,
-      };
+function firstSnapshot<T>(loaders: Array<() => T | null>): T | null {
+  for (const load of loaders) {
+    const value = load();
+    if (value) {
+      return value;
     }
+  }
+  return null;
+}
+
+export function readRouteLifecycleArtifacts(
+  featureDir?: string,
+  archiveDir?: string,
+): RouteLifecycleArtifacts {
+  const bootstrap = firstSnapshot([
+    () => featureDir ? loadBootstrapRouteArtifact(join(featureDir, '.initial-route.json')) : null,
+    () => archiveDir ? loadBootstrapRouteArtifact(join(archiveDir, 'initial-route.json')) : null,
+  ]);
+  const expanded = firstSnapshot([
+    () => featureDir ? loadExpandedRouteArtifact(join(featureDir, '.post-expansion-route.json')) : null,
+    () => featureDir ? loadExpandedRouteArtifact(join(featureDir, '.expanded-route.json')) : null,
+    () => archiveDir ? loadExpandedRouteArtifact(join(archiveDir, 'post-expansion-route.json')) : null,
+  ]);
+  const active = firstSnapshot([
+    () => featureDir ? loadBootstrapRouteArtifact(join(featureDir, '.routing-complete')) : null,
+    () => archiveDir ? loadBootstrapRouteArtifact(join(archiveDir, 'routing-complete.json')) : null,
+  ]);
+
+  return { bootstrap, expanded, active };
+}
+
+export function toRouteArtifactView(route: RouteArtifactSnapshot): RouteArtifactView {
+  return {
+    coder: route.coder,
+    codeDepth: route.codeDepth,
+    reviewer: route.reviewer,
+    reviewMode: route.reviewMode,
+  };
+}
+
+export function formatRouteArtifactSignature(route: RouteArtifactView | RouteArtifactSnapshot): string {
+  return `coder=${route.coder},codeDepth=${route.codeDepth},reviewer=${route.reviewer},reviewMode=${route.reviewMode}`;
+}
+
+function modelClassOrId(modelId: string, repoDir?: string): string {
+  const registry = getEffectiveRegistry(repoDir);
+  return getModel(registry, modelId)?.class || modelId;
+}
+
+export function routeChangedMaterially(
+  bootstrap: RouteArtifactSnapshot,
+  expanded: RouteArtifactSnapshot,
+  repoDir?: string,
+): { changed: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+
+  if (modelClassOrId(bootstrap.coder, repoDir) !== modelClassOrId(expanded.coder, repoDir)) {
+    reasons.push('coder_class');
+  }
+
+  if (bootstrap.codeDepth !== expanded.codeDepth) {
+    reasons.push('code_depth');
+  }
+
+  if (modelClassOrId(bootstrap.reviewer, repoDir) !== modelClassOrId(expanded.reviewer, repoDir)) {
+    reasons.push('reviewer_class');
   }
 
   return {
-    bootstrap,
-    expanded,
+    changed: reasons.length > 0,
+    reasons,
+  };
+}
+
+function routesMatchExactly(
+  left: RouteArtifactSnapshot | null | undefined,
+  right: RouteArtifactSnapshot | null | undefined,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+
+  return left.coder === right.coder
+    && left.codeDepth === right.codeDepth
+    && left.reviewer === right.reviewer
+    && left.reviewMode === right.reviewMode;
+}
+
+export function deriveRouteDecisionSource(
+  artifacts: RouteLifecycleArtifacts,
+  repoDir?: string,
+): 'bootstrap' | 'expanded' | 'preserved' | undefined {
+  const { bootstrap, expanded, active } = artifacts;
+
+  if (!bootstrap && !expanded && !active) {
+    return undefined;
+  }
+
+  if (!expanded) {
+    return 'bootstrap';
+  }
+
+  if (!bootstrap) {
+    return 'expanded';
+  }
+
+  if (active && routesMatchExactly(active, bootstrap) && !routesMatchExactly(active, expanded)) {
+    return 'preserved';
+  }
+
+  if (active && routesMatchExactly(active, expanded)) {
+    return routeChangedMaterially(bootstrap, expanded, repoDir).changed ? 'expanded' : 'preserved';
+  }
+
+  return routeChangedMaterially(bootstrap, expanded, repoDir).changed ? 'expanded' : 'preserved';
+}
+
+export function buildRouteLifecycleProvenance(
+  artifacts: RouteLifecycleArtifacts,
+  repoDir?: string,
+): RouteLifecycleProvenance | null {
+  const decisionSource = deriveRouteDecisionSource(artifacts, repoDir);
+  if (!decisionSource) {
+    return null;
+  }
+
+  const active = artifacts.active
+    ?? (decisionSource === 'expanded' ? artifacts.expanded : artifacts.bootstrap)
+    ?? artifacts.expanded
+    ?? artifacts.bootstrap;
+  const routeChanged = artifacts.bootstrap && active
+    ? routeChangedMaterially(artifacts.bootstrap, active, repoDir).changed
+    : undefined;
+  const metadataCarrier = artifacts.expanded ?? active ?? undefined;
+
+  return {
+    ...(artifacts.bootstrap ? { bootstrapRoute: toRouteArtifactView(artifacts.bootstrap) } : {}),
+    ...(artifacts.expanded ? { expandedRoute: toRouteArtifactView(artifacts.expanded) } : {}),
+    ...(active ? { activeRoute: toRouteArtifactView(active) } : {}),
+    ...(typeof routeChanged === 'boolean' ? { routeChanged } : {}),
+    decisionSource,
+    ...(typeof metadataCarrier?.cache_hit === 'boolean' ? { expandedCacheHit: metadataCarrier.cache_hit } : {}),
+    ...(metadataCarrier?.packet_hash ? { packetHash: metadataCarrier.packet_hash } : {}),
+    ...(metadataCarrier?.route_source ? { routeSource: metadataCarrier.route_source } : {}),
   };
 }
 
