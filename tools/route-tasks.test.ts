@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -145,6 +145,47 @@ describe('route-tasks CLI', () => {
     }
   });
 
+  it('writes expanded route artifacts with cache metadata', () => {
+    const repoDir = makeRepo();
+    try {
+      const featureA = join(repoDir, 'features', 'a');
+      const featureB = join(repoDir, 'features', 'b');
+      mkdirSync(featureA, { recursive: true });
+      mkdirSync(featureB, { recursive: true });
+      const packetA = join(featureA, 'task-packet.md');
+      const packetB = join(featureB, 'task-packet.md');
+      const inputFile = join(repoDir, 'expanded-route-input.jsonl');
+      writeFileSync(packetA, 'Build startup batch routing with tests\n');
+      writeFileSync(packetB, 'Use cached routing for selected tasks\n');
+      writeFileSync(inputFile, [
+        JSON.stringify({ issueId: 'HOK-200', featureDir: featureA, packetFile: packetA }),
+        JSON.stringify({ issueId: 'HOK-201', featureDir: featureB, packetFile: packetB }),
+      ].join('\n') + '\n');
+
+      const stdout = execFileSync('npx', ['tsx', routeTasksTool, '--expanded-jsonl', inputFile, '--repo-dir', repoDir], {
+        encoding: 'utf-8',
+        cwd: resolve(__dirname, '..'),
+        env: { ...process.env },
+      });
+
+      const lines = stdout.trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(lines.length, 2);
+      for (const item of lines) {
+        assert.ok(item.outputFile.endsWith('.post-expansion-route.json'));
+        assert.match(item.packet_hash, /^[a-f0-9]{64}$/);
+        assert.equal(item.cache_hit, false);
+        assert.match(item.route_source, /batch|single/);
+      }
+
+      const artifact = JSON.parse(readFileSync(join(featureA, '.post-expansion-route.json'), 'utf-8'));
+      assert.match(artifact.packet_hash, /^[a-f0-9]{64}$/);
+      assert.ok(typeof artifact.cache_hit === 'boolean');
+      assert.match(artifact.route_source, /batch|single/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps route-task --json stdout strict JSON and sends diagnostics to stderr', () => {
     const repoDir = makeRepo();
     try {
@@ -166,6 +207,44 @@ describe('route-tasks CLI', () => {
       assert.equal(stdout.includes('Router:'), false);
       assert.equal(stdout.includes('Auto-aggregated'), false);
       assert.equal(stderr.includes('{\n  "planner"'), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('supports empty expanded input successfully', () => {
+    const repoDir = makeRepo();
+    try {
+      const inputFile = join(repoDir, 'empty-expanded-route-input.jsonl');
+      writeFileSync(inputFile, '');
+      const stdout = execFileSync('npx', ['tsx', routeTasksTool, '--expanded-jsonl', inputFile, '--repo-dir', repoDir], {
+        encoding: 'utf-8',
+        cwd: resolve(__dirname, '..'),
+        env: { ...process.env },
+      });
+      assert.equal(stdout, '');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails expanded mode on missing packet path without writing artifacts', () => {
+    const repoDir = makeRepo();
+    try {
+      const featureA = join(repoDir, 'features', 'a');
+      mkdirSync(featureA, { recursive: true });
+      const inputFile = join(repoDir, 'missing-expanded-route-input.jsonl');
+      writeFileSync(inputFile, `${JSON.stringify({ issueId: 'HOK-300', featureDir: featureA, packetFile: join(featureA, 'missing-task-packet.md') })}\n`);
+
+      assert.throws(() => {
+        execFileSync('npx', ['tsx', routeTasksTool, '--expanded-jsonl', inputFile, '--repo-dir', repoDir], {
+          encoding: 'utf-8',
+          cwd: resolve(__dirname, '..'),
+          env: { ...process.env },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      });
+      assert.equal(existsSync(resolve(featureA, '.post-expansion-route.json')), false);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
