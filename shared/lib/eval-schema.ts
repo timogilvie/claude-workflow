@@ -56,6 +56,9 @@
  * - **1.16.0**: Added optional `challengeRouteContext` field to `EvalRecord`
  *   (HOK-1515) so challenge evals retain both bootstrap and expanded routing
  *   provenance when participant selection is refreshed or preserved
+ * - **1.17.0**: Added optional `nonRewardReason` field to `EvalRecord`
+ *   (HOK-1499) so submission and validation flows can surface a stable,
+ *   user-readable reason when a record is not reward eligible
  *
  * @module eval-schema
  */
@@ -63,6 +66,9 @@
 import type { ModelPricing } from './workflow-cost.ts';
 import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
+
+/** Current eval schema version for newly emitted records. */
+export const SCHEMA_VERSION = '1.17.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -1183,6 +1189,12 @@ export interface EvalRecord {
 
   /** Stable machine-readable reasons why the record is ineligible for exports. */
   eligibilityErrors?: EligibilityErrorCode[];
+
+  /** Stable user-readable reason why the record is not reward eligible. */
+  nonRewardReason?: {
+    code: string;
+    message: string;
+  };
 
   /** Per-model token usage breakdown from the workflow sessions */
   workflowTokenUsage?: Record<

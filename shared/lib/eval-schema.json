@@ -221,6 +221,20 @@
       },
       "description": "Stable machine-readable reasons why the record is ineligible for exports."
     },
+    "nonRewardReason": {
+      "type": "object",
+      "description": "Stable user-readable reason why the record is not reward eligible.",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
     "workflowTokenUsage": {
       "type": "object",
       "description": "Per-model token usage breakdown from the workflow sessions.",

@@ -35,6 +35,10 @@ import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } fro
 import { getManifest, getManifestRef } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import { getResource } from './resource-registry.ts';
+import {
+  deriveNonRewardReasonFromIssues,
+  validateEvalRecord,
+} from './eval-validator.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -296,6 +300,23 @@ export function attachEligibility(record: EvalRecord | null | undefined): void {
   record.trainingEligible = eligibility.trainingEligible;
   record.budgetEvalEligible = eligibility.budgetEvalEligible;
   record.eligibilityErrors = eligibility.eligibilityErrors;
+  attachNonRewardReason(
+    record,
+    deriveNonRewardReasonFromIssues(
+      validateEvalRecord(record, { file: '<inline>', line: 0 }),
+    ),
+  );
+}
+
+export function attachNonRewardReason(
+  record: EvalRecord,
+  reason?: { code: string; message: string } | null,
+): void {
+  if (!reason) {
+    return;
+  }
+
+  record.nonRewardReason = reason;
 }
 
 /**

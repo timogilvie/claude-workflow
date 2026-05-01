@@ -13,6 +13,7 @@ import {
   attachDifficultyMetadata,
   attachFallbackEvent,
   attachProviderMetadata,
+  attachNonRewardReason,
   attachRubricEval,
   attachStageOutcomes,
   attachTaskContextMetadata,
@@ -674,6 +675,28 @@ describe('eval-record-builder', () => {
       enrichEvalRecord(baseRecord, { rubricEval: validRubricEval });
       expect(baseRecord.rubricEval).toEqual(validRubricEval);
       expect(baseRecord.rubric_provenance).toBe('judge');
+    });
+  });
+
+  describe('attachNonRewardReason', () => {
+    it('is a no-op when reason is undefined or null', () => {
+      attachNonRewardReason(baseRecord, undefined);
+      expect(baseRecord.nonRewardReason).toBeUndefined();
+
+      attachNonRewardReason(baseRecord, null);
+      expect(baseRecord.nonRewardReason).toBeUndefined();
+    });
+
+    it('sets the nonRewardReason field when provided', () => {
+      attachNonRewardReason(baseRecord, {
+        code: 'INELIGIBLE_REWARD_NO_JUDGE',
+        message: 'Reward not paid: record has no judge evaluation result.',
+      });
+
+      expect(baseRecord.nonRewardReason).toEqual({
+        code: 'INELIGIBLE_REWARD_NO_JUDGE',
+        message: 'Reward not paid: record has no judge evaluation result.',
+      });
     });
   });
 
