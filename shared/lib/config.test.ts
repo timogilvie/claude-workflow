@@ -32,6 +32,7 @@ import {
   getPermissionsConfig,
   getDashboardConfig,
   getDeepSeekProviderConfig,
+  getDeepSeekLauncherConfig,
   getHokusaiSubmissionConfig,
   getProvidersConfig,
   getReadyConfig,
@@ -368,6 +369,89 @@ test('deepseek provider accessor returns typed config', () => {
       stages: ['planner', 'coder'],
       effortLevel: 'high',
     });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getDeepSeekLauncherConfig returns empty object when not configured', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ router: { enabled: true } }));
+    assert.deepEqual(getDeepSeekLauncherConfig(tmp), {});
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getDeepSeekLauncherConfig returns launcher sub-config', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      providers: {
+        deepseek: {
+          apiKeyEnv: 'DEEPSEEK_API_KEY',
+          launcher: {
+            model: 'deepseek-v4-pro',
+            subagentModel: 'deepseek-v4-flash',
+            stateDir: '.wavemill/deepseek-state/custom',
+          },
+        },
+      },
+    }));
+
+    assert.deepEqual(getDeepSeekLauncherConfig(tmp), {
+      model: 'deepseek-v4-pro',
+      subagentModel: 'deepseek-v4-flash',
+      stateDir: '.wavemill/deepseek-state/custom',
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('launcher config with secretSource is returned', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      providers: {
+        deepseek: {
+          apiKeyEnv: 'DEEPSEEK_API_KEY',
+          launcher: {
+            secretSource: 'MY_CUSTOM_KEY_ENV',
+          },
+        },
+      },
+    }));
+
+    const launcherConfig = getDeepSeekLauncherConfig(tmp);
+    assert.equal(launcherConfig.secretSource, 'MY_CUSTOM_KEY_ENV');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('deepseek provider accessor still returns typed config with launcher present', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      providers: {
+        deepseek: {
+          enabled: true,
+          apiKeyEnv: 'DEEPSEEK_API_KEY',
+          launcher: { model: 'deepseek-v4-flash' },
+        },
+      },
+    }));
+
+    const provider = getDeepSeekProviderConfig(tmp);
+    assert.equal(provider.enabled, true);
+    assert.equal(provider.apiKeyEnv, 'DEEPSEEK_API_KEY');
+    assert.deepEqual(provider.launcher, { model: 'deepseek-v4-flash' });
   } finally {
     cleanUp(tmp);
   }

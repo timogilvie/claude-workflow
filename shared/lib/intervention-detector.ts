@@ -633,8 +633,9 @@ export function detectAllInterventions(
   interventions.push(manualEditEvent);
 
   // Session transcript detection (requires worktree path + branch).
-  // Only applies to Claude — Codex autonomous mode has no user messages.
-  if (opts.worktreePath && branch && (!opts.agentType || opts.agentType === 'claude')) {
+  // Applies to Claude and claude-deepseek — Codex autonomous mode has no user messages.
+  const isClaudeLike = !opts.agentType || opts.agentType === 'claude' || opts.agentType === 'claude-deepseek';
+  if (opts.worktreePath && branch && isClaudeLike) {
     interventions.push(detectSessionRedirects(opts.worktreePath, branch));
   }
 

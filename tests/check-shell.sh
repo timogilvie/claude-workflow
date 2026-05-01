@@ -2554,6 +2554,58 @@ for fixture in \
 done
 
 # ============================================================================
+# TEST 16: claude-deepseek agent adapter functions
+# ============================================================================
+echo ""
+echo "=== claude-deepseek agent adapter functions ==="
+
+if [[ -f "$LIB_DIR/agent-adapters.sh" ]]; then
+  # Test agent_binary_for_cmd and agent_default_model_for_cmd in a subshell
+  result="$(bash -c '
+    source "'"$LIB_DIR/agent-adapters.sh"'" 2>/dev/null
+    agent_binary_for_cmd "claude-deepseek"
+  ' 2>/dev/null)" || true
+  if [[ "$result" == "claude" ]]; then
+    pass "agent_binary_for_cmd maps claude-deepseek to claude"
+  else
+    fail "agent_binary_for_cmd claude-deepseek" "expected claude, got $result"
+  fi
+
+  result="$(bash -c '
+    source "'"$LIB_DIR/agent-adapters.sh"'" 2>/dev/null
+    agent_default_model_for_cmd "claude-deepseek"
+  ' 2>/dev/null)" || true
+  if [[ "$result" == "deepseek-v4-flash" ]]; then
+    pass "agent_default_model_for_cmd claude-deepseek returns deepseek-v4-flash"
+  else
+    fail "agent_default_model_for_cmd claude-deepseek" "expected deepseek-v4-flash, got $result"
+  fi
+
+  # Verify existing paths unchanged
+  result="$(bash -c '
+    source "'"$LIB_DIR/agent-adapters.sh"'" 2>/dev/null
+    agent_binary_for_cmd "claude"
+  ' 2>/dev/null)" || true
+  if [[ "$result" == "claude" ]]; then
+    pass "agent_binary_for_cmd preserves claude unchanged"
+  else
+    fail "agent_binary_for_cmd claude unchanged" "got $result"
+  fi
+
+  result="$(bash -c '
+    source "'"$LIB_DIR/agent-adapters.sh"'" 2>/dev/null
+    agent_resolve_from_model "deepseek-v4-pro"
+  ' 2>/dev/null)" || true
+  if [[ "$result" == "claude" ]]; then
+    pass "agent_resolve_from_model deepseek-v4-pro still maps to claude (backward compat)"
+  else
+    fail "backward compat agent_resolve_from_model" "expected claude, got $result"
+  fi
+else
+  fail "agent-adapters.sh not found"
+fi
+
+# ============================================================================
 # RESULTS
 # ============================================================================
 echo ""
