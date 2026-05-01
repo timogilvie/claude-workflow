@@ -39,6 +39,11 @@ export interface MillConfig {
   retryDelay?: number;
   setupCommand?: string;
   defaultMaxCostUsd?: number;
+  expansionHandshake?: ExpansionHandshakeConfig;
+}
+
+export interface ExpansionHandshakeConfig {
+  policy?: 'block' | 'warn';
 }
 
 export interface GitConfig {
@@ -795,6 +800,11 @@ export function getVerificationConfig(repoDir?: string): VerificationConfig {
  */
 export function getMillConfig(repoDir?: string): MillConfig {
   return loadWavemillConfig(repoDir).mill || {};
+}
+
+export function getExpansionHandshakeConfig(repoDir?: string): { policy: 'block' | 'warn' } {
+  const policy = loadWavemillConfig(repoDir).mill?.expansionHandshake?.policy;
+  return { policy: policy ?? 'block' };
 }
 
 /**

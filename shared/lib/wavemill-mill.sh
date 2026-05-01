@@ -5593,6 +5593,15 @@ monitor_issue_state() {
               log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"
             fi
 
+            if ! mill_check_expansion_handshake "$FEATURE_DIR" "$ISSUE" "$REPO_DIR"; then
+              rm -f "$FEATURE_DIR/.plan-approved"
+              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" \
+                "Expansion handshake blocked: raw input requires wavemill expand $ISSUE"
+              set_window_attention_state "$WIN" "needs-user"
+              active_count=$((active_count + 1))
+              return 0
+            fi
+
             # FORCE_MODEL takes priority, then challenge, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
               coder_model="$FORCE_MODEL"
