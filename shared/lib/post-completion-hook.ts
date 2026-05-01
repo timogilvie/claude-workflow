@@ -305,6 +305,12 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       routingDecision: stageArtifacts.routingDecision,
     });
 
+    const executionModel = ctx.solutionModel || stageArtifacts.executionModel;
+    if (executionModel) {
+      record.modelId = executionModel;
+      record.modelVersion = executionModel;
+    }
+
     // 5. Compute workflow cost
     let costOutcome: ReturnType<typeof computeWorkflowCost> | null = null;
     if (ctx.worktreePath && branchName) {
@@ -390,11 +396,6 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       interventionRecords: interventionData.records,
       routingDecision: stageArtifacts.routingDecision,
     });
-
-    if (ctx.solutionModel) {
-      record.modelId = ctx.solutionModel;
-      record.modelVersion = ctx.solutionModel;
-    }
 
     // 7. Persist
     const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);

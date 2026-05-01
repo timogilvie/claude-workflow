@@ -410,7 +410,10 @@ simulate_coding_transition() {
   coding_status=$(read_stage_status "$feature_dir" "coding")
 
   if [[ "$coding_status" == "running" ]] && [[ -f "$feature_dir/.coding-complete" ]]; then
-    write_stage_result "$feature_dir" "coding" "completed" "claude" "claude-opus-4-6"
+    local existing_model
+    existing_model=$(jq -r '.model // empty' "$feature_dir/.coding-result.json" 2>/dev/null || echo "")
+    [[ -z "$existing_model" ]] && existing_model="claude-opus-4-6"
+    write_stage_result "$feature_dir" "coding" "completed" "claude" "$existing_model"
     echo "completed"
     return 0
   fi
@@ -1087,6 +1090,14 @@ write_stage_result "$FD57" "coding" "running" "claude" "claude-opus-4-6"
 touch "$FD57/.coding-complete"
 check "stuck handoff regression stays completed with pane alive" "completed" "$(simulate_coding_transition "$FD57")"
 check "coding completion persists despite pane alive" "completed" "$(read_stage_status "$FD57" "coding")"
+
+# Test 57b: DeepSeek coding result preserves model identity on completion
+FD57B="$TEST_DIR/test57b"
+mkdir -p "$FD57B"
+write_stage_result "$FD57B" "coding" "running" "claude" "deepseek-v4-pro"
+touch "$FD57B/.coding-complete"
+check "deepseek coding completion preserves model" "completed" "$(simulate_coding_transition "$FD57B")"
+check "deepseek coding result keeps model" "deepseek-v4-pro" "$(jq -r '.model' "$FD57B/.coding-result.json")"
 
 # Test 58: HOK-1210 — idle pane stays awaiting_user until .plan-approved is created
 FD58="$TEST_DIR/test58"
