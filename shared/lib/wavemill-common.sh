@@ -1033,13 +1033,18 @@ wavemill_lock_run() {
   fi
 
   local lock_dir="$lock_root/${lock_name}.lk"
+  local owner_file="$lock_dir/owner.pid"
+  local owner_pid="${BASHPID:-$$}"
   local ttl=30 attempts=0
   while ! mkdir "$lock_dir" 2>/dev/null; do
-    local mtime now
-    mtime="$(stat -c '%Y' "$lock_dir" 2>/dev/null || stat -f '%m' "$lock_dir" 2>/dev/null || echo 0)"
+    local mtime now recorded_pid=""
+    recorded_pid="$(cat "$owner_file" 2>/dev/null || echo "")"
+    mtime="$(stat -c '%Y' "$owner_file" 2>/dev/null || stat -f '%m' "$owner_file" 2>/dev/null || echo 0)"
     now="$(date +%s)"
-    if [[ $((now - mtime)) -gt $ttl ]]; then
-      rmdir "$lock_dir" 2>/dev/null || true
+    if [[ "$mtime" =~ ^[0-9]+$ ]] && [[ "$mtime" -gt 0 ]] && [[ $((now - mtime)) -gt $ttl ]]; then
+      if [[ -z "$recorded_pid" ]] || ! kill -0 "$recorded_pid" 2>/dev/null; then
+        rm -rf "$lock_dir" 2>/dev/null || true
+      fi
       continue
     fi
     sleep "0.$((RANDOM % 3 + 1))"
@@ -1053,8 +1058,10 @@ wavemill_lock_run() {
     fi
   done
 
+  printf '%s\n' "$owner_pid" > "$owner_file" 2>/dev/null || true
   "$@"
   local rc=$?
+  rm -f "$owner_file" 2>/dev/null || true
   rmdir "$lock_dir" 2>/dev/null || true
   return "$rc"
 }

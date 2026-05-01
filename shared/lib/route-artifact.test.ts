@@ -234,6 +234,9 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     route_source: undefined,
     packet_hash: undefined,
   });
+  assert.equal(result.bootstrap?.coder, 'claude-sonnet-4-6');
+  assert.equal(result.expanded?.coder, 'gpt-5.4');
+  assert.equal(result.expanded?.codeDepth, 'deep');
 });
 
 test('readBothRouteArtifacts returns null for missing sides independently', () => {
@@ -290,6 +293,62 @@ test('readBothRouteArtifacts returns null for malformed artifacts without throwi
   const result = readBothRouteArtifacts(featureDir);
   assert.equal(result.bootstrap, null);
   assert.equal(result.expanded, null);
+});
+
+test('readBothRouteArtifacts still reads expanded artifact when bootstrap is malformed', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.initial-route.json'), '{');
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+  }));
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.equal(result.bootstrap, null);
+  assert.deepEqual(result.expanded, {
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+    planDepth: undefined,
+    planner: undefined,
+    cache_hit: undefined,
+    route_source: undefined,
+    packet_hash: undefined,
+  });
+});
+
+test('readBothRouteArtifacts drops invalid expanded artifact while preserving bootstrap snapshot', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  }));
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-6',
+  }));
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.deepEqual(result.bootstrap, {
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+    planDepth: undefined,
+    planner: undefined,
+    cache_hit: undefined,
+    route_source: undefined,
+    packet_hash: undefined,
+  });
+  assert.equal(result.expanded, null);
+  const validity = hasValidPostExpansionRoute(featureDir);
+  assert.equal(validity.ok, false);
+  assert.match(validity.reason || '', /^missing-required-field:/);
 });
 
 test('hasValidPostExpansionRoute returns missing when file is absent', () => {

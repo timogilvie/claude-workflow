@@ -377,6 +377,8 @@ test('pickChallengeWorkflowsWithContext preserves bootstrap participants when ro
   assert.ok(pair);
   assert.equal(pair!.routeContext.decisionSource, 'preserved');
   assert.equal(pair!.primary.model, 'claude-sonnet-4-5-20250929');
+  assert.equal(pair!.primary.codeDepth, 'medium');
+  assert.equal(pair!.primary.reviewer, 'claude-opus-4-6');
   assert.equal(pair!.routeContext.refreshRationale, 'expanded route matches bootstrap on coder class/depth');
 });
 
@@ -411,10 +413,17 @@ test('pickChallengeWorkflowsWithContext refreshes participants when expanded rou
 
   assert.ok(pair);
   assert.equal(pair!.routeContext.decisionSource, 'expanded');
+  assert.equal(pair!.routeContext.bootstrapRoute?.coder, 'claude-sonnet-4-6');
+  assert.equal(pair!.routeContext.expandedRoute?.coder, 'gpt-5.4');
   assert.equal(pair!.primary.model, 'gpt-5.4');
   assert.equal(pair!.primary.codeDepth, 'deep');
   assert.equal(pair!.primary.planner, 'claude-opus-4-6');
   assert.equal(pair!.primary.planDepth, 'deep');
+  assert.equal(pair!.primary.reviewer, 'claude-opus-4-6');
+  assert.equal(pair!.primary.reviewMode, 'static');
+  assert.notEqual(pair!.challenger.model, pair!.primary.model);
+  assert.equal(pair!.challenger.codeDepth, 'deep');
+  assert.equal(pair!.challenger.reviewer, 'claude-opus-4-6');
 });
 
 process.on('exit', () => {
