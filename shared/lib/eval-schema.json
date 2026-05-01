@@ -1323,6 +1323,18 @@
       "enum": ["judge", "backfill_derived", "legacy_absent"],
       "description": "Provenance of the rubric metadata attached to this eval record."
     },
+    "workflow_success_rate_under_budget": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Wavemill router benchmark score: successful completions that stayed under budget."
+    },
+    "wavemill_router_diagnostics": {
+      "$ref": "#/$defs/WavemillRouterDiagnostics"
+    },
+    "wavemill_router_scoring": {
+      "$ref": "#/$defs/WavemillRouterScoringMetadata"
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
@@ -1330,6 +1342,52 @@
     }
   },
   "$defs": {
+    "WavemillRouterDiagnostics": {
+      "type": "object",
+      "properties": {
+        "scoreable_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "invalid_route_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "budget_compliance_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "completion_success_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "total_cost_usd": { "type": "number", "minimum": 0 },
+        "timing_p50_ms": { "type": "number", "minimum": 0 },
+        "timing_p95_ms": { "type": "number", "minimum": 0 },
+        "intervention_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "intervention_count": { "type": "integer", "minimum": 0 },
+        "total_records": { "type": "integer", "minimum": 0 },
+        "scoreable_records": { "type": "integer", "minimum": 0 },
+        "invalid_route_records": { "type": "integer", "minimum": 0 }
+      },
+      "required": [
+        "scoreable_coverage",
+        "invalid_route_rate",
+        "budget_compliance_rate",
+        "completion_success_rate",
+        "total_cost_usd",
+        "timing_p50_ms",
+        "timing_p95_ms",
+        "intervention_rate",
+        "intervention_count",
+        "total_records",
+        "scoreable_records",
+        "invalid_route_records"
+      ],
+      "additionalProperties": false
+    },
+    "WavemillRouterScoringMetadata": {
+      "type": "object",
+      "properties": {
+        "scorer_id": {
+          "type": "string"
+        },
+        "measurement_policy": {
+          "type": "string",
+          "enum": ["replay_exact_match", "challenge_prospective"]
+        }
+      },
+      "required": ["scorer_id", "measurement_policy"],
+      "additionalProperties": false
+    },
     "RubricCriterion": {
       "type": "object",
       "description": "A single structured per-stage rubric criterion from the eval judge.",

@@ -49,6 +49,10 @@
  *   eligibility diagnostics fields to `EvalRecord` (HOK-1492) so training
  *   and budget-export consumers can inspect stable ineligibility reasons
  *   without silently dropping rows
+ * - **1.15.0**: Added optional Wavemill router benchmark output fields to
+ *   `EvalRecord` (HOK-1507), including
+ *   `workflow_success_rate_under_budget`, structured router diagnostics, and
+ *   scorer/policy attribution metadata
  *
  * @module eval-schema
  */
@@ -1037,6 +1041,34 @@ export interface FallbackEventMetadata {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Wavemill Router Eval (HOK-1507)
+// ────────────────────────────────────────────────────────────────
+
+export type WavemillRouterMeasurementPolicy =
+  | 'replay_exact_match'
+  | 'challenge_prospective';
+
+export interface WavemillRouterDiagnostics {
+  scoreable_coverage: number;
+  invalid_route_rate: number;
+  budget_compliance_rate: number;
+  completion_success_rate: number;
+  total_cost_usd: number;
+  timing_p50_ms: number;
+  timing_p95_ms: number;
+  intervention_rate: number;
+  intervention_count: number;
+  total_records: number;
+  scoreable_records: number;
+  invalid_route_records: number;
+}
+
+export interface WavemillRouterScoringMetadata {
+  scorer_id: string;
+  measurement_policy: WavemillRouterMeasurementPolicy;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -1298,6 +1330,15 @@ export interface EvalRecord {
 
   /** Budget constraints applied during routing and execution. */
   constraints?: EvalConstraints;
+
+  /** Wavemill router benchmark score: successful completions that stayed under budget. */
+  workflow_success_rate_under_budget?: number;
+
+  /** Wavemill router benchmark diagnostics and coverage metrics. */
+  wavemill_router_diagnostics?: WavemillRouterDiagnostics;
+
+  /** Wavemill router scorer metadata for replay/prospective measurement. */
+  wavemill_router_scoring?: WavemillRouterScoringMetadata;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;

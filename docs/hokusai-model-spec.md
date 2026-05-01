@@ -27,6 +27,9 @@ The primary objective of the model is:
 
 ## 3. Benchmark Definition
 
+Scorer ID:
+`hokusai.scorers.wavemill.success_rate_under_budget:v1`
+
 ### 3.1 Benchmark Task
 
 Each benchmark sample consists of:
@@ -40,18 +43,29 @@ The model must output a workflow configuration that is expected to complete the 
 
 ### 3.2 Evaluation Criteria
 
-#### Stage 1 — Feasibility
-A prediction is valid if:
+#### Stage 1 — Scoreability
+A benchmark row is scoreable if:
+- the route artifact is valid JSON with planner, coder, and reviewer fields
+- the selected measurement policy has enough task input to replay or reroute
+- the observed eval row provides completion and budget/cost data
+
+Malformed route artifacts are not dropped. They are counted as `invalid_route` diagnostics.
+
+#### Stage 2 — Feasibility
+A prediction is feasible if:
 - selected models are allowed
 - observed cost ≤ max cost
 
 Else score = 0.
 
-#### Stage 2 — Outcome Score
+#### Stage 3 — Outcome Score
 
 Score = Successful Completion Under Budget
 
-Benchmark Score = SuccessfulRunsWithinBudget / TotalRuns
+HEM field:
+`workflow_success_rate_under_budget`
+
+Benchmark Score = SuccessfulRunsWithinBudget / ScoreableRuns
 
 ---
 
@@ -64,6 +78,29 @@ completed_successfully == true
 ### 3.4 Budget Compliance
 
 actual_cost_usd ≤ max_cost_usd
+
+### 3.5 Measurement Policies
+
+- `replay_exact_match`: use the persisted route decision exactly as captured in the route artifact and score it against the observed eval outcome.
+- `challenge_prospective`: reconstruct the persisted task input, reroute under the current router with the requested `modelsAvailable`, and score the prospective route against the same observed eval outcome.
+
+### 3.6 Diagnostics
+
+The scorer also emits `wavemill_router_diagnostics` with:
+- `scoreable_coverage`
+- `invalid_route_rate`
+- `budget_compliance_rate`
+- `completion_success_rate`
+- `total_cost_usd`
+- `timing_p50_ms`
+- `timing_p95_ms`
+- `intervention_rate`
+- `intervention_count`
+- `total_records`
+- `scoreable_records`
+- `invalid_route_records`
+
+Mint eligibility may be blocked when `scoreable_coverage` falls below the configured threshold. The default helper threshold is `0.8`, with a default maximum invalid route rate of `0.2`.
 
 ---
 
@@ -160,4 +197,4 @@ DeltaOne = BenchmarkScore_new − BenchmarkScore_baseline
 
 ## 8. Summary
 
-This model predicts workflow configurations that maximize successful task completion within budget using real execution data.
+This model predicts workflow configurations that maximize successful task completion within budget using real execution data. The benchmark is measured by `hokusai.scorers.wavemill.success_rate_under_budget:v1` and persisted as `workflow_success_rate_under_budget` plus coverage and diagnostics fields.
