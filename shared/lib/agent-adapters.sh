@@ -23,6 +23,16 @@ agent_resolve_from_model() {
   esac
 }
 
+# Resolve the underlying binary for a given agent kind.
+# claude-deepseek runs the 'claude' binary with DeepSeek env overrides.
+agent_binary_for_cmd() {
+  local cmd="$1"
+  case "$cmd" in
+    claude-deepseek) echo "claude" ;;
+    *) echo "$cmd" ;;
+  esac
+}
+
 # ============================================================================
 # MODEL VALIDATION
 # ============================================================================
@@ -70,6 +80,7 @@ agent_default_model_for_cmd() {
   case "$agent_cmd" in
     codex) echo "gpt-5.4" ;;
     claude) echo "claude-sonnet-4-6" ;;
+    claude-deepseek) echo "deepseek-v4-flash" ;;
     *) echo "" ;;
   esac
 }
@@ -224,15 +235,45 @@ agent_write_initial_status() {
 # ============================================================================
 
 # Check that the agent CLI binary is available on PATH.
-# Args: $1 = agent command name (e.g. "claude", "codex")
+# Args: $1 = agent command name (e.g. "claude", "codex", "claude-deepseek")
 # Returns: 0 if found, 1 if not
 agent_validate() {
   local cmd="$1"
-  command -v "$cmd" >/dev/null 2>&1
+  local binary
+  binary="$(agent_binary_for_cmd "$cmd")"
+  command -v "$binary" >/dev/null 2>&1
+}
+
+# Internal: validate DEEPSEEK_API_KEY (or configured apiKeyEnv) for claude-deepseek.
+# Args: $1 = repo_dir
+# Returns: 0 if key present, 1 if missing
+_agent_check_deepseek_api_key() {
+  local repo_dir="${1:-$(pwd)}"
+  local provider_json api_key_env key_value
+
+  provider_json="$(agent_deepseek_config "$repo_dir" 2>/dev/null)" || {
+    # Fallback: read DEEPSEEK_API_KEY directly
+    if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
+      echo "Error: DEEPSEEK_API_KEY is not set. Set it before launching a claude-deepseek agent." >&2
+      return 1
+    fi
+    return 0
+  }
+
+  api_key_env="$(agent_json_get "$provider_json" apiKeyEnv)"
+  api_key_env="${api_key_env:-DEEPSEEK_API_KEY}"
+
+  # Use nameref-safe indirect expansion
+  key_value="${!api_key_env:-}"
+  if [[ -z "$key_value" ]]; then
+    echo "Error: ${api_key_env} is not set. Set it before launching a claude-deepseek agent." >&2
+    return 1
+  fi
+  return 0
 }
 
 # Check if agent is authenticated and ready to use.
-# Args: $1 = agent command name (e.g. "claude", "codex")
+# Args: $1 = agent command name (e.g. "claude", "codex", "claude-deepseek")
 # Returns: 0 if authenticated, 1 if not authenticated
 # Output: Error message to stderr if not authenticated
 # Note: Results are cached per-process to avoid redundant checks
@@ -254,6 +295,13 @@ agent_check_auth() {
   fi
 
   case "$cmd" in
+    claude-deepseek)
+      # claude-deepseek uses the claude binary + DeepSeek env; validate DEEPSEEK_API_KEY
+      if ! _agent_check_deepseek_api_key "$repo_dir"; then
+        _AGENT_AUTH_CACHE[$cache_key]=1
+        return 1
+      fi
+      ;;
     claude)
       if agent_model_is_deepseek "$model"; then
         if ! agent_validate_deepseek_launch "$model" "$repo_dir"; then
@@ -1149,6 +1197,59 @@ agent_launch_autonomous() {
 
   # Wrap agent command so exit status is visible and the shell survives
   case "$agent_cmd" in
+    claude-deepseek)
+      local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+      local lib_dir="${tools_dir%/tools}/shared/lib"
+      local launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
+      local env_block resolved_model
+
+      # Validate credentials and resolve env before touching tmux — fail-fast.
+      env_block="$(
+        cd "$lib_dir" &&
+        agent_run_tsx_tool "$tools_dir/launch-claude-deepseek.ts" \
+          --repo "$repo_dir" \
+          --session "$session" \
+          --issue "$issue" \
+          ${model:+--model "$model"}
+      )" || {
+        echo "Error: claude-deepseek pre-launch validation failed" >&2
+        return 1
+      }
+
+      # Extract resolved model from env block (ANTHROPIC_MODEL line)
+      resolved_model="$(printf '%s\n' "$env_block" | grep '^ANTHROPIC_MODEL=' | head -1 | sed "s/^ANTHROPIC_MODEL='//;s/'$//")"
+      local effective_model_flag=""
+      if [[ -n "$resolved_model" ]]; then
+        effective_model_flag=" --model $resolved_model"
+      fi
+
+      cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
+# Resolve credentials at runtime (not embedded in script)
+tools_dir='$tools_dir'
+lib_dir='$lib_dir'
+env_block="\$(cd "\$lib_dir" && npx tsx "\$tools_dir/launch-claude-deepseek.ts" --repo '$repo_dir' --session '$session' --issue '$issue'${model:+ --model '$model'} 2>&1)"
+launch_rc=\$?
+if [[ "\$launch_rc" -eq 2 ]]; then
+  echo "Error: Missing DeepSeek API key. Set DEEPSEEK_API_KEY before launching." >&2
+  exit 2
+elif [[ "\$launch_rc" -ne 0 ]]; then
+  echo "Error: claude-deepseek launcher failed (rc=\$launch_rc): \$env_block" >&2
+  exit 1
+fi
+eval "\$env_block"
+cat '$instr_file' | claude${effective_model_flag} --dangerously-skip-permissions
+echo "[wavemill] Agent exited (\$?)"
+LAUNCHEOF
+      chmod +x "$launcher"
+      tmux send-keys -t "$session:$window" -l -- "$launcher"
+      tmux send-keys -t "$session:$window" C-m
+      ;;
     claude)
       if agent_model_is_deepseek "$model"; then
         if ! agent_validate_deepseek_launch "$model" "$repo_dir"; then
@@ -1409,6 +1510,61 @@ agent_launch_interactive() {
 
   # Don't use exec — keep the shell alive so the window persists after agent exit
   case "$agent_cmd" in
+    claude-deepseek)
+      local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+      local lib_dir="${tools_dir%/tools}/shared/lib"
+      local env_block resolved_model
+
+      # Validate credentials before touching the pane — fail-fast.
+      env_block="$(
+        cd "$lib_dir" &&
+        agent_run_tsx_tool "$tools_dir/launch-claude-deepseek.ts" \
+          --repo "$repo_dir" \
+          --session "$session" \
+          --issue "$issue" \
+          ${model:+--model "$model"}
+      )" || {
+        local launch_rc=$?
+        if [[ "$launch_rc" -eq 2 ]]; then
+          echo "Error: Missing DeepSeek API key. Set DEEPSEEK_API_KEY before launching." >&2
+        else
+          echo "Error: claude-deepseek pre-launch validation failed" >&2
+        fi
+        return 1
+      }
+
+      resolved_model="$(printf '%s\n' "$env_block" | grep '^ANTHROPIC_MODEL=' | head -1 | sed "s/^ANTHROPIC_MODEL='//;s/'$//")"
+      local effective_model_flag=""
+      if [[ -n "$resolved_model" ]]; then
+        effective_model_flag=" --model $resolved_model"
+      fi
+
+      cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+tools_dir='$tools_dir'
+lib_dir='$lib_dir'
+env_block="\$(cd "\$lib_dir" && npx tsx "\$tools_dir/launch-claude-deepseek.ts" --repo '$repo_dir' --session '$session' --issue '$issue'${model:+ --model '$model'} 2>&1)"
+launch_rc=\$?
+if [[ "\$launch_rc" -eq 2 ]]; then
+  echo "Error: Missing DeepSeek API key. Set DEEPSEEK_API_KEY before launching." >&2
+  exit 2
+elif [[ "\$launch_rc" -ne 0 ]]; then
+  echo "Error: claude-deepseek launcher failed (rc=\$launch_rc): \$env_block" >&2
+  exit 1
+fi
+eval "\$env_block"
+claude${effective_model_flag}${agent_flags} --dangerously-skip-permissions "\$(cat '$prompt_file')"
+echo "[wavemill] Agent exited (\$?)"
+LAUNCHEOF
+      ;;
     claude)
       if agent_model_is_deepseek "$model"; then
         local provider_json base_url api_key_env effort_level provider_root provider_home xdg_config_home xdg_data_home

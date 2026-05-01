@@ -869,4 +869,27 @@ describe('intervention-detector', () => {
       assert.equal(event.count, 0);
     });
   });
+
+  describe('claude-deepseek agentType is treated as Claude-like', () => {
+    it('detectSessionRedirects runs for claude-deepseek agentType', () => {
+      const { worktreePath, projectsDir, cleanup } = setupSessionDir();
+      try {
+        const branch = 'task/ds-feature';
+        const lines = [
+          userEntry({ branch, content: 'You are working on: DS Feature (HOK-200)' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'Redirect: change the approach' }),
+          assistantEntry({ branch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        // detectSessionRedirects runs for claude-deepseek (same as claude)
+        const event = detectSessionRedirects(worktreePath, branch);
+        assert.equal(event.type, 'session_redirect');
+        assert.equal(event.count, 1);
+      } finally {
+        cleanup();
+      }
+    });
+  });
 });

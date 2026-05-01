@@ -1,1524 +1,1555 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Wavemill configuration",
-  "description": "Per-repo (.wavemill-config.json) or user-level (~/.wavemill/config.json) config. All fields are optional; env vars override everything.",
-  "type": "object",
-  "properties": {
-    "configVersion": {
-      "type": "string",
-      "description": "Config format version (e.g., '1.0.0'). Used for upgrade detection and compatibility checks."
-    },
-    "linear": {
-      "type": "object",
-      "properties": {
-        "project": {
-          "type": "string",
-          "description": "Linear project name for backlog queries. Empty string means all projects."
-        }
-      }
-    },
-    "git": {
-      "type": "object",
-      "description": "Git behavior shared across wavemill workflows.",
-      "properties": {
-        "fetchTtlSeconds": {
-          "type": "integer",
-          "default": 60,
-          "minimum": 0,
-          "description": "Seconds to reuse a successful base-branch fetch before fetching again. Set to 0 to always fetch."
-        }
-      }
-    },
-    "mill": {
-      "type": "object",
-      "description": "Settings for the 'wavemill mill' command.",
-      "properties": {
-        "session": {
-          "type": "string",
-          "default": "",
-          "description": "Tmux session name."
-        },
-        "maxParallel": {
-          "type": "integer",
-          "default": 7,
-          "minimum": 1,
-          "description": "Number of parallel agent workers."
-        },
-        "pollSeconds": {
-          "type": "integer",
-          "default": 10,
-          "minimum": 1,
-          "description": "Seconds between PR status checks."
-        },
-        "baseBranch": {
-          "type": "string",
-          "default": "main",
-          "description": "Base branch for worktrees and PR targets."
-        },
-        "worktreeRoot": {
-          "type": "string",
-          "default": "../worktrees",
-          "description": "Directory for git worktrees. Relative paths resolve against the repo root."
-        },
-        "agentCmd": {
-          "type": "string",
-          "default": "claude",
-          "description": "Agent CLI to use. Built-in support for 'claude' and 'codex'. Other CLIs work via generic tmux passthrough. Can be overridden with --agent flag or AGENT_CMD env var.",
-          "examples": [
-            "claude",
-            "codex"
-          ]
-        },
-        "requireConfirm": {
-          "type": "boolean",
-          "default": true,
-          "description": "Whether to prompt for confirmation before launching tasks."
-        },
-        "planningMode": {
-          "type": "string",
-          "enum": [
-            "interactive"
-          ],
-          "default": "interactive",
-          "description": "How to handle the planning phase. Interactive planning launches a dedicated planning phase in tmux before implementation."
-        },
-        "maxRetries": {
-          "type": "integer",
-          "default": 3,
-          "minimum": 1,
-          "description": "Max retry attempts for failed API calls."
-        },
-        "retryDelay": {
-          "type": "integer",
-          "default": 2,
-          "minimum": 1,
-          "description": "Initial retry delay in seconds (doubles on each retry)."
-        },
-        "setupCommand": {
-          "type": "string",
-          "default": "",
-          "description": "Shell command to run in each new worktree before agent launch (e.g., 'npm install'). Skipped when resuming an existing worktree.",
-          "examples": [
-            "npm install",
-            "pnpm install",
-            "pip install -r requirements.txt"
-          ]
-        },
-        "defaultMaxCostUsd": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Default per-task cost budget guideline in USD. When unset, the built-in default is 25.00. Repository config can still override the value, and omitting the field from routing data means no explicit cost constraint for that run."
-        },
-        "expansionHandshake": {
-          "type": "object",
-          "description": "Controls gating of raw-issue-text tasks at the plan\u2192code transition.",
-          "properties": {
-            "policy": {
-              "type": "string",
-              "enum": [
-                "block",
-                "warn"
-              ],
-              "default": "block",
-              "description": "block (default): halt transition. warn: proceed with a warning log line."
-            }
-          },
-          "additionalProperties": false
-        }
-      }
-    },
-    "expand": {
-      "type": "object",
-      "description": "Settings for the 'wavemill expand' command.",
-      "properties": {
-        "maxSelect": {
-          "type": "integer",
-          "default": 3,
-          "minimum": 1,
-          "description": "Maximum issues that can be selected for expansion."
-        },
-        "maxDisplay": {
-          "type": "integer",
-          "default": 9,
-          "minimum": 1,
-          "description": "Maximum candidate issues shown in the selection list."
-        }
-      }
-    },
-    "plan": {
-      "type": "object",
-      "description": "Settings for the 'wavemill plan' command.",
-      "properties": {
-        "maxDisplay": {
-          "type": "integer",
-          "default": 9,
-          "minimum": 1,
-          "description": "Maximum initiatives shown in the selection list."
-        },
-        "research": {
-          "type": "boolean",
-          "default": false,
-          "description": "When true, always run the research phase before plan decomposition. Can be overridden by the --research CLI flag."
-        },
-        "model": {
-          "type": "string",
-          "default": "claude-opus-4-7",
-          "description": "Claude model to use for plan decomposition and research. Can be overridden with PLAN_MODEL env var."
-        },
-        "interactive": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable interactive mode for plan decomposition. When true, Claude has access to all tools (WebFetch, AskUserQuestion, Read, etc.) and can fetch URLs, ask questions, and research. When false, Claude runs in non-interactive mode (no tools, pure JSON output). Can be overridden by --interactive or --no-interactive CLI flags."
-        },
-        "timeout": {
-          "type": "integer",
-          "minimum": 1000,
-          "description": "Timeout in milliseconds for plan decomposition and research. Default: 600000 (10 min) for interactive mode, 120000 (2 min) for non-interactive. Can be overridden with PLAN_TIMEOUT env var."
-        }
-      }
-    },
-    "dashboard": {
-      "type": "object",
-      "description": "Controls how much runtime activity is shown in the mill control pane. Lower verbosity reduces dashboard spam while all messages can still be written to a session log.",
-      "properties": {
-        "verbosity": {
-          "type": "string",
-          "enum": [
-            "error",
-            "status",
-            "info",
-            "debug"
-          ],
-          "default": "info",
-          "description": "Minimum log level shown in the mill control pane. 'error' shows only errors, 'status' shows key workflow transitions, 'info' adds routine progress, and 'debug' shows detailed diagnostic output."
-        },
-        "logToFile": {
-          "type": "boolean",
-          "default": true,
-          "description": "When true, write all control-pane messages to a per-session log file in .wavemill/logs/ even if they are hidden by the current verbosity setting."
-        }
-      },
-      "additionalProperties": false
-    },
-    "eval": {
-      "type": "object",
-      "description": "Settings for the 'wavemill eval' command.",
-      "properties": {
-        "aggregation": {
-          "type": "object",
-          "description": "Cross-repo eval aggregation settings for training the DSPy-optimized model router.",
-          "properties": {
-            "repos": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": [],
-              "description": "Absolute paths to repository directories to aggregate evals from."
-            },
-            "outputPath": {
-              "type": "string",
-              "default": ".wavemill/evals/aggregated-evals.jsonl",
-              "description": "Output path for the aggregated eval file, relative to repo root."
-            }
-          },
-          "additionalProperties": false
-        },
-        "evalsDir": {
-          "type": "string",
-          "default": ".wavemill/evals",
-          "description": "Directory for persisting eval result JSONL files. Relative paths resolve against the repo root."
-        },
-        "judge": {
-          "type": "object",
-          "description": "LLM judge configuration for eval scoring.",
-          "properties": {
-            "model": {
-              "type": "string",
-              "default": "claude-sonnet-4-6",
-              "minLength": 1,
-              "description": "Model ID for the eval judge (e.g. 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001')."
-            },
-            "provider": {
-              "type": "string",
-              "default": "anthropic",
-              "enum": [
-                "anthropic"
-              ],
-              "description": "LLM provider for the eval judge. Currently only 'anthropic' is supported."
-            }
-          },
-          "additionalProperties": false
-        },
-        "pricing": {
-          "type": "object",
-          "description": "Per-model pricing table for cost estimation. Keys are model identifiers, values specify cost per million tokens.",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "inputCostPerMTok": {
-                "type": "number",
-                "minimum": 0,
-                "description": "Cost in USD per million input tokens."
-              },
-              "outputCostPerMTok": {
-                "type": "number",
-                "minimum": 0,
-                "description": "Cost in USD per million output tokens."
-              },
-              "cacheWriteCostPerMTok": {
-                "type": "number",
-                "minimum": 0,
-                "description": "Cost in USD per million cache creation (write) input tokens. Defaults to 1.25x inputCostPerMTok."
-              },
-              "cacheReadCostPerMTok": {
-                "type": "number",
-                "minimum": 0,
-                "description": "Cost in USD per million cache read input tokens. Defaults to 0.1x inputCostPerMTok."
-              }
-            },
-            "required": [
-              "inputCostPerMTok",
-              "outputCostPerMTok"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "interventionPenalties": {
-          "type": "object",
-          "description": "Penalty weights per intervention type. Each value is the score penalty (0-1) applied per occurrence of that intervention type.",
-          "properties": {
-            "reviewComment": {
-              "type": "number",
-              "default": 0.05,
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Penalty per PR review comment requesting changes."
-            },
-            "postPrCommit": {
-              "type": "number",
-              "default": 0.08,
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Penalty per commit made after the initial PR creation."
-            },
-            "manualEdit": {
-              "type": "number",
-              "default": 0.1,
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Penalty per manual file edit (commit not attributed to the agent)."
-            },
-            "testFix": {
-              "type": "number",
-              "default": 0.06,
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Penalty per interactive test fix detected in commit messages."
-            },
-            "sessionRedirect": {
-              "type": "number",
-              "default": 0.12,
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Penalty per user redirection detected in the Claude session transcript (user sent a message correcting the agent mid-session)."
-            },
-            "selfReviewWarning": {
-              "type": "number",
-              "default": 0.05,
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Penalty per warning-severity finding in self-review (minor issue caught by review-changes tool)."
-            },
-            "selfReviewBlocker": {
-              "type": "number",
-              "default": 0.2,
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Penalty per blocker-severity finding in self-review (critical issue that blocks PR, such as security vulnerabilities or correctness bugs)."
-            }
-          },
-          "additionalProperties": false
-        },
-        "mintEligibility": {
-          "type": "object",
-          "description": "Coverage gates for minting Wavemill router benchmark results into downstream eligibility-sensitive flows.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "When false, disable mint eligibility gating for router eval outputs."
-            },
-            "coverageThreshold": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Minimum scoreable coverage required for mint eligibility. Defaults to 0.8 when omitted."
-            },
-            "maxInvalidRouteRate": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1,
-              "description": "Maximum invalid route rate allowed for mint eligibility. Defaults to 0.2 when omitted."
-            }
-          },
-          "additionalProperties": false
-        }
-      }
-    },
-    "autoEval": {
-      "type": "boolean",
-      "default": true,
-      "description": "When true, automatically run eval after workflow/bugfix command completion (PR creation). Eval failures are logged as warnings and never fail the workflow."
-    },
-    "hokusai": {
-      "type": "object",
-      "description": "Hokusai data submission settings.",
-      "properties": {
-        "dataSubmission": {
-          "type": "object",
-          "description": "Opt-in configuration for submitting anonymized workflow outcomes to Hokusai.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": false,
-              "description": "Enable Hokusai data submission. Defaults to opt-out."
-            },
-            "consentVersion": {
-              "type": "string",
-              "default": "1.0",
-              "description": "Current consent version. Changing this triggers re-prompting."
-            },
-            "endpoint": {
-              "type": "string",
-              "default": "https://api.hokusai.dev/v1/submit",
-              "description": "Hokusai API endpoint for data submission."
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "challenge": {
-      "type": "object",
-      "description": "Settings for challenge mode head-to-head task execution in mill.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Master toggle for challenge mode."
-        },
-        "rate": {
-          "type": "number",
-          "default": 0.1,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Probability that a selected mill task becomes a challenge task."
-        },
-        "models": {
-          "description": "Pool of models eligible for challenge. Null means use router.models.",
-          "oneOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "comparisonModel": {
-          "type": "string",
-          "default": "claude-opus-4-7",
-          "minLength": 1,
-          "description": "Model used as the LLM judge for challenge PR comparison."
-        },
-        "autoMergeWinner": {
-          "type": "boolean",
-          "default": false,
-          "description": "Whether to automatically merge the recommended winner and close the loser."
-        }
-      },
-      "additionalProperties": false
-    },
-    "challengeScheduler": {
-      "type": "object",
-      "description": "Challenge scheduling policy for exploration-driven model testing.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable advisory challenge recommendations during routing."
-        },
-        "confidenceThreshold": {
-          "type": "number",
-          "default": 0.7,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Suggest a challenge when routing confidence falls below this threshold."
-        },
-        "newModelChallengeCount": {
-          "type": "integer",
-          "default": 5,
-          "minimum": 1,
-          "description": "Treat models with fewer than this many eval records as new."
-        },
-        "minEvalRecordsPerStage": {
-          "type": "integer",
-          "default": 10,
-          "minimum": 1,
-          "description": "Suggest a challenge when a workflow stage has fewer records than this threshold."
-        },
-        "maxConcurrentChallenges": {
-          "type": "integer",
-          "default": 2,
-          "minimum": 1,
-          "description": "Advisory limit for how many challenges the orchestrator should run in parallel."
-        }
-      },
-      "additionalProperties": false
-    },
-    "providers": {
-      "type": "object",
-      "description": "Optional provider-specific execution paths for supported agent CLIs.",
-      "properties": {
-        "deepseek": {
-          "type": "object",
-          "description": "Run Claude Code against DeepSeek's Anthropic-compatible endpoint. This path is default-off until explicitly enabled.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": false,
-              "description": "Enable DeepSeek as a Claude-compatible provider path."
-            },
-            "apiKeyEnv": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Environment variable name that holds the DeepSeek API key."
-            },
-            "baseUrl": {
-              "type": "string",
-              "default": "https://api.deepseek.com/anthropic",
-              "description": "Anthropic-compatible base URL for Claude Code requests."
-            },
-            "models": {
-              "type": "array",
-              "description": "DeepSeek model IDs that Wavemill may route to when the provider is enabled.",
-              "items": {
-                "type": "string",
-                "pattern": "^deepseek-"
-              }
-            },
-            "stages": {
-              "type": "array",
-              "description": "Workflow stages allowed to use DeepSeek.",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "planner",
-                  "coder",
-                  "reviewer"
-                ]
-              }
-            },
-            "effortLevel": {
-              "type": "string",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ],
-              "default": "medium",
-              "description": "Claude Code effort level to request when using the DeepSeek provider path."
-            }
-          },
-          "additionalProperties": false,
-          "allOf": [
-            {
-              "if": {
-                "properties": {
-                  "enabled": {
-                    "const": true
-                  }
-                },
-                "required": [
-                  "enabled"
-                ]
-              },
-              "then": {
-                "required": [
-                  "apiKeyEnv"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "ready": {
-      "type": "object",
-      "description": "Settings for the ready stage (merge-readiness checks)",
-      "properties": {
-        "checks": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "List of check names to run (empty = all available checks)"
-        },
-        "requiredChecks": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Checks that must pass for merge approval (subset of checks)"
-        },
-        "migrationPatterns": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [
-            "migrations/",
-            "alembic/versions/"
-          ],
-          "description": "Regex patterns used to identify migration files across the repository."
-        },
-        "remediation": {
-          "type": "object",
-          "description": "Automatic remediation settings for fixable ready-check failures.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": true,
-              "description": "Launch a remediation agent when a fixable ready check fails."
-            },
-            "maxAttempts": {
-              "type": "integer",
-              "default": 3,
-              "minimum": 1,
-              "description": "Maximum remediation launches allowed before ready falls back to operator attention."
-            },
-            "agentCmd": {
-              "type": "string",
-              "default": "",
-              "description": "Optional agent command override for ready remediation launches."
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "modelRegistry": {
-      "type": "object",
-      "description": "Overrides for the canonical model capability registry. Models merge over defaults while ladders replace the default ladder for each task type.",
-      "properties": {
-        "models": {
-          "type": "object",
-          "description": "Map of model IDs to partial capability overrides.",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "vendor": {
-                "type": "string",
-                "minLength": 1
-              },
-              "class": {
-                "type": "string",
-                "enum": [
-                  "frontier",
-                  "strong_generalist",
-                  "fast_economy"
-                ]
-              },
-              "strengths": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "weaknesses": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "qualityScores": {
-                "type": "object",
-                "properties": {
-                  "routing": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100
-                  },
-                  "planning": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100
-                  },
-                  "coding": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100
-                  },
-                  "review": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100
-                  },
-                  "classify": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100
-                  }
-                },
-                "additionalProperties": false
-              },
-              "pricing": {
-                "type": "object",
-                "properties": {
-                  "inputCostPerMTok": {
-                    "type": "number",
-                    "minimum": 0
-                  },
-                  "outputCostPerMTok": {
-                    "type": "number",
-                    "minimum": 0
-                  },
-                  "cacheWriteCostPerMTok": {
-                    "type": "number",
-                    "minimum": 0
-                  },
-                  "cacheReadCostPerMTok": {
-                    "type": "number",
-                    "minimum": 0
-                  }
-                },
-                "required": [
-                  "inputCostPerMTok",
-                  "outputCostPerMTok"
-                ],
-                "additionalProperties": false
-              },
-              "defaultLadderEligible": {
-                "type": "boolean"
-              },
-              "contextWindowTokens": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "agent": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "ladders": {
-          "type": "object",
-          "description": "Ordered fallback ladders for each task type.",
-          "properties": {
-            "routing": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "planning": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "coding": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "review": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "classify": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "router": {
-      "type": "object",
-      "description": "Settings for the prompt-to-model router that suggests the best LLM for a task based on historical eval data.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable model routing suggestions before workflow execution."
-        },
-        "defaultModel": {
-          "type": "string",
-          "default": "claude-sonnet-4-6",
-          "description": "Fallback model when insufficient eval data exists for routing."
-        },
-        "minRecords": {
-          "type": "integer",
-          "default": 20,
-          "minimum": 1,
-          "description": "Minimum total eval records required before the router makes suggestions."
-        },
-        "minModels": {
-          "type": "integer",
-          "default": 2,
-          "minimum": 1,
-          "description": "Minimum distinct models with eval data before routing is active."
-        },
-        "models": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data."
-        },
-        "availableModels": {
-          "type": "object",
-          "description": "Per-stage model availability lists. Stages without a list fall back to router.models.",
-          "properties": {
-            "planner": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "Models available for the planning stage."
-            },
-            "coder": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "Models available for the coding stage."
-            },
-            "reviewer": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "Models available for the review stage."
-            }
-          },
-          "additionalProperties": false
-        },
-        "defaultAgent": {
-          "type": "string",
-          "default": "claude",
-          "description": "Fallback agent CLI when router has insufficient data or no agentMap entry matches the recommended model.",
-          "examples": [
-            "claude",
-            "codex"
-          ]
-        },
-        "agentMap": {
-          "type": "object",
-          "description": "Maps model IDs to agent CLI commands. Used to determine which agent CLI to launch when the router recommends a model.",
-          "additionalProperties": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Wavemill configuration",
+    "description": "Per-repo (.wavemill-config.json) or user-level (~/.wavemill/config.json) config. All fields are optional; env vars override everything.",
+    "type": "object",
+    "properties": {
+        "configVersion": {
             "type": "string",
-            "description": "Agent CLI command name (e.g. 'claude', 'codex')."
-          }
+            "description": "Config format version (e.g., '1.0.0'). Used for upgrade detection and compatibility checks."
         },
-        "mode": {
-          "type": "string",
-          "enum": [
-            "heuristic",
-            "llm",
-            "auto",
-            "stage-aware",
-            "hokusai"
-          ],
-          "default": "auto",
-          "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, 'hokusai' calls the Hokusai API for ML-based routing, and 'auto' prefers Hokusai when configured before falling back to stage-aware and heuristic."
-        },
-        "llmModel": {
-          "type": "string",
-          "default": "gpt-4o-mini",
-          "description": "Model to use for LLM-based routing decisions. Should be fast and cheap."
-        },
-        "llmProvider": {
-          "type": "string",
-          "enum": [
-            "openai",
-            "anthropic"
-          ],
-          "default": "openai",
-          "description": "API provider for LLM routing calls. OpenAI recommended (gpt-4o-mini is fast and cheap)."
-        },
-        "kNeighbors": {
-          "type": "integer",
-          "default": 10,
-          "minimum": 1,
-          "description": "Number of nearest historical tasks to consider for stage-aware routing."
-        },
-        "backfilledEvalsPath": {
-          "type": "string",
-          "default": ".wavemill/evals/aggregated-evals.backfilled.jsonl",
-          "description": "Preferred supplemental backfilled eval dataset for the stage-aware router when local eval history is sparse."
-        },
-        "stageBlendWeight": {
-          "type": "number",
-          "default": 0.3,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Regularization weight blending stage-specific scores with overall eval score during stage-aware routing."
-        },
-        "rubricAware": {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "enum": [
-                "off",
-                "shadow",
-                "on"
-              ],
-              "default": "off"
-            },
-            "minCoverage": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1,
-              "default": 0.3
-            },
-            "weight": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1,
-              "default": 0.3
+        "linear": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "Linear project name for backlog queries. Empty string means all projects."
+                }
             }
-          },
-          "additionalProperties": false
+        },
+        "git": {
+            "type": "object",
+            "description": "Git behavior shared across wavemill workflows.",
+            "properties": {
+                "fetchTtlSeconds": {
+                    "type": "integer",
+                    "default": 60,
+                    "minimum": 0,
+                    "description": "Seconds to reuse a successful base-branch fetch before fetching again. Set to 0 to always fetch."
+                }
+            }
+        },
+        "mill": {
+            "type": "object",
+            "description": "Settings for the 'wavemill mill' command.",
+            "properties": {
+                "session": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Tmux session name."
+                },
+                "maxParallel": {
+                    "type": "integer",
+                    "default": 7,
+                    "minimum": 1,
+                    "description": "Number of parallel agent workers."
+                },
+                "pollSeconds": {
+                    "type": "integer",
+                    "default": 10,
+                    "minimum": 1,
+                    "description": "Seconds between PR status checks."
+                },
+                "baseBranch": {
+                    "type": "string",
+                    "default": "main",
+                    "description": "Base branch for worktrees and PR targets."
+                },
+                "worktreeRoot": {
+                    "type": "string",
+                    "default": "../worktrees",
+                    "description": "Directory for git worktrees. Relative paths resolve against the repo root."
+                },
+                "agentCmd": {
+                    "type": "string",
+                    "default": "claude",
+                    "description": "Agent CLI to use. Built-in support for 'claude' and 'codex'. Other CLIs work via generic tmux passthrough. Can be overridden with --agent flag or AGENT_CMD env var.",
+                    "examples": [
+                        "claude",
+                        "codex",
+                        "claude-deepseek"
+                    ]
+                },
+                "requireConfirm": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Whether to prompt for confirmation before launching tasks."
+                },
+                "planningMode": {
+                    "type": "string",
+                    "enum": [
+                        "interactive"
+                    ],
+                    "default": "interactive",
+                    "description": "How to handle the planning phase. Interactive planning launches a dedicated planning phase in tmux before implementation."
+                },
+                "maxRetries": {
+                    "type": "integer",
+                    "default": 3,
+                    "minimum": 1,
+                    "description": "Max retry attempts for failed API calls."
+                },
+                "retryDelay": {
+                    "type": "integer",
+                    "default": 2,
+                    "minimum": 1,
+                    "description": "Initial retry delay in seconds (doubles on each retry)."
+                },
+                "setupCommand": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Shell command to run in each new worktree before agent launch (e.g., 'npm install'). Skipped when resuming an existing worktree.",
+                    "examples": [
+                        "npm install",
+                        "pnpm install",
+                        "pip install -r requirements.txt"
+                    ]
+                },
+                "defaultMaxCostUsd": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Default per-task cost budget guideline in USD. When unset, the built-in default is 25.00. Repository config can still override the value, and omitting the field from routing data means no explicit cost constraint for that run."
+                },
+                "expansionHandshake": {
+                    "type": "object",
+                    "description": "Controls gating of raw-issue-text tasks at the plan\u2192code transition.",
+                    "properties": {
+                        "policy": {
+                            "type": "string",
+                            "enum": [
+                                "block",
+                                "warn"
+                            ],
+                            "default": "block",
+                            "description": "block (default): halt transition. warn: proceed with a warning log line."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            }
+        },
+        "expand": {
+            "type": "object",
+            "description": "Settings for the 'wavemill expand' command.",
+            "properties": {
+                "maxSelect": {
+                    "type": "integer",
+                    "default": 3,
+                    "minimum": 1,
+                    "description": "Maximum issues that can be selected for expansion."
+                },
+                "maxDisplay": {
+                    "type": "integer",
+                    "default": 9,
+                    "minimum": 1,
+                    "description": "Maximum candidate issues shown in the selection list."
+                }
+            }
+        },
+        "plan": {
+            "type": "object",
+            "description": "Settings for the 'wavemill plan' command.",
+            "properties": {
+                "maxDisplay": {
+                    "type": "integer",
+                    "default": 9,
+                    "minimum": 1,
+                    "description": "Maximum initiatives shown in the selection list."
+                },
+                "research": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, always run the research phase before plan decomposition. Can be overridden by the --research CLI flag."
+                },
+                "model": {
+                    "type": "string",
+                    "default": "claude-opus-4-7",
+                    "description": "Claude model to use for plan decomposition and research. Can be overridden with PLAN_MODEL env var."
+                },
+                "interactive": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable interactive mode for plan decomposition. When true, Claude has access to all tools (WebFetch, AskUserQuestion, Read, etc.) and can fetch URLs, ask questions, and research. When false, Claude runs in non-interactive mode (no tools, pure JSON output). Can be overridden by --interactive or --no-interactive CLI flags."
+                },
+                "timeout": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "description": "Timeout in milliseconds for plan decomposition and research. Default: 600000 (10 min) for interactive mode, 120000 (2 min) for non-interactive. Can be overridden with PLAN_TIMEOUT env var."
+                }
+            }
+        },
+        "dashboard": {
+            "type": "object",
+            "description": "Controls how much runtime activity is shown in the mill control pane. Lower verbosity reduces dashboard spam while all messages can still be written to a session log.",
+            "properties": {
+                "verbosity": {
+                    "type": "string",
+                    "enum": [
+                        "error",
+                        "status",
+                        "info",
+                        "debug"
+                    ],
+                    "default": "info",
+                    "description": "Minimum log level shown in the mill control pane. 'error' shows only errors, 'status' shows key workflow transitions, 'info' adds routine progress, and 'debug' shows detailed diagnostic output."
+                },
+                "logToFile": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "When true, write all control-pane messages to a per-session log file in .wavemill/logs/ even if they are hidden by the current verbosity setting."
+                }
+            },
+            "additionalProperties": false
+        },
+        "eval": {
+            "type": "object",
+            "description": "Settings for the 'wavemill eval' command.",
+            "properties": {
+                "aggregation": {
+                    "type": "object",
+                    "description": "Cross-repo eval aggregation settings for training the DSPy-optimized model router.",
+                    "properties": {
+                        "repos": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "default": [],
+                            "description": "Absolute paths to repository directories to aggregate evals from."
+                        },
+                        "outputPath": {
+                            "type": "string",
+                            "default": ".wavemill/evals/aggregated-evals.jsonl",
+                            "description": "Output path for the aggregated eval file, relative to repo root."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "evalsDir": {
+                    "type": "string",
+                    "default": ".wavemill/evals",
+                    "description": "Directory for persisting eval result JSONL files. Relative paths resolve against the repo root."
+                },
+                "judge": {
+                    "type": "object",
+                    "description": "LLM judge configuration for eval scoring.",
+                    "properties": {
+                        "model": {
+                            "type": "string",
+                            "default": "claude-sonnet-4-6",
+                            "minLength": 1,
+                            "description": "Model ID for the eval judge (e.g. 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001')."
+                        },
+                        "provider": {
+                            "type": "string",
+                            "default": "anthropic",
+                            "enum": [
+                                "anthropic"
+                            ],
+                            "description": "LLM provider for the eval judge. Currently only 'anthropic' is supported."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "pricing": {
+                    "type": "object",
+                    "description": "Per-model pricing table for cost estimation. Keys are model identifiers, values specify cost per million tokens.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "inputCostPerMTok": {
+                                "type": "number",
+                                "minimum": 0,
+                                "description": "Cost in USD per million input tokens."
+                            },
+                            "outputCostPerMTok": {
+                                "type": "number",
+                                "minimum": 0,
+                                "description": "Cost in USD per million output tokens."
+                            },
+                            "cacheWriteCostPerMTok": {
+                                "type": "number",
+                                "minimum": 0,
+                                "description": "Cost in USD per million cache creation (write) input tokens. Defaults to 1.25x inputCostPerMTok."
+                            },
+                            "cacheReadCostPerMTok": {
+                                "type": "number",
+                                "minimum": 0,
+                                "description": "Cost in USD per million cache read input tokens. Defaults to 0.1x inputCostPerMTok."
+                            }
+                        },
+                        "required": [
+                            "inputCostPerMTok",
+                            "outputCostPerMTok"
+                        ],
+                        "additionalProperties": false
+                    }
+                },
+                "interventionPenalties": {
+                    "type": "object",
+                    "description": "Penalty weights per intervention type. Each value is the score penalty (0-1) applied per occurrence of that intervention type.",
+                    "properties": {
+                        "reviewComment": {
+                            "type": "number",
+                            "default": 0.05,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per PR review comment requesting changes."
+                        },
+                        "postPrCommit": {
+                            "type": "number",
+                            "default": 0.08,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per commit made after the initial PR creation."
+                        },
+                        "manualEdit": {
+                            "type": "number",
+                            "default": 0.1,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per manual file edit (commit not attributed to the agent)."
+                        },
+                        "testFix": {
+                            "type": "number",
+                            "default": 0.06,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per interactive test fix detected in commit messages."
+                        },
+                        "sessionRedirect": {
+                            "type": "number",
+                            "default": 0.12,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per user redirection detected in the Claude session transcript (user sent a message correcting the agent mid-session)."
+                        },
+                        "selfReviewWarning": {
+                            "type": "number",
+                            "default": 0.05,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per warning-severity finding in self-review (minor issue caught by review-changes tool)."
+                        },
+                        "selfReviewBlocker": {
+                            "type": "number",
+                            "default": 0.2,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per blocker-severity finding in self-review (critical issue that blocks PR, such as security vulnerabilities or correctness bugs)."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "mintEligibility": {
+                    "type": "object",
+                    "description": "Coverage gates for minting Wavemill router benchmark results into downstream eligibility-sensitive flows.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "When false, disable mint eligibility gating for router eval outputs."
+                        },
+                        "coverageThreshold": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Minimum scoreable coverage required for mint eligibility. Defaults to 0.8 when omitted."
+                        },
+                        "maxInvalidRouteRate": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Maximum invalid route rate allowed for mint eligibility. Defaults to 0.2 when omitted."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            }
+        },
+        "autoEval": {
+            "type": "boolean",
+            "default": true,
+            "description": "When true, automatically run eval after workflow/bugfix command completion (PR creation). Eval failures are logged as warnings and never fail the workflow."
         },
         "hokusai": {
-          "type": "object",
-          "description": "Hokusai API configuration for ML-based workflow routing. Hokusai is only available via API.",
-          "properties": {
-            "endpoint": {
-              "type": "string",
-              "description": "HTTP endpoint for Hokusai API (e.g., 'https://hokusai-api.example.com/predict')."
+            "type": "object",
+            "description": "Hokusai data submission settings.",
+            "properties": {
+                "dataSubmission": {
+                    "type": "object",
+                    "description": "Opt-in configuration for submitting anonymized workflow outcomes to Hokusai.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable Hokusai data submission. Defaults to opt-out."
+                        },
+                        "consentVersion": {
+                            "type": "string",
+                            "default": "1.0",
+                            "description": "Current consent version. Changing this triggers re-prompting."
+                        },
+                        "endpoint": {
+                            "type": "string",
+                            "default": "https://api.hokusai.dev/v1/submit",
+                            "description": "Hokusai API endpoint for data submission."
+                        }
+                    },
+                    "additionalProperties": false
+                }
             },
-            "apiKey": {
-              "type": "string",
-              "description": "Optional API key for authentication."
+            "additionalProperties": false
+        },
+        "challenge": {
+            "type": "object",
+            "description": "Settings for challenge mode head-to-head task execution in mill.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Master toggle for challenge mode."
+                },
+                "rate": {
+                    "type": "number",
+                    "default": 0.1,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Probability that a selected mill task becomes a challenge task."
+                },
+                "models": {
+                    "description": "Pool of models eligible for challenge. Null means use router.models.",
+                    "oneOf": [
+                        {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "minLength": 1
+                            }
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null
+                },
+                "comparisonModel": {
+                    "type": "string",
+                    "default": "claude-opus-4-7",
+                    "minLength": 1,
+                    "description": "Model used as the LLM judge for challenge PR comparison."
+                },
+                "autoMergeWinner": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether to automatically merge the recommended winner and close the loser."
+                }
             },
-            "timeout": {
-              "type": "integer",
-              "default": 5000,
-              "minimum": 100,
-              "description": "Request timeout in milliseconds."
+            "additionalProperties": false
+        },
+        "challengeScheduler": {
+            "type": "object",
+            "description": "Challenge scheduling policy for exploration-driven model testing.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable advisory challenge recommendations during routing."
+                },
+                "confidenceThreshold": {
+                    "type": "number",
+                    "default": 0.7,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Suggest a challenge when routing confidence falls below this threshold."
+                },
+                "newModelChallengeCount": {
+                    "type": "integer",
+                    "default": 5,
+                    "minimum": 1,
+                    "description": "Treat models with fewer than this many eval records as new."
+                },
+                "minEvalRecordsPerStage": {
+                    "type": "integer",
+                    "default": 10,
+                    "minimum": 1,
+                    "description": "Suggest a challenge when a workflow stage has fewer records than this threshold."
+                },
+                "maxConcurrentChallenges": {
+                    "type": "integer",
+                    "default": 2,
+                    "minimum": 1,
+                    "description": "Advisory limit for how many challenges the orchestrator should run in parallel."
+                }
+            },
+            "additionalProperties": false
+        },
+        "providers": {
+            "type": "object",
+            "description": "Optional provider-specific execution paths for supported agent CLIs.",
+            "properties": {
+                "deepseek": {
+                    "type": "object",
+                    "description": "Run Claude Code against DeepSeek's Anthropic-compatible endpoint. This path is default-off until explicitly enabled.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable DeepSeek as a Claude-compatible provider path."
+                        },
+                        "apiKeyEnv": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Environment variable name that holds the DeepSeek API key."
+                        },
+                        "baseUrl": {
+                            "type": "string",
+                            "default": "https://api.deepseek.com/anthropic",
+                            "description": "Anthropic-compatible base URL for Claude Code requests."
+                        },
+                        "models": {
+                            "type": "array",
+                            "description": "DeepSeek model IDs that Wavemill may route to when the provider is enabled.",
+                            "items": {
+                                "type": "string",
+                                "pattern": "^deepseek-"
+                            }
+                        },
+                        "stages": {
+                            "type": "array",
+                            "description": "Workflow stages allowed to use DeepSeek.",
+                            "items": {
+                                "type": "string",
+                                "enum": [
+                                    "planner",
+                                    "coder",
+                                    "reviewer"
+                                ]
+                            }
+                        },
+                        "effortLevel": {
+                            "type": "string",
+                            "enum": [
+                                "low",
+                                "medium",
+                                "high"
+                            ],
+                            "default": "medium",
+                            "description": "Claude Code effort level to request when using the DeepSeek provider path."
+                        },
+                        "launcher": {
+                            "type": "object",
+                            "description": "First-class claude-deepseek launcher configuration.",
+                            "properties": {
+                                "model": {
+                                    "type": "string",
+                                    "pattern": "^deepseek-",
+                                    "description": "Default DeepSeek model for claude-deepseek launches."
+                                },
+                                "subagentModel": {
+                                    "type": "string",
+                                    "pattern": "^deepseek-",
+                                    "description": "Model for background subagent work (CLAUDE_CODE_SUBAGENT_MODEL). Defaults to model."
+                                },
+                                "secretSource": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "Alternative env var name or secret source to resolve the DeepSeek API key. Falls back to apiKeyEnv / DEEPSEEK_API_KEY."
+                                },
+                                "stateDir": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "Override the isolated Claude Code state directory used for claude-deepseek launches."
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false,
+                    "allOf": [
+                        {
+                            "if": {
+                                "properties": {
+                                    "enabled": {
+                                        "const": true
+                                    }
+                                },
+                                "required": [
+                                    "enabled"
+                                ]
+                            },
+                            "then": {
+                                "required": [
+                                    "apiKeyEnv"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "ready": {
+            "type": "object",
+            "description": "Settings for the ready stage (merge-readiness checks)",
+            "properties": {
+                "checks": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "List of check names to run (empty = all available checks)"
+                },
+                "requiredChecks": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Checks that must pass for merge approval (subset of checks)"
+                },
+                "migrationPatterns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [
+                        "migrations/",
+                        "alembic/versions/"
+                    ],
+                    "description": "Regex patterns used to identify migration files across the repository."
+                },
+                "remediation": {
+                    "type": "object",
+                    "description": "Automatic remediation settings for fixable ready-check failures.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Launch a remediation agent when a fixable ready check fails."
+                        },
+                        "maxAttempts": {
+                            "type": "integer",
+                            "default": 3,
+                            "minimum": 1,
+                            "description": "Maximum remediation launches allowed before ready falls back to operator attention."
+                        },
+                        "agentCmd": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Optional agent command override for ready remediation launches."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "modelRegistry": {
+            "type": "object",
+            "description": "Overrides for the canonical model capability registry. Models merge over defaults while ladders replace the default ladder for each task type.",
+            "properties": {
+                "models": {
+                    "type": "object",
+                    "description": "Map of model IDs to partial capability overrides.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "vendor": {
+                                "type": "string",
+                                "minLength": 1
+                            },
+                            "class": {
+                                "type": "string",
+                                "enum": [
+                                    "frontier",
+                                    "strong_generalist",
+                                    "fast_economy"
+                                ]
+                            },
+                            "strengths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+                            "weaknesses": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+                            "qualityScores": {
+                                "type": "object",
+                                "properties": {
+                                    "routing": {
+                                        "type": "number",
+                                        "minimum": 0,
+                                        "maximum": 100
+                                    },
+                                    "planning": {
+                                        "type": "number",
+                                        "minimum": 0,
+                                        "maximum": 100
+                                    },
+                                    "coding": {
+                                        "type": "number",
+                                        "minimum": 0,
+                                        "maximum": 100
+                                    },
+                                    "review": {
+                                        "type": "number",
+                                        "minimum": 0,
+                                        "maximum": 100
+                                    },
+                                    "classify": {
+                                        "type": "number",
+                                        "minimum": 0,
+                                        "maximum": 100
+                                    }
+                                },
+                                "additionalProperties": false
+                            },
+                            "pricing": {
+                                "type": "object",
+                                "properties": {
+                                    "inputCostPerMTok": {
+                                        "type": "number",
+                                        "minimum": 0
+                                    },
+                                    "outputCostPerMTok": {
+                                        "type": "number",
+                                        "minimum": 0
+                                    },
+                                    "cacheWriteCostPerMTok": {
+                                        "type": "number",
+                                        "minimum": 0
+                                    },
+                                    "cacheReadCostPerMTok": {
+                                        "type": "number",
+                                        "minimum": 0
+                                    }
+                                },
+                                "required": [
+                                    "inputCostPerMTok",
+                                    "outputCostPerMTok"
+                                ],
+                                "additionalProperties": false
+                            },
+                            "defaultLadderEligible": {
+                                "type": "boolean"
+                            },
+                            "contextWindowTokens": {
+                                "type": "integer",
+                                "minimum": 1
+                            },
+                            "agent": {
+                                "type": "string",
+                                "minLength": 1
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "ladders": {
+                    "type": "object",
+                    "description": "Ordered fallback ladders for each task type.",
+                    "properties": {
+                        "routing": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "planning": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "coding": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "review": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "classify": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "router": {
+            "type": "object",
+            "description": "Settings for the prompt-to-model router that suggests the best LLM for a task based on historical eval data.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable model routing suggestions before workflow execution."
+                },
+                "defaultModel": {
+                    "type": "string",
+                    "default": "claude-sonnet-4-6",
+                    "description": "Fallback model when insufficient eval data exists for routing."
+                },
+                "minRecords": {
+                    "type": "integer",
+                    "default": 20,
+                    "minimum": 1,
+                    "description": "Minimum total eval records required before the router makes suggestions."
+                },
+                "minModels": {
+                    "type": "integer",
+                    "default": 2,
+                    "minimum": 1,
+                    "description": "Minimum distinct models with eval data before routing is active."
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data."
+                },
+                "availableModels": {
+                    "type": "object",
+                    "description": "Per-stage model availability lists. Stages without a list fall back to router.models.",
+                    "properties": {
+                        "planner": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Models available for the planning stage."
+                        },
+                        "coder": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Models available for the coding stage."
+                        },
+                        "reviewer": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Models available for the review stage."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "defaultAgent": {
+                    "type": "string",
+                    "default": "claude",
+                    "description": "Fallback agent CLI when router has insufficient data or no agentMap entry matches the recommended model.",
+                    "examples": [
+                        "claude",
+                        "codex"
+                    ]
+                },
+                "agentMap": {
+                    "type": "object",
+                    "description": "Maps model IDs to agent CLI commands. Used to determine which agent CLI to launch when the router recommends a model.",
+                    "additionalProperties": {
+                        "type": "string",
+                        "description": "Agent CLI command name (e.g. 'claude', 'codex').",
+                        "examples": [
+                            "claude-deepseek"
+                        ]
+                    }
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "heuristic",
+                        "llm",
+                        "auto",
+                        "stage-aware",
+                        "hokusai"
+                    ],
+                    "default": "auto",
+                    "description": "Routing strategy: 'heuristic' uses regex-based classification, 'llm' uses the DSPy-optimized selector, 'stage-aware' uses nearest-neighbor routing over live local evals plus fallback historical datasets, 'hokusai' calls the Hokusai API for ML-based routing, and 'auto' prefers Hokusai when configured before falling back to stage-aware and heuristic."
+                },
+                "llmModel": {
+                    "type": "string",
+                    "default": "gpt-4o-mini",
+                    "description": "Model to use for LLM-based routing decisions. Should be fast and cheap."
+                },
+                "llmProvider": {
+                    "type": "string",
+                    "enum": [
+                        "openai",
+                        "anthropic"
+                    ],
+                    "default": "openai",
+                    "description": "API provider for LLM routing calls. OpenAI recommended (gpt-4o-mini is fast and cheap)."
+                },
+                "kNeighbors": {
+                    "type": "integer",
+                    "default": 10,
+                    "minimum": 1,
+                    "description": "Number of nearest historical tasks to consider for stage-aware routing."
+                },
+                "backfilledEvalsPath": {
+                    "type": "string",
+                    "default": ".wavemill/evals/aggregated-evals.backfilled.jsonl",
+                    "description": "Preferred supplemental backfilled eval dataset for the stage-aware router when local eval history is sparse."
+                },
+                "stageBlendWeight": {
+                    "type": "number",
+                    "default": 0.3,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Regularization weight blending stage-specific scores with overall eval score during stage-aware routing."
+                },
+                "rubricAware": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": [
+                                "off",
+                                "shadow",
+                                "on"
+                            ],
+                            "default": "off"
+                        },
+                        "minCoverage": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.3
+                        },
+                        "weight": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.3
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "hokusai": {
+                    "type": "object",
+                    "description": "Hokusai API configuration for ML-based workflow routing. Hokusai is only available via API.",
+                    "properties": {
+                        "endpoint": {
+                            "type": "string",
+                            "description": "HTTP endpoint for Hokusai API (e.g., 'https://hokusai-api.example.com/predict')."
+                        },
+                        "apiKey": {
+                            "type": "string",
+                            "description": "Optional API key for authentication."
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "default": 5000,
+                            "minimum": 100,
+                            "description": "Request timeout in milliseconds."
+                        }
+                    },
+                    "required": [
+                        "endpoint"
+                    ],
+                    "additionalProperties": false
+                },
+                "difficulty": {
+                    "type": "object",
+                    "description": "Settings for the task difficulty classifier that enforces model quality floors before routing.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Enable difficulty-based model floor enforcement."
+                        },
+                        "classifierModel": {
+                            "type": "string",
+                            "default": "claude-haiku-4-5-20251001",
+                            "description": "Model used for LLM-based task classification (defaults to cheapest available)."
+                        },
+                        "cacheTtlDays": {
+                            "type": "integer",
+                            "default": 7,
+                            "minimum": 1,
+                            "description": "Number of days to cache difficulty classification results."
+                        },
+                        "skipLlm": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Use heuristic classification only (skip LLM call). Useful for offline or cost-sensitive environments."
+                        }
+                    },
+                    "additionalProperties": false
+                }
             }
-          },
-          "required": [
-            "endpoint"
-          ],
-          "additionalProperties": false
         },
-        "difficulty": {
-          "type": "object",
-          "description": "Settings for the task difficulty classifier that enforces model quality floors before routing.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": true,
-              "description": "Enable difficulty-based model floor enforcement."
+        "validation": {
+            "type": "object",
+            "description": "Settings for task packet validation (quality gate after issue expansion).",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Whether validation is enabled. Can be bypassed per-expansion with --skip-validation flag."
+                },
+                "layer1": {
+                    "type": "object",
+                    "description": "Layer 1 deterministic validation (file paths, structure).",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Whether Layer 1 validation is enabled."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "layer2": {
+                    "type": "object",
+                    "description": "Layer 2 LLM-based validation (vague specs, contradictions).",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Whether Layer 2 validation is enabled."
+                        },
+                        "model": {
+                            "type": "string",
+                            "default": "claude-haiku-4-5-20251001",
+                            "description": "LLM model to use for task packet review. Should be fast and cheap (Haiku recommended)."
+                        },
+                        "provider": {
+                            "type": "string",
+                            "enum": [
+                                "claude-cli",
+                                "anthropic"
+                            ],
+                            "default": "claude-cli",
+                            "description": "LLM provider for Layer 2 validation. 'claude-cli' uses local subscription, 'anthropic' uses API key."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "onFailure": {
+                    "type": "string",
+                    "enum": [
+                        "conservative",
+                        "auto-fix",
+                        "proceed"
+                    ],
+                    "default": "conservative",
+                    "description": "Behavior when validation fails: 'conservative' (skip update), 'auto-fix' (retry expansion with feedback), 'proceed' (update anyway with warnings attached)."
+                }
             },
-            "classifierModel": {
-              "type": "string",
-              "default": "claude-haiku-4-5-20251001",
-              "description": "Model used for LLM-based task classification (defaults to cheapest available)."
+            "additionalProperties": false
+        },
+        "constraints": {
+            "type": "object",
+            "description": "Settings for constraint validation (promoting rules from prose to code).",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable constraint validation. When true (default), generated constraint rules are validated before PR creation."
+                },
+                "cleanupAfterMerge": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically delete constraint rules after PR merge. When false (default), rules persist for audit trail."
+                }
             },
-            "cacheTtlDays": {
-              "type": "integer",
-              "default": 7,
-              "minimum": 1,
-              "description": "Number of days to cache difficulty classification results."
+            "additionalProperties": false
+        },
+        "ui": {
+            "type": "object",
+            "description": "Settings for UI review and design artifact analysis.",
+            "properties": {
+                "devServer": {
+                    "type": "string",
+                    "description": "Dev server URL for screenshot capture (e.g. http://localhost:3000). Used by frontend-testing skill and UI review tools."
+                },
+                "visualVerification": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable screenshot capture and console checking during UI review."
+                },
+                "designStandards": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable design artifact discovery and compliance checking. When enabled, review context will include Tailwind config, component libraries, design guides, etc."
+                },
+                "creativeDirection": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable creative design review (opt-in, uses frontend-design skill to evaluate aesthetic quality and uniqueness)."
+                }
             },
-            "skipLlm": {
-              "type": "boolean",
-              "default": false,
-              "description": "Use heuristic classification only (skip LLM call). Useful for offline or cost-sensitive environments."
-            }
-          },
-          "additionalProperties": false
-        }
-      }
-    },
-    "validation": {
-      "type": "object",
-      "description": "Settings for task packet validation (quality gate after issue expansion).",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Whether validation is enabled. Can be bypassed per-expansion with --skip-validation flag."
+            "additionalProperties": false
         },
-        "layer1": {
-          "type": "object",
-          "description": "Layer 1 deterministic validation (file paths, structure).",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": true,
-              "description": "Whether Layer 1 validation is enabled."
-            }
-          },
-          "additionalProperties": false
-        },
-        "layer2": {
-          "type": "object",
-          "description": "Layer 2 LLM-based validation (vague specs, contradictions).",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": true,
-              "description": "Whether Layer 2 validation is enabled."
+        "review": {
+            "type": "object",
+            "description": "Settings for the self-review loop in workflow commands.",
+            "properties": {
+                "maxIterations": {
+                    "type": "integer",
+                    "default": 3,
+                    "minimum": 1,
+                    "maximum": 10,
+                    "description": "Maximum number of self-review iterations before escalating to human. The agent will attempt to fix issues and re-review up to this many times."
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable the self-review loop in workflow commands. When false, workflow proceeds directly from implementation to validation."
+                },
+                "metricsLog": {
+                    "type": "string",
+                    "default": ".wavemill/review-log.json",
+                    "description": "Path to review metrics log file (JSONL format). Relative paths resolve against repo root. Tracks iteration count, findings, and outcomes for each review run."
+                },
+                "personas": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "general",
+                            "security",
+                            "performance",
+                            "correctness",
+                            "design"
+                        ]
+                    },
+                    "default": [
+                        "general"
+                    ],
+                    "description": "Active reviewer personas for code review. Each persona focuses on specific concerns. The 'design' persona requires ui.creativeDirection: true to be enabled."
+                }
             },
-            "model": {
-              "type": "string",
-              "default": "claude-haiku-4-5-20251001",
-              "description": "LLM model to use for task packet review. Should be fast and cheap (Haiku recommended)."
+            "additionalProperties": false
+        },
+        "integration": {
+            "type": "object",
+            "description": "Settings for autonomous integration mode (opt-in). Task branches are promoted to an integration branch before merging to main.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable autonomous integration mode. When false (default), the integration controller is a no-op."
+                },
+                "integrationBranch": {
+                    "type": "string",
+                    "default": "auto/integration",
+                    "description": "The long-lived integration branch where task branches are merged before promotion to main."
+                },
+                "promotionBranch": {
+                    "type": "string",
+                    "default": "main",
+                    "description": "The target branch for promotion after integration validation passes."
+                },
+                "mergeMethod": {
+                    "type": "string",
+                    "enum": [
+                        "merge",
+                        "squash",
+                        "rebase"
+                    ],
+                    "default": "squash",
+                    "description": "Merge strategy for promoting the integration branch to the promotion branch."
+                },
+                "deleteBranchAfterMerge": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Delete task branches after they are merged into the integration branch."
+                },
+                "haltOnRed": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Halt integration promotion when CI checks are failing on the integration branch."
+                },
+                "highRiskPolicy": {
+                    "type": "string",
+                    "enum": [
+                        "block",
+                        "manual",
+                        "allow"
+                    ],
+                    "default": "manual",
+                    "description": "Policy for handling high-risk PRs: 'block' prevents merge, 'manual' requires human approval, 'allow' permits autonomous merge."
+                },
+                "useMillSession": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "When true, the integration controller reuses the active mill tmux session for status reporting."
+                },
+                "readyPolicy": {
+                    "type": "object",
+                    "description": "Eligibility guards for the autonomous merge controller",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "integrationBranch": {
+                            "type": "string"
+                        },
+                        "riskPolicy": {
+                            "type": "string",
+                            "enum": [
+                                "block",
+                                "require-label",
+                                "auto"
+                            ],
+                            "default": "require-label"
+                        },
+                        "enforceMigrationCoupling": {
+                            "type": "boolean",
+                            "default": true
+                        }
+                    },
+                    "additionalProperties": false
+                }
             },
-            "provider": {
-              "type": "string",
-              "enum": [
-                "claude-cli",
-                "anthropic"
-              ],
-              "default": "claude-cli",
-              "description": "LLM provider for Layer 2 validation. 'claude-cli' uses local subscription, 'anthropic' uses API key."
-            }
-          },
-          "additionalProperties": false
+            "additionalProperties": false
         },
-        "onFailure": {
-          "type": "string",
-          "enum": [
-            "conservative",
-            "auto-fix",
-            "proceed"
-          ],
-          "default": "conservative",
-          "description": "Behavior when validation fails: 'conservative' (skip update), 'auto-fix' (retry expansion with feedback), 'proceed' (update anyway with warnings attached)."
-        }
-      },
-      "additionalProperties": false
-    },
-    "constraints": {
-      "type": "object",
-      "description": "Settings for constraint validation (promoting rules from prose to code).",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable constraint validation. When true (default), generated constraint rules are validated before PR creation."
-        },
-        "cleanupAfterMerge": {
-          "type": "boolean",
-          "default": false,
-          "description": "Automatically delete constraint rules after PR merge. When false (default), rules persist for audit trail."
-        }
-      },
-      "additionalProperties": false
-    },
-    "ui": {
-      "type": "object",
-      "description": "Settings for UI review and design artifact analysis.",
-      "properties": {
-        "devServer": {
-          "type": "string",
-          "description": "Dev server URL for screenshot capture (e.g. http://localhost:3000). Used by frontend-testing skill and UI review tools."
-        },
-        "visualVerification": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable screenshot capture and console checking during UI review."
-        },
-        "designStandards": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable design artifact discovery and compliance checking. When enabled, review context will include Tailwind config, component libraries, design guides, etc."
-        },
-        "creativeDirection": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable creative design review (opt-in, uses frontend-design skill to evaluate aesthetic quality and uniqueness)."
-        }
-      },
-      "additionalProperties": false
-    },
-    "review": {
-      "type": "object",
-      "description": "Settings for the self-review loop in workflow commands.",
-      "properties": {
-        "maxIterations": {
-          "type": "integer",
-          "default": 3,
-          "minimum": 1,
-          "maximum": 10,
-          "description": "Maximum number of self-review iterations before escalating to human. The agent will attempt to fix issues and re-review up to this many times."
-        },
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable the self-review loop in workflow commands. When false, workflow proceeds directly from implementation to validation."
-        },
-        "metricsLog": {
-          "type": "string",
-          "default": ".wavemill/review-log.json",
-          "description": "Path to review metrics log file (JSONL format). Relative paths resolve against repo root. Tracks iteration count, findings, and outcomes for each review run."
-        },
-        "personas": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "general",
-              "security",
-              "performance",
-              "correctness",
-              "design"
-            ]
-          },
-          "default": [
-            "general"
-          ],
-          "description": "Active reviewer personas for code review. Each persona focuses on specific concerns. The 'design' persona requires ui.creativeDirection: true to be enabled."
-        }
-      },
-      "additionalProperties": false
-    },
-    "integration": {
-      "type": "object",
-      "description": "Settings for autonomous integration mode (opt-in). Task branches are promoted to an integration branch before merging to main.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable autonomous integration mode. When false (default), the integration controller is a no-op."
-        },
-        "integrationBranch": {
-          "type": "string",
-          "default": "auto/integration",
-          "description": "The long-lived integration branch where task branches are merged before promotion to main."
-        },
-        "promotionBranch": {
-          "type": "string",
-          "default": "main",
-          "description": "The target branch for promotion after integration validation passes."
-        },
-        "mergeMethod": {
-          "type": "string",
-          "enum": [
-            "merge",
-            "squash",
-            "rebase"
-          ],
-          "default": "squash",
-          "description": "Merge strategy for promoting the integration branch to the promotion branch."
-        },
-        "deleteBranchAfterMerge": {
-          "type": "boolean",
-          "default": true,
-          "description": "Delete task branches after they are merged into the integration branch."
-        },
-        "haltOnRed": {
-          "type": "boolean",
-          "default": true,
-          "description": "Halt integration promotion when CI checks are failing on the integration branch."
-        },
-        "highRiskPolicy": {
-          "type": "string",
-          "enum": [
-            "block",
-            "manual",
-            "allow"
-          ],
-          "default": "manual",
-          "description": "Policy for handling high-risk PRs: 'block' prevents merge, 'manual' requires human approval, 'allow' permits autonomous merge."
-        },
-        "useMillSession": {
-          "type": "boolean",
-          "default": true,
-          "description": "When true, the integration controller reuses the active mill tmux session for status reporting."
-        },
-        "readyPolicy": {
-          "type": "object",
-          "description": "Eligibility guards for the autonomous merge controller",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": false
+        "permissions": {
+            "type": "object",
+            "description": "Permission settings for agent tool usage. Configures which commands can be auto-approved without user confirmation.",
+            "properties": {
+                "autoApprovePatterns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Command patterns that are auto-approved without user confirmation. Supports glob patterns (e.g., 'git status*', 'gh pr view*'). Patterns are matched against the full command string."
+                },
+                "worktreeMode": {
+                    "type": "object",
+                    "description": "Special permission settings when working in isolated git worktrees.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Enable relaxed permissions when running in a git worktree. When true, read-only commands are more likely to be auto-approved."
+                        },
+                        "autoApproveReadOnly": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Auto-approve read-only commands in worktrees without user confirmation. Only applies when worktreeMode.enabled is true."
+                        }
+                    },
+                    "additionalProperties": false
+                }
             },
-            "integrationBranch": {
-              "type": "string"
-            },
-            "riskPolicy": {
-              "type": "string",
-              "enum": [
-                "block",
-                "require-label",
-                "auto"
-              ],
-              "default": "require-label"
-            },
-            "enforceMigrationCoupling": {
-              "type": "boolean",
-              "default": true
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "permissions": {
-      "type": "object",
-      "description": "Permission settings for agent tool usage. Configures which commands can be auto-approved without user confirmation.",
-      "properties": {
-        "autoApprovePatterns": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Command patterns that are auto-approved without user confirmation. Supports glob patterns (e.g., 'git status*', 'gh pr view*'). Patterns are matched against the full command string."
+            "additionalProperties": false
         },
-        "worktreeMode": {
-          "type": "object",
-          "description": "Special permission settings when working in isolated git worktrees.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": true,
-              "description": "Enable relaxed permissions when running in a git worktree. When true, read-only commands are more likely to be auto-approved."
+        "quota": {
+            "type": "object",
+            "description": "Configuration for proactive model quota health detection and manual status overrides.",
+            "properties": {
+                "manualOverrides": {
+                    "type": "object",
+                    "description": "Manual status overrides per model (e.g. set sonnet degrading during known high-usage windows).",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "enum": [
+                                    "healthy",
+                                    "degrading",
+                                    "exhausted"
+                                ]
+                            },
+                            "reason": {
+                                "type": "string"
+                            },
+                            "expiresAt": {
+                                "type": "string",
+                                "description": "ISO-8601 date/time when this manual override expires."
+                            }
+                        },
+                        "required": [
+                            "status"
+                        ],
+                        "additionalProperties": false
+                    }
+                },
+                "thresholds": {
+                    "type": "object",
+                    "description": "Tunable thresholds for proactive quota degradation heuristics.",
+                    "properties": {
+                        "volumeThresholdPercent": {
+                            "type": "number",
+                            "default": 70,
+                            "minimum": 0,
+                            "maximum": 100,
+                            "description": "Percent of baseline rolling request volume (5-minute window) that triggers degrading."
+                        },
+                        "budgetThresholdPercent": {
+                            "type": "number",
+                            "default": 25,
+                            "minimum": 0,
+                            "maximum": 100,
+                            "description": "Remaining budget percentage threshold for proactive degrading."
+                        },
+                        "nearLimitCount": {
+                            "type": "integer",
+                            "default": 3,
+                            "minimum": 1,
+                            "description": "Number of near-limit warning signals inside the decay window before marking degrading."
+                        }
+                    },
+                    "additionalProperties": false
+                }
             },
-            "autoApproveReadOnly": {
-              "type": "boolean",
-              "default": true,
-              "description": "Auto-approve read-only commands in worktrees without user confirmation. Only applies when worktreeMode.enabled is true."
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "quota": {
-      "type": "object",
-      "description": "Configuration for proactive model quota health detection and manual status overrides.",
-      "properties": {
-        "manualOverrides": {
-          "type": "object",
-          "description": "Manual status overrides per model (e.g. set sonnet degrading during known high-usage windows).",
-          "additionalProperties": {
+            "additionalProperties": false
+        },
+        "verification": {
+            "type": "object",
+            "description": "Verification settings for weak model fallback. Automatically enforces extra checks when weaker models generate code.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable verification engine. When false, all verification is skipped."
+                },
+                "qualityThresholds": {
+                    "type": "object",
+                    "description": "Quality score thresholds per task type. Models scoring below threshold trigger verification.",
+                    "properties": {
+                        "routing": {
+                            "type": "number",
+                            "default": 70,
+                            "minimum": 0,
+                            "maximum": 100
+                        },
+                        "planning": {
+                            "type": "number",
+                            "default": 70,
+                            "minimum": 0,
+                            "maximum": 100
+                        },
+                        "coding": {
+                            "type": "number",
+                            "default": 80,
+                            "minimum": 0,
+                            "maximum": 100,
+                            "description": "Threshold for coding tasks. Haiku (60) triggers verification, Sonnet (90) does not."
+                        },
+                        "review": {
+                            "type": "number",
+                            "default": 80,
+                            "minimum": 0,
+                            "maximum": 100
+                        },
+                        "classify": {
+                            "type": "number",
+                            "default": 70,
+                            "minimum": 0,
+                            "maximum": 100
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "patchSizeCap": {
+                    "type": "object",
+                    "description": "Patch size cap settings. Enforced when weak model is used and no stronger reviewer is available.",
+                    "properties": {
+                        "baseLines": {
+                            "type": "integer",
+                            "default": 200,
+                            "minimum": 50,
+                            "description": "Base line count for patch size cap. Adjusted by quality gap if adjustByQualityGap is true."
+                        },
+                        "adjustByQualityGap": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Whether to adjust cap based on quality gap. Formula: cap = baseLines * max(0.5, 1 - (gap / 50))"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "mandatoryChecks": {
+                    "type": "object",
+                    "description": "Checks that must pass before commit when verification is triggered.",
+                    "properties": {
+                        "typecheck": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "lint": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "test": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "selfExplanation": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Require structured commit message with CHANGED/WHY/RISK sections."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "secondPassReview": {
+                    "type": "object",
+                    "description": "Second-pass review settings. Triggered when weak model is used and stronger reviewer is available.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "riskPatterns": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "default": [
+                                "**/auth/**",
+                                "**/authentication/**",
+                                "**/authorization/**",
+                                "**/migrations/**",
+                                "**/schema/**",
+                                "**/*crypto*",
+                                "**/*encryption*",
+                                "**/*permission*",
+                                "**/*security*",
+                                "**/sql/**"
+                            ],
+                            "description": "File path patterns that indicate high-risk code requiring second-pass review."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "budget": {
+            "type": "object",
+            "description": "Cost budget constraints per operating mode. Used by the router to enforce spending limits.",
+            "properties": {
+                "normalMode": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Per-task cost budget in USD for normal mode. Default: 25.00"
+                },
+                "constrainedMode": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Per-task cost budget in USD for constrained mode. Default: 15.00"
+                },
+                "survivalMode": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Per-task cost budget in USD for survival mode. Default: 5.00"
+                }
+            },
+            "additionalProperties": false
+        },
+        "registry": {
             "type": "object",
             "properties": {
-              "status": {
-                "type": "string",
-                "enum": [
-                  "healthy",
-                  "degrading",
-                  "exhausted"
-                ]
-              },
-              "reason": {
-                "type": "string"
-              },
-              "expiresAt": {
-                "type": "string",
-                "description": "ISO-8601 date/time when this manual override expires."
-              }
-            },
-            "required": [
-              "status"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "thresholds": {
-          "type": "object",
-          "description": "Tunable thresholds for proactive quota degradation heuristics.",
-          "properties": {
-            "volumeThresholdPercent": {
-              "type": "number",
-              "default": 70,
-              "minimum": 0,
-              "maximum": 100,
-              "description": "Percent of baseline rolling request volume (5-minute window) that triggers degrading."
-            },
-            "budgetThresholdPercent": {
-              "type": "number",
-              "default": 25,
-              "minimum": 0,
-              "maximum": 100,
-              "description": "Remaining budget percentage threshold for proactive degrading."
-            },
-            "nearLimitCount": {
-              "type": "integer",
-              "default": 3,
-              "minimum": 1,
-              "description": "Number of near-limit warning signals inside the decay window before marking degrading."
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "verification": {
-      "type": "object",
-      "description": "Verification settings for weak model fallback. Automatically enforces extra checks when weaker models generate code.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable verification engine. When false, all verification is skipped."
-        },
-        "qualityThresholds": {
-          "type": "object",
-          "description": "Quality score thresholds per task type. Models scoring below threshold trigger verification.",
-          "properties": {
-            "routing": {
-              "type": "number",
-              "default": 70,
-              "minimum": 0,
-              "maximum": 100
-            },
-            "planning": {
-              "type": "number",
-              "default": 70,
-              "minimum": 0,
-              "maximum": 100
-            },
-            "coding": {
-              "type": "number",
-              "default": 80,
-              "minimum": 0,
-              "maximum": 100,
-              "description": "Threshold for coding tasks. Haiku (60) triggers verification, Sonnet (90) does not."
-            },
-            "review": {
-              "type": "number",
-              "default": 80,
-              "minimum": 0,
-              "maximum": 100
-            },
-            "classify": {
-              "type": "number",
-              "default": 70,
-              "minimum": 0,
-              "maximum": 100
-            }
-          },
-          "additionalProperties": false
-        },
-        "patchSizeCap": {
-          "type": "object",
-          "description": "Patch size cap settings. Enforced when weak model is used and no stronger reviewer is available.",
-          "properties": {
-            "baseLines": {
-              "type": "integer",
-              "default": 200,
-              "minimum": 50,
-              "description": "Base line count for patch size cap. Adjusted by quality gap if adjustByQualityGap is true."
-            },
-            "adjustByQualityGap": {
-              "type": "boolean",
-              "default": true,
-              "description": "Whether to adjust cap based on quality gap. Formula: cap = baseLines * max(0.5, 1 - (gap / 50))"
-            }
-          },
-          "additionalProperties": false
-        },
-        "mandatoryChecks": {
-          "type": "object",
-          "description": "Checks that must pass before commit when verification is triggered.",
-          "properties": {
-            "typecheck": {
-              "type": "boolean",
-              "default": true
-            },
-            "lint": {
-              "type": "boolean",
-              "default": true
-            },
-            "test": {
-              "type": "boolean",
-              "default": true
-            },
-            "selfExplanation": {
-              "type": "boolean",
-              "default": true,
-              "description": "Require structured commit message with CHANGED/WHY/RISK sections."
-            }
-          },
-          "additionalProperties": false
-        },
-        "secondPassReview": {
-          "type": "object",
-          "description": "Second-pass review settings. Triggered when weak model is used and stronger reviewer is available.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": true
-            },
-            "riskPatterns": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": [
-                "**/auth/**",
-                "**/authentication/**",
-                "**/authorization/**",
-                "**/migrations/**",
-                "**/schema/**",
-                "**/*crypto*",
-                "**/*encryption*",
-                "**/*permission*",
-                "**/*security*",
-                "**/sql/**"
-              ],
-              "description": "File path patterns that indicate high-risk code requiring second-pass review."
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "budget": {
-      "type": "object",
-      "description": "Cost budget constraints per operating mode. Used by the router to enforce spending limits.",
-      "properties": {
-        "normalMode": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Per-task cost budget in USD for normal mode. Default: 25.00"
-        },
-        "constrainedMode": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Per-task cost budget in USD for constrained mode. Default: 15.00"
-        },
-        "survivalMode": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Per-task cost budget in USD for survival mode. Default: 5.00"
-        }
-      },
-      "additionalProperties": false
-    },
-    "registry": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "dir": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "resources": {
-      "type": "object",
-      "properties": {
-        "runtimeSelection": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "defaultVariant": {
-              "type": "string",
-              "enum": [
-                "baseline",
-                "optimized",
-                "canary"
-              ]
-            },
-            "fallbackToBaseline": {
-              "type": "boolean"
-            },
-            "canaryRate": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "surfaces": {
-              "type": "object",
-              "properties": {
-                "router": {
-                  "$ref": "#/definitions/runtimeSurfaceConfig"
+                "enabled": {
+                    "type": "boolean"
                 },
-                "planner": {
-                  "$ref": "#/definitions/runtimeSurfaceConfig"
-                },
-                "reviewer": {
-                  "$ref": "#/definitions/runtimeSurfaceConfig"
+                "dir": {
+                    "type": "string"
                 }
-              },
-              "additionalProperties": false
-            }
-          },
-          "additionalProperties": false
+            },
+            "additionalProperties": false
+        },
+        "resources": {
+            "type": "object",
+            "properties": {
+                "runtimeSelection": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean"
+                        },
+                        "defaultVariant": {
+                            "type": "string",
+                            "enum": [
+                                "baseline",
+                                "optimized",
+                                "canary"
+                            ]
+                        },
+                        "fallbackToBaseline": {
+                            "type": "boolean"
+                        },
+                        "canaryRate": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                        },
+                        "surfaces": {
+                            "type": "object",
+                            "properties": {
+                                "router": {
+                                    "$ref": "#/definitions/runtimeSurfaceConfig"
+                                },
+                                "planner": {
+                                    "$ref": "#/definitions/runtimeSurfaceConfig"
+                                },
+                                "reviewer": {
+                                    "$ref": "#/definitions/runtimeSurfaceConfig"
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
         }
-      },
-      "additionalProperties": false
-    }
-  },
-  "definitions": {
-    "runtimeSurfaceConfig": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "variant": {
-          "type": "string",
-          "enum": [
-            "baseline",
-            "optimized",
-            "canary"
-          ]
-        },
-        "resourceId": {
-          "type": "string"
-        },
-        "version": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
+    },
+    "definitions": {
+        "runtimeSurfaceConfig": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "variant": {
+                    "type": "string",
+                    "enum": [
+                        "baseline",
+                        "optimized",
+                        "canary"
+                    ]
+                },
+                "resourceId": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                }
+            },
+            "additionalProperties": false
         }
-      },
-      "additionalProperties": false
-    }
-  },
-  "additionalProperties": false
+    },
+    "additionalProperties": false
 }
