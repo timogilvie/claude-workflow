@@ -117,22 +117,7 @@ Recommended branch flow:
 - `auto/integration` is validated as the shared staging branch
 - `auto/integration` promotes into `main`
 
-Minimal config:
-
-```json
-{
-  "mill": {
-    "baseBranch": "auto/integration"
-  },
-  "integration": {
-    "enabled": true,
-    "integrationBranch": "auto/integration",
-    "promotionBranch": "main",
-    "mergeMethod": "squash",
-    "highRiskPolicy": "manual"
-  }
-}
-```
+For setup, the minimal config, and the complete configuration reference, see [Autonomous Integration](autonomous-integration.md). The rest of this section describes how the autonomous path interacts with mill's existing pipeline once enabled.
 
 ### Autonomous Integration Mode
 
