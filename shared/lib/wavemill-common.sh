@@ -722,6 +722,28 @@ wavemill_command_file_path() {
   printf '/tmp/wavemill-%s-commands\n' "$session"
 }
 
+# Output the merged wavemill config JSON for a repo dir, applying
+# .wavemill-config.local.json (gitignored) on top of .wavemill-config.json.
+# Mirrors loadWavemillConfig() in shared/lib/config.ts: objects are recursively
+# merged via jq's `*`, arrays are replaced. Use this in shell sites that need to
+# see per-developer overrides — currently the integration-window spawn gate.
+# Most shell reads of the base file remain direct; migrate when an overlay
+# need surfaces for them.
+wavemill_load_config() {
+  local repo_dir="$1"
+  local base="$repo_dir/.wavemill-config.json"
+  local lcl="$repo_dir/.wavemill-config.local.json"
+  if [[ -f "$base" && -f "$lcl" ]]; then
+    jq -s '.[0] * .[1]' "$base" "$lcl" 2>/dev/null || cat "$base" 2>/dev/null || echo '{}'
+  elif [[ -f "$base" ]]; then
+    cat "$base"
+  elif [[ -f "$lcl" ]]; then
+    cat "$lcl"
+  else
+    echo '{}'
+  fi
+}
+
 wavemill_command_offset_path() {
   local session="$1"
   printf '/tmp/wavemill-%s-commands.offset\n' "$session"

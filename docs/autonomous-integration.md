@@ -39,6 +39,8 @@ git push -u origin auto/integration
 
 This is enough to start. Defaults from [`wavemill-config.schema.json`](../wavemill-config.schema.json) cover the rest: `auto/integration` as the staging branch, squash merges, halt-on-red, manual review for high-risk PRs.
 
+If you want to enable this only for yourself without committing the change, put the same block in `.wavemill-config.local.json` (gitignored, deep-merged on load) instead of the base file. See [Per-Developer Config Overrides](getting-started.md#per-developer-config-overrides).
+
 **3. What changes about your workflow.** After enabling:
 
 - New task PRs target `auto/integration` instead of `main`.

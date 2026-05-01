@@ -54,6 +54,7 @@ startup_log() {
   printf '%s\n' "$*" >> "$STATUS_LOG_FILE"
 }
 
+source "$(dirname "$RUNNER")/wavemill-common.sh"
 eval "$(extract_spawn_function)"
 
 tmux new-session -d -s "$SESSION" -n control -c "$REPO_UNDER_TEST" 'sleep 300'

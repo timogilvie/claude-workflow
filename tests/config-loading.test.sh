@@ -269,6 +269,48 @@ check_matches "defaults with no config files" '^wavemill-' "$M_SESSION"
 check "defaults with no config files (parallel)" "7" "$M_MAX_PARALLEL"
 
 # ============================================================================
+# Test 6: wavemill_load_config merges .local.json onto base
+# ============================================================================
+echo ""
+echo "=== Local Overlay (wavemill_load_config) ==="
+
+OVERLAY_TMP=$(mktemp -d)
+cat > "$OVERLAY_TMP/.wavemill-config.json" <<'EOF'
+{ "integration": { "enabled": false, "useMillSession": true }, "mill": { "maxParallel": 7 } }
+EOF
+cat > "$OVERLAY_TMP/.wavemill-config.local.json" <<'EOF'
+{ "integration": { "enabled": true } }
+EOF
+
+eval "$(
+  source "$COMMON"
+  merged=$(wavemill_load_config "$OVERLAY_TMP")
+  echo "OV_ENABLED='$(echo "$merged" | jq -r '.integration.enabled')'"
+  echo "OV_USE_MILL_SESSION='$(echo "$merged" | jq -r '.integration.useMillSession')'"
+  echo "OV_MAX_PARALLEL='$(echo "$merged" | jq -r '.mill.maxParallel')'"
+)"
+
+check "overlay overrides scalar from base" "true" "$OV_ENABLED"
+check "overlay preserves siblings via deep merge" "true" "$OV_USE_MILL_SESSION"
+check "overlay preserves unrelated branches" "7" "$OV_MAX_PARALLEL"
+
+# Local-only (no base) should still work.
+LOCAL_ONLY_TMP=$(mktemp -d)
+cat > "$LOCAL_ONLY_TMP/.wavemill-config.local.json" <<'EOF'
+{ "integration": { "enabled": true } }
+EOF
+
+eval "$(
+  source "$COMMON"
+  merged=$(wavemill_load_config "$LOCAL_ONLY_TMP")
+  echo "LO_ENABLED='$(echo "$merged" | jq -r '.integration.enabled')'"
+)"
+
+check "local-only file acts as the whole config" "true" "$LO_ENABLED"
+
+rm -rf "$OVERLAY_TMP" "$LOCAL_ONLY_TMP"
+
+# ============================================================================
 # Results
 # ============================================================================
 echo ""
