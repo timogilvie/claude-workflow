@@ -9,6 +9,7 @@ import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import path from 'node:path';
 import { evaluateTask } from './eval.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
@@ -26,10 +27,12 @@ import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
 import { attachStageOutcomes, enrichEvalRecord } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
+import { readBothRouteArtifacts } from './route-artifact.ts';
 import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, formatRepoContextDisplay, formatInterventionDisplay } from './eval-summary-printer.ts';
 import { errorMessage } from './error-utils.ts';
 import type { EvalRecord, InterventionRecord, RoutingDecision, TaskContext, RepoContext } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
+import { routeChangedMaterially, type ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome } from './workflow-cost.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -64,6 +67,46 @@ interface PostCompletionEnrichmentInput {
   costOutcome: WorkflowCostOutcome | null;
   interventionRecords: InterventionRecord[];
   routingDecision?: RoutingDecision;
+}
+
+function deriveChallengeRouteContext(
+  branchName: string | undefined,
+  worktreePath: string | undefined,
+): ChallengeRouteContext | null {
+  if (!worktreePath) {
+    return null;
+  }
+
+  const slugFromBranch = branchName?.replace(/^(task|bug)\//, '');
+  const slug = slugFromBranch && slugFromBranch !== branchName
+    ? slugFromBranch
+    : path.basename(worktreePath);
+  if (!slug) {
+    return null;
+  }
+
+  const featureDir = join(worktreePath, 'features', slug);
+  const { bootstrap, expanded } = readBothRouteArtifacts(featureDir);
+  if (!bootstrap && !expanded) {
+    return null;
+  }
+
+  const decisionSource = !expanded
+    ? 'bootstrap'
+    : !bootstrap
+      ? 'expanded'
+      : routeChangedMaterially(bootstrap, expanded).changed
+        ? 'expanded'
+        : 'preserved';
+
+  return {
+    decisionSource,
+    ...(bootstrap ? { bootstrapRoute: bootstrap } : {}),
+    ...(expanded ? { expandedRoute: expanded } : {}),
+    ...(decisionSource === 'preserved'
+      ? { refreshRationale: 'expanded route matches bootstrap on coder class/depth' }
+      : {}),
+  };
 }
 
 export function buildTaskDescriptorForPostCompletion(
@@ -125,6 +168,9 @@ export function enrichPostCompletionRecord(
   enrichEvalRecord(record, {
     agentType: input.agentType,
     challengePairId: input.challengePairId,
+    challengeRouteContext: input.challengePairId
+      ? deriveChallengeRouteContext(input.branchName, input.worktreePath)
+      : null,
     difficulty: input.difficultyData,
     taskContext: input.taskContextData,
     repoContext: input.repoContextData,

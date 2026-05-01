@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
 export type RouteSource =
@@ -66,6 +68,11 @@ export interface NormalizedExpandedRouteArtifact {
   reviewMode: string;
 }
 
+export interface RouteArtifactSnapshot extends NormalizedExpandedRouteArtifact {
+  planDepth?: string;
+  planner?: string;
+}
+
 export type ExpandedRouteValidation = {
   valid: boolean;
   missing: string[];
@@ -131,5 +138,74 @@ export function validateExpandedRouteArtifact(value: unknown): ExpandedRouteVali
       reviewer,
       reviewMode,
     },
+  };
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+function parseBootstrapRouteArtifact(value: unknown): RouteArtifactSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const artifact = value as Record<string, unknown>;
+  const coder = readString(artifact.coder);
+  const codeDepth = readString(artifact.codeDepth);
+  const reviewer = readString(artifact.reviewer);
+  const reviewMode = readString(artifact.reviewMode ?? artifact.reviewRecommended);
+
+  if (!coder || !codeDepth || !reviewer || !reviewMode) {
+    return null;
+  }
+
+  return {
+    coder,
+    codeDepth,
+    reviewer,
+    reviewMode,
+    planDepth: readString(artifact.planDepth),
+    planner: readString(artifact.planner),
+  };
+}
+
+function loadJson(filePath: string): unknown | null {
+  if (!existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+export function readBothRouteArtifacts(featureDir: string): {
+  bootstrap: RouteArtifactSnapshot | null;
+  expanded: RouteArtifactSnapshot | null;
+} {
+  const bootstrapRaw = loadJson(path.join(featureDir, '.initial-route.json'));
+  const expandedRaw = loadJson(path.join(featureDir, '.post-expansion-route.json'));
+
+  const bootstrap = parseBootstrapRouteArtifact(bootstrapRaw);
+
+  let expanded: RouteArtifactSnapshot | null = null;
+  if (expandedRaw !== null) {
+    const validation = validateExpandedRouteArtifact(expandedRaw);
+    if (validation.valid && validation.normalized) {
+      const artifact = expandedRaw as Record<string, unknown>;
+      expanded = {
+        ...validation.normalized,
+        planDepth: readString(artifact.planDepth),
+        planner: readString(artifact.planner),
+      };
+    }
+  }
+
+  return {
+    bootstrap,
+    expanded,
   };
 }

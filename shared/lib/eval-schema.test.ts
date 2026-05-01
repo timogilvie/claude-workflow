@@ -1310,6 +1310,41 @@ test('Eligibility fields validate and schema stays in parity', () => {
   ]);
 });
 
+test('challengeRouteContext remains optional for legacy records', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('challengeRouteContext validates when present', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.16.0',
+    challengeRouteContext: {
+      decisionSource: 'expanded',
+      bootstrapRoute: {
+        coder: 'claude-sonnet-4-6',
+        codeDepth: 'medium',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'llm',
+      },
+      expandedRoute: {
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'static',
+      },
+      refreshRationale: 'expanded route changed coder class',
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.challengeRouteContext?.type, 'object');
+});
+
 test('Wavemill router fields validate and schema stays in parity', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,

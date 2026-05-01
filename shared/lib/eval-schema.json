@@ -1315,6 +1315,27 @@
       "enum": ["judge", "backfill_derived", "legacy_absent"],
       "description": "Provenance of the rubric metadata attached to this eval record."
     },
+    "challengeRouteContext": {
+      "type": "object",
+      "description": "Challenge-mode routing context preserving bootstrap and expanded route provenance when available.",
+      "properties": {
+        "decisionSource": {
+          "type": "string",
+          "enum": ["bootstrap", "expanded", "preserved"]
+        },
+        "bootstrapRoute": {
+          "$ref": "#/$defs/ChallengeRouteArtifact"
+        },
+        "expandedRoute": {
+          "$ref": "#/$defs/ChallengeRouteArtifact"
+        },
+        "refreshRationale": {
+          "type": "string"
+        }
+      },
+      "required": ["decisionSource"],
+      "additionalProperties": false
+    },
     "workflow_success_rate_under_budget": {
       "type": "number",
       "minimum": 0,
@@ -1334,6 +1355,17 @@
     }
   },
   "$defs": {
+    "ChallengeRouteArtifact": {
+      "type": "object",
+      "properties": {
+        "coder": { "type": "string" },
+        "codeDepth": { "type": "string" },
+        "reviewer": { "type": "string" },
+        "reviewMode": { "type": "string" }
+      },
+      "required": ["coder", "codeDepth", "reviewer", "reviewMode"],
+      "additionalProperties": false
+    },
     "WavemillRouterDiagnostics": {
       "type": "object",
       "properties": {
