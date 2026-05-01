@@ -44,6 +44,9 @@
  *   (HOK-1409) to propagate rubric-derived features (criterion count, mean
  *   score, per-criterion scores, determinative boundary) into privacy-safe
  *   descriptor data for router training
+ * - **1.14.0**: Added optional eligibility diagnostics fields to `EvalRecord`
+ *   (HOK-1492) so training and budget-export consumers can inspect stable
+ *   ineligibility reasons without silently dropping rows
  *
  * @module eval-schema
  */
@@ -208,6 +211,19 @@ export type InterventionType =
  * Intervention severity enum — indicates impact level.
  */
 export type InterventionSeverity = 'low' | 'med' | 'high';
+
+/**
+ * Stable eligibility error codes for downstream training and budget export.
+ *
+ * @since 1.14.0
+ */
+export type EligibilityErrorCode =
+  | 'missing_routing'
+  | 'missing_cost'
+  | 'missing_budget_snapshot'
+  | 'missing_outcome'
+  | 'missing_task_descriptor'
+  | 'missing_model_identity';
 
 /**
  * A single structured intervention event.
@@ -1098,6 +1114,15 @@ export interface EvalRecord {
 
   /** Total estimated cost in USD to build the feature (all agent sessions on this branch) */
   workflowCost?: number;
+
+  /** Whether the record includes the fields required for training export. */
+  trainingEligible?: boolean;
+
+  /** Whether the record includes the fields required for budget-eval export. */
+  budgetEvalEligible?: boolean;
+
+  /** Stable machine-readable reasons why the record is ineligible for exports. */
+  eligibilityErrors?: EligibilityErrorCode[];
 
   /** Per-model token usage breakdown from the workflow sessions */
   workflowTokenUsage?: Record<

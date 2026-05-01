@@ -1285,6 +1285,31 @@ test('Rejects rubric_provenance with invalid enum value', () => {
   );
 });
 
+test('Eligibility fields validate and schema stays in parity', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.14.0',
+    trainingEligible: false,
+    budgetEvalEligible: true,
+    eligibilityErrors: ['missing_model_identity', 'missing_routing'],
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.trainingEligible?.type, 'boolean');
+  assert.equal(properties.budgetEvalEligible?.type, 'boolean');
+  assert.deepEqual(properties.eligibilityErrors?.items?.enum, [
+    'missing_routing',
+    'missing_cost',
+    'missing_budget_snapshot',
+    'missing_outcome',
+    'missing_task_descriptor',
+    'missing_model_identity',
+  ]);
+});
+
 // ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────
