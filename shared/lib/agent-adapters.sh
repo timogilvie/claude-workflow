@@ -1234,10 +1234,17 @@ agent_launch_autonomous() {
   local agent_cmd="$4"
   local model="${5:-}"
   local issue="${6:-}"
+  local repo_dir="${REPO_DIR:-$(pwd)}"
+
+  if [[ "$agent_cmd" == "claude" ]] && agent_model_is_deepseek "$model"; then
+    if ! agent_validate_deepseek_launch "$model" "$repo_dir"; then
+      return 1
+    fi
+  fi
+
   local hooks_dir dashboard_pid
   hooks_dir="$(agent_hooks_dir)"
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
-  local repo_dir="${REPO_DIR:-$(pwd)}"
 
   local model_flag=""
   if [[ -n "$model" ]]; then
@@ -1250,9 +1257,6 @@ agent_launch_autonomous() {
   case "$agent_cmd" in
     claude)
       if agent_model_is_deepseek "$model"; then
-        if ! agent_validate_deepseek_launch "$model" "$repo_dir"; then
-          return 1
-        fi
         local provider_json base_url api_key_env effort_level provider_root launcher
         provider_json="$(agent_deepseek_config "$repo_dir")" || return 1
         base_url="$(agent_json_get "$provider_json" baseUrl)"
@@ -1413,11 +1417,9 @@ agent_launch_interactive() {
   local agent_flags="${6:-}"
   local abort_check_cmd="${7:-}"
   local issue="${8:-}"
-  local dashboard_pid
-  dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
   local repo_dir="${REPO_DIR:-$(pwd)}"
 
-  if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
+  if [[ -n "$model" ]] && ! agent_validate_model "$model" "$repo_dir" >/dev/null 2>&1; then
     local fallback_model=""
     fallback_model="$(agent_default_model_for_cmd "$agent_cmd")"
     if agent_model_looks_like_depth_tag "$model"; then
@@ -1427,7 +1429,7 @@ agent_launch_interactive() {
     fi
 
     if [[ -n "$fallback_model" ]]; then
-      if agent_validate_model "$fallback_model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
+      if agent_validate_model "$fallback_model" "$repo_dir" >/dev/null 2>&1; then
         _agent_log_warn "Falling back to $fallback_model"
         model="$fallback_model"
       else
@@ -1445,6 +1447,9 @@ agent_launch_interactive() {
       return 1
     fi
   fi
+
+  local dashboard_pid
+  dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
 
   local model_flag=""
   if [[ -n "$model" ]]; then
