@@ -5218,12 +5218,12 @@ poll_sleep() {
   fi
   elapsed=0
   while (( elapsed < secs )); do
-    sleep 1
-    elapsed=$((elapsed + 1))
     drain_command_events
     if (( ${#COMMAND_QUEUE[@]} > 0 )); then
       return 0
     fi
+    sleep 1
+    elapsed=$((elapsed + 1))
   done
 }
 

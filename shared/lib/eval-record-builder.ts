@@ -45,6 +45,9 @@ import { getResource } from './resource-registry.ts';
 export interface EvalRecordMetadata {
   /** Agent type that ran the workflow */
   agentType?: string;
+  /** Execution provider metadata */
+  provider?: string;
+  endpoint?: string;
   /** Shared challenge pair identifier */
   challengePairId?: string;
   /** Difficulty analysis results */
@@ -75,6 +78,20 @@ export interface EvalRecordMetadata {
  */
 export function attachAgentType(record: EvalRecord, agentType?: string): void {
   record.agentType = agentType || 'claude';
+}
+
+export function attachProviderMetadata(
+  record: EvalRecord,
+  provider?: string,
+  endpoint?: string,
+): void {
+  if (provider) {
+    record.provider = provider;
+  }
+
+  if (endpoint) {
+    record.endpoint = endpoint;
+  }
 }
 
 export function attachChallengePairId(record: EvalRecord, challengePairId?: string): void {
@@ -529,6 +546,7 @@ export function attachRubricEval(record: EvalRecord, rubricEval?: RubricEval): v
  */
 export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadata): void {
   attachAgentType(record, metadata.agentType);
+  attachProviderMetadata(record, metadata.provider, metadata.endpoint);
   attachChallengePairId(record, metadata.challengePairId);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);

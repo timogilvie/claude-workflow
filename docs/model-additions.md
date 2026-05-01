@@ -11,9 +11,10 @@ Wavemill model support is deliberately explicit. When adding a new model, update
 3. Map the model to its launcher in `router.agentMap`; OpenAI `gpt-*` models normally map to `codex`.
 4. Add planner availability under `router.availableModels.planner` when the model is allowed to plan before there is eval history.
 5. Add capabilities and ladder placement in `shared/lib/model-registry.ts`; this is what quota policy and class-aware fallback use.
-6. Add the model to `DEFAULT_MODEL_POOL` and any role-specific frontier preference lists in `shared/lib/workflow-router.ts`.
-7. Update DSPy routing metadata in `dspy/prepare_data.py`, `dspy/evaluators/model_router_evaluator.py`, `dspy/optimize.py`, and the active selector artifact when it carries explicit model candidates.
-8. Update tests that assert exact default model lists or ladders.
-9. Run focused config, registry, and router tests before merging.
+6. If the model requires a provider-specific launcher path, add the provider gate in `.wavemill-config.json`, `wavemill-config.schema.json`, and the launcher/session-cost/eval attribution paths before exposing the model to routing.
+7. Add the model to `DEFAULT_MODEL_POOL` and any role-specific frontier preference lists in `shared/lib/workflow-router.ts`.
+8. Update DSPy routing metadata in `dspy/prepare_data.py`, `dspy/evaluators/model_router_evaluator.py`, `dspy/optimize.py`, and the active selector artifact when it carries explicit model candidates.
+9. Update tests that assert exact default model lists or ladders.
+10. Run focused config, registry, router, and provider-launch tests before merging.
 
 For frontier models, use `class: "frontier"` in the registry and include the model in the planning, coding, and review ladders. Prefer putting same-vendor successors next to the previous model so quota fallback can substitute within the same class cleanly.

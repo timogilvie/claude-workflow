@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
 import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig } from './config.ts';
+import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { getEffectiveRegistry, getLadder, type RegistryTaskType } from './model-registry.ts';
@@ -146,6 +147,10 @@ const DEFAULT_MODEL_POOL = [
   'claude-opus-4-6',
   'claude-sonnet-4-5-20250929',
   'claude-haiku-4-5-20251001',
+  'deepseek-v4-pro',
+  'deepseek-v4-flash',
+  'deepseek-chat',
+  'deepseek-reasoner',
   'gpt-5.3-codex',
   'gpt-5.4',
   'gpt-5.5',
@@ -181,6 +186,11 @@ const BREADTH_PATTERNS = [
   /\bextend\b/i,
   /\broute\b/i,
 ];
+
+interface ResolvedModelPool {
+  models: string[];
+  warnings: string[];
+}
 
 export interface StageTokenProfile {
   inputTokens: number;
@@ -241,14 +251,30 @@ function countMatches(prompt: string, patterns: RegExp[]): number {
   return patterns.reduce((sum, pattern) => sum + (pattern.test(prompt) ? 1 : 0), 0);
 }
 
-function getModelPool(repoDir?: string): string[] {
+function mergePoolWarnings(...results: DeepSeekPoolFilterResult[]): string[] {
+  return [...new Set(results.flatMap((result) => result.warnings))];
+}
+
+function filterProviderPool(
+  models: string[],
+  repoDir?: string,
+  stage?: 'planner' | 'coder' | 'reviewer',
+): ResolvedModelPool {
+  const filtered = filterDeepSeekModels(models, repoDir, stage);
+  return {
+    models: filtered.models,
+    warnings: filtered.warnings,
+  };
+}
+
+function getModelPool(repoDir?: string): ResolvedModelPool {
   const routerConfig = loadRouterConfig(repoDir);
   const pricingModels = Object.keys(loadConfiguredPricingTable(repoDir));
-  return [...new Set([
+  return filterProviderPool([...new Set([
     ...(routerConfig.models || []),
     ...pricingModels,
     ...DEFAULT_MODEL_POOL,
-  ])];
+  ])], repoDir);
 }
 
 function validateDeepSeekPool(models: string[] | undefined, repoDir?: string): void {
@@ -259,9 +285,9 @@ function validateDeepSeekPool(models: string[] | undefined, repoDir?: string): v
   }
 }
 
-function getEffectiveModelPool(options?: RouteWorkflowOptions): string[] {
+function getEffectiveModelPool(options?: RouteWorkflowOptions): ResolvedModelPool {
   if (options?.modelsAvailable && options.modelsAvailable.length > 0) {
-    return [...new Set(options.modelsAvailable)];
+    return filterProviderPool([...new Set(options.modelsAvailable)], options.repoDir);
   }
 
   return getModelPool(options?.repoDir);
@@ -286,7 +312,7 @@ function resolveStagePool(
   routerConfig: ReturnType<typeof getRouterConfig>,
   options?: RouteWorkflowOptions,
   policyPool?: string[],
-): string[] {
+): ResolvedModelPool {
   const explicitPool = options?.modelsAvailable && options.modelsAvailable.length > 0
     ? options.modelsAvailable
     : role === 'planner'
@@ -297,7 +323,7 @@ function resolveStagePool(
 
   validateDeepSeekPool(explicitPool, options?.repoDir);
   const configuredPool = intersectPools(basePool, explicitPool);
-  return intersectPools(configuredPool, policyPool);
+  return filterProviderPool(intersectPools(configuredPool, policyPool), options?.repoDir, role);
 }
 
 function pickAvailableModel(pool: string[], preferred: string[], fallback: string): string {
@@ -381,7 +407,7 @@ function resolvePolicyStagePools(
     return null;
   }
 
-  const pool = getModelPool(repoDir);
+  const pool = getModelPool(repoDir).models;
   const policyStagePools = buildPolicyStagePools({ difficulty: taskDifficulty, quotaState, pool, repoDir });
 
   return { taskDifficulty, quotaState, policyStagePools };
@@ -815,7 +841,8 @@ export function readTaskPromptFromFile(filePath: string): string {
 
 export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): WorkflowRouteDecision {
   const repoDir = options?.repoDir;
-  const pool = getEffectiveModelPool(options);
+  const poolResolution = getEffectiveModelPool(options);
+  const pool = poolResolution.models;
   const characteristics = analyzePrompt(prompt);
   const riskScore = computeRiskScore(prompt, characteristics);
   const planDepth = choosePlanDepth(characteristics, riskScore);
@@ -825,9 +852,12 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   const routerConfig = getRouterConfig(repoDir);
   const modelRouterConfig = loadRouterConfig(repoDir);
   const policyResolution = resolvePolicyStagePools(options || {});
-  const plannerPool = resolveStagePool('planner', pool, routerConfig, options, policyResolution?.policyStagePools.plannerModels);
-  const coderPool = resolveStagePool('coder', pool, routerConfig, options, policyResolution?.policyStagePools.coderModels);
-  const reviewerPool = resolveStagePool('reviewer', pool, routerConfig, options, policyResolution?.policyStagePools.reviewerModels);
+  const plannerPoolResolution = resolveStagePool('planner', pool, routerConfig, options, policyResolution?.policyStagePools.plannerModels);
+  const coderPoolResolution = resolveStagePool('coder', pool, routerConfig, options, policyResolution?.policyStagePools.coderModels);
+  const reviewerPoolResolution = resolveStagePool('reviewer', pool, routerConfig, options, policyResolution?.policyStagePools.reviewerModels);
+  const plannerPool = plannerPoolResolution.models;
+  const coderPool = coderPoolResolution.models;
+  const reviewerPool = reviewerPoolResolution.models;
   const coderRecommendation = recommendModel(prompt, {
     ...modelRouterConfig,
     repoDir,
@@ -971,6 +1001,13 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     );
   }
 
+  reasoning.push(...mergePoolWarnings(
+    poolResolution,
+    plannerPoolResolution,
+    coderPoolResolution,
+    reviewerPoolResolution,
+  ));
+
   return {
     planner: finalPlanner,
     coder: finalCoder,
@@ -1070,14 +1107,14 @@ function routeWorkflowStageAwareInternal(
       const floor = getAllowedModelFloor(taskDifficulty);
       // Use policy-filtered pool if available, otherwise full pool
       const floorPool = policyResolution?.policyStagePools
-        ? [
+        ? filterProviderPool([
             ...new Set([
               ...policyResolution.policyStagePools.plannerModels,
               ...policyResolution.policyStagePools.coderModels,
               ...policyResolution.policyStagePools.reviewerModels,
             ]),
-          ]
-        : getModelPool(repoDir);
+          ], repoDir).models
+        : getModelPool(repoDir).models;
       finalPlanner = applyDifficultyFloor(fallback.planner, floor, floorPool, 'planner');
       finalCoder = applyDifficultyFloor(fallback.coder, floor, floorPool, 'coder');
       finalReviewer = applyDifficultyFloor(fallback.reviewer, floor, floorPool, 'reviewer');
@@ -1100,14 +1137,14 @@ function routeWorkflowStageAwareInternal(
       const floor = getAllowedModelFloor(taskDifficulty);
       // Use policy-filtered pool if available, otherwise full pool
       const floorPool = policyResolution?.policyStagePools
-        ? [
+        ? filterProviderPool([
             ...new Set([
               ...policyResolution.policyStagePools.plannerModels,
               ...policyResolution.policyStagePools.coderModels,
               ...policyResolution.policyStagePools.reviewerModels,
             ]),
-          ]
-        : getModelPool(repoDir);
+          ], repoDir).models
+        : getModelPool(repoDir).models;
       saPlanner = applyDifficultyFloor(stageAwareDecision.planner, floor, floorPool, 'planner');
       saCoder = applyDifficultyFloor(stageAwareDecision.coder, floor, floorPool, 'coder');
       saReviewer = applyDifficultyFloor(stageAwareDecision.reviewer, floor, floorPool, 'reviewer');
@@ -1155,15 +1192,16 @@ function buildDegradedModelPool(
   const pool = Object.entries(registry.models)
     .filter(([, capabilities]) => allowedClasses.includes(capabilities.class))
     .map(([modelId]) => modelId);
+  const filteredPool = filterProviderPool(pool, repoDir).models;
 
-  if (pool.length > 0) {
-    return pool;
+  if (filteredPool.length > 0) {
+    return filteredPool;
   }
 
   console.warn(
     `[workflow-router] No degraded model pool available for ${mode} mode; falling back to full routing pool.`,
   );
-  return getModelPool(repoDir);
+  return getModelPool(repoDir).models;
 }
 
 function prependReasoning(
@@ -1283,7 +1321,7 @@ export function tryPolicyResolution(
     return null;
   }
 
-  const pool = getModelPool(repoDir);
+  const pool = getModelPool(repoDir).models;
   const characteristics = analyzePrompt(prompt);
   const riskScore = computeRiskScore(prompt, characteristics);
   const planDepth = choosePlanDepth(characteristics, riskScore);

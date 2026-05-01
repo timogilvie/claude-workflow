@@ -50,6 +50,14 @@
       "type": "string",
       "description": "Provider used by the LLM judge for this eval (e.g. 'anthropic')."
     },
+    "provider": {
+      "type": "string",
+      "description": "Execution provider for the evaluated workflow (e.g. 'deepseek')."
+    },
+    "endpoint": {
+      "type": "string",
+      "description": "API endpoint used by the evaluated workflow when provider-specific."
+    },
     "score": {
       "type": "number",
       "minimum": 0,

@@ -16,6 +16,7 @@
 import path from 'node:path';
 import { errorMessage } from './error-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { getDeepSeekProviderMetadata } from './deepseek-provider.ts';
 import {
   autoDetectContext,
   computeWallClockSeconds,
@@ -59,6 +60,22 @@ function resolveEvalConstraints(
 ): EvalConstraints | undefined {
   const maxCostUsd = routingComplete?.maxCostUsd ?? getMaxCostUsd(repoDir);
   return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
+}
+
+function resolveExecutionModel(solutionModel: string | undefined, routingDecision: unknown): string | undefined {
+  if (solutionModel) {
+    return solutionModel;
+  }
+
+  const chosen = (routingDecision as { chosen?: { modelId?: string } | number; candidates?: Array<{ modelId?: string }> } | undefined)?.chosen;
+  if (typeof chosen === 'object' && chosen?.modelId) {
+    return chosen.modelId;
+  }
+  if (typeof chosen === 'number') {
+    return (routingDecision as { candidates?: Array<{ modelId?: string }> } | undefined)?.candidates?.[chosen]?.modelId;
+  }
+
+  return undefined;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -323,6 +340,8 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // 9b. Build task descriptor for router training (HOK-1120)
   let taskDescriptor = null;
   let evalConstraints: EvalConstraints | undefined;
+  const executionModel = resolveExecutionModel(solutionModel, effectiveRoutingDecision);
+  const providerMetadata = getDeepSeekProviderMetadata(executionModel, repoDir);
   try {
     // Derive feature slug from branch or issue ID
     const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
@@ -361,6 +380,8 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // 10. Enrich record with metadata
   enrichEvalRecord(record, {
     agentType,
+    provider: providerMetadata?.provider,
+    endpoint: providerMetadata?.endpoint,
     challengePairId,
     difficulty: difficultyData,
     taskContext: taskContextData,
@@ -370,9 +391,9 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   });
 
   // 11. Set solution model if provided
-  if (solutionModel) {
-    record.modelId = solutionModel;
-    record.modelVersion = solutionModel;
+  if (executionModel) {
+    record.modelId = executionModel;
+    record.modelVersion = executionModel;
   }
 
   // 12. Persist eval record to disk

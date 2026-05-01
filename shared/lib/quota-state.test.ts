@@ -31,6 +31,7 @@ import {
 
 let tempRoot: string;
 let repoDir: string;
+const originalDeepSeekQuotaTestKey = process.env.TEST_DEEPSEEK_KEY;
 
 function git(command: string, cwd: string): string {
   return execSync(`git ${command}`, {
@@ -120,13 +121,28 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
           weaknesses: ['api dependency'],
           qualityScores: { planning: 92, coding: 90, review: 90, classify: 72, routing: 74 },
         },
+        'deepseek-v4-pro': {
+          vendor: 'deepseek',
+          class: 'frontier',
+          strengths: ['reasoning'],
+          weaknesses: ['provider gate'],
+          qualityScores: { planning: 86, coding: 84, review: 82, classify: 60, routing: 62 },
+        },
       },
       ladders: {
-        planning: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
+        planning: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro'],
+      },
+    },
+    providers: {
+      deepseek: {
+        enabled: true,
+        apiKeyEnv: 'TEST_DEEPSEEK_KEY',
+        models: ['deepseek-v4-pro'],
+        stages: ['planner', 'coder', 'reviewer'],
       },
     },
   });
@@ -139,6 +155,7 @@ describe('quota-state', () => {
       `quota-state-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     );
     repoDir = createRepoDir('repo');
+    process.env.TEST_DEEPSEEK_KEY = 'quota-test-key';
     __resetQuotaStateTestState();
     clearConfigCache();
   });
@@ -146,6 +163,11 @@ describe('quota-state', () => {
   afterEach(() => {
     __resetQuotaStateTestState();
     clearConfigCache();
+    if (originalDeepSeekQuotaTestKey === undefined) {
+      delete process.env.TEST_DEEPSEEK_KEY;
+    } else {
+      process.env.TEST_DEEPSEEK_KEY = originalDeepSeekQuotaTestKey;
+    }
 
     if (existsSync(tempRoot)) {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -210,6 +232,20 @@ describe('quota-state', () => {
 
     const models = rawQuotaState(repoDir).models as Record<string, Record<string, unknown>>;
     assert.equal(models['claude-opus-4-7']?.consecutiveLimitErrors, 2);
+  });
+
+  it('tracks DeepSeek models in quota state without special casing', () => {
+    __setClock(() => Date.parse('2026-04-17T12:10:00.000Z'));
+    recordRequest({ modelId: 'deepseek-v4-pro' }, repoDir);
+    recordNearLimit({ modelId: 'deepseek-v4-pro', remainingEstimate: 1000, limitEstimate: 2000 }, repoDir);
+    recordLimitError({ modelId: 'deepseek-v4-pro', reason: '429 rate_limit' }, repoDir);
+
+    const snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['deepseek-v4-pro']?.status, 'degrading');
+
+    const models = rawQuotaState(repoDir).models as Record<string, Record<string, unknown>>;
+    assert.equal((models['deepseek-v4-pro']?.requestHistory as unknown[]).length, 1);
+    assert.equal(models['deepseek-v4-pro']?.consecutiveNearLimitSignals, 1);
   });
 
   it('persists quota state across reads without relying on process-local caches', () => {
@@ -549,6 +585,10 @@ describe('quota-state', () => {
             status: 'degrading',
             reason: 'aggregate frontier capacity check',
           },
+          'deepseek-v4-pro': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
         },
       },
     });
@@ -585,6 +625,7 @@ describe('quota-state', () => {
     }, repoDir);
     recordSuccess({ modelId: 'gpt-5.4' }, repoDir);
     recordSuccess({ modelId: 'gpt-5.5' }, repoDir);
+    recordSuccess({ modelId: 'deepseek-v4-pro' }, repoDir);
 
     assert.equal(getCurrentOperatingMode(repoDir), 'normal');
     assert.deepEqual(getVendorQuotaBreakdown(readQuotaSnapshot(repoDir), [
@@ -592,9 +633,11 @@ describe('quota-state', () => {
       { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
       { modelId: 'gpt-5.5', vendor: 'openai' },
       { modelId: 'gpt-5.4', vendor: 'openai' },
+      { modelId: 'deepseek-v4-pro', vendor: 'deepseek' },
     ]), {
       anthropic: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
       openai: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
+      deepseek: { healthy: 1, degraded: 0, exhausted: 0, total: 1 },
     });
   });
 
@@ -617,6 +660,10 @@ describe('quota-state', () => {
       modelId: 'gpt-5.5',
       reason: '429 rate_limit',
     }, repoDir);
+    recordLimitError({
+      modelId: 'deepseek-v4-pro',
+      reason: '429 rate_limit',
+    }, repoDir);
 
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
   });
@@ -628,6 +675,7 @@ describe('quota-state', () => {
     markExhausted({ modelId: 'claude-opus-4-6', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'gpt-5.5', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'gpt-5.4', reason: 'quota_exhausted' }, repoDir);
+    markExhausted({ modelId: 'deepseek-v4-pro', reason: 'quota_exhausted' }, repoDir);
 
     assert.equal(getCurrentOperatingMode(repoDir), 'survival');
   });

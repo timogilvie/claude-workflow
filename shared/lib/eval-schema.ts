@@ -44,9 +44,11 @@
  *   (HOK-1409) to propagate rubric-derived features (criterion count, mean
  *   score, per-criterion scores, determinative boundary) into privacy-safe
  *   descriptor data for router training
- * - **1.14.0**: Added optional eligibility diagnostics fields to `EvalRecord`
- *   (HOK-1492) so training and budget-export consumers can inspect stable
- *   ineligibility reasons without silently dropping rows
+ * - **1.14.0**: Added optional `provider` and `endpoint` metadata for
+ *   Claude-compatible provider attribution (HOK-1485), plus optional
+ *   eligibility diagnostics fields to `EvalRecord` (HOK-1492) so training
+ *   and budget-export consumers can inspect stable ineligibility reasons
+ *   without silently dropping rows
  * - **1.15.0**: Added optional Wavemill router benchmark output fields to
  *   `EvalRecord` (HOK-1507), including
  *   `workflow_success_rate_under_budget`, structured router diagnostics, and
@@ -1098,6 +1100,12 @@ export interface EvalRecord {
 
   /** Provider used by the LLM judge for this eval (e.g. "anthropic") */
   judgeProvider?: string;
+
+  /** Execution provider for the evaluated workflow (e.g. "deepseek") */
+  provider?: string;
+
+  /** API endpoint used by the evaluated workflow when provider-specific */
+  endpoint?: string;
 
   /** Numeric score between 0 and 1 (inclusive) */
   score: number;

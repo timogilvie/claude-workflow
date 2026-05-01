@@ -10,6 +10,7 @@ import {
   attachConstraints,
   attachDifficultyMetadata,
   attachFallbackEvent,
+  attachProviderMetadata,
   attachRubricEval,
   attachStageOutcomes,
   attachTaskContextMetadata,
@@ -77,6 +78,20 @@ describe('eval-record-builder', () => {
       const before = { ...baseRecord };
       attachDifficultyMetadata(baseRecord, null);
       expect(baseRecord).toEqual(before);
+    });
+  });
+
+  describe('attachProviderMetadata', () => {
+    it('should attach provider metadata when present', () => {
+      attachProviderMetadata(baseRecord, 'deepseek', 'https://api.deepseek.com/anthropic');
+      expect(baseRecord.provider).toBe('deepseek');
+      expect(baseRecord.endpoint).toBe('https://api.deepseek.com/anthropic');
+    });
+
+    it('should no-op when provider metadata is absent', () => {
+      attachProviderMetadata(baseRecord, undefined, undefined);
+      expect(baseRecord.provider).toBeUndefined();
+      expect(baseRecord.endpoint).toBeUndefined();
     });
   });
 
@@ -326,8 +341,14 @@ describe('eval-record-builder', () => {
     });
 
     it('enrichEvalRecord attaches maxCostUsd from metadata constraints', () => {
-      enrichEvalRecord(baseRecord, { constraints: { maxCostUsd: 10 } });
+      enrichEvalRecord(baseRecord, {
+        constraints: { maxCostUsd: 10 },
+        provider: 'deepseek',
+        endpoint: 'https://api.deepseek.com/anthropic',
+      });
       expect(baseRecord.constraints).toEqual({ maxCostUsd: 10 });
+      expect(baseRecord.provider).toBe('deepseek');
+      expect(baseRecord.endpoint).toBe('https://api.deepseek.com/anthropic');
     });
   });
 
