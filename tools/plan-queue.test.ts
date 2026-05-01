@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,9 +11,9 @@ const repoDir = resolve(__dirname, '..');
 const planQueueTool = resolve(__dirname, 'plan-queue.ts');
 const fixture = resolve(repoDir, 'fixtures/plan-queue/backlog-basic.json');
 
-function runPlanQueue(args: string[], input?: string) {
+function runPlanQueue(args: string[], input?: string, cwd = repoDir) {
   return spawnSync('npx', ['tsx', planQueueTool, ...args], {
-    cwd: repoDir,
+    cwd,
     encoding: 'utf-8',
     env: { ...process.env },
     input,
@@ -135,5 +135,40 @@ describe('plan-queue CLI', () => {
     assert.match(result.stderr, /Queued After Dependencies/);
     assert.match(result.stderr, /Avoid Running Together/);
     assert.match(result.stderr, /Needs Triage/);
+  });
+
+  it('creates a cache file for file mode and reports cache stats in preview mode', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'plan-queue-cache-test-'));
+    try {
+      const first = runPlanQueue(['--backlog-file', fixture, '--cache-key', 'smoke-test', '--preview'], undefined, tempDir);
+      const cachePath = join(tempDir, '.wavemill', 'cache', 'task-dependency-plans', 'smoke-test.json');
+
+      assert.equal(first.status, 0);
+      assert.equal(existsSync(cachePath), true);
+      assert.match(first.stderr, /cache: hits=0 misses=0 pruned=0/);
+
+      const second = runPlanQueue(['--backlog-file', fixture, '--cache-key', 'smoke-test', '--preview'], undefined, tempDir);
+      assert.equal(second.status, 0);
+      assert.match(second.stderr, /cache: hits=0 misses=0 pruned=0/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips cache writes when --no-cache is provided', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'plan-queue-cache-disabled-test-'));
+    try {
+      const result = runPlanQueue(
+        ['--backlog-file', fixture, '--cache-key', 'disabled-test', '--no-cache', '--preview'],
+        undefined,
+        tempDir,
+      );
+
+      assert.equal(result.status, 0);
+      assert.equal(existsSync(join(tempDir, '.wavemill', 'cache', 'task-dependency-plans', 'disabled-test.json')), false);
+      assert.doesNotMatch(result.stderr, /cache: hits=/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

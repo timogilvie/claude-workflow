@@ -49,6 +49,7 @@ epics/*/
 .wavemill/quota-state.lock
 .wavemill/project-context.md
 .wavemill/evals/
+.wavemill/cache/
 .wavemill/context/
 .wavemill/logs/
 prompt-registry.jsonl
