@@ -231,6 +231,13 @@ export interface ReviewConfig {
 
 export type DeepSeekProviderStage = keyof AvailableModelsConfig;
 
+export interface DeepSeekLauncherConfig {
+  model?: string;
+  subagentModel?: string;
+  secretSource?: string;
+  stateDir?: string;
+}
+
 export interface DeepSeekProviderConfig {
   enabled?: boolean;
   apiKeyEnv?: string;
@@ -238,6 +245,7 @@ export interface DeepSeekProviderConfig {
   models?: string[];
   stages?: DeepSeekProviderStage[];
   effortLevel?: 'low' | 'medium' | 'high';
+  launcher?: DeepSeekLauncherConfig;
 }
 
 export interface ProvidersConfig {
@@ -887,6 +895,14 @@ export function getProvidersConfig(repoDir?: string): ProvidersConfig {
  */
 export function getDeepSeekProviderConfig(repoDir?: string): DeepSeekProviderConfig {
   return loadWavemillConfig(repoDir).providers?.deepseek || {};
+}
+
+/**
+ * Get the DeepSeek launcher config section.
+ * Returns empty object if not configured.
+ */
+export function getDeepSeekLauncherConfig(repoDir?: string): DeepSeekLauncherConfig {
+  return loadWavemillConfig(repoDir).providers?.deepseek?.launcher || {};
 }
 
 /**
