@@ -520,12 +520,6 @@ route_lifecycle_route_id() {
   ' "$route_file" 2>/dev/null
 }
 
-route_lifecycle_field() {
-  local route_file="$1" field="$2"
-  [[ -n "$route_file" && -f "$route_file" ]] || return 1
-  jq -r "$field // empty" "$route_file" 2>/dev/null
-}
-
 log_route_lifecycle() {
   local event="$1"
   shift || true
@@ -757,12 +751,24 @@ apply_expanded_route_if_present() {
     source="preserved"
   fi
 
-  log_route_lifecycle "expanded_assigned" \
-    "issue=$issue" \
-    "bootstrap_route=\"${bootstrap_route}\"" \
-    "expanded_route=\"${expanded_route}\"" \
-    "route_changed=$route_changed" \
-    "source=$source"
+  local is_cache_hit
+  is_cache_hit="$(jq -r '.cache_hit // false' "$route_file" 2>/dev/null || echo "false")"
+
+  if [[ "$is_cache_hit" == "true" ]]; then
+    local packet_hash
+    packet_hash="$(jq -r '.packet_hash // ""' "$route_file" 2>/dev/null || true)"
+    log_route_lifecycle "expansion_cache_hit" \
+      "issue=$issue" \
+      "route=\"${expanded_route}\"" \
+      "packet_hash=${packet_hash:0:12}"
+  else
+    log_route_lifecycle "expanded_assigned" \
+      "issue=$issue" \
+      "bootstrap_route=\"${bootstrap_route}\"" \
+      "expanded_route=\"${expanded_route}\"" \
+      "route_changed=$route_changed" \
+      "source=$source"
+  fi
 
   return 0
 }

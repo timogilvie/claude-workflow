@@ -607,7 +607,7 @@ $details_context"
   local bootstrap_route
   bootstrap_route="$(route_lifecycle_route_id "$feature_dir/.initial-route.json" 2>/dev/null || true)"
   if [[ -n "$bootstrap_route" ]]; then
-    startup_log "route.lifecycle: event=bootstrap_assigned issue=$issue route=\"$bootstrap_route\""
+    log_route_lifecycle "bootstrap_assigned" "issue=$issue" "route=\"$bootstrap_route\""
   fi
 
   local planner_agent
