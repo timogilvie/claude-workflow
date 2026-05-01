@@ -149,7 +149,7 @@ runTool({
         process.stderr.write(`cache: hits=0 misses=0 pruned=${cacheStats.totalEdges - cacheStats.retainedEdges}\n`);
       }
     }
-    if (cacheAfterPrune) {
+    if (cacheAfterPrune && cacheKey) {
       await saveCache(process.cwd(), cacheKey, cacheAfterPrune);
     }
   },
