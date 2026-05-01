@@ -205,6 +205,84 @@ harness_setup_runtime_artifacts() {
   printf '{"warning":"linear validation unavailable"}\n' > "$repo/.wavemill/logs/linear-validation-warnings.jsonl"
 }
 
+harness_seed_bootstrap_route() {
+  local repo="$1" slug="$2"
+  local feature_dir="$repo/features/$slug"
+  mkdir -p "$feature_dir"
+
+  cat > "$feature_dir/.initial-route.json" <<'EOF'
+{
+  "planner": "bootstrap-planner",
+  "coder": "bootstrap-coder",
+  "reviewer": "bootstrap-reviewer",
+  "planDepth": "light",
+  "codeDepth": "shallow",
+  "reviewMode": "static",
+  "provenance": {
+    "source": "bootstrap"
+  }
+}
+EOF
+
+  cp "$feature_dir/.initial-route.json" "$feature_dir/.routing-complete"
+
+  cat > "$feature_dir/.phase-config.json" <<'EOF'
+{
+  "planning": {
+    "model": "bootstrap-planner",
+    "agent": "claude",
+    "depth": "light"
+  },
+  "coding": {
+    "model": "bootstrap-coder",
+    "agent": "claude",
+    "depth": "shallow"
+  },
+  "review": {
+    "model": "bootstrap-reviewer",
+    "agent": "claude",
+    "mode": "static"
+  },
+  "resolvedAt": "2026-05-01T00:00:00Z",
+  "forceModel": null
+}
+EOF
+}
+
+harness_common_route_overrides() {
+  cat <<EOF
+    FORCE_MODEL=""
+    source "$REPO_DIR/shared/lib/wavemill-common.sh"
+    read_state_value() { printf "%s\\n" "\${1-}"; }
+    get_task_phase() { printf "%s\\n" "\$CURRENT_PHASE"; }
+    set_task_phase() { CURRENT_PHASE="\$2"; }
+    get_task_meta() { :; }
+    save_task_state() { :; }
+    log() {
+      if [[ "\${1:-}" == "warn" ]]; then
+        shift
+        WARN_OUTPUT+="\$*\\n"
+      else
+        LOG_OUTPUT+="\$*\\n"
+      fi
+    }
+    eval "\$(declare -f apply_expanded_route_if_present | sed '1s/apply_expanded_route_if_present/apply_expanded_route_if_present_real/')"
+    apply_expanded_route_if_present() {
+      APPLY_CALLED="true"
+      apply_expanded_route_if_present_real "\$@"
+    }
+    eval "\$(declare -f mill_check_expansion_handshake | sed '1s/mill_check_expansion_handshake/mill_check_expansion_handshake_real/')"
+    mill_check_expansion_handshake() {
+      HANDSHAKE_CALLED="true"
+      mill_check_expansion_handshake_real "\$@"
+    }
+    read_phase_config() {
+      local feature_dir="\$1" stage="\$2" field="\$3"
+      jq -r --arg stage "\$stage" --arg field "\$field" '.[\$stage][\$field] // ""' "\$feature_dir/.phase-config.json" 2>/dev/null || true
+    }
+EOF
+}
+
 harness_read_stage_status() {
   local repo="$1" slug="$2" stage="$3"
   jq -r '.status // empty' "$repo/features/$slug/.${stage}-result.json" 2>/dev/null || true
@@ -245,7 +323,14 @@ harness_run_tick() {
     CURRENT_PHASE="planning"
     CURRENT_AGENT="codex"
     CODING_LAUNCHED="false"
+    CODING_MODEL=""
+    CODING_AGENT=""
+    CODING_DEPTH=""
     PLANNING_LAUNCHED="false"
+    REROUTE_CALLED="false"
+    APPLY_CALLED="false"
+    HANDSHAKE_CALLED="false"
+    CHALLENGE_REFRESH_CALLED="false"
     ACTIVE_COUNT=0
     LOG_OUTPUT=""
     WARN_OUTPUT=""
@@ -297,14 +382,20 @@ harness_run_tick() {
     handle_agent_error_recovery() { :; }
     handle_phase_launch_result() { return 0; }
     launch_planning_phase() { PLANNING_LAUNCHED="true"; return 0; }
-    launch_coding_phase() { CODING_LAUNCHED="true"; return 0; }
+    launch_coding_phase() {
+      CODING_LAUNCHED="true"
+      CODING_MODEL="${7:-}"
+      CODING_AGENT="${8:-}"
+      CODING_DEPTH="${9:-}"
+      return 0
+    }
     launch_review_phase() { return 0; }
     launch_ready_phase() { return 0; }
     ready_state_dir() { printf "%s\n" "$1/features/$2/ready"; }
     write_ready_attention_file() { :; }
-    reroute_expanded_packets_for_coding_handoff() { return 0; }
-    apply_expanded_route_if_present() { return 0; }
-    mill_check_expansion_handshake() { return 0; }
+    reroute_expanded_packets_for_coding_handoff() { REROUTE_CALLED="true"; return 0; }
+    apply_expanded_route_if_present() { APPLY_CALLED="true"; return 0; }
+    mill_check_expansion_handshake() { HANDSHAKE_CALLED="true"; return 0; }
     restore_review_task_window() { return 0; }
     _restore_inflight_task_window_if_missing() { _RESTORE_STATE="none"; return 0; }
     check_routing_complete() { return 1; }
@@ -329,7 +420,14 @@ harness_run_tick() {
     printf "planning_status=%s\n" "$(read_stage_status "$REPO_UNDER_TEST/features/$SLUG" planning)"
     printf "coding_status=%s\n" "$(read_stage_status "$REPO_UNDER_TEST/features/$SLUG" coding)"
     printf "coding_launched=%s\n" "$CODING_LAUNCHED"
+    printf "coding_model=%s\n" "$CODING_MODEL"
+    printf "coding_agent=%s\n" "$CODING_AGENT"
+    printf "coding_depth=%s\n" "$CODING_DEPTH"
     printf "planning_launched=%s\n" "$PLANNING_LAUNCHED"
+    printf "reroute_called=%s\n" "$REROUTE_CALLED"
+    printf "apply_called=%s\n" "$APPLY_CALLED"
+    printf "handshake_called=%s\n" "$HANDSHAKE_CALLED"
+    printf "challenge_refresh_called=%s\n" "$CHALLENGE_REFRESH_CALLED"
     printf "attention=%s\n" "$ATTENTION_STATE"
     printf "active_count=%s\n" "$active_count"
     printf "warn_output=%s\n" "$(printf "%s" "$WARN_OUTPUT" | tr "\n" "|")"
@@ -482,6 +580,172 @@ test_claude_local_settings_allowed() {
   check_contains "claude settings: tracked file remains modified" "$(git -C "$repo" status --short .claude/settings.local.json)" "M .claude/settings.local.json"
 }
 
+test_coding_uses_expanded_route_over_bootstrap() {
+  local slug="expanded-route-wins"
+  local issue="HOK-1516-WINS"
+  local repo tick initial_before overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+  initial_before="$(cat "$repo/features/$slug/.initial-route.json")"
+
+  cat > "$repo/features/$slug/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "expanded-planner",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6",
+  "planDepth": "deep",
+  "codeDepth": "deep",
+  "reviewMode": "static+llm",
+  "provenance": {
+    "source": "expanded-test"
+  }
+}
+EOF
+
+  overrides="$(harness_common_route_overrides)"
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "expanded wins: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "expanded wins: coding model from expanded route" "gpt-5.4" "$(kv_value "$tick" coding_model)"
+  check_eq "expanded wins: coding depth from expanded route" "deep" "$(kv_value "$tick" coding_depth)"
+  check_eq "expanded wins: bootstrap model not launched" "false" "$([[ "$(kv_value "$tick" coding_model)" == "bootstrap-coder" ]] && printf true || printf false)"
+  check_eq "expanded wins: routing provenance expanded" "expanded" "$(jq -r '.provenance.source' "$repo/features/$slug/.routing-complete")"
+  check_eq "expanded wins: phase config model updated" "gpt-5.4" "$(jq -r '.coding.model' "$repo/features/$slug/.phase-config.json")"
+  check_eq "expanded wins: phase config depth updated" "deep" "$(jq -r '.coding.depth' "$repo/features/$slug/.phase-config.json")"
+  check_eq "expanded wins: initial route remains bootstrap-only" "$initial_before" "$(cat "$repo/features/$slug/.initial-route.json")"
+}
+
+test_invalid_expanded_route_blocks_lifecycle_handoff() {
+  local case_name route_json slug issue repo tick feature_dir note overrides
+
+  for case_name in malformed missing-fields; do
+    slug="invalid-expanded-route-$case_name"
+    issue="HOK-1516-INVALID-$case_name"
+    repo="$(harness_init_repo "$slug")"
+    harness_setup_planning_state "$repo" "$slug" "completed"
+    harness_setup_runtime_artifacts "$repo"
+    harness_seed_bootstrap_route "$repo" "$slug"
+    feature_dir="$repo/features/$slug"
+    cp "$feature_dir/.routing-complete" "$TEST_TMP/$slug-routing-before.json"
+    cp "$feature_dir/.phase-config.json" "$TEST_TMP/$slug-phase-before.json"
+
+    if [[ "$case_name" == "malformed" ]]; then
+      printf '{"coder":\n' > "$feature_dir/.post-expansion-route.json"
+    else
+      cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
+{"coder":"gpt-5.4","reviewMode":"static+llm"}
+EOF
+    fi
+
+    overrides="$(harness_common_route_overrides)"
+    tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+    note="$(jq -r '.notes // empty' "$feature_dir/.planning-result.json")"
+
+    check_eq "invalid $case_name: coding does not launch" "false" "$(kv_value "$tick" coding_launched)"
+    check_file_absent "invalid $case_name: plan approval removed" "$feature_dir/.plan-approved"
+    check_eq "invalid $case_name: planning awaits user" "awaiting_user" "$(harness_read_stage_status "$repo" "$slug" planning)"
+    check_contains "invalid $case_name: planning note names handshake" "$note" "Expansion handshake blocked"
+    check_contains "invalid $case_name: warning reports block" "$(kv_value "$tick" warn_output)" "[expansion-handshake] BLOCKED"
+    if cmp -s "$feature_dir/.routing-complete" "$TEST_TMP/$slug-routing-before.json" \
+      && cmp -s "$feature_dir/.phase-config.json" "$TEST_TMP/$slug-phase-before.json"; then
+      pass "invalid $case_name: route artifacts unchanged"
+    else
+      fail "invalid $case_name: route artifacts changed"
+    fi
+  done
+}
+
+test_already_expanded_packet_skips_mandatory_expansion() {
+  local slug="already-expanded-packet"
+  local issue="HOK-1516-PACKET"
+  local repo tick overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+
+  cat > "$repo/features/$slug/task-packet.md" <<'EOF'
+## 1. Objective
+
+Implement the deterministic test fixture.
+EOF
+  cat > "$repo/features/$slug/.routing-complete" <<'EOF'
+{"coder":"packet-coder","codeDepth":"deep","reviewer":"packet-reviewer","reviewMode":"static","provenance":{"source":"expanded"}}
+EOF
+  cat > "$repo/features/$slug/.phase-config.json" <<'EOF'
+{
+  "coding": {
+    "model": "packet-coder",
+    "agent": "codex",
+    "depth": "deep"
+  },
+  "review": {
+    "model": "packet-reviewer",
+    "agent": "claude",
+    "mode": "static"
+  }
+}
+EOF
+
+  overrides="$(harness_common_route_overrides)"
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "already-expanded: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "already-expanded: handshake checked" "true" "$(kv_value "$tick" handshake_called)"
+  check_eq "already-expanded: model from phase config" "packet-coder" "$(kv_value "$tick" coding_model)"
+  check_eq "already-expanded: depth from phase config" "deep" "$(kv_value "$tick" coding_depth)"
+  check_not_contains "already-expanded: no mandatory expansion block" "$(kv_value "$tick" warn_output)" "[expansion-handshake] BLOCKED"
+  check_file_absent "already-expanded: no expansion sentinel" "$repo/features/$slug/.expanded-route-command-invoked"
+}
+
+test_resume_uses_expanded_phase_config_over_stale_state() {
+  local slug="resume-expanded-route"
+  local issue="HOK-1516-RESUME"
+  local repo tick initial_before routing_before phase_before overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  cat > "$repo/features/$slug/task-packet.md" <<'EOF'
+## 1. Objective
+
+Resume from expanded lifecycle artifacts.
+EOF
+  cat > "$repo/features/$slug/.routing-complete" <<'EOF'
+{"coder":"gpt-5.4","codeDepth":"deep","reviewer":"claude-sonnet-4-6","reviewMode":"static+llm","provenance":{"source":"expanded"}}
+EOF
+  cat > "$repo/features/$slug/.phase-config.json" <<'EOF'
+{
+  "coding": {
+    "model": "gpt-5.4",
+    "agent": "codex",
+    "depth": "deep"
+  },
+  "review": {
+    "model": "claude-sonnet-4-6",
+    "agent": "claude",
+    "mode": "static+llm"
+  }
+}
+EOF
+  initial_before="$(cat "$repo/features/$slug/.initial-route.json")"
+  routing_before="$(cat "$repo/features/$slug/.routing-complete")"
+  phase_before="$(cat "$repo/features/$slug/.phase-config.json")"
+
+  overrides="$(harness_common_route_overrides)"
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "resume: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "resume: model from phase config" "gpt-5.4" "$(kv_value "$tick" coding_model)"
+  check_eq "resume: depth from phase config" "deep" "$(kv_value "$tick" coding_depth)"
+  check_eq "resume: stale bootstrap model not used" "false" "$([[ "$(kv_value "$tick" coding_model)" == "bootstrap-coder" ]] && printf true || printf false)"
+  check_eq "resume: initial route unchanged" "$initial_before" "$(cat "$repo/features/$slug/.initial-route.json")"
+  check_eq "resume: routing artifact unchanged" "$routing_before" "$(cat "$repo/features/$slug/.routing-complete")"
+  check_eq "resume: phase config unchanged" "$phase_before" "$(cat "$repo/features/$slug/.phase-config.json")"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -490,6 +754,10 @@ test_source_edit_blocks_handoff
 test_regression_without_wavemill_allowance
 test_mixed_artifacts_source_edit_wins
 test_claude_local_settings_allowed
+test_coding_uses_expanded_route_over_bootstrap
+test_invalid_expanded_route_blocks_lifecycle_handoff
+test_already_expanded_packet_skips_mandatory_expansion
+test_resume_uses_expanded_phase_config_over_stale_state
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then

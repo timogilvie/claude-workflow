@@ -417,6 +417,78 @@ test('pickChallengeWorkflowsWithContext refreshes participants when expanded rou
   assert.equal(pair!.primary.planDepth, 'deep');
 });
 
+test('pickChallengeWorkflowsWithContext carries expanded route context to both challenge entries', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    planner: 'bootstrap-planner',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'bootstrap-reviewer',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['gpt-5.4', 'claude-sonnet-4-6'],
+    {
+      pairId: 'HOK-980',
+      issueId: 'HOK-980',
+      slug: 'expanded-context',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-sonnet-4-6',
+      randomFn: () => 0,
+    },
+    { bootstrap, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.routeContext.decisionSource, 'expanded');
+  assert.equal(pair!.routeContext.expandedRoute, expanded);
+  assert.equal(pair!.primary.model, 'gpt-5.4');
+  assert.equal(pair!.primary.codeDepth, 'deep');
+  assert.equal(pair!.primary.reviewMode, 'static+llm');
+  assert.equal(pair!.primary.planner, 'bootstrap-planner');
+  assert.equal(pair!.challenger.codeDepth, 'deep');
+  assert.equal(pair!.challenger.reviewMode, 'static+llm');
+  assert.equal(pair!.challenger.planner, 'bootstrap-planner');
+});
+
+test('pickChallengeWorkflowsWithContext treats absent invalid expanded snapshot as bootstrap-only', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    planner: 'bootstrap-planner',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'bootstrap-reviewer',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['claude-sonnet-4-6', 'gpt-5.4'],
+    {
+      pairId: 'HOK-981',
+      issueId: 'HOK-981',
+      slug: 'invalid-expanded-absent',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-sonnet-4-6',
+      randomFn: () => 0,
+    },
+    { bootstrap, expanded: null },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.routeContext.decisionSource, 'bootstrap');
+  assert.equal(pair!.routeContext.expandedRoute, undefined);
+  assert.equal(pair!.primary.model, 'claude-sonnet-4-6');
+  assert.equal(pair!.primary.codeDepth, 'medium');
+  assert.equal(pair!.primary.reviewMode, 'llm');
+});
+
 process.on('exit', () => {
   console.log(`\nPassed: ${passed}`);
   console.log(`Failed: ${failed}`);

@@ -236,6 +236,29 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
   });
 });
 
+test('readBothRouteArtifacts exposes expanded route as authoritative when snapshots conflict', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+    coder: 'bootstrap-coder',
+    reviewer: 'bootstrap-reviewer',
+    codeDepth: 'shallow',
+    reviewMode: 'static',
+  }));
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+    coder: 'expanded-coder',
+    reviewer: 'expanded-reviewer',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+  }));
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.equal(result.bootstrap?.coder, 'bootstrap-coder');
+  assert.equal(result.bootstrap?.codeDepth, 'shallow');
+  assert.equal(result.expanded?.coder, 'expanded-coder');
+  assert.equal(result.expanded?.codeDepth, 'deep');
+  assert.notEqual(result.bootstrap?.coder, result.expanded?.coder);
+});
+
 test('readBothRouteArtifacts returns null for missing sides independently', () => {
   const featureDir = makeFeatureDir();
   writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
@@ -248,6 +271,19 @@ test('readBothRouteArtifacts returns null for missing sides independently', () =
   const result = readBothRouteArtifacts(featureDir);
   assert.equal(result.bootstrap?.coder, 'claude-sonnet-4-6');
   assert.equal(result.expanded, null);
+});
+
+test('readBothRouteArtifacts normalizes expanded reviewRecommended to reviewMode', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-4-6',
+    codeDepth: 'deep',
+    reviewRecommended: 'static+llm',
+  }));
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.equal(result.expanded?.reviewMode, 'static+llm');
 });
 
 test('readBothRouteArtifacts reads expanded-only artifacts', () => {
@@ -290,6 +326,51 @@ test('readBothRouteArtifacts returns null for malformed artifacts without throwi
   const result = readBothRouteArtifacts(featureDir);
   assert.equal(result.bootstrap, null);
   assert.equal(result.expanded, null);
+});
+
+test('readBothRouteArtifacts ignores malformed expanded snapshot while keeping bootstrap snapshot', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+    coder: 'bootstrap-coder',
+    reviewer: 'bootstrap-reviewer',
+    codeDepth: 'medium',
+    reviewMode: 'static',
+  }));
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), '{');
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.equal(result.bootstrap?.coder, 'bootstrap-coder');
+  assert.equal(result.expanded, null);
+});
+
+test('readBothRouteArtifacts keeps normalized expanded fields and drops provenance-only metadata', () => {
+  const featureDir = makeFeatureDir();
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+    planner: 'expanded-planner',
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-4-6',
+    planDepth: 'deep',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+    cache_hit: true,
+    route_source: 'batch',
+    packet_hash: 'b'.repeat(64),
+    provenance: { source: 'expanded', inputHash: 'ignored-in-snapshot' },
+  }));
+
+  const result = readBothRouteArtifacts(featureDir);
+  assert.deepEqual(result.expanded, {
+    planner: 'expanded-planner',
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-4-6',
+    planDepth: 'deep',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+    cache_hit: true,
+    route_source: 'batch',
+    packet_hash: 'b'.repeat(64),
+  });
+  assert.equal('provenance' in (result.expanded as object), false);
 });
 
 test('hasValidPostExpansionRoute returns missing when file is absent', () => {
