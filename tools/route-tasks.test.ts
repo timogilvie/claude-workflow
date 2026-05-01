@@ -133,7 +133,13 @@ describe('route-tasks CLI', () => {
 
       const { issueId, ...batchDecision } = parsed[0];
       assert.equal(issueId, 'HOK-100');
-      assert.deepEqual(batchDecision, single);
+      assert.equal(batchDecision.provenance.inputHash, single.provenance.inputHash);
+      assert.equal(batchDecision.provenance.inputPath, single.provenance.inputPath);
+      assert.equal(batchDecision.provenance.source, single.provenance.source);
+      assert.equal(batchDecision.provenance.inputKind, single.provenance.inputKind);
+      const { routedAt: _batchRoutedAt, ...batchProvenanceRest } = batchDecision.provenance;
+      const { routedAt: _singleRoutedAt, ...singleProvenanceRest } = single.provenance;
+      assert.deepEqual({ ...batchDecision, provenance: batchProvenanceRest }, { ...single, provenance: singleProvenanceRest });
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

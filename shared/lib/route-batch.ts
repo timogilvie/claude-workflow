@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getHokusaiRouterConfig } from './config.ts';
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
+import { buildRouteProvenance, withRouteProvenance, type RouteInputKind, type RouteSource } from './route-artifact.ts';
 import { loadStageAwareRouterContext, type StageAwareRouterContext } from './stage-aware-router.ts';
 import {
   readTaskPromptFromFile,
@@ -20,6 +21,8 @@ export interface RouteBatchTask {
   issueId?: string;
   prompt: string;
   file?: string;
+  source?: RouteSource;
+  inputKind?: RouteInputKind;
 }
 
 export interface RouteBatchPlanTask {
@@ -33,6 +36,8 @@ export interface RouteBatchOptions extends RouteWorkflowOptions {
   repoDir?: string;
   mode?: 'auto' | 'stage-aware' | 'heuristic' | 'hokusai';
   operatingMode?: OperatingMode;
+  source?: RouteSource;
+  inputKind?: RouteInputKind;
 }
 
 export interface RouteBatchResult {
@@ -68,12 +73,16 @@ export function resolveRouteBatchTask(task: {
   issueId?: string;
   prompt?: string;
   file?: string;
+  source?: RouteSource;
+  inputKind?: RouteInputKind;
 }): RouteBatchTask {
   if (task.file) {
     return {
       issueId: task.issueId,
       file: task.file,
       prompt: readTaskPromptFromFile(task.file),
+      source: task.source,
+      inputKind: task.inputKind,
     };
   }
 
@@ -81,6 +90,8 @@ export function resolveRouteBatchTask(task: {
     return {
       issueId: task.issueId,
       prompt: task.prompt,
+      source: task.source,
+      inputKind: task.inputKind,
     };
   }
 
@@ -108,6 +119,8 @@ export function tasksFromPlan(plan: unknown): RouteBatchTask[] {
       issueId: planTask.issueId || planTask.issue,
       prompt: planTask.prompt,
       file: planTask.taskPacketFile,
+      source: 'expanded',
+      inputKind: 'task-packet',
     });
   });
 }
@@ -173,7 +186,7 @@ async function routeTaskInBatch(
 }
 
 export async function routeBatch(
-  tasks: Array<{ issueId?: string; prompt?: string; file?: string }>,
+  tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind }>,
   options: RouteBatchOptions = {},
 ): Promise<RouteBatchResult[]> {
   const resolvedOptions = buildRouteBatchWorkflowOptions(options);
@@ -193,7 +206,21 @@ export async function routeBatch(
   const results: RouteBatchResult[] = [];
   for (const task of resolvedTasks) {
     const decision = await routeTaskInBatch(task.prompt, resolvedOptions, operatingMode, stageAwareContext);
-    results.push({ task, decision });
+    const source = task.source
+      || resolvedOptions.source
+      || (mode === 'heuristic' ? 'heuristic-fallback' : task.file ? 'expanded' : 'live');
+    const inputKind = task.inputKind
+      || resolvedOptions.inputKind
+      || (mode === 'heuristic' ? 'heuristic' : task.file ? 'task-packet' : 'issue');
+
+    const provenance = buildRouteProvenance({
+      source,
+      inputKind,
+      inputPath: task.file || '',
+      inputBytes: mode === 'heuristic' ? undefined : task.prompt,
+      routerMode: operatingMode ?? getCurrentOperatingMode(repoDir),
+    });
+    results.push({ task, decision: withRouteProvenance(decision, provenance) });
   }
 
   return results;

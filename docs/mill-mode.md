@@ -270,11 +270,25 @@ all downstream consumers should read it via `read_route_json()` from `wavemill-c
 | `codeDepth` | `"light"` \| `"medium"` \| `"deep"` | Coding depth recommendation |
 | `reviewRecommended` | `"none"` \| `"static"` \| `"llm"` \| `"static+llm"` | Review mode recommendation (stored as `reviewMode` in state) |
 | `routingMode` | string | How the route was determined (e.g. `"stage-aware"`, `"heuristic-fallback"`) |
+| `provenance` | object | Input/source metadata for the route artifact |
 | `neighborCount` | number | Number of similar eval records used for routing |
 | `expectedSuccess` | number | Estimated success probability (0-1) |
 | `expectedCost` | number | Estimated total cost in USD |
 | `signals` | object | Prompt analysis signals (taskType, riskScore, etc.) |
 | `challengeRecommendation` | object? | Optional challenge-mode recommendation |
+
+`provenance` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `source` | `"bootstrap"` \| `"expanded"` \| `"startup-cache"` \| `"batch-cache"` \| `"live"` \| `"heuristic-fallback"` | Route origin |
+| `inputKind` | `"issue"` \| `"task-packet"` \| `"cache"` \| `"heuristic"` | Type of routed input |
+| `inputPath` | string | Input file path when available |
+| `inputHash` | string | SHA-256 of exact routed UTF-8 input bytes |
+| `routedAt` | string | ISO-8601 UTC timestamp |
+| `routerMode` | `"normal"` \| `"constrained"` \| `"survival"` | Operating mode at route time |
+
+`routingMode` and `provenance.routerMode` are different: `routingMode` is route strategy, while `provenance.routerMode` is the quota operating mode.
 
 ### Consumers
 
@@ -287,7 +301,7 @@ all downstream consumers should read it via `read_route_json()` from `wavemill-c
 
 ### Fallback Chain
 
-`read_route_json()` implements: `route.json` → `model-suggestion.json` → default value.
+`read_route_json()` implements: `route.json` (top-level, then `.provenance.<field>`) → `model-suggestion.json` (coder only) → default value.
 
 `model-suggestion.json` is a **deprecated** compatibility shim that only carries the `coder`
 model (as `recommendedModel`). It will be removed in a future PR once all consumers have

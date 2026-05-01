@@ -100,6 +100,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Register agent configurations and DSPy artifacts as resources when they are used in routing decisions
 - Wrap resource registration in try-catch to ensure registry failures do not break routing
 - Gate rubric-aware stage scoring on nearest-neighbor window coverage, not per-record coverage
+- Stamp route artifacts with `provenance.source`, `inputKind`, `inputPath`, `inputHash`, `routedAt`, and `routerMode`
 
 ### DON'T
 - Trigger constrained mode while any frontier model is healthy
@@ -107,6 +108,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Use frontier models (opus) in constrained or survival mode
 - Use LLM reasoning for candidate selection in degraded modes
 - Assume model registry will have preferred classes available
+- Overwrite `.initial-route.json` after bootstrap routing has been persisted
 
 ## Known Failure Modes
 
@@ -117,6 +119,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 | A non-frontier model is selected while a healthy frontier sibling is available | Frontier-sibling substitution was skipped, or `below-frontier-substitute` exclusions were not applied | Verify `findHealthyFrontierSibling()` can see the current quota snapshot and `resolveModel()` is excluding non-frontier candidates in the mixed-frontier path |
 | No policy-adjustment line appears for a frontier-to-frontier swap | The route never passed through `logPolicyAdjustment()` or `logFinalFrontierSubstitution()` for that path | Confirm routing stayed out of degraded mode and note that `routingMode === 'policy'` intentionally skips the final frontier-substitution log |
 | `heuristic-fallback, neighbors=0` appears in degraded mode despite populated `evals.jsonl` | The degraded `modelsAvailable` allowlist filters every k-nearest neighbor before stage selection, so `routeStageAware()` returns `null` and the caller reports zero neighbors | Retry `rankModelsPerStage()` without model constraints when filtering caused the null, return `stage-aware-partial`, and let the caller overlay degraded model selection while preserving the real neighbor count |
+| Route artifacts are missing provenance or still marked as cache/live incorrectly | Route JSON write sites did not stamp or refresh `provenance` fields on reuse | Ensure route persistence paths always write/merge `provenance` and refresh source on cache recovery |
 | Rubric-aware mode is enabled but scalar routing still wins | Rubric coverage in the nearest-neighbor window is below `router.rubricAware.minCoverage` | Check decision reasoning for `rubric-aware fallback`; lower `minCoverage` only after validating mixed-dataset behavior |
 
 ## Testing Patterns
@@ -143,6 +146,10 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - `shared/lib/stage-aware-router.ts` — KNN-based routing used by degraded modes after aggregate frontier exhaustion/degradation is confirmed
 
 ## Recent Changes
+
+### 2026-04-30T00:00:00.000Z - HOK-1511: Persist route provenance and input hashes
+**Changed:** Route artifacts now include a nested `provenance` object (`source`, `inputKind`, `inputPath`, `inputHash`, `routedAt`, `routerMode`) and shell route readers can resolve both legacy top-level fields and provenance metadata.
+**Impact:** Bootstrap vs expanded/cache/live decisions are now distinguishable and unchanged input packets can be detected by stable `inputHash`, while `.initial-route.json` remains immutable once written.
 
 ### 2026-04-27T00:00:00.000Z - HOK-1410: Rubric-aware stage labels in stage-aware routing
 **Changed:** Stage-aware routing can now blend per-record rubric mean scores with scalar stage scores behind `router.rubricAware`. The default remains `off`; `shadow` records a side-channel decision while preserving scalar routing, and `on` uses rubric-aware scoring when nearest-neighbor coverage meets the configured threshold.
