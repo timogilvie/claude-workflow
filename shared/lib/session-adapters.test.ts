@@ -712,4 +712,9 @@ describe('getSessionAdapter', () => {
     const adapter = getSessionAdapter('unknown-agent');
     assert.ok(adapter instanceof ClaudeSessionAdapter);
   });
+
+  it('returns ClaudeSessionAdapter for "claude-deepseek"', () => {
+    const adapter = getSessionAdapter('claude-deepseek');
+    assert.ok(adapter instanceof ClaudeSessionAdapter);
+  });
 });
