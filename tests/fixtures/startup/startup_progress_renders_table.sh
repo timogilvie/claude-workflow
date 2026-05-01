@@ -76,9 +76,9 @@ if [[ "$clear_count" -lt 2 ]]; then
   echo "file renderer did not emit terminal refresh sequences" >&2
   exit 1
 fi
-final_screen="$(perl -0777 -ne '@screens = split(/\e\[H\e\[J/); print $screens[-1]' "$file_out")"
-header_line="$(printf '%s\n' "$final_screen" | grep '^issue ')"
-hok3_line="$(printf '%s\n' "$final_screen" | grep '^HOK-3')"
+final_screen="$(perl -0777 -ne '@screens = grep { /\S/ } split(/\e\[H\e\[J/); print $screens[-1] // q{}' "$file_out")"
+header_line="$(printf '%s\n' "$final_screen" | grep '^issue ' || true)"
+hok3_line="$(printf '%s\n' "$final_screen" | grep '^HOK-3' || true)"
 if [[ "$header_line" != 'issue | route | worktree | deps | agent | linear' ]]; then
   echo "file renderer header width is misaligned" >&2
   exit 1

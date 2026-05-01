@@ -193,7 +193,12 @@ test('valid config passes validation', () => {
           },
         },
       },
-      challenge: { enabled: true, rate: 0.25, models: ['claude-opus-4-6', 'gpt-5.3-codex'] },
+      challenge: {
+        enabled: true,
+        rate: 0.25,
+        models: ['claude-opus-4-6', 'gpt-5.3-codex'],
+        allowDeepseek: true,
+      },
       challengeScheduler: { enabled: true, confidenceThreshold: 0.65, newModelChallengeCount: 4 },
       providers: {
         deepseek: {
@@ -210,6 +215,7 @@ test('valid config passes validation', () => {
     assert.equal(config.router?.enabled, true);
     assert.equal(config.challenge?.enabled, true);
     assert.equal(config.challenge?.rate, 0.25);
+    assert.equal(config.challenge?.allowDeepseek, true);
     assert.equal(config.challengeScheduler?.confidenceThreshold, 0.65);
     assert.equal(config.providers?.deepseek?.enabled, true);
     assert.equal(config.modelRegistry?.models?.['claude-opus-4-7']?.qualityScores?.coding, 99);
@@ -485,6 +491,47 @@ test('invalid challenge scheduler threshold throws validation error', () => {
     writeConfig(tmp, JSON.stringify({
       challengeScheduler: { confidenceThreshold: 2 }
     }));
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('challenge.allowDeepseek accepts boolean true', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: {
+        allowDeepseek: true,
+      },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.equal(config.challenge?.allowDeepseek, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('challenge.allowDeepseek rejects non-boolean values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: {
+        allowDeepseek: 'yes',
+      },
+    }));
+
     if (hasAjv) {
       assert.throws(() => {
         loadWavemillConfig(tmp);
@@ -841,6 +888,7 @@ test('getChallengeConfig returns challenge section', () => {
       challenge: {
         enabled: true,
         rate: 0.5,
+        allowDeepseek: true,
         comparisonModel: 'claude-opus-4-6',
         autoMergeWinner: true,
       },
@@ -849,6 +897,7 @@ test('getChallengeConfig returns challenge section', () => {
     const challengeConfig = getChallengeConfig(tmp);
     assert.equal(challengeConfig.enabled, true);
     assert.equal(challengeConfig.rate, 0.5);
+    assert.equal(challengeConfig.allowDeepseek, true);
     assert.equal(challengeConfig.comparisonModel, 'claude-opus-4-6');
     assert.equal(challengeConfig.autoMergeWinner, true);
   } finally {
