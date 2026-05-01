@@ -298,11 +298,11 @@ setup_control_dashboard() {
 }
 
 spawn_integration_window() {
-  local config_file enabled use_mill_session integration_cmd
+  local merged enabled use_mill_session integration_cmd
 
-  config_file="$REPO_DIR/.wavemill-config.json"
-  enabled="$(jq -r '.integration.enabled // false' "$config_file" 2>/dev/null || echo false)"
-  use_mill_session="$(jq -r '.integration.useMillSession // true' "$config_file" 2>/dev/null || echo true)"
+  merged="$(wavemill_load_config "$REPO_DIR")"
+  enabled="$(printf '%s' "$merged" | jq -r '.integration.enabled // false' 2>/dev/null || echo false)"
+  use_mill_session="$(printf '%s' "$merged" | jq -r '.integration.useMillSession // true' 2>/dev/null || echo true)"
 
   if [[ "$enabled" != "true" || "$use_mill_session" != "true" ]]; then
     return 0

@@ -1364,7 +1364,16 @@ test('repo config remains valid and integration defaults stay opt-in', () => {
   clearConfigCache();
   const config = loadWavemillConfig(process.cwd());
   assert.ok(config);
-  assert.deepEqual(getIntegrationConfig(process.cwd()), INTEGRATION_DEFAULTS);
+
+  // Assert on the shipped base file directly, not the merged config. A
+  // developer running with `.wavemill-config.local.json` may have integration
+  // enabled locally; this test guards the canonical default that ships in main.
+  const shipped = JSON.parse(
+    readFileSync(join(process.cwd(), '.wavemill-config.json'), 'utf-8'),
+  ) as { integration?: unknown };
+  if (shipped.integration !== undefined) {
+    assert.deepEqual(shipped.integration, INTEGRATION_DEFAULTS);
+  }
 });
 
 test('ready remediation maxAttempts must be at least 1', () => {
@@ -1437,6 +1446,123 @@ test('invalid integration ready policy risk setting throws validation error', ()
         loadWavemillConfig(tmp);
       });
     }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
+// Local Overlay Tests
+// ────────────────────────────────────────────────────────────────
+
+console.log('\n--- Local Overlay Tests ---\n');
+
+function writeLocalConfig(repoDir: string, content: string) {
+  writeFileSync(join(repoDir, '.wavemill-config.local.json'), content, 'utf-8');
+}
+
+test('local overlay deep-merges objects onto base', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: { baseBranch: 'main', maxParallel: 7 },
+      integration: { enabled: false, integrationBranch: 'auto/integration' },
+    }));
+    writeLocalConfig(tmp, JSON.stringify({
+      mill: { baseBranch: 'auto/integration' },
+      integration: { enabled: true },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.equal(config.mill?.baseBranch, 'auto/integration');
+    assert.equal(config.mill?.maxParallel, 7);
+    assert.equal(config.integration?.enabled, true);
+    assert.equal(config.integration?.integrationBranch, 'auto/integration');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('local overlay replaces arrays entirely rather than concatenating', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      permissions: { autoApprovePatterns: ['git status*', 'ls *'] },
+    }));
+    writeLocalConfig(tmp, JSON.stringify({
+      permissions: { autoApprovePatterns: ['rg *'] },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.deepEqual(config.permissions?.autoApprovePatterns, ['rg *']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('local overlay alone (no base file) acts as the entire config', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeLocalConfig(tmp, JSON.stringify({
+      mill: { maxParallel: 3 },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.equal(config.mill?.maxParallel, 3);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('local overlay with no overrides yields the base config unchanged', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: { maxParallel: 5 },
+    }));
+    writeLocalConfig(tmp, '{}');
+
+    const config = loadWavemillConfig(tmp);
+    assert.equal(config.mill?.maxParallel, 5);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('schema validation runs against the merged config, catching bad overlay keys', () => {
+  if (!hasAjv) return; // Skip if Ajv not installed
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: { enabled: false },
+    }));
+    writeLocalConfig(tmp, JSON.stringify({
+      integration: { mergeMethod: 'not-a-real-method' },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /validation failed/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('malformed local overlay throws a clear parse error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+    writeLocalConfig(tmp, '{ broken json }');
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /Failed to parse.*\.wavemill-config\.local\.json/);
   } finally {
     cleanUp(tmp);
   }
