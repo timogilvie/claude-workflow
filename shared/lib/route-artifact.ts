@@ -58,3 +58,78 @@ export function withRouteProvenance<T extends WorkflowRouteDecision>(decision: T
     provenance,
   };
 }
+
+export interface NormalizedExpandedRouteArtifact {
+  coder: string;
+  codeDepth: string;
+  reviewer: string;
+  reviewMode: string;
+}
+
+export type ExpandedRouteValidation = {
+  valid: boolean;
+  missing: string[];
+  invalid: string[];
+  normalized?: NormalizedExpandedRouteArtifact;
+};
+
+export function validateExpandedRouteArtifact(value: unknown): ExpandedRouteValidation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {
+      valid: false,
+      missing: [],
+      invalid: ['artifact'],
+    };
+  }
+
+  const artifact = value as Record<string, unknown>;
+  const missing: string[] = [];
+  const invalid: string[] = [];
+
+  const readStringField = (field: 'coder' | 'codeDepth' | 'reviewer'): string | undefined => {
+    const raw = artifact[field];
+    if (typeof raw === 'undefined') {
+      missing.push(field);
+      return undefined;
+    }
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      invalid.push(field);
+      return undefined;
+    }
+    return raw;
+  };
+
+  const coder = readStringField('coder');
+  const codeDepth = readStringField('codeDepth');
+  const reviewer = readStringField('reviewer');
+
+  const reviewModeCandidate = artifact.reviewMode ?? artifact.reviewRecommended;
+  let reviewMode: string | undefined;
+  if (typeof reviewModeCandidate === 'undefined') {
+    missing.push('reviewMode');
+  } else if (typeof reviewModeCandidate !== 'string' || reviewModeCandidate.trim() === '') {
+    invalid.push('reviewMode');
+  } else {
+    reviewMode = reviewModeCandidate;
+  }
+
+  if (missing.length > 0 || invalid.length > 0 || !coder || !codeDepth || !reviewer || !reviewMode) {
+    return {
+      valid: false,
+      missing,
+      invalid,
+    };
+  }
+
+  return {
+    valid: true,
+    missing: [],
+    invalid: [],
+    normalized: {
+      coder,
+      codeDepth,
+      reviewer,
+      reviewMode,
+    },
+  };
+}

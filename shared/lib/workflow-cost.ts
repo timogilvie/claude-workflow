@@ -14,6 +14,7 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { getSessionAdapter, detectAgentType, type AgentType } from './session-adapters.ts';
 import { loadWavemillConfig } from './config.ts';
+import { getEffectiveRegistry } from './model-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -156,6 +157,22 @@ const CACHE_READ_MULTIPLIER = 0.1;
  * @returns Pricing table, or empty object if unavailable
  */
 export function loadPricingTable(repoDir?: string): PricingTable {
+  const registryPricing: PricingTable = Object.fromEntries(
+    Object.entries(getEffectiveRegistry(repoDir).models)
+      .filter(([, capabilities]) => capabilities.pricing)
+      .map(([modelId, capabilities]) => [modelId, { ...capabilities.pricing! }]),
+  );
+  const config = loadWavemillConfig(repoDir);
+  if (config.eval?.pricing && typeof config.eval.pricing === 'object') {
+    return {
+      ...registryPricing,
+      ...config.eval.pricing,
+    };
+  }
+  return registryPricing;
+}
+
+export function loadConfiguredPricingTable(repoDir?: string): PricingTable {
   const config = loadWavemillConfig(repoDir);
   if (config.eval?.pricing && typeof config.eval.pricing === 'object') {
     return config.eval.pricing;

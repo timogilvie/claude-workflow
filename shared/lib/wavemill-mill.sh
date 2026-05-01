@@ -3030,6 +3030,9 @@ _restore_inflight_task_window_if_missing() {
         "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
     coding)
+      if ! apply_expanded_route_if_present "$feature_dir" "$issue" "$slug" "$wt_dir" "$STATE_FILE"; then
+        log_warn "$issue → expanded route invalid; using existing execution state for coding relaunch"
+      fi
       model=$(read_phase_config "$feature_dir" "coding" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$issue" "coderModel")
       model="$(resolve_phase_model "coding" "$model" "claude-opus-4-7")"
@@ -5572,6 +5575,10 @@ monitor_issue_state() {
             fi
             # Record approval via approve_plan (HOK-1193: controller-owned stage result)
             approve_plan "$FEATURE_DIR" "$current_agent" ""
+
+            if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
+              log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"
+            fi
 
             # FORCE_MODEL takes priority, then challenge, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then

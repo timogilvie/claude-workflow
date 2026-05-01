@@ -18,6 +18,7 @@ import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import { resolveModel, topViableCandidate } from './routing-policy.ts';
 import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
+import { loadConfiguredPricingTable } from './workflow-cost.ts';
 import {
   routeStageAware,
   routeStageAwareWithContext,
@@ -31,6 +32,8 @@ import { registerAgentConfig } from './resource-adapters/agent-config-adapter.ts
 import { recordUse } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import type { RouteProvenance } from './route-artifact.ts';
+import { isDeepSeekLikeModelId } from './model-registry.ts';
+import { validateModelOrThrow } from './model-validator.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -266,12 +269,20 @@ function filterProviderPool(
 
 function getModelPool(repoDir?: string): ResolvedModelPool {
   const routerConfig = loadRouterConfig(repoDir);
-  const pricingModels = Object.keys(loadPricingTable(repoDir));
+  const pricingModels = Object.keys(loadConfiguredPricingTable(repoDir));
   return filterProviderPool([...new Set([
     ...(routerConfig.models || []),
     ...pricingModels,
     ...DEFAULT_MODEL_POOL,
   ])], repoDir);
+}
+
+function validateDeepSeekPool(models: string[] | undefined, repoDir?: string): void {
+  for (const modelId of models ?? []) {
+    if (isDeepSeekLikeModelId(modelId)) {
+      validateModelOrThrow(modelId, repoDir);
+    }
+  }
 }
 
 function getEffectiveModelPool(options?: RouteWorkflowOptions): ResolvedModelPool {
@@ -310,6 +321,7 @@ function resolveStagePool(
         ? options?.coderModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'coder')
         : options?.reviewerModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'reviewer');
 
+  validateDeepSeekPool(explicitPool, options?.repoDir);
   const configuredPool = intersectPools(basePool, explicitPool);
   return filterProviderPool(intersectPools(configuredPool, policyPool), options?.repoDir, role);
 }
@@ -1297,6 +1309,8 @@ export function tryPolicyResolution(
   options?: RouteWorkflowOptions,
 ): StageAwareDecision | null {
   const repoDir = options?.repoDir;
+  const routerConfig = loadRouterConfig(repoDir);
+  validateDeepSeekPool(routerConfig.models, repoDir);
   const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
   if (!taskDifficulty) {
     return null;
@@ -1482,9 +1496,9 @@ export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?
   const defaultAgent = routerConfig.defaultAgent || 'claude';
   const agentMap = routerConfig.agentMap || {};
 
-  const plannerAgent = resolveAgent(decision.planner, agentMap, defaultAgent);
-  const coderAgent = resolveAgent(decision.coder, agentMap, defaultAgent);
-  const reviewerAgent = resolveAgent(decision.reviewer, agentMap, defaultAgent);
+  const plannerAgent = resolveAgent(decision.planner, agentMap, defaultAgent, repoDir);
+  const coderAgent = resolveAgent(decision.coder, agentMap, defaultAgent, repoDir);
+  const reviewerAgent = resolveAgent(decision.reviewer, agentMap, defaultAgent, repoDir);
 
   const difficultySuffix = decision.signals.taskDifficulty
     ? `  difficulty=${decision.signals.taskDifficulty}`

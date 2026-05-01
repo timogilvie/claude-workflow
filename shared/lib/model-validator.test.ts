@@ -25,6 +25,8 @@ describe('model-validator', () => {
       assert.ok(all.includes('claude-opus-4-7'), 'Should include claude-opus-4-7');
       assert.ok(all.includes('claude-sonnet-4-6'), 'Should include claude-sonnet-4-6');
       assert.ok(all.includes('deepseek-v4-pro'), 'Should include deepseek-v4-pro');
+      assert.ok(all.includes('deepseek-v4-flash'), 'Should include deepseek-v4-flash');
+      assert.ok(all.includes('deepseek-v4-pro[1m]'), 'Should include deepseek-v4-pro[1m]');
     });
 
     it('groups models by agent', () => {
@@ -58,12 +60,15 @@ describe('model-validator', () => {
       assert.strictEqual(isValidModel('claude-opus-4-7', '.'), true);
       assert.strictEqual(isValidModel('claude-sonnet-4-6', '.'), true);
       assert.strictEqual(isValidModel('deepseek-v4-pro', '.'), true);
+      assert.strictEqual(isValidModel('deepseek-v4-flash', '.'), true);
+      assert.strictEqual(isValidModel('deepseek-v4-pro[1m]', '.'), true);
     });
 
     it('returns false for unknown models', () => {
       assert.strictEqual(isValidModel('chatgpt-5.3', '.'), false);
       assert.strictEqual(isValidModel('chatgpt-5.4', '.'), false);
       assert.strictEqual(isValidModel('gpt-99', '.'), false);
+      assert.strictEqual(isValidModel('deepseek-v4-pro[]', '.'), false);
     });
   });
 
@@ -116,6 +121,12 @@ describe('model-validator', () => {
       assert.doesNotThrow(() => {
         validateModelOrThrow('deepseek-v4-pro', '.');
       });
+      assert.doesNotThrow(() => {
+        validateModelOrThrow('deepseek-v4-flash', '.');
+      });
+      assert.doesNotThrow(() => {
+        validateModelOrThrow('deepseek-v4-pro[1m]', '.');
+      });
     });
 
     it('throws for invalid models', () => {
@@ -126,6 +137,18 @@ describe('model-validator', () => {
       assert.throws(
         () => validateModelOrThrow('invalid-model', '.'),
         /Unknown model "invalid-model"/
+      );
+      assert.throws(
+        () => validateModelOrThrow('deepseek-v4-pro[2m]', '.'),
+        /Unknown DeepSeek model "deepseek-v4-pro\[2m\]"/
+      );
+      assert.throws(
+        () => validateModelOrThrow('deepseek-v4-pro\[\]', '.'),
+        /Invalid model ID "deepseek-v4-pro\[\]"/
+      );
+      assert.throws(
+        () => validateModelOrThrow('DEEPSEEK-V4-PRO', '.'),
+        /Invalid model ID "DEEPSEEK-V4-PRO"/
       );
     });
 
@@ -143,6 +166,18 @@ describe('model-validator', () => {
           message.includes('gpt-5'),
           'Error message should suggest a gpt-5 model'
         );
+      }
+    });
+
+    it('lists configured DeepSeek models in DeepSeek-specific unknown errors', () => {
+      try {
+        validateModelOrThrow('deepseek-v4-ultra', '.');
+        assert.fail('Should have thrown');
+      } catch (err) {
+        const message = errorMessage(err);
+        assert.ok(message.includes('Configured DeepSeek models:'));
+        assert.ok(message.includes('deepseek-v4-pro'));
+        assert.ok(message.includes('deepseek-v4-flash'));
       }
     });
 

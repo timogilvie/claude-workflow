@@ -13,6 +13,15 @@ export interface ModelCapabilities {
   strengths: string[];
   weaknesses: string[];
   qualityScores: Record<RegistryTaskType, number>;
+  pricing?: {
+    inputCostPerMTok: number;
+    outputCostPerMTok: number;
+    cacheWriteCostPerMTok?: number;
+    cacheReadCostPerMTok?: number;
+  };
+  defaultLadderEligible?: boolean;
+  contextWindowTokens?: number;
+  agent?: string;
 }
 
 export interface ModelRegistry {
@@ -45,6 +54,10 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     strengths: [...capabilities.strengths],
     weaknesses: [...capabilities.weaknesses],
     qualityScores: { ...capabilities.qualityScores },
+    pricing: capabilities.pricing ? { ...capabilities.pricing } : undefined,
+    defaultLadderEligible: capabilities.defaultLadderEligible,
+    contextWindowTokens: capabilities.contextWindowTokens,
+    agent: capabilities.agent,
   };
 }
 
@@ -73,6 +86,10 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
       classify: 0,
       ...override?.qualityScores,
     },
+    pricing: override?.pricing ? { ...override.pricing } : undefined,
+    defaultLadderEligible: override?.defaultLadderEligible ?? true,
+    contextWindowTokens: override?.contextWindowTokens,
+    agent: override?.agent,
   };
 }
 
@@ -91,6 +108,10 @@ function mergeCapabilities(
       ...seed.qualityScores,
       ...override.qualityScores,
     },
+    pricing: override.pricing ? { ...override.pricing } : seed.pricing ? { ...seed.pricing } : undefined,
+    defaultLadderEligible: override.defaultLadderEligible ?? seed.defaultLadderEligible ?? true,
+    contextWindowTokens: override.contextWindowTokens ?? seed.contextWindowTokens,
+    agent: override.agent ?? seed.agent,
   };
 }
 
@@ -121,6 +142,41 @@ function compareModels(
   }
 
   return leftId.localeCompare(rightId);
+}
+
+export class ModelValidationError extends Error {
+  readonly modelId: string;
+
+  constructor(modelId: string, message: string) {
+    super(message);
+    this.name = 'ModelValidationError';
+    this.modelId = modelId;
+  }
+}
+
+const MODEL_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*(?:\[[a-z0-9]+\])?$/;
+
+export function isDeepSeekLikeModelId(modelId: string): boolean {
+  return /^deepseek-/i.test(modelId);
+}
+
+export function configuredDeepSeekModelIds(registry: ModelRegistry): string[] {
+  return Object.keys(registry.models)
+    .filter((modelId) => modelId.startsWith('deepseek-'))
+    .sort();
+}
+
+export function isKnownModelId(registry: ModelRegistry, modelId: string): boolean {
+  return Object.hasOwn(registry.models, modelId);
+}
+
+export function validateModelId(modelId: string): void {
+  if (!MODEL_ID_PATTERN.test(modelId)) {
+    throw new ModelValidationError(
+      modelId,
+      `Error: Invalid model ID "${modelId}"\n\nModel IDs must be lowercase and may include digits, hyphens, dots, and a single bracket suffix like [1m].`,
+    );
+  }
 }
 
 export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
@@ -177,16 +233,50 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     'deepseek-v4-pro': {
       vendor: 'deepseek',
       class: 'strong_generalist',
-      strengths: ['strong coding throughput', 'Anthropic-compatible Claude Code path'],
-      weaknesses: ['provider path is default-off', 'limited validation coverage'],
-      qualityScores: scores(48, 74, 80, 72, 42),
+      strengths: ['long-context reasoning', 'code generation', 'anthropic-compatible launch'],
+      weaknesses: ['opt-in only', 'pricing subject to change'],
+      qualityScores: scores(64, 84, 83, 85, 62),
+      pricing: {
+        inputCostPerMTok: 0.435,
+        outputCostPerMTok: 0.87,
+        cacheWriteCostPerMTok: 0.435,
+        cacheReadCostPerMTok: 0.003625,
+      },
+      defaultLadderEligible: false,
+      contextWindowTokens: 1_000_000,
+      agent: 'claude',
+    },
+    'deepseek-v4-pro[1m]': {
+      vendor: 'deepseek',
+      class: 'strong_generalist',
+      strengths: ['max-context tasks', 'code generation', 'anthropic-compatible launch'],
+      weaknesses: ['opt-in only', 'pricing subject to change'],
+      qualityScores: scores(63, 85, 82, 84, 61),
+      pricing: {
+        inputCostPerMTok: 0.435,
+        outputCostPerMTok: 0.87,
+        cacheWriteCostPerMTok: 0.435,
+        cacheReadCostPerMTok: 0.003625,
+      },
+      defaultLadderEligible: false,
+      contextWindowTokens: 1_000_000,
+      agent: 'claude',
     },
     'deepseek-v4-flash': {
       vendor: 'deepseek',
       class: 'fast_economy',
-      strengths: ['fast turnaround', 'lower expected cost'],
-      weaknesses: ['shallower review depth', 'limited validation coverage'],
-      qualityScores: scores(56, 52, 66, 54, 60),
+      strengths: ['speed', 'low cost', 'anthropic-compatible launch'],
+      weaknesses: ['less depth than pro', 'opt-in only'],
+      qualityScores: scores(70, 68, 76, 70, 80),
+      pricing: {
+        inputCostPerMTok: 0.14,
+        outputCostPerMTok: 0.28,
+        cacheWriteCostPerMTok: 0.14,
+        cacheReadCostPerMTok: 0.0028,
+      },
+      defaultLadderEligible: false,
+      contextWindowTokens: 1_000_000,
+      agent: 'claude',
     },
     'deepseek-chat': {
       vendor: 'deepseek',
@@ -232,6 +322,7 @@ export function getLadder(registry: ModelRegistry, taskType: RegistryTaskType): 
   }
 
   return Object.entries(registry.models)
+    .filter(([, capabilities]) => capabilities.defaultLadderEligible !== false)
     .filter(([, capabilities]) => Number.isFinite(capabilities.qualityScores[taskType]))
     .sort((left, right) => compareModels(taskType, left, right))
     .filter(([, capabilities]) => capabilities.qualityScores[taskType] > 0)
