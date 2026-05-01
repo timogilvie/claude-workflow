@@ -596,11 +596,13 @@ $details_context"
         routedAt: (now | todateiso8601),
         routerMode: $routerMode
       }
-    } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' > "$feature_dir/.routing-complete"
+    } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' \
+    | write_json_artifact "$feature_dir/.routing-complete"
   if [[ -f "$feature_dir/.initial-route.json" ]]; then
     startup_log "  Keeping existing .initial-route.json for $issue"
   else
-    cp "$feature_dir/.routing-complete" "$feature_dir/.initial-route.json"
+    jq '.provenance.source = "bootstrap"' "$feature_dir/.routing-complete" \
+      | write_json_artifact "$feature_dir/.initial-route.json"
   fi
 
   local planner_agent
