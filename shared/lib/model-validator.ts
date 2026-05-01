@@ -12,6 +12,14 @@
 
 import { loadWavemillConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
+import {
+  configuredDeepSeekModelIds,
+  getEffectiveRegistry,
+  isDeepSeekLikeModelId,
+  isKnownModelId,
+  ModelValidationError,
+  validateModelId,
+} from './model-registry.ts';
 import { resolveAgent } from './model-router.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -24,13 +32,18 @@ export interface KnownModelsResult {
 }
 
 /**
- * Get all known models from config (pricing + agentMap).
+ * Get all known models from config and the effective registry.
  * Returns models grouped by agent for helpful error messages.
  */
 export function getKnownModels(repoDir?: string): KnownModelsResult {
   const config = loadWavemillConfig(repoDir);
+  const registry = getEffectiveRegistry(repoDir);
 
   const modelSet = new Set<string>();
+
+  for (const modelId of Object.keys(registry.models)) {
+    modelSet.add(modelId);
+  }
 
   // Add models from pricing config
   if (config.eval?.pricing) {
@@ -46,7 +59,9 @@ export function getKnownModels(repoDir?: string): KnownModelsResult {
     }
   }
 
-  const all = Array.from(modelSet).sort();
+  const all = Array.from(modelSet)
+    .filter((modelId) => !isDeepSeekLikeModelId(modelId) || isKnownModelId(registry, modelId))
+    .sort();
 
   // Group by agent for display
   const byAgent = new Map<string, string[]>();
@@ -54,7 +69,7 @@ export function getKnownModels(repoDir?: string): KnownModelsResult {
   const defaultAgent = config.router?.defaultAgent || 'claude';
 
   for (const modelId of all) {
-    const agent = resolveAgent(modelId, agentMap, defaultAgent);
+    const agent = resolveAgent(modelId, agentMap, defaultAgent, repoDir);
     const existing = byAgent.get(agent) || [];
     existing.push(modelId);
     byAgent.set(agent, existing);
@@ -67,6 +82,12 @@ export function getKnownModels(repoDir?: string): KnownModelsResult {
  * Check if a model ID is known (exists in config).
  */
 export function isValidModel(modelId: string, repoDir?: string): boolean {
+  try {
+    validateModelId(modelId);
+  } catch {
+    return false;
+  }
+
   const { all } = getKnownModels(repoDir);
   return all.includes(modelId);
 }
@@ -138,11 +159,28 @@ export function suggestModel(invalidModel: string, repoDir?: string): string[] {
  * - Suggestions for similar model names
  */
 export function validateModelOrThrow(modelId: string, repoDir?: string): void {
+  validateModelId(modelId);
+
   if (isValidModel(modelId, repoDir)) {
     return;
   }
 
   const { all, byAgent } = getKnownModels(repoDir);
+  const registry = getEffectiveRegistry(repoDir);
+
+  if (isDeepSeekLikeModelId(modelId)) {
+    const configured = configuredDeepSeekModelIds(registry);
+    let message = `Error: Unknown DeepSeek model "${modelId}"\n\n`;
+    if (configured.length > 0) {
+      message += 'Configured DeepSeek models:\n';
+      for (const candidate of configured) {
+        message += `  • ${candidate}\n`;
+      }
+    } else {
+      message += 'No DeepSeek models are configured in the effective registry.\n';
+    }
+    throw new ModelValidationError(modelId, message);
+  }
 
   // Build error message
   let message = `Error: Unknown model "${modelId}"\n\n`;
@@ -174,7 +212,7 @@ export function validateModelOrThrow(modelId: string, repoDir?: string): void {
     }
   }
 
-  throw new Error(message);
+  throw new ModelValidationError(modelId, message);
 }
 
 // ────────────────────────────────────────────────────────────────

@@ -270,7 +270,7 @@ describe('routing-policy ranking', () => {
     assert.ok(frontier);
     assert.equal(frontier.viable, false);
     assert.equal(frontier.exclusionReason, 'exceeds-cost-tier');
-    assert.equal(ranked[0].modelId, 'claude-sonnet-4-6');
+    assert.equal(ranked[0].modelId, 'deepseek-v4-pro[1m]');
   });
 
   it('applies minimum quality thresholds after floor and cost checks', () => {

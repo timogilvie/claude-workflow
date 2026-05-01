@@ -149,6 +149,16 @@ test('valid config passes validation', () => {
           'claude-opus-4-7': {
             qualityScores: { coding: 99 },
           },
+          'deepseek-v4-pro': {
+            pricing: {
+              inputCostPerMTok: 0.435,
+              outputCostPerMTok: 0.87,
+              cacheReadCostPerMTok: 0.003625,
+            },
+            defaultLadderEligible: false,
+            contextWindowTokens: 1000000,
+            agent: 'claude',
+          },
         },
         ladders: {
           review: ['claude-opus-4-7', 'claude-sonnet-4-6'],
@@ -189,6 +199,10 @@ test('valid config passes validation', () => {
     assert.equal(config.challenge?.rate, 0.25);
     assert.equal(config.challengeScheduler?.confidenceThreshold, 0.65);
     assert.equal(config.modelRegistry?.models?.['claude-opus-4-7']?.qualityScores?.coding, 99);
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.pricing?.inputCostPerMTok, 0.435);
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.defaultLadderEligible, false);
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.contextWindowTokens, 1000000);
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.agent, 'claude');
     assert.deepEqual(config.modelRegistry?.ladders?.review, ['claude-opus-4-7', 'claude-sonnet-4-6']);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
     assert.equal(config.mill?.maxParallel, 5);
