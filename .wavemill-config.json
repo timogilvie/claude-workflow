@@ -180,21 +180,6 @@
     "enabled": true,
     "cleanupAfterMerge": false
   },
-  "integration": {
-    "enabled": true,
-    "integrationBranch": "auto/integration",
-    "promotionBranch": "main",
-    "mergeMethod": "squash",
-    "deleteBranchAfterMerge": true,
-    "haltOnRed": true,
-    "highRiskPolicy": "manual",
-    "useMillSession": true,
-    "readyPolicy": {
-      "enabled": true,
-      "riskPolicy": "require-label",
-      "enforceMigrationCoupling": true
-    }
-  },
   "ui": {
     "visualVerification": true,
     "designStandards": true,
