@@ -12,6 +12,8 @@ Backlog → Expand → Route → Build → Review → Ready → Eval → Learn
                         └──── routing improves over time ───┘
 ```
 
+Optional: enable [autonomous integration](autonomous-integration.md) and Wavemill also handles `Ready → Tend → Promote → main`, merging reviewed PRs into a staging branch and opening a managed promotion PR to your trunk.
+
 ## Default Workflow
 
 1. **`wavemill mill`** pulls prioritized work and runs the factory loop.
@@ -35,6 +37,7 @@ Use supporting commands when you need to prepare work, inspect outcomes, or inte
 - [`wavemill review`](review-mode.md) for targeted PR review
 - [`wavemill eval`](eval-mode.md) for performance analysis
 - [`wavemill route`](routing-and-hokusai.md) for inspecting routing decisions
+- [`wavemill tend`](autonomous-integration.md) for autonomous merging into a staging branch before `main`
 - [Adding Models](model-additions.md) for the maintainer checklist when new models become available
 - [`wavemill context`](cli-reference.md) for maintaining agent-readable project memory
 

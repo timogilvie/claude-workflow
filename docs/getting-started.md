@@ -77,7 +77,13 @@ What happens next:
 - launches parallel worktrees and agents
 - evaluates outcomes so future routing improves
 
-## 5) Optional: Opt Into Hokusai
+## 5) Optional: Enable Autonomous Integration
+
+By default, Wavemill opens task PRs against `main` and you merge them yourself. If you want Wavemill to also handle merging — landing reviewed PRs onto a staging branch and opening a managed promotion PR to `main` — turn on autonomous integration.
+
+This is opt-in because it requires a one-time branch setup and adds a `tend` loop to your mill session. See [Autonomous Integration](autonomous-integration.md) for the quickstart, complete config reference, branch protection guidance, high-risk policy, and rollback playbook.
+
+## 6) Optional: Opt Into Hokusai
 
 If you want routing to benefit from collective intelligence in addition to your own local history:
 
@@ -112,6 +118,7 @@ SKIP_CONFIG_CHECK=true wavemill mill
 ## See Also
 
 - [Mill Mode](mill-mode.md) — autonomous parallel backlog processing
+- [Autonomous Integration](autonomous-integration.md) — auto-merge reviewed PRs into a staging branch before `main`
 - [Routing & Hokusai](routing-and-hokusai.md) — how Wavemill gets better over time
 - [CLI Reference](cli-reference.md) — full command surface
 - [Plan Mode](plan-mode.md) — decompose epics into well-scoped sub-issues

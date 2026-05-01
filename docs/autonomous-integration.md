@@ -12,7 +12,42 @@ task/* -> auto/integration -> main
 
 Use it when you want Wavemill to merge reviewed task PRs into a shared integration branch continuously, then promote that branch to `main` on a separate cadence.
 
-## Recommended Configuration
+## Quickstart
+
+Three steps to turn this on for an existing repo.
+
+**1. Create the integration branch.** This must exist before you enable the feature; tend will not create it for you.
+
+```bash
+git fetch origin main
+git branch auto/integration origin/main
+git push -u origin auto/integration
+```
+
+**2. Add the minimal config to `.wavemill-config.json`:**
+
+```json
+{
+  "integration": {
+    "enabled": true,
+    "readyPolicy": {
+      "enabled": true
+    }
+  }
+}
+```
+
+This is enough to start. Defaults from [`wavemill-config.schema.json`](../wavemill-config.schema.json) cover the rest: `auto/integration` as the staging branch, squash merges, halt-on-red, manual review for high-risk PRs.
+
+**3. What changes about your workflow.** After enabling:
+
+- New task PRs target `auto/integration` instead of `main`.
+- A `wavemill tend` loop starts as a tmux window inside your mill session and merges ready-labeled PRs one at a time.
+- A separate `auto/integration -> main` promotion PR is opened and refreshed but not auto-merged. You decide when to release.
+
+If you have in-flight task PRs when you flip this on, set `mill.baseBranch` to `auto/integration` only after they merge. Changing the base branch on a repo with open PRs does not retarget them automatically, but new worktrees will start from the wrong branch until you do.
+
+## Complete Configuration Reference
 
 ```json
 {
@@ -156,6 +191,14 @@ Challenge-mode PR pairs are not allowed to race into `auto/integration`. Tend wa
 - If no comparison exists yet, both sides stay blocked.
 - If a winner exists and challenge auto-merge is enabled, tend keeps the winner eligible and closes the loser.
 - If auto-merge of winners is disabled, the winner is still held for manual action.
+
+## Disabling Autonomous Integration
+
+To turn the feature off, set `integration.enabled: false` in `.wavemill-config.json` (or remove the `integration` block entirely). The next `wavemill mill` start will not spawn the tend window, and task PRs will resume targeting whatever `mill.baseBranch` is set to.
+
+If you set `mill.baseBranch` to `auto/integration` while integration mode was on, switch it back to `main` (or your trunk) at the same time. Otherwise new task worktrees will keep branching off the now-frozen integration branch.
+
+The `auto/integration` branch itself is safe to leave in place; nothing reads from it once `integration.enabled` is false. Delete it when you are confident you do not want to re-enable.
 
 ## See Also
 
