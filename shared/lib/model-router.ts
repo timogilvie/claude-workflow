@@ -28,6 +28,7 @@ import {
   ModelValidationError,
 } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
+import { filterDeepSeekForUnattended } from './deepseek-provider.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -477,7 +478,7 @@ function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
  * Heuristic model recommendation based on regex task classification
  * and historical eval score averages.
  */
-function recommendModelHeuristic(
+export function recommendModelHeuristic(
   prompt: string,
   characteristics: PromptCharacteristics,
   opts: Required<RouterOptions>,
@@ -521,6 +522,13 @@ function recommendModelHeuristic(
   if (opts.models && opts.models.length > 0) {
     modelStats = modelStats.filter((s) => opts.models!.includes(s.modelId));
   }
+
+  // Apply unattended DeepSeek filtering (gate for mill/challenge routing)
+  const unattendedFiltered = filterDeepSeekForUnattended(
+    modelStats.map((s) => s.modelId),
+    opts.repoDir,
+  );
+  modelStats = modelStats.filter((s) => unattendedFiltered.models.includes(s.modelId));
 
   if (modelStats.length === 0) {
     return {

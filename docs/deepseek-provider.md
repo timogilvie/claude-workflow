@@ -75,7 +75,33 @@ To route DeepSeek models to the `claude-deepseek` launcher via the router, add a
 }
 ```
 
-DeepSeek is default-off. Do not enable it for unattended usage until the smoke test below passes.
+DeepSeek is default-off for autonomous routing (mill/challenge mode). Manual launches and smoke tests work immediately when `DEEPSEEK_API_KEY` is set. Autonomous routing requires explicit enablement via `deepseek.unattendedEnabled`.
+
+### Enabling unattended routing (mill/challenge)
+
+To allow DeepSeek models in autonomous mill/challenge routing, set `deepseek.unattendedEnabled` in `.wavemill-config.json`:
+
+```json
+{
+  "deepseek": {
+    "unattendedEnabled": true
+  },
+  "providers": {
+    "deepseek": {
+      "enabled": true,
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "models": ["deepseek-v4-pro", "deepseek-v4-flash"]
+    }
+  }
+}
+```
+
+**Important:** `deepseek.unattendedEnabled` and `providers.deepseek.enabled` serve different purposes:
+
+- `providers.deepseek.enabled`: Controls whether DeepSeek provider path is available (endpoint, models, stages, launcher config)
+- `deepseek.unattendedEnabled`: Additional gate for autonomous mill/challenge routing
+
+Both must be true for DeepSeek to participate in autonomous routing. Manual launches via `claude-deepseek` or explicit stage assignments are unaffected by the unattended gate.
 
 ## Model IDs
 
@@ -158,26 +184,49 @@ Exit code `2` from `tools/launch-claude-deepseek.ts`.
 
 ## Limitations
 
-DeepSeek’s Anthropic-compatible endpoint does not fully match native Anthropic Claude Code behavior. DeepSeek currently documents limitations around image/document content and some server-side tools being unsupported or ignored. Treat the provider path as opt-in and validate the exact workflow you need before enabling it broadly.
+DeepSeek’s Anthropic-compatible endpoint does not fully match native Anthropic Claude Code behavior:
+
+- **Model behavior**: DeepSeek models may have different tool-call reliability, reasoning patterns, and output formatting compared to first-party Claude models
+- **Feature compatibility**: Not every Claude Code feature is guaranteed to work identically (e.g., image/document content, some server-side tools may be unsupported or ignored)
+- **Performance**: Response times and quality may differ from Anthropic’s Claude models for the same task
+- **API compatibility**: While the endpoint aims for Anthropic compatibility, edge cases and version mismatches may occur
+
+**Recommendation**: Treat the DeepSeek provider as opt-in and validate your specific workflows with live smoke tests before enabling `deepseek.unattendedEnabled` for autonomous routing. Start with manual launches or limited stages to assess suitability.
 
 ## Smoke test
 
-Without a key:
+### Dry-run (default)
+
+The default mode shows the command and environment without making a network call:
 
 ```bash
-unset DEEPSEEK_API_KEY
 npx tsx tools/smoke-deepseek.ts
 ```
 
 Expected result:
 
-- exit code `2`
-- stdout `DEEPSEEK_API_KEY not set; skipping smoke test`
+- exit code `0`
+- Shows command, working directory, state directory, and environment variable names
+- No API key required
+- No network calls
+
+### Live smoke test (optional)
+
+To validate the actual DeepSeek integration:
+
+```bash
+npx tsx tools/smoke-deepseek.ts --live
+```
+
+Without `DEEPSEEK_API_KEY`:
+
+- exit code `0`
+- stdout includes `skipping` and `DEEPSEEK_API_KEY`
 
 With a real key:
 
 ```bash
-DEEPSEEK_API_KEY=$REAL_KEY npx tsx tools/smoke-deepseek.ts
+DEEPSEEK_API_KEY=$REAL_KEY npx tsx tools/smoke-deepseek.ts --live
 ```
 
 Expected result:
@@ -186,6 +235,8 @@ Expected result:
 - stdout `OK`
 - a workflow transcript is written under the isolated DeepSeek provider home
 - no files under the real `~/.claude` are newer than the pre-smoke marker
+
+**Before enabling `deepseek.unattendedEnabled`, run the live smoke test to validate your setup.**
 
 Testing the `claude-deepseek` launcher directly:
 
@@ -209,6 +260,46 @@ After a successful smoke run:
 
 ## Rollback
 
-Disable the provider by setting `providers.deepseek.enabled` to `false` or removing the `providers.deepseek` block entirely. Unset the DeepSeek API key env var if you no longer want local runs to use it.
+To disable DeepSeek support:
+
+### Disable unattended routing only
+
+Set `deepseek.unattendedEnabled` to `false` or remove the `deepseek` section:
+
+```json
+{
+  "deepseek": {
+    "unattendedEnabled": false
+  }
+}
+```
+
+This prevents autonomous mill/challenge selection while keeping manual launches and explicit stage assignments available.
+
+### Disable provider entirely
+
+Set `providers.deepseek.enabled` to `false` or remove the `providers.deepseek` block:
+
+```json
+{
+  "providers": {
+    "deepseek": {
+      "enabled": false
+    }
+  }
+}
+```
+
+This disables all DeepSeek routing, including manual stage assignments.
+
+### Remove API key
+
+Unset the DeepSeek API key env var if you no longer want local runs to use it:
+
+```bash
+unset DEEPSEEK_API_KEY
+```
+
+### Remove launcher integration
 
 To remove `claude-deepseek` from the router, remove its `router.agentMap` entries or set `agentCmd` back to `"claude"` or `"codex"`.

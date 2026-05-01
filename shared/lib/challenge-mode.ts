@@ -3,6 +3,7 @@ import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import { resolveAgent } from './model-router.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts';
+import { filterDeepSeekForUnattended } from './deepseek-provider.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
 export type ChallengeDecisionSource = 'bootstrap' | 'expanded' | 'preserved';
@@ -44,19 +45,22 @@ function uniqueNonEmpty(values: string[]): string[] {
 
 export function getChallengeModelPoolFromConfig(repoDir?: string): string[] {
   const config = loadWavemillConfig(repoDir);
-  return getChallengeModelPool(config.challenge, config.router);
+  return getChallengeModelPool(config.challenge, config.router, repoDir);
 }
 
 export function getChallengeModelPool(
   challengeConfig?: ChallengeConfig,
   routerConfig?: RouterConfig,
+  repoDir?: string,
 ): string[] {
   const configured = challengeConfig?.models;
-  if (Array.isArray(configured)) {
-    return uniqueNonEmpty(configured);
-  }
+  const basePool = Array.isArray(configured)
+    ? uniqueNonEmpty(configured)
+    : uniqueNonEmpty(routerConfig?.models || []);
 
-  return uniqueNonEmpty(routerConfig?.models || []);
+  // Apply unattended DeepSeek filtering
+  const filtered = filterDeepSeekForUnattended(basePool, repoDir);
+  return filtered.models;
 }
 
 export function canRunChallenge(pool: string[]): boolean {
@@ -99,6 +103,7 @@ export function pickChallengeModels(
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
+    repoDir?: string;
   },
 ): ChallengePairSelection | null {
   const uniquePool = uniqueNonEmpty(pool);
@@ -107,6 +112,16 @@ export function pickChallengeModels(
   const agentMap = opts.agentMap || {};
 
   let primaryModel = opts.primaryModel?.trim() || '';
+
+  // Filter out DeepSeek if provided primaryModel is DeepSeek and unattended is disabled
+  if (primaryModel) {
+    const filtered = filterDeepSeekForUnattended([primaryModel], opts.repoDir);
+    if (filtered.models.length === 0) {
+      // Primary model was filtered out, need to select from pool
+      primaryModel = '';
+    }
+  }
+
   if (!primaryModel) {
     if (!canRunChallenge(uniquePool)) {
       return null;
@@ -187,6 +202,16 @@ export function pickChallengeWorkflows(
 
   // First, get the base model selection (primary and challenger coders)
   let primaryModel = opts.primaryModel?.trim() || '';
+
+  // Filter out DeepSeek if provided primaryModel is DeepSeek and unattended is disabled
+  if (primaryModel) {
+    const filtered = filterDeepSeekForUnattended([primaryModel], opts.repoDir);
+    if (filtered.models.length === 0) {
+      // Primary model was filtered out, need to select from pool
+      primaryModel = '';
+    }
+  }
+
   if (!primaryModel) {
     if (!canRunChallenge(uniquePool)) {
       return null;

@@ -33,6 +33,7 @@ import {
   getDashboardConfig,
   getDeepSeekProviderConfig,
   getDeepSeekLauncherConfig,
+  getDeepSeekConfig,
   getHokusaiSubmissionConfig,
   getProvidersConfig,
   getReadyConfig,
@@ -1520,6 +1521,62 @@ test('invalid integration ready policy risk setting throws validation error', ()
         },
       },
     }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getDeepSeekConfig returns default false when section is absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+    const deepseekConfig = getDeepSeekConfig(tmp);
+    assert.equal(deepseekConfig.unattendedEnabled, false);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getDeepSeekConfig returns default false when section is empty object', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ deepseek: {} }));
+    const deepseekConfig = getDeepSeekConfig(tmp);
+    assert.equal(deepseekConfig.unattendedEnabled, false);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getDeepSeekConfig returns true when unattendedEnabled is true', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ deepseek: { unattendedEnabled: true } }));
+    const deepseekConfig = getDeepSeekConfig(tmp);
+    assert.equal(deepseekConfig.unattendedEnabled, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('deepseek config with non-boolean unattendedEnabled fails validation when Ajv available', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ deepseek: { unattendedEnabled: 'yes' } }));
 
     if (hasAjv) {
       assert.throws(() => {

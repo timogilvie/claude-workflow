@@ -252,6 +252,10 @@ export interface ProvidersConfig {
   deepseek?: DeepSeekProviderConfig;
 }
 
+export interface DeepSeekConfig {
+  unattendedEnabled?: boolean;
+}
+
 export interface IntegrationConfig {
   enabled: boolean;
   integrationBranch: string;
@@ -393,6 +397,7 @@ export interface WavemillConfig {
   ui?: UiConfig;
   review?: ReviewConfig;
   providers?: ProvidersConfig;
+  deepseek?: DeepSeekConfig;
   integration?: Partial<IntegrationConfig>;
   ready?: ReadyConfig;
   permissions?: PermissionsConfig;
@@ -903,6 +908,21 @@ export function getDeepSeekProviderConfig(repoDir?: string): DeepSeekProviderCon
  */
 export function getDeepSeekLauncherConfig(repoDir?: string): DeepSeekLauncherConfig {
   return loadWavemillConfig(repoDir).providers?.deepseek?.launcher || {};
+}
+
+/**
+ * Get the DeepSeek config section.
+ * Returns `{ unattendedEnabled: false }` when absent or empty.
+ *
+ * This controls whether DeepSeek models can be selected by autonomous
+ * routing surfaces like mill/challenge mode. Manual launches and smoke
+ * tests remain unaffected.
+ */
+export function getDeepSeekConfig(repoDir?: string): Required<DeepSeekConfig> {
+  const config = loadWavemillConfig(repoDir).deepseek;
+  return {
+    unattendedEnabled: config?.unattendedEnabled ?? false,
+  };
 }
 
 /**

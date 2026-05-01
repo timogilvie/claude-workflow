@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 import {
   canRunChallenge,
@@ -8,11 +11,13 @@ import {
   deriveChallengeSlug,
   deriveChallengerKey,
   getChallengeModelPool,
+  getChallengeModelPoolFromConfig,
   pickChallengeWorkflowsWithContext,
   pickChallengeModels,
   pickChallengeWorkflows,
 } from './challenge-mode.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
+import { clearConfigCache } from './config.ts';
 
 let passed = 0;
 let failed = 0;
@@ -487,6 +492,130 @@ test('pickChallengeWorkflowsWithContext treats absent invalid expanded snapshot 
   assert.equal(pair!.primary.model, 'claude-sonnet-4-6');
   assert.equal(pair!.primary.codeDepth, 'medium');
   assert.equal(pair!.primary.reviewMode, 'llm');
+});
+
+// ────────────────────────────────────────────────────────────────
+// DeepSeek Unattended Filtering Tests
+// ────────────────────────────────────────────────────────────────
+
+console.log('\n--- DeepSeek Unattended Filtering Tests ---\n');
+
+function makeTempRepo(): string {
+  return mkdtempSync(join(tmpdir(), 'challenge-test-'));
+}
+
+function cleanUp(dir: string) {
+  rmSync(dir, { recursive: true, force: true });
+}
+
+function writeConfig(repoDir: string, content: string) {
+  writeFileSync(join(repoDir, '.wavemill-config.json'), content, 'utf-8');
+}
+
+test('getChallengeModelPool filters DeepSeek when unattendedEnabled is absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { models: ['deepseek-v4-pro', 'claude-sonnet-4-6'] },
+    }));
+
+    const pool = getChallengeModelPoolFromConfig(tmp);
+    assert.deepEqual(pool, ['claude-sonnet-4-6']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getChallengeModelPool filters DeepSeek when unattendedEnabled is false', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { models: ['deepseek-v4-pro', 'claude-sonnet-4-6'] },
+      deepseek: { unattendedEnabled: false },
+    }));
+
+    const pool = getChallengeModelPoolFromConfig(tmp);
+    assert.deepEqual(pool, ['claude-sonnet-4-6']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getChallengeModelPool allows DeepSeek when unattendedEnabled is true', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { models: ['deepseek-v4-pro', 'claude-sonnet-4-6'] },
+      deepseek: { unattendedEnabled: true },
+    }));
+
+    const pool = getChallengeModelPoolFromConfig(tmp);
+    assert.deepEqual(pool, ['deepseek-v4-pro', 'claude-sonnet-4-6']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pickChallengeModels filters DeepSeek primaryModel when unattended gate is false', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      deepseek: { unattendedEnabled: false },
+    }));
+
+    const pair = pickChallengeModels(
+      ['claude-sonnet-4-6', 'claude-opus-4-6'],
+      {
+        pairId: 'TEST-1',
+        issueId: 'TEST-1',
+        slug: 'test',
+        primaryModel: 'deepseek-v4-pro',
+        randomFn: () => 0,
+        repoDir: tmp,
+      },
+    );
+
+    assert.ok(pair);
+    assert.equal(pair!.primary.model, 'claude-sonnet-4-6');
+    assert.equal(pair!.challenger.model, 'claude-opus-4-6');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pickChallengeModels returns null when only DeepSeek models in pool and gate is false', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      deepseek: { unattendedEnabled: false },
+    }));
+
+    const pool = getChallengeModelPool(
+      { models: ['deepseek-v4-pro', 'deepseek-v4-flash'] },
+      undefined,
+      tmp,
+    );
+
+    const pair = pickChallengeModels(
+      pool,
+      {
+        pairId: 'TEST-2',
+        issueId: 'TEST-2',
+        slug: 'test',
+        randomFn: () => 0,
+        repoDir: tmp,
+      },
+    );
+
+    assert.equal(pair, null);
+  } finally {
+    cleanUp(tmp);
+  }
 });
 
 process.on('exit', () => {

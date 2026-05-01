@@ -5,11 +5,18 @@ import { join, resolve } from 'node:path';
 import { DEEPSEEK_BASE_URL } from './deepseek-provider.ts';
 import { encodeProjectDir, resolveProjectsDirs } from './workflow-cost.ts';
 
-const SKIP_MESSAGE = 'DEEPSEEK_API_KEY not set; skipping smoke test';
+const SKIP_MESSAGE = 'DEEPSEEK_API_KEY not set; skipping live smoke test';
 
 export interface DeepSeekSmokeResult {
   exitCode: number;
   message: string;
+}
+
+export interface DeepSeekDryRunPlan {
+  command: string[];
+  cwd: string;
+  envKeys: string[];
+  stateDir: string;
 }
 
 function latestMtimeMs(root: string): number {
@@ -43,11 +50,44 @@ function hasProviderTranscript(worktreePath: string, providerRoot: string): bool
   return resolveProjectsDirs(worktreePath).some((projectsDir) => projectsDir.startsWith(providerRoot) && existsSync(projectsDir));
 }
 
+/**
+ * Build a dry-run plan showing the command and environment that would be used
+ * for a DeepSeek smoke test. Does not require DEEPSEEK_API_KEY.
+ *
+ * @param repoDir - Repository directory (default: current working directory)
+ * @returns Dry-run plan with command, env keys, and state paths (no secrets)
+ */
+export function buildDeepSeekDryRunPlan(repoDir = process.cwd()): DeepSeekDryRunPlan {
+  const worktreePath = resolve(repoDir);
+  const providerRoot = join(worktreePath, '.wavemill', 'runs', 'smoke-deepseek', 'providers', 'deepseek');
+  const prompt = process.env.DEEPSEEK_SMOKE_PROMPT || 'Reply with OK.';
+
+  return {
+    command: ['claude', '--model', 'deepseek-v4-flash', '--dangerously-skip-permissions', prompt],
+    cwd: worktreePath,
+    envKeys: [
+      'HOME',
+      'XDG_CONFIG_HOME',
+      'XDG_DATA_HOME',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+      'CLAUDE_CODE_SUBAGENT_MODEL',
+      'CLAUDE_CODE_EFFORT_LEVEL',
+    ],
+    stateDir: providerRoot,
+  };
+}
+
 export function runDeepSeekSmoke(repoDir = process.cwd()): DeepSeekSmokeResult {
   const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
   if (!apiKey) {
     return {
-      exitCode: 2,
+      exitCode: 0,
       message: SKIP_MESSAGE,
     };
   }

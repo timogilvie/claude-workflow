@@ -1,5 +1,6 @@
 import {
   getDeepSeekProviderConfig,
+  getDeepSeekConfig,
   type DeepSeekProviderConfig,
   type DeepSeekProviderStage,
 } from './config.ts';
@@ -107,6 +108,38 @@ export function filterDeepSeekModels(
       ? [`DeepSeek models were ignored because they are not allowlisted in providers.deepseek.models: ${skippedConfiguredModels.join(', ')}`]
       : [],
   };
+}
+
+/**
+ * Filter DeepSeek models for unattended routing contexts (mill/challenge).
+ *
+ * This is an additional gate on top of provider-level filtering.
+ * Manual launches and smoke tests are unaffected.
+ *
+ * @param models - Model IDs to filter
+ * @param repoDir - Repository directory for config resolution
+ * @returns Filtered models and warnings
+ */
+export function filterDeepSeekForUnattended(
+  models: readonly string[],
+  repoDir?: string,
+): DeepSeekPoolFilterResult {
+  const requested = [...new Set(models)];
+  const deepSeekRequested = requested.filter((modelId) => isDeepSeekModel(modelId));
+
+  if (deepSeekRequested.length === 0) {
+    return { models: requested, warnings: [] };
+  }
+
+  const config = getDeepSeekConfig(repoDir);
+  if (!config.unattendedEnabled) {
+    return {
+      models: requested.filter((modelId) => !isDeepSeekModel(modelId)),
+      warnings: ['DeepSeek models were excluded from unattended routing because deepseek.unattendedEnabled is not true.'],
+    };
+  }
+
+  return { models: requested, warnings: [] };
 }
 
 export function getDeepSeekProviderMetadata(

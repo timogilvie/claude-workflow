@@ -1521,6 +1521,18 @@
                 }
             },
             "additionalProperties": false
+        },
+        "deepseek": {
+            "type": "object",
+            "description": "DeepSeek support configuration. Controls whether DeepSeek models can be selected by autonomous routing (mill/challenge mode). Separate from providers.deepseek which controls the provider path and capabilities.",
+            "properties": {
+                "unattendedEnabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Allow DeepSeek models to be selected for autonomous mill/challenge routing. Manual launches and smoke tests are unaffected by this setting."
+                }
+            },
+            "additionalProperties": false
         }
     },
     "definitions": {
