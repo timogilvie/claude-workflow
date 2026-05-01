@@ -444,6 +444,45 @@ describe('quota fallback', () => {
     assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-opus-4-7']);
   });
 
+  it('keeps DeepSeek Claude-compatible models in provider-filtered ladders', async () => {
+    writeRegistryConfig({
+      configVersion: '1.3.0',
+      modelRegistry: {
+        models: {
+          'deepseek-v4-pro': {
+            vendor: 'deepseek',
+            class: 'strong_generalist',
+            agent: 'claude',
+            qualityScores: { routing: 0, planning: 0, coding: 95, review: 0, classify: 0 },
+          },
+          'gpt-5.5': {
+            vendor: 'openai',
+            class: 'frontier',
+            qualityScores: { routing: 0, planning: 0, coding: 99, review: 0, classify: 0 },
+          },
+        },
+        ladders: {
+          coding: ['gpt-5.5', 'deepseek-v4-pro'],
+        },
+      },
+    });
+
+    const { cliPath, logPath } = createMockCli('deepseek-provider-filter', {
+      'deepseek-v4-pro': { type: 'success', text: 'deepseek coding winner' },
+    });
+
+    const result = await callLLM('coding prompt', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      taskType: 'coding',
+    });
+
+    assert.equal(result.model, 'deepseek-v4-pro');
+    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['deepseek-v4-pro']);
+  });
+
   it('persists a non_quota_error fallback event when a later candidate fails for another reason', async () => {
     const { cliPath } = createMockCli('quota-then-other-error', {
       'model-a': { type: 'quota', message: '429 quota exceeded', code: 1 },
@@ -511,6 +550,53 @@ describe('quota fallback', () => {
 
     assert.equal(result.model, 'model-b');
     assert.ok(elapsedMs < 2000, `expected quota fallback without 2s backoff, got ${elapsedMs}ms`);
+  });
+
+  it('treats DeepSeek 401 auth failures as non-quota and does not exhaust the model', async () => {
+    const { cliPath } = createMockCli('deepseek-auth', {
+      'deepseek-v4-pro': { type: 'other', message: '401 authentication_error invalid_api_key', code: 1 },
+      'claude-sonnet-4-6': { type: 'success', text: 'should not be used' },
+    });
+
+    await assert.rejects(
+      () => callLLM('auth prompt', {
+        provider: 'claude',
+        mode: 'stream',
+        cliCmd: cliPath,
+        repoDir,
+        taskType: 'coding',
+        fallbackModels: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
+      }),
+      /authentication_error|authentication failed/i,
+    );
+
+    const snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['deepseek-v4-pro']?.status, undefined);
+    assert.deepEqual(readFallbackRecords(), []);
+  });
+
+  it('retries DeepSeek transient server errors without marking quota exhaustion', async () => {
+    const { cliPath } = createMockCli('deepseek-server-error', {
+      'deepseek-v4-pro': [
+        { type: 'other', message: '500 server_error temporarily unavailable', code: 1 },
+        { type: 'success', text: 'recovered from server error' },
+      ],
+    });
+
+    const result = await callLLM('transient prompt', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      retry: true,
+      maxRetries: 1,
+      taskType: 'coding',
+      fallbackModels: ['deepseek-v4-pro'],
+    });
+
+    assert.equal(result.model, 'deepseek-v4-pro');
+    const snapshot = readQuotaSnapshot(repoDir);
+    assert.notEqual(snapshot.models['deepseek-v4-pro']?.status, 'exhausted');
   });
 
   it('keeps exponential backoff for transient errors on the same model', async () => {

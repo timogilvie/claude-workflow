@@ -2637,6 +2637,31 @@ approve_plan() {
   write_stage_result "$feature_dir" "planning" "completed" "$agent" "$model" "Plan approved by user" '{"type":"planning","planFile":"plan.md"}'
 }
 
+resolve_stage_result_model() {
+  local feature_dir="$1" stage="$2" fallback="${3:-}"
+  local model=""
+
+  case "$stage" in
+    coding)
+      model=$(read_phase_config "$feature_dir" "coding" "model")
+      [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "coderModel")
+      [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.coding-result.json" 2>/dev/null || echo "")
+      model="$(resolve_phase_model "coding" "$model" "${fallback:-claude-opus-4-7}")"
+      ;;
+    review)
+      model=$(read_phase_config "$feature_dir" "review" "model")
+      [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "reviewerModel")
+      [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.review-result.json" 2>/dev/null || echo "")
+      model="$(resolve_phase_model "review" "$model" "${fallback:-claude-sonnet-4-6}")"
+      ;;
+    *)
+      model="$fallback"
+      ;;
+  esac
+
+  printf '%s\n' "$model"
+}
+
 # Validate that planning stayed within its phase boundary before coding starts.
 # Usage: validate_planning_phase_output <wt_dir>
 # Returns non-zero after reverting out-of-scope changes and removing approval.
@@ -5870,7 +5895,7 @@ monitor_issue_state() {
         coding)
           if [[ "$resolved_phase" == "aborted" ]]; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during coding phase"
-            write_stage_result "$FEATURE_DIR" "coding" "aborted" "$current_agent"
+            write_stage_result "$FEATURE_DIR" "coding" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -5891,7 +5916,7 @@ monitor_issue_state() {
           if [[ "$resolved_phase" == "review" ]]; then
             validate_coding_phase_output "$BRANCH"
             # Mark coding as completed (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
+            write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
 
             # FORCE_MODEL takes priority, then phase config, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
@@ -5939,7 +5964,7 @@ monitor_issue_state() {
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
               validate_coding_phase_output "$BRANCH"
               log "status" "✓ $ISSUE → .coding-complete detected, marking coding as completed"
-              write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
+              write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
               return 0
@@ -5962,7 +5987,7 @@ monitor_issue_state() {
         review)
           if [[ "$resolved_phase" == "aborted" ]]; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
-            write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent"
+            write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -5977,7 +6002,7 @@ monitor_issue_state() {
           # and the controller can move into ready even if the stage file is still "running".
           if [[ "$review_status" == "running" ]]; then
             if [[ -n "$pr_number" ]]; then
-              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
               review_status="completed"
             else
               set_window_attention_state "$WIN" "clear"
@@ -5999,7 +6024,7 @@ monitor_issue_state() {
           # Review is no longer running - check if PR was created and transition to ready phase.
           if [[ -n "$pr_number" ]]; then
             # Mark review as completed with PR artifact (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
 
             # Transition to ready phase
             set_task_phase "$ISSUE" "ready"

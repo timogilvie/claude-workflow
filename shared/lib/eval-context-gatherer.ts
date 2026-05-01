@@ -739,6 +739,7 @@ export function gatherStageArtifacts(
   planContent?: string;
   selfReviewSummary?: string;
   routingDecision?: RoutingDecision;
+  executionModel?: string;
 } {
   // Derive feature slug
   const slug = deriveFeatureSlug(branch, issueId, repoDir);
@@ -749,6 +750,7 @@ export function gatherStageArtifacts(
       planContent: loadFromArchive(repoDir, issueId, 'plan.md'),
       selfReviewSummary: undefined,
       routingDecision: undefined,
+      executionModel: undefined,
     };
   }
 
@@ -767,7 +769,36 @@ export function gatherStageArtifacts(
     planContent,
     selfReviewSummary,
     routingDecision,
+    executionModel: loadStageExecutionModel(repoDir, slug, worktreePath),
   };
+}
+
+function loadStageExecutionModel(repoDir: string, slug: string, worktreePath?: string): string | undefined {
+  const resultPaths = ['coding', 'review', 'planning'].flatMap((stage) => {
+    const paths: string[] = [];
+    if (worktreePath) {
+      paths.push(path.join(worktreePath, 'features', slug, `.${stage}-result.json`));
+    }
+    paths.push(path.join(repoDir, 'features', slug, `.${stage}-result.json`));
+    paths.push(path.join(repoDir, 'bugs', slug, `.${stage}-result.json`));
+    return paths;
+  });
+
+  for (const resultPath of resultPaths) {
+    if (!existsSync(resultPath)) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as { model?: unknown };
+      if (typeof parsed.model === 'string' && parsed.model.trim().length > 0) {
+        return parsed.model;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return undefined;
 }
 
 /**
