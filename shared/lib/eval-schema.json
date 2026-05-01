@@ -198,6 +198,29 @@
       "minimum": 0,
       "description": "Total estimated cost in USD to build the feature (all agent sessions on this branch)."
     },
+    "trainingEligible": {
+      "type": "boolean",
+      "description": "Whether the record includes the fields required for training export."
+    },
+    "budgetEvalEligible": {
+      "type": "boolean",
+      "description": "Whether the record includes the fields required for budget-eval export."
+    },
+    "eligibilityErrors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "missing_routing",
+          "missing_cost",
+          "missing_budget_snapshot",
+          "missing_outcome",
+          "missing_task_descriptor",
+          "missing_model_identity"
+        ]
+      },
+      "description": "Stable machine-readable reasons why the record is ineligible for exports."
+    },
     "workflowTokenUsage": {
       "type": "object",
       "description": "Per-model token usage breakdown from the workflow sessions.",

@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { EvalRecord } from './eval-schema.ts';
 import {
+  attachEligibility,
   attachAgentType,
   attachConstraints,
   attachDifficultyMetadata,
@@ -15,6 +16,7 @@ import {
   attachTaskContextMetadata,
   attachRepoContextMetadata,
   attachWorkflowCostMetadata,
+  computeEligibility,
   enrichEvalRecord,
 } from './eval-record-builder.ts';
 import type { RubricEval } from './eval-schema.ts';
@@ -191,6 +193,139 @@ describe('eval-record-builder', () => {
       const before = { ...baseRecord };
       attachWorkflowCostMetadata(baseRecord, null);
       expect(baseRecord).toEqual(before);
+    });
+  });
+
+  describe('eligibility', () => {
+    function makeEligibleRecord(): EvalRecord {
+      return {
+        ...baseRecord,
+        modelId: 'gpt-5.4',
+        routingDecision: {
+          candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+          chosen: 0,
+        },
+        taskDescriptor: {
+          schema_version: '1.0',
+          signals: {
+            heuristic: {
+              task_type: 'feature',
+              languages: ['typescript'],
+              framework_tags: ['react'],
+              files_touched: 2,
+              repo_size_loc: 10_000,
+              description_tokens: 50,
+              is_greenfield: false,
+              has_migration: false,
+              has_ui: true,
+              has_tests: true,
+              cross_service: false,
+            },
+            learned: {
+              complexity: 3,
+              domain: 'frontend',
+              risk_flags: [],
+            },
+          },
+          constraints: {
+            max_cost_usd: 5,
+            models_available: ['gpt-5.4'],
+            objective: 'balanced',
+          },
+          stages: {
+            planner: { model: 'gpt-5.4' },
+          },
+        },
+        workflowCost: 1.25,
+        outcomes: {
+          success: true,
+          review: {
+            humanReviewRequired: false,
+            rounds: 0,
+            approvals: 1,
+            changeRequests: 0,
+          },
+          rework: {
+            agentIterations: 1,
+          },
+          delivery: {
+            prCreated: true,
+            merged: false,
+          },
+        },
+        constraints: {
+          maxCostUsd: 5,
+        },
+      } as EvalRecord;
+    }
+
+    it('computes eligible flags for a complete record', () => {
+      expect(computeEligibility(makeEligibleRecord())).toEqual({
+        trainingEligible: true,
+        budgetEvalEligible: true,
+        eligibilityErrors: [],
+      });
+    });
+
+    it('marks missing routing as a shared ineligibility reason', () => {
+      const result = computeEligibility({
+        ...makeEligibleRecord(),
+        routingDecision: undefined,
+      });
+
+      expect(result.trainingEligible).toBe(false);
+      expect(result.budgetEvalEligible).toBe(false);
+      expect(result.eligibilityErrors).toContain('missing_routing');
+    });
+
+    it('marks missing workflowCost as budget eval ineligible', () => {
+      const result = computeEligibility({
+        ...makeEligibleRecord(),
+        workflowCost: undefined,
+      });
+
+      expect(result.trainingEligible).toBe(true);
+      expect(result.budgetEvalEligible).toBe(false);
+      expect(result.eligibilityErrors).toContain('missing_cost');
+    });
+
+    it('sorts and deduplicates eligibility errors', () => {
+      const record = {
+        ...baseRecord,
+        modelId: '',
+      } as EvalRecord;
+
+      expect(computeEligibility(record).eligibilityErrors).toEqual([
+        'missing_budget_snapshot',
+        'missing_cost',
+        'missing_model_identity',
+        'missing_outcome',
+        'missing_routing',
+        'missing_task_descriptor',
+      ]);
+    });
+
+    it('is a no-op for null records', () => {
+      expect(() => attachEligibility(null)).not.toThrow();
+    });
+
+    it('is idempotent when attaching computed eligibility', () => {
+      const record = makeEligibleRecord();
+
+      attachEligibility(record);
+      const once = {
+        trainingEligible: record.trainingEligible,
+        budgetEvalEligible: record.budgetEvalEligible,
+        eligibilityErrors: record.eligibilityErrors,
+      };
+
+      attachEligibility(record);
+
+      expect({
+        trainingEligible: record.trainingEligible,
+        budgetEvalEligible: record.budgetEvalEligible,
+        eligibilityErrors: record.eligibilityErrors,
+      }).toEqual(once);
     });
   });
 

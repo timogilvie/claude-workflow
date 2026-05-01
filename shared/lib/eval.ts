@@ -30,7 +30,7 @@ import { loadPricingTable } from './workflow-cost.ts';
 import { createPromptArtifact, type PromptArtifact } from './prompt-hash.ts';
 import { errorMessage } from './error-utils.ts';
 import { getLatestSession } from './session.ts';
-import { attachManifestRef } from './eval-record-builder.ts';
+import { attachEligibility, attachManifestRef } from './eval-record-builder.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,7 +38,7 @@ const __dirname = dirname(__filename);
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
-const SCHEMA_VERSION = '1.13.0';
+const SCHEMA_VERSION = '1.14.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 
@@ -621,5 +621,6 @@ export async function evaluateTask(
   };
   const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
   attachManifestRef(record, activeSessionId);
+  attachEligibility(record);
   return record;
 }
