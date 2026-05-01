@@ -174,6 +174,27 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       weaknesses: ['higher cost'],
       qualityScores: scores(60, 94, 90, 92, 60),
     },
+    'deepseek-v4-pro': {
+      vendor: 'deepseek',
+      class: 'strong_generalist',
+      strengths: ['code generation', 'long context', 'cost efficiency'],
+      weaknesses: ['less established eval history'],
+      qualityScores: scores(55, 75, 80, 72, 60),
+    },
+    'deepseek-v4-flash': {
+      vendor: 'deepseek',
+      class: 'fast_economy',
+      strengths: ['speed', 'low cost', 'code generation'],
+      weaknesses: ['less depth on complex reasoning'],
+      qualityScores: scores(70, 55, 65, 50, 75),
+    },
+    'deepseek-v4-pro[1m]': {
+      vendor: 'deepseek',
+      class: 'strong_generalist',
+      strengths: ['extended context', 'code generation', 'cost efficiency'],
+      weaknesses: ['less established eval history', 'context-length tradeoffs'],
+      qualityScores: scores(55, 75, 78, 70, 58),
+    },
   },
   ladders: {
     routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'claude-opus-4-7'],

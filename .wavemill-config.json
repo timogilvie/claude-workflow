@@ -93,6 +93,18 @@
       "gpt-5.5": {
         "inputCostPerMTok": 5,
         "outputCostPerMTok": 30
+      },
+      "deepseek-v4-pro": {
+        "inputCostPerMTok": 0.5,
+        "outputCostPerMTok": 2.19
+      },
+      "deepseek-v4-flash": {
+        "inputCostPerMTok": 0.1,
+        "outputCostPerMTok": 0.3
+      },
+      "deepseek-v4-pro[1m]": {
+        "inputCostPerMTok": 1,
+        "outputCostPerMTok": 4.38
       }
     },
     "interventionPenalties": {
@@ -150,7 +162,10 @@
       "gpt-5.3-codex": "codex",
       "gpt-5.4": "codex",
       "gpt-5.3-codex-spark": "codex",
-      "gpt-5.5": "codex"
+      "gpt-5.5": "codex",
+      "deepseek-v4-pro": "claude",
+      "deepseek-v4-flash": "claude",
+      "deepseek-v4-pro[1m]": "claude"
     },
     "mode": "auto",
     "llmModel": "gpt-4o-mini",

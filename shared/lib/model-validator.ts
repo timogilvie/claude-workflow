@@ -144,6 +144,23 @@ export function validateModelOrThrow(modelId: string, repoDir?: string): void {
 
   const { all, byAgent } = getKnownModels(repoDir);
 
+  // DeepSeek-specific error for unknown deepseek-* IDs
+  if (modelId.startsWith('deepseek-')) {
+    const knownDeepseek = all.filter((m) => m.startsWith('deepseek-'));
+    let message = `Error: Unknown DeepSeek model "${modelId}"\n\n`;
+    if (knownDeepseek.length > 0) {
+      message += 'Configured DeepSeek models:\n';
+      for (const model of knownDeepseek) {
+        message += `  • ${model}\n`;
+      }
+    } else {
+      message += 'No DeepSeek models are currently configured.\n';
+    }
+    message += '\nTo add this model, configure it in .wavemill-config.json under\n';
+    message += '"eval.pricing" and/or "router.agentMap".\n';
+    throw new Error(message);
+  }
+
   // Build error message
   let message = `Error: Unknown model "${modelId}"\n\n`;
 

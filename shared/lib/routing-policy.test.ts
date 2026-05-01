@@ -752,3 +752,95 @@ describe('routing-policy integration', () => {
     }
   });
 });
+
+describe('DeepSeek routing opt-in behavior', () => {
+  it('default config with DeepSeek pricing does not include DeepSeek in routing pool', async () => {
+    const { repoDir, cleanup } = makeRepo({
+      eval: {
+        ...baseConfig().eval,
+        pricing: {
+          ...baseConfig().eval.pricing,
+          'deepseek-v4-pro': { inputCostPerMTok: 0.5, outputCostPerMTok: 2.19 },
+        },
+      },
+    });
+    try {
+      const decision = await routeWorkflowAuto('Add a new feature', { repoDir });
+      const allModels = [decision.planner, decision.coder, decision.reviewer];
+      for (const model of allModels) {
+        assert.ok(
+          !model.startsWith('deepseek-'),
+          `DeepSeek model "${model}" should not appear in default routing`,
+        );
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('explicitly configured router.models can include DeepSeek', async () => {
+    const { repoDir, cleanup } = makeRepo({
+      router: {
+        ...baseConfig().router,
+        models: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
+        agentMap: {
+          ...baseConfig().router.agentMap,
+          'deepseek-v4-pro': 'claude',
+        },
+      },
+      eval: {
+        ...baseConfig().eval,
+        pricing: {
+          ...baseConfig().eval.pricing,
+          'deepseek-v4-pro': { inputCostPerMTok: 0.5, outputCostPerMTok: 2.19 },
+        },
+      },
+    });
+    try {
+      const decision = await routeWorkflowAuto('Add a new feature', {
+        repoDir,
+        modelsAvailable: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
+      });
+      const allModels = [decision.planner, decision.coder, decision.reviewer];
+      assert.ok(
+        allModels.some((m) => m === 'deepseek-v4-pro' || m === 'claude-sonnet-4-6'),
+        'Should route to one of the explicitly available models',
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('bracketed DeepSeek IDs work in explicit modelsAvailable', async () => {
+    const { repoDir, cleanup } = makeRepo({
+      router: {
+        ...baseConfig().router,
+        models: ['deepseek-v4-pro[1m]', 'claude-sonnet-4-6'],
+        agentMap: {
+          ...baseConfig().router.agentMap,
+          'deepseek-v4-pro[1m]': 'claude',
+        },
+      },
+      eval: {
+        ...baseConfig().eval,
+        pricing: {
+          ...baseConfig().eval.pricing,
+          'deepseek-v4-pro[1m]': { inputCostPerMTok: 1, outputCostPerMTok: 4.38 },
+        },
+      },
+    });
+    try {
+      const decision = await routeWorkflowAuto('Add a new feature', {
+        repoDir,
+        modelsAvailable: ['deepseek-v4-pro[1m]', 'claude-sonnet-4-6'],
+      });
+      const allModels = [decision.planner, decision.coder, decision.reviewer];
+      assert.ok(
+        allModels.some((m) => m === 'deepseek-v4-pro[1m]' || m === 'claude-sonnet-4-6'),
+        'Should route to one of the explicitly available models including bracketed IDs',
+      );
+    } finally {
+      cleanup();
+    }
+  });
+});

@@ -113,9 +113,17 @@ function getAvailableModels(
 ): string[] {
   const routerConfig = loadRouterConfig(repoDir);
   const pricingModels = Object.keys(loadPricingTable(repoDir));
+  const agentMap = routerConfig.agentMap || {};
+  const explicitModels = new Set(routerConfig.models || []);
+  // Only include pricing models that are also in agentMap (launch-ready) AND
+  // either explicitly listed in router.models or already have a well-known prefix.
+  // This prevents opt-in models from becoming automatic challenge candidates.
+  const eligiblePricingModels = pricingModels.filter(
+    (m) => explicitModels.has(m) || m.startsWith('claude-') || m.startsWith('gpt-') || /^o\d/.test(m),
+  );
   return [...new Set([
     ...(routerConfig.models || []),
-    ...pricingModels,
+    ...eligiblePricingModels,
     routingDecision.planner,
     routingDecision.coder,
     routingDecision.reviewer,

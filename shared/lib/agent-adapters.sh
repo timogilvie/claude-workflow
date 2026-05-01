@@ -18,6 +18,7 @@ agent_resolve_from_model() {
   case "$model" in
     claude-*) echo "claude" ;;
     gpt-*|o[0-9]*) echo "codex" ;;
+    deepseek-*) echo "claude" ;;
     *) echo "${AGENT_CMD:-claude}" ;;
   esac
 }

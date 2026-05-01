@@ -295,7 +295,7 @@ const DEFAULT_ROUTER_OPTIONS = {
  *
  * Resolution order:
  *   1. Explicit agentMap entry
- *   2. Prefix heuristic (claude- prefix = claude, gpt-/o prefix = codex)
+ *   2. Prefix heuristic (claude- = claude, gpt-/o = codex, deepseek- = claude)
  *   3. defaultAgent fallback
  */
 export function resolveAgent(
@@ -306,6 +306,7 @@ export function resolveAgent(
   if (agentMap[modelId]) return agentMap[modelId];
   if (modelId.startsWith('claude-')) return 'claude';
   if (modelId.startsWith('gpt-') || /^o\d/.test(modelId)) return 'codex';
+  if (modelId.startsWith('deepseek-')) return 'claude';
   return defaultAgent;
 }
 

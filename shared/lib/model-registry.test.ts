@@ -48,6 +48,9 @@ describe('model-registry', () => {
       'claude-haiku-4-5-20251001',
       'gpt-5.5',
       'gpt-5.4',
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
+      'deepseek-v4-pro[1m]',
     ];
 
     assert.deepEqual(Object.keys(DEFAULT_MODEL_REGISTRY.models).sort(), expectedModels.sort());
@@ -302,6 +305,41 @@ describe('model-registry', () => {
 
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /missing-model/);
+  });
+
+  it('includes DeepSeek models with complete metadata', () => {
+    const deepseekModels = ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-pro[1m]'];
+    for (const modelId of deepseekModels) {
+      const model = DEFAULT_MODEL_REGISTRY.models[modelId];
+      assert.ok(model, `${modelId} should exist in registry`);
+      assert.equal(model.vendor, 'deepseek');
+      assert.ok(model.strengths.length > 0);
+      assert.ok(model.weaknesses.length > 0);
+      for (const taskType of ['routing', 'planning', 'coding', 'review', 'classify'] as TaskType[]) {
+        assert.equal(typeof model.qualityScores[taskType], 'number');
+        assert.ok(model.qualityScores[taskType] >= 0);
+      }
+    }
+  });
+
+  it('default ladders do not include DeepSeek models', () => {
+    const deepseekModels = ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-pro[1m]'];
+    for (const taskType of ['routing', 'planning', 'coding', 'review', 'classify'] as TaskType[]) {
+      const ladder = DEFAULT_MODEL_REGISTRY.ladders[taskType] || [];
+      for (const modelId of deepseekModels) {
+        assert.ok(!ladder.includes(modelId), `${modelId} should not be in default ${taskType} ladder`);
+      }
+    }
+  });
+
+  it('explicit override ladder can include bracketed DeepSeek model IDs', () => {
+    const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
+      ladders: {
+        coding: ['deepseek-v4-pro[1m]', 'claude-sonnet-4-6'],
+      },
+    });
+
+    assert.deepEqual(getLadder(merged, 'coding'), ['deepseek-v4-pro[1m]', 'claude-sonnet-4-6']);
   });
 
   it('getEffectiveRegistry merges repo config into the seeded defaults', () => {

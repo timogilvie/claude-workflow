@@ -241,9 +241,16 @@ function countMatches(prompt: string, patterns: RegExp[]): number {
 function getModelPool(repoDir?: string): string[] {
   const routerConfig = loadRouterConfig(repoDir);
   const pricingModels = Object.keys(loadPricingTable(repoDir));
+  const explicitModels = new Set(routerConfig.models || []);
+  const defaultPoolSet = new Set(DEFAULT_MODEL_POOL);
+  // Only include pricing models that are also in the default pool or explicitly configured.
+  // This keeps opt-in models (e.g. DeepSeek) out of default routing unless explicitly listed.
+  const eligiblePricingModels = pricingModels.filter(
+    (m) => defaultPoolSet.has(m) || explicitModels.has(m),
+  );
   return [...new Set([
     ...(routerConfig.models || []),
-    ...pricingModels,
+    ...eligiblePricingModels,
     ...DEFAULT_MODEL_POOL,
   ])];
 }

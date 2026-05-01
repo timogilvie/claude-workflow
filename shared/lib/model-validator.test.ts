@@ -1,5 +1,5 @@
 /**
- * Tests for model-validator.ts
+ * Tests for model-validator.ts and resolveAgent
  */
 
 import { describe, it } from 'node:test';
@@ -11,6 +11,7 @@ import {
   suggestModel,
   validateModelOrThrow,
 } from './model-validator.ts';
+import { resolveAgent } from './model-router.ts';
 
 describe('model-validator', () => {
   describe('getKnownModels', () => {
@@ -38,6 +39,13 @@ describe('model-validator', () => {
       assert.ok(claudeModels.includes('claude-opus-4-7'), 'Claude should include claude-opus-4-7');
     });
 
+    it('includes configured DeepSeek models', () => {
+      const { all } = getKnownModels('.');
+      assert.ok(all.includes('deepseek-v4-pro'), 'Should include deepseek-v4-pro');
+      assert.ok(all.includes('deepseek-v4-flash'), 'Should include deepseek-v4-flash');
+      assert.ok(all.includes('deepseek-v4-pro[1m]'), 'Should include deepseek-v4-pro[1m]');
+    });
+
     it('deduplicates models from pricing and agentMap', () => {
       const { all } = getKnownModels('.');
 
@@ -57,10 +65,21 @@ describe('model-validator', () => {
       assert.strictEqual(isValidModel('claude-sonnet-4-6', '.'), true);
     });
 
+    it('returns true for configured DeepSeek models including bracketed IDs', () => {
+      assert.strictEqual(isValidModel('deepseek-v4-pro', '.'), true);
+      assert.strictEqual(isValidModel('deepseek-v4-flash', '.'), true);
+      assert.strictEqual(isValidModel('deepseek-v4-pro[1m]', '.'), true);
+    });
+
     it('returns false for unknown models', () => {
       assert.strictEqual(isValidModel('chatgpt-5.3', '.'), false);
       assert.strictEqual(isValidModel('chatgpt-5.4', '.'), false);
       assert.strictEqual(isValidModel('gpt-99', '.'), false);
+    });
+
+    it('returns false for unknown DeepSeek model IDs', () => {
+      assert.strictEqual(isValidModel('deepseek-v4-pro[2m]', '.'), false);
+      assert.strictEqual(isValidModel('deepseek-v5-turbo', '.'), false);
     });
   });
 
@@ -160,5 +179,60 @@ describe('model-validator', () => {
         );
       }
     });
+
+    it('does not throw for configured DeepSeek models', () => {
+      assert.doesNotThrow(() => validateModelOrThrow('deepseek-v4-pro', '.'));
+      assert.doesNotThrow(() => validateModelOrThrow('deepseek-v4-flash', '.'));
+      assert.doesNotThrow(() => validateModelOrThrow('deepseek-v4-pro[1m]', '.'));
+    });
+
+    it('throws DeepSeek-specific error for unknown deepseek-* IDs', () => {
+      try {
+        validateModelOrThrow('deepseek-v4-pro[2m]', '.');
+        assert.fail('Should have thrown');
+      } catch (err) {
+        const message = errorMessage(err);
+        assert.ok(
+          message.includes('Unknown DeepSeek model'),
+          'Error should indicate DeepSeek-specific error'
+        );
+        assert.ok(
+          message.includes('deepseek-v4-pro'),
+          'Error should list configured DeepSeek alternatives'
+        );
+        assert.ok(
+          message.includes('eval.pricing'),
+          'Error should mention how to add the model'
+        );
+      }
+    });
+  });
+});
+
+describe('resolveAgent', () => {
+  it('resolves DeepSeek models to claude via prefix heuristic', () => {
+    assert.strictEqual(resolveAgent('deepseek-v4-pro', {}, 'codex'), 'claude');
+    assert.strictEqual(resolveAgent('deepseek-v4-flash', {}, 'codex'), 'claude');
+    assert.strictEqual(resolveAgent('deepseek-v4-pro[1m]', {}, 'codex'), 'claude');
+  });
+
+  it('explicit agentMap overrides prefix heuristic for DeepSeek', () => {
+    const agentMap = { 'deepseek-v4-pro': 'custom-agent' };
+    assert.strictEqual(resolveAgent('deepseek-v4-pro', agentMap, 'codex'), 'custom-agent');
+  });
+
+  it('resolves claude-* models to claude', () => {
+    assert.strictEqual(resolveAgent('claude-opus-4-7', {}, 'codex'), 'claude');
+    assert.strictEqual(resolveAgent('claude-sonnet-4-6', {}, 'codex'), 'claude');
+  });
+
+  it('resolves gpt-* models to codex', () => {
+    assert.strictEqual(resolveAgent('gpt-5.4', {}, 'claude'), 'codex');
+    assert.strictEqual(resolveAgent('gpt-5.5', {}, 'claude'), 'codex');
+  });
+
+  it('falls back to defaultAgent for unknown prefixes', () => {
+    assert.strictEqual(resolveAgent('unknown-model', {}, 'claude'), 'claude');
+    assert.strictEqual(resolveAgent('unknown-model', {}, 'codex'), 'codex');
   });
 });
