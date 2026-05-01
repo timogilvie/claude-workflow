@@ -23,6 +23,14 @@ runTool({
       type: 'string',
       description: 'Routing mode: auto, stage-aware, heuristic, or hokusai',
     },
+    source: {
+      type: 'string',
+      description: 'Route provenance source (bootstrap, expanded, startup-cache, batch-cache, live, heuristic-fallback)',
+    },
+    'input-kind': {
+      type: 'string',
+      description: 'Route input kind (issue, task-packet, cache, heuristic)',
+    },
     'max-cost': {
       type: 'string',
       description: 'Maximum cost budget in USD for routing',
@@ -45,8 +53,10 @@ runTool({
   ],
   async run({ args, positional }) {
     let prompt = '';
+    let file: string | undefined;
     if (args.file) {
       try {
+        file = args.file;
         prompt = readTaskPromptFromFile(args.file);
       } catch (err) {
         throw new Error(`Failed to read file: ${err instanceof Error ? err.message : String(err)}`);
@@ -69,7 +79,7 @@ runTool({
       }
     }
     const [result] = await routeBatch([
-      { prompt },
+      { prompt, file, source: args.source, inputKind: args['input-kind'] },
     ], {
       repoDir,
       mode: mode as 'auto' | 'stage-aware' | 'heuristic' | 'hokusai',

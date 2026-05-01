@@ -398,17 +398,41 @@ check_pr_exists() {
 # read route.json through this helper instead of reading the shim directly.
 #
 # Usage: read_route_json <session> <issue> <field> [default]
+route_read_field() {
+  local route_file="$1" field="$2" default_value="${3:-}"
+  local value=""
+
+  if [[ ! -f "$route_file" ]]; then
+    return 1
+  fi
+
+  if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
+    return 2
+  fi
+
+  value=$(jq -r --arg field "$field" '
+    if ($field | contains(".")) then
+      ($field | split(".")) as $path | getpath($path) // empty
+    else
+      .[$field] // .provenance[$field] // empty
+    end
+  ' "$route_file" 2>/dev/null || true)
+  if [[ -n "$value" ]]; then
+    echo "$value"
+    return 0
+  fi
+
+  echo "$default_value"
+  return 0
+}
+
 read_route_json() {
   local session="$1" issue="$2" field="$3" default_value="${4:-}"
   local route_file="/tmp/${session}-${issue}-route.json"
   local suggestion_file="/tmp/${session}-${issue}-model-suggestion.json"
   local value=""
 
-  if [[ -f "$route_file" ]]; then
-    value=$(jq -r --arg field "$field" '
-      ($field | split(".")) as $path |
-      getpath($path) // empty
-    ' "$route_file" 2>/dev/null || true)
+  if value=$(route_read_field "$route_file" "$field" ""); then
     if [[ -n "$value" ]]; then
       echo "$value"
       return 0
