@@ -41,6 +41,21 @@ else
   fail "initial-route immutability guard is missing"
 fi
 
+if grep -Fq 'apply_expanded_route_if_present()' "$REPO_DIR/shared/lib/wavemill-common.sh" \
+  && grep -Fq '.post-expansion-route.json' "$REPO_DIR/shared/lib/wavemill-common.sh" \
+  && grep -Fq '.expanded-route.json' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+  pass "shared expanded-route apply helper prefers post-expansion artifacts"
+else
+  fail "expanded-route apply helper or precedence guard is missing"
+fi
+
+if grep -Fq 'apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG"' "$MILL_SCRIPT" \
+  && grep -Fq 'apply_expanded_route_if_present "$feature_dir" "$issue" "$slug"' "$MILL_SCRIPT"; then
+  pass "mill applies expanded route before coding launch and coding resume"
+else
+  fail "mill is missing expanded-route apply call sites"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
