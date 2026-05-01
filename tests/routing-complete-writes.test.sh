@@ -27,6 +27,20 @@ else
   fail "startup runner is missing maxCostUsd in .routing-complete writes"
 fi
 
+if grep -Fq 'provenance' "$MILL_SCRIPT" \
+  && grep -Fq 'provenance' "$REPO_DIR/shared/lib/wavemill-startup-runner.sh"; then
+  pass "routing-complete writes include provenance metadata"
+else
+  fail "routing-complete writes are missing provenance metadata"
+fi
+
+if grep -Fq 'if [[ -f "$feature_dir/.initial-route.json" ]]' "$MILL_SCRIPT" \
+  && grep -Fq 'if [[ -f "$feature_dir/.initial-route.json" ]]' "$REPO_DIR/shared/lib/wavemill-startup-runner.sh"; then
+  pass "initial-route writes are guarded for immutability"
+else
+  fail "initial-route immutability guard is missing"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 

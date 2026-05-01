@@ -29,6 +29,7 @@ import { policyAdjustmentLog, routerLog } from './router-log.ts';
 import { registerAgentConfig } from './resource-adapters/agent-config-adapter.ts';
 import { recordUse } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
+import type { RouteProvenance } from './route-artifact.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -74,6 +75,7 @@ export interface WorkflowRouteDecision {
   };
   budgetViolation?: BudgetViolation;
   resourceSelections?: RuntimeResourceSelection[];
+  provenance?: RouteProvenance;
 }
 
 export interface RouteWorkflowOptions {

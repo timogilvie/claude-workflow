@@ -3,12 +3,15 @@
 import { readFileSync } from 'node:fs';
 import { stdin as input } from 'node:process';
 import { routeBatch, getWavemillAdditionalEvalPaths, tasksFromPlan } from '../shared/lib/route-batch.ts';
+import type { RouteInputKind, RouteSource } from '../shared/lib/route-artifact.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 
 interface RouteBatchTaskInput {
   issueId?: string;
   prompt?: string;
   file?: string;
+  source?: RouteSource;
+  inputKind?: RouteInputKind;
 }
 
 async function readStdin(): Promise<string> {
@@ -38,11 +41,13 @@ async function readJsonlTasks(path: string): Promise<RouteBatchTaskInput[]> {
       throw new Error(`Invalid JSONL at line ${index + 1}: expected object`);
     }
 
-    const item = parsed as { issueId?: unknown; prompt?: unknown; file?: unknown };
+    const item = parsed as { issueId?: unknown; prompt?: unknown; file?: unknown; source?: unknown; inputKind?: unknown };
     tasks.push({
       issueId: typeof item.issueId === 'string' ? item.issueId : undefined,
       prompt: typeof item.prompt === 'string' ? item.prompt : undefined,
       file: typeof item.file === 'string' ? item.file : undefined,
+      source: typeof item.source === 'string' ? item.source as RouteSource : undefined,
+      inputKind: typeof item.inputKind === 'string' ? item.inputKind as RouteInputKind : undefined,
     });
   }
 

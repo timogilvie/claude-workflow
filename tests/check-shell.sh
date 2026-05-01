@@ -1673,11 +1673,12 @@ else
   trap 'rm -f "$route_file" "$suggestion_file"' EXIT
 
   cat > "$route_file" <<'EOF'
-{"planner":"planner-a","coder":"coder-a","reviewer":"reviewer-a","planDepth":"deep","codeDepth":"medium","reviewRecommended":"dynamic"}
+{"planner":"planner-a","coder":"coder-a","reviewer":"reviewer-a","planDepth":"deep","codeDepth":"medium","reviewRecommended":"dynamic","provenance":{"inputHash":"abc123","source":"expanded"}}
 EOF
   if [[ "$(_test_route_helper "$route_session" "$route_issue" "coder")" == "coder-a" ]] \
     && [[ "$(_test_route_helper "$route_session" "$route_issue" "planner")" == "planner-a" ]] \
-    && [[ "$(_test_route_helper "$route_session" "$route_issue" "reviewRecommended" "static")" == "dynamic" ]]; then
+    && [[ "$(_test_route_helper "$route_session" "$route_issue" "reviewRecommended" "static")" == "dynamic" ]] \
+    && [[ "$(_test_route_helper "$route_session" "$route_issue" "inputHash" "none")" == "abc123" ]]; then
     pass "read_route_json returns values from canonical route.json"
   else
     fail "read_route_json does not read route.json fields correctly"
@@ -1713,6 +1714,12 @@ EOF
     pass "read_route_json returns defaults for missing route.json fields"
   else
     fail "read_route_json did not return default for missing route.json field"
+  fi
+
+  if [[ "$(_test_route_helper "$route_session" "$route_issue" "source" "live")" == "live" ]]; then
+    pass "read_route_json returns defaults for missing provenance fields"
+  else
+    fail "read_route_json did not return default for missing provenance field"
   fi
 
   cat > "$route_file" <<'EOF'
