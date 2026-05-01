@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { getBacklog, type LinearIssue } from '../shared/lib/linear.ts';
-import { planTaskDependencies, TaskDependencyPlannerError } from '../shared/lib/task-dependency-planner.ts';
+import { planTaskDependencies, TaskDependencyPlannerError, type PlanResult } from '../shared/lib/task-dependency-planner.ts';
 import {
   parseBacklogJson,
   extractEdgesFromBacklog,
