@@ -4489,6 +4489,7 @@ reroute_expanded_packets_for_coding_handoff() {
     REROUTE_EXPANDED_LAST_REASON="routing_error"
     replay_route_transparency_logs "$stderr_file"
     if [[ -f "$current_feature_dir/.post-expansion-route.json" ]]; then
+      REROUTE_EXPANDED_LAST_REASON="routing_error_using_existing_artifact"
       log_route_lifecycle "expansion_skipped" \
         "issue=$current_issue" \
         "reason=routing_error_using_existing_artifact" \

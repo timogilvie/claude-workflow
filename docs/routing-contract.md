@@ -110,7 +110,7 @@ Current event names:
 - `expanded_assigned`: valid expanded route promoted or confirmed for execution
 - `expansion_cache_hit`: expanded reroute reused cached packet-hash output
 - `expansion_skipped`: expanded reroute skipped — `reason=disabled`, `reason=not_eligible`, or `reason=routing_error_using_existing_artifact` (routing call failed but a pre-existing artifact was found and used)
-- `expansion_failed`: expanded reroute or promotion failed with `reason=routing_error` or `reason=invalid_artifact`
+- `expansion_failed`: expanded reroute or promotion failed with `reason=routing_error`, `reason=invalid_artifact`, or `reason=cache_error`
 - `execution_active`: route actually used for coding execution, with `source=bootstrap|expanded|preserved`
 
 Common fields:
