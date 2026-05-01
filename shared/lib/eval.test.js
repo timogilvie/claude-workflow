@@ -41,7 +41,7 @@ describe('evaluateTask', () => {
 
     // Core EvalRecord fields from eval-schema.ts
     assert.ok(result.id, 'should have a UUID id');
-    assert.equal(result.schemaVersion, '1.13.0');
+    assert.equal(result.schemaVersion, '1.14.0');
     assert.equal(result.originalPrompt, 'Add a loading spinner');
     assert.ok(result.modelId);
     assert.ok(result.modelVersion);
@@ -54,6 +54,15 @@ describe('evaluateTask', () => {
     assert.deepEqual(result.interventionDetails, []);
     assert.equal(result.rationale, 'Task was completed successfully with clean implementation.');
     assert.equal(result.issueId, 'HOK-100');
+    assert.equal(result.trainingEligible, false);
+    assert.equal(result.budgetEvalEligible, false);
+    assert.deepEqual(result.eligibilityErrors, [
+      'missing_budget_snapshot',
+      'missing_cost',
+      'missing_outcome',
+      'missing_routing',
+      'missing_task_descriptor',
+    ]);
   });
 
   it('derives correct score band from eval-schema rubric', async () => {

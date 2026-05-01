@@ -10,6 +10,7 @@
 
 import type {
   EvalRecord,
+  EligibilityErrorCode,
   RepoContext,
   RoutingCandidate,
   RoutingDecision,
@@ -178,6 +179,10 @@ export interface HokusaiSubmission {
   observed_outcomes: HokusaiSubmissionOutcomes;
   rubric_signals?: HokusaiSubmissionRubricSignals;
 }
+
+export type HokusaiSubmissionResult =
+  | { ok: true; submission: HokusaiSubmission }
+  | { ok: false; reasons: EligibilityErrorCode[] };
 
 // ============================================================================
 // Input Schema Adapters
@@ -498,6 +503,20 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function uniqueSortedCodes(codes: EligibilityErrorCode[]): EligibilityErrorCode[] {
+  return [...new Set(codes)].sort();
+}
+
+function filterEligibilityReasons(
+  record: EvalRecord,
+  allowed: readonly EligibilityErrorCode[],
+  fallback: EligibilityErrorCode,
+): EligibilityErrorCode[] {
+  const allowedSet = new Set<EligibilityErrorCode>(allowed);
+  const reasons = record.eligibilityErrors?.filter((code) => allowedSet.has(code)) ?? [];
+  return reasons.length > 0 ? uniqueSortedCodes(reasons) : [fallback];
+}
+
 function extractRubricSignals(record: EvalRecord): HokusaiSubmissionRubricSignals | undefined {
   const rubric = record.taskDescriptor?.rubric;
 
@@ -528,19 +547,30 @@ function extractRubricSignals(record: EvalRecord): HokusaiSubmissionRubricSignal
 /**
  * Converts an eval result into the Hokusai training/submission schema.
  *
- * Returns `null` when the record does not contain the required identifiers,
- * routing details, or observed outcome data needed for a complete submission.
+ * Returns structured failure reasons when the record does not contain the
+ * required identifiers, routing details, or observed outcome data needed for
+ * a complete submission.
  */
 export function toHokusaiSubmission(
   record: EvalRecord,
-): HokusaiSubmission | null {
+): HokusaiSubmissionResult {
+  if (record.trainingEligible === false) {
+    return {
+      ok: false,
+      reasons: uniqueSortedCodes(record.eligibilityErrors ?? []),
+    };
+  }
+
   if (!isNonEmptyString(record.id) || !isNonEmptyString(record.issueId)) {
-    return null;
+    return { ok: false, reasons: ['missing_model_identity'] };
   }
 
   const routeTaken = extractRoutes(record);
   if (!routeTaken) {
-    return null;
+    return {
+      ok: false,
+      reasons: filterEligibilityReasons(record, ['missing_routing'], 'missing_routing'),
+    };
   }
 
   if (
@@ -549,29 +579,35 @@ export function toHokusaiSubmission(
     || typeof record.timeSeconds !== 'number'
     || !Number.isFinite(record.timeSeconds)
   ) {
-    return null;
+    return {
+      ok: false,
+      reasons: filterEligibilityReasons(record, ['missing_cost'], 'missing_cost'),
+    };
   }
 
   const rubricSignals = extractRubricSignals(record);
 
   return {
-    schema_version: rubricSignals ? '1.1' : '1.0',
-    run_id: record.id,
-    task_id: record.issueId,
-    constraints: {
-      max_cost_usd:
-        record.constraints?.maxCostUsd
-        ?? record.taskDescriptor?.constraints?.max_cost_usd
-        ?? null,
+    ok: true,
+    submission: {
+      schema_version: rubricSignals ? '1.1' : '1.0',
+      run_id: record.id,
+      task_id: record.issueId,
+      constraints: {
+        max_cost_usd:
+          record.constraints?.maxCostUsd
+          ?? record.taskDescriptor?.constraints?.max_cost_usd
+          ?? null,
+      },
+      route_taken: routeTaken,
+      observed_outcomes: {
+        completed_successfully: record.outcomes?.success ?? record.score >= 0.5,
+        actual_cost_usd: record.workflowCost,
+        actual_time_seconds: record.timeSeconds,
+        intervention_count: record.interventionCount ?? 0,
+      },
+      ...(rubricSignals && { rubric_signals: rubricSignals }),
     },
-    route_taken: routeTaken,
-    observed_outcomes: {
-      completed_successfully: record.outcomes?.success ?? record.score >= 0.5,
-      actual_cost_usd: record.workflowCost,
-      actual_time_seconds: record.timeSeconds,
-      intervention_count: record.interventionCount ?? 0,
-    },
-    ...(rubricSignals && { rubric_signals: rubricSignals }),
   };
 }
 
