@@ -9,6 +9,7 @@ import {
   loadCache,
   pruneCache,
   saveCache,
+  type CacheFile,
   type FingerprintableTask,
 } from '../shared/lib/task-dependency-plan-cache.ts';
 import {
@@ -119,7 +120,15 @@ runTool({
       ? parseBacklogJson(readFileSync(0, 'utf8'), 'stdin')
       : await loadBacklogFromLinear(args.project);
     const fingerprintTasks = records.map(toCacheTask);
-    const cacheBeforePrune = shouldUseCache ? loadCache(process.cwd(), cacheKey) : undefined;
+    let cacheBeforePrune: CacheFile | undefined = undefined;
+    if (shouldUseCache) {
+      try {
+        cacheBeforePrune = loadCache(process.cwd(), cacheKey);
+      } catch (error) {
+        process.stderr.write(`plan-queue: invalid cache key "${cacheKey}": ${(error as Error).message}\n`);
+        process.exit(2);
+      }
+    }
     const cacheAfterPrune = cacheBeforePrune ? pruneCache(cacheBeforePrune, fingerprintTasks) : undefined;
     const edges = extractEdgesFromBacklog(records);
     let result: PlanResult;

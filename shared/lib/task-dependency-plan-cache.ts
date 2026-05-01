@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { mutateJsonState, StateLockTimeoutError } from './state-mutex.ts';
 
 export const CACHE_SCHEMA_VERSION = 1;
-const CACHE_WRITE_TIMEOUT_MS = 100;
+const CACHE_WRITE_TIMEOUT_MS = 5000;
 
 export interface CachedEdge {
   from: string;
