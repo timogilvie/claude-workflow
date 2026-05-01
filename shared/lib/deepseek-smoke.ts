@@ -294,10 +294,11 @@ export function runLiveSmoke(options: RunLiveSmokeOptions = {}): DeepSeekSmokeRe
   ));
 
   if (checks[0]?.ok) {
+    const transcriptFound = hasProviderTranscript(worktreePath, env);
     checks.push(assertCheck(
       'live.transcript',
-      hasProviderTranscript(worktreePath, env),
-      hasProviderTranscript(worktreePath, env)
+      transcriptFound,
+      transcriptFound
         ? `Transcript detected under ${relPath(repoDir, env.WAVEMILL_DEEPSEEK_STATE_DIR)}.`
         : 'Live smoke did not produce a transcript under the isolated DeepSeek state directory.',
     ));
