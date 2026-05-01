@@ -15,6 +15,7 @@ import {
   type TendCandidate,
   type TendDecision,
 } from './tend-controller.ts';
+import { createStatusLineWriter } from '../../tools/tend.ts';
 
 function metadata(lines: string[] = ['task: HOK-1437']): string {
   return ['<!-- wavemill-meta', ...lines, '-->'].join('\n');
@@ -665,5 +666,57 @@ describe('executeMerge', () => {
     } finally {
       options.cleanup();
     }
+  });
+});
+
+describe('writeStatusLine / tend loop deduplication', () => {
+  it('writes repeated identical status exactly once', () => {
+    let output = '';
+    const writer = {
+      write(chunk: string) {
+        output += chunk;
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+    const { writeStatusLine } = createStatusLineWriter(writer);
+    const line = 'eligible=0 blocked=0 health=ok last=none action=idle';
+
+    for (let i = 0; i < 5; i += 1) {
+      writeStatusLine(line);
+    }
+
+    assert.equal(output, line);
+  });
+
+  it('rewrites in place when status changes', () => {
+    let output = '';
+    const writer = {
+      write(chunk: string) {
+        output += chunk;
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+    const { writeStatusLine } = createStatusLineWriter(writer);
+
+    writeStatusLine('eligible=0 blocked=0 health=ok last=none action=idle');
+    writeStatusLine('eligible=0 blocked=0 health=ok last=none action=routing');
+
+    assert.ok(output.endsWith('\religible=0 blocked=0 health=ok last=none action=routing\x1b[K'));
+    assert.ok(!output.includes('\n'));
+  });
+
+  it('does not prefix first render with carriage return', () => {
+    let output = '';
+    const writer = {
+      write(chunk: string) {
+        output += chunk;
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+    const { writeStatusLine } = createStatusLineWriter(writer);
+
+    writeStatusLine('eligible=0 blocked=0 health=ok last=none action=idle');
+
+    assert.ok(!output.startsWith('\r'));
   });
 });

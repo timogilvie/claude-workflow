@@ -6,6 +6,30 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 
 const TEND_LOOP_INTERVAL_MS = 60_000;
 
+export type StatusLineWriter = {
+  writeStatusLine: (line: string) => void;
+};
+
+export function createStatusLineWriter(writer: NodeJS.WriteStream = process.stdout): StatusLineWriter {
+  let lastStatusLine: string | null = null;
+
+  return {
+    writeStatusLine(line: string): void {
+      if (line === lastStatusLine) {
+        return;
+      }
+
+      if (lastStatusLine === null) {
+        writer.write(line);
+      } else {
+        writer.write(`\r${line}\x1b[K`);
+      }
+
+      lastStatusLine = line;
+    },
+  };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -14,39 +38,40 @@ function statusActionForResult(status: string, prNumber: number): string {
   return status === 'merged' ? `merged-#${prNumber}` : `${status}-#${prNumber}`;
 }
 
-runTool({
-  name: 'tend',
-  description: 'Tend the integration queue',
-  options: {
-    once: {
-      type: 'boolean',
-      description: 'Run once and exit',
+function main(): void {
+  runTool({
+    name: 'tend',
+    description: 'Tend the integration queue',
+    options: {
+      once: {
+        type: 'boolean',
+        description: 'Run once and exit',
+      },
+      loop: {
+        type: 'boolean',
+        description: 'Run continuously inside the mill tmux session',
+      },
+      'dry-run': {
+        type: 'boolean',
+        description: 'Print status line without mutating',
+      },
+      'repo-dir': {
+        type: 'string',
+        description: 'Repository directory (default: current directory)',
+        default: process.cwd(),
+      },
     },
-    loop: {
-      type: 'boolean',
-      description: 'Run continuously inside the mill tmux session',
+    examples: [
+      'npx tsx tools/tend.ts --once --dry-run',
+      'npx tsx tools/tend.ts --once --repo-dir /path/to/repo',
+      'npx tsx tools/tend.ts --loop --repo-dir /path/to/repo',
+      'npx tsx tools/tend.ts promote --repo-dir /path/to/repo',
+    ],
+    positional: {
+      name: 'command',
+      description: 'Optional subcommand (supported: promote)',
     },
-    'dry-run': {
-      type: 'boolean',
-      description: 'Print status line without mutating',
-    },
-    'repo-dir': {
-      type: 'string',
-      description: 'Repository directory (default: current directory)',
-      default: process.cwd(),
-    },
-  },
-  examples: [
-    'npx tsx tools/tend.ts --once --dry-run',
-    'npx tsx tools/tend.ts --once --repo-dir /path/to/repo',
-    'npx tsx tools/tend.ts --loop --repo-dir /path/to/repo',
-    'npx tsx tools/tend.ts promote --repo-dir /path/to/repo',
-  ],
-  positional: {
-    name: 'command',
-    description: 'Optional subcommand (supported: promote)',
-  },
-  async run({ args, positional }) {
+    async run({ args, positional }) {
     const subcommand = positional[0];
     if (!args.once && !args.loop) {
       if (subcommand === 'promote') {
@@ -63,13 +88,14 @@ runTool({
 
     const repoDir = String(args['repo-dir'] || process.cwd());
 
-    if (args.loop) {
+      if (args.loop) {
+        const { writeStatusLine } = createStatusLineWriter();
       let lastMergedPR: number | null = null;
 
       while (true) {
         const decision = await selectNextCandidate({ repoDir });
         if (decision.nextPR === null) {
-          console.log(formatStatusLine(decision, { action: 'idle', lastPR: lastMergedPR }));
+          writeStatusLine(formatStatusLine(decision, { action: 'idle', lastPR: lastMergedPR }));
           await sleep(TEND_LOOP_INTERVAL_MS);
           continue;
         }
@@ -79,7 +105,7 @@ runTool({
           throw new Error(`tend: selected PR #${decision.nextPR} was not found in eligible candidates`);
         }
 
-        console.log(formatStatusLine(decision, {
+        writeStatusLine(formatStatusLine(decision, {
           action: `merging-#${candidate.number}`,
           lastPR: lastMergedPR,
         }));
@@ -89,7 +115,7 @@ runTool({
           lastMergedPR = result.prNumber;
         }
 
-        console.log(formatStatusLine(decision, {
+        writeStatusLine(formatStatusLine(decision, {
           action: statusActionForResult(result.status, result.prNumber),
           lastPR: lastMergedPR,
         }));
@@ -101,8 +127,8 @@ runTool({
 
         await sleep(TEND_LOOP_INTERVAL_MS);
       }
-      return;
-    }
+        return;
+      }
 
     const decision = await selectNextCandidate({
       repoDir,
@@ -126,5 +152,10 @@ runTool({
     if (result.status === 'halted') {
       process.exitCode = 1;
     }
-  },
-});
+    },
+  });
+}
+
+if (import.meta.main) {
+  main();
+}
