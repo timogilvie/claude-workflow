@@ -445,6 +445,70 @@
       },
       "additionalProperties": false
     },
+    "providers": {
+      "type": "object",
+      "description": "Optional provider-specific execution paths for supported agent CLIs.",
+      "properties": {
+        "deepseek": {
+          "type": "object",
+          "description": "Run Claude Code against DeepSeek's Anthropic-compatible endpoint. This path is default-off until explicitly enabled.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable DeepSeek as a Claude-compatible provider path."
+            },
+            "apiKeyEnv": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Environment variable name that holds the DeepSeek API key."
+            },
+            "baseUrl": {
+              "type": "string",
+              "default": "https://api.deepseek.com/anthropic",
+              "description": "Anthropic-compatible base URL for Claude Code requests."
+            },
+            "models": {
+              "type": "array",
+              "description": "DeepSeek model IDs that Wavemill may route to when the provider is enabled.",
+              "items": {
+                "type": "string",
+                "pattern": "^deepseek-"
+              }
+            },
+            "stages": {
+              "type": "array",
+              "description": "Workflow stages allowed to use DeepSeek.",
+              "items": {
+                "type": "string",
+                "enum": ["planner", "coder", "reviewer"]
+              }
+            },
+            "effortLevel": {
+              "type": "string",
+              "enum": ["low", "medium", "high"],
+              "default": "medium",
+              "description": "Claude Code effort level to request when using the DeepSeek provider path."
+            }
+          },
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "enabled": { "const": true }
+                },
+                "required": ["enabled"]
+              },
+              "then": {
+                "required": ["apiKeyEnv"]
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "ready": {
       "type": "object",
       "description": "Settings for the ready stage (merge-readiness checks)",

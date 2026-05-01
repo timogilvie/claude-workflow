@@ -278,13 +278,27 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       contextWindowTokens: 1_000_000,
       agent: 'claude',
     },
+    'deepseek-chat': {
+      vendor: 'deepseek',
+      class: 'strong_generalist',
+      strengths: ['compatibility alias for existing DeepSeek integrations'],
+      weaknesses: ['compatibility alias', 'future deprecation risk'],
+      qualityScores: scores(46, 70, 76, 68, 40),
+    },
+    'deepseek-reasoner': {
+      vendor: 'deepseek',
+      class: 'frontier',
+      strengths: ['reasoning-oriented compatibility alias'],
+      weaknesses: ['compatibility alias', 'future deprecation risk'],
+      qualityScores: scores(44, 78, 74, 70, 36),
+    },
   },
   ladders: {
-    routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'claude-opus-4-7'],
-    planning: ['gpt-5.5', 'claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    coding: ['gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'],
-    review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
+    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-opus-4-7'],
+    planning: ['gpt-5.5', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    coding: ['gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
+    review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
+    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
   },
 };
 

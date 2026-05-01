@@ -1,0 +1,96 @@
+---
+title: DeepSeek Provider
+---
+
+DeepSeek support in Wavemill is implemented as a Claude-compatible provider path. Wavemill still launches `claude`, but for DeepSeek models it injects Anthropic-compatible env vars and isolates Claude Code state under the worktree so the user’s normal `~/.claude` is not touched.
+
+## Required setup
+
+Set a DeepSeek API key in your shell:
+
+```bash
+export DEEPSEEK_API_KEY=...
+```
+
+Enable the provider explicitly in `.wavemill-config.json`:
+
+```json
+{
+  "providers": {
+    "deepseek": {
+      "enabled": true,
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+      "stages": ["coder"],
+      "effortLevel": "medium"
+    }
+  }
+}
+```
+
+DeepSeek is default-off. Do not enable it for unattended usage until the smoke test below passes.
+
+## Model IDs
+
+Primary current IDs:
+
+- `deepseek-v4-pro`
+- `deepseek-v4-flash`
+
+Compatibility aliases kept for existing workflows:
+
+- `deepseek-chat`
+- `deepseek-reasoner`
+
+The aliases are retained for compatibility, but DeepSeek currently documents the `deepseek-v4-*` IDs as primary.
+
+## Runtime behavior
+
+- Wavemill sets `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`.
+- Wavemill passes `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, the Claude default model aliases, `CLAUDE_CODE_SUBAGENT_MODEL`, and `CLAUDE_CODE_EFFORT_LEVEL` only to the child `claude` process.
+- Claude state is isolated under `.wavemill/runs/<issue-or-session>/providers/deepseek/`.
+- Routing filters DeepSeek models unless the provider is enabled, the configured key env var is present, and the target stage is allowlisted in `providers.deepseek.stages`.
+
+## Limitations
+
+DeepSeek’s Anthropic-compatible endpoint does not fully match native Anthropic Claude Code behavior. DeepSeek currently documents limitations around image/document content and some server-side tools being unsupported or ignored. Treat the provider path as opt-in and validate the exact workflow you need before enabling it broadly.
+
+## Smoke test
+
+Without a key:
+
+```bash
+unset DEEPSEEK_API_KEY
+npx tsx tools/smoke-deepseek.ts
+```
+
+Expected result:
+
+- exit code `2`
+- stdout `DEEPSEEK_API_KEY not set; skipping smoke test`
+
+With a real key:
+
+```bash
+DEEPSEEK_API_KEY=$REAL_KEY npx tsx tools/smoke-deepseek.ts
+```
+
+Expected result:
+
+- exit code `0`
+- stdout `OK`
+- a workflow transcript is written under the isolated DeepSeek provider home
+- no files under the real `~/.claude` are newer than the pre-smoke marker
+
+## Manual validation
+
+After a successful smoke run:
+
+1. Route a stage to `deepseek-v4-pro` or `deepseek-v4-flash`.
+2. Confirm the eval row records `provider: "deepseek"` and `endpoint: "https://api.deepseek.com/anthropic"`.
+3. Confirm transcript discovery, workflow cost, and intervention detection still work for the run.
+4. Grep `.wavemill` and `/tmp/wavemill-*` to verify the literal API key was not persisted.
+
+## Rollback
+
+Disable the provider by setting `providers.deepseek.enabled` to `false` or removing the `providers.deepseek` block entirely. Unset the DeepSeek API key env var if you no longer want local runs to use it.

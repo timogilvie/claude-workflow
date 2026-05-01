@@ -6,6 +6,7 @@ import {
   type ModelRegistry,
   type RegistryTaskType,
 } from './model-registry.ts';
+import { filterDeepSeekModels } from './deepseek-provider.ts';
 import { type QuotaSnapshot, type QuotaStatus } from './quota-state.ts';
 import { getAllowedModelFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 
@@ -108,11 +109,33 @@ function findHealthyFrontierSibling(
   return null;
 }
 
+function filterProviderUnavailableModels(
+  registry: ModelRegistry,
+  repoDir?: string,
+): ModelRegistry {
+  const allowedModelIds = new Set(filterDeepSeekModels(Object.keys(registry.models), repoDir).models);
+
+  return {
+    models: Object.fromEntries(
+      Object.entries(registry.models).filter(([modelId]) => allowedModelIds.has(modelId)),
+    ),
+    ladders: Object.fromEntries(
+      Object.entries(registry.ladders).map(([taskType, ladder]) => [
+        taskType,
+        ladder.filter((modelId) => allowedModelIds.has(modelId)),
+      ]),
+    ),
+  };
+}
+
 export function resolveModel(
   policy: RoutingPolicy,
   registryOverride?: ModelRegistry,
 ): RankedCandidate[] {
-  const registry = registryOverride ?? getEffectiveRegistry(policy.repoDir);
+  const registry = filterProviderUnavailableModels(
+    registryOverride ?? getEffectiveRegistry(policy.repoDir),
+    policy.repoDir,
+  );
   const floor = getAllowedModelFloor(policy.difficulty);
   const hasViableFrontier = Object.entries(registry.models).some(([modelId, capabilities]) => {
     if (capabilities.class !== 'frontier') {

@@ -39,6 +39,7 @@ describe('model-validator', () => {
       assert.ok(codexModels.includes('gpt-5.5'), 'Codex should include gpt-5.5');
       assert.ok(claudeModels.includes('claude-opus-4-6'), 'Claude should include claude-opus-4-6');
       assert.ok(claudeModels.includes('claude-opus-4-7'), 'Claude should include claude-opus-4-7');
+      assert.ok(claudeModels.includes('deepseek-v4-pro'), 'Claude should include deepseek-v4-pro');
     });
 
     it('deduplicates models from pricing and agentMap', () => {

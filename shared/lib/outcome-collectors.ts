@@ -29,7 +29,7 @@ import type {
   DeliveryOutcome,
 } from './eval-schema.ts';
 import type { InterventionSummary } from './intervention-detector.ts';
-import { resolveProjectsDir } from './workflow-cost.ts';
+import { resolveProjectsDirs } from './workflow-cost.ts';
 
 // ────────────────────────────────────────────────────────────────
 // PR Checks Cache
@@ -467,12 +467,15 @@ export function collectReworkOutcome(
 
     // Try to count tool failures from session files (Claude only)
     if (agentType === 'claude' && worktreePath) {
-      const projectsDir = resolveProjectsDir(worktreePath);
-      if (existsSync(projectsDir)) {
-        const sessionFiles = readdirSync(projectsDir)
-          .filter((f) => f.endsWith('.jsonl'))
-          .map((f) => join(projectsDir, f));
+      const sessionFiles = resolveProjectsDirs(worktreePath)
+        .filter((projectsDir) => existsSync(projectsDir))
+        .flatMap((projectsDir) =>
+          readdirSync(projectsDir)
+            .filter((f) => f.endsWith('.jsonl'))
+            .map((f) => join(projectsDir, f))
+        );
 
+      if (sessionFiles.length > 0) {
         let toolFailures = 0;
         for (const filePath of sessionFiles) {
           try {

@@ -448,7 +448,7 @@ startup_run_task_phases() {
     startup_phase_failed "$startup_id" route "$issue" "agent unavailable"
     return 1
   fi
-  if [[ "$task_agent" != "$AGENT_CMD" ]] && ! agent_check_auth "$task_agent"; then
+  if [[ "$task_agent" != "$AGENT_CMD" ]] && ! agent_check_auth "$task_agent" "$coder_model" "$REPO_DIR"; then
     startup_phase_failed "$startup_id" route "$issue" "agent unauthenticated"
     return 1
   fi

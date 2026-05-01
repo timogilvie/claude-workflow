@@ -14,6 +14,7 @@ import { loadWavemillConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 import {
   configuredDeepSeekModelIds,
+  DEFAULT_MODEL_REGISTRY,
   getEffectiveRegistry,
   isDeepSeekLikeModelId,
   isKnownModelId,
@@ -50,6 +51,10 @@ export function getKnownModels(repoDir?: string): KnownModelsResult {
     for (const modelId of Object.keys(config.eval.pricing)) {
       modelSet.add(modelId);
     }
+  }
+
+  for (const modelId of Object.keys(DEFAULT_MODEL_REGISTRY.models)) {
+    modelSet.add(modelId);
   }
 
   // Add models from agentMap

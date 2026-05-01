@@ -42,6 +42,38 @@ function setupClaudeSessionDir() {
   };
 }
 
+function setupDeepSeekClaudeSessionDir() {
+  const tmpHome = mkdtempSync(join(tmpdir(), 'adapter-deepseek-'));
+  const worktreePath = join(tmpHome, 'fake-worktree');
+  const encoded = encodeProjectDir(worktreePath);
+  const projectsDir = join(
+    worktreePath,
+    '.wavemill',
+    'runs',
+    'HOK-1485',
+    'providers',
+    'deepseek',
+    'home',
+    '.claude',
+    'projects',
+    encoded,
+  );
+  mkdirSync(projectsDir, { recursive: true });
+
+  const origHome = process.env.HOME;
+  process.env.HOME = tmpHome;
+
+  return {
+    tmpHome,
+    worktreePath,
+    projectsDir,
+    cleanup: () => {
+      process.env.HOME = origHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    },
+  };
+}
+
 /** Set up a fake ~/.codex/sessions/ directory for Codex adapter tests. */
 function setupCodexSessionDir() {
   const tmpHome = mkdtempSync(join(tmpdir(), 'adapter-codex-'));
@@ -220,6 +252,23 @@ describe('ClaudeSessionAdapter', () => {
       assert.equal(Object.keys(result.models).length, 2);
       assert.equal(result.models['claude-opus-4-6'].inputTokens, 400);
       assert.equal(result.models['claude-haiku-4-5-20251001'].inputTokens, 200);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('discovers transcripts under DeepSeek provider homes', () => {
+    const { worktreePath, projectsDir, cleanup } = setupDeepSeekClaudeSessionDir();
+    try {
+      const branch = 'task/test';
+      writeFileSync(join(projectsDir, 'session1.jsonl'), claudeAssistantTurn({ branch, model: 'deepseek-v4-pro', inputTokens: 120, outputTokens: 45 }));
+
+      const adapter = new ClaudeSessionAdapter();
+      const result = adapter.scan({ worktreePath, branchName: branch });
+
+      assert.ok(result);
+      assert.equal(result.models['deepseek-v4-pro'].inputTokens, 120);
+      assert.equal(result.sessionCount, 1);
     } finally {
       cleanup();
     }

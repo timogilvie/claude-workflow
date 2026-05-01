@@ -317,6 +317,7 @@ export function resolveAgent(
   const capabilities = getModel(registry, modelId);
   if (capabilities?.agent) return capabilities.agent;
   if (modelId.startsWith('claude-')) return 'claude';
+  if (modelId.startsWith('deepseek-')) return 'claude';
   if (modelId.startsWith('gpt-') || /^o\d/.test(modelId)) return 'codex';
   if (isDeepSeekLikeModelId(modelId)) {
     const configured = configuredDeepSeekModelIds(registry);
