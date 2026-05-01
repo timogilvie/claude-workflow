@@ -80,6 +80,38 @@ function setupSessionDir(): { tmpHome: string; worktreePath: string; projectsDir
   };
 }
 
+function setupDeepSeekSessionDir(): { tmpHome: string; worktreePath: string; projectsDir: string; cleanup: () => void } {
+  const tmpHome = mkdtempSync(join(tmpdir(), 'intervention-deepseek-test-'));
+  const worktreePath = join(tmpHome, 'fake-worktree');
+  const encoded = encodeProjectDir(worktreePath);
+  const projectsDir = join(
+    worktreePath,
+    '.wavemill',
+    'runs',
+    'HOK-1488',
+    'providers',
+    'deepseek',
+    'home',
+    '.claude',
+    'projects',
+    encoded,
+  );
+  mkdirSync(projectsDir, { recursive: true });
+
+  const origHome = process.env.HOME;
+  process.env.HOME = tmpHome;
+
+  return {
+    tmpHome,
+    worktreePath,
+    projectsDir,
+    cleanup: () => {
+      process.env.HOME = origHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    },
+  };
+}
+
 describe('intervention-detector', () => {
   describe('DEFAULT_PENALTIES', () => {
     it('has expected default values', () => {
@@ -389,6 +421,31 @@ describe('intervention-detector', () => {
         // First string message across all files is skipped (task prompt).
         // "First redirect" and "Second redirect in session 2" are counted.
         assert.equal(event.count, 2);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('detects redirects from DeepSeek provider-home transcripts and ignores wrong branches', () => {
+      const { worktreePath, projectsDir, cleanup } = setupDeepSeekSessionDir();
+      try {
+        const branch = 'task/my-feature';
+        const wrongBranch = 'task/other-feature';
+        const lines = [
+          userEntry({ branch, content: 'You are working on: My Feature (HOK-100)' }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: toolResultContent('toolu_123', 'result') }),
+          assistantEntry({ branch }),
+          userEntry({ branch, content: 'Actually prioritize the quota handling path first' }),
+          assistantEntry({ branch }),
+          userEntry({ branch: wrongBranch, content: 'Wrong branch redirect should be ignored' }),
+          assistantEntry({ branch: wrongBranch }),
+        ];
+        writeFileSync(join(projectsDir, 'session1.jsonl'), lines.join('\n'));
+
+        const event = detectSessionRedirects(worktreePath, branch);
+        assert.equal(event.count, 1);
+        assert.match(event.details[0], /quota handling path first/);
       } finally {
         cleanup();
       }
