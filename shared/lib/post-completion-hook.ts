@@ -28,12 +28,16 @@ import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
 import { attachStageOutcomes, enrichEvalRecord } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
-import { readBothRouteArtifacts } from './route-artifact.ts';
+import {
+  buildRouteLifecycleProvenance,
+  deriveRouteDecisionSource,
+  readRouteLifecycleArtifacts,
+} from './route-artifact.ts';
 import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, formatRepoContextDisplay, formatInterventionDisplay } from './eval-summary-printer.ts';
 import { errorMessage } from './error-utils.ts';
-import type { EvalRecord, InterventionRecord, RoutingDecision, TaskContext, RepoContext } from './eval-schema.ts';
+import type { EvalRecord, EvalRouteProvenance, InterventionRecord, RoutingDecision, TaskContext, RepoContext } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
-import { routeChangedMaterially, type ChallengeRouteContext } from './challenge-mode.ts';
+import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome } from './workflow-cost.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -70,35 +74,38 @@ interface PostCompletionEnrichmentInput {
   routingDecision?: RoutingDecision;
 }
 
-function deriveChallengeRouteContext(
+function resolveRouteArtifactDirs(
+  repoDir: string,
   branchName: string | undefined,
   worktreePath: string | undefined,
-): ChallengeRouteContext | null {
-  if (!worktreePath) {
-    return null;
-  }
-
+  issueId: string | undefined,
+): { featureDir?: string; archiveDir?: string } {
   const slugFromBranch = branchName?.replace(/^(task|bug)\//, '');
   const slug = slugFromBranch && slugFromBranch !== branchName
     ? slugFromBranch
-    : path.basename(worktreePath);
-  if (!slug) {
-    return null;
-  }
+    : worktreePath
+      ? path.basename(worktreePath)
+      : '';
 
-  const featureDir = join(worktreePath, 'features', slug);
-  const { bootstrap, expanded } = readBothRouteArtifacts(featureDir);
+  return {
+    ...(slug && worktreePath ? { featureDir: join(worktreePath, 'features', slug) } : {}),
+    ...(issueId ? { archiveDir: join(repoDir, '.wavemill', 'evals', 'artifacts', issueId) } : {}),
+  };
+}
+
+function deriveChallengeRouteContext(
+  repoDir: string,
+  issueId: string | undefined,
+  branchName: string | undefined,
+  worktreePath: string | undefined,
+): ChallengeRouteContext | null {
+  const { featureDir, archiveDir } = resolveRouteArtifactDirs(repoDir, branchName, worktreePath, issueId);
+  const { bootstrap, expanded, active } = readRouteLifecycleArtifacts(featureDir, archiveDir);
   if (!bootstrap && !expanded) {
     return null;
   }
 
-  const decisionSource = !expanded
-    ? 'bootstrap'
-    : !bootstrap
-      ? 'expanded'
-      : routeChangedMaterially(bootstrap, expanded).changed
-        ? 'expanded'
-        : 'preserved';
+  const decisionSource = deriveRouteDecisionSource({ bootstrap, expanded, active }, repoDir) ?? 'bootstrap';
 
   return {
     decisionSource,
@@ -108,6 +115,16 @@ function deriveChallengeRouteContext(
       ? { refreshRationale: 'expanded route matches bootstrap on coder class/depth' }
       : {}),
   };
+}
+
+function deriveRouteProvenance(
+  repoDir: string,
+  issueId: string | undefined,
+  branchName: string | undefined,
+  worktreePath: string | undefined,
+): EvalRouteProvenance | null {
+  const { featureDir, archiveDir } = resolveRouteArtifactDirs(repoDir, branchName, worktreePath, issueId);
+  return buildRouteLifecycleProvenance(readRouteLifecycleArtifacts(featureDir, archiveDir), repoDir);
 }
 
 export function buildTaskDescriptorForPostCompletion(
@@ -171,8 +188,14 @@ export function enrichPostCompletionRecord(
     provider: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.provider,
     endpoint: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.endpoint,
     challengePairId: input.challengePairId,
+    routeProvenance: deriveRouteProvenance(
+      input.repoDir,
+      input.issueId,
+      input.branchName,
+      input.worktreePath,
+    ),
     challengeRouteContext: input.challengePairId
-      ? deriveChallengeRouteContext(input.branchName, input.worktreePath)
+      ? deriveChallengeRouteContext(input.repoDir, input.issueId, input.branchName, input.worktreePath)
       : null,
     difficulty: input.difficultyData,
     taskContext: input.taskContextData,

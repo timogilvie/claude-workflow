@@ -393,6 +393,9 @@ harness_run_tick() {
     launch_ready_phase() { return 0; }
     ready_state_dir() { printf "%s\n" "$1/features/$2/ready"; }
     write_ready_attention_file() { :; }
+    emit_execution_active_route() { :; }
+    log_route_lifecycle() { :; }
+    route_lifecycle_route_id() { :; }
     reroute_expanded_packets_for_coding_handoff() { REROUTE_CALLED="true"; return 0; }
     apply_expanded_route_if_present() { APPLY_CALLED="true"; return 0; }
     mill_check_expansion_handshake() { HANDSHAKE_CALLED="true"; return 0; }
