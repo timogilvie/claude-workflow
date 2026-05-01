@@ -50,7 +50,7 @@ The `coding)` branch reads reviewer model and mode from `.phase-config.json` or 
 
 ### Challenge Mode
 
-Challenge selection currently derives paired workflow settings from the active route available at launch time. Startup challenge preparation reads `/tmp` route data and `resolve-challenge-task.ts`; `launch_task()` persists planner/coder/reviewer/depth values for both primary and challenger entries into task state; `shared/lib/challenge-mode.ts::pickChallengeWorkflows` computes one workflow route and shares planner, reviewer, and depth values across the primary and challenger while keeping distinct coder models.
+Challenge selection now records an explicit decision source. Startup and early launch still use the bootstrap route when no expanded artifact exists. Once planning emits `.post-expansion-route.json`, `resolve-challenge-task.ts` compares bootstrap and expanded route context and either refreshes challenge participants from the expanded route, or preserves the bootstrap pair with a recorded rationale when the route did not change materially. Eval records may persist both bootstrap and expanded route snapshots through `challengeRouteContext`.
 
 ### Resume Behavior
 
@@ -143,6 +143,6 @@ Eval archival should continue retaining both `routing-complete.json` and `post-e
 | dynamic launch | Uses `/tmp` route cache or live route on raw/minimal packet, then writes `.routing-complete` and `.initial-route.json`. | Same bootstrap capture, followed by later promotion if expansion succeeds. |
 | planning expansion | Writes `.post-expansion-route.json` only. | Writes `.post-expansion-route.json`, and the controller promotes it before coding/review execution begins. |
 | coding and review launch | Read `.phase-config.json` or task state, which may still reflect bootstrap routing. | Read authoritative execution state derived from the promoted expanded route. |
-| challenge mode | Uses launch-time route and persists challenge-specific overrides. | Preserve distinct coder identities, but source shared planner/reviewer/depth values from the authoritative execution route after promotion. |
+| challenge mode | Uses launch-time route and persists challenge-specific overrides. | Preserve distinct coder identities, refresh or preserve the pair from explicit bootstrap-versus-expanded routing context, and record the decision source for evals. |
 | resume | Relaunches from `.phase-config.json` or task state, even if they still hold bootstrap values. | Relaunches from the promoted authoritative route, keeping bootstrap and expanded artifacts only as provenance. |
 | eval archival | Archives both `.routing-complete` and `.post-expansion-route.json`, but loads only `.routing-complete` as routing decision. | Preserve both artifacts and make the bootstrap-versus-expanded distinction explicit for later analysis. |

@@ -7,6 +7,7 @@ import type { EvalRecord } from './eval-schema.ts';
 import {
   attachEligibility,
   attachAgentType,
+  attachChallengeRouteContext,
   attachConstraints,
   attachDifficultyMetadata,
   attachFallbackEvent,
@@ -637,6 +638,76 @@ describe('eval-record-builder', () => {
       enrichEvalRecord(baseRecord, { rubricEval: validRubricEval });
       expect(baseRecord.rubricEval).toEqual(validRubricEval);
       expect(baseRecord.rubric_provenance).toBe('judge');
+    });
+  });
+
+  describe('attachChallengeRouteContext (HOK-1515)', () => {
+    const routeContext = {
+      decisionSource: 'expanded' as const,
+      bootstrapRoute: {
+        coder: 'claude-sonnet-4-6',
+        codeDepth: 'medium',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'llm',
+        planner: 'gpt-5.4',
+      },
+      expandedRoute: {
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'static',
+      },
+      refreshRationale: 'coder class changed',
+    };
+
+    it('is a no-op when context is undefined', () => {
+      const before = { ...baseRecord };
+      attachChallengeRouteContext(baseRecord, undefined);
+      expect(baseRecord.challengeRouteContext).toBeUndefined();
+      expect(baseRecord).toEqual(before);
+    });
+
+    it('is a no-op when context is null', () => {
+      const before = { ...baseRecord };
+      attachChallengeRouteContext(baseRecord, null);
+      expect(baseRecord.challengeRouteContext).toBeUndefined();
+      expect(baseRecord).toEqual(before);
+    });
+
+    it('attaches normalized challenge route context when provided', () => {
+      attachChallengeRouteContext(baseRecord, routeContext);
+      expect(baseRecord.challengeRouteContext).toEqual({
+        decisionSource: 'expanded',
+        bootstrapRoute: {
+          coder: 'claude-sonnet-4-6',
+          codeDepth: 'medium',
+          reviewer: 'claude-opus-4-6',
+          reviewMode: 'llm',
+        },
+        expandedRoute: {
+          coder: 'gpt-5.4',
+          codeDepth: 'deep',
+          reviewer: 'claude-opus-4-6',
+          reviewMode: 'static',
+        },
+        refreshRationale: 'coder class changed',
+      });
+    });
+
+    it('attaches partial context when only bootstrap route is available', () => {
+      attachChallengeRouteContext(baseRecord, {
+        decisionSource: 'bootstrap',
+        bootstrapRoute: routeContext.bootstrapRoute,
+      });
+      expect(baseRecord.challengeRouteContext).toEqual({
+        decisionSource: 'bootstrap',
+        bootstrapRoute: {
+          coder: 'claude-sonnet-4-6',
+          codeDepth: 'medium',
+          reviewer: 'claude-opus-4-6',
+          reviewMode: 'llm',
+        },
+      });
     });
   });
 });
