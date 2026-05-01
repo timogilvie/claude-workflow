@@ -1,0 +1,13 @@
+{
+  "issueId": "HOK-2005",
+  "planner": "gpt-5.5",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6",
+  "constraints": {
+    "maxCostUsd": 4
+  },
+  "task": {
+    "issueId": "HOK-2005",
+    "prompt": "Prospectively reroute a task even when no eval row exists yet."
+  }
+}
