@@ -52,15 +52,10 @@ if (!isLive) {
   process.exit(0);
 }
 
-// Live mode
+// Live mode — always print result.message to stdout; use stderr only for failures.
 const result = runDeepSeekSmoke(process.cwd());
 if (result.exitCode !== 0) {
-  if (result.message.includes('skipping')) {
-    console.log(result.message);
-  } else {
-    console.error(result.message);
-  }
+  console.error(result.message);
   process.exit(result.exitCode);
 }
-
 console.log(result.message);
