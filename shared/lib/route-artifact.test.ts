@@ -85,6 +85,9 @@ test('validateExpandedRouteArtifact accepts execution fields', () => {
     codeDepth: 'deep',
     reviewer: 'claude-sonnet-4-6',
     reviewMode: 'static+llm',
+    cache_hit: true,
+    route_source: 'batch',
+    packet_hash: 'a'.repeat(64),
     extra: true,
   });
 
@@ -140,6 +143,21 @@ test('validateExpandedRouteArtifact rejects blank execution fields', () => {
   assert.equal(result.valid, false);
   assert.deepEqual(result.missing, []);
   assert.deepEqual(result.invalid, ['coder']);
+});
+
+test('validateExpandedRouteArtifact rejects malformed optional metadata', () => {
+  const result = validateExpandedRouteArtifact({
+    coder: 'gpt-5.4',
+    codeDepth: 'deep',
+    reviewer: 'claude-sonnet-4-6',
+    reviewMode: 'static+llm',
+    cache_hit: 'yes',
+    route_source: 'live',
+    packet_hash: 'abc123',
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.invalid.sort(), ['cache_hit', 'packet_hash', 'route_source']);
 });
 
 test('stringifyRouteArtifact returns strict JSON with trailing newline', () => {
@@ -200,6 +218,9 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     planDepth: 'deep',
     codeDepth: 'medium',
     reviewMode: 'llm',
+    cache_hit: undefined,
+    route_source: undefined,
+    packet_hash: undefined,
   });
   assert.deepEqual(result.expanded, {
     coder: 'gpt-5.4',
@@ -208,6 +229,9 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     reviewMode: 'static+llm',
     planDepth: undefined,
     planner: undefined,
+    cache_hit: undefined,
+    route_source: undefined,
+    packet_hash: undefined,
   });
 });
 
@@ -232,6 +256,9 @@ test('readBothRouteArtifacts reads expanded-only artifacts', () => {
     reviewer: 'claude-opus-4-6',
     codeDepth: 'deep',
     reviewRecommended: 'static',
+    cache_hit: true,
+    route_source: 'cache',
+    packet_hash: 'a'.repeat(64),
   }));
 
   const result = readBothRouteArtifacts(featureDir);
@@ -243,6 +270,9 @@ test('readBothRouteArtifacts reads expanded-only artifacts', () => {
     reviewMode: 'static',
     planDepth: undefined,
     planner: undefined,
+    cache_hit: true,
+    route_source: 'cache',
+    packet_hash: 'a'.repeat(64),
   });
 });
 

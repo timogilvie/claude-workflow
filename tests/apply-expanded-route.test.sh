@@ -124,6 +124,9 @@ echo "=== Expanded Route Apply Helper ==="
   "planDepth": "deep",
   "codeDepth": "deep",
   "reviewRecommended": "static+llm",
+  "cache_hit": true,
+  "route_source": "cache",
+  "packet_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "provenance": {
     "inputHash": "abc123"
   }
@@ -138,6 +141,9 @@ EOF
       && [[ "$(jq -r '.review.mode' "$feature_dir/.phase-config.json")" == "static+llm" ]] \
       && [[ "$(jq -r '.tasks["HOK-1512"].coderModel' "$state_file")" == "gpt-5.4" ]] \
       && [[ "$(jq -r '.tasks["HOK-1512"].reviewMode' "$state_file")" == "static+llm" ]] \
+      && [[ "$(jq -r '.cache_hit' "$feature_dir/.routing-complete")" == "true" ]] \
+      && [[ "$(jq -r '.route_source' "$feature_dir/.routing-complete")" == "cache" ]] \
+      && [[ "$(jq -r '.packet_hash' "$feature_dir/.routing-complete")" == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]] \
       && [[ "$(jq -r '.provenance.source' "$feature_dir/.routing-complete")" == "expanded" ]] \
       && cmp -s "$feature_dir/.initial-route.json" "$root/bootstrap-route.json"; then
       pass "valid post-expansion route updates execution state and preserves bootstrap snapshot"
