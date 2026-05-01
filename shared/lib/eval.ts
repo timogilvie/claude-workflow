@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
+  SCHEMA_VERSION,
   getScoreBand,
   type EvalRecord,
   type InterventionRecord,
@@ -38,7 +39,6 @@ const __dirname = dirname(__filename);
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
-const SCHEMA_VERSION = '1.16.0';
 const MAX_RETRIES = 2;
 const TIMEOUT_MS = 120_000;
 

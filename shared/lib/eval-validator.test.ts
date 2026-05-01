@@ -1,0 +1,204 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, it } from 'node:test';
+import { SCHEMA_VERSION, type EvalRecord } from './eval-schema.ts';
+import {
+  deriveNonRewardReasonFromIssues,
+  validateEvalRecord,
+  validateEvalsFile,
+  validateEvalsStore,
+} from './eval-validator.ts';
+
+function makeRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
+  return {
+    id: 'eval-1',
+    schemaVersion: SCHEMA_VERSION,
+    originalPrompt: 'Ship the fix',
+    modelId: 'gpt-5.4',
+    modelVersion: 'gpt-5.4',
+    score: 0.9,
+    scoreBand: 'Minor Feedback',
+    timeSeconds: 42,
+    timestamp: '2026-05-01T12:00:00Z',
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: 'Judge result is present.',
+    ...overrides,
+  };
+}
+
+function writeJsonlFile(lines: string[]): string {
+  const dir = mkdtempSync(join(tmpdir(), 'eval-validator-'));
+  tempDirs.push(dir);
+  const filePath = join(dir, 'evals.jsonl');
+  writeFileSync(filePath, lines.length > 0 ? `${lines.join('\n')}\n` : '', 'utf-8');
+  return filePath;
+}
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    rmSync(tempDirs.pop()!, { recursive: true, force: true });
+  }
+});
+
+describe('eval-validator', () => {
+  it('reports an all-valid file with no issues', async () => {
+    const filePath = writeJsonlFile([
+      JSON.stringify(makeRecord({ id: 'eval-1' })),
+      JSON.stringify(makeRecord({ id: 'eval-2', timeSeconds: 43 })),
+    ]);
+
+    const report = await validateEvalsFile(filePath);
+    assert.equal(report.totalLines, 2);
+    assert.equal(report.validRecords, 2);
+    assert.deepEqual(report.issues, []);
+    assert.deepEqual(report.countsByCode, {});
+  });
+
+  it('reports malformed JSON lines with their source line', async () => {
+    const filePath = writeJsonlFile([
+      JSON.stringify(makeRecord()),
+      '{"id": "broken"',
+    ]);
+
+    const report = await validateEvalsFile(filePath);
+    assert.equal(report.issues.length, 1);
+    assert.equal(report.issues[0].code, 'MALFORMED_JSON');
+    assert.equal(report.issues[0].line, 2);
+  });
+
+  it('reports JSON values that are not objects', async () => {
+    const filePath = writeJsonlFile(['[]']);
+    const report = await validateEvalsFile(filePath);
+    assert.equal(report.issues.length, 1);
+    assert.equal(report.issues[0].code, 'NOT_AN_OBJECT');
+  });
+
+  it('reports missing required fields with the field name', async () => {
+    const filePath = writeJsonlFile([
+      JSON.stringify({
+        ...makeRecord(),
+        modelId: undefined,
+      }),
+    ]);
+
+    const report = await validateEvalsFile(filePath);
+    assert.ok(report.issues.some((issue) => issue.code === 'MISSING_REQUIRED_FIELD' && issue.detail === 'modelId'));
+  });
+
+  it('reports reward ineligibility when judge output is missing', async () => {
+    const filePath = writeJsonlFile([
+      JSON.stringify(makeRecord({ rationale: '   ' })),
+    ]);
+
+    const report = await validateEvalsFile(filePath);
+    assert.ok(report.issues.some((issue) => issue.code === 'INELIGIBLE_REWARD_NO_JUDGE'));
+  });
+
+  it('handles an empty file without throwing', async () => {
+    const filePath = writeJsonlFile([]);
+    const report = await validateEvalsFile(filePath);
+    assert.equal(report.totalLines, 0);
+    assert.equal(report.validRecords, 0);
+    assert.deepEqual(report.issues, []);
+  });
+
+  it('ignores trailing blank lines', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-validator-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'evals.jsonl');
+    writeFileSync(filePath, `${JSON.stringify(makeRecord())}\n\n\n`, 'utf-8');
+
+    const report = await validateEvalsFile(filePath);
+    assert.equal(report.totalLines, 3);
+    assert.equal(report.validRecords, 1);
+    assert.deepEqual(report.issues, []);
+  });
+
+  it('wraps missing-file errors with the target path', async () => {
+    await assert.rejects(
+      () => validateEvalsFile('/definitely/missing/evals.jsonl'),
+      /Unable to validate evals file .*ENOENT/,
+    );
+  });
+
+  it('returns an empty report when the eval store is absent', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'eval-store-'));
+    tempDirs.push(repoDir);
+    const report = await validateEvalsStore(repoDir);
+    assert.equal(report.validRecords, 0);
+    assert.deepEqual(report.issues, []);
+    assert.deepEqual(report.countsByCode, {});
+  });
+
+  it('groups countsByCode from the full issue set', async () => {
+    const filePath = writeJsonlFile([
+      '{"id": "broken"',
+      JSON.stringify(makeRecord({ rationale: '' })),
+      JSON.stringify(null),
+    ]);
+
+    const report = await validateEvalsFile(filePath);
+    assert.deepEqual(report.countsByCode, {
+      MALFORMED_JSON: 1,
+      INELIGIBLE_REWARD_NO_JUDGE: 1,
+      NOT_AN_OBJECT: 1,
+    });
+  });
+
+  it('derives the highest-severity non-reward reason and returns null for empty issue lists', () => {
+    const reason = deriveNonRewardReasonFromIssues([
+      {
+        code: 'INELIGIBLE_REWARD_NO_JUDGE',
+        file: 'evals.jsonl',
+        line: 1,
+        message: 'Reward not paid: record has no judge evaluation result.',
+      },
+      {
+        code: 'MISSING_REQUIRED_FIELD',
+        file: 'evals.jsonl',
+        line: 1,
+        detail: 'modelId',
+        message: 'Required field is absent.',
+      },
+    ]);
+
+    assert.deepEqual(reason, {
+      code: 'MISSING_REQUIRED_FIELD',
+      message: 'Required field is absent.',
+    });
+    assert.equal(deriveNonRewardReasonFromIssues([]), null);
+  });
+
+  it('treats null and undefined records as not-an-object input', () => {
+    assert.deepEqual(
+      validateEvalRecord(null, { file: 'evals.jsonl', line: 1 }).map((issue) => issue.code),
+      ['NOT_AN_OBJECT'],
+    );
+    assert.deepEqual(
+      validateEvalRecord(undefined, { file: 'evals.jsonl', line: 1 }).map((issue) => issue.code),
+      ['NOT_AN_OBJECT'],
+    );
+  });
+
+  it('reports unknown future schema versions', () => {
+    const issues = validateEvalRecord(
+      makeRecord({ schemaVersion: '9.0.0' }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(issues.some((issue) => issue.code === 'UNKNOWN_SCHEMA_VERSION'));
+  });
+
+  it('reports schema violations for invalid field values', () => {
+    const issues = validateEvalRecord(
+      makeRecord({ score: 2 }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(issues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'score'));
+  });
+});
