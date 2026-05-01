@@ -222,13 +222,13 @@ function classifyLLMError(error: unknown): ClassifiedLLMError {
   const resetAt = extractResetAt(message);
 
   if (
-    /\b(429|rate[_ -]?limit|quota|resource_exhausted|insufficient_quota|too many requests)\b/i.test(message)
+    /\b(429|rate[_ -]?limit(?:[_ -]?(?:exceeded|error))?|quota|resource_exhausted|insufficient_quota|too many requests)\b/i.test(message)
     || /exited with code 429/i.test(message)
   ) {
     return { kind: 'quota', reason: 'quota', resetAt };
   }
 
-  if (/\b(401|403|authentication|unauthorized|forbidden|invalid api key|permission denied)\b/i.test(lowered)) {
+  if (/\b(401|403|authentication(?:_error)?|unauthorized|forbidden|invalid[_ ]api[_ ]key|permission denied)\b/i.test(lowered)) {
     return { kind: 'auth', reason: 'auth', resetAt };
   }
 
@@ -236,7 +236,7 @@ function classifyLLMError(error: unknown): ClassifiedLLMError {
     return { kind: 'timeout', reason: 'timeout', resetAt };
   }
 
-  if (/\b(econnreset|econnrefused|enotfound|socket hang up|temporar(?:y|ily)|overloaded|unavailable|5\d\d)\b/i.test(lowered)) {
+  if (/\b(econnreset|econnrefused|enotfound|socket hang up|temporar(?:y|ily)|overloaded|unavailable|server_error|5\d\d)\b/i.test(lowered)) {
     return { kind: 'transient', reason: 'transient', resetAt };
   }
 
@@ -411,7 +411,7 @@ function isModelCompatibleWithProvider(
   }
 
   if (provider === 'claude') {
-    return model.vendor === 'anthropic';
+    return model.vendor === 'anthropic' || model.vendor === 'deepseek' || model.agent === 'claude';
   }
 
   if (provider === 'codex' || provider === 'openai') {

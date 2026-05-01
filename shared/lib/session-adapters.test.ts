@@ -74,6 +74,55 @@ function setupDeepSeekClaudeSessionDir() {
   };
 }
 
+function setupHybridClaudeSessionDir() {
+  const tmpHome = mkdtempSync(join(tmpdir(), 'adapter-hybrid-'));
+  const worktreePath = join(tmpHome, 'fake-worktree');
+  const encoded = encodeProjectDir(worktreePath);
+  const standardProjectsDir = join(tmpHome, '.claude', 'projects', encoded);
+  const deepseekProjectsDir1 = join(
+    worktreePath,
+    '.wavemill',
+    'runs',
+    'HOK-1485',
+    'providers',
+    'deepseek',
+    'home',
+    '.claude',
+    'projects',
+    encoded,
+  );
+  const deepseekProjectsDir2 = join(
+    worktreePath,
+    '.wavemill',
+    'runs',
+    'HOK-1486',
+    'providers',
+    'deepseek',
+    'home',
+    '.claude',
+    'projects',
+    encoded,
+  );
+  mkdirSync(standardProjectsDir, { recursive: true });
+  mkdirSync(deepseekProjectsDir1, { recursive: true });
+  mkdirSync(deepseekProjectsDir2, { recursive: true });
+
+  const origHome = process.env.HOME;
+  process.env.HOME = tmpHome;
+
+  return {
+    tmpHome,
+    worktreePath,
+    standardProjectsDir,
+    deepseekProjectsDir1,
+    deepseekProjectsDir2,
+    cleanup: () => {
+      process.env.HOME = origHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    },
+  };
+}
+
 /** Set up a fake ~/.codex/sessions/ directory for Codex adapter tests. */
 function setupCodexSessionDir() {
   const tmpHome = mkdtempSync(join(tmpdir(), 'adapter-codex-'));
@@ -269,6 +318,37 @@ describe('ClaudeSessionAdapter', () => {
       assert.ok(result);
       assert.equal(result.models['deepseek-v4-pro'].inputTokens, 120);
       assert.equal(result.sessionCount, 1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('aggregates standard Claude and multiple DeepSeek provider roots together', () => {
+    const {
+      worktreePath,
+      standardProjectsDir,
+      deepseekProjectsDir1,
+      deepseekProjectsDir2,
+      cleanup,
+    } = setupHybridClaudeSessionDir();
+    try {
+      const branch = 'task/test';
+      writeFileSync(join(standardProjectsDir, 'session1.jsonl'), claudeAssistantTurn({ branch, model: 'claude-opus-4-6', inputTokens: 100, outputTokens: 20 }));
+      writeFileSync(join(deepseekProjectsDir1, 'session1.jsonl'), claudeAssistantTurn({ branch, model: 'deepseek-v4-pro', inputTokens: 200, outputTokens: 30 }));
+      writeFileSync(join(deepseekProjectsDir2, 'session1.jsonl'), [
+        claudeAssistantTurn({ branch: 'task/other', model: 'deepseek-v4-pro', inputTokens: 999, outputTokens: 999 }),
+        claudeAssistantTurn({ branch, model: 'deepseek-v4-flash', inputTokens: 300, outputTokens: 40 }),
+      ].join('\n'));
+
+      const adapter = new ClaudeSessionAdapter();
+      const result = adapter.scan({ worktreePath, branchName: branch });
+
+      assert.ok(result);
+      assert.equal(result.sessionCount, 3);
+      assert.equal(result.turnCount, 3);
+      assert.equal(result.models['claude-opus-4-6'].inputTokens, 100);
+      assert.equal(result.models['deepseek-v4-pro'].inputTokens, 200);
+      assert.equal(result.models['deepseek-v4-flash'].inputTokens, 300);
     } finally {
       cleanup();
     }

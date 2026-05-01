@@ -133,6 +133,18 @@ export function isValidTaskPacket(text: string): boolean {
 }
 
 /**
+ * Classify markdown content as a structured task packet vs raw issue text.
+ *
+ * Mirrors the shell `is_task_packet()` matcher so controller and TypeScript
+ * utilities share the same detection behavior.
+ */
+export function isTaskPacketContent(text: string): boolean {
+  return /(\#{2,}\s+(1\.|Objective|What|Technical Context|Success Criteria)|##\s+(Task Packet|Detailed Sections)|Quick Reference)/i.test(
+    text
+  );
+}
+
+/**
  * Check if a file path points to a task packet (by naming convention).
  *
  * Recognizes both legacy and progressive disclosure formats:

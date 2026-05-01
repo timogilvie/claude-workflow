@@ -1,7 +1,7 @@
 # Router
 
-**Last updated:** 2026-04-21T14:28:57.564Z
-**Files touched:** 2 files in last 30 days
+**Last updated:** 2026-05-01T00:00:00.000Z
+**Files touched:** 5 files in last 30 days
 
 ## Purpose
 
@@ -62,6 +62,32 @@ This is a normal-mode policy adjustment, not degraded routing. `workflow-router.
 
 Individual command behavior now changes based on operating mode. In `constrained` mode, routing restricts to sonnet/haiku candidates and skips LLM-based difficulty classification. In `survival` mode, routing uses haiku only and relies on stage-aware KNN signals instead of open-ended LLM reasoning.
 
+## Expanded Packet Reroute
+
+Expanded-packet reroute now reuses the same `routeBatch()` pipeline as bootstrap routing:
+
+- `tools/route-tasks.ts --expanded-jsonl` accepts one JSON object per expanded packet and delegates to `routeExpandedPackets()`.
+- `routeExpandedPackets()` hashes the current packet bytes, checks `.wavemill/state/expanded-route-cache.json`, and only routes misses.
+- Two or more misses are routed in one shared batch so config and eval history load once.
+- A batch failure falls back to per-task reroute for only the missing or failed entries.
+- Successful fresh decisions are recorded back into the expanded-route cache under the current operating mode.
+
+The cache key is a SHA-256 over the expanded packet content plus the cache input version. Full packets hash raw `task-packet.md` bytes; split packets hash `task-packet-header.md` + `task-packet-details.md` with stable separators and the version suffix.
+
+Cache entries are gated by operating mode. A route cached in `normal` mode is not reused in `constrained` or `survival`.
+
+Expanded route artifacts now carry additive top-level metadata:
+
+- `cache_hit`
+- `route_source` with values `cache`, `batch`, or `single`
+- `packet_hash`
+
+Transparency logs emitted during expanded reroute include:
+
+- `route_source=<cache|batch|single>`
+- `packet_hash=<12-char prefix>`
+- `issue=<issue id>`
+
 ## Proactive Degradation Detection
 
 Operating mode now includes proactive quota-state transitions, not just reactive 429-driven state.
@@ -101,6 +127,8 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Wrap resource registration in try-catch to ensure registry failures do not break routing
 - Gate rubric-aware stage scoring on nearest-neighbor window coverage, not per-record coverage
 - Stamp route artifacts with `provenance.source`, `inputKind`, `inputPath`, `inputHash`, `routedAt`, and `routerMode`
+- Preserve `cache_hit`, `route_source`, and `packet_hash` when promoting `.post-expansion-route.json` into `.routing-complete`
+- Prefer cache hits for unchanged expanded packets on coding launch and resume
 
 ### DON'T
 - Trigger constrained mode while any frontier model is healthy
@@ -150,6 +178,10 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 ### 2026-04-30T00:00:00.000Z - HOK-1511: Persist route provenance and input hashes
 **Changed:** Route artifacts now include a nested `provenance` object (`source`, `inputKind`, `inputPath`, `inputHash`, `routedAt`, `routerMode`) and shell route readers can resolve both legacy top-level fields and provenance metadata.
 **Impact:** Bootstrap vs expanded/cache/live decisions are now distinguishable and unchanged input packets can be detected by stable `inputHash`, while `.initial-route.json` remains immutable once written.
+
+### 2026-05-01T00:00:00.000Z - HOK-1514: Batch and cache expanded reroute
+**Changed:** Expanded reroute now routes approved task packets through a shared batch path, persists decisions in `.wavemill/state/expanded-route-cache.json`, and tags expanded artifacts with `cache_hit`, `route_source`, and `packet_hash`.
+**Impact:** Multi-task planning-to-coding handoffs avoid repeated config/eval loads where batching is possible, unchanged packets skip reroute safely on resume/retry, and operators can distinguish cache hits from fresh expanded routing in logs and artifacts.
 
 ### 2026-04-27T00:00:00.000Z - HOK-1410: Rubric-aware stage labels in stage-aware routing
 **Changed:** Stage-aware routing can now blend per-record rubric mean scores with scalar stage scores behind `router.rubricAware`. The default remains `off`; `shadow` records a side-channel decision while preserving scalar routing, and `on` uses rubric-aware scoring when nearest-neighbor coverage meets the configured threshold.

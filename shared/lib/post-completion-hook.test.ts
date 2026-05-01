@@ -186,6 +186,67 @@ await test('enrichPostCompletionRecord falls back to archived routing-complete d
   }
 });
 
+await test('enrichPostCompletionRecord preserves DeepSeek model identity before eligibility is computed', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-deepseek-'));
+  const featureDir = join(repoDir, 'features', 'deepseek-task');
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(
+    join(featureDir, '.coding-result.json'),
+    JSON.stringify({
+      stage: 'coding',
+      status: 'completed',
+      startedAt: '2026-04-06T11:00:00.000Z',
+      finishedAt: '2026-04-06T11:30:00.000Z',
+      agent: 'claude',
+      model: 'deepseek-v4-pro',
+      notes: '',
+    }),
+  );
+
+  try {
+    const record = { ...makeRecord(), modelId: '', modelVersion: '' } as EvalRecord;
+    record.routingDecision = {
+      candidates: [{ agentType: 'claude', modelId: 'claude-sonnet-4-6' }],
+      chosen: { agentType: 'claude', modelId: 'claude-sonnet-4-6' },
+      decisionPolicyVersion: 'baseline',
+      decisionRationale: 'fallback',
+    };
+    record.constraints = { maxCostUsd: 5 };
+    record.workflowCost = 1.2;
+    record.workflowTokenUsage = {};
+    record.outcomes = {
+      success: true,
+      review: { humanReviewRequired: false, rounds: 0, approvals: 1, changeRequests: 0 },
+      rework: { agentIterations: 1 },
+      delivery: { prCreated: true, merged: false },
+    };
+    record.modelId = 'deepseek-v4-pro';
+    record.modelVersion = 'deepseek-v4-pro';
+
+    enrichPostCompletionRecord(record, {
+      repoDir,
+      issueId: 'HOK-1488',
+      branchName: 'task/deepseek-task',
+      worktreePath: repoDir,
+      originalPrompt: 'Evaluate deepseek-backed run',
+      prDiff: '+++ src/session.ts',
+      record,
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+      costOutcome: null,
+      interventionRecords: [],
+    });
+
+    assert.equal(record.modelId, 'deepseek-v4-pro');
+    assert.equal(record.provider, 'deepseek');
+    assert.equal(record.trainingEligible, true);
+    assert.ok(!record.eligibilityErrors?.includes('missing_model_identity'));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 
 if (failed > 0) {

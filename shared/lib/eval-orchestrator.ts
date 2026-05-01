@@ -78,6 +78,14 @@ function resolveExecutionModel(solutionModel: string | undefined, routingDecisio
   return undefined;
 }
 
+function resolveExecutionModelWithArtifacts(
+  solutionModel: string | undefined,
+  routingDecision: unknown,
+  stageExecutionModel: string | undefined,
+): string | undefined {
+  return resolveExecutionModel(solutionModel, routingDecision) ?? stageExecutionModel;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────
@@ -340,7 +348,11 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // 9b. Build task descriptor for router training (HOK-1120)
   let taskDescriptor = null;
   let evalConstraints: EvalConstraints | undefined;
-  const executionModel = resolveExecutionModel(solutionModel, effectiveRoutingDecision);
+  const executionModel = resolveExecutionModelWithArtifacts(
+    solutionModel,
+    effectiveRoutingDecision,
+    stageArtifacts.executionModel,
+  );
   const providerMetadata = getDeepSeekProviderMetadata(executionModel, repoDir);
   try {
     // Derive feature slug from branch or issue ID
@@ -377,6 +389,11 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     console.warn(`Warning: failed to build task descriptor: ${errorMsg}`);
   }
 
+  if (executionModel) {
+    record.modelId = executionModel;
+    record.modelVersion = executionModel;
+  }
+
   // 10. Enrich record with metadata
   enrichEvalRecord(record, {
     agentType,
@@ -390,13 +407,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     constraints: evalConstraints,
   });
 
-  // 11. Set solution model if provided
-  if (executionModel) {
-    record.modelId = executionModel;
-    record.modelVersion = executionModel;
-  }
-
-  // 12. Persist eval record to disk
+  // 11. Persist eval record to disk
   try {
     appendEvalRecord(record);
   } catch (err) {

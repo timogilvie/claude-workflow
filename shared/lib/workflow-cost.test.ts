@@ -293,6 +293,54 @@ test('resolveProjectsDirs includes DeepSeek provider transcript roots', () => {
   }
 });
 
+test('computeWorkflowCost prices DeepSeek transcripts from configured aliases without crashing', () => {
+  const base = join(tmpdir(), `wavemill-test-${randomUUID()}`);
+  const worktreePath = join(base, 'fake-worktree');
+  mkdirSync(worktreePath, { recursive: true });
+
+  const originalHome = process.env.HOME;
+  process.env.HOME = join(base, 'home');
+
+  try {
+    const encoded = encodeProjectDir(worktreePath);
+    const providerProjectsDir = join(
+      worktreePath,
+      '.wavemill',
+      'runs',
+      'HOK-1488',
+      'providers',
+      'deepseek',
+      'home',
+      '.claude',
+      'projects',
+      encoded,
+    );
+    mkdirSync(providerProjectsDir, { recursive: true });
+    writeFileSync(
+      join(providerProjectsDir, 'session1.jsonl'),
+      assistantTurn({ branch: 'task/test', model: 'deepseek-chat', inputTokens: 1_000_000, outputTokens: 500_000 }),
+    );
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/test',
+      pricingTable: {
+        'deepseek-chat': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.ok(result.totalCostUsd > 0);
+      assert.ok(result.models['deepseek-chat'].costUsd > 0);
+      assert.deepEqual(result.pricingUsed['deepseek-chat'], { inputCostPerMTok: 2, outputCostPerMTok: 8 });
+    }
+  } finally {
+    process.env.HOME = originalHome;
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test('Handles malformed JSONL lines gracefully', () => {
   const branch = 'task/test';
   const lines = [

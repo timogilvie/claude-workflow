@@ -2637,6 +2637,31 @@ approve_plan() {
   write_stage_result "$feature_dir" "planning" "completed" "$agent" "$model" "Plan approved by user" '{"type":"planning","planFile":"plan.md"}'
 }
 
+resolve_stage_result_model() {
+  local feature_dir="$1" stage="$2" fallback="${3:-}"
+  local model=""
+
+  case "$stage" in
+    coding)
+      model=$(read_phase_config "$feature_dir" "coding" "model")
+      [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "coderModel")
+      [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.coding-result.json" 2>/dev/null || echo "")
+      model="$(resolve_phase_model "coding" "$model" "${fallback:-claude-opus-4-7}")"
+      ;;
+    review)
+      model=$(read_phase_config "$feature_dir" "review" "model")
+      [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "reviewerModel")
+      [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.review-result.json" 2>/dev/null || echo "")
+      model="$(resolve_phase_model "review" "$model" "${fallback:-claude-sonnet-4-6}")"
+      ;;
+    *)
+      model="$fallback"
+      ;;
+  esac
+
+  printf '%s\n' "$model"
+}
+
 # Validate that planning stayed within its phase boundary before coding starts.
 # Usage: validate_planning_phase_output <wt_dir>
 # Returns non-zero after reverting out-of-scope changes and removing approval.
@@ -3033,6 +3058,9 @@ _restore_inflight_task_window_if_missing() {
         "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
     coding)
+      if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
+        log_warn "$issue → expanded reroute helper failed, attempting promotion from existing artifacts"
+      fi
       if ! apply_expanded_route_if_present "$feature_dir" "$issue" "$slug" "$wt_dir" "$STATE_FILE"; then
         log_warn "$issue → expanded route invalid; using existing execution state for coding relaunch"
       fi
@@ -4352,6 +4380,103 @@ batch_route_selected_tasks() {
   return 0
 }
 
+append_expanded_reroute_input() {
+  local jsonl_file="$1" issue="$2" slug="$3" feature_dir="$4"
+  local output_file="$feature_dir/.post-expansion-route.json"
+  local full_packet="$feature_dir/task-packet.md"
+  local header_file="$feature_dir/task-packet-header.md"
+  local details_file="$feature_dir/task-packet-details.md"
+
+  if [[ -f "$full_packet" ]]; then
+    jq -cn \
+      --arg issueId "$issue" \
+      --arg slug "$slug" \
+      --arg featureDir "$feature_dir" \
+      --arg packetFile "$full_packet" \
+      --arg outputFile "$output_file" \
+      '{issueId: $issueId, slug: $slug, featureDir: $featureDir, packetFile: $packetFile, outputFile: $outputFile}' >> "$jsonl_file"
+    printf '\n' >> "$jsonl_file"
+    return 0
+  fi
+
+  if [[ -f "$header_file" && -f "$details_file" ]]; then
+    jq -cn \
+      --arg issueId "$issue" \
+      --arg slug "$slug" \
+      --arg featureDir "$feature_dir" \
+      --arg headerFile "$header_file" \
+      --arg detailsFile "$details_file" \
+      --arg outputFile "$output_file" \
+      '{issueId: $issueId, slug: $slug, featureDir: $featureDir, headerFile: $headerFile, detailsFile: $detailsFile, outputFile: $outputFile}' >> "$jsonl_file"
+    printf '\n' >> "$jsonl_file"
+    return 0
+  fi
+
+  return 1
+}
+
+reroute_expanded_packets_for_coding_handoff() {
+  local current_issue="$1" current_slug="$2" current_feature_dir="$3"
+  local route_batch_tool="$TOOLS_DIR/route-tasks.ts"
+  local input_file output_file stderr_file
+  local -a route_max_cost_args=()
+  local count=0
+
+  if [[ ! -f "$route_batch_tool" ]]; then
+    return 1
+  fi
+
+  input_file="/tmp/${SESSION}-${current_issue}-expanded-reroute-input.jsonl"
+  output_file="/tmp/${SESSION}-${current_issue}-expanded-reroute-output.jsonl"
+  stderr_file="/tmp/${SESSION}-${current_issue}-expanded-reroute.stderr"
+  : > "$input_file"
+
+  if ! append_expanded_reroute_input "$input_file" "$current_issue" "$current_slug" "$current_feature_dir"; then
+    rm -f "$input_file" "$output_file" "$stderr_file"
+    return 1
+  fi
+  count=$((count + 1))
+
+  if [[ -f "${STATE_FILE:-}" ]]; then
+    while IFS=$'\t' read -r issue slug worktree; do
+      [[ -n "$issue" && -n "$slug" && -n "$worktree" ]] || continue
+      [[ "$issue" == "$current_issue" ]] && continue
+
+      local feature_dir="$worktree/features/$slug"
+      [[ -d "$feature_dir" ]] || continue
+      [[ -f "$feature_dir/.post-expansion-route.json" ]] && continue
+      [[ -f "$feature_dir/.coding-result.json" ]] && continue
+      [[ -f "$feature_dir/.planning-result.json" ]] || continue
+      if ! jq -e '.status == "completed"' "$feature_dir/.planning-result.json" >/dev/null 2>&1; then
+        continue
+      fi
+
+      if append_expanded_reroute_input "$input_file" "$issue" "$slug" "$feature_dir"; then
+        count=$((count + 1))
+      fi
+    done < <(jq -r '.tasks | to_entries[] | [.key, (.value.slug // ""), (.value.worktree // "")] | @tsv' "$STATE_FILE" 2>/dev/null || true)
+  fi
+
+  [[ -n "${DEFAULT_MAX_COST_USD:-}" ]] && route_max_cost_args=(--max-cost "$DEFAULT_MAX_COST_USD")
+
+  if ! _with_timeout "$API_TIMEOUT" npx tsx "$route_batch_tool" \
+    --expanded-jsonl "$input_file" \
+    --repo-dir "$REPO_DIR" \
+    "${route_max_cost_args[@]}" >"$output_file" 2>"$stderr_file"; then
+    replay_route_transparency_logs "$stderr_file"
+    if [[ -f "$current_feature_dir/.post-expansion-route.json" ]]; then
+      rm -f "$input_file" "$output_file" "$stderr_file"
+      return 0
+    fi
+    rm -f "$input_file" "$output_file" "$stderr_file"
+    return 1
+  fi
+
+  replay_route_transparency_logs "$stderr_file"
+  rm -f "$input_file" "$output_file" "$stderr_file"
+  return 0
+}
+
 
 # ============================================================================
 # BACKLOG FETCHING & CANDIDATE SCORING
@@ -5589,8 +5714,20 @@ monitor_issue_state() {
             # Record approval via approve_plan (HOK-1193: controller-owned stage result)
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
+            if ! reroute_expanded_packets_for_coding_handoff "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
+              log_warn "$ISSUE → expanded reroute helper failed, attempting promotion from existing artifacts"
+            fi
             if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
               log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"
+            fi
+
+            if ! mill_check_expansion_handshake "$FEATURE_DIR" "$ISSUE" "$REPO_DIR"; then
+              rm -f "$FEATURE_DIR/.plan-approved"
+              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" \
+                "Expansion handshake blocked: raw input requires wavemill expand $ISSUE"
+              set_window_attention_state "$WIN" "needs-user"
+              active_count=$((active_count + 1))
+              return 0
             fi
 
             # FORCE_MODEL takes priority, then challenge, then state, then default
@@ -5767,7 +5904,7 @@ monitor_issue_state() {
         coding)
           if [[ "$resolved_phase" == "aborted" ]]; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during coding phase"
-            write_stage_result "$FEATURE_DIR" "coding" "aborted" "$current_agent"
+            write_stage_result "$FEATURE_DIR" "coding" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -5788,7 +5925,7 @@ monitor_issue_state() {
           if [[ "$resolved_phase" == "review" ]]; then
             validate_coding_phase_output "$BRANCH"
             # Mark coding as completed (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
+            write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
 
             # FORCE_MODEL takes priority, then phase config, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
@@ -5836,7 +5973,7 @@ monitor_issue_state() {
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
               validate_coding_phase_output "$BRANCH"
               log "status" "✓ $ISSUE → .coding-complete detected, marking coding as completed"
-              write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent"
+              write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
               return 0
@@ -5859,7 +5996,7 @@ monitor_issue_state() {
         review)
           if [[ "$resolved_phase" == "aborted" ]]; then
             log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
-            write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent"
+            write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -5874,7 +6011,7 @@ monitor_issue_state() {
           # and the controller can move into ready even if the stage file is still "running".
           if [[ "$review_status" == "running" ]]; then
             if [[ -n "$pr_number" ]]; then
-              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
               review_status="completed"
             else
               set_window_attention_state "$WIN" "clear"
@@ -5896,7 +6033,7 @@ monitor_issue_state() {
           # Review is no longer running - check if PR was created and transition to ready phase.
           if [[ -n "$pr_number" ]]; then
             # Mark review as completed with PR artifact (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
 
             # Transition to ready phase
             set_task_phase "$ISSUE" "ready"
