@@ -426,6 +426,33 @@ route_read_field() {
   return 0
 }
 
+write_json_artifact() {
+  local target_path="$1"
+  local tmp_file
+  tmp_file="$(mktemp "${target_path}.tmp.XXXXXX")" || {
+    echo "write_json_artifact: failed to allocate temp file for $target_path" >&2
+    return 1
+  }
+
+  if ! cat > "$tmp_file"; then
+    rm -f "$tmp_file"
+    echo "write_json_artifact: failed to read JSON payload for $target_path" >&2
+    return 1
+  fi
+
+  if ! jq -e . "$tmp_file" >/dev/null 2>&1; then
+    rm -f "$tmp_file"
+    echo "write_json_artifact: invalid JSON for $target_path" >&2
+    return 1
+  fi
+
+  if ! mv "$tmp_file" "$target_path"; then
+    rm -f "$tmp_file"
+    echo "write_json_artifact: failed to move temp file into place for $target_path" >&2
+    return 1
+  fi
+}
+
 read_route_json() {
   local session="$1" issue="$2" field="$3" default_value="${4:-}"
   local route_file="/tmp/${session}-${issue}-route.json"
@@ -542,7 +569,7 @@ apply_expanded_route_if_present() {
   fi
 
   if [[ ! -f "$routing_file" ]]; then
-    printf '{}\n' > "$routing_file"
+    printf '{}\n' | write_json_artifact "$routing_file"
   fi
 
   if ! state_mutate "$routing_file" \

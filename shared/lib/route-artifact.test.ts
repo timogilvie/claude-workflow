@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
-import { buildRouteProvenance, readBothRouteArtifacts, validateExpandedRouteArtifact } from './route-artifact.ts';
+import {
+  buildRouteProvenance,
+  readBothRouteArtifacts,
+  stringifyRouteArtifact,
+  validateExpandedRouteArtifact,
+  writeRouteArtifact,
+} from './route-artifact.ts';
 
 test('same input bytes produce same sha256', () => {
   const a = buildRouteProvenance({
@@ -136,16 +142,42 @@ test('validateExpandedRouteArtifact rejects blank execution fields', () => {
   assert.deepEqual(result.invalid, ['coder']);
 });
 
+test('stringifyRouteArtifact returns strict JSON with trailing newline', () => {
+  const output = stringifyRouteArtifact({ coder: 'gpt-5.4', nested: { ok: true } });
+
+  assert.match(output, /^\{/);
+  assert.match(output, /\n$/);
+  assert.doesNotThrow(() => JSON.parse(output));
+});
+
+test('writeRouteArtifact writes strict JSON bytes parseable as-is', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'route-artifact-'));
+  try {
+    const target = join(dir, '.routing-complete');
+    writeRouteArtifact(target, { coder: 'gpt-5.4', reviewMode: 'llm' });
+
+    const written = readFileSync(target, 'utf-8');
+    assert.equal(written.trimStart().startsWith('{'), true);
+    assert.doesNotThrow(() => JSON.parse(written));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeRouteArtifact rejects non-serializable top-level payloads', () => {
+  assert.throws(() => writeRouteArtifact(join(tmpdir(), 'unused.json'), undefined), /serialize to a JSON document/);
+});
+
 function makeFeatureDir(): string {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'route-artifact-'));
-  const featureDir = path.join(root, 'features', 'demo');
+  const root = mkdtempSync(join(tmpdir(), 'route-artifact-'));
+  const featureDir = join(root, 'features', 'demo');
   mkdirSync(featureDir, { recursive: true });
   return featureDir;
 }
 
 test('readBothRouteArtifacts returns both snapshots when present', () => {
   const featureDir = makeFeatureDir();
-  writeFileSync(path.join(featureDir, '.initial-route.json'), JSON.stringify({
+  writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
     planner: 'gpt-5.4',
     coder: 'claude-sonnet-4-6',
     reviewer: 'claude-opus-4-6',
@@ -153,7 +185,7 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     codeDepth: 'medium',
     reviewMode: 'llm',
   }));
-  writeFileSync(path.join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
     coder: 'gpt-5.4',
     reviewer: 'claude-sonnet-4-5-20250929',
     codeDepth: 'deep',
@@ -181,7 +213,7 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
 
 test('readBothRouteArtifacts returns null for missing sides independently', () => {
   const featureDir = makeFeatureDir();
-  writeFileSync(path.join(featureDir, '.initial-route.json'), JSON.stringify({
+  writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
     coder: 'claude-sonnet-4-6',
     reviewer: 'claude-opus-4-6',
     codeDepth: 'medium',
@@ -195,7 +227,7 @@ test('readBothRouteArtifacts returns null for missing sides independently', () =
 
 test('readBothRouteArtifacts reads expanded-only artifacts', () => {
   const featureDir = makeFeatureDir();
-  writeFileSync(path.join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
     coder: 'gpt-5.4',
     reviewer: 'claude-opus-4-6',
     codeDepth: 'deep',
@@ -216,8 +248,8 @@ test('readBothRouteArtifacts reads expanded-only artifacts', () => {
 
 test('readBothRouteArtifacts returns null for malformed artifacts without throwing', () => {
   const featureDir = makeFeatureDir();
-  writeFileSync(path.join(featureDir, '.initial-route.json'), '{');
-  writeFileSync(path.join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+  writeFileSync(join(featureDir, '.initial-route.json'), '{');
+  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
     coder: '',
     reviewer: 'claude-opus-4-6',
     codeDepth: 'deep',

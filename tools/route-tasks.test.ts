@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -140,6 +140,32 @@ describe('route-tasks CLI', () => {
       const { routedAt: _batchRoutedAt, ...batchProvenanceRest } = batchDecision.provenance;
       const { routedAt: _singleRoutedAt, ...singleProvenanceRest } = single.provenance;
       assert.deepEqual({ ...batchDecision, provenance: batchProvenanceRest }, { ...single, provenance: singleProvenanceRest });
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps route-task --json stdout strict JSON and sends diagnostics to stderr', () => {
+    const repoDir = makeRepo();
+    try {
+      const packet = join(repoDir, 'budget-task.md');
+      writeFileSync(packet, 'Build routing flow with tests\n');
+      const stdoutFile = join(repoDir, 'route.stdout.json');
+      const stderrFile = join(repoDir, 'route.stderr.log');
+
+      execFileSync('bash', ['-lc', `npx tsx "${routeTaskTool}" --json --file "${packet}" --repo-dir "${repoDir}" > "${stdoutFile}" 2> "${stderrFile}"`], {
+        cwd: resolve(__dirname, '..'),
+        env: { ...process.env },
+      });
+
+      const stdout = readFileSync(stdoutFile, 'utf-8');
+      const stderr = readFileSync(stderrFile, 'utf-8');
+      assert.doesNotThrow(() => JSON.parse(stdout));
+      assert.equal(stdout.startsWith('Router:'), false);
+      assert.equal(stdout.startsWith('Auto-aggregated'), false);
+      assert.equal(stdout.includes('Router:'), false);
+      assert.equal(stdout.includes('Auto-aggregated'), false);
+      assert.equal(stderr.includes('{\n  "planner"'), false);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

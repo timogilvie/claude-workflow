@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import path from 'node:path';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
 export type RouteSource =
@@ -59,6 +59,27 @@ export function withRouteProvenance<T extends WorkflowRouteDecision>(decision: T
     ...decision,
     provenance,
   };
+}
+
+export function stringifyRouteArtifact(value: unknown): string {
+  const serialized = JSON.stringify(value, null, 2);
+  if (typeof serialized !== 'string') {
+    throw new TypeError('Route artifact must serialize to a JSON document');
+  }
+
+  JSON.parse(serialized);
+  return `${serialized}\n`;
+}
+
+export function writeRouteArtifact(path: string, value: unknown): void {
+  const tmpPath = join(dirname(path), `.tmp-route-artifact-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  try {
+    writeFileSync(tmpPath, stringifyRouteArtifact(value), 'utf-8');
+    renameSync(tmpPath, path);
+  } catch (error) {
+    rmSync(tmpPath, { force: true });
+    throw error;
+  }
 }
 
 export interface NormalizedExpandedRouteArtifact {
@@ -186,8 +207,8 @@ export function readBothRouteArtifacts(featureDir: string): {
   bootstrap: RouteArtifactSnapshot | null;
   expanded: RouteArtifactSnapshot | null;
 } {
-  const bootstrapRaw = loadJson(path.join(featureDir, '.initial-route.json'));
-  const expandedRaw = loadJson(path.join(featureDir, '.post-expansion-route.json'));
+  const bootstrapRaw = loadJson(join(featureDir, '.initial-route.json'));
+  const expandedRaw = loadJson(join(featureDir, '.post-expansion-route.json'));
 
   const bootstrap = parseBootstrapRouteArtifact(bootstrapRaw);
 
