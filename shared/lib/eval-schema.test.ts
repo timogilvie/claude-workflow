@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  SCHEMA_VERSION,
   type EvalRecord,
   type TokenUsage,
   SCORE_BANDS,
@@ -1388,6 +1389,46 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.workflow_success_rate_under_budget?.type, 'number');
   assert.equal(properties.wavemill_router_diagnostics?.$ref, '#/$defs/WavemillRouterDiagnostics');
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
+});
+
+test('Schema version constant is 1.17.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.17.0');
+});
+
+test('Legacy rows still validate without nonRewardReason', () => {
+  const result = validateAgainstSchema(scenarios[0].record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Records validate with a complete nonRewardReason', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.17.0',
+    nonRewardReason: {
+      code: 'INELIGIBLE_REWARD_NO_JUDGE',
+      message: 'Reward not paid: record has no judge evaluation result.',
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Records reject nonRewardReason when message is missing', () => {
+  const bad = {
+    ...scenarios[0].record,
+    schemaVersion: '1.17.0',
+    nonRewardReason: {
+      code: 'INELIGIBLE_REWARD_NO_JUDGE',
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(
+    result.errors.some((error) => error.includes('nonRewardReason.message')),
+    'Should mention nonRewardReason.message in error',
+  );
 });
 
 // ────────────────────────────────────────────────────────────────

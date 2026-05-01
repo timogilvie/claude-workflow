@@ -1055,24 +1055,18 @@ wavemill_lock_run() {
   fi
 
   local lock_dir="$lock_root/${lock_name}.lk"
-  local ttl=30 attempts=0
+  local attempts=0
+  local max_retries="${WAVEMILL_LOCK_MAX_RETRIES:-300}"
+  local sleep_seconds="${WAVEMILL_LOCK_SLEEP_SECONDS:-0.1}"
   while ! mkdir "$lock_dir" 2>/dev/null; do
-    local mtime now
-    mtime="$(stat -c '%Y' "$lock_dir" 2>/dev/null || stat -f '%m' "$lock_dir" 2>/dev/null || echo 0)"
-    now="$(date +%s)"
-    if [[ $((now - mtime)) -gt $ttl ]]; then
-      rmdir "$lock_dir" 2>/dev/null || true
-      continue
-    fi
-    sleep "0.$((RANDOM % 3 + 1))"
     attempts=$((attempts + 1))
-    if [[ "$attempts" -gt 100 ]]; then
+    if (( attempts >= max_retries )); then
       if declare -F startup_log >/dev/null 2>&1; then
-        startup_log "Warning: wavemill_lock_run timeout on $lock_name; proceeding unlocked"
+        startup_log "Warning: wavemill_lock_run timeout on $lock_name; aborting locked operation"
       fi
-      "$@"
-      return
+      return 1
     fi
+    sleep "$sleep_seconds"
   done
 
   "$@"

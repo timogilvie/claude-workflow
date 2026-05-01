@@ -31,6 +31,7 @@ Historical and aggregated eval datasets now also carry explicit rubric provenanc
 - Keep schema evolution additive. New fields must be optional so old `evals.jsonl` rows continue to parse unchanged.
 - Bump the eval schema minor version on additive changes and document the change in `eval-schema.ts`.
 - Keep `eval-record-builder.ts` helpers pure and local: mutate the provided record, but treat `null` and `undefined` as "do nothing".
+- Keep `shared/lib/eval-validator.ts` as the single authoritative source of eval validation error codes; tolerant readers may continue skipping malformed rows silently, but explicit validation must flow through that module.
 - Route fallback telemetry through `appendEvalRecord()` so prompt-registry and aggregation tooling continue to observe a single eval pipeline.
 - Treat telemetry writes as best-effort metadata. Fallback logging must never change the success or failure semantics of the LLM call itself.
 

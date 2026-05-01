@@ -23,7 +23,7 @@ import { randomUUID } from 'node:crypto';
 import { attachFallbackEvent } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
-import { getScoreBand, type DifficultyBand, type EvalRecord, type FallbackEventMetadata, type FallbackOutcome } from './eval-schema.ts';
+import { SCHEMA_VERSION, getScoreBand, type DifficultyBand, type EvalRecord, type FallbackEventMetadata, type FallbackOutcome } from './eval-schema.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getEffectiveRegistry, getLadder, getModel, rankCandidates, type RegistryTaskType } from './model-registry.ts';
 import { getModelStatus, markExhausted, readQuotaSnapshot, recordSuccess } from './quota-state.ts';
@@ -180,7 +180,6 @@ const DEFAULT_MAX_RETRIES = 2;
 const SLOW_CALL_WARNING_MS = 30_000;
 const SLOW_CALL_REPEAT_MS = 15_000;
 const FALLBACK_DEFAULT_TASK_TYPE: RegistryTaskType = 'classify';
-const FALLBACK_EVAL_SCHEMA_VERSION = '1.16.0';
 const FALLBACK_EVENT_SCHEMA_VERSION = '1.0';
 const warnedMissingTaskType = new Set<string>();
 
@@ -333,7 +332,7 @@ function buildFallbackEventRecord(input: {
 
   const record: EvalRecord = {
     id: randomUUID(),
-    schemaVersion: FALLBACK_EVAL_SCHEMA_VERSION,
+    schemaVersion: SCHEMA_VERSION,
     originalPrompt: summarizePrompt(input.prompt),
     modelId: input.fallbackModel ?? input.preferredModel,
     modelVersion: '',
