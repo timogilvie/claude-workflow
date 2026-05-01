@@ -99,6 +99,33 @@ Expanded route artifacts may additionally include:
 
 If planning fails, expansion is incomplete, or the discovered expanded-route artifact is malformed or missing required execution fields, no promotion occurs. The controller emits an `expanded route invalid` warning and execution remains on the previously persisted bootstrap route.
 
+## Expansion Handshake Gate
+
+At plan-to-code transition, the controller now enforces an expansion handshake:
+
+- If `task-packet.md` already looks like a full task packet, the transition passes.
+- If it is raw issue text, a valid `features/<slug>/.post-expansion-route.json` must exist.
+- If the route artifact is missing or invalid, the transition is blocked by default.
+
+Policy is controlled by `.wavemill-config.json`:
+
+```json
+{
+  "mill": {
+    "expansionHandshake": {
+      "policy": "block"
+    }
+  }
+}
+```
+
+Set `policy` to `"warn"` to log and continue instead of blocking.
+
+When blocked, the controller logs the missing artifact reason and clears `.plan-approved` so resume does not auto-advance. Recovery flow:
+
+1. Run `wavemill expand <ISSUE>`.
+2. Re-approve planning by touching `.plan-approved`.
+
 ### Authoritative Execution Route
 
 The authoritative execution route is the route consumed by coding, review, resume, challenge follow-on behavior, and eval context that claims to represent the execution workflow.

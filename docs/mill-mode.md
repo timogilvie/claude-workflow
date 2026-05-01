@@ -318,6 +318,38 @@ If the expanded-route artifact is malformed or missing required execution fields
 fails closed with an `expanded route invalid` warning and the existing bootstrap execution
 state remains in place.
 
+## Expansion Handshake
+
+Before coding starts, mill now checks for a mandatory expansion handshake:
+
+- Expanded packet input (`task-packet.md` has task-packet markers): pass.
+- Raw issue text input: requires a valid `features/<slug>/.post-expansion-route.json`.
+
+If the handshake fails, transition is blocked by default and logs one of:
+
+- `[expansion-handshake] BLOCKED issue=<ISSUE> reason=missing`
+- `[expansion-handshake] BLOCKED issue=<ISSUE> reason=invalid-json`
+- `[expansion-handshake] BLOCKED issue=<ISSUE> reason=missing-required-field`
+
+Recovery:
+
+1. Run `wavemill expand <ISSUE>`.
+2. Re-approve planning (`touch features/<slug>/.plan-approved`).
+
+Optional bypass (warn-only):
+
+```json
+{
+  "mill": {
+    "expansionHandshake": {
+      "policy": "warn"
+    }
+  }
+}
+```
+
+With `policy: "warn"`, mill logs `[expansion-handshake] WARN ...` and proceeds.
+
 ## See Also
 
 - [Routing & Hokusai](routing-and-hokusai.md) — self-improving routing and collective intelligence

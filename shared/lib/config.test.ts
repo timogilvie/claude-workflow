@@ -26,6 +26,7 @@ import {
   getIntegrationConfig,
   getIntegrationReadyPolicy,
   getMillConfig,
+  getExpansionHandshakeConfig,
   getMaxCostUsd,
   getUiConfig,
   getPermissionsConfig,
@@ -828,6 +829,71 @@ test('getMillConfig returns mill section', () => {
     assert.equal(millConfig.baseBranch, 'develop');
     assert.equal(millConfig.defaultMaxCostUsd, 12.5);
     assert.equal(config.git?.fetchTtlSeconds, 30);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getExpansionHandshakeConfig defaults to block when section absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ mill: { maxParallel: 5 } }));
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'block' });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getExpansionHandshakeConfig defaults to block when mill absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'block' });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getExpansionHandshakeConfig returns warn when configured', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: {
+        expansionHandshake: {
+          policy: 'warn',
+        },
+      },
+    }));
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'warn' });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid expansionHandshake policy fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: {
+        expansionHandshake: {
+          policy: 'silent',
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
   } finally {
     cleanUp(tmp);
   }
