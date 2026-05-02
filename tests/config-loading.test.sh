@@ -311,6 +311,71 @@ check "local-only file acts as the whole config" "true" "$LO_ENABLED"
 rm -rf "$OVERLAY_TMP" "$LOCAL_ONLY_TMP"
 
 # ============================================================================
+# Test 7: load_config applies .wavemill-config.local.json overlay
+# (sets BASE_BRANCH, CHALLENGE_AUTO_MERGE, etc. from the merged result)
+# ============================================================================
+echo ""
+echo "=== load_config Overlay Precedence ==="
+
+LCFG_TMP=$(mktemp -d)
+cat > "$LCFG_TMP/.wavemill-config.json" <<'EOF'
+{
+  "linear": { "project": "base-project" },
+  "mill": { "baseBranch": "main", "maxParallel": 7 },
+  "challenge": { "autoMergeWinner": false }
+}
+EOF
+cat > "$LCFG_TMP/.wavemill-config.local.json" <<'EOF'
+{
+  "mill": { "baseBranch": "auto/integration" },
+  "challenge": { "autoMergeWinner": true }
+}
+EOF
+
+eval "$(
+  export HOME="$FAKE_HOME"
+  unset $UNSET_VARS 2>/dev/null || true
+  source "$COMMON"
+  load_config "$LCFG_TMP"
+  echo "LC_BASE_BRANCH='$BASE_BRANCH'"
+  echo "LC_AUTO_MERGE='$CHALLENGE_AUTO_MERGE'"
+  echo "LC_MAX_PARALLEL='$MAX_PARALLEL'"
+  echo "LC_PROJECT='$PROJECT_NAME'"
+)"
+
+check "overlay overrides BASE_BRANCH" "auto/integration" "$LC_BASE_BRANCH"
+check "overlay overrides CHALLENGE_AUTO_MERGE" "true" "$LC_AUTO_MERGE"
+check "overlay preserves base mill.maxParallel" "7" "$LC_MAX_PARALLEL"
+check "overlay preserves base linear.project" "base-project" "$LC_PROJECT"
+
+# Env vars must still win over the overlay.
+eval "$(
+  export HOME="$FAKE_HOME"
+  unset $UNSET_VARS 2>/dev/null || true
+  export BASE_BRANCH="develop"
+  source "$COMMON"
+  load_config "$LCFG_TMP"
+  echo "LC_ENV_BASE='$BASE_BRANCH'"
+)"
+
+check "env BASE_BRANCH wins over overlay" "develop" "$LC_ENV_BASE"
+
+# detect_project_name should also see the overlay (separate code path).
+eval "$(
+  export HOME="$FAKE_HOME"
+  unset $UNSET_VARS PROJECT_NAME LINEAR_PROJECT 2>/dev/null || true
+  source "$COMMON"
+  cat > "$LCFG_TMP/.wavemill-config.local.json" <<'OVERLAY'
+{ "linear": { "project": "overlay-project" } }
+OVERLAY
+  echo "LC_DETECT='$(detect_project_name "$LCFG_TMP")'"
+)"
+
+check "detect_project_name sees overlay" "overlay-project" "$LC_DETECT"
+
+rm -rf "$LCFG_TMP"
+
+# ============================================================================
 # Results
 # ============================================================================
 echo ""
