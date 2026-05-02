@@ -1,5 +1,6 @@
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { resolveAgent } from './model-router.ts';
+export { routeChangedMaterially } from './route-artifact.ts';
 import { routeChangedMaterially, type RouteArtifactSnapshot } from './route-artifact.ts';
 import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts';
 
