@@ -4483,7 +4483,10 @@ reroute_expanded_packets_for_coding_handoff() {
 # ============================================================================
 
 BACKLOG_CACHE=""
+BACKLOG_JSON_CACHE=""
+QUEUE_PLAN_CACHE=""
 LAST_BACKLOG_FETCH=0
+LAST_QUEUE_PLAN_FETCH=0
 BACKLOG_CACHE_TTL=60  # seconds between backlog refreshes
 
 fetch_candidates() {
@@ -4501,9 +4504,16 @@ fetch_candidates() {
 
   if [[ -z "$backlog_json" ]] || [[ "$backlog_json" == "[]" ]]; then
     BACKLOG_CACHE=""
+    BACKLOG_JSON_CACHE=""
+    QUEUE_PLAN_CACHE=""
+    LAST_QUEUE_PLAN_FETCH=0
     LAST_BACKLOG_FETCH=$now
     return
   fi
+
+  BACKLOG_JSON_CACHE="$backlog_json"
+  QUEUE_PLAN_CACHE=""
+  LAST_QUEUE_PLAN_FETCH=0
 
   # Use shared scoring function from wavemill-common.sh (eliminates duplication)
   # Strip has_detailed_plan (field 6) to match pick_candidates() 6-field format:
@@ -4511,6 +4521,135 @@ fetch_candidates() {
   BACKLOG_CACHE=$(score_and_rank_issues "$backlog_json" 30 | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}')
   LAST_BACKLOG_FETCH=$now
   echo "$BACKLOG_CACHE"
+}
+
+fetch_queue_plan() {
+  local now plan_input queue_plan
+  now=$(date +%s)
+
+  if (( now - LAST_QUEUE_PLAN_FETCH < BACKLOG_CACHE_TTL )) && [[ -n "$QUEUE_PLAN_CACHE" ]]; then
+    echo "$QUEUE_PLAN_CACHE"
+    return 0
+  fi
+
+  [[ -n "$BACKLOG_JSON_CACHE" ]] || return 1
+
+  plan_input=$(jq -c '
+    map({
+      id: .identifier,
+      title: .title,
+      sharedSurface: ((.sharedSurface // []) | sort),
+      dependsOn: (
+        (.inverseRelations.nodes // [])
+        | map(select(.type == "blocks" and .issue.identifier != null) | .issue.identifier)
+        | sort
+      )
+    })
+  ' <<<"$BACKLOG_JSON_CACHE" 2>/dev/null) || return 1
+
+  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || return 1
+
+  jq -e '
+    has("availableNow")
+    and has("queuedAfterDependencies")
+    and has("avoidRunningTogether")
+    and has("needsTriage")
+  ' >/dev/null 2>&1 <<<"$queue_plan" || return 1
+
+  QUEUE_PLAN_CACHE="$queue_plan"
+  LAST_QUEUE_PLAN_FETCH=$now
+  echo "$QUEUE_PLAN_CACHE"
+}
+
+render_grouped_task_list() {
+  local queue_plan="$1" available="$2"
+  local counter=0 output="" select_lines="" section_body="" line rec group_index task_id blockers triage_id
+  declare -A id_to_record=()
+
+  jq -e . >/dev/null 2>&1 <<<"$queue_plan" || return 1
+
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    task_id=${line%%|*}
+    [[ -n "$task_id" ]] && id_to_record["$task_id"]="$line"
+  done <<<"$available"
+
+  section_body=""
+  while IFS= read -r task_id; do
+    [[ -n "$task_id" ]] || continue
+    rec="${id_to_record[$task_id]:-}"
+    [[ -n "$rec" ]] || continue
+    IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
+    counter=$((counter + 1))
+    section_body+=$(printf '  %s. %s - %s\n' "$counter" "$task_id" "$title")
+    select_lines+="${rec}"$'\n'
+  done < <(jq -r '.availableNow[]?' <<<"$queue_plan" 2>/dev/null)
+  if [[ -n "$section_body" ]]; then
+    output+="Available Now - Parallel Wave 1"$'\n'
+    output+="${section_body}"
+  fi
+
+  section_body=""
+  while IFS=$'\t' read -r task_id blockers; do
+    [[ -n "$task_id" ]] || continue
+    rec="${id_to_record[$task_id]:-}"
+    [[ -n "$rec" ]] || continue
+    IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
+    counter=$((counter + 1))
+    section_body+=$(printf '  %s. %s - %s (blocked by: %s)\n' "$counter" "$task_id" "$title" "$blockers")
+    select_lines+="${rec}"$'\n'
+  done < <(jq -r '.queuedAfterDependencies[]? | [.taskId, (.ancestors | join(", "))] | @tsv' <<<"$queue_plan" 2>/dev/null)
+  if [[ -n "$section_body" ]]; then
+    [[ -n "$output" ]] && output+=$'\n'
+    output+="Queued After Dependencies"$'\n'
+    output+="${section_body}"
+  fi
+
+  section_body=""
+  group_index=0
+  while IFS= read -r blockers; do
+    [[ -n "$blockers" ]] || continue
+    group_index=$((group_index + 1))
+    local cluster_body=""
+    while IFS= read -r task_id; do
+      [[ -n "$task_id" ]] || continue
+      rec="${id_to_record[$task_id]:-}"
+      [[ -n "$rec" ]] || continue
+      IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
+      counter=$((counter + 1))
+      cluster_body+=$(printf '    %s. %s - %s\n' "$counter" "$task_id" "$title")
+      select_lines+="${rec}"$'\n'
+    done < <(jq -r '.[]' <<<"$blockers" 2>/dev/null)
+    if [[ -n "$cluster_body" ]]; then
+      section_body+=$(printf '  [conflict cluster %s]\n%s' "$group_index" "$cluster_body")
+    fi
+  done < <(jq -c '.avoidRunningTogether[]?' <<<"$queue_plan" 2>/dev/null)
+  if [[ -n "$section_body" ]]; then
+    [[ -n "$output" ]] && output+=$'\n'
+    output+="Avoid Running Together"$'\n'
+    output+="${section_body}"
+  fi
+
+  section_body=""
+  while IFS= read -r triage_id; do
+    [[ -n "$triage_id" ]] || continue
+    rec="${id_to_record[$triage_id]:-}"
+    [[ -n "$rec" ]] || continue
+    IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
+    counter=$((counter + 1))
+    section_body+=$(printf '  %s. %s - %s [triage]\n' "$counter" "$task_id" "$title")
+    select_lines+="${rec}"$'\n'
+  done < <(jq -r '.needsTriage[]? | .edge.to' <<<"$queue_plan" 2>/dev/null)
+  if [[ -n "$section_body" ]]; then
+    [[ -n "$output" ]] && output+=$'\n'
+    output+="Needs Triage"$'\n'
+    output+="${section_body}"
+  fi
+
+  (( counter > 0 )) || return 1
+
+  GROUPED_SELECT_FROM="${select_lines%$'\n'}"
+  GROUPED_DISPLAY="${output%$'\n'}"
 }
 
 
@@ -5258,6 +5397,9 @@ LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
 TASK_LIST_RENDERED=0  # track task list cursor region in control pane
 SELECT_SHOW_ALL=false
+USING_GROUPED_VIEW=false
+GROUPED_SELECT_FROM=""
+GROUPED_DISPLAY=""
 declare -a COMMAND_QUEUE=()
 COMMAND_FILE="$(wavemill_command_file_path "$SESSION")"
 COMMAND_OFFSET_FILE="$(wavemill_command_offset_path "$SESSION")"
@@ -6808,7 +6950,8 @@ while :; do
         [[ -n "$avail_blocked" ]] && avail_blocked_count=$(echo "$avail_blocked" | grep -c .)
 
         # Only re-render the prompt when the display would actually change
-        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}"
+        queue_fp="${QUEUE_PLAN_CACHE:0:50}"
+        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
           SELECT_SHOW_ALL=false
           if (( TASK_LIST_RENDERED == 1 )); then
@@ -6819,17 +6962,34 @@ while :; do
             tput sc 2>/dev/null || true
           fi
           echo "Next tasks:"
-          if [[ -n "$avail_unblocked" ]]; then
-            echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
-          else
-            echo "  (no unblocked tasks)"
+          queue_plan_json=""
+          GROUPED_DISPLAY=""
+          GROUPED_SELECT_FROM=""
+          if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
+            render_grouped_task_list "$queue_plan_json" "$available"
+            if [[ -n "$GROUPED_DISPLAY" ]]; then
+              echo "$GROUPED_DISPLAY"
+              select_from="$GROUPED_SELECT_FROM"
+              USING_GROUPED_VIEW=true
+            fi
           fi
-          if (( avail_blocked_count > 0 )); then
-            echo ""
-            echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
+          if [[ -z "$GROUPED_DISPLAY" ]]; then
+            USING_GROUPED_VIEW=false
+            [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
+            if [[ -n "$avail_unblocked" ]]; then
+              echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
+            else
+              echo "  (no unblocked tasks)"
+            fi
+            if (( avail_blocked_count > 0 )); then
+              echo ""
+              echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
+            fi
           fi
           echo ""
-          if (( avail_blocked_count > 0 )); then
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+          elif (( avail_blocked_count > 0 )); then
             echo "Enter number(s) to start (e.g. 1 3), 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
           else
             echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
@@ -6842,7 +7002,9 @@ while :; do
 
         # Default: selection against unblocked list only
         select_from="$avail_unblocked"
-        if [[ "$SELECT_SHOW_ALL" == "true" ]]; then
+        if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+          select_from="$GROUPED_SELECT_FROM"
+        elif [[ "$SELECT_SHOW_ALL" == "true" ]]; then
           select_from=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
         fi
 
@@ -6867,27 +7029,33 @@ while :; do
             QUIT_REQUESTED=true
           fi
         elif [[ "$REPLY" =~ ^[mM]$ ]]; then
-          clear_task_list_display
-          all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
-          echo ""
-          log "info" "All tasks:"
-          ln=0
-          while IFS= read -r mline; do
-            ln=$((ln + 1))
-            IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
-            if (( mblocked > 0 )); then
-              printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
-            else
-              printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
-            fi
-          done <<<"$all_avail"
-          echo ""
-          echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
-          SELECT_SHOW_ALL=true
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            :
+          else
+            clear_task_list_display
+            all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
+            echo ""
+            log "info" "All tasks:"
+            ln=0
+            while IFS= read -r mline; do
+              ln=$((ln + 1))
+              IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
+              if (( mblocked > 0 )); then
+                printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
+              else
+                printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
+              fi
+            done <<<"$all_avail"
+            echo ""
+            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            SELECT_SHOW_ALL=true
+          fi
         elif [[ "$REPLY" =~ ^unknown\  ]]; then
           log_warn "Unknown input: ${REPLY#unknown }"
         elif [[ -n "$REPLY" ]]; then
-          if [[ "$SELECT_SHOW_ALL" == "true" ]]; then
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            select_from="$GROUPED_SELECT_FROM"
+          elif [[ "$SELECT_SHOW_ALL" == "true" ]]; then
             select_from=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
           fi
           # Parse user selection and launch tasks (up to free_slots)
@@ -6935,6 +7103,7 @@ while :; do
           LAST_DISPLAY=""
           LAST_WAITING_MSG=""  # Clear waiting state
           SELECT_SHOW_ALL=false
+          USING_GROUPED_VIEW=false
           clear_task_list_display
         fi
         poll_sleep "$POLL_SECONDS"
