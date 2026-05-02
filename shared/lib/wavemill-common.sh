@@ -46,13 +46,16 @@ _WAVEMILL_DEFAULTS='{
   }
 }'
 
-# Load layered config: defaults < ~/.wavemill/config.json < .wavemill-config.json < env vars
+# Load layered config: defaults < ~/.wavemill/config.json < .wavemill-config.json
+# < .wavemill-config.local.json < env vars
 #
 # Resolution order (later wins):
 #   1. Hardcoded defaults (_WAVEMILL_DEFAULTS)
 #   2. User-level config (~/.wavemill/config.json)
 #   3. Per-repo config (.wavemill-config.json)
-#   4. Environment variables (always win)
+#   4. Per-developer overlay (.wavemill-config.local.json) — gitignored,
+#      mirrors the loadWavemillConfig() overlay on the TypeScript side.
+#   5. Environment variables (always win)
 #
 # Sets: SESSION, MAX_PARALLEL, POLL_SECONDS, BASE_BRANCH, WORKTREE_ROOT,
 #        AGENT_CMD, REQUIRE_CONFIRM, PLANNING_MODE, MAX_RETRIES, RETRY_DELAY,
@@ -64,15 +67,20 @@ load_config() {
   local repo_dir="${1:-$PWD}"
   local user_config="$HOME/.wavemill/config.json"
   local repo_config="$repo_dir/.wavemill-config.json"
+  local local_config="$repo_dir/.wavemill-config.local.json"
 
   # Read config files (empty object if missing)
   local user_json='{}'
   local repo_json='{}'
+  local local_json='{}'
   if [[ -f "$user_config" ]]; then
     user_json=$(cat "$user_config") || user_json='{}'
   fi
   if [[ -f "$repo_config" ]]; then
     repo_json=$(cat "$repo_config") || repo_json='{}'
+  fi
+  if [[ -f "$local_config" ]]; then
+    local_json=$(cat "$local_config") || local_json='{}'
   fi
 
   # Single jq call: deep-merge all layers, emit shell-safe variable assignments
@@ -81,8 +89,9 @@ load_config() {
     --argjson defaults "$_WAVEMILL_DEFAULTS" \
     --argjson user "$user_json" \
     --argjson repo "$repo_json" \
+    --argjson local "$local_json" \
     '
-    ($defaults * $user * $repo) as $c |
+    ($defaults * $user * $repo * $local) as $c |
     [
       "_CFG_PROJECT=\($c.linear.project // "" | @sh)",
       "_CFG_GIT_FETCH_TTL_SECONDS=\($c.git.fetchTtlSeconds // 60)",
@@ -119,6 +128,7 @@ load_config() {
     echo "Error: Failed to parse config files. Check JSON syntax in:" >&2
     [[ -f "$user_config" ]] && echo "  $user_config" >&2
     [[ -f "$repo_config" ]] && echo "  $repo_config" >&2
+    [[ -f "$local_config" ]] && echo "  $local_config" >&2
     exit 1
   }
 
@@ -289,9 +299,7 @@ detect_project_name() {
 
   # Legacy fallback
   local project_name=""
-  if [[ -f "$repo_dir/.wavemill-config.json" ]]; then
-    project_name=$(jq -r '.linear.project // empty' "$repo_dir/.wavemill-config.json" 2>/dev/null)
-  fi
+  project_name=$(wavemill_load_config "$repo_dir" | jq -r '.linear.project // empty' 2>/dev/null)
   if [[ -z "$project_name" ]]; then
     project_name="${PROJECT_NAME:-}"
   fi
@@ -806,13 +814,10 @@ mill_check_expansion_handshake() {
   fi
 
   local policy="block"
-  local config_file="$repo_dir/.wavemill-config.json"
-  if [[ -f "$config_file" ]]; then
-    local cfg_policy
-    cfg_policy=$(jq -r '.mill.expansionHandshake.policy // "block"' "$config_file" 2>/dev/null || echo "block")
-    if [[ "$cfg_policy" == "warn" ]]; then
-      policy="warn"
-    fi
+  local cfg_policy
+  cfg_policy=$(wavemill_load_config "$repo_dir" | jq -r '.mill.expansionHandshake.policy // "block"' 2>/dev/null || echo "block")
+  if [[ "$cfg_policy" == "warn" ]]; then
+    policy="warn"
   fi
 
   if [[ "$policy" == "warn" ]]; then
