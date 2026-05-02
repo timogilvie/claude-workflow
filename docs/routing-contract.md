@@ -15,7 +15,7 @@ This note documents the current Wavemill routing lifecycle and the runtime contr
 ## Non-Goals
 
 - No change to challenge-mode pairing semantics or operator overrides such as `FORCE_MODEL`.
-- No eval schema change beyond preserving the existing archived artifacts.
+- No change to the underlying routing policy or expanded-route cache keying.
 
 ## Scoring Format Requirement
 
@@ -57,7 +57,7 @@ Resume uses persisted execution state plus cache-aware expanded reroute when nee
 
 ### Eval Artifact Archival
 
-`archive_stage_artifacts()` copies `features/<slug>/.routing-complete` to `.wavemill/evals/artifacts/<issue>/routing-complete.json` and `features/<slug>/.post-expansion-route.json` to `.wavemill/evals/artifacts/<issue>/post-expansion-route.json`. `shared/lib/eval-context-gatherer.ts` currently loads `.routing-complete` or archived `routing-complete.json` as the routing decision; it archives but does not treat `post-expansion-route.json` as the authoritative execution route. The Wavemill router benchmark may read both forms, but malformed JSON is classified as `invalid_route` instead of being silently skipped.
+`archive_stage_artifacts()` copies `features/<slug>/.initial-route.json` to `.wavemill/evals/artifacts/<issue>/initial-route.json`, `features/<slug>/.routing-complete` to `.wavemill/evals/artifacts/<issue>/routing-complete.json`, and `features/<slug>/.post-expansion-route.json` to `.wavemill/evals/artifacts/<issue>/post-expansion-route.json`. Eval loading prefers live worktree artifacts and falls back to the archive copy so later summaries can compare bootstrap, expanded, and active execution routes after worktree cleanup.
 
 ## Route Read/Write Audit
 
@@ -77,6 +77,7 @@ Resume uses persisted execution state plus cache-aware expanded reroute when nee
 | `features/<slug>/.phase-config.json` | `shared/lib/wavemill-mill.sh::write_phase_config`, `read_phase_config`, resume helpers, `shared/lib/wavemill-common.sh::apply_expanded_route_if_present` | read + write | planning handoff, coding, review, resume | Resolved per-stage execution settings used by downstream phase launches. Rewritten from the authoritative execution route before coding begins. |
 | `.wavemill/workflow-state.json` | `save_task_state()`, `set_task_phase()`, `get_task_meta()`, resume helpers, `shared/lib/wavemill-common.sh::apply_expanded_route_if_present` | read + write | launch, phase transitions, resume, challenge | Durable task ledger for planner/coder/reviewer models, depths, review mode, challenge metadata, PR state, and active phase. Expanded-route promotion updates the execution fields in place. |
 | `.wavemill/evals/artifacts/<issue>/routing-complete.json` | `archive_stage_artifacts()`, `eval-context-gatherer.ts` | read + write | cleanup, post-run eval | Archived copy of the current feature-local routing decision used by eval context loading. |
+| `.wavemill/evals/artifacts/<issue>/initial-route.json` | `archive_stage_artifacts()` | read + write | cleanup, post-run eval provenance | Archived bootstrap snapshot retained for bootstrap-versus-expanded comparisons after worktree cleanup. |
 | `.wavemill/evals/artifacts/<issue>/post-expansion-route.json` | `archive_stage_artifacts()` | write | cleanup, provenance | Archived expanded-route snapshot retained for later route-drift analysis, but not loaded as the active routing decision today. |
 
 ## Target Lifecycle
@@ -98,6 +99,30 @@ Expanded route artifacts may additionally include:
 - `packet_hash` as a 64-character SHA-256 hex digest
 
 If planning fails, expansion is incomplete, or the discovered expanded-route artifact is malformed or missing required execution fields, no promotion occurs. The controller emits an `expanded route invalid` warning and execution remains on the previously persisted bootstrap route.
+
+## Route Lifecycle Logs
+
+Operator-facing routing logs use the stable prefix `route.lifecycle:`. Dashboards and parsers should key on the prefix plus `event=...`, not on older free-form phrases such as `Workflow route recovered from batch cache`.
+
+Current event names:
+
+- `bootstrap_assigned`: bootstrap route persisted to `.routing-complete` and `.initial-route.json`
+- `expanded_assigned`: valid expanded route promoted or confirmed for execution
+- `expansion_cache_hit`: expanded reroute reused cached packet-hash output
+- `expansion_skipped`: expanded reroute skipped — `reason=disabled`, `reason=not_eligible`, or `reason=routing_error_using_existing_artifact` (routing call failed but a pre-existing artifact was found and used)
+- `expansion_failed`: expanded reroute or promotion failed with `reason=routing_error`, `reason=invalid_artifact`, or `reason=cache_error`
+- `execution_active`: route actually used for coding execution, with `source=bootstrap|expanded|preserved`
+
+Common fields:
+
+- `issue=<LINEAR_ID>`
+- `route="coder=...,codeDepth=...,reviewer=...,reviewMode=..."`
+- `bootstrap_route="..."`
+- `expanded_route="..."`
+- `active_route="..."`
+- `route_changed=true|false`
+- `packet_hash=<sha256>`
+- `source=batch|single|cache|bootstrap|expanded|preserved`
 
 ## Expansion Handshake Gate
 
@@ -168,7 +193,24 @@ Resume should reconstruct active execution from the authoritative route persiste
 
 Resume should not re-run expensive expanded routing for unchanged packets. It may refresh the expanded route helper on coding relaunch, but unchanged packets must reuse the persisted artifact or the expanded-route cache by `packet_hash` and operating mode.
 
-Eval archival should continue retaining both `routing-complete.json` and `post-expansion-route.json` so later analysis can compare bootstrap-to-expanded drift. Current eval loading still treats `routing-complete.json` as the routing decision; follow-up runtime work can decide whether first-class bootstrap and expanded provenance fields belong in the eval schema.
+Eval archival now retains `initial-route.json`, `routing-complete.json`, and `post-expansion-route.json` so later analysis can compare bootstrap-to-expanded drift without a live worktree.
+
+Eval schema `1.18.0` adds optional `routeProvenance`:
+
+```json
+{
+  "routeProvenance": {
+    "bootstrapRoute": { "coder": "…", "codeDepth": "…", "reviewer": "…", "reviewMode": "…" },
+    "expandedRoute": { "coder": "…", "codeDepth": "…", "reviewer": "…", "reviewMode": "…" },
+    "activeRoute": { "coder": "…", "codeDepth": "…", "reviewer": "…", "reviewMode": "…" },
+    "routeChanged": true,
+    "decisionSource": "expanded",
+    "expandedCacheHit": false,
+    "packetHash": "<sha256>",
+    "routeSource": "batch"
+  }
+}
+```
 
 ## Current Vs Target Summary
 

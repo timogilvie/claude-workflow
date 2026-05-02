@@ -126,6 +126,22 @@ export function formatWorkflowCostOutcome(
   );
 }
 
+function shortRoute(route?: { coder: string; codeDepth: string; reviewer: string; reviewMode: string }): string {
+  if (!route) {
+    return '';
+  }
+  return `${route.coder}/${route.codeDepth}/${route.reviewer}/${route.reviewMode}`;
+}
+
+export function formatRouteProvenanceDisplay(record: EvalRecord): string {
+  const provenance = record.routeProvenance;
+  if (!provenance?.decisionSource || !provenance.activeRoute) {
+    return '';
+  }
+
+  return `, route: ${provenance.decisionSource} ${shortRoute(provenance.activeRoute)} changed=${provenance.routeChanged === true ? 'true' : 'false'}`;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Printer
 // ────────────────────────────────────────────────────────────────
@@ -142,5 +158,6 @@ export function formatWorkflowCostOutcome(
 export function printEvalSummary(record: EvalRecord, prefix = 'Post-completion eval'): void {
   const scoreDisplay = formatScoreDisplay(record.score as number, record.scoreBand);
   const costSuffix = formatCostDisplay(record.workflowCost);
-  console.log(`${prefix}: ${scoreDisplay}${costSuffix} — saved to eval store`);
+  const routeSuffix = formatRouteProvenanceDisplay(record);
+  console.log(`${prefix}: ${scoreDisplay}${costSuffix}${routeSuffix} — saved to eval store`);
 }

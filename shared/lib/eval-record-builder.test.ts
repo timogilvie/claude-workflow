@@ -12,6 +12,7 @@ import {
   attachConstraints,
   attachDifficultyMetadata,
   attachFallbackEvent,
+  attachRouteProvenance,
   attachProviderMetadata,
   attachNonRewardReason,
   attachRubricEval,
@@ -767,6 +768,51 @@ describe('eval-record-builder', () => {
           reviewMode: 'llm',
         },
       });
+    });
+  });
+
+  describe('attachRouteProvenance (HOK-1517)', () => {
+    const routeProvenance = {
+      decisionSource: 'expanded' as const,
+      bootstrapRoute: {
+        coder: 'claude-sonnet-4-6',
+        codeDepth: 'medium',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'llm',
+      },
+      expandedRoute: {
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-sonnet-4-6',
+        reviewMode: 'static',
+      },
+      activeRoute: {
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-sonnet-4-6',
+        reviewMode: 'static',
+      },
+      routeChanged: true,
+      expandedCacheHit: true,
+      packetHash: 'a'.repeat(64),
+      routeSource: 'cache' as const,
+    };
+
+    it('is a no-op when provenance is undefined', () => {
+      const before = { ...baseRecord };
+      attachRouteProvenance(baseRecord, undefined);
+      expect(baseRecord.routeProvenance).toBeUndefined();
+      expect(baseRecord).toEqual(before);
+    });
+
+    it('attaches route provenance when provided', () => {
+      attachRouteProvenance(baseRecord, routeProvenance);
+      expect(baseRecord.routeProvenance).toEqual(routeProvenance);
+    });
+
+    it('attaches route provenance through enrichEvalRecord', () => {
+      enrichEvalRecord(baseRecord, { routeProvenance });
+      expect(baseRecord.routeProvenance).toEqual(routeProvenance);
     });
   });
 });

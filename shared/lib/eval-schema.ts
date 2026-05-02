@@ -59,6 +59,9 @@
  * - **1.17.0**: Added optional `nonRewardReason` field to `EvalRecord`
  *   (HOK-1499) so submission and validation flows can surface a stable,
  *   user-readable reason when a record is not reward eligible
+ * - **1.18.0**: Added optional `routeProvenance` field to `EvalRecord`
+ *   (HOK-1517) so eval artifacts retain bootstrap, expanded, and active
+ *   execution route attribution for operator-facing comparisons
  *
  * @module eval-schema
  */
@@ -68,7 +71,7 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.17.0';
+export const SCHEMA_VERSION = '1.18.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -1094,6 +1097,24 @@ export interface EvalChallengeRouteContext {
   refreshRationale?: string;
 }
 
+export interface EvalRouteArtifact {
+  coder: string;
+  codeDepth: string;
+  reviewer: string;
+  reviewMode: string;
+}
+
+export interface EvalRouteProvenance {
+  bootstrapRoute?: EvalRouteArtifact;
+  expandedRoute?: EvalRouteArtifact;
+  activeRoute?: EvalRouteArtifact;
+  routeChanged?: boolean;
+  decisionSource?: 'bootstrap' | 'expanded' | 'preserved';
+  expandedCacheHit?: boolean;
+  packetHash?: string;
+  routeSource?: 'batch' | 'single' | 'cache';
+}
+
 // ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
@@ -1328,6 +1349,17 @@ export interface EvalRecord {
    * @since 1.16.0
    */
   challengeRouteContext?: EvalChallengeRouteContext;
+
+  /**
+   * General routing provenance for operator and eval attribution.
+   *
+   * Captures the bootstrap route that launched planning, any expanded route
+   * produced from the task packet, and the active execution route that coding
+   * actually used.
+   *
+   * @since 1.18.0
+   */
+  routeProvenance?: EvalRouteProvenance;
 
   /**
    * Cross-model fallback telemetry for quota-aware training attribution.
