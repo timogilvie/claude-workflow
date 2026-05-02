@@ -1358,6 +1358,39 @@
       "required": ["decisionSource"],
       "additionalProperties": false
     },
+    "routeProvenance": {
+      "type": "object",
+      "description": "General routing provenance capturing bootstrap, expanded, and active execution routes for eval attribution.",
+      "properties": {
+        "bootstrapRoute": {
+          "$ref": "#/$defs/RouteArtifact"
+        },
+        "expandedRoute": {
+          "$ref": "#/$defs/RouteArtifact"
+        },
+        "activeRoute": {
+          "$ref": "#/$defs/RouteArtifact"
+        },
+        "routeChanged": {
+          "type": "boolean"
+        },
+        "decisionSource": {
+          "type": "string",
+          "enum": ["bootstrap", "expanded", "preserved"]
+        },
+        "expandedCacheHit": {
+          "type": "boolean"
+        },
+        "packetHash": {
+          "type": "string"
+        },
+        "routeSource": {
+          "type": "string",
+          "enum": ["batch", "single", "cache"]
+        }
+      },
+      "additionalProperties": false
+    },
     "workflow_success_rate_under_budget": {
       "type": "number",
       "minimum": 0,
@@ -1378,6 +1411,17 @@
   },
   "$defs": {
     "ChallengeRouteArtifact": {
+      "type": "object",
+      "properties": {
+        "coder": { "type": "string" },
+        "codeDepth": { "type": "string" },
+        "reviewer": { "type": "string" },
+        "reviewMode": { "type": "string" }
+      },
+      "required": ["coder", "codeDepth", "reviewer", "reviewMode"],
+      "additionalProperties": false
+    },
+    "RouteArtifact": {
       "type": "object",
       "properties": {
         "coder": { "type": "string" },

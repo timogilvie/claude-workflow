@@ -27,6 +27,19 @@ function scoreBar(score: number): string {
   return '\u2588'.repeat(filled) + '\u2591'.repeat(empty);
 }
 
+function formatRouteSignature(route?: {
+  coder: string;
+  codeDepth: string;
+  reviewer: string;
+  reviewMode: string;
+}): string {
+  if (!route) {
+    return 'n/a';
+  }
+
+  return `${route.coder}, ${route.codeDepth}, ${route.reviewer}, ${route.reviewMode}`;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Public API
 // ────────────────────────────────────────────────────────────────
@@ -193,6 +206,17 @@ export function formatEvalRecord(record: EvalRecord): string {
         ? 'PR created'
         : 'no PR';
     lines.push(`    ${BOLD}Delivery:${NC}  ${deliveryStatus}`);
+    lines.push('');
+  }
+
+  if (record.routeProvenance) {
+    const provenance = record.routeProvenance;
+    lines.push(`  ${BOLD}Route Provenance:${NC}`);
+    lines.push(`    ${BOLD}Decision:${NC}  ${provenance.decisionSource || 'n/a'}`);
+    lines.push(`    ${BOLD}Bootstrap:${NC} ${formatRouteSignature(provenance.bootstrapRoute)}`);
+    lines.push(`    ${BOLD}Expanded:${NC}  ${formatRouteSignature(provenance.expandedRoute)}`);
+    lines.push(`    ${BOLD}Active:${NC}    ${formatRouteSignature(provenance.activeRoute)}`);
+    lines.push(`    ${BOLD}Changed:${NC}   ${typeof provenance.routeChanged === 'boolean' ? String(provenance.routeChanged) : 'n/a'}`);
     lines.push('');
   }
 

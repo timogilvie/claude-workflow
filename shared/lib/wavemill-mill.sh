@@ -3059,11 +3059,23 @@ _restore_inflight_task_window_if_missing() {
       ;;
     coding)
       if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
+        if [[ "${REROUTE_EXPANDED_LAST_REASON:-}" == "disabled" || "${REROUTE_EXPANDED_LAST_REASON:-}" == "not_eligible" ]]; then
+          log_route_lifecycle "expansion_skipped" \
+            "issue=$issue" \
+            "reason=${REROUTE_EXPANDED_LAST_REASON:-not_eligible}" \
+            "active_route=\"$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)\""
+        else
+          log_route_lifecycle "expansion_failed" \
+            "issue=$issue" \
+            "reason=${REROUTE_EXPANDED_LAST_REASON:-routing_error}" \
+            "active_route=\"$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)\""
+        fi
         log_warn "$issue → expanded reroute helper failed, attempting promotion from existing artifacts"
       fi
       if ! apply_expanded_route_if_present "$feature_dir" "$issue" "$slug" "$wt_dir" "$STATE_FILE"; then
         log_warn "$issue → expanded route invalid; using existing execution state for coding relaunch"
       fi
+      emit_execution_active_route "$feature_dir" "$issue"
       model=$(read_phase_config "$feature_dir" "coding" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$issue" "coderModel")
       model="$(resolve_phase_model "coding" "$model" "claude-opus-4-7")"
@@ -4106,6 +4118,14 @@ archive_stage_artifacts() {
       fi
     fi
 
+    if [[ -f "$feature_dir/.initial-route.json" ]]; then
+      if jq -e . "$feature_dir/.initial-route.json" >/dev/null 2>&1; then
+        cp "$feature_dir/.initial-route.json" "$archive_dir/initial-route.json" 2>/dev/null || true
+      else
+        log_warn "  Skipping invalid route artifact archive: $feature_dir/.initial-route.json"
+      fi
+    fi
+
     # Post-expansion route
     if [[ -f "$feature_dir/.post-expansion-route.json" ]]; then
       if jq -e . "$feature_dir/.post-expansion-route.json" >/dev/null 2>&1; then
@@ -4421,8 +4441,10 @@ reroute_expanded_packets_for_coding_handoff() {
   local input_file output_file stderr_file
   local -a route_max_cost_args=()
   local count=0
+  REROUTE_EXPANDED_LAST_REASON=""
 
   if [[ ! -f "$route_batch_tool" ]]; then
+    REROUTE_EXPANDED_LAST_REASON="disabled"
     return 1
   fi
 
@@ -4432,6 +4454,7 @@ reroute_expanded_packets_for_coding_handoff() {
   : > "$input_file"
 
   if ! append_expanded_reroute_input "$input_file" "$current_issue" "$current_slug" "$current_feature_dir"; then
+    REROUTE_EXPANDED_LAST_REASON="not_eligible"
     rm -f "$input_file" "$output_file" "$stderr_file"
     return 1
   fi
@@ -4463,8 +4486,14 @@ reroute_expanded_packets_for_coding_handoff() {
     --expanded-jsonl "$input_file" \
     --repo-dir "$REPO_DIR" \
     "${route_max_cost_args[@]}" >"$output_file" 2>"$stderr_file"; then
+    REROUTE_EXPANDED_LAST_REASON="routing_error"
     replay_route_transparency_logs "$stderr_file"
     if [[ -f "$current_feature_dir/.post-expansion-route.json" ]]; then
+      REROUTE_EXPANDED_LAST_REASON="routing_error_using_existing_artifact"
+      log_route_lifecycle "expansion_skipped" \
+        "issue=$current_issue" \
+        "reason=routing_error_using_existing_artifact" \
+        "active_route=\"$(route_lifecycle_route_id "$current_feature_dir/.routing-complete" 2>/dev/null || true)\""
       rm -f "$input_file" "$output_file" "$stderr_file"
       return 0
     fi
@@ -4882,7 +4911,7 @@ launch_task() {
       if [[ -f "$saved_route" ]] && [[ -f "$saved_route_source_file" ]] && [[ "$(cat "$saved_route_source_file" 2>/dev/null)" == "batch-cache" ]] && jq -e '.planner and .coder and .reviewer' "$saved_route" >/dev/null 2>&1; then
         route_json=$(cat "$saved_route" 2>/dev/null || echo "")
         route_source="batch-cache"
-        log "info" "  Workflow route recovered from batch cache"
+        log "info" "  Workflow route cache hit from batch cache"
       elif [[ ! -s "$route_input_file" ]]; then
         route_reason="missing_packet"
         log_warn "  Workflow routing skipped: no packet content available"
@@ -4939,10 +4968,10 @@ launch_task() {
         route_json=$(cat "$saved_route" 2>/dev/null || echo "")
         route_source="$(cat "$saved_route_source_file" 2>/dev/null || echo "startup-cache")"
         if [[ "$route_source" == "batch-cache" ]]; then
-          log "info" "  Workflow route recovered from batch cache"
+          log "info" "  Workflow route cache hit from batch cache"
         else
           route_source="startup-cache"
-          log "info" "  Workflow route recovered from startup cache"
+          log "info" "  Workflow route cache hit from startup cache"
         fi
       fi
 
@@ -4974,7 +5003,7 @@ launch_task() {
 
         if [[ -n "$route_json" ]] && echo "$route_json" | jq -e '.planner and .coder and .reviewer' >/dev/null 2>&1; then
           route_source="heuristic-fallback"
-          log "info" "  Workflow route recovered via heuristic fallback"
+          log "info" "  Workflow route selected via heuristic fallback"
         else
           if [[ -n "$route_json" ]]; then
             route_reason="invalid_json"
@@ -5312,6 +5341,11 @@ Implement from the issue description plus direct codebase analysis."
   else
     jq '.provenance.source = "bootstrap"' "$routing_file" \
       | write_json_artifact "$feature_dir/.initial-route.json"
+  fi
+  local bootstrap_route
+  bootstrap_route="$(route_lifecycle_route_id "$feature_dir/.initial-route.json" 2>/dev/null || true)"
+  if [[ -n "$bootstrap_route" ]]; then
+    log_route_lifecycle "bootstrap_assigned" "issue=$issue" "route=\"$bootstrap_route\""
   fi
 
   # Launch planning phase directly with the routed model (skip routing agent)
@@ -5857,11 +5891,23 @@ monitor_issue_state() {
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
             if ! reroute_expanded_packets_for_coding_handoff "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
+              if [[ "${REROUTE_EXPANDED_LAST_REASON:-}" == "disabled" || "${REROUTE_EXPANDED_LAST_REASON:-}" == "not_eligible" ]]; then
+                log_route_lifecycle "expansion_skipped" \
+                  "issue=$ISSUE" \
+                  "reason=${REROUTE_EXPANDED_LAST_REASON:-not_eligible}" \
+                  "active_route=\"$(route_lifecycle_route_id "$FEATURE_DIR/.routing-complete" 2>/dev/null || true)\""
+              else
+                log_route_lifecycle "expansion_failed" \
+                  "issue=$ISSUE" \
+                  "reason=${REROUTE_EXPANDED_LAST_REASON:-routing_error}" \
+                  "active_route=\"$(route_lifecycle_route_id "$FEATURE_DIR/.routing-complete" 2>/dev/null || true)\""
+              fi
               log_warn "$ISSUE → expanded reroute helper failed, attempting promotion from existing artifacts"
             fi
             if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
               log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"
             fi
+            emit_execution_active_route "$FEATURE_DIR" "$ISSUE"
 
             if ! mill_check_expansion_handshake "$FEATURE_DIR" "$ISSUE" "$REPO_DIR"; then
               rm -f "$FEATURE_DIR/.plan-approved"

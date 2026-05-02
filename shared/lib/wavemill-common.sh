@@ -511,6 +511,73 @@ validate_expanded_route_artifact() {
   ' "$route_file" >/dev/null 2>&1
 }
 
+route_lifecycle_route_id() {
+  local route_file="$1"
+  [[ -n "$route_file" && -f "$route_file" ]] || return 1
+
+  jq -r '
+    "coder=\(.coder // ""),codeDepth=\(.codeDepth // ""),reviewer=\(.reviewer // ""),reviewMode=\(.reviewMode // .reviewRecommended // "")"
+  ' "$route_file" 2>/dev/null
+}
+
+log_route_lifecycle() {
+  local event="$1"
+  shift || true
+
+  local line="route.lifecycle: event=${event}"
+  local token
+  for token in "$@"; do
+    [[ -n "$token" ]] || continue
+    line+=" ${token}"
+  done
+  log "info" "$line"
+}
+
+emit_execution_active_route() {
+  local feature_dir="$1" issue="$2"
+  local routing_file="$feature_dir/.routing-complete"
+  local bootstrap_file="$feature_dir/.initial-route.json"
+  local expanded_file=""
+  local active_route="" bootstrap_route="" expanded_route="" route_changed="" source=""
+
+  [[ -f "$routing_file" ]] || return 0
+  active_route="$(route_lifecycle_route_id "$routing_file" 2>/dev/null || true)"
+  [[ -n "$active_route" ]] || return 0
+
+  if [[ -f "$bootstrap_file" ]]; then
+    bootstrap_route="$(route_lifecycle_route_id "$bootstrap_file" 2>/dev/null || true)"
+  fi
+
+  expanded_file="$(find_expanded_route_artifact "$feature_dir" 2>/dev/null || true)"
+  if [[ -n "$expanded_file" ]]; then
+    expanded_route="$(route_lifecycle_route_id "$expanded_file" 2>/dev/null || true)"
+  fi
+
+  route_changed="false"
+  if [[ -n "$bootstrap_route" && "$bootstrap_route" != "$active_route" ]]; then
+    route_changed="true"
+  fi
+
+  source="bootstrap"
+  if [[ -n "$expanded_route" ]]; then
+    if [[ "$expanded_route" == "$active_route" ]]; then
+      if [[ -n "$bootstrap_route" && "$bootstrap_route" == "$active_route" ]]; then
+        source="preserved"
+      else
+        source="expanded"
+      fi
+    else
+      source="preserved"
+    fi
+  fi
+
+  log_route_lifecycle "execution_active" \
+    "issue=$issue" \
+    "route=\"$active_route\"" \
+    "route_changed=$route_changed" \
+    "source=$source"
+}
+
 ensure_phase_config_state_file() {
   local feature_dir="$1"
   local config_file="$feature_dir/.phase-config.json"
@@ -547,17 +614,22 @@ apply_expanded_route_if_present() {
   local feature_dir="$1" issue="$2" slug="$3" worktree_dir="$4" state_file="${5:-${STATE_FILE:-}}"
   local route_file routing_file phase_config_file planner_model plan_depth coder_model code_depth reviewer_model review_mode
   local planner_agent="" coder_agent="" reviewer_agent=""
+  local active_route="" bootstrap_route="" expanded_route="" route_changed="false" source="expanded"
 
   route_file="$(find_expanded_route_artifact "$feature_dir" 2>/dev/null || true)"
   [[ -n "$route_file" ]] || return 0
 
   if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
     log "warn" "expanded route invalid: $route_file (malformed JSON)"
+    active_route="$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)"
+    log_route_lifecycle "expansion_failed" "issue=$issue" "reason=invalid_artifact" "active_route=\"${active_route}\""
     return 1
   fi
 
   if ! validate_expanded_route_artifact "$route_file"; then
     log "warn" "expanded route invalid: $route_file (missing required execution fields)"
+    active_route="$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)"
+    log_route_lifecycle "expansion_failed" "issue=$issue" "reason=invalid_artifact" "active_route=\"${active_route}\""
     return 1
   fi
 
@@ -595,6 +667,8 @@ apply_expanded_route_if_present() {
     --arg routeFile "$route_file" \
     --slurpfile route "$route_file"; then
     log "warn" "expanded route invalid: $route_file (failed to update .routing-complete)"
+    active_route="$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)"
+    log_route_lifecycle "expansion_failed" "issue=$issue" "reason=invalid_artifact" "active_route=\"${active_route}\""
     return 1
   fi
 
@@ -635,6 +709,8 @@ apply_expanded_route_if_present() {
     --arg reviewerAgent "$reviewer_agent" \
     --arg reviewMode "$review_mode"; then
     log "warn" "expanded route invalid: $route_file (failed to update .phase-config.json)"
+    active_route="$(route_lifecycle_route_id "$routing_file" 2>/dev/null || true)"
+    log_route_lifecycle "expansion_failed" "issue=$issue" "reason=invalid_artifact" "active_route=\"${active_route}\""
     return 1
   fi
 
@@ -659,8 +735,39 @@ apply_expanded_route_if_present() {
       --arg codeDepth "$code_depth" \
       --arg reviewMode "$review_mode"; then
       log "warn" "expanded route invalid: $route_file (failed to update workflow state)"
+      active_route="$(route_lifecycle_route_id "$routing_file" 2>/dev/null || true)"
+      log_route_lifecycle "expansion_failed" "issue=$issue" "reason=invalid_artifact" "active_route=\"${active_route}\""
       return 1
     fi
+  fi
+
+  bootstrap_route="$(route_lifecycle_route_id "$feature_dir/.initial-route.json" 2>/dev/null || true)"
+  expanded_route="$(route_lifecycle_route_id "$route_file" 2>/dev/null || true)"
+  active_route="$(route_lifecycle_route_id "$routing_file" 2>/dev/null || true)"
+  if [[ -n "$bootstrap_route" && -n "$active_route" && "$bootstrap_route" != "$active_route" ]]; then
+    route_changed="true"
+  fi
+  if [[ -n "$bootstrap_route" && "$bootstrap_route" == "$active_route" ]]; then
+    source="preserved"
+  fi
+
+  local is_cache_hit
+  is_cache_hit="$(jq -r '.cache_hit // false' "$route_file" 2>/dev/null || echo "false")"
+
+  if [[ "$is_cache_hit" == "true" ]]; then
+    local packet_hash
+    packet_hash="$(jq -r '.packet_hash // ""' "$route_file" 2>/dev/null || true)"
+    log_route_lifecycle "expansion_cache_hit" \
+      "issue=$issue" \
+      "route=\"${expanded_route}\"" \
+      "packet_hash=${packet_hash:0:12}"
+  else
+    log_route_lifecycle "expanded_assigned" \
+      "issue=$issue" \
+      "bootstrap_route=\"${bootstrap_route}\"" \
+      "expanded_route=\"${expanded_route}\"" \
+      "route_changed=$route_changed" \
+      "source=$source"
   fi
 
   return 0

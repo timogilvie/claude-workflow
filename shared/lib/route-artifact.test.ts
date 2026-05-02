@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import {
+  buildRouteLifecycleProvenance,
+  deriveRouteDecisionSource,
+  formatRouteArtifactSignature,
   buildRouteProvenance,
   hasValidPostExpansionRoute,
   readBothRouteArtifacts,
+  readRouteLifecycleArtifacts,
+  routeChangedMaterially,
   stringifyRouteArtifact,
   validateExpandedRouteArtifact,
   writeRouteArtifact,
@@ -371,6 +376,148 @@ test('readBothRouteArtifacts keeps normalized expanded fields and drops provenan
     packet_hash: 'b'.repeat(64),
   });
   assert.equal('provenance' in (result.expanded as object), false);
+});
+
+test('formatRouteArtifactSignature renders compact operator-facing route ids', () => {
+  assert.equal(
+    formatRouteArtifactSignature({
+      coder: 'gpt-5.4',
+      codeDepth: 'deep',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'static+llm',
+    }),
+    'coder=gpt-5.4,codeDepth=deep,reviewer=claude-sonnet-4-6,reviewMode=static+llm',
+  );
+});
+
+test('routeChangedMaterially tracks coder/reviewer class and depth changes', () => {
+  const result = routeChangedMaterially(
+    {
+      coder: 'claude-sonnet-4-6',
+      codeDepth: 'medium',
+      reviewer: 'claude-opus-4-6',
+      reviewMode: 'llm',
+    },
+    {
+      coder: 'gpt-5.4',
+      codeDepth: 'deep',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'llm',
+    },
+  );
+
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.reasons.sort(), ['code_depth', 'coder_class', 'reviewer_class']);
+});
+
+test('readRouteLifecycleArtifacts falls back to archived bootstrap and active route files', () => {
+  const featureDir = makeFeatureDir();
+  const archiveDir = join(dirname(featureDir), 'archive');
+  mkdirSync(archiveDir, { recursive: true });
+
+  writeFileSync(join(archiveDir, 'initial-route.json'), JSON.stringify({
+    coder: 'bootstrap-coder',
+    reviewer: 'bootstrap-reviewer',
+    codeDepth: 'medium',
+    reviewMode: 'static',
+  }));
+  writeFileSync(join(archiveDir, 'routing-complete.json'), JSON.stringify({
+    coder: 'active-coder',
+    reviewer: 'active-reviewer',
+    codeDepth: 'deep',
+    reviewMode: 'llm',
+  }));
+  writeFileSync(join(archiveDir, 'post-expansion-route.json'), JSON.stringify({
+    coder: 'expanded-coder',
+    reviewer: 'expanded-reviewer',
+    codeDepth: 'deep',
+    reviewMode: 'llm',
+    cache_hit: true,
+    route_source: 'cache',
+    packet_hash: 'c'.repeat(64),
+  }));
+
+  const result = readRouteLifecycleArtifacts(undefined, archiveDir);
+  assert.equal(result.bootstrap?.coder, 'bootstrap-coder');
+  assert.equal(result.expanded?.coder, 'expanded-coder');
+  assert.equal(result.active?.coder, 'active-coder');
+});
+
+test('deriveRouteDecisionSource returns preserved when active route stays bootstrap', () => {
+  const decisionSource = deriveRouteDecisionSource({
+    bootstrap: {
+      coder: 'claude-sonnet-4-6',
+      codeDepth: 'medium',
+      reviewer: 'claude-opus-4-6',
+      reviewMode: 'llm',
+    },
+    expanded: {
+      coder: 'gpt-5.4',
+      codeDepth: 'deep',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'static',
+    },
+    active: {
+      coder: 'claude-sonnet-4-6',
+      codeDepth: 'medium',
+      reviewer: 'claude-opus-4-6',
+      reviewMode: 'llm',
+    },
+  });
+
+  assert.equal(decisionSource, 'preserved');
+});
+
+test('buildRouteLifecycleProvenance includes active route and expanded cache metadata', () => {
+  const provenance = buildRouteLifecycleProvenance({
+    bootstrap: {
+      coder: 'claude-sonnet-4-6',
+      codeDepth: 'medium',
+      reviewer: 'claude-opus-4-6',
+      reviewMode: 'llm',
+    },
+    expanded: {
+      coder: 'gpt-5.4',
+      codeDepth: 'deep',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'static',
+      cache_hit: true,
+      route_source: 'cache',
+      packet_hash: 'd'.repeat(64),
+    },
+    active: {
+      coder: 'gpt-5.4',
+      codeDepth: 'deep',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'static',
+    },
+  });
+
+  assert.deepEqual(provenance, {
+    bootstrapRoute: {
+      coder: 'claude-sonnet-4-6',
+      codeDepth: 'medium',
+      reviewer: 'claude-opus-4-6',
+      reviewMode: 'llm',
+    },
+    expandedRoute: {
+      coder: 'gpt-5.4',
+      codeDepth: 'deep',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'static',
+    },
+    activeRoute: {
+      coder: 'gpt-5.4',
+      codeDepth: 'deep',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'static',
+    },
+    routeChanged: true,
+    decisionSource: 'expanded',
+    expandedCacheHit: true,
+    packetHash: 'd'.repeat(64),
+    routeSource: 'cache',
+  });
 });
 
 test('hasValidPostExpansionRoute returns missing when file is absent', () => {

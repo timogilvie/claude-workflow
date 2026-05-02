@@ -11,6 +11,7 @@ import {
   formatDifficultyDisplay,
   formatTaskContextDisplay,
   formatRepoContextDisplay,
+  formatRouteProvenanceDisplay,
   formatWorkflowCostOutcome,
   printEvalSummary,
 } from './eval-summary-printer.ts';
@@ -110,6 +111,31 @@ describe('eval-summary-printer', () => {
     });
   });
 
+  describe('formatRouteProvenanceDisplay', () => {
+    it('should return empty string when route provenance is absent', () => {
+      expect(formatRouteProvenanceDisplay({} as EvalRecord)).toBe('');
+    });
+
+    it('should format active route provenance compactly', () => {
+      const record = {
+        routeProvenance: {
+          decisionSource: 'expanded',
+          activeRoute: {
+            coder: 'gpt-5.4',
+            codeDepth: 'deep',
+            reviewer: 'claude-sonnet-4-6',
+            reviewMode: 'static',
+          },
+          routeChanged: true,
+        },
+      } as EvalRecord;
+
+      expect(formatRouteProvenanceDisplay(record)).toBe(
+        ', route: expanded gpt-5.4/deep/claude-sonnet-4-6/static changed=true'
+      );
+    });
+  });
+
   describe('printEvalSummary', () => {
     let consoleLogSpy: ReturnType<typeof vi.spyOn>;
 
@@ -138,6 +164,35 @@ describe('eval-summary-printer', () => {
 
       expect(consoleLogSpy).toHaveBeenCalledWith(
         'Post-completion eval: excellent (0.95), workflow cost: $0.1234 — saved to eval store'
+      );
+    });
+
+    it('should print summary with route provenance', () => {
+      const record: EvalRecord = {
+        id: 'test-id',
+        timestamp: '2026-03-02T12:00:00Z',
+        score: 0.95,
+        scoreBand: 'excellent',
+        reasoning: 'Test reasoning',
+        taskPrompt: 'Test task',
+        prReviewOutput: 'Test PR',
+        schemaVersion: '1.18.0',
+        routeProvenance: {
+          decisionSource: 'expanded',
+          activeRoute: {
+            coder: 'gpt-5.4',
+            codeDepth: 'deep',
+            reviewer: 'claude-sonnet-4-6',
+            reviewMode: 'static',
+          },
+          routeChanged: true,
+        },
+      } as EvalRecord;
+
+      printEvalSummary(record);
+
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        'Post-completion eval: excellent (0.95), route: expanded gpt-5.4/deep/claude-sonnet-4-6/static changed=true — saved to eval store'
       );
     });
 

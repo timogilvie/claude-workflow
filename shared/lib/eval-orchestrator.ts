@@ -26,6 +26,7 @@ import {
   fetchRoutingCompleteRawWithArchive,
   type EvalContext,
 } from './eval-context-gatherer.ts';
+import { buildRouteLifecycleProvenance, readRouteLifecycleArtifacts } from './route-artifact.ts';
 import {
   detectAllInterventions,
   toInterventionMeta,
@@ -49,6 +50,7 @@ import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
 import type {
   EvalRecord,
+  EvalRouteProvenance,
   Outcomes,
   EvalConstraints,
 } from './eval-schema.ts';
@@ -84,6 +86,30 @@ function resolveExecutionModelWithArtifacts(
   stageExecutionModel: string | undefined,
 ): string | undefined {
   return resolveExecutionModel(solutionModel, routingDecision) ?? stageExecutionModel;
+}
+
+function deriveRouteProvenance(
+  repoDir: string,
+  branch: string,
+  issueId: string,
+  worktreePath?: string,
+): EvalRouteProvenance | null {
+  const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
+  if (!slug && !issueId) {
+    return null;
+  }
+
+  const featureDir = slug && worktreePath
+    ? path.join(worktreePath, 'features', slug)
+    : undefined;
+  const archiveDir = issueId
+    ? path.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId)
+    : undefined;
+
+  return buildRouteLifecycleProvenance(
+    readRouteLifecycleArtifacts(featureDir, archiveDir),
+    repoDir,
+  );
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -400,6 +426,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     provider: providerMetadata?.provider,
     endpoint: providerMetadata?.endpoint,
     challengePairId,
+    routeProvenance: deriveRouteProvenance(repoDir, branch, issueId, worktreePath),
     difficulty: difficultyData,
     taskContext: taskContextData,
     repoContext: repoContextData,

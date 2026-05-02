@@ -1357,6 +1357,50 @@ test('challengeRouteContext validates when present', () => {
   assert.equal(properties.challengeRouteContext?.type, 'object');
 });
 
+test('routeProvenance remains optional for legacy records', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('routeProvenance validates when present', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.18.0',
+    routeProvenance: {
+      decisionSource: 'expanded',
+      bootstrapRoute: {
+        coder: 'claude-sonnet-4-6',
+        codeDepth: 'medium',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'llm',
+      },
+      expandedRoute: {
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-sonnet-4-6',
+        reviewMode: 'static',
+      },
+      activeRoute: {
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-sonnet-4-6',
+        reviewMode: 'static',
+      },
+      routeChanged: true,
+      expandedCacheHit: true,
+      packetHash: 'a'.repeat(64),
+      routeSource: 'cache',
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.routeProvenance?.type, 'object');
+});
+
 test('Wavemill router fields validate and schema stays in parity', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
@@ -1391,8 +1435,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.17.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.17.0');
+test('Schema version constant is 1.18.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.18.0');
 });
 
 test('Legacy rows still validate without nonRewardReason', () => {
@@ -1403,7 +1447,7 @@ test('Legacy rows still validate without nonRewardReason', () => {
 test('Records validate with a complete nonRewardReason', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
-    schemaVersion: '1.17.0',
+    schemaVersion: '1.18.0',
     nonRewardReason: {
       code: 'INELIGIBLE_REWARD_NO_JUDGE',
       message: 'Reward not paid: record has no judge evaluation result.',
@@ -1417,7 +1461,7 @@ test('Records validate with a complete nonRewardReason', () => {
 test('Records reject nonRewardReason when message is missing', () => {
   const bad = {
     ...scenarios[0].record,
-    schemaVersion: '1.17.0',
+    schemaVersion: '1.18.0',
     nonRewardReason: {
       code: 'INELIGIBLE_REWARD_NO_JUDGE',
     },
