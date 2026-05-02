@@ -460,7 +460,7 @@ else
 
   if grep -Fq 'should_cleanup_closed_pr() {' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'role=$(get_task_meta "$issue" "challengeRole")' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq '[[ "$role" == "challenger" && "${_CFG_CHALLENGE_AUTO_MERGE:-false}" != "true" ]]' <<< "$HEREDOC_CONTENT"; then
+    && grep -Fq '[[ "$role" == "challenger" && "${CHALLENGE_AUTO_MERGE:-false}" != "true" ]]' <<< "$HEREDOC_CONTENT"; then
     pass "monitor defines closed-PR cleanup helper for manual-review challengers"
   else
     fail "monitor is missing closed-PR cleanup helper for manual-review challengers"
