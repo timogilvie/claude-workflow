@@ -90,7 +90,7 @@ _progress_render_reader() {
   local fifo="$1" task_count="$2" output_file="${3:-}"
   local columns=(route worktree deps agent linear)
   local -A cells details issues
-  local i col id state detail finished=0 issue_width=5
+  local i col id state detail issue_width=5
 
   _progress_emit() {
     if [[ -n "${output_file:-}" ]]; then
@@ -151,13 +151,8 @@ _progress_render_reader() {
   }
 
   _progress_draw_table
-  while true; do
-    if ! IFS=$'\t' read -t 0.1 -r id col state detail 2>/dev/null; then
-      [[ -z "${output_file:-}" ]] && _progress_draw_table
-      continue
-    fi
+  while IFS=$'\t' read -r id col state detail 2>/dev/null; do
     if [[ "$id" == "__finish__" ]]; then
-      finished=1
       _progress_draw_table
       break
     fi
@@ -168,28 +163,14 @@ _progress_render_reader() {
       cells["$id:$col"]="$state"
       details["$id:$col"]="$(_progress_clean_detail "${detail:-}")"
     fi
-    while IFS=$'\t' read -t 0.001 -r id col state detail 2>/dev/null; do
-      if [[ "$id" == "__finish__" ]]; then
-        finished=1
-        break
-      fi
-      [[ "$id" =~ ^[0-9]+$ ]] || continue
-      if [[ "$col" == "issue" ]]; then
-        issues["$id"]="$(_progress_clean_detail "$state")"
-      else
-        cells["$id:$col"]="$state"
-        details["$id:$col"]="$(_progress_clean_detail "${detail:-}")"
-      fi
-    done
     _progress_draw_table
-    (( finished == 1 )) && break
   done < "$fifo"
 }
 
 progress_start() {
   local task_count="$1" output_file="${2:-${WAVEMILL_STARTUP_PROGRESS_FILE:-}}"
   [[ "${WAVEMILL_NO_PROGRESS:-0}" == "1" ]] && return 0
-  PROGRESS_FIFO="/tmp/wavemill-${SESSION:-$$}-startup-progress.fifo"
+  PROGRESS_FIFO="$(mktemp -u "/tmp/wavemill-${SESSION:-$$}-startup-progress.XXXXXX.fifo")"
   rm -f "$PROGRESS_FIFO"
   mkfifo "$PROGRESS_FIFO"
   _progress_render_reader "$PROGRESS_FIFO" "$task_count" "$output_file" &
