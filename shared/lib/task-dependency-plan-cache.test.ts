@@ -1,0 +1,273 @@
+import assert from 'node:assert/strict';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
+import {
+  CACHE_SCHEMA_VERSION,
+  computeTaskFingerprint,
+  getTaskDependencyCachePath,
+  loadCache,
+  lookupEdge,
+  pruneCache,
+  recordEdge,
+  saveCache,
+  type CacheFile,
+} from './task-dependency-plan-cache.ts';
+
+let repoDir: string;
+
+function readCache(path: string): CacheFile {
+  return JSON.parse(readFileSync(path, 'utf8')) as CacheFile;
+}
+
+function createCache(overrides: Partial<CacheFile> = {}): CacheFile {
+  return {
+    schemaVersion: CACHE_SCHEMA_VERSION,
+    projectSlug: 'sample-project',
+    updatedAt: new Date(0).toISOString(),
+    fingerprints: {},
+    edges: [],
+    ...overrides,
+  };
+}
+
+describe('task-dependency-plan-cache', () => {
+  beforeEach(() => {
+    repoDir = join(tmpdir(), `task-dependency-cache-test-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(repoDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+    mock.restoreAll();
+  });
+
+  it('computes deterministic fingerprints regardless of key order', () => {
+    const first = computeTaskFingerprint({
+      id: 'HOK-1',
+      title: 'Title',
+      description: 'Description',
+      labels: ['backend', 'cache'],
+      priority: 1,
+      estimate: 3,
+      state: { name: 'In Progress' },
+      blocks: ['HOK-2'],
+    });
+
+    const second = computeTaskFingerprint({
+      blocks: ['HOK-2'],
+      state: { name: 'In Progress' },
+      estimate: 3,
+      priority: 1,
+      labels: ['cache', 'backend'],
+      description: 'Description',
+      title: 'Title',
+      id: 'HOK-1',
+    });
+
+    assert.match(first, /^[a-f0-9]{64}$/);
+    assert.equal(first, second);
+    assert.notEqual(
+      first,
+      computeTaskFingerprint({
+        id: 'HOK-1',
+        title: 'Retitled',
+        description: 'Description',
+        labels: ['backend', 'cache'],
+        priority: 1,
+        estimate: 3,
+        state: { name: 'In Progress' },
+        blocks: ['HOK-2'],
+      }),
+    );
+  });
+
+  it('normalizes undefined and null fingerprint fields equally', () => {
+    assert.equal(
+      computeTaskFingerprint({ id: 'HOK-1', priority: undefined, state: undefined }),
+      computeTaskFingerprint({ id: 'HOK-1', priority: null, state: null }),
+    );
+  });
+
+  it('returns an empty cache for a missing file without warning', () => {
+    const warn = mock.method(console, 'warn', () => undefined);
+
+    const cache = loadCache(repoDir, 'sample-project');
+
+    assert.deepEqual(cache, createCache());
+    assert.equal(warn.mock.callCount(), 0);
+  });
+
+  it('drops corrupt JSON cache files with a warning', () => {
+    const cachePath = getTaskDependencyCachePath(repoDir, 'sample-project');
+    mkdirSync(join(repoDir, '.wavemill', 'cache', 'task-dependency-plans'), { recursive: true });
+    writeFileSync(cachePath, '{"schemaVersion":', 'utf8');
+    const warn = mock.method(console, 'warn', () => undefined);
+
+    const cache = loadCache(repoDir, 'sample-project');
+
+    assert.deepEqual(cache, createCache());
+    assert.equal(warn.mock.callCount(), 1);
+  });
+
+  it('drops schema mismatches with a warning', () => {
+    const cachePath = getTaskDependencyCachePath(repoDir, 'sample-project');
+    mkdirSync(join(repoDir, '.wavemill', 'cache', 'task-dependency-plans'), { recursive: true });
+    writeFileSync(
+      cachePath,
+      `${JSON.stringify({ ...createCache(), schemaVersion: 99 }, null, 2)}\n`,
+      'utf8',
+    );
+    const warn = mock.method(console, 'warn', () => undefined);
+
+    const cache = loadCache(repoDir, 'sample-project');
+
+    assert.deepEqual(cache, createCache());
+    assert.equal(warn.mock.callCount(), 1);
+  });
+
+  it('drops invalid cache shapes with a warning', () => {
+    const cachePath = getTaskDependencyCachePath(repoDir, 'sample-project');
+    mkdirSync(join(repoDir, '.wavemill', 'cache', 'task-dependency-plans'), { recursive: true });
+    writeFileSync(
+      cachePath,
+      `${JSON.stringify({ ...createCache(), edges: [{}] }, null, 2)}\n`,
+      'utf8',
+    );
+    const warn = mock.method(console, 'warn', () => undefined);
+
+    const cache = loadCache(repoDir, 'sample-project');
+
+    assert.deepEqual(cache, createCache());
+    assert.equal(warn.mock.callCount(), 1);
+  });
+
+  it('prunes removed and changed tasks while retaining matching inferred edges', () => {
+    const unchanged = { id: 'HOK-1', title: 'Task 1', state: 'Todo' };
+    const changedBefore = { id: 'HOK-2', title: 'Task 2', state: 'Todo' };
+    const changedAfter = { id: 'HOK-2', title: 'Task 2 updated', state: 'Todo' };
+    const removed = { id: 'HOK-3', title: 'Task 3', state: 'Todo' };
+    const stable = { id: 'HOK-4', title: 'Task 4', state: 'Todo' };
+    const cache = createCache({
+      fingerprints: {
+        'HOK-1': computeTaskFingerprint(unchanged),
+        'HOK-2': computeTaskFingerprint(changedBefore),
+        'HOK-3': computeTaskFingerprint(removed),
+        'HOK-4': computeTaskFingerprint(stable),
+      },
+      edges: [
+        {
+          from: 'HOK-1',
+          to: 'HOK-4',
+          fromFingerprint: computeTaskFingerprint(unchanged),
+          toFingerprint: computeTaskFingerprint(stable),
+          kind: 'inferred',
+          classifiedAt: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          from: 'HOK-2',
+          to: 'HOK-4',
+          fromFingerprint: computeTaskFingerprint(changedBefore),
+          toFingerprint: computeTaskFingerprint(stable),
+          kind: 'inferred',
+          classifiedAt: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          from: 'HOK-3',
+          to: 'HOK-4',
+          fromFingerprint: computeTaskFingerprint(removed),
+          toFingerprint: computeTaskFingerprint(stable),
+          kind: 'inferred',
+          classifiedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const pruned = pruneCache(cache, [unchanged, changedAfter, stable]);
+
+    assert.deepEqual(pruned.fingerprints, {
+      'HOK-1': computeTaskFingerprint(unchanged),
+      'HOK-2': computeTaskFingerprint(changedAfter),
+      'HOK-4': computeTaskFingerprint(stable),
+    });
+    assert.deepEqual(pruned.edges, [cache.edges[0]]);
+  });
+
+  it('returns an empty edge list when pruning against an empty backlog', () => {
+    const pruned = pruneCache(
+      createCache({
+        edges: [
+          {
+            from: 'HOK-1',
+            to: 'HOK-2',
+            fromFingerprint: 'a',
+            toFingerprint: 'b',
+            kind: 'inferred',
+            classifiedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      }),
+      [],
+    );
+
+    assert.deepEqual(pruned.fingerprints, {});
+    assert.deepEqual(pruned.edges, []);
+  });
+
+  it('looks up cached edges in either direction and respects fingerprints', () => {
+    const cache = recordEdge(
+      createCache(),
+      {
+        from: 'HOK-1',
+        to: 'HOK-2',
+        fromFingerprint: 'fp-1',
+        toFingerprint: 'fp-2',
+        kind: 'inferred',
+        label: 'blocks',
+        confidence: 0.91,
+        classifiedAt: '2026-01-01T00:00:00.000Z',
+      },
+    );
+
+    assert.equal(lookupEdge(cache, 'HOK-1', 'HOK-2', 'fp-1', 'fp-2'), cache.edges[0]);
+    assert.equal(lookupEdge(cache, 'HOK-2', 'HOK-1', 'fp-2', 'fp-1'), cache.edges[0]);
+    assert.equal(lookupEdge(cache, 'HOK-1', 'HOK-2', 'fp-x', 'fp-2'), undefined);
+  });
+
+  it('creates the cache directory and writes the cache file', async () => {
+    const cache = createCache({
+      fingerprints: { 'HOK-1': 'fp-1' },
+      edges: [
+        {
+          from: 'HOK-1',
+          to: 'HOK-2',
+          fromFingerprint: 'fp-1',
+          toFingerprint: 'fp-2',
+          kind: 'inferred',
+          classifiedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    await saveCache(repoDir, 'sample-project', cache);
+
+    const saved = readCache(getTaskDependencyCachePath(repoDir, 'sample-project'));
+    assert.equal(saved.projectSlug, 'sample-project');
+    assert.equal(saved.schemaVersion, CACHE_SCHEMA_VERSION);
+    assert.match(saved.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.deepEqual(saved.fingerprints, cache.fingerprints);
+    assert.deepEqual(saved.edges, cache.edges);
+  });
+
+  it('falls back gracefully when the cache lock times out', async () => {
+    const cachePath = getTaskDependencyCachePath(repoDir, 'sample-project');
+    mkdirSync(join(repoDir, '.wavemill', 'cache', 'task-dependency-plans'), { recursive: true });
+    writeFileSync(`${cachePath}.lock`, '', { flag: 'wx' });
+    const warn = mock.method(console, 'warn', () => undefined);
+
+    await assert.doesNotReject(saveCache(repoDir, 'sample-project', createCache()));
+
+    assert.equal(warn.mock.callCount(), 1);
+  });
+});
