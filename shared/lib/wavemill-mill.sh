@@ -2352,7 +2352,7 @@ eval_record_exists_for_issue_pr() {
   pr_url=$(gh pr view "$pr" --json url --jq .url 2>/dev/null || true)
   [[ -z "$pr_url" ]] && return 1
 
-  evals_dir=$(jq -r '.eval.evalsDir // ".wavemill/evals"' "$REPO_DIR/.wavemill-config.json" 2>/dev/null || echo ".wavemill/evals")
+  evals_dir=$(wavemill_load_config "$REPO_DIR" | jq -r '.eval.evalsDir // ".wavemill/evals"' 2>/dev/null || echo ".wavemill/evals")
   [[ "$evals_dir" != /* ]] && evals_dir="$REPO_DIR/$evals_dir"
   evals_file="$evals_dir/evals.jsonl"
   [[ -r "$evals_file" ]] || return 1
@@ -2577,17 +2577,21 @@ ready_remediation_config_json() {
   local wt_dir="$1"
   local user_config="$HOME/.wavemill/config.json"
   local repo_config="$wt_dir/.wavemill-config.json"
+  local local_config="$wt_dir/.wavemill-config.local.json"
   local user_json='{}'
   local repo_json='{}'
+  local local_json='{}'
 
   [[ -f "$user_config" ]] && user_json=$(cat "$user_config" 2>/dev/null || echo '{}')
   [[ -f "$repo_config" ]] && repo_json=$(cat "$repo_config" 2>/dev/null || echo '{}')
+  [[ -f "$local_config" ]] && local_json=$(cat "$local_config" 2>/dev/null || echo '{}')
 
   jq -n -c \
     --argjson user "$user_json" \
     --argjson repo "$repo_json" \
+    --argjson local "$local_json" \
     '
-    ({ready:{remediation:{enabled:true,maxAttempts:3,agentCmd:""}}} * $user * $repo).ready.remediation
+    ({ready:{remediation:{enabled:true,maxAttempts:3,agentCmd:""}}} * $user * $repo * $local).ready.remediation
     ' 2>/dev/null || echo '{"enabled":true,"maxAttempts":3,"agentCmd":""}'
 }
 
@@ -3766,7 +3770,7 @@ should_cleanup_closed_pr() {
   local issue="$1"
   local role
   role=$(get_task_meta "$issue" "challengeRole")
-  [[ "$role" == "challenger" && "${_CFG_CHALLENGE_AUTO_MERGE:-false}" != "true" ]]
+  [[ "$role" == "challenger" && "${CHALLENGE_AUTO_MERGE:-false}" != "true" ]]
 }
 
 is_challenge_task() {
@@ -4039,7 +4043,7 @@ maybe_run_challenge_comparison() {
       loser_slug=$(get_task_meta "$loser_key" "slug")
       loser_pr=$(get_task_meta "$loser_key" "pr")
       if [[ -n "$loser_slug" ]]; then
-        if [[ "${_CFG_CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
+        if [[ "${CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
           log "status" "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
           # Close PR if not already closed/merged
           if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then

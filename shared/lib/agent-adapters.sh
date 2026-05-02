@@ -94,17 +94,16 @@ agent_hooks_dir() {
 agent_runtime_resource_selection_enabled() {
   local repo_dir="$1"
   local surface="$2"
-  local config_file="$repo_dir/.wavemill-config.json"
-
-  [[ -f "$config_file" ]] || return 1
 
   # Runtime resource selection is disabled by default in config.ts. Keep the
   # shell path aligned so baseline prompt rendering does not depend on npx/tsx.
+  # Reads through wavemill_load_config so .wavemill-config.local.json overrides
+  # take effect.
   if command -v jq >/dev/null 2>&1; then
-    jq -e --arg surface "$surface" '
+    wavemill_load_config "$repo_dir" | jq -e --arg surface "$surface" '
       (.resources.runtimeSelection.enabled == true)
       and (.resources.runtimeSelection.surfaces[$surface].enabled != false)
-    ' "$config_file" >/dev/null 2>&1
+    ' >/dev/null 2>&1
     return $?
   fi
 

@@ -119,13 +119,23 @@ done
 resolve_evals_file() {
   local evals_dir=".wavemill/evals"
 
-  # Check per-repo config for custom evals dir
-  if [[ -f "$REPO_DIR/.wavemill-config.json" ]]; then
-    local custom_dir
-    custom_dir=$(jq -r '.eval.evalsDir // empty' "$REPO_DIR/.wavemill-config.json" 2>/dev/null || true)
-    if [[ -n "$custom_dir" ]]; then
-      evals_dir="$custom_dir"
-    fi
+  # Check per-repo config for custom evals dir, applying .local.json overlay
+  # so per-developer overrides take effect. Inlined merge keeps this script
+  # standalone (it's exec'd, not sourced).
+  local base="$REPO_DIR/.wavemill-config.json"
+  local lcl="$REPO_DIR/.wavemill-config.local.json"
+  local merged='{}'
+  if [[ -f "$base" && -f "$lcl" ]]; then
+    merged=$(jq -s '.[0] * .[1]' "$base" "$lcl" 2>/dev/null || cat "$base" 2>/dev/null || echo '{}')
+  elif [[ -f "$base" ]]; then
+    merged=$(cat "$base")
+  elif [[ -f "$lcl" ]]; then
+    merged=$(cat "$lcl")
+  fi
+  local custom_dir
+  custom_dir=$(printf '%s' "$merged" | jq -r '.eval.evalsDir // empty' 2>/dev/null || true)
+  if [[ -n "$custom_dir" ]]; then
+    evals_dir="$custom_dir"
   fi
 
   # Resolve relative to repo dir
