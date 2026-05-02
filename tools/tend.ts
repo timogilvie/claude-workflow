@@ -1,5 +1,6 @@
 #!/usr/bin/env -S npx tsx
 
+import { createStatusRenderer } from '../shared/lib/tend-status-renderer.ts';
 import { executeMerge, formatStatusLine, selectNextCandidate } from '../shared/lib/tend-controller.ts';
 import { runPromotion } from '../shared/lib/promotion-controller.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
@@ -65,11 +66,19 @@ runTool({
 
     if (args.loop) {
       let lastMergedPR: number | null = null;
+      const renderer = createStatusRenderer(process.stdout as NodeJS.WriteStream);
+
+      const handleSignal = (signal: NodeJS.Signals) => {
+        renderer.finalize();
+        process.kill(process.pid, signal);
+      };
+      process.once('SIGINT', () => handleSignal('SIGINT'));
+      process.once('SIGTERM', () => handleSignal('SIGTERM'));
 
       while (true) {
         const decision = await selectNextCandidate({ repoDir });
         if (decision.nextPR === null) {
-          console.log(formatStatusLine(decision, { action: 'idle', lastPR: lastMergedPR }));
+          renderer.write(formatStatusLine(decision, { action: 'idle', lastPR: lastMergedPR }));
           await sleep(TEND_LOOP_INTERVAL_MS);
           continue;
         }
@@ -79,7 +88,7 @@ runTool({
           throw new Error(`tend: selected PR #${decision.nextPR} was not found in eligible candidates`);
         }
 
-        console.log(formatStatusLine(decision, {
+        renderer.write(formatStatusLine(decision, {
           action: `merging-#${candidate.number}`,
           lastPR: lastMergedPR,
         }));
@@ -89,12 +98,13 @@ runTool({
           lastMergedPR = result.prNumber;
         }
 
-        console.log(formatStatusLine(decision, {
+        renderer.write(formatStatusLine(decision, {
           action: statusActionForResult(result.status, result.prNumber),
           lastPR: lastMergedPR,
         }));
 
         if (result.haltLoop) {
+          renderer.finalize();
           process.exitCode = 1;
           break;
         }
