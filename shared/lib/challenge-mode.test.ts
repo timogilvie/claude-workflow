@@ -7,6 +7,7 @@ import {
   deriveChallengeBranch,
   deriveChallengeSlug,
   deriveChallengerKey,
+  filterDeepSeekChallengeModels,
   getChallengeModelPool,
   pickChallengeWorkflowsWithContext,
   pickChallengeModels,
@@ -45,6 +46,31 @@ test('challenge model pool falls back to router models when challenge.models is 
     { models: ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex'] },
   );
   assert.deepEqual(pool, ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex']);
+});
+
+test('challenge model pool excludes DeepSeek by default', () => {
+  const pool = getChallengeModelPool(
+    { models: ['deepseek-v4-flash', 'claude-opus-4-6', 'deepseek-v4-pro'] },
+    { models: ['gpt-5.3-codex'] },
+  );
+  assert.deepEqual(pool, ['claude-opus-4-6']);
+});
+
+test('challenge model pool includes DeepSeek when allowDeepseek is enabled', () => {
+  const pool = getChallengeModelPool(
+    { allowDeepseek: true, models: ['deepseek-v4-flash', 'claude-opus-4-6', 'deepseek-v4-flash'] },
+    { models: ['gpt-5.3-codex'] },
+  );
+  assert.deepEqual(pool, ['deepseek-v4-flash', 'claude-opus-4-6']);
+});
+
+test('filterDeepSeekChallengeModels returns a clear rationale when it removes candidates', () => {
+  const filtered = filterDeepSeekChallengeModels(
+    ['deepseek-v4-flash', 'claude-deepseek', 'claude-opus-4-6', ''],
+    {},
+  );
+  assert.deepEqual(filtered.models, ['claude-opus-4-6']);
+  assert.deepEqual(filtered.warnings, ['DeepSeek excluded: challenge.allowDeepseek is not enabled']);
 });
 
 test('canRunChallenge requires at least two distinct models', () => {
@@ -115,6 +141,21 @@ test('pickChallengeModels returns null when fewer than two distinct models exist
     pairId: 'HOK-970',
     issueId: 'HOK-970',
     slug: 'challenge-mode',
+  });
+  assert.equal(pair, null);
+});
+
+test('all-DeepSeek pool becomes not runnable when allowDeepseek is not enabled', () => {
+  const pool = getChallengeModelPool(
+    { models: ['deepseek-v4-flash', 'deepseek-v4-pro'] },
+    { models: [] },
+  );
+  assert.deepEqual(pool, []);
+  assert.equal(canRunChallenge(pool), false);
+  const pair = pickChallengeModels(pool, {
+    pairId: 'HOK-982',
+    issueId: 'HOK-982',
+    slug: 'all-deepseek',
   });
   assert.equal(pair, null);
 });

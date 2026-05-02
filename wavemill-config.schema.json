@@ -432,6 +432,11 @@
                     ],
                     "default": null
                 },
+                "allowDeepseek": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enables DeepSeek eligibility in unattended challenge mode after smoke validation has passed."
+                },
                 "comparisonModel": {
                     "type": "string",
                     "default": "claude-opus-4-7",

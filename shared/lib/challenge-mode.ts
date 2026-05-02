@@ -1,4 +1,6 @@
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
+import { isDeepSeekModel } from './deepseek-provider.ts';
+import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import { resolveAgent } from './model-router.ts';
 export { routeChangedMaterially } from './route-artifact.ts';
 import { routeChangedMaterially, type RouteArtifactSnapshot } from './route-artifact.ts';
@@ -38,8 +40,31 @@ export interface ChallengeRouteContext {
   refreshRationale?: string;
 }
 
+export interface DeepSeekChallengeFilterResult {
+  models: string[];
+  warnings: string[];
+}
+
 function uniqueNonEmpty(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+export function filterDeepSeekChallengeModels(
+  pool: string[],
+  challengeConfig?: ChallengeConfig,
+): DeepSeekChallengeFilterResult {
+  const uniquePool = uniqueNonEmpty(pool);
+  if (challengeConfig?.allowDeepseek === true) {
+    return { models: uniquePool, warnings: [] };
+  }
+
+  const filtered = uniquePool.filter((model) => !isDeepSeekModel(model) && model !== 'claude-deepseek');
+  return {
+    models: filtered,
+    warnings: filtered.length === uniquePool.length
+      ? []
+      : ['DeepSeek excluded: challenge.allowDeepseek is not enabled'],
+  };
 }
 
 export function getChallengeModelPoolFromConfig(repoDir?: string): string[] {
@@ -53,10 +78,10 @@ export function getChallengeModelPool(
 ): string[] {
   const configured = challengeConfig?.models;
   if (Array.isArray(configured)) {
-    return uniqueNonEmpty(configured);
+    return filterDeepSeekChallengeModels(configured, challengeConfig).models;
   }
 
-  return uniqueNonEmpty(routerConfig?.models || []);
+  return filterDeepSeekChallengeModels(routerConfig?.models || [], challengeConfig).models;
 }
 
 export function canRunChallenge(pool: string[]): boolean {

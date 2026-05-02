@@ -184,6 +184,7 @@ export interface ChallengeConfig {
   enabled?: boolean;
   rate?: number;
   models?: string[] | null;
+  allowDeepseek?: boolean;
   comparisonModel?: string;
   autoMergeWinner?: boolean;
 }
