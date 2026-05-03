@@ -35,8 +35,9 @@ export function isEvalSuccess(
   }
 
   if (typeof record?.score === 'number' && Number.isFinite(record.score)) {
-    const threshold = isFiniteThreshold(options?.threshold)
-      ? options.threshold
+    const t = options?.threshold;
+    const threshold = isFiniteThreshold(t)
+      ? t
       : getSuccessThreshold(options?.repoDir);
     return record.score >= threshold;
   }

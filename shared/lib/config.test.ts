@@ -1625,6 +1625,54 @@ test('eval success threshold rejects values above 1', () => {
   }
 });
 
+test('eval success threshold rejects values below 0', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: {
+        successThreshold: -0.1,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('eval success threshold rejects non-numeric values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: {
+        successThreshold: '0.5',
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 // ────────────────────────────────────────────────────────────────
 // Local Overlay Tests
 // ────────────────────────────────────────────────────────────────
