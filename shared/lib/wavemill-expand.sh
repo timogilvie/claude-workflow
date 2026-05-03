@@ -28,6 +28,16 @@ log() { echo "$(date '+%H:%M:%S') $*"; }
 log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
+is_expand_quit_selection() {
+  local input="$1"
+
+  # Trim only the outer whitespace so mixed-token input stays non-quit.
+  input="${input#"${input%%[![:space:]]*}"}"
+  input="${input%"${input##*[![:space:]]}"}"
+
+  [[ "$input" == "q" || "$input" == "Q" ]]
+}
+
 # ============================================================================
 # LINEAR API HELPERS (read-only; writes go through expand-issue.ts)
 # ============================================================================
@@ -111,6 +121,11 @@ main() {
   echo ""
   echo "Enter up to $MAX_SELECT numbers to expand (e.g. 1 3 5), or press Enter to skip:"
   read -r SELECTED
+
+  if is_expand_quit_selection "$SELECTED"; then
+    log "Quit. No issues expanded."
+    exit 0
+  fi
 
   if [[ -z "$SELECTED" ]]; then
     log "No issues selected. Exiting."
