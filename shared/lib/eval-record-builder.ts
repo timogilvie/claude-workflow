@@ -81,6 +81,9 @@ export interface EvalRecordMetadata {
   rubricEval?: RubricEval | null;
 }
 
+/** Richer eval metadata attachment used by training-facing eval entrypoints. */
+export interface EnrichTrainingMetadataInput extends EvalRecordMetadata {}
+
 // ────────────────────────────────────────────────────────────────
 // Metadata Attachment Functions
 // ────────────────────────────────────────────────────────────────
@@ -271,6 +274,37 @@ export function attachWorkflowCostMetadata(
       ...failure.diagnostics,
     };
   }
+}
+
+const TRAINING_METADATA_DIAGNOSTIC_CHECKS = [
+  { field: 'workflowCost', isPresent: (record: EvalRecord) => typeof record.workflowCost === 'number' && Number.isFinite(record.workflowCost) },
+  { field: 'taskDescriptor', isPresent: (record: EvalRecord) => record.taskDescriptor != null },
+  { field: 'constraints', isPresent: (record: EvalRecord) => record.constraints != null },
+  {
+    field: 'difficulty',
+    isPresent: (record: EvalRecord) =>
+      record.difficultyBand != null || record.difficultySignals != null || record.stratum != null,
+  },
+  { field: 'taskContext', isPresent: (record: EvalRecord) => record.taskContext != null },
+  { field: 'repoContext', isPresent: (record: EvalRecord) => record.repoContext != null },
+  { field: 'routeProvenance', isPresent: (record: EvalRecord) => record.routeProvenance != null },
+] as const;
+
+function attachEnrichmentDiagnostics(record: EvalRecord): void {
+  const missingFields = TRAINING_METADATA_DIAGNOSTIC_CHECKS
+    .filter(({ isPresent }) => !isPresent(record))
+    .map(({ field }) => field);
+  if (missingFields.length === 0) {
+    delete record.enrichmentDiagnostics;
+    return;
+  }
+
+  record.enrichmentDiagnostics = [...missingFields];
+
+  const identity = [record.id, record.issueId].filter(Boolean).join(' / ') || '<unknown-record>';
+  console.warn(
+    `Eval record enrichment missing metadata for ${identity}: ${record.enrichmentDiagnostics.join(', ')}`
+  );
 }
 
 const TRAINING_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
@@ -733,6 +767,44 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachEligibility(record);
 
   // Extract stageScores from record metadata (set by evaluateTask)
+  const stageScores = record.metadata?.stageScores as
+    | Record<string, { score: number; rationale: string; rubricCriteria?: RubricCriterion[] }>
+    | undefined;
+  const planCritique = record.metadata?.planCritique as PlanCritique | undefined;
+  attachStageOutcomes(record, stageScores, planCritique);
+}
+
+/**
+ * Enrich an eval record with full training-facing metadata plus diagnostics.
+ *
+ * Mirrors enrichEvalRecord's attachment order and adds structured diagnostics
+ * when expected enrichment inputs are missing.
+ */
+export function enrichTrainingMetadata(
+  record: EvalRecord,
+  metadata: EnrichTrainingMetadataInput,
+): void {
+  attachAgentType(record, metadata.agentType);
+  attachProviderMetadata(record, metadata.provider, metadata.endpoint);
+  attachChallengePairId(record, metadata.challengePairId);
+  attachChallengeRouteContext(record, metadata.challengeRouteContext);
+  attachRouteProvenance(record, metadata.routeProvenance);
+  attachDifficultyMetadata(record, metadata.difficulty || null);
+  attachTaskContextMetadata(record, metadata.taskContext || null);
+  attachRepoContextMetadata(record, metadata.repoContext || null);
+  attachWorkflowCostMetadata(record, metadata.workflowCost || null);
+  attachTaskDescriptor(record, metadata.taskDescriptor || null);
+  attachFallbackEvent(record, metadata.fallbackEvent || null);
+  attachConstraints(record, metadata.constraints || null);
+  attachBudgetViolation(record);
+  if (metadata.rubricEval) {
+    attachRubricEval(record, metadata.rubricEval);
+  }
+  attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
+  attachResourceSelections(record);
+  attachEnrichmentDiagnostics(record);
+  attachEligibility(record);
+
   const stageScores = record.metadata?.stageScores as
     | Record<string, { score: number; rationale: string; rubricCriteria?: RubricCriterion[] }>
     | undefined;

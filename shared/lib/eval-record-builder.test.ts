@@ -3,7 +3,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { beforeEach, describe, it, mock } from 'node:test';
 import type { EvalRecord } from './eval-schema.ts';
 import {
   attachEligibility,
@@ -23,6 +23,7 @@ import {
   attachWorkflowCostMetadata,
   computeEligibility,
   enrichEvalRecord,
+  enrichTrainingMetadata,
 } from './eval-record-builder.ts';
 import type { RubricEval } from './eval-schema.ts';
 
@@ -233,6 +234,172 @@ describe('eval-record-builder', () => {
       const before = { ...baseRecord };
       attachWorkflowCostMetadata(baseRecord, null);
       expect(baseRecord).toEqual(before);
+    });
+  });
+
+  describe('enrichTrainingMetadata', () => {
+    it('attaches training metadata without warnings when all expected fields are present', () => {
+      const warn = mock.method(console, 'warn', () => undefined);
+      const routingDecision = {
+        candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+        chosen: 0,
+      };
+      const descriptor = {
+        schema_version: '1.0',
+        signals: {
+          heuristic: {
+            task_type: 'feature',
+            languages: ['typescript'],
+            framework_tags: ['react'],
+            files_touched: 2,
+            repo_size_loc: 5000,
+            description_tokens: 40,
+            is_greenfield: false,
+            has_migration: false,
+            has_ui: false,
+            has_tests: true,
+            cross_service: false,
+          },
+          learned: {
+            complexity: 0.4,
+            domain: 'backend',
+            risk_flags: [],
+          },
+        },
+      };
+
+      baseRecord.modelId = 'gpt-5.4';
+      baseRecord.modelVersion = 'gpt-5.4';
+      baseRecord.routingDecision = routingDecision as EvalRecord['routingDecision'];
+      baseRecord.outcomes = {
+        success: true,
+        review: { humanReviewRequired: false, rounds: 0, approvals: 1, changeRequests: 0 },
+        rework: { agentIterations: 1 },
+        delivery: { prCreated: true, merged: false },
+      };
+
+      enrichTrainingMetadata(baseRecord, {
+        agentType: 'codex',
+        workflowCost: {
+          status: 'success',
+          totalCostUsd: 1.25,
+          models: {
+            'gpt-5.4': {
+              inputTokens: 10,
+              cacheCreationTokens: 0,
+              cacheReadTokens: 0,
+              outputTokens: 5,
+              costUsd: 1.25,
+            },
+          },
+          sessionCount: 1,
+          turnCount: 2,
+          pricingUsed: {},
+        },
+        taskDescriptor: descriptor as EvalRecord['taskDescriptor'],
+        constraints: { maxCostUsd: 5 },
+        difficulty: {
+          difficultyBand: 'medium',
+          difficultySignals: { locTouched: 10, filesTouched: 2 },
+          stratum: 'ts_express_med',
+        },
+        taskContext: {
+          taskType: 'feature',
+          changeKind: 'modify_existing',
+          complexity: 'm',
+        },
+        repoContext: {
+          repoId: 'repo',
+          repoVisibility: 'private',
+          primaryLanguage: 'TypeScript',
+          languages: { TypeScript: 100 },
+          frameworks: ['React'],
+          repoSize: { fileCount: 10, loc: 5000, dependencyCount: 4 },
+        },
+        routeProvenance: {
+          activeRoute: {
+            coder: 'codex',
+            codeDepth: 'deep',
+            reviewer: 'codex',
+            reviewMode: 'full',
+          },
+          routeChanged: false,
+          decisionSource: 'bootstrap',
+        },
+      });
+
+      expect(baseRecord.workflowCost).toBe(1.25);
+      expect(baseRecord.trainingEligible).toBe(true);
+      expect(baseRecord.enrichmentDiagnostics).toBeUndefined();
+      expect(warn.mock.calls.length).toBe(0);
+    });
+
+    it('warns when workflow cost remains missing after enrichment', () => {
+      const warn = mock.method(console, 'warn', () => undefined);
+
+      enrichTrainingMetadata(baseRecord, {
+        workflowCost: {
+          status: 'skipped',
+          reason: 'Required parameters missing: worktreePath',
+          diagnostics: {
+            branchName: 'task/example',
+            agentType: 'codex',
+          },
+        },
+        taskDescriptor: {
+          schema_version: '1.0',
+          signals: {
+            heuristic: {
+              task_type: 'feature',
+              languages: ['typescript'],
+              framework_tags: [],
+              files_touched: 1,
+              repo_size_loc: 100,
+              description_tokens: 4,
+              is_greenfield: false,
+              has_migration: false,
+              has_ui: false,
+              has_tests: false,
+              cross_service: false,
+            },
+          },
+        } as EvalRecord['taskDescriptor'],
+        constraints: { maxCostUsd: 2 },
+        routeProvenance: {
+          activeRoute: {
+            coder: 'codex',
+            codeDepth: 'deep',
+            reviewer: 'codex',
+            reviewMode: 'full',
+          },
+        },
+      });
+
+      expect(baseRecord.workflowCostStatus).toBe('skipped');
+      expect(baseRecord.enrichmentDiagnostics).toContain('workflowCost');
+      expect(warn.mock.calls.length).toBe(1);
+      expect(String(warn.mock.calls[0].arguments[0])).toContain('workflowCost');
+    });
+
+    it('warns when task descriptor is missing and does not crash on null inputs', () => {
+      const warn = mock.method(console, 'warn', () => undefined);
+
+      expect(() =>
+        enrichTrainingMetadata(baseRecord, {
+          workflowCost: null,
+          taskDescriptor: null,
+          constraints: null,
+          difficulty: null,
+          taskContext: null,
+          repoContext: null,
+          routeProvenance: null,
+        })
+      ).not.toThrow();
+
+      expect(baseRecord.taskDescriptor).toBeUndefined();
+      expect(baseRecord.enrichmentDiagnostics).toContain('taskDescriptor');
+      expect(warn.mock.calls.length).toBe(1);
+      expect(String(warn.mock.calls[0].arguments[0])).toContain('taskDescriptor');
     });
   });
 

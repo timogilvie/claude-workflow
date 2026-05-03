@@ -334,6 +334,13 @@
       "required": ["reason"],
       "additionalProperties": false
     },
+    "enrichmentDiagnostics": {
+      "type": "array",
+      "description": "List of enrichment metadata fields still missing after shared training-record enrichment.",
+      "items": {
+        "type": "string"
+      }
+    },
     "pricingSnapshot": {
       "type": "object",
       "description": "Snapshot of the pricing table used for workflowCost calculation (HOK-858). Maps model IDs to their pricing at the time of evaluation.",
