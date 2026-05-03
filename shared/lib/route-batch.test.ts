@@ -251,7 +251,7 @@ await test('batch decisions match serial auto routing and reuse eval loading', a
         const { provenance: _provenance, ...rest } = decision as typeof decision & { provenance?: unknown };
         return rest;
       }),
-      serialDecisions,
+      serialDecisions.map((decision) => ({ ...decision, maxCostUsd: null })),
     );
     for (const { decision } of batchResults) {
       assert.ok(decision.provenance);

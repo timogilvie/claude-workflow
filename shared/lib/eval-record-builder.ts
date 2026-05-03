@@ -13,6 +13,7 @@
  * @module eval-record-builder
  */
 
+import { BUDGET_MISSING } from './eval-validator.ts';
 import type {
   EvalChallengeRouteContext,
   EvalRouteArtifact,
@@ -280,6 +281,7 @@ const TRAINING_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
 ];
 
 const BUDGET_EVAL_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
+  BUDGET_MISSING,
   'missing_budget_snapshot',
   'missing_cost',
   'missing_routing',
@@ -289,8 +291,13 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isFiniteNonNegativeBudget(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 function hasBudgetSnapshot(record: EvalRecord): boolean {
-  return record.constraints !== undefined || typeof record.budgetViolated === 'boolean';
+  return isFiniteNonNegativeBudget(record.constraints?.maxCostUsd)
+    || isFiniteNonNegativeBudget(record.taskDescriptor?.constraints?.max_cost_usd);
 }
 
 /**
@@ -324,6 +331,7 @@ export function computeEligibility(record: EvalRecord): {
   }
 
   if (!hasBudgetSnapshot(record)) {
+    errors.add(BUDGET_MISSING);
     errors.add('missing_budget_snapshot');
   }
 
@@ -352,6 +360,11 @@ export function attachEligibility(record: EvalRecord | null | undefined): void {
   record.trainingEligible = eligibility.trainingEligible;
   record.budgetEvalEligible = eligibility.budgetEvalEligible;
   record.eligibilityErrors = eligibility.eligibilityErrors;
+  if (eligibility.eligibilityErrors.includes(BUDGET_MISSING)) {
+    record.budgetEvalEligibilityError = BUDGET_MISSING;
+  } else {
+    delete record.budgetEvalEligibilityError;
+  }
   attachNonRewardReason(
     record,
     deriveNonRewardReasonFromIssues(
@@ -502,6 +515,42 @@ export function attachConstraints(
 
   if (Object.keys(normalized).length > 0) {
     record.constraints = normalized;
+  }
+}
+
+/**
+ * Attach the routing budget snapshot to every eval-facing budget location.
+ *
+ * `0` is a valid budget. Missing, null, negative, or non-finite values mark
+ * the record as explicitly missing budget metadata without fabricating a
+ * descriptor that otherwise has required training fields.
+ */
+export function attachBudgetMetadata(record: EvalRecord, budgetUsd: unknown): void {
+  if (!isFiniteNonNegativeBudget(budgetUsd)) {
+    if (record.constraints && 'maxCostUsd' in record.constraints) {
+      const { maxCostUsd: _maxCostUsd, ...rest } = record.constraints;
+      record.constraints = Object.keys(rest).length > 0 ? rest : undefined;
+    }
+    if (record.taskDescriptor?.constraints) {
+      delete record.taskDescriptor.constraints.max_cost_usd;
+    }
+    record.budgetEvalEligible = false;
+    record.budgetEvalEligibilityError = BUDGET_MISSING;
+    record.eligibilityErrors = Array.from(new Set([...(record.eligibilityErrors ?? []), BUDGET_MISSING])).sort();
+    return;
+  }
+
+  record.constraints = {
+    ...(record.constraints ?? {}),
+    maxCostUsd: budgetUsd,
+  };
+  if (record.taskDescriptor?.constraints) {
+    record.taskDescriptor.constraints.max_cost_usd = budgetUsd;
+  }
+  record.budgetEvalEligible = true;
+  delete record.budgetEvalEligibilityError;
+  if (record.eligibilityErrors) {
+    record.eligibilityErrors = record.eligibilityErrors.filter((code) => code !== BUDGET_MISSING && code !== 'missing_budget_snapshot');
   }
 }
 
@@ -674,6 +723,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
   attachFallbackEvent(record, metadata.fallbackEvent || null);
   attachConstraints(record, metadata.constraints || null);
+  attachBudgetMetadata(record, metadata.constraints?.maxCostUsd);
   attachBudgetViolation(record);
   if (metadata.rubricEval) {
     attachRubricEval(record, metadata.rubricEval);

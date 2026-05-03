@@ -62,7 +62,14 @@ function resolveEvalConstraints(
   routingComplete: RoutingCompleteData | null,
   repoDir: string,
 ): EvalConstraints | undefined {
-  const maxCostUsd = routingComplete?.maxCostUsd ?? getMaxCostUsd(repoDir);
+  const candidates = [
+    routingComplete?.maxCostUsd,
+    routingComplete?.constraints?.maxCostUsd,
+    getMaxCostUsd(repoDir),
+  ];
+  const maxCostUsd = candidates.find((value) => (
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+  ));
   return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
 }
 
