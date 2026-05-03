@@ -493,6 +493,18 @@ startup_run_task_phases() {
     rm -f "$worktree_stderr"
     startup_step "[1/7] Creating worktree...     ✓"
   fi
+
+  # Propagate the per-developer overlay (.wavemill-config.local.json) into the
+  # worktree if one exists in the parent repo. The overlay is gitignored, so
+  # `git worktree add` doesn't bring it along — without this copy, ready
+  # checks and other tools running inside the worktree only see the base
+  # config and silently miss the developer's overrides (e.g. anchored
+  # migrationPatterns or integration.enabled). Done unconditionally so we
+  # also self-heal worktrees created by older mill versions.
+  if [[ -f "$REPO_DIR/.wavemill-config.local.json" ]]; then
+    cp "$REPO_DIR/.wavemill-config.local.json" "$wt_dir/.wavemill-config.local.json"
+  fi
+
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" worktree done
 
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps running
