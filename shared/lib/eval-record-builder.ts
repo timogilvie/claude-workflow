@@ -13,6 +13,7 @@
  * @module eval-record-builder
  */
 
+import { BUDGET_MISSING } from './eval-validator.ts';
 import type {
   EvalChallengeRouteContext,
   EvalRouteArtifact,
@@ -79,6 +80,9 @@ export interface EvalRecordMetadata {
   /** Structured rubric criteria evaluation (HOK-1406) */
   rubricEval?: RubricEval | null;
 }
+
+/** Richer eval metadata attachment used by training-facing eval entrypoints. */
+export interface EnrichTrainingMetadataInput extends EvalRecordMetadata {}
 
 // ────────────────────────────────────────────────────────────────
 // Metadata Attachment Functions
@@ -272,6 +276,37 @@ export function attachWorkflowCostMetadata(
   }
 }
 
+const TRAINING_METADATA_DIAGNOSTIC_CHECKS = [
+  { field: 'workflowCost', isPresent: (record: EvalRecord) => typeof record.workflowCost === 'number' && Number.isFinite(record.workflowCost) },
+  { field: 'taskDescriptor', isPresent: (record: EvalRecord) => record.taskDescriptor != null },
+  { field: 'constraints', isPresent: (record: EvalRecord) => record.constraints != null },
+  {
+    field: 'difficulty',
+    isPresent: (record: EvalRecord) =>
+      record.difficultyBand != null || record.difficultySignals != null || record.stratum != null,
+  },
+  { field: 'taskContext', isPresent: (record: EvalRecord) => record.taskContext != null },
+  { field: 'repoContext', isPresent: (record: EvalRecord) => record.repoContext != null },
+  { field: 'routeProvenance', isPresent: (record: EvalRecord) => record.routeProvenance != null },
+] as const;
+
+function attachEnrichmentDiagnostics(record: EvalRecord): void {
+  const missingFields = TRAINING_METADATA_DIAGNOSTIC_CHECKS
+    .filter(({ isPresent }) => !isPresent(record))
+    .map(({ field }) => field);
+  if (missingFields.length === 0) {
+    delete record.enrichmentDiagnostics;
+    return;
+  }
+
+  record.enrichmentDiagnostics = [...missingFields];
+
+  const identity = [record.id, record.issueId].filter(Boolean).join(' / ') || '<unknown-record>';
+  console.warn(
+    `Eval record enrichment missing metadata for ${identity}: ${record.enrichmentDiagnostics.join(', ')}`
+  );
+}
+
 const TRAINING_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
   'missing_model_identity',
   'missing_outcome',
@@ -280,6 +315,7 @@ const TRAINING_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
 ];
 
 const BUDGET_EVAL_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
+  BUDGET_MISSING,
   'missing_budget_snapshot',
   'missing_cost',
   'missing_routing',
@@ -289,8 +325,13 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isFiniteNonNegativeBudget(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 function hasBudgetSnapshot(record: EvalRecord): boolean {
-  return record.constraints !== undefined || typeof record.budgetViolated === 'boolean';
+  return isFiniteNonNegativeBudget(record.constraints?.maxCostUsd)
+    || isFiniteNonNegativeBudget(record.taskDescriptor?.constraints?.max_cost_usd);
 }
 
 /**
@@ -324,6 +365,7 @@ export function computeEligibility(record: EvalRecord): {
   }
 
   if (!hasBudgetSnapshot(record)) {
+    errors.add(BUDGET_MISSING);
     errors.add('missing_budget_snapshot');
   }
 
@@ -352,6 +394,11 @@ export function attachEligibility(record: EvalRecord | null | undefined): void {
   record.trainingEligible = eligibility.trainingEligible;
   record.budgetEvalEligible = eligibility.budgetEvalEligible;
   record.eligibilityErrors = eligibility.eligibilityErrors;
+  if (eligibility.eligibilityErrors.includes(BUDGET_MISSING)) {
+    record.budgetEvalEligibilityError = BUDGET_MISSING;
+  } else {
+    delete record.budgetEvalEligibilityError;
+  }
   attachNonRewardReason(
     record,
     deriveNonRewardReasonFromIssues(
@@ -502,6 +549,42 @@ export function attachConstraints(
 
   if (Object.keys(normalized).length > 0) {
     record.constraints = normalized;
+  }
+}
+
+/**
+ * Attach the routing budget snapshot to every eval-facing budget location.
+ *
+ * `0` is a valid budget. Missing, null, negative, or non-finite values mark
+ * the record as explicitly missing budget metadata without fabricating a
+ * descriptor that otherwise has required training fields.
+ */
+export function attachBudgetMetadata(record: EvalRecord, budgetUsd: unknown): void {
+  if (!isFiniteNonNegativeBudget(budgetUsd)) {
+    if (record.constraints && 'maxCostUsd' in record.constraints) {
+      const { maxCostUsd: _maxCostUsd, ...rest } = record.constraints;
+      record.constraints = Object.keys(rest).length > 0 ? rest : undefined;
+    }
+    if (record.taskDescriptor?.constraints) {
+      delete record.taskDescriptor.constraints.max_cost_usd;
+    }
+    record.budgetEvalEligible = false;
+    record.budgetEvalEligibilityError = BUDGET_MISSING;
+    record.eligibilityErrors = Array.from(new Set([...(record.eligibilityErrors ?? []), BUDGET_MISSING])).sort();
+    return;
+  }
+
+  record.constraints = {
+    ...(record.constraints ?? {}),
+    maxCostUsd: budgetUsd,
+  };
+  if (record.taskDescriptor?.constraints) {
+    record.taskDescriptor.constraints.max_cost_usd = budgetUsd;
+  }
+  record.budgetEvalEligible = true;
+  delete record.budgetEvalEligibilityError;
+  if (record.eligibilityErrors) {
+    record.eligibilityErrors = record.eligibilityErrors.filter((code) => code !== BUDGET_MISSING && code !== 'missing_budget_snapshot');
   }
 }
 
@@ -674,6 +757,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
   attachFallbackEvent(record, metadata.fallbackEvent || null);
   attachConstraints(record, metadata.constraints || null);
+  attachBudgetMetadata(record, metadata.constraints?.maxCostUsd);
   attachBudgetViolation(record);
   if (metadata.rubricEval) {
     attachRubricEval(record, metadata.rubricEval);
@@ -683,6 +767,44 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachEligibility(record);
 
   // Extract stageScores from record metadata (set by evaluateTask)
+  const stageScores = record.metadata?.stageScores as
+    | Record<string, { score: number; rationale: string; rubricCriteria?: RubricCriterion[] }>
+    | undefined;
+  const planCritique = record.metadata?.planCritique as PlanCritique | undefined;
+  attachStageOutcomes(record, stageScores, planCritique);
+}
+
+/**
+ * Enrich an eval record with full training-facing metadata plus diagnostics.
+ *
+ * Mirrors enrichEvalRecord's attachment order and adds structured diagnostics
+ * when expected enrichment inputs are missing.
+ */
+export function enrichTrainingMetadata(
+  record: EvalRecord,
+  metadata: EnrichTrainingMetadataInput,
+): void {
+  attachAgentType(record, metadata.agentType);
+  attachProviderMetadata(record, metadata.provider, metadata.endpoint);
+  attachChallengePairId(record, metadata.challengePairId);
+  attachChallengeRouteContext(record, metadata.challengeRouteContext);
+  attachRouteProvenance(record, metadata.routeProvenance);
+  attachDifficultyMetadata(record, metadata.difficulty || null);
+  attachTaskContextMetadata(record, metadata.taskContext || null);
+  attachRepoContextMetadata(record, metadata.repoContext || null);
+  attachWorkflowCostMetadata(record, metadata.workflowCost || null);
+  attachTaskDescriptor(record, metadata.taskDescriptor || null);
+  attachFallbackEvent(record, metadata.fallbackEvent || null);
+  attachConstraints(record, metadata.constraints || null);
+  attachBudgetViolation(record);
+  if (metadata.rubricEval) {
+    attachRubricEval(record, metadata.rubricEval);
+  }
+  attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
+  attachResourceSelections(record);
+  attachEnrichmentDiagnostics(record);
+  attachEligibility(record);
+
   const stageScores = record.metadata?.stageScores as
     | Record<string, { score: number; rationale: string; rubricCriteria?: RubricCriterion[] }>
     | undefined;

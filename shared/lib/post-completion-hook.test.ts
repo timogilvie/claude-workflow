@@ -83,6 +83,19 @@ await test('enrichPostCompletionRecord attaches taskDescriptor for persisted rec
       planner: 'claude-opus-4-6',
       coder: 'gpt-5.3-codex',
       reviewer: 'claude-sonnet-4-5-20250929',
+      codeDepth: 'deep',
+      reviewMode: 'full',
+      maxCostUsd: 6.5,
+    }),
+  );
+  writeFileSync(
+    join(featureDir, '.initial-route.json'),
+    JSON.stringify({
+      planner: 'claude-opus-4-6',
+      coder: 'gpt-5.3-codex',
+      reviewer: 'claude-sonnet-4-5-20250929',
+      codeDepth: 'deep',
+      reviewMode: 'full',
     }),
   );
 
@@ -166,6 +179,8 @@ await test('enrichPostCompletionRecord attaches taskDescriptor for persisted rec
       'gpt-5.3-codex',
       'claude-sonnet-4-6',
     ]);
+    assert.equal(record.workflowCostStatus, 'success');
+    assert.equal(record.enrichmentDiagnostics, undefined);
   } finally {
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });

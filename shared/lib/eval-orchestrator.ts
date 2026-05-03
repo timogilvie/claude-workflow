@@ -23,9 +23,7 @@ import {
   computeWallClockSeconds,
   gatherEvalContext,
   gatherStageArtifacts,
-  fetchIssueData,
   fetchRoutingCompleteRawWithArchive,
-  type EvalContext,
 } from './eval-context-gatherer.ts';
 import { buildRouteLifecycleProvenance, readRouteLifecycleArtifacts } from './route-artifact.ts';
 import {
@@ -45,24 +43,58 @@ import {
   collectDeliveryOutcome,
 } from './outcome-collectors.ts';
 import { evaluateTask } from './eval.ts';
-import { enrichEvalRecord } from './eval-record-builder.ts';
+import { attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
+import { computeWorkflowCost, loadPricingTable, type WorkflowCostOutcome } from './workflow-cost.ts';
 import type {
   EvalRecord,
   EvalRouteProvenance,
   Outcomes,
   EvalConstraints,
+  PlanCritique,
 } from './eval-schema.ts';
 import type { RoutingCompleteData } from './eval-context-gatherer.ts';
+
+export const evalOrchestratorDeps = {
+  autoDetectContext,
+  computeWallClockSeconds,
+  gatherEvalContext,
+  gatherStageArtifacts,
+  detectAllInterventions,
+  toInterventionMeta,
+  toInterventionRecords,
+  formatForJudge,
+  loadPenalties,
+  runEvalAnalysis,
+  collectCiOutcome,
+  collectTestsOutcome,
+  collectStaticAnalysisOutcome,
+  collectReviewOutcome,
+  collectReworkOutcome,
+  collectDeliveryOutcome,
+  evaluateTask,
+  buildTaskDescriptor,
+  appendEvalRecord,
+  computeWorkflowCost,
+  loadPricingTable,
+  execShellCommand,
+};
 
 function resolveEvalConstraints(
   routingComplete: RoutingCompleteData | null,
   repoDir: string,
 ): EvalConstraints | undefined {
-  const maxCostUsd = routingComplete?.maxCostUsd ?? getMaxCostUsd(repoDir);
+  const candidates = [
+    routingComplete?.maxCostUsd,
+    routingComplete?.constraints?.maxCostUsd,
+    getMaxCostUsd(repoDir),
+  ];
+  const maxCostUsd = candidates.find((value) => (
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+  ));
   return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
 }
 
@@ -198,14 +230,14 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
 
   // Auto-detect if not explicitly provided
   if (!issueId && !prNumber) {
-    const detected = autoDetectContext(repoDir);
+    const detected = evalOrchestratorDeps.autoDetectContext(repoDir);
     issueId = detected.issueId;
     prNumber = detected.prNumber;
     branch = detected.branch;
     prUrl = detected.prUrl;
   }
 
-  const evalContext = gatherEvalContext({
+  const evalContext = evalOrchestratorDeps.gatherEvalContext({
     issueId,
     prNumber,
     prUrl,
@@ -213,7 +245,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   });
 
   // Gather stage artifacts for judge attribution (search worktree first if provided)
-  const stageArtifacts = gatherStageArtifacts(repoDir, issueId, branch, worktreePath);
+  const stageArtifacts = evalOrchestratorDeps.gatherStageArtifacts(repoDir, issueId, branch, worktreePath);
 
   if (issueId) console.log(`  Issue: ${issueId}`);
   if (prNumber) console.log(`  PR: #${prNumber}`);
@@ -233,7 +265,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // Ensure we have branch name for intervention detection
   if (!branch) {
     try {
-      branch = execShellCommand('git branch --show-current', {
+      branch = evalOrchestratorDeps.execShellCommand('git branch --show-current', {
         encoding: 'utf-8',
         cwd: repoDir,
       }).trim();
@@ -243,12 +275,12 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   }
 
   const wallClockSeconds = branch
-    ? computeWallClockSeconds(repoDir, branch) ?? 0
+    ? evalOrchestratorDeps.computeWallClockSeconds(repoDir, branch) ?? 0
     : 0;
 
   const runInterventionAnalysis = () =>
     Promise.resolve().then(() => {
-      const interventionSummary = detectAllInterventions({
+      const interventionSummary = evalOrchestratorDeps.detectAllInterventions({
         prNumber,
         branchName: branch,
         baseBranch: 'main',
@@ -257,10 +289,10 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
         issueId,
       });
 
-      const interventionMeta = toInterventionMeta(interventionSummary);
-      const interventionRecords = toInterventionRecords(interventionSummary);
-      const penalties = loadPenalties(repoDir);
-      const interventionText = formatForJudge(interventionSummary, penalties);
+      const interventionMeta = evalOrchestratorDeps.toInterventionMeta(interventionSummary);
+      const interventionRecords = evalOrchestratorDeps.toInterventionRecords(interventionSummary);
+      const penalties = evalOrchestratorDeps.loadPenalties(repoDir);
+      const interventionText = evalOrchestratorDeps.formatForJudge(interventionSummary, penalties);
 
       const totalInterventions = interventionSummary.interventions.reduce(
         (sum, e) => sum + e.count,
@@ -289,7 +321,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     { difficultyData, repoContextData, taskContextData },
   ] = await Promise.all([
     runInterventionAnalysis(),
-    runEvalAnalysis({
+    evalOrchestratorDeps.runEvalAnalysis({
       prDiff: evalContext.prDiff,
       prNumber,
       repoDir,
@@ -303,18 +335,18 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   const outcomes: Outcomes = {
     success: false, // Will be set after scoring based on score threshold
     ci: prNumber
-      ? collectCiOutcome(prNumber, repoDir)
+      ? evalOrchestratorDeps.collectCiOutcome(prNumber, repoDir)
       : undefined,
     tests:
       prNumber && branch
-        ? collectTestsOutcome(prNumber, branch, 'main', repoDir)
+        ? evalOrchestratorDeps.collectTestsOutcome(prNumber, branch, 'main', repoDir)
         : undefined,
     staticAnalysis:
       prNumber && branch
-        ? collectStaticAnalysisOutcome(prNumber, branch, 'main', repoDir)
+        ? evalOrchestratorDeps.collectStaticAnalysisOutcome(prNumber, branch, 'main', repoDir)
         : undefined,
     review: prNumber
-      ? collectReviewOutcome(prNumber, interventionSummary, repoDir, undefined, issueId, branch)
+      ? evalOrchestratorDeps.collectReviewOutcome(prNumber, interventionSummary, repoDir, undefined, issueId, branch)
       : {
           humanReviewRequired: interventionSummary.interventions.some(
             (e) => e.type === 'review_comment' && e.count > 0
@@ -323,9 +355,9 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
           approvals: 0,
           changeRequests: 0,
         },
-    rework: collectReworkOutcome(repoDir, branch, agentType, repoDir),
+    rework: evalOrchestratorDeps.collectReworkOutcome(repoDir, branch, agentType, repoDir),
     delivery: prNumber
-      ? collectDeliveryOutcome(prNumber, repoDir)
+      ? evalOrchestratorDeps.collectDeliveryOutcome(prNumber, repoDir)
       : {
           prCreated: false,
           merged: false,
@@ -349,7 +381,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // Use explicitly provided routing decision, or fall back to auto-loaded one
   const effectiveRoutingDecision = routingDecision ?? stageArtifacts.routingDecision;
 
-  const record = await evaluateTask(
+  const record = await evalOrchestratorDeps.evaluateTask(
     {
       taskPrompt: evalContext.taskPrompt,
       prReviewOutput: evalContext.prDiff,
@@ -373,7 +405,68 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     record.outcomes.success = isEvalSuccess(record);
   }
 
-  // 9b. Build task descriptor for router training (HOK-1120)
+  // Pre-populate stageOutcomes so buildTaskDescriptor can embed them in the descriptor.
+  // enrichTrainingMetadata calls attachStageOutcomes again as part of its comprehensive
+  // enrichment pass; attachStageOutcomes is idempotent (overwrites, never appends).
+  attachStageOutcomes(
+    record,
+    record.metadata?.stageScores as Record<string, { score: number; rationale: string }> | undefined,
+    record.metadata?.planCritique as PlanCritique | undefined,
+  );
+
+  // 9b. Compute workflow cost metadata before building the descriptor so both
+  // eval entrypoints describe the same run with the same cost context.
+  let workflowCostOutcome: WorkflowCostOutcome | null = null;
+  if (worktreePath && branch) {
+    try {
+      const pricingTable = evalOrchestratorDeps.loadPricingTable(repoDir);
+      workflowCostOutcome = evalOrchestratorDeps.computeWorkflowCost({
+        worktreePath,
+        branchName: branch,
+        repoDir,
+        pricingTable,
+        agentType,
+      });
+    } catch (err) {
+      const errorMsg = errorMessage(err);
+      console.warn(`Warning: failed to compute workflow cost: ${errorMsg}`);
+      workflowCostOutcome = {
+        status: 'adapter_error',
+        reason: errorMsg,
+        diagnostics: {
+          worktreePath,
+          branchName: branch,
+          agentType,
+        },
+      };
+    }
+  } else {
+    const missingParams = [];
+    if (!worktreePath) {
+      missingParams.push('worktreePath');
+    }
+    if (!branch) {
+      missingParams.push('branchName');
+    }
+    workflowCostOutcome = {
+      status: 'skipped',
+      reason: `Required parameters missing: ${missingParams.join(', ')}`,
+      diagnostics: {
+        worktreePath,
+        branchName: branch,
+        agentType,
+      },
+    };
+  }
+
+  const resolvedWorkflowCost = workflowCostOutcome?.status === 'success'
+    ? workflowCostOutcome.totalCostUsd
+    : undefined;
+  const resolvedWorkflowTokenUsage = workflowCostOutcome?.status === 'success'
+    ? workflowCostOutcome.models
+    : undefined;
+
+  // 9c. Build task descriptor for router training (HOK-1120)
   let taskDescriptor = null;
   let evalConstraints: EvalConstraints | undefined;
   const executionModel = resolveExecutionModelWithArtifacts(
@@ -393,8 +486,8 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     evalConstraints = resolveEvalConstraints(routingComplete, repoDir);
 
     // Build descriptor from all gathered context
-    taskDescriptor = buildTaskDescriptor({
-      originalPrompt: evalContext.originalPrompt,
+    taskDescriptor = evalOrchestratorDeps.buildTaskDescriptor({
+      originalPrompt: evalContext.taskPrompt,
       prDiff: evalContext.prDiff,
       taskContext: taskContextData || undefined,
       repoContext: repoContextData || undefined,
@@ -402,8 +495,8 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       routingDecision: effectiveRoutingDecision || undefined,
       routingComplete: routingComplete || undefined,
       stageOutcomes: record.stageOutcomes || undefined,
-      workflowCost: record.workflowCost || undefined,
-      workflowTokenUsage: record.workflowTokenUsage || undefined,
+      workflowCost: resolvedWorkflowCost,
+      workflowTokenUsage: resolvedWorkflowTokenUsage,
       score: record.score || undefined,
       timeSeconds: record.timeSeconds || undefined,
       interventionCount: record.interventionCount || undefined,
@@ -423,7 +516,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   }
 
   // 10. Enrich record with metadata
-  enrichEvalRecord(record, {
+  enrichTrainingMetadata(record, {
     agentType,
     provider: providerMetadata?.provider,
     endpoint: providerMetadata?.endpoint,
@@ -432,13 +525,14 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     difficulty: difficultyData,
     taskContext: taskContextData,
     repoContext: repoContextData,
+    workflowCost: workflowCostOutcome,
     taskDescriptor,
     constraints: evalConstraints,
   });
 
   // 11. Persist eval record to disk
   try {
-    appendEvalRecord(record);
+    evalOrchestratorDeps.appendEvalRecord(record);
   } catch (err) {
     const errorMsg = errorMessage(err);
     console.error(`Warning: failed to persist eval record: ${errorMsg}`);
