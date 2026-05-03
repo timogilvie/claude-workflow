@@ -20,6 +20,12 @@ Initializes `.wavemill-config.json` in the current repository and can also creat
 
 Expands backlog issues into implementation-ready task packets. Useful when you want to prepare work ahead of mill mode.
 
+```bash
+wavemill expand
+wavemill expand HOK-1494
+wavemill expand https://linear.app/hokusai/issue/HOK-1494/fix-archived-routing-decision-parsing-for-eval-enrichment HOK-1531
+```
+
 ### `wavemill plan`
 
 Breaks large initiatives into smaller issues that are easier for `mill` to execute autonomously.

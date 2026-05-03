@@ -2,13 +2,14 @@
 title: Expand Mode
 ---
 
-Use `wavemill expand` when you want to prepare backlog items outside of `wavemill mill`. Mill mode can do this automatically, but `expand` is useful when you want to curate task packets ahead of time.
+Use `wavemill expand` when you want to prepare backlog items outside of `wavemill mill`. Mill mode can do this automatically, but `expand` is useful when you want to curate task packets ahead of time or target specific issues directly.
 
 ## What It Does
 
-- Fetches Linear backlog filtered to issues without detailed task packets.
+- With no args, fetches Linear backlog filtered to issues without detailed task packets.
 - Ranks issues by priority score (considers Linear priority, estimates, labels, and dependencies).
 - Lets you interactively select up to 3 issues to expand.
+- Accepts direct issue IDs or Linear issue URLs and skips the picker in that mode.
 - Expands each issue with Claude CLI using the issue-writer prompt template.
 - Gathers codebase context (directory structure, recent commits, relevant files, project-context.md).
 - Generates comprehensive 9-section task packets with progressive disclosure (header + details).
@@ -22,6 +23,15 @@ Use `wavemill expand` when you want to prepare backlog items outside of `wavemil
 # Interactive expand with project auto-detection
 cd <your-project>
 wavemill expand
+
+# Expand a specific issue directly
+wavemill expand HOK-1494
+
+# Expand multiple issues sequentially
+wavemill expand HOK-1494 HOK-1531
+
+# Linear issue URLs are accepted too
+wavemill expand https://linear.app/hokusai/issue/HOK-1494/fix-archived-routing-decision-parsing-for-eval-enrichment
 ```
 
 Common overrides:
@@ -38,12 +48,17 @@ MAX_SELECT=5 MAX_DISPLAY=15 wavemill expand
 
 ### 1) Issue Selection
 
+`wavemill expand` has two modes:
+
+- No args: Wavemill fetches your backlog and shows a ranked interactive picker.
+- One or more args: Wavemill validates each argument as `TEAM-123` or a Linear issue URL, canonicalizes it, and expands those issues directly without fetching backlog candidates.
+
 Wavemill fetches your Linear backlog and filters to issues that need expansion:
 - Missing detailed task packet structure
 - Short descriptions (< 200 words)
 - No implementation-ready content
 
-Issues are ranked by priority score (same algorithm as mill mode) and displayed for selection.
+In interactive mode, issues are ranked by priority score (same algorithm as mill mode) and displayed for selection.
 
 ### 2) Context Gathering
 
@@ -150,6 +165,8 @@ Configuration lives in `.wavemill-config.json`:
 - `MAX_SELECT` — Maximum issues to select (default: 3)
 - `MAX_DISPLAY` — Maximum issues to display (default: 9)
 - `CLAUDE_CMD` — Claude CLI command (default: `claude`)
+
+Direct mode expands multiple issues sequentially in the order provided so output and Linear updates stay readable.
 
 ## Key Files
 

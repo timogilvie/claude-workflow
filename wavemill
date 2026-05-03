@@ -42,9 +42,10 @@ ${GREEN}Commands:${NC}
                ${CYAN}--agent <name>${NC}  Agent CLI to use (claude, codex, ...)
                ${CYAN}--no-progress${NC}   Use legacy startup status lines
 
-  ${CYAN}expand${NC}    Batch expand Linear issues
-             - Shows ranked backlog candidates
-             - Select up to 3 issues interactively
+  ${CYAN}expand${NC}    Expand Linear issues into task packets
+             - No args: shows ranked backlog candidates
+             - Issue IDs/URLs: expands those issues directly
+             - Supports multiple direct issues sequentially
              - Expands with Claude + auto-labels
              - Updates Linear with detailed task packets
 
@@ -187,6 +188,10 @@ ${GREEN}Examples:${NC}
 
   # Expand issues interactively
   wavemill expand
+
+  # Expand one or more issues directly
+  wavemill expand HOK-1494
+  wavemill expand HOK-1494 HOK-1531
 
   # Evaluate most recent completed workflow
   wavemill eval
