@@ -816,13 +816,6 @@ function loadStageExecutionModel(repoDir: string, slug: string, worktreePath?: s
  * Load routing decision from the archive directory.
  */
 function loadRoutingDecisionFromArchive(repoDir: string, issueId: string): RoutingDecision | null {
-  const content = loadFromArchive(repoDir, issueId, 'routing-complete.json');
-  if (content) {
-    try {
-      return JSON.parse(content) as RoutingDecision;
-    } catch {
-      // Invalid JSON
-    }
-  }
-  return null;
+  const raw = loadRoutingCompleteRawFromArchive(repoDir, issueId);
+  return raw ? convertToRoutingDecision(raw) : null;
 }
