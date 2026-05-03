@@ -265,10 +265,10 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // Ensure we have branch name for intervention detection
   if (!branch) {
     try {
-        branch = evalOrchestratorDeps.execShellCommand('git branch --show-current', {
-          encoding: 'utf-8',
-          cwd: repoDir,
-        }).trim();
+      branch = evalOrchestratorDeps.execShellCommand('git branch --show-current', {
+        encoding: 'utf-8',
+        cwd: repoDir,
+      }).trim();
     } catch {
       // Best-effort
     }
@@ -405,6 +405,9 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     record.outcomes.success = isEvalSuccess(record);
   }
 
+  // Pre-populate stageOutcomes so buildTaskDescriptor can embed them in the descriptor.
+  // enrichTrainingMetadata calls attachStageOutcomes again as part of its comprehensive
+  // enrichment pass; attachStageOutcomes is idempotent (overwrites, never appends).
   attachStageOutcomes(
     record,
     record.metadata?.stageScores as Record<string, { score: number; rationale: string }> | undefined,
