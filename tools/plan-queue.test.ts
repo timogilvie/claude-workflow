@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ const planQueueTool = resolve(__dirname, 'plan-queue.ts');
 const fixture = resolve(repoDir, 'fixtures/plan-queue/backlog-basic.json');
 
 function runPlanQueue(args: string[], input?: string, cwd = repoDir) {
-  return spawnSync('npx', ['tsx', planQueueTool, ...args], {
+  return spawnSync('tsx', [planQueueTool, ...args], {
     cwd,
     encoding: 'utf-8',
     env: { ...process.env },
@@ -31,7 +31,7 @@ function parseJson(stdout: string) {
 
 describe('plan-queue CLI', () => {
   it('emits queuePlan JSON from a backlog file', () => {
-    const stdout = execFileSync('npx', ['tsx', planQueueTool, '--backlog-file', fixture, '--json'], {
+    const stdout = execFileSync('tsx', [planQueueTool, '--backlog-file', fixture, '--json'], {
       cwd: repoDir,
       encoding: 'utf-8',
       env: { ...process.env },
@@ -167,6 +167,61 @@ describe('plan-queue CLI', () => {
       assert.equal(result.status, 0);
       assert.equal(existsSync(join(tempDir, '.wavemill', 'cache', 'task-dependency-plans', 'disabled-test.json')), false);
       assert.doesNotMatch(result.stderr, /cache: hits=/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('merges retained cached edges into planning when backlog fingerprints are unchanged', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'plan-queue-cache-edges-test-'));
+    try {
+      const backlogPath = join(tempDir, 'backlog.json');
+      const backlog = [
+        { id: 'HOK-1', title: 'First', state: 'Todo', labels: [], blocks: [] },
+        { id: 'HOK-2', title: 'Second', state: 'Todo', labels: [], blocks: [] },
+      ];
+      writeFileSync(backlogPath, `${JSON.stringify(backlog, null, 2)}\n`, 'utf8');
+
+      const cacheDir = join(tempDir, '.wavemill', 'cache', 'task-dependency-plans');
+      const cachePath = join(cacheDir, 'cached-edges.json');
+      mkdirSync(cacheDir, { recursive: true });
+      const { computeTaskFingerprint } = await import('../shared/lib/task-dependency-plan-cache.ts');
+      const fingerprints = Object.fromEntries(backlog.map((task) => [task.id, computeTaskFingerprint(task)]));
+      writeFileSync(
+        cachePath,
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            projectSlug: 'cached-edges',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            fingerprints,
+            edges: [
+              {
+                from: 'HOK-1',
+                to: 'HOK-2',
+                fromFingerprint: fingerprints['HOK-1'],
+                toFingerprint: fingerprints['HOK-2'],
+                kind: 'inferred',
+                type: 'depends_on',
+                classifiedAt: '2026-01-01T00:00:00.000Z',
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        'utf8',
+      );
+
+      const result = runPlanQueue(['--backlog-file', backlogPath, '--cache-key', 'cached-edges', '--json'], undefined, tempDir);
+
+      assert.equal(result.status, 0);
+      assert.deepEqual(parseJson(result.stdout), {
+        availableNow: ['HOK-1'],
+        queuedAfterDependencies: [{ taskId: 'HOK-2', ancestors: ['HOK-1'] }],
+        avoidRunningTogether: [],
+        needsTriage: [],
+      });
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
