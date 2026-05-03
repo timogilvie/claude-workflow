@@ -312,6 +312,22 @@ Policy for repositories adopting the ready stage:
 
 Manual operator workflow:
 
+```bash
+wavemill ready 42
+```
+
+Use the result to answer three questions before merge:
+
+- Are blocking checks failing?
+- Are there manual release steps that must happen before or after merge?
+- Is the result current for the latest PR head?
+
+Recommended merge rule once real checks are live:
+
+- `pass`: merge allowed
+- `warn`: merge allowed only with explicit operator handling of the warning
+- `fail`: merge blocked
+
 ## Migration Dry-Run (Ephemeral Postgres)
 
 Use the migration dry-run workflow when label-based or static migration checks are not enough. Running every migration end to end against a clean Postgres instance catches semantic failures that chain checks miss, including missing `create_index` calls, object-name collisions, Postgres-specific `ENUM` behavior, and hidden ordering dependencies between revisions.
@@ -337,22 +353,6 @@ Tradeoffs:
 - Budget roughly 2 GitHub Actions minutes per PR when the workflow is enabled
 
 Integration with `checkCIStatus` is automatic. This workflow appears like any other GitHub status check, so the ready stage will pick it up without new ready-specific code.
-
-```bash
-wavemill ready 42
-```
-
-Use the result to answer three questions before merge:
-
-- Are blocking checks failing?
-- Are there manual release steps that must happen before or after merge?
-- Is the result current for the latest PR head?
-
-Recommended merge rule once real checks are live:
-
-- `pass`: merge allowed
-- `warn`: merge allowed only with explicit operator handling of the warning
-- `fail`: merge blocked
 
 ## Ready Configuration
 
