@@ -68,6 +68,10 @@ export interface DashboardConfig {
   logToFile?: boolean;
 }
 
+export interface TaskSelectionConfig {
+  enterLaunchesWave?: boolean;
+}
+
 export interface JudgeConfig {
   model?: string;
   provider?: 'anthropic';
@@ -384,6 +388,7 @@ export interface WavemillConfig {
   expand?: ExpandConfig;
   plan?: PlanConfig;
   dashboard?: DashboardConfig;
+  taskSelection?: TaskSelectionConfig;
   eval?: EvalConfig;
   autoEval?: boolean;
   hokusai?: HokusaiConfig;
@@ -881,6 +886,10 @@ export function getPlanConfig(repoDir?: string): PlanConfig {
  */
 export function getDashboardConfig(repoDir?: string): DashboardConfig {
   return loadWavemillConfig(repoDir).dashboard || {};
+}
+
+export function getTaskSelectionConfig(repoDir?: string): TaskSelectionConfig {
+  return loadWavemillConfig(repoDir).taskSelection || {};
 }
 
 /**

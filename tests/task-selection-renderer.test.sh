@@ -84,6 +84,10 @@ extract_monitor_heredoc > "$MONITOR_BODY"
 
 FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
 {
+  extract_function "$MONITOR_BODY" "build_queue_plan_once"
+  echo
+  extract_function "$MONITOR_BODY" "invoke_first_wave_helper"
+  echo
   extract_function "$MONITOR_BODY" "fetch_queue_plan"
   echo
   extract_function "$MONITOR_BODY" "render_grouped_task_list"
@@ -166,6 +170,33 @@ test_fetch_queue_plan_transforms_linear_backlog() {
   check_contains "fetch_queue_plan preserves shared-surface clusters" "$output" '"avoidRunningTogether"'
   check_contains "fetch_queue_plan preserves shared-surface ids" "$output" '"HOK-13"'
   check_contains "fetch_queue_plan triages unknown dependency" "$output" '"to": "HOK-14"'
+}
+
+test_invoke_first_wave_helper_packs_priority_without_violating_dependencies() {
+  local wave_result
+  wave_result=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" REPO_DIR="$REPO_DIR" LINEAR_BACKLOG_JSON="$LINEAR_BACKLOG_JSON" CANDIDATES="$CANDIDATES" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    BACKLOG_CACHE_TTL=60
+    BACKLOG_JSON_CACHE="$LINEAR_BACKLOG_JSON"
+    QUEUE_PLAN_CACHE=""
+    LAST_QUEUE_PLAN_FETCH=0
+    TOOLS_DIR="$REPO_DIR/tools"
+    MAX_PARALLEL=3
+    _with_timeout() {
+      shift
+      "$@"
+    }
+
+    queue_plan=$(build_queue_plan_once "$LINEAR_BACKLOG_JSON")
+    invoke_first_wave_helper "$queue_plan" "$CANDIDATES" 3
+  ')
+
+  check_contains "wave helper selects highest-priority ready task" "$wave_result" '"HOK-10"'
+  check_contains "wave helper keeps ready shared-surface task in wave" "$wave_result" '"HOK-13"'
+  check_not_contains "wave helper does not pull blocked dependency into wave" "$wave_result" '"HOK-11"'
+  check_contains "wave helper defers blocked work even if highly scored" "$wave_result" '"deferred"'
 }
 
 test_grouped_render_with_fixture_output() {
@@ -273,6 +304,7 @@ test_fallback_when_queue_analysis_fails() {
 
 echo "=== Task Selection Renderer ==="
 test_fetch_queue_plan_transforms_linear_backlog
+test_invoke_first_wave_helper_packs_priority_without_violating_dependencies
 test_grouped_render_with_fixture_output
 test_render_rejects_malformed_json
 test_fallback_when_queue_analysis_fails

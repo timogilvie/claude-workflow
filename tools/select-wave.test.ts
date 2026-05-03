@@ -1,0 +1,56 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoDir = resolve(__dirname, '..');
+const toolPath = resolve(__dirname, 'select-wave.ts');
+
+function runSelectWave(input: unknown) {
+  return spawnSync('npx', ['tsx', toolPath], {
+    cwd: repoDir,
+    encoding: 'utf-8',
+    env: { ...process.env },
+    input: JSON.stringify(input),
+  });
+}
+
+describe('select-wave CLI', () => {
+  it('emits a dependency-safe wave ordered by priority', () => {
+    const result = runSelectWave({
+      plan: {
+        availableNow: ['HOK-1', 'HOK-2', 'HOK-3'],
+        queuedAfterDependencies: [{ taskId: 'HOK-4', ancestors: ['HOK-1'] }],
+        avoidRunningTogether: [['HOK-2', 'HOK-3']],
+        needsTriage: [],
+      },
+      tasks: [
+        { id: 'HOK-1', score: 60 },
+        { id: 'HOK-2', score: 95 },
+        { id: 'HOK-3', score: 90 },
+        { id: 'HOK-4', score: 100 },
+      ],
+      maxParallel: 2,
+    });
+
+    assert.equal(result.status, 0);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      wave: ['HOK-2', 'HOK-1'],
+      deferred: ['HOK-3'],
+    });
+  });
+
+  it('fails clearly for invalid input', () => {
+    const result = spawnSync('npx', ['tsx', toolPath], {
+      cwd: repoDir,
+      encoding: 'utf-8',
+      env: { ...process.env },
+      input: '{"plan":',
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /parse select-wave JSON/);
+  });
+});
