@@ -2505,6 +2505,7 @@ echo "=== Startup Lifecycle Fixtures ==="
 for fixture in \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_launches_concurrently.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_serializes_state_writes.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/worktree_overlay_propagation.sh" \
 ; do
   if [[ ! -f "$fixture" ]]; then
     fail "Missing startup fixture $(basename "$fixture")"
