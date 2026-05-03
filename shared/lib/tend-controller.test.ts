@@ -524,7 +524,7 @@ describe('executeMerge', () => {
       assert.ok(hasCall(options.calls, /git fetch origin 'auto\/integration'/));
       assert.ok(hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
       assert.ok(hasCall(options.calls, /git push --force-with-lease/));
-      assert.ok(hasCall(options.calls, /gh pr checks 42/));
+      assert.ok(hasCall(options.calls, /gh pr checks 42 --json name,state,bucket 2>&1 \|\| true/));
       assert.ok(hasCall(options.calls, /gh pr merge 42 --squash --delete-branch/));
       assert.ok(hasCall(options.calls, /git worktree remove --force/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
@@ -659,6 +659,29 @@ describe('executeMerge', () => {
         if (cmd.includes('gh pr list --label')) return '[]';
         if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
         if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'failure' }]);
+        return '';
+      },
+    });
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'checks');
+      assert.ok(!hasCall(options.calls, /gh pr merge/));
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks when PR checks report a failing gh bucket', async () => {
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', bucket: 'fail' }]);
         return '';
       },
     });
