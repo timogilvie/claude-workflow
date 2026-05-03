@@ -16,6 +16,7 @@ import type {
   RoutingDecision,
   TaskDescriptor,
 } from './eval-schema.ts';
+import { isEvalSuccess } from './eval-success-policy.ts';
 
 // ============================================================================
 // Input Schema Types
@@ -601,7 +602,7 @@ export function toHokusaiSubmission(
       },
       route_taken: routeTaken,
       observed_outcomes: {
-        completed_successfully: record.outcomes?.success ?? record.score >= 0.5,
+        completed_successfully: isEvalSuccess(record),
         actual_cost_usd: record.workflowCost,
         actual_time_seconds: record.timeSeconds,
         intervention_count: record.interventionCount ?? 0,
