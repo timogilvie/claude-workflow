@@ -18,6 +18,7 @@
 import { execShellCommand, escapeShellArg } from './shell-utils.ts';
 import { extractReleaseReadiness, type ReleaseReadiness } from './task-packet-utils.ts';
 import { DEFAULT_READY_MIGRATION_PATTERNS, getReadyConfig } from './config.ts';
+import { parseMigrationFile, type MigrationStatementKind, type ParsedMigrationFile } from './migration-ast.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -120,6 +121,7 @@ interface PRContext {
   prNumber: number;
   diff: string;
   changedFiles: string[];
+  labels: string[];
   branch: string;
   baseBranch: string;
   url: string;
@@ -227,6 +229,39 @@ function getMigrationPatternsOrCheck(patternSources: string[], checkName: string
 
 function findMigrationFiles(changedFiles: string[], migrationPatterns: RegExp[]): string[] {
   return changedFiles.filter(file => migrationPatterns.some(pattern => pattern.test(file)));
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function findDowngradeProblem(statements: MigrationStatementKind[]): string | null {
+  const meaningfulStatements = statements.filter(statement => statement !== 'docstring');
+  if (meaningfulStatements.length === 0) {
+    return 'downgrade body only contains a docstring';
+  }
+
+  if (meaningfulStatements.every(statement => statement === 'pass')) {
+    return 'downgrade body only contains pass statements';
+  }
+
+  if (meaningfulStatements.every(statement =>
+    statement === 'pass' || statement === 'raise-not-implemented')) {
+    return 'downgrade body is non-functional (pass or NotImplementedError only)';
+  }
+
+  return null;
+}
+
+function findDestructiveUpgradeOps(parsedMigration: ParsedMigrationFile): string[] {
+  return parsedMigration.upgrade.opCalls
+    .map(opCall => opCall.functionName)
+    .filter(functionName => functionName === 'drop_column' || functionName === 'drop_table');
 }
 
 async function collectMigrationFiles(repoDir: string, migrationPatterns: RegExp[]): Promise<string[]> {
@@ -374,7 +409,7 @@ async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRCon
   try {
     // Fetch PR metadata
     const prJson = readyStageDeps.execShellCommand(
-      `gh pr view ${escapeShellArg(String(prNumber))} --json number,headRefName,baseRefName,url,files`,
+      `gh pr view ${escapeShellArg(String(prNumber))} --json number,headRefName,baseRefName,url,files,labels`,
       { encoding: 'utf-8', cwd: repoDir }
     );
     const prData = JSON.parse(prJson.toString());
@@ -387,6 +422,7 @@ async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRCon
 
     // Extract changed files from JSON
     const changedFiles: string[] = prData.files?.map((f: any) => f.path) || [];
+    const labels: string[] = prData.labels?.map((label: any) => label.name).filter((name: unknown) => typeof name === 'string') || [];
 
     // Fetch CI status
     let ciStatus = 'unknown';
@@ -406,6 +442,7 @@ async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRCon
       prNumber,
       diff,
       changedFiles,
+      labels,
       branch: prData.headRefName,
       baseBranch: prData.baseRefName,
       url: prData.url,
@@ -850,6 +887,131 @@ export async function checkMigrationChainIntegrity(
   };
 }
 
+export async function checkMigrationReversibility(
+  changedFiles: string[],
+  repoDir: string,
+  prLabels: string[] = [],
+  migrationPatternSources: string[] = getReadyConfig(repoDir).migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS]
+): Promise<ReadyCheck> {
+  const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
+    migrationPatternSources,
+    'migration-reversibility'
+  );
+  if (!Array.isArray(migrationPatternsOrCheck)) {
+    return migrationPatternsOrCheck;
+  }
+
+  const migrationFilesChanged = findMigrationFiles(changedFiles, migrationPatternsOrCheck);
+  if (migrationFilesChanged.length === 0) {
+    return {
+      name: 'migration-reversibility',
+      status: 'skip',
+      message: 'No migration files changed',
+      details: {},
+    };
+  }
+
+  const parsedMigrations: Array<{ file: string; parsed: ParsedMigrationFile }> = [];
+  try {
+    for (const relativeFile of migrationFilesChanged) {
+      const filePath = path.join(repoDir, relativeFile);
+      if (!(await fileExists(filePath))) {
+        continue;
+      }
+
+      const parsed = await parseMigrationFile(filePath);
+      if (!parsed) {
+        continue;
+      }
+
+      parsedMigrations.push({ file: relativeFile, parsed });
+    }
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      return {
+        name: 'migration-reversibility',
+        status: 'skip',
+        message: 'Skipping migration reversibility check because python3 is not available',
+        details: {},
+      };
+    }
+    throw error;
+  }
+
+  if (parsedMigrations.length === 0) {
+    return {
+      name: 'migration-reversibility',
+      status: 'skip',
+      message: 'No recognizable migration files changed',
+      details: {
+        migrationFiles: migrationFilesChanged,
+      },
+    };
+  }
+
+  const invalidDowngrades = parsedMigrations
+    .map(({ file, parsed }) => {
+      const reason = findDowngradeProblem(parsed.downgrade.statements);
+      return reason ? { file, reason } : null;
+    })
+    .filter((entry): entry is { file: string; reason: string } => entry !== null);
+
+  const destructiveMigrations = parsedMigrations
+    .map(({ file, parsed }) => {
+      const operations = findDestructiveUpgradeOps(parsed);
+      return operations.length > 0 ? { file, operations } : null;
+    })
+    .filter((entry): entry is { file: string; operations: string[] } => entry !== null);
+
+  const hasIrreversibleLabel = prLabels.includes('migration:irreversible');
+
+  if (invalidDowngrades.length > 0 && !hasIrreversibleLabel) {
+    return {
+      name: 'migration-reversibility',
+      status: 'fail',
+      message: 'One or more migrations have empty or non-functional downgrade() bodies',
+      details: {
+        invalidDowngrades,
+        destructiveUpgradeOps: destructiveMigrations,
+      },
+    };
+  }
+
+  if (destructiveMigrations.length > 0) {
+    return {
+      name: 'migration-reversibility',
+      status: 'warn',
+      message: invalidDowngrades.length > 0 && hasIrreversibleLabel
+        ? 'Irreversible migrations explicitly labeled, but upgrade() still drops data'
+        : 'Migration upgrade() drops schema objects and may lose data even with a downgrade()',
+      details: {
+        destructiveUpgradeOps: destructiveMigrations,
+        invalidDowngrades,
+        overrideLabelApplied: hasIrreversibleLabel && invalidDowngrades.length > 0,
+      },
+    };
+  }
+
+  if (invalidDowngrades.length > 0) {
+    return {
+      name: 'migration-reversibility',
+      status: 'pass',
+      message: 'Irreversible migrations explicitly approved with migration:irreversible',
+      details: {
+        invalidDowngrades,
+        overrideLabelApplied: true,
+      },
+    };
+  }
+
+  return {
+    name: 'migration-reversibility',
+    status: 'pass',
+    message: 'All changed migrations have non-trivial downgrade() bodies',
+    details: {},
+  };
+}
+
 /**
  * Check CI status for the PR.
  *
@@ -1100,6 +1262,7 @@ export async function runReadyStage(options: {
   const allChecks: ReadyCheck[] = [
     checkSchemaMigrations(prContext.changedFiles, repoDir),
     await checkMigrationChainIntegrity(repoDir, config.migrationPatterns),
+    await checkMigrationReversibility(prContext.changedFiles, repoDir, prContext.labels, config.migrationPatterns),
     checkDeployPaths(prContext.changedFiles, deployConfig),
     checkReleaseRequirements(taskPacket, prContext, repoDir),
     checkCIStatus(prNumber, repoDir),
