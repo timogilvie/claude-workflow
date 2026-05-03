@@ -532,6 +532,24 @@ describe('ready-stage', () => {
       assert.match(result.message, /could not parse/);
     });
 
+    it('passes alter_column without type_ (no finding)', async () => {
+      await writeFixture('alter_column_no_type.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/alter_column_no_type.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+    });
+
+    it('passes execute with CREATE INDEX CONCURRENTLY (no execute_dml finding)', async () => {
+      await writeFixture('execute_create_index.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/execute_create_index.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+    });
+
     it('honors custom migration danger labels', async () => {
       await writeFixture('drop_table.py');
       await writeRepoFiles(repoDir, {
