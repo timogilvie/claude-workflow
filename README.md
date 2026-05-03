@@ -77,14 +77,13 @@ Use the other commands around it when needed:
 
 - `wavemill expand` to prepare issue descriptions and task packets
 - `wavemill plan` to break down epics before milling them
-- `wavemill scaffold migrate-dryrun <target-repo>` to install the ephemeral-Postgres migration dry-run CI check into another repo
 - `wavemill review` to inspect a PR directly
 - `wavemill eval` to inspect or export performance data
 - `wavemill route` to inspect model-selection decisions
 - `wavemill context` to manage agent-readable project memory
 - `wavemill hokusai` to manage collective-intelligence opt-in
 
-See [docs/ready-stage.md](docs/ready-stage.md#migration-dry-run-ephemeral-postgres) for the migration dry-run adoption guide and CI tradeoffs.
+Run `wavemill scaffold migrate-dryrun <target-repo>` to install an ephemeral-Postgres migration dry-run CI workflow into another repository. The scaffold spins up a Postgres service container, applies all migrations from base, and optionally runs `downgrade base` followed by a second `upgrade head` to verify reversibility. The resulting workflow appears as a normal GitHub status check and is automatically picked up by `checkCIStatus` — no wavemill-specific code changes are needed in the adopting repo. See [docs/ready-stage.md](docs/ready-stage.md#migration-dry-run-ephemeral-postgres) for the full adoption guide and CI tradeoffs.
 
 ### Configuration
 
