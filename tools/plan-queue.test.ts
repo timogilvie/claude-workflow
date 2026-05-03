@@ -12,7 +12,7 @@ const planQueueTool = resolve(__dirname, 'plan-queue.ts');
 const fixture = resolve(repoDir, 'fixtures/plan-queue/backlog-basic.json');
 
 function runPlanQueue(args: string[], input?: string, cwd = repoDir) {
-  return spawnSync('tsx', [planQueueTool, ...args], {
+  return spawnSync('npx', ['tsx', planQueueTool, ...args], {
     cwd,
     encoding: 'utf-8',
     env: { ...process.env },
@@ -31,7 +31,7 @@ function parseJson(stdout: string) {
 
 describe('plan-queue CLI', () => {
   it('emits queuePlan JSON from a backlog file', () => {
-    const stdout = execFileSync('tsx', [planQueueTool, '--backlog-file', fixture, '--json'], {
+    const stdout = execFileSync('npx', ['tsx', planQueueTool, '--backlog-file', fixture, '--json'], {
       cwd: repoDir,
       encoding: 'utf-8',
       env: { ...process.env },

@@ -200,17 +200,21 @@ runTool({
         contextTasks,
         template: promptTemplate,
       });
-      const llmResult = await callLLM(prompt, { taskType: 'classify', repoDir: process.cwd() });
-      const currentFingerprints = Object.fromEntries(fingerprintTasks.map((t) => [t.id, computeTaskFingerprint(t)]));
-      const fingerprintMap = new Map([...Object.entries(cacheAfterPrune.fingerprints), ...Object.entries(currentFingerprints)]);
-      const freshEdges = parseQueueAnalysisEdges(llmResult.text, changedTaskIds, fingerprintMap);
-      const mergedCachedEdges = mergeEdges(cacheAfterPrune.edges, freshEdges, { changedTaskIds, removedTaskIds });
-      inferredEdges = cachedEdgesToDependencyEdges(mergedCachedEdges);
-      cacheToSave = {
-        ...cacheAfterPrune,
-        edges: mergedCachedEdges,
-        fingerprints: currentFingerprints,
-      };
+      try {
+        const llmResult = await callLLM(prompt, { taskType: 'classify', repoDir: process.cwd() });
+        const currentFingerprints = Object.fromEntries(fingerprintTasks.map((t) => [t.id, computeTaskFingerprint(t)]));
+        const fingerprintMap = new Map([...Object.entries(cacheAfterPrune.fingerprints), ...Object.entries(currentFingerprints)]);
+        const freshEdges = parseQueueAnalysisEdges(llmResult.text, changedTaskIds, fingerprintMap);
+        const mergedCachedEdges = mergeEdges(cacheAfterPrune.edges, freshEdges, { changedTaskIds, removedTaskIds });
+        inferredEdges = cachedEdgesToDependencyEdges(mergedCachedEdges);
+        cacheToSave = {
+          ...cacheAfterPrune,
+          edges: mergedCachedEdges,
+          fingerprints: currentFingerprints,
+        };
+      } catch (error) {
+        process.stderr.write(`plan-queue: partial refresh failed, falling back to cached edges: ${(error as Error).message}\n`);
+      }
     }
 
     const edges = dedupeDependencyEdges([...explicitEdges, ...inferredEdges]);
