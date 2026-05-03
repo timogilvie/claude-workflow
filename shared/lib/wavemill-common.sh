@@ -112,6 +112,7 @@ load_config() {
       "_CFG_PLAN_MODEL=\($c.plan.model // "claude-opus-4-7" | @sh)",
       "_CFG_DASHBOARD_VERBOSITY=\($c.dashboard.verbosity // "info" | @sh)",
       "_CFG_DASHBOARD_LOG_TO_FILE=\(if ($c.dashboard | has("logToFile")) then $c.dashboard.logToFile else true end)",
+      "_CFG_ENTER_LAUNCHES_WAVE=\(if ($c.taskSelection | has("enterLaunchesWave")) then $c.taskSelection.enterLaunchesWave else true end)",
       "_CFG_CHALLENGE_ENABLED=\($c.challenge.enabled // false)",
       "_CFG_CHALLENGE_RATE=\($c.challenge.rate // 0.10)",
       "_CFG_CHALLENGE_MODELS=\(($c.challenge.models // null) | @json | @sh)",
@@ -177,6 +178,7 @@ load_config() {
   PLAN_MODEL="${PLAN_MODEL:-$_CFG_PLAN_MODEL}"
   DASHBOARD_VERBOSITY="${DASHBOARD_VERBOSITY:-$_CFG_DASHBOARD_VERBOSITY}"
   DASHBOARD_LOG_TO_FILE="${DASHBOARD_LOG_TO_FILE:-$_CFG_DASHBOARD_LOG_TO_FILE}"
+  ENTER_LAUNCHES_WAVE="${ENTER_LAUNCHES_WAVE:-$_CFG_ENTER_LAUNCHES_WAVE}"
   CHALLENGE_ENABLED="${CHALLENGE_ENABLED:-$_CFG_CHALLENGE_ENABLED}"
   CHALLENGE_RATE="${CHALLENGE_RATE:-$_CFG_CHALLENGE_RATE}"
   CHALLENGE_MODELS_JSON="${CHALLENGE_MODELS_JSON:-$_CFG_CHALLENGE_MODELS}"
@@ -207,6 +209,7 @@ load_config() {
   export AGENT_CMD REQUIRE_CONFIRM PLANNING_MODE MAX_RETRIES RETRY_DELAY
   export PROJECT_NAME MAX_SELECT MAX_DISPLAY PLAN_MAX_DISPLAY PLAN_RESEARCH PLAN_MODEL
   export DASHBOARD_VERBOSITY DASHBOARD_LOG_TO_FILE
+  export ENTER_LAUNCHES_WAVE
   export CHALLENGE_ENABLED CHALLENGE_RATE CHALLENGE_MODELS_JSON
   export CHALLENGE_COMPARISON_MODEL CHALLENGE_AUTO_MERGE
   export ROUTER_ENABLED ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD DEFAULT_MAX_COST_USD
@@ -216,7 +219,7 @@ load_config() {
   unset _CFG_BASE_BRANCH _CFG_WORKTREE_ROOT _CFG_AGENT_CMD _CFG_REQUIRE_CONFIRM
   unset _CFG_PLANNING_MODE _CFG_MAX_RETRIES _CFG_RETRY_DELAY _CFG_MAX_SELECT _CFG_MAX_DISPLAY
   unset _CFG_PLAN_MAX_DISPLAY _CFG_PLAN_RESEARCH _CFG_PLAN_MODEL
-  unset _CFG_DASHBOARD_VERBOSITY _CFG_DASHBOARD_LOG_TO_FILE
+  unset _CFG_DASHBOARD_VERBOSITY _CFG_DASHBOARD_LOG_TO_FILE _CFG_ENTER_LAUNCHES_WAVE
   unset _CFG_CHALLENGE_ENABLED _CFG_CHALLENGE_RATE _CFG_CHALLENGE_MODELS
   unset _CFG_CHALLENGE_COMPARISON_MODEL _CFG_CHALLENGE_AUTO_MERGE
   unset _CFG_ROUTER_ENABLED _CFG_ROUTER_DEFAULT_MODEL _CFG_AUTO_EVAL _CFG_SETUP_CMD _CFG_DEFAULT_MAX_COST_USD
@@ -1149,6 +1152,113 @@ warn_once_per_session() {
 
   log "warn" "$message"
   printf '%s\n' "$warning_key" >> "$warning_file" 2>/dev/null || true
+}
+
+normalize_worktree_path() {
+  local path="$1"
+  local parent_dir base_name
+
+  if [[ -d "$path" ]]; then
+    (cd "$path" && pwd -P)
+    return 0
+  fi
+
+  parent_dir="$(dirname "$path")"
+  base_name="$(basename "$path")"
+  if [[ -d "$parent_dir" ]]; then
+    printf '%s/%s\n' "$(cd "$parent_dir" && pwd -P)" "$base_name"
+    return 0
+  fi
+
+  printf '%s\n' "$path"
+}
+
+ensure_worktree() {
+  local branch="$1"
+  local desired_path="$2"
+  local repo_dir="${3:-$PWD}"
+  local worktree_list="" existing_path="" line="" current_path=""
+  local hook_script agent_name
+  local desired_cmp_path existing_cmp_path
+
+  if ! worktree_list="$(git -C "$repo_dir" worktree list --porcelain 2>/dev/null)"; then
+    echo "Error: failed to inspect git worktree registrations for $branch" >&2
+    if [[ -n "${WAVEMILL_SESSION:-}" && -n "${WAVEMILL_ISSUE:-}" ]] && command -v jq >/dev/null 2>&1; then
+      hook_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)/wavemill-hook-protocol.sh"
+      if ! declare -F wavemill_hook_write >/dev/null 2>&1 && [[ -f "$hook_script" ]]; then
+        # shellcheck source=/dev/null
+        source "$hook_script"
+      fi
+      if declare -F wavemill_hook_write >/dev/null 2>&1; then
+        agent_name="${AGENT_CMD:-${CURRENT_AGENT:-wavemill}}"
+        wavemill_hook_write "error" "worktree-setup" "worktree-collision" "$agent_name" || true
+      fi
+    fi
+    return 1
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      worktree\ *)
+        current_path="${line#worktree }"
+        ;;
+      branch\ refs/heads/*)
+        if [[ "${line#branch refs/heads/}" == "$branch" ]]; then
+          existing_path="$current_path"
+          break
+        fi
+        ;;
+      "")
+        current_path=""
+        ;;
+    esac
+  done <<< "$worktree_list"
+
+  desired_cmp_path="$(normalize_worktree_path "$desired_path")"
+
+  if [[ -z "$existing_path" ]]; then
+    git -C "$repo_dir" worktree add "$desired_path" "$branch" >/dev/null || return 1
+    printf '%s\n' "$desired_path"
+    return 0
+  fi
+
+  existing_cmp_path="$(normalize_worktree_path "$existing_path")"
+
+  if [[ "$existing_cmp_path" == "$desired_cmp_path" ]]; then
+    if [[ -d "$existing_path" ]]; then
+      printf '%s\n' "$desired_path"
+      return 0
+    fi
+    echo "Detected stale worktree registration for $branch at $desired_path; pruning" >&2
+  else
+    if [[ -d "$existing_path" ]]; then
+      echo "Reusing existing worktree for $branch at $existing_path" >&2
+      printf '%s\n' "$existing_path"
+      return 0
+    fi
+    echo "Detected stale worktree registration for $branch at $existing_path; recreating at $desired_path" >&2
+  fi
+
+  if ! git -C "$repo_dir" worktree prune >/dev/null; then
+    echo "Error: failed to prune stale worktree registration for $branch" >&2
+  elif git -C "$repo_dir" worktree add "$desired_path" "$branch" >/dev/null; then
+    printf '%s\n' "$desired_path"
+    return 0
+  fi
+
+  echo "Error: failed to prepare worktree for $branch" >&2
+  if [[ -n "${WAVEMILL_SESSION:-}" && -n "${WAVEMILL_ISSUE:-}" ]] && command -v jq >/dev/null 2>&1; then
+    hook_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)/wavemill-hook-protocol.sh"
+    if ! declare -F wavemill_hook_write >/dev/null 2>&1 && [[ -f "$hook_script" ]]; then
+      # shellcheck source=/dev/null
+      source "$hook_script"
+    fi
+    if declare -F wavemill_hook_write >/dev/null 2>&1; then
+      agent_name="${AGENT_CMD:-${CURRENT_AGENT:-wavemill}}"
+      wavemill_hook_write "error" "worktree-setup" "worktree-collision" "$agent_name" || true
+    fi
+  fi
+  return 1
 }
 
 wavemill_lock_run() {

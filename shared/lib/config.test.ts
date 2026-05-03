@@ -1269,6 +1269,12 @@ test('getReadyConfig returns empty check lists by default', () => {
     assert.deepEqual(readyConfig.checks, []);
     assert.deepEqual(readyConfig.requiredChecks, []);
     assert.deepEqual(readyConfig.migrationPatterns, ['migrations/', 'alembic/versions/']);
+    assert.deepEqual(readyConfig.migrationDangerLabels, {
+      drop_column: 'migration:destructive',
+      drop_table: 'migration:destructive',
+      alter_column_type: 'migration:long-running',
+    });
+    assert.deepEqual(readyConfig.migrationForbiddenPatterns, []);
   } finally {
     cleanUp(tmp);
   }
@@ -1347,6 +1353,31 @@ test('getReadyConfig respects explicit remediation overrides', () => {
       maxAttempts: 5,
       agentCmd: 'claude',
     });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getReadyConfig honors explicit danger labels and forbidden patterns', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        migrationDangerLabels: {
+          drop_table: 'db-risk-approved',
+        },
+        migrationForbiddenPatterns: ['custom-online-ddl'],
+      }
+    }));
+
+    const readyConfig = getReadyConfig(tmp);
+    assert.deepEqual(readyConfig.migrationDangerLabels, {
+      drop_column: 'migration:destructive',
+      drop_table: 'db-risk-approved',
+      alter_column_type: 'migration:long-running',
+    });
+    assert.deepEqual(readyConfig.migrationForbiddenPatterns, ['custom-online-ddl']);
   } finally {
     cleanUp(tmp);
   }

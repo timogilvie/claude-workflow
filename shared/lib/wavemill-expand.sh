@@ -28,6 +28,90 @@ log() { echo "$(date '+%H:%M:%S') $*"; }
 log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
 log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
 
+canonicalize_issue_identifier() {
+  local input="$1"
+  if [[ "$input" =~ ^([A-Za-z]+-[0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]^^}"
+    return 0
+  fi
+
+  if [[ "$input" =~ ^https?://linear\.app/[^/]+/issue/([A-Za-z]+-[0-9]+)([/?].*)?$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]^^}"
+    return 0
+  fi
+
+  return 1
+}
+
+expand_selected_issues() {
+  local mode="$1"
+  shift
+  local selected_issues=("$@")
+  local success_count=0
+  local fail_count=0
+
+  echo ""
+  log "Expanding ${#selected_issues[@]} issue(s)..."
+  echo ""
+
+  for issue_line in "${selected_issues[@]}"; do
+    local issue title expanded_file header_file details_file
+
+    if [[ "$mode" == "direct" ]]; then
+      issue="$issue_line"
+      title="Direct issue request"
+    else
+      IFS='|' read -r issue _ title _ _ _ <<<"$issue_line"
+    fi
+
+    log "Processing $issue: $title"
+
+    expanded_file="/tmp/issue-expander-${issue}.md"
+
+    echo ""
+    if expand_issue_with_tool "$issue" "$expanded_file"; then
+      echo ""
+      log "  ✓ Expanded and updated in Linear"
+
+      header_file="${expanded_file%.md}-header.md"
+      details_file="${expanded_file%.md}-details.md"
+      if [[ -f "$header_file" ]] && [[ -f "$details_file" ]]; then
+        log "  ✓ Header and details files generated"
+      fi
+
+      rm -f "$expanded_file" "$header_file" "$details_file"
+      ((++success_count))
+    else
+      log_error "  ✗ Expansion failed for $issue (see /tmp/expand-issue-${issue}.log)"
+      ((++fail_count))
+    fi
+
+    echo ""
+  done
+
+  log "Expansion complete!"
+  log "  Success: $success_count"
+  if [[ $fail_count -gt 0 ]]; then
+    log "  Failed: $fail_count"
+  fi
+
+  if [[ "$mode" == "direct" ]] && [[ $fail_count -gt 0 ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+is_expand_quit_selection() {
+  local input="$1"
+
+  # Trim only the outer whitespace so mixed-token input stays non-quit.
+  input="${input#"${input%%[![:space:]]*}"}"
+  input="${input%"${input##*[![:space:]]}"}"
+
+  [[ "$input" == "q" || "$input" == "Q" ]]
+}
+
 # ============================================================================
 # LINEAR API HELPERS (read-only; writes go through expand-issue.ts)
 # ============================================================================
@@ -70,6 +154,7 @@ linear_get_issue() {
 # ============================================================================
 
 main() {
+  local direct_args=("$@")
   log "Issue Expander - Batch expand Linear issues"
   echo ""
 
@@ -80,6 +165,30 @@ main() {
     log "Project: (all projects)"
   fi
   echo ""
+
+  if [[ $# -gt 0 ]]; then
+    local requested_issues=()
+    local invalid_inputs=()
+    local input canonical_issue
+
+    for input in "${direct_args[@]}"; do
+      if canonical_issue=$(canonicalize_issue_identifier "$input"); then
+        requested_issues+=("$canonical_issue")
+      else
+        invalid_inputs+=("$input")
+      fi
+    done
+
+    if [[ ${#invalid_inputs[@]} -gt 0 ]]; then
+      log_error "Invalid issue identifiers: ${invalid_inputs[*]}"
+      log_error "Expected each argument to be TEAM-123 or a Linear issue URL"
+      exit 1
+    fi
+
+    log "Direct issue expansion: ${requested_issues[*]}"
+    expand_selected_issues "direct" "${requested_issues[@]}"
+    return $?
+  fi
 
   # Fetch backlog
   log "Fetching backlog from Linear..."
@@ -111,6 +220,11 @@ main() {
   echo ""
   echo "Enter up to $MAX_SELECT numbers to expand (e.g. 1 3 5), or press Enter to skip:"
   read -r SELECTED
+
+  if is_expand_quit_selection "$SELECTED"; then
+    log "Quit. No issues expanded."
+    exit 0
+  fi
 
   if [[ -z "$SELECTED" ]]; then
     log "No issues selected. Exiting."
@@ -144,52 +258,7 @@ main() {
     SELECTED_ISSUES=("${SELECTED_ISSUES[@]:0:$MAX_SELECT}")
   fi
 
-  echo ""
-  log "Expanding ${#SELECTED_ISSUES[@]} issue(s)..."
-  echo ""
-
-  # Process each selected issue
-  SUCCESS_COUNT=0
-  FAIL_COUNT=0
-
-  for issue_line in "${SELECTED_ISSUES[@]}"; do
-    IFS='|' read -r ISSUE SLUG TITLE AREA SCORE HAS_PLAN <<<"$issue_line"
-
-    log "Processing $ISSUE: $TITLE"
-
-    # Create temp file for expanded description
-    EXPANDED_FILE="/tmp/issue-expander-${ISSUE}.md"
-
-    # Expand the issue (always updates Linear by default)
-    echo ""
-    if expand_issue_with_tool "$ISSUE" "$EXPANDED_FILE"; then
-      echo ""
-      log "  ✓ Expanded and updated in Linear"
-
-      # Report generated files
-      local header_file="${EXPANDED_FILE%.md}-header.md"
-      local details_file="${EXPANDED_FILE%.md}-details.md"
-      if [[ -f "$header_file" ]] && [[ -f "$details_file" ]]; then
-        log "  ✓ Header and details files generated"
-      fi
-
-      # Cleanup temp files (labeling is handled by auto-label-issue.ts inside expand-issue.ts)
-      rm -f "$EXPANDED_FILE" "$header_file" "$details_file"
-      ((++SUCCESS_COUNT))
-    else
-      log_error "  ✗ Expansion failed for $ISSUE (see /tmp/expand-issue-${ISSUE}.log)"
-      ((++FAIL_COUNT))
-    fi
-
-    echo ""
-  done
-
-  # Summary
-  log "Expansion complete!"
-  log "  Success: $SUCCESS_COUNT"
-  if [[ $FAIL_COUNT -gt 0 ]]; then
-    log "  Failed: $FAIL_COUNT"
-  fi
+  expand_selected_issues "interactive" "${SELECTED_ISSUES[@]}"
 }
 
 main "$@"

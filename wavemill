@@ -42,9 +42,10 @@ ${GREEN}Commands:${NC}
                ${CYAN}--agent <name>${NC}  Agent CLI to use (claude, codex, ...)
                ${CYAN}--no-progress${NC}   Use legacy startup status lines
 
-  ${CYAN}expand${NC}    Batch expand Linear issues
-             - Shows ranked backlog candidates
-             - Select up to 3 issues interactively
+  ${CYAN}expand${NC}    Expand Linear issues into task packets
+             - No args: shows ranked backlog candidates
+             - Issue IDs/URLs: expands those issues directly
+             - Supports multiple direct issues sequentially
              - Expands with Claude + auto-labels
              - Updates Linear with detailed task packets
 
@@ -53,6 +54,11 @@ ${GREEN}Commands:${NC}
              - Prioritizes those without existing issues
              - Select one to decompose with Claude
              - Creates phased milestones and issues in Linear
+
+  ${CYAN}scaffold${NC}  Scaffold reusable CI workflows into another repository
+             Subcommands:
+               ${CYAN}wavemill scaffold migrate-dryrun <target>${NC}
+                          Copy the migration dry-run workflow pair
 
   ${CYAN}eval${NC}      Evaluate LLM performance on a completed workflow
              - Auto-detects recent workflow context
@@ -182,6 +188,10 @@ ${GREEN}Examples:${NC}
 
   # Expand issues interactively
   wavemill expand
+
+  # Expand one or more issues directly
+  wavemill expand HOK-1494
+  wavemill expand HOK-1494 HOK-1531
 
   # Evaluate most recent completed workflow
   wavemill eval
@@ -772,6 +782,21 @@ run_plan() {
   exec "$plan_script" "$@"
 }
 
+run_scaffold() {
+  local subcommand="${1:-}"
+
+  case "$subcommand" in
+    migrate-dryrun)
+      shift
+      exec npx tsx "$TOOLS_DIR/scaffold-migrate-dryrun.ts" "$@"
+      ;;
+    *)
+      echo "Usage: wavemill scaffold migrate-dryrun <target-repo> [options]" >&2
+      exit 1
+      ;;
+  esac
+}
+
 run_review() {
   local review_script="$LIB_DIR/wavemill-review.sh"
 
@@ -895,6 +920,10 @@ case "${1:-}" in
     run_preflight_checks
     shift
     run_plan "$@"
+    ;;
+  scaffold)
+    shift
+    run_scaffold "$@"
     ;;
   review)
     run_preflight_checks

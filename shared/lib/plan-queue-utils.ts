@@ -15,6 +15,16 @@ export type QueuePlan = {
   needsTriage: TriageRecord[];
 };
 
+export type TaskWithScore = {
+  id: string;
+  score: number;
+};
+
+export type WaveSelection = {
+  wave: string[];
+  deferred: string[];
+};
+
 export const compareTaskIds = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
 
 export function parseBacklogJson(raw: string, source: string): BacklogRecord[] {
@@ -103,4 +113,52 @@ export function buildQueuePlan(edges: DependencyEdge[], result: PlanResult): Que
     avoidRunningTogether: clusterSharedSurface(nonTriagedEdges),
     needsTriage: result.triage,
   };
+}
+
+export function selectFirstWave(
+  plan: QueuePlan,
+  scoredTasks: TaskWithScore[],
+  opts: { maxParallel: number }
+): WaveSelection {
+  if (!Array.isArray(plan.availableNow)) {
+    throw new TypeError('Queue plan must include availableNow');
+  }
+
+  if (!Number.isInteger(opts.maxParallel) || opts.maxParallel < 0) {
+    throw new RangeError('maxParallel must be a non-negative integer');
+  }
+
+  if (opts.maxParallel === 0) {
+    return { wave: [], deferred: [...plan.availableNow] };
+  }
+
+  const scoreById = new Map(scoredTasks.map((task) => [task.id, task.score]));
+  const available = plan.availableNow
+    .map((id) => ({ id, score: scoreById.get(id) ?? 0 }))
+    .sort((a, b) => b.score - a.score || compareTaskIds(a.id, b.id));
+
+  const clusterById = new Map<string, number>();
+  for (const [index, group] of (plan.avoidRunningTogether ?? []).entries()) {
+    for (const taskId of group) {
+      clusterById.set(taskId, index);
+    }
+  }
+
+  const usedClusters = new Set<number>();
+  const wave: string[] = [];
+  const deferred: string[] = [];
+
+  for (const task of available) {
+    const cluster = clusterById.get(task.id);
+    if (wave.length < opts.maxParallel && (cluster === undefined || !usedClusters.has(cluster))) {
+      wave.push(task.id);
+      if (cluster !== undefined) {
+        usedClusters.add(cluster);
+      }
+      continue;
+    }
+    deferred.push(task.id);
+  }
+
+  return { wave, deferred };
 }
