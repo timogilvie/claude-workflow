@@ -25,6 +25,8 @@ import {
   parseMigrationFile,
   type DowngradeClassification,
 } from './migration-ast.ts';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -118,6 +120,16 @@ export interface ReadyStageConfig {
    * Regex patterns used to identify migration files in the repository.
    */
   migrationPatterns?: string[];
+
+  /**
+   * Required PR labels for specific forbidden-DDL findings.
+   */
+  migrationDangerLabels?: Record<string, string>;
+
+  /**
+   * Extra repository-specific forbidden migration patterns.
+   */
+  migrationForbiddenPatterns?: string[];
 }
 
 /**
@@ -132,8 +144,23 @@ interface PRContext {
   baseBranch: string;
   url: string;
   ciStatus: string;
-  /** Normalized PR label names; empty array when GitHub returns no labels. */
-  labels: string[];
+}
+
+interface ForbiddenDDLFinding {
+  file: string;
+  line: number;
+  rule: string;
+  detail: string;
+}
+
+interface ForbiddenDDLError {
+  file: string;
+  message: string;
+}
+
+interface ForbiddenDDLAnalyzerResult {
+  findings: ForbiddenDDLFinding[];
+  errors: ForbiddenDDLError[];
 }
 
 /**
@@ -175,6 +202,16 @@ export async function sleep(ms: number): Promise<void> {
 export const readyStageDeps = {
   execShellCommand,
   sleep,
+  spawnPython(
+    scriptPath: string,
+    filePaths: string[],
+    repoDir: string
+  ): SpawnSyncReturns<string> {
+    return spawnSync('python3', [scriptPath, ...filePaths], {
+      cwd: repoDir,
+      encoding: 'utf-8',
+    });
+  },
 };
 
 interface MigrationRevision {
@@ -246,30 +283,6 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function findDowngradeProblem(statements: MigrationStatementKind[]): string | null {
-  const meaningfulStatements = statements.filter(statement => statement !== 'docstring');
-  if (meaningfulStatements.length === 0) {
-    return 'downgrade body only contains a docstring';
-  }
-
-  if (meaningfulStatements.every(statement => statement === 'pass')) {
-    return 'downgrade body only contains pass statements';
-  }
-
-  if (meaningfulStatements.every(statement =>
-    statement === 'pass' || statement === 'raise-not-implemented')) {
-    return 'downgrade body is non-functional (pass or NotImplementedError only)';
-  }
-
-  return null;
-}
-
-function findDestructiveUpgradeOps(parsedMigration: ParsedMigrationFile): string[] {
-  return parsedMigration.upgrade.opCalls
-    .map(opCall => opCall.functionName)
-    .filter(functionName => functionName === 'drop_column' || functionName === 'drop_table');
 }
 
 async function collectMigrationFiles(repoDir: string, migrationPatterns: RegExp[]): Promise<string[]> {
@@ -901,6 +914,186 @@ export async function checkMigrationChainIntegrity(
   };
 }
 
+function summarizeForbiddenDDLFinding(finding: ForbiddenDDLFinding): string {
+  return `${finding.file}:${finding.line} ${finding.rule}`;
+}
+
+export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyCheck {
+  const config = getReadyConfig(repoDir);
+  const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
+    config.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    'forbidden-ddl'
+  );
+  if (!Array.isArray(migrationPatternsOrCheck)) {
+    return migrationPatternsOrCheck;
+  }
+
+  const migrationFiles = findMigrationFiles(prContext.changedFiles, migrationPatternsOrCheck);
+  const existingMigrationFiles = migrationFiles.filter(relativePath =>
+    existsSync(path.join(repoDir, relativePath))
+  );
+
+  if (existingMigrationFiles.length === 0) {
+    return {
+      name: 'forbidden-ddl',
+      status: 'skip',
+      message: 'No migration files changed',
+      details: {
+        migrationFiles: [],
+        labels: prContext.labels,
+      },
+    };
+  }
+
+  const scriptPath = path.join(repoDir, 'shared/lib/forbidden-ddl-analyzer.py');
+  const analyzer = readyStageDeps.spawnPython(
+    scriptPath,
+    existingMigrationFiles.map(relativePath => path.join(repoDir, relativePath)),
+    repoDir
+  );
+
+  if (analyzer.error) {
+    return {
+      name: 'forbidden-ddl',
+      status: 'fail',
+      message: 'Python 3 is required to analyze migration files',
+      details: {
+        error: analyzer.error.message,
+      },
+    };
+  }
+
+  if (analyzer.status !== 0) {
+    return {
+      name: 'forbidden-ddl',
+      status: 'fail',
+      message: 'Forbidden DDL analyzer failed',
+      details: {
+        status: analyzer.status,
+        stdout: analyzer.stdout?.slice(0, 2000),
+        stderr: analyzer.stderr?.slice(0, 2000),
+      },
+    };
+  }
+
+  let analyzerResult: ForbiddenDDLAnalyzerResult;
+  try {
+    analyzerResult = JSON.parse(analyzer.stdout || '{}') as ForbiddenDDLAnalyzerResult;
+  } catch (error) {
+    return {
+      name: 'forbidden-ddl',
+      status: 'fail',
+      message: 'Forbidden DDL analyzer returned invalid JSON',
+      details: {
+        error: error instanceof Error ? error.message : String(error),
+        stdout: analyzer.stdout?.slice(0, 2000),
+      },
+    };
+  }
+
+  if (!Array.isArray(analyzerResult.findings) || !Array.isArray(analyzerResult.errors)) {
+    return {
+      name: 'forbidden-ddl',
+      status: 'fail',
+      message: 'Forbidden DDL analyzer returned an invalid payload',
+      details: {
+        stdout: analyzer.stdout?.slice(0, 2000),
+      },
+    };
+  }
+
+  if (analyzerResult.errors.length > 0) {
+    return {
+      name: 'forbidden-ddl',
+      status: 'fail',
+      message: 'Forbidden DDL analyzer could not parse one or more migration files',
+      details: {
+        migrationFiles: existingMigrationFiles,
+        labels: prContext.labels,
+        errors: analyzerResult.errors,
+      },
+    };
+  }
+
+  const prLabels = new Set(prContext.labels);
+  const requiredLabels = config.migrationDangerLabels ?? {};
+  const findings = analyzerResult.findings.map(finding => {
+    const requiredLabel = requiredLabels[finding.rule];
+    const acknowledged = typeof requiredLabel === 'string' && prLabels.has(requiredLabel);
+
+    let status: ReadyCheckStatus = 'warn';
+    let message = `${summarizeForbiddenDDLFinding(finding)} matched a custom forbidden migration pattern`;
+
+    switch (finding.rule) {
+      case 'add_column_non_nullable_no_default':
+        status = 'fail';
+        message = `${summarizeForbiddenDDLFinding(finding)} adds a non-nullable column without server_default`;
+        break;
+      case 'drop_column':
+      case 'drop_table':
+        status = acknowledged ? 'pass' : 'fail';
+        message = acknowledged
+          ? `${summarizeForbiddenDDLFinding(finding)} acknowledged by PR label ${requiredLabel}`
+          : `${summarizeForbiddenDDLFinding(finding)} is destructive and requires PR label ${requiredLabel ?? '(unconfigured)'}`;
+        break;
+      case 'alter_column_type':
+        status = acknowledged ? 'pass' : 'warn';
+        message = acknowledged
+          ? `${summarizeForbiddenDDLFinding(finding)} acknowledged by PR label ${requiredLabel}`
+          : `${summarizeForbiddenDDLFinding(finding)} changes column type; expect a long-running table rewrite`;
+        break;
+      case 'execute_dml':
+        status = 'warn';
+        message = `${summarizeForbiddenDDLFinding(finding)} performs DML inside upgrade(); prefer a separate online job`;
+        break;
+    }
+
+    return {
+      ...finding,
+      requiredLabel,
+      acknowledged,
+      status,
+      message,
+    };
+  });
+
+  const blockingFindings = findings.filter(finding => finding.status === 'fail');
+  const warningFindings = findings.filter(finding => finding.status === 'warn');
+  const acknowledgedFindings = findings.filter(finding => finding.acknowledged);
+
+  if (blockingFindings.length === 0 && warningFindings.length === 0) {
+    return {
+      name: 'forbidden-ddl',
+      status: 'pass',
+      message: acknowledgedFindings.length > 0
+        ? 'Migration risk findings were explicitly acknowledged by PR labels'
+        : 'No forbidden migration patterns detected',
+      details: {
+        migrationFiles: existingMigrationFiles,
+        labels: prContext.labels,
+        findings,
+        acknowledgedFindings,
+        requiredLabels,
+      },
+    };
+  }
+
+  return {
+    name: 'forbidden-ddl',
+    status: blockingFindings.length > 0 ? 'fail' : 'warn',
+    message: blockingFindings.length > 0
+      ? `${blockingFindings.length} forbidden migration pattern(s) require changes or explicit acknowledgment`
+      : `${warningFindings.length} migration risk warning(s) detected`,
+    details: {
+      migrationFiles: existingMigrationFiles,
+      labels: prContext.labels,
+      findings,
+      acknowledgedFindings,
+      requiredLabels,
+    },
+  };
+}
+
 /**
  * PR label that explicitly accepts an irreversible migration.
  *
@@ -1341,6 +1534,7 @@ export async function runReadyStage(options: {
   const allChecks: ReadyCheck[] = [
     checkSchemaMigrations(prContext.changedFiles, repoDir),
     await checkMigrationChainIntegrity(repoDir, config.migrationPatterns),
+    checkForbiddenDDL(prContext, repoDir),
     await checkMigrationReversibility(
       prContext.changedFiles,
       repoDir,
