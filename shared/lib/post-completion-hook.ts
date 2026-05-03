@@ -28,6 +28,7 @@ import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
 import { attachStageOutcomes, enrichEvalRecord } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
+import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 import {
   buildRouteLifecycleProvenance,
   deriveRouteDecisionSource,
@@ -165,7 +166,7 @@ export function buildTaskDescriptorForPostCompletion(
     interventionCount: input.record.interventionCount || undefined,
     interventions: input.interventionRecords || undefined,
     rubricEval: input.record.rubricEval || undefined,
-    modelsAvailable: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-sonnet-4-5-20250929', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
+    modelsAvailable: getConfiguredModelsForDescriptor(input.repoDir),
     objective: 'balanced',
     maxCostUsd: typeof maxCostUsd === 'number' ? maxCostUsd : undefined,
   });
