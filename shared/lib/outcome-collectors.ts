@@ -20,6 +20,20 @@ import { fetchPrReviews, resolveOwnerRepo } from './github.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadReviewInterventions } from './review-intervention-mapper.ts';
+
+// Maps gh CLI's `bucket` field (pass/fail/pending/skipping/cancel) to the
+// legacy `conclusion` values the collectors below were written against.
+// `gh pr checks --json conclusion` was removed in gh ≥ 2.72.0.
+function bucketToConclusion(bucket: string | null | undefined): string | null {
+  switch (bucket) {
+    case 'pass': return 'success';
+    case 'fail': return 'failure';
+    case 'skipping': return 'skipped';
+    case 'cancel': return 'cancelled';
+    case 'pending': return null;
+    default: return null;
+  }
+}
 import type {
   CiOutcome,
   TestsOutcome,
@@ -77,9 +91,12 @@ function fetchPrChecks(prNumber: string, repoDir?: string): any[] {
   }
 
   try {
-    // Fetch all fields needed by any collector
+    // Fetch all fields needed by any collector. gh CLI removed `conclusion`
+    // from `gh pr checks --json` (gh ≥ 2.72.0); we now request `bucket`
+    // (pre-categorized pass/fail/pending) and synthesize a `conclusion`
+    // field below so the rest of this file's collectors keep working.
     const checksRaw = execShellCommand(
-      `gh pr checks ${escapeShellArg(prNumber)} --json name,state,conclusion,startedAt,completedAt 2>/dev/null || echo '[]'`,
+      `gh pr checks ${escapeShellArg(prNumber)} --json name,state,bucket,startedAt,completedAt 2>/dev/null || echo '[]'`,
       { encoding: 'utf-8', cwd, timeout: 15_000 }
     ).trim();
 
@@ -88,11 +105,18 @@ function fetchPrChecks(prNumber: string, repoDir?: string): any[] {
       return [];
     }
 
-    const checks = JSON.parse(checksRaw);
-    if (!Array.isArray(checks)) {
+    const parsed = JSON.parse(checksRaw);
+    if (!Array.isArray(parsed)) {
       prChecksCache.set(cacheKey, []);
       return [];
     }
+
+    const checks = parsed.map((entry: { conclusion?: unknown; bucket?: unknown }) => ({
+      ...entry,
+      conclusion: typeof entry.conclusion === 'string'
+        ? entry.conclusion
+        : bucketToConclusion(typeof entry.bucket === 'string' ? entry.bucket : null),
+    }));
 
     // Cache and return
     prChecksCache.set(cacheKey, checks);
