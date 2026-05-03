@@ -1,11 +1,14 @@
 import {
+  getAvailableModelsForStage,
   getModelRegistryConfig,
+  getRouterConfig,
   type ModelCapabilitiesOverride,
   type ModelRegistryConfig,
 } from './config.ts';
 
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
+export type DescriptorModelStage = 'planner' | 'coder' | 'reviewer';
 
 export interface ModelCapabilities {
   vendor: string;
@@ -36,6 +39,11 @@ export const CLASS_RANK: Record<ModelClass, number> = {
   fast_economy: 1,
 };
 const warnedUnknownLadders = new Set<string>();
+const DESCRIPTOR_STAGE_TO_TASK_TYPE: Record<DescriptorModelStage, RegistryTaskType> = {
+  planner: 'planning',
+  coder: 'coding',
+  reviewer: 'review',
+};
 
 function scores(
   routing: number,
@@ -70,6 +78,21 @@ function cloneRegistry(registry: ModelRegistry): ModelRegistry {
       Object.entries(registry.ladders).map(([taskType, ladder]) => [taskType, [...ladder]])
     ) as Partial<Record<RegistryTaskType, string[]>>,
   };
+}
+
+function dedupeModelIds(modelIds: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+
+  for (const modelId of modelIds) {
+    if (typeof modelId !== 'string' || modelId.length === 0 || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    deduped.push(modelId);
+  }
+
+  return deduped;
 }
 
 function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCapabilities {
@@ -372,6 +395,26 @@ export function mergeModelRegistry(
 
 export function getEffectiveRegistry(repoDir?: string): ModelRegistry {
   return mergeModelRegistry(DEFAULT_MODEL_REGISTRY, getModelRegistryConfig(repoDir));
+}
+
+export function getConfiguredModelsForDescriptorStage(
+  repoDir: string | undefined,
+  stage: DescriptorModelStage,
+): string[] {
+  const configuredModels = getAvailableModelsForStage(getRouterConfig(repoDir), stage);
+  if (configuredModels && configuredModels.length > 0) {
+    return dedupeModelIds(configuredModels);
+  }
+
+  return dedupeModelIds(getLadder(getEffectiveRegistry(repoDir), DESCRIPTOR_STAGE_TO_TASK_TYPE[stage]));
+}
+
+export function getConfiguredModelsForDescriptor(repoDir?: string): string[] {
+  return dedupeModelIds([
+    ...getConfiguredModelsForDescriptorStage(repoDir, 'planner'),
+    ...getConfiguredModelsForDescriptorStage(repoDir, 'coder'),
+    ...getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'),
+  ]);
 }
 
 export function resetWarningState(): void {
