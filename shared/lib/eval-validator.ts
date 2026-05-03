@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline';
-import { SCHEMA_VERSION } from './eval-schema.ts';
+import { BUDGET_MISSING, SCHEMA_VERSION } from './eval-schema.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
 import {
   EVAL_ERROR_CODES,
@@ -21,6 +21,8 @@ const ajv = new Ajv2020({
   validateFormats: false,
 });
 const validateSchema = ajv.compile(evalSchema) as (value: unknown) => boolean;
+
+export { BUDGET_MISSING };
 
 const REQUIRED_FIELDS = [
   'id',

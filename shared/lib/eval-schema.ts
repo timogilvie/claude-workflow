@@ -62,6 +62,11 @@
  * - **1.18.0**: Added optional `routeProvenance` field to `EvalRecord`
  *   (HOK-1517) so eval artifacts retain bootstrap, expanded, and active
  *   execution route attribution for operator-facing comparisons
+ * - **1.19.0**: Added explicit budget eligibility diagnostics (HOK-1497),
+ *   including `budgetEvalEligibilityError` and a stable missing-budget code.
+ * - **1.20.0**: Added optional `enrichmentDiagnostics` field to `EvalRecord`
+ *   (HOK-1495) so shared eval enrichment paths can surface missing metadata
+ *   inputs instead of silently omitting them
  *
  * @module eval-schema
  */
@@ -71,7 +76,7 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.18.0';
+export const SCHEMA_VERSION = '1.20.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -238,10 +243,13 @@ export type InterventionSeverity = 'low' | 'med' | 'high';
 export type EligibilityErrorCode =
   | 'missing_routing'
   | 'missing_cost'
+  | 'missing_budget'
   | 'missing_budget_snapshot'
   | 'missing_outcome'
   | 'missing_task_descriptor'
   | 'missing_model_identity';
+
+export const BUDGET_MISSING: EligibilityErrorCode = 'missing_budget';
 
 /**
  * A single structured intervention event.
@@ -1208,6 +1216,9 @@ export interface EvalRecord {
   /** Whether the record includes the fields required for budget-eval export. */
   budgetEvalEligible?: boolean;
 
+  /** Primary budget-eval eligibility error when budget metadata is absent. */
+  budgetEvalEligibilityError?: EligibilityErrorCode;
+
   /** Stable machine-readable reasons why the record is ineligible for exports. */
   eligibilityErrors?: EligibilityErrorCode[];
 
@@ -1243,6 +1254,9 @@ export interface EvalRecord {
     totalAssistantTurns?: number;
     branchMismatches?: number;
   };
+
+  /** Missing metadata inputs detected during shared training enrichment. */
+  enrichmentDiagnostics?: string[];
 
   /** Snapshot of the pricing table used for workflowCost calculation (HOK-858) */
   pricingSnapshot?: Record<string, ModelPricing>;
