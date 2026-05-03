@@ -146,6 +146,7 @@ export interface EvalConfig {
   judge?: JudgeConfig;
   pricing?: Record<string, PricingEntry>;
   interventionPenalties?: InterventionPenaltiesConfig;
+  successThreshold?: number;
   mintEligibility?: MintEligibilityConfig;
 }
 

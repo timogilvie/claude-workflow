@@ -16,6 +16,7 @@ import { CYAN, GREEN, YELLOW, RED, BOLD, DIM, NC } from './colors.ts';
 // ────────────────────────────────────────────────────────────────
 
 function scoreColor(score: number): string {
+  // Display color bands are intentionally broader than eval-success classification.
   if (score >= 0.8) return GREEN;
   if (score >= 0.5) return YELLOW;
   return RED;

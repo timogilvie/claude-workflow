@@ -341,6 +341,12 @@
                     },
                     "additionalProperties": false
                 },
+                "successThreshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Canonical score threshold used when eval outcomes.success is missing. Defaults to 0.8 when omitted."
+                },
                 "mintEligibility": {
                     "type": "object",
                     "description": "Coverage gates for minting Wavemill router benchmark results into downstream eligibility-sensitive flows.",
