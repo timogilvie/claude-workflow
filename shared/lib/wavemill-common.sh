@@ -1151,6 +1151,113 @@ warn_once_per_session() {
   printf '%s\n' "$warning_key" >> "$warning_file" 2>/dev/null || true
 }
 
+normalize_worktree_path() {
+  local path="$1"
+  local parent_dir base_name
+
+  if [[ -d "$path" ]]; then
+    (cd "$path" && pwd -P)
+    return 0
+  fi
+
+  parent_dir="$(dirname "$path")"
+  base_name="$(basename "$path")"
+  if [[ -d "$parent_dir" ]]; then
+    printf '%s/%s\n' "$(cd "$parent_dir" && pwd -P)" "$base_name"
+    return 0
+  fi
+
+  printf '%s\n' "$path"
+}
+
+ensure_worktree() {
+  local branch="$1"
+  local desired_path="$2"
+  local repo_dir="${3:-$PWD}"
+  local worktree_list="" existing_path="" line="" current_path=""
+  local hook_script agent_name
+  local desired_cmp_path existing_cmp_path
+
+  if ! worktree_list="$(git -C "$repo_dir" worktree list --porcelain 2>/dev/null)"; then
+    echo "Error: failed to inspect git worktree registrations for $branch" >&2
+    if [[ -n "${WAVEMILL_SESSION:-}" && -n "${WAVEMILL_ISSUE:-}" ]] && command -v jq >/dev/null 2>&1; then
+      hook_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)/wavemill-hook-protocol.sh"
+      if ! declare -F wavemill_hook_write >/dev/null 2>&1 && [[ -f "$hook_script" ]]; then
+        # shellcheck source=/dev/null
+        source "$hook_script"
+      fi
+      if declare -F wavemill_hook_write >/dev/null 2>&1; then
+        agent_name="${AGENT_CMD:-${CURRENT_AGENT:-wavemill}}"
+        wavemill_hook_write "error" "worktree-setup" "worktree-collision" "$agent_name" || true
+      fi
+    fi
+    return 1
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      worktree\ *)
+        current_path="${line#worktree }"
+        ;;
+      branch\ refs/heads/*)
+        if [[ "${line#branch refs/heads/}" == "$branch" ]]; then
+          existing_path="$current_path"
+          break
+        fi
+        ;;
+      "")
+        current_path=""
+        ;;
+    esac
+  done <<< "$worktree_list"
+
+  desired_cmp_path="$(normalize_worktree_path "$desired_path")"
+
+  if [[ -z "$existing_path" ]]; then
+    git -C "$repo_dir" worktree add "$desired_path" "$branch" >/dev/null || return 1
+    printf '%s\n' "$desired_path"
+    return 0
+  fi
+
+  existing_cmp_path="$(normalize_worktree_path "$existing_path")"
+
+  if [[ "$existing_cmp_path" == "$desired_cmp_path" ]]; then
+    if [[ -d "$existing_path" ]]; then
+      printf '%s\n' "$desired_path"
+      return 0
+    fi
+    echo "Detected stale worktree registration for $branch at $desired_path; pruning" >&2
+  else
+    if [[ -d "$existing_path" ]]; then
+      echo "Reusing existing worktree for $branch at $existing_path" >&2
+      printf '%s\n' "$existing_path"
+      return 0
+    fi
+    echo "Detected stale worktree registration for $branch at $existing_path; recreating at $desired_path" >&2
+  fi
+
+  if ! git -C "$repo_dir" worktree prune >/dev/null; then
+    echo "Error: failed to prune stale worktree registration for $branch" >&2
+  elif git -C "$repo_dir" worktree add "$desired_path" "$branch" >/dev/null; then
+    printf '%s\n' "$desired_path"
+    return 0
+  fi
+
+  echo "Error: failed to prepare worktree for $branch" >&2
+  if [[ -n "${WAVEMILL_SESSION:-}" && -n "${WAVEMILL_ISSUE:-}" ]] && command -v jq >/dev/null 2>&1; then
+    hook_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)/wavemill-hook-protocol.sh"
+    if ! declare -F wavemill_hook_write >/dev/null 2>&1 && [[ -f "$hook_script" ]]; then
+      # shellcheck source=/dev/null
+      source "$hook_script"
+    fi
+    if declare -F wavemill_hook_write >/dev/null 2>&1; then
+      agent_name="${AGENT_CMD:-${CURRENT_AGENT:-wavemill}}"
+      wavemill_hook_write "error" "worktree-setup" "worktree-collision" "$agent_name" || true
+    fi
+  fi
+  return 1
+}
+
 wavemill_lock_run() {
   local lock_name="$1"
   shift
