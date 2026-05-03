@@ -258,14 +258,15 @@ export function mergeEdges(
 
   const deduped = new Map<string, CachedEdge>();
   for (const edge of [...retained, ...validFresh]) {
-    const existing = deduped.get(`${edge.from}\u0000${edge.to}`);
+    const key = `${edge.type ?? 'depends_on'}\u0000${edge.from}\u0000${edge.to}`;
+    const existing = deduped.get(key);
     if (!existing) {
-      deduped.set(`${edge.from}\u0000${edge.to}`, edge);
+      deduped.set(key, edge);
       continue;
     }
 
     if (existing.classifiedAt <= edge.classifiedAt) {
-      deduped.set(`${edge.from}\u0000${edge.to}`, edge);
+      deduped.set(key, edge);
     }
   }
 
