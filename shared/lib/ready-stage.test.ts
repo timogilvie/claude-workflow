@@ -23,6 +23,8 @@ import {
 } from './ready-stage.ts';
 import * as readyStage from './ready-stage.ts';
 
+const migrationFixturesDir = path.resolve(process.cwd(), 'tests/fixtures/migrations');
+
 function assertIso8601(timestamp: string) {
   assert.match(
     timestamp,
@@ -38,6 +40,10 @@ async function writeRepoFiles(repoDir: string, files: Record<string, string>) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, 'utf-8');
   }
+}
+
+async function loadMigrationFixture(name: string): Promise<string> {
+  return fs.readFile(path.join(migrationFixturesDir, name), 'utf-8');
 }
 
 describe('ready-stage', () => {
@@ -1432,6 +1438,55 @@ describe('ready-stage', () => {
       try {
         const result = await runReadyStage({ prNumber: 42, repoDir });
         assert.deepEqual(result.checks.map(check => check.name), ['ci-status']);
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('can run only the migration-reversibility check through the allowlist', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            checks: ['migration-reversibility'],
+            requiredChecks: ['migration-reversibility'],
+          },
+        }),
+        'alembic/versions/001_bad.py': await loadMigrationFixture('downgrade_pass.py'),
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+            });
+          }
+
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [{ path: 'alembic/versions/001_bad.py' }],
+            labels: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return '';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.deepEqual(result.checks.map(check => check.name), ['migration-reversibility']);
+        assert.equal(result.checks[0]?.status, 'fail');
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });

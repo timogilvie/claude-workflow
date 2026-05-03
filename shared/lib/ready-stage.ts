@@ -127,6 +127,7 @@ interface PRContext {
   prNumber: number;
   diff: string;
   changedFiles: string[];
+  labels: string[];
   branch: string;
   baseBranch: string;
   url: string;
@@ -236,6 +237,39 @@ function getMigrationPatternsOrCheck(patternSources: string[], checkName: string
 
 function findMigrationFiles(changedFiles: string[], migrationPatterns: RegExp[]): string[] {
   return changedFiles.filter(file => migrationPatterns.some(pattern => pattern.test(file)));
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function findDowngradeProblem(statements: MigrationStatementKind[]): string | null {
+  const meaningfulStatements = statements.filter(statement => statement !== 'docstring');
+  if (meaningfulStatements.length === 0) {
+    return 'downgrade body only contains a docstring';
+  }
+
+  if (meaningfulStatements.every(statement => statement === 'pass')) {
+    return 'downgrade body only contains pass statements';
+  }
+
+  if (meaningfulStatements.every(statement =>
+    statement === 'pass' || statement === 'raise-not-implemented')) {
+    return 'downgrade body is non-functional (pass or NotImplementedError only)';
+  }
+
+  return null;
+}
+
+function findDestructiveUpgradeOps(parsedMigration: ParsedMigrationFile): string[] {
+  return parsedMigration.upgrade.opCalls
+    .map(opCall => opCall.functionName)
+    .filter(functionName => functionName === 'drop_column' || functionName === 'drop_table');
 }
 
 async function collectMigrationFiles(repoDir: string, migrationPatterns: RegExp[]): Promise<string[]> {
@@ -422,11 +456,11 @@ async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRCon
       prNumber,
       diff,
       changedFiles,
+      labels,
       branch: prData.headRefName,
       baseBranch: prData.baseRefName,
       url: prData.url,
       ciStatus,
-      labels,
     };
   } catch (error) {
     if (error instanceof Error) {
