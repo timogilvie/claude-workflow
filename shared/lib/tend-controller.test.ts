@@ -576,6 +576,54 @@ describe('executeMerge', () => {
     }
   });
 
+  it('queries gh pr checks with bucket, not the removed conclusion field', async () => {
+    // gh CLI ≥ 2.72.0 removed `conclusion` from `gh pr checks --json`'s
+    // accepted fields. Asking for it now fails the whole call with
+    // "Unknown JSON field: conclusion". We must request `bucket` instead
+    // and synthesize a conclusion-shaped value internally.
+    const options = buildMergeTestOptions();
+    try {
+      await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      const checksCall = options.calls.find((c) => c.startsWith('gh pr checks'));
+      assert.ok(checksCall, 'expected at least one gh pr checks call');
+      assert.match(checksCall, /--json [^ ]*\bbucket\b/);
+      assert.ok(
+        !/--json [^ ]*\bconclusion\b/.test(checksCall),
+        'expected `conclusion` to no longer be requested',
+      );
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('treats checks as passing when only bucket is present (post-2.72.0 gh shape)', async () => {
+    // Simulate the new gh CLI output shape where conclusion is absent and
+    // bucket carries the categorization. Without the bucket→conclusion
+    // synthesis, the merge would never reach `pass` and would block on
+    // the "all checks passing" gate.
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        const calls = options.calls;
+        calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('gh pr checks')) {
+          // New gh shape: only `bucket` and `state`, no `conclusion`.
+          return JSON.stringify([{ name: 'ci', state: 'SUCCESS', bucket: 'pass' }]);
+        }
+        return '';
+      },
+    });
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+      assert.equal(result.status, 'merged');
+    } finally {
+      options.cleanup();
+    }
+  });
+
   it('blocks and comments when rebase fails', async () => {
     const options = buildMergeTestOptions();
     const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {

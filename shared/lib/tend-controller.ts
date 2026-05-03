@@ -507,8 +507,12 @@ export async function waitForChecks(
   const deadline = Date.now() + timeoutMs;
 
   while (true) {
+    // gh CLI removed the `conclusion` field from `gh pr checks --json`
+    // (gh ≥ 2.72.0). Use `bucket` (gh's pre-categorized pass/fail/pending)
+    // and `state`. parseCheckRuns synthesizes a `conclusion`-shaped field
+    // so downstream comparison logic keeps working without churn.
     const output = shellRunner(
-      `gh pr checks ${prNumber} --json name,state,conclusion`,
+      `gh pr checks ${prNumber} --json name,state,bucket`,
       { encoding: 'utf-8', cwd: repoDir },
     );
     const checks = parseCheckRuns(output);
@@ -630,12 +634,31 @@ function defaultLoserCleanup(prNumber: number, repoDir: string): void {
   );
 }
 
-function parseCheckRuns(output: string): Array<{ name?: string; state?: string | null; conclusion?: string | null }> {
+function parseCheckRuns(output: string): Array<{ name?: string; state?: string | null; conclusion?: string | null; bucket?: string | null }> {
   const parsed = JSON.parse(String(output)) as unknown;
   if (!Array.isArray(parsed)) {
     throw new Error('tend: gh pr checks returned non-array JSON');
   }
-  return parsed as Array<{ name?: string; state?: string | null; conclusion?: string | null }>;
+  // Synthesize a `conclusion`-shaped value from `bucket` when conclusion is
+  // absent (gh ≥ 2.72.0). Downstream isFailingCheck/isPassingCheck/summarize
+  // code reads `conclusion` directly; mapping at the boundary keeps them
+  // unchanged.
+  return (parsed as Array<{ name?: string; state?: string | null; conclusion?: string | null; bucket?: string | null }>)
+    .map((entry) => ({
+      ...entry,
+      conclusion: entry.conclusion ?? bucketToConclusion(entry.bucket),
+    }));
+}
+
+function bucketToConclusion(bucket: string | null | undefined): string | null {
+  switch (bucket) {
+    case 'pass': return 'success';
+    case 'fail': return 'failure';
+    case 'skipping': return 'skipped';
+    case 'cancel': return 'cancelled';
+    case 'pending': return null;  // still in flight
+    default: return null;
+  }
 }
 
 function isFailingCheck(check: { state?: string | null; conclusion?: string | null }): boolean {
