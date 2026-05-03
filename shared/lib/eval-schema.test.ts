@@ -1303,7 +1303,8 @@ test('Eligibility fields validate and schema stays in parity', () => {
     schemaVersion: '1.14.0',
     trainingEligible: false,
     budgetEvalEligible: true,
-    eligibilityErrors: ['missing_model_identity', 'missing_routing'],
+    budgetEvalEligibilityError: 'missing_budget',
+    eligibilityErrors: ['missing_budget', 'missing_model_identity', 'missing_routing'],
   };
 
   const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
@@ -1312,9 +1313,11 @@ test('Eligibility fields validate and schema stays in parity', () => {
   const properties = schema.properties as Record<string, Record<string, unknown>>;
   assert.equal(properties.trainingEligible?.type, 'boolean');
   assert.equal(properties.budgetEvalEligible?.type, 'boolean');
+  assert.equal(properties.budgetEvalEligibilityError?.type, 'string');
   assert.deepEqual(properties.eligibilityErrors?.items?.enum, [
     'missing_routing',
     'missing_cost',
+    'missing_budget',
     'missing_budget_snapshot',
     'missing_outcome',
     'missing_task_descriptor',
@@ -1435,8 +1438,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.18.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.18.0');
+test('Schema version constant is 1.19.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.19.0');
 });
 
 test('Legacy rows still validate without nonRewardReason', () => {
