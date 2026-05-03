@@ -414,6 +414,7 @@ write_launch_plan() {
     --arg dryRun "$DRY_RUN" \
     --arg projectName "$PROJECT_NAME" \
     --arg autoEval "$AUTO_EVAL" \
+    --arg enterLaunchesWave "${ENTER_LAUNCHES_WAVE:-true}" \
     --arg dashboardVerbosity "$DASHBOARD_VERBOSITY" \
     --arg dashboardLogToFile "$DASHBOARD_LOG_TO_FILE" \
     --arg millLogFile "$MILL_LOG_FILE" \
@@ -447,6 +448,7 @@ write_launch_plan() {
         dryRun: ($dryRun == "true"),
         projectName: $projectName,
         autoEval: ($autoEval == "true"),
+        enterLaunchesWave: ($enterLaunchesWave == "true"),
         dashboardVerbosity: $dashboardVerbosity,
         dashboardLogToFile: ($dashboardLogToFile == "true")
       }
@@ -888,6 +890,48 @@ smart_select_from_candidates() {
   fi
 }
 
+build_queue_plan_once() {
+  local backlog_json="$1"
+  local plan_input queue_plan
+
+  plan_input=$(jq -c '
+    map({
+      id: .identifier,
+      title: .title,
+      sharedSurface: ((.sharedSurface // []) | sort),
+      dependsOn: (
+        (.inverseRelations.nodes // [])
+        | map(select(.type == "blocks" and .issue.identifier != null) | .issue.identifier)
+        | sort
+      )
+    })
+  ' <<<"$backlog_json" 2>/dev/null) || return 1
+
+  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || return 1
+  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || return 1
+  echo "$queue_plan"
+}
+
+invoke_first_wave_helper() {
+  local queue_plan="$1" candidates="$2" max_parallel="${3:-$MAX_PARALLEL}"
+  [[ -z "$queue_plan" ]] && return 1
+
+  local tasks_json input_json
+  tasks_json=$(awk -F'|' 'NF >= 5 && $1 != "" {
+    id = $1
+    gsub(/"/, "\\\"", id)
+    printf "{\"id\":\"%s\",\"score\":%s}\n", id, ($5 + 0)
+  }' <<<"$candidates" | jq -s '.') || return 1
+
+  input_json=$(jq -n \
+    --argjson p "$queue_plan" \
+    --argjson t "$tasks_json" \
+    --argjson m "$max_parallel" \
+    '{"plan": $p, "tasks": $t, "maxParallel": ($m | tonumber)}') || return 1
+
+  printf '%s\n' "$input_json" | _with_timeout 10 npx tsx "$TOOLS_DIR/select-wave.ts" 2>/dev/null
+}
+
 
 # ============================================================================
 # GITHUB API WITH RETRY AND VALIDATION
@@ -1281,6 +1325,8 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
   # pick_candidates() outputs 6 fields (has_detailed_plan is stripped), so field 6 is blocked_by_count
   UNBLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 == 0 || $6 == ""')
   BLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 > 0')
+  WAVE_LAUNCH_LINES=""
+  WAVE_LAUNCH_USED=false
   BLOCKED_COUNT=0
   [[ -n "$BLOCKED" ]] && BLOCKED_COUNT=$(echo "$BLOCKED" | grep -c .)
   SHOW_BLOCKED_TASKS=false
@@ -1334,15 +1380,15 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
     fi
     if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
       if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, q to quit, or Enter to auto-select first $STARTUP_SLOT_LIMIT:"
+        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, q to quit, or Enter to launch recommended wave:"
       else
-        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, q to quit, or Enter to auto-select first $STARTUP_SLOT_LIMIT:"
+        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, q to quit, or Enter to launch recommended wave:"
       fi
     else
       if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-        echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to auto-select first $STARTUP_SLOT_LIMIT:"
+        echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to launch recommended wave:"
       else
-        echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to auto-select first $STARTUP_SLOT_LIMIT:"
+        echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to launch recommended wave:"
       fi
     fi
     read -r SELECTED
@@ -1371,15 +1417,40 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
       exit 0
     fi
 
-    if [[ -z "$SELECTED" ]] && [[ -n "$UNBLOCKED" ]]; then
-      CANDIDATES="$UNBLOCKED"
+    if [[ -z "$SELECTED" ]]; then
+      if [[ "${ENTER_LAUNCHES_WAVE:-true}" == "true" ]]; then
+        WAVE_LAUNCH_USED=true
+        startup_queue_plan=$(build_queue_plan_once "$BACKLOG" 2>/dev/null) || startup_queue_plan=""
+        if [[ -n "$startup_queue_plan" ]]; then
+          wave_result=$(invoke_first_wave_helper "$startup_queue_plan" "$UNBLOCKED" "$STARTUP_SLOT_LIMIT" 2>/dev/null) || wave_result=""
+          wave_ids=$(jq -r '.wave[]?' <<<"$wave_result" 2>/dev/null) || wave_ids=""
+          deferred_ids=$(jq -r '.deferred[]?' <<<"$wave_result" 2>/dev/null) || deferred_ids=""
+          [[ -n "$deferred_ids" ]] && log "info" "[wave-launch] deferred: $(tr '\n' ',' <<<"$deferred_ids" | sed 's/,$//')"
+          while IFS= read -r wid; do
+            [[ -z "$wid" ]] && continue
+            wline=$(grep -m1 "^${wid}|" <<<"$UNBLOCKED" 2>/dev/null || echo "")
+            [[ -n "$wline" ]] && WAVE_LAUNCH_LINES+="${wline}"$'\n'
+          done <<<"$wave_ids"
+          if [[ -z "$wave_ids" ]]; then
+            log "status" "No tasks currently available, waiting on dependencies."
+          fi
+        else
+          WAVE_LAUNCH_USED=false
+          [[ -n "$UNBLOCKED" ]] && CANDIDATES="$UNBLOCKED"
+        fi
+      elif [[ -n "$UNBLOCKED" ]]; then
+        CANDIDATES="$UNBLOCKED"
+      fi
     fi
 
     break
   done
 
-  # Use smart selection
-  SELECTED_LINES="$(smart_select_from_candidates "$CANDIDATES" "$SELECTED")"
+  if [[ "$WAVE_LAUNCH_USED" == "true" ]]; then
+    SELECTED_LINES="${WAVE_LAUNCH_LINES%$'\n'}"
+  else
+    SELECTED_LINES="$(smart_select_from_candidates "$CANDIDATES" "$SELECTED")"
+  fi
   while IFS= read -r line; do
     [[ -n "$line" ]] && TASKS+=("$line")
   done <<<"$SELECTED_LINES"
@@ -4567,6 +4638,16 @@ fetch_queue_plan() {
   fi
 
   [[ -n "$BACKLOG_JSON_CACHE" ]] || return 1
+  queue_plan=$(build_queue_plan_once "$BACKLOG_JSON_CACHE") || return 1
+
+  QUEUE_PLAN_CACHE="$queue_plan"
+  LAST_QUEUE_PLAN_FETCH=$now
+  echo "$QUEUE_PLAN_CACHE"
+}
+
+build_queue_plan_once() {
+  local backlog_json="$1"
+  local plan_input queue_plan
 
   plan_input=$(jq -c '
     map({
@@ -4579,20 +4660,31 @@ fetch_queue_plan() {
         | sort
       )
     })
-  ' <<<"$BACKLOG_JSON_CACHE" 2>/dev/null) || return 1
+  ' <<<"$backlog_json" 2>/dev/null) || return 1
 
   queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || return 1
+  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || return 1
+  echo "$queue_plan"
+}
 
-  jq -e '
-    has("availableNow")
-    and has("queuedAfterDependencies")
-    and has("avoidRunningTogether")
-    and has("needsTriage")
-  ' >/dev/null 2>&1 <<<"$queue_plan" || return 1
+invoke_first_wave_helper() {
+  local queue_plan="$1" candidates="$2" max_parallel="${3:-$MAX_PARALLEL}"
+  [[ -z "$queue_plan" ]] && return 1
 
-  QUEUE_PLAN_CACHE="$queue_plan"
-  LAST_QUEUE_PLAN_FETCH=$now
-  echo "$QUEUE_PLAN_CACHE"
+  local tasks_json input_json
+  tasks_json=$(awk -F'|' 'NF >= 5 && $1 != "" {
+    id = $1
+    gsub(/"/, "\\\"", id)
+    printf "{\"id\":\"%s\",\"score\":%s}\n", id, ($5 + 0)
+  }' <<<"$candidates" | jq -s '.') || return 1
+
+  input_json=$(jq -n \
+    --argjson p "$queue_plan" \
+    --argjson t "$tasks_json" \
+    --argjson m "$max_parallel" \
+    '{"plan": $p, "tasks": $t, "maxParallel": ($m | tonumber)}') || return 1
+
+  printf '%s\n' "$input_json" | _with_timeout 10 npx tsx "$TOOLS_DIR/select-wave.ts" 2>/dev/null
 }
 
 render_grouped_task_list() {
@@ -7040,11 +7132,11 @@ while :; do
           fi
           echo ""
           if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
-            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
           elif (( avail_blocked_count > 0 )); then
-            echo "Enter number(s) to start (e.g. 1 3), 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
           else
-            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
           fi
           LAST_DISPLAY="$display_fingerprint"
           LAST_ACTIVE_COUNT=$active_count
@@ -7063,6 +7155,7 @@ while :; do
         REPLY=""
         if consume_next_command; then
           case "$REPLY" in
+            enter) ;;
             select\ *) REPLY="${REPLY#select }" ;;
             more) REPLY="m" ;;
             quit) REPLY="q" ;;
@@ -7104,6 +7197,38 @@ while :; do
           fi
         elif [[ "$REPLY" =~ ^unknown\  ]]; then
           log_warn "Unknown input: ${REPLY#unknown }"
+        elif [[ "$REPLY" == "enter" ]]; then
+          if [[ "${ENTER_LAUNCHES_WAVE:-true}" == "true" ]] && [[ -n "$QUEUE_PLAN_CACHE" ]]; then
+            wave_result=$(invoke_first_wave_helper "$QUEUE_PLAN_CACHE" "$avail_unblocked" "$free_slots" 2>/dev/null) || wave_result=""
+            if [[ -n "$wave_result" ]]; then
+              wave_ids=$(jq -r '.wave[]?' <<<"$wave_result" 2>/dev/null) || wave_ids=""
+              deferred_ids=$(jq -r '.deferred[]?' <<<"$wave_result" 2>/dev/null) || deferred_ids=""
+              if [[ -z "$wave_ids" ]]; then
+                log "status" "No tasks currently available, waiting on dependencies."
+              else
+                [[ -n "$deferred_ids" ]] && log "debug" "[wave-launch] deferred=$(tr '\n' ',' <<<"$deferred_ids" | sed 's/,$//')"
+                wave_selected_lines=""
+                while IFS= read -r wid; do
+                  [[ -z "$wid" ]] && continue
+                  wline=$(grep -m1 "^${wid}|" <<<"$avail_unblocked" 2>/dev/null || echo "")
+                  [[ -n "$wline" ]] && wave_selected_lines+="${wline}"$'\n'
+                done <<<"$wave_ids"
+                if [[ -n "$wave_selected_lines" ]]; then
+                  launched=0
+                  while IFS= read -r local_line; do
+                    [[ -z "$local_line" ]] && continue
+                    (( launched >= free_slots )) && break
+                    IFS='|' read -r sel_issue sel_slug sel_title _rest <<<"$local_line"
+                    launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+                    launched=$((launched + LAST_LAUNCHED_SLOTS))
+                  done <<<"$wave_selected_lines"
+                  LAST_BACKLOG_FETCH=0; LAST_DISPLAY=""; SELECT_SHOW_ALL=false
+                  USING_GROUPED_VIEW=false
+                  clear_task_list_display
+                fi
+              fi
+            fi
+          fi
         elif [[ -n "$REPLY" ]]; then
           if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
             select_from="$GROUPED_SELECT_FROM"
