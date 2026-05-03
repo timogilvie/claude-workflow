@@ -17,6 +17,7 @@ import {
 import {
   cachedEdgesToDependencyEdges,
   computeBacklogDiff,
+  computeTaskFingerprint,
   getCacheStats,
   loadCache,
   mergeEdges,
@@ -200,13 +201,15 @@ runTool({
         template: promptTemplate,
       });
       const llmResult = await callLLM(prompt, { taskType: 'classify', repoDir: process.cwd() });
-      const fingerprintMap = new Map(Object.entries(cacheAfterPrune.fingerprints));
+      const currentFingerprints = Object.fromEntries(fingerprintTasks.map((t) => [t.id, computeTaskFingerprint(t)]));
+      const fingerprintMap = new Map([...Object.entries(cacheAfterPrune.fingerprints), ...Object.entries(currentFingerprints)]);
       const freshEdges = parseQueueAnalysisEdges(llmResult.text, changedTaskIds, fingerprintMap);
       const mergedCachedEdges = mergeEdges(cacheAfterPrune.edges, freshEdges, { changedTaskIds, removedTaskIds });
       inferredEdges = cachedEdgesToDependencyEdges(mergedCachedEdges);
       cacheToSave = {
         ...cacheAfterPrune,
         edges: mergedCachedEdges,
+        fingerprints: currentFingerprints,
       };
     }
 
