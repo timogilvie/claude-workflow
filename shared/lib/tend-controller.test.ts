@@ -533,6 +533,49 @@ describe('executeMerge', () => {
     }
   });
 
+  it('uses a detached scratch worktree so it does not fight mill task worktrees', async () => {
+    // Mill's task worktree at worktrees/<slug>/ already holds the PR branch
+    // checked out. Tend's scratch worktree must NOT try to check it out by
+    // name — git only allows a branch in one worktree at a time. The fix:
+    // `git worktree add --detach <path> origin/<branch>` so HEAD is detached.
+    const options = buildMergeTestOptions();
+    try {
+      await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      // The worktree-add command must include --detach and the origin/ ref,
+      // not just the branch name.
+      assert.ok(
+        hasCall(options.calls, /git worktree add --detach .* 'origin\/task\/merge-me'/),
+        'expected: git worktree add --detach <path> origin/<branch>',
+      );
+
+      // The PR branch must be fetched before the worktree-add so origin/<branch>
+      // is fresh.
+      assert.ok(
+        hasCall(options.calls, /git fetch origin 'task\/merge-me'/),
+        'expected: git fetch origin <branch> before scratch worktree creation',
+      );
+
+      // The push must use HEAD:<branch> syntax because we are operating from
+      // a detached HEAD.
+      assert.ok(
+        hasCall(options.calls, /git push --force-with-lease=.* origin HEAD:'task\/merge-me'/),
+        'expected: git push ... origin HEAD:<branch>',
+      );
+
+      // The legacy form (which would break on a detached HEAD) must NOT appear.
+      assert.ok(
+        !options.calls.some((cmd) =>
+          /git push --force-with-lease=[^ ]+ origin 'task\/merge-me'/.test(cmd) &&
+          !cmd.includes('HEAD:')
+        ),
+        'expected legacy `git push origin <branch>` form to be replaced',
+      );
+    } finally {
+      options.cleanup();
+    }
+  });
+
   it('blocks and comments when rebase fails', async () => {
     const options = buildMergeTestOptions();
     const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {

@@ -143,7 +143,14 @@ if [[ "${1:-}" == "rev-parse" && "${2:-}" == origin/* ]]; then
 fi
 
 if [[ "${1:-}" == "worktree" && "${2:-}" == "add" ]]; then
-  mkdir -p "${3:-}"
+  # Skip the optional --detach flag so we always pluck the worktree path
+  # whether the caller is `git worktree add <path> <branch>` or
+  # `git worktree add --detach <path> <ref>`.
+  shift 2
+  if [[ "${1:-}" == "--detach" ]]; then
+    shift
+  fi
+  mkdir -p "${1:-}"
   exit 0
 fi
 
