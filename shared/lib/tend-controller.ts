@@ -392,13 +392,30 @@ async function withScratchWorktree<T>(
   fn: (worktreePath: string) => Promise<T>,
   shellRunner: MergeExecutionDeps['shellRunner'],
 ): Promise<T> {
+  validateBranchName(prBranch, 'PR branch');
+
   const commonGitDir = String(shellRunner('git rev-parse --git-common-dir', {
     encoding: 'utf-8',
     cwd: repoDir,
   })).trim();
   const worktreePath = join(commonGitDir, 'wavemill-tend', String(prNumber));
+
+  // Fetch the latest remote tip for the PR branch so the detached worktree
+  // operates on what GitHub considers the branch's current state, not a
+  // possibly-stale local ref.
   shellRunner(
-    `git worktree add ${escapeShellArg(worktreePath)} ${escapeShellArg(prBranch)}`,
+    `git fetch origin ${escapeShellArg(prBranch)} 2>&1`,
+    { encoding: 'utf-8', cwd: repoDir },
+  );
+
+  // Use --detach so this worktree gets a detached HEAD at the PR's remote
+  // tip rather than checking out the branch by name. Mill creates its own
+  // task worktree that already holds <prBranch> checked out, and git refuses
+  // to check out the same branch in two worktrees. Tend doesn't need branch
+  // ownership — it just needs the tree at that commit so it can rebase and
+  // push back to origin's <prBranch> ref by name (see rebaseAndPush).
+  shellRunner(
+    `git worktree add --detach ${escapeShellArg(worktreePath)} ${escapeShellArg(`origin/${prBranch}`)}`,
     { encoding: 'utf-8', cwd: repoDir },
   );
 
@@ -468,8 +485,13 @@ function rebaseAndPush(
     throw error;
   }
 
+  // Push the rebased commits back to origin's <prBranch>. We use HEAD:<branch>
+  // syntax because withScratchWorktree intentionally checks out a detached
+  // HEAD (so it doesn't fight mill's task worktree for branch ownership).
+  // --force-with-lease still keys on origin's pre-rebase SHA — that doesn't
+  // depend on local branch ownership.
   output.push(String(shellRunner(
-    `git push --force-with-lease=${escapeShellArg(prBranch)}:${escapeShellArg(prBranchSha)} origin ${escapeShellArg(prBranch)} 2>&1`,
+    `git push --force-with-lease=${escapeShellArg(prBranch)}:${escapeShellArg(prBranchSha)} origin HEAD:${escapeShellArg(prBranch)} 2>&1`,
     { encoding: 'utf-8', cwd: worktreePath },
   )));
 
