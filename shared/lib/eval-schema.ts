@@ -64,6 +64,9 @@
  *   execution route attribution for operator-facing comparisons
  * - **1.19.0**: Added explicit budget eligibility diagnostics (HOK-1497),
  *   including `budgetEvalEligibilityError` and a stable missing-budget code.
+ * - **1.20.0**: Added optional `enrichmentDiagnostics` field to `EvalRecord`
+ *   (HOK-1495) so shared eval enrichment paths can surface missing metadata
+ *   inputs instead of silently omitting them
  *
  * @module eval-schema
  */
@@ -73,7 +76,7 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.19.0';
+export const SCHEMA_VERSION = '1.20.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -1251,6 +1254,9 @@ export interface EvalRecord {
     totalAssistantTurns?: number;
     branchMismatches?: number;
   };
+
+  /** Missing metadata inputs detected during shared training enrichment. */
+  enrichmentDiagnostics?: string[];
 
   /** Snapshot of the pricing table used for workflowCost calculation (HOK-858) */
   pricingSnapshot?: Record<string, ModelPricing>;

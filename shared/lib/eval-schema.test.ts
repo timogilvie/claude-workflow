@@ -1323,6 +1323,8 @@ test('Eligibility fields validate and schema stays in parity', () => {
     'missing_task_descriptor',
     'missing_model_identity',
   ]);
+  assert.equal(properties.enrichmentDiagnostics?.type, 'array');
+  assert.equal(properties.enrichmentDiagnostics?.items?.type, 'string');
 });
 
 test('challengeRouteContext remains optional for legacy records', () => {
@@ -1438,8 +1440,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.19.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.19.0');
+test('Schema version constant is 1.20.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.20.0');
 });
 
 test('Legacy rows still validate without nonRewardReason', () => {
