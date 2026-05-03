@@ -18,7 +18,13 @@
 import { execShellCommand, escapeShellArg } from './shell-utils.ts';
 import { extractReleaseReadiness, type ReleaseReadiness } from './task-packet-utils.ts';
 import { DEFAULT_READY_MIGRATION_PATTERNS, getReadyConfig } from './config.ts';
-import { parseMigrationFile, type MigrationStatementKind, type ParsedMigrationFile } from './migration-ast.ts';
+import {
+  classifyDowngradeBody,
+  extractOperationCalls,
+  getMigrationFunction,
+  parseMigrationFile,
+  type DowngradeClassification,
+} from './migration-ast.ts';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -279,30 +285,6 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-function findDowngradeProblem(statements: MigrationStatementKind[]): string | null {
-  const meaningfulStatements = statements.filter(statement => statement !== 'docstring');
-  if (meaningfulStatements.length === 0) {
-    return 'downgrade body only contains a docstring';
-  }
-
-  if (meaningfulStatements.every(statement => statement === 'pass')) {
-    return 'downgrade body only contains pass statements';
-  }
-
-  if (meaningfulStatements.every(statement =>
-    statement === 'pass' || statement === 'raise-not-implemented')) {
-    return 'downgrade body is non-functional (pass or NotImplementedError only)';
-  }
-
-  return null;
-}
-
-function findDestructiveUpgradeOps(parsedMigration: ParsedMigrationFile): string[] {
-  return parsedMigration.upgrade.opCalls
-    .map(opCall => opCall.functionName)
-    .filter(functionName => functionName === 'drop_column' || functionName === 'drop_table');
-}
-
 async function collectMigrationFiles(repoDir: string, migrationPatterns: RegExp[]): Promise<string[]> {
   const matchedFiles: string[] = [];
   const pendingDirs = [repoDir];
@@ -461,10 +443,12 @@ async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRCon
 
     // Extract changed files from JSON
     const changedFiles: string[] = prData.files?.map((f: any) => f.path) || [];
+
+    // Normalize labels; defaults to [] when gh response omits the field.
     const labels: string[] = Array.isArray(prData.labels)
       ? prData.labels
-        .map((label: any) => typeof label?.name === 'string' ? label.name : null)
-        .filter((label: string | null): label is string => label !== null)
+          .map((label: any) => (typeof label?.name === 'string' ? label.name : null))
+          .filter((name: string | null): name is string => name !== null)
       : [];
 
     // Fetch CI status
@@ -1110,11 +1094,68 @@ export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyC
   };
 }
 
+/**
+ * PR label that explicitly accepts an irreversible migration.
+ *
+ * When applied to the PR, hard reversibility failures (empty / docstring-only /
+ * NotImplementedError downgrades) are recorded but converted to a `pass` so the
+ * choice is documented rather than silently allowed.
+ */
+export const MIGRATION_IRREVERSIBLE_LABEL = 'migration:irreversible';
+
+/**
+ * Alembic operations in `upgrade()` that destroy data even if `downgrade()`
+ * recreates the schema. Listed here for the soft warning emitted by
+ * `checkMigrationReversibility`.
+ */
+const DESTRUCTIVE_UPGRADE_OPERATIONS = ['op.drop_column', 'op.drop_table'] as const;
+
+type MigrationFailureReason =
+  | 'parse-error'
+  | 'missing-downgrade'
+  | 'empty-pass'
+  | 'empty-docstring'
+  | 'not-implemented';
+
+interface MigrationReversibilityFailure {
+  file: string;
+  reason: MigrationFailureReason;
+  classification?: DowngradeClassification;
+  message: string;
+}
+
+interface MigrationReversibilityWarning {
+  file: string;
+  destructiveOperations: string[];
+  classification: DowngradeClassification;
+}
+
+const MIGRATION_FAILURE_MESSAGES: Record<MigrationFailureReason, string> = {
+  'parse-error': 'Migration file could not be parsed by python3 ast',
+  'missing-downgrade': 'Migration file has no downgrade() function',
+  'empty-pass': 'Migration downgrade() body is only "pass"',
+  'empty-docstring': 'Migration downgrade() body is only a docstring',
+  'not-implemented': 'Migration downgrade() raises NotImplementedError',
+};
+
+/**
+ * Check that every changed migration file has a real, executable `downgrade()`.
+ *
+ * Fails when any migration in the PR has a downgrade body that is `pass`,
+ * docstring-only, or `raise NotImplementedError`. Operators can document a
+ * deliberate decision by applying the `migration:irreversible` label, which
+ * converts the failure into a passing check while preserving the override
+ * record in `details.overriddenFailures`.
+ *
+ * Even with a non-trivial downgrade, the check emits a soft warning when the
+ * upgrade contains `op.drop_column` or `op.drop_table` because data loss is
+ * not recoverable by `add_column` / `create_table`.
+ */
 export async function checkMigrationReversibility(
   changedFiles: string[],
   repoDir: string,
-  prLabels: string[] = [],
-  migrationPatternSources: string[] = getReadyConfig(repoDir).migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS]
+  labels: string[],
+  migrationPatternSources: string[] = [...DEFAULT_READY_MIGRATION_PATTERNS]
 ): Promise<ReadyCheck> {
   const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
     migrationPatternSources,
@@ -1124,105 +1165,111 @@ export async function checkMigrationReversibility(
     return migrationPatternsOrCheck;
   }
 
-  const migrationFilesChanged = findMigrationFiles(changedFiles, migrationPatternsOrCheck);
-  if (migrationFilesChanged.length === 0) {
+  const migrationFiles = findMigrationFiles(changedFiles, migrationPatternsOrCheck);
+  if (migrationFiles.length === 0) {
     return {
       name: 'migration-reversibility',
       status: 'skip',
-      message: 'No migration files changed',
+      message: 'No migration files changed in this PR',
       details: {},
     };
   }
 
-  const parsedMigrations: Array<{ file: string; parsed: ParsedMigrationFile }> = [];
-  try {
-    for (const relativeFile of migrationFilesChanged) {
-      const filePath = path.join(repoDir, relativeFile);
-      if (!(await fileExists(filePath))) {
-        continue;
-      }
+  const failures: MigrationReversibilityFailure[] = [];
+  const warnings: MigrationReversibilityWarning[] = [];
 
-      const parsed = await parseMigrationFile(filePath);
-      if (!parsed) {
-        continue;
-      }
-
-      parsedMigrations.push({ file: relativeFile, parsed });
+  for (const file of migrationFiles) {
+    const absolutePath = path.isAbsolute(file) ? file : path.join(repoDir, file);
+    const parsed = parseMigrationFile(absolutePath);
+    if (parsed.parseError) {
+      failures.push({
+        file,
+        reason: 'parse-error',
+        message: `${MIGRATION_FAILURE_MESSAGES['parse-error']}: ${parsed.parseError.kind} (${parsed.parseError.message})`,
+      });
+      continue;
     }
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+
+    const downgrade = getMigrationFunction(parsed, 'downgrade');
+    const classification = downgrade ? classifyDowngradeBody(downgrade.body) : 'missing';
+
+    if (classification !== 'non-trivial') {
+      const reason: MigrationFailureReason =
+        classification === 'missing'
+          ? 'missing-downgrade'
+          : classification;
+      failures.push({
+        file,
+        reason,
+        classification,
+        message: MIGRATION_FAILURE_MESSAGES[reason],
+      });
+    }
+
+    if (classification === 'non-trivial') {
+      const upgrade = getMigrationFunction(parsed, 'upgrade');
+      const upgradeOps = extractOperationCalls(upgrade);
+      const destructive = [
+        ...new Set(
+          upgradeOps.filter(op =>
+            (DESTRUCTIVE_UPGRADE_OPERATIONS as readonly string[]).includes(op)
+          )
+        ),
+      ];
+      if (destructive.length > 0) {
+        warnings.push({
+          file,
+          destructiveOperations: destructive,
+          classification,
+        });
+      }
+    }
+  }
+
+  const overrideApplied = labels.some(
+    label => label.toLowerCase() === MIGRATION_IRREVERSIBLE_LABEL.toLowerCase()
+  );
+
+  if (failures.length > 0) {
+    if (overrideApplied) {
       return {
         name: 'migration-reversibility',
-        status: 'skip',
-        message: 'Skipping migration reversibility check because python3 is not available',
-        details: {},
+        status: 'pass',
+        message: `Migration reversibility failures overridden by ${MIGRATION_IRREVERSIBLE_LABEL} label`,
+        details: {
+          overrideLabel: MIGRATION_IRREVERSIBLE_LABEL,
+          overrideApplied: true,
+          overriddenFailures: failures,
+          warnings,
+          migrationFiles,
+        },
       };
     }
-    throw error;
-  }
-
-  if (parsedMigrations.length === 0) {
-    return {
-      name: 'migration-reversibility',
-      status: 'skip',
-      message: 'No recognizable migration files changed',
-      details: {
-        migrationFiles: migrationFilesChanged,
-      },
-    };
-  }
-
-  const invalidDowngrades = parsedMigrations
-    .map(({ file, parsed }) => {
-      const reason = findDowngradeProblem(parsed.downgrade.statements);
-      return reason ? { file, reason } : null;
-    })
-    .filter((entry): entry is { file: string; reason: string } => entry !== null);
-
-  const destructiveMigrations = parsedMigrations
-    .map(({ file, parsed }) => {
-      const operations = findDestructiveUpgradeOps(parsed);
-      return operations.length > 0 ? { file, operations } : null;
-    })
-    .filter((entry): entry is { file: string; operations: string[] } => entry !== null);
-
-  const hasIrreversibleLabel = prLabels.includes('migration:irreversible');
-
-  if (invalidDowngrades.length > 0 && !hasIrreversibleLabel) {
     return {
       name: 'migration-reversibility',
       status: 'fail',
-      message: 'One or more migrations have empty or non-functional downgrade() bodies',
+      message: `Migration ${
+        failures.length === 1 ? 'file has' : 'files have'
+      } no executable downgrade() — apply the ${MIGRATION_IRREVERSIBLE_LABEL} label to document this decision`,
       details: {
-        invalidDowngrades,
-        destructiveUpgradeOps: destructiveMigrations,
+        overrideLabel: MIGRATION_IRREVERSIBLE_LABEL,
+        overrideApplied: false,
+        failures,
+        warnings,
+        migrationFiles,
       },
     };
   }
 
-  if (destructiveMigrations.length > 0) {
-    return {
-      name: 'migration-reversibility',
-      status: 'warn',
-      message: invalidDowngrades.length > 0 && hasIrreversibleLabel
-        ? 'Irreversible migrations explicitly labeled, but upgrade() still drops data'
-        : 'Migration upgrade() drops schema objects and may lose data even with a downgrade()',
-      details: {
-        destructiveUpgradeOps: destructiveMigrations,
-        invalidDowngrades,
-        overrideLabelApplied: hasIrreversibleLabel && invalidDowngrades.length > 0,
-      },
-    };
-  }
-
-  if (invalidDowngrades.length > 0) {
+  if (warnings.length > 0) {
     return {
       name: 'migration-reversibility',
       status: 'pass',
-      message: 'Irreversible migrations explicitly approved with migration:irreversible',
+      message:
+        'Migration downgrade() bodies are non-trivial; upgrade() contains destructive operations that downgrade cannot restore data for',
       details: {
-        invalidDowngrades,
-        overrideLabelApplied: true,
+        warnings,
+        migrationFiles,
       },
     };
   }
@@ -1230,8 +1277,10 @@ export async function checkMigrationReversibility(
   return {
     name: 'migration-reversibility',
     status: 'pass',
-    message: 'All changed migrations have non-trivial downgrade() bodies',
-    details: {},
+    message: 'All changed migrations have a non-trivial downgrade()',
+    details: {
+      migrationFiles,
+    },
   };
 }
 
@@ -1486,7 +1535,12 @@ export async function runReadyStage(options: {
     checkSchemaMigrations(prContext.changedFiles, repoDir),
     await checkMigrationChainIntegrity(repoDir, config.migrationPatterns),
     checkForbiddenDDL(prContext, repoDir),
-    await checkMigrationReversibility(prContext.changedFiles, repoDir, prContext.labels, config.migrationPatterns),
+    await checkMigrationReversibility(
+      prContext.changedFiles,
+      repoDir,
+      prContext.labels,
+      config.migrationPatterns
+    ),
     checkDeployPaths(prContext.changedFiles, deployConfig),
     checkReleaseRequirements(taskPacket, prContext, repoDir),
     checkCIStatus(prNumber, repoDir),
