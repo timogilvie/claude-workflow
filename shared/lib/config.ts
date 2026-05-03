@@ -68,6 +68,10 @@ export interface DashboardConfig {
   logToFile?: boolean;
 }
 
+export interface TaskSelectionConfig {
+  enterLaunchesWave?: boolean;
+}
+
 export interface JudgeConfig {
   model?: string;
   provider?: 'anthropic';
@@ -308,6 +312,8 @@ export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
   migrationPatterns?: string[];
+  migrationDangerLabels?: Record<string, string>;
+  migrationForbiddenPatterns?: string[];
   remediation?: ReadyRemediationConfig;
 }
 
@@ -384,6 +390,7 @@ export interface WavemillConfig {
   expand?: ExpandConfig;
   plan?: PlanConfig;
   dashboard?: DashboardConfig;
+  taskSelection?: TaskSelectionConfig;
   eval?: EvalConfig;
   autoEval?: boolean;
   hokusai?: HokusaiConfig;
@@ -421,6 +428,12 @@ export const DEFAULT_READY_MIGRATION_PATTERNS = [
   'migrations/',
   'alembic/versions/',
 ] as const;
+
+export const DEFAULT_READY_MIGRATION_DANGER_LABELS = {
+  drop_column: 'migration:destructive',
+  drop_table: 'migration:destructive',
+  alter_column_type: 'migration:long-running',
+} as const;
 
 // ────────────────────────────────────────────────────────────────
 // Schema Validation
@@ -791,6 +804,11 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
     migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    migrationDangerLabels: {
+      ...DEFAULT_READY_MIGRATION_DANGER_LABELS,
+      ...(config.ready?.migrationDangerLabels ?? {}),
+    },
+    migrationForbiddenPatterns: config.ready?.migrationForbiddenPatterns ?? [],
     remediation: {
       enabled: config.ready?.remediation?.enabled ?? true,
       maxAttempts: config.ready?.remediation?.maxAttempts ?? 3,
@@ -881,6 +899,10 @@ export function getPlanConfig(repoDir?: string): PlanConfig {
  */
 export function getDashboardConfig(repoDir?: string): DashboardConfig {
   return loadWavemillConfig(repoDir).dashboard || {};
+}
+
+export function getTaskSelectionConfig(repoDir?: string): TaskSelectionConfig {
+  return loadWavemillConfig(repoDir).taskSelection || {};
 }
 
 /**

@@ -38,18 +38,19 @@ eval "$(awk '
   /^monitor_issue_state\(\) \{/ { exit }
 ' <<< "$HEREDOC_CONTENT" | sed '$d')"
 
-printf 'select 1\nmore\nquit\n' > "$COMMAND_FILE"
+printf 'select 1\nenter\nmore\nquit\n' > "$COMMAND_FILE"
 printf '0\n' > "$COMMAND_OFFSET_FILE"
 
 drain_command_events
 
-if (( ${#COMMAND_QUEUE[@]} != 3 )); then
-  echo "FAIL: expected 3 queued commands after drain, got ${#COMMAND_QUEUE[@]}"
+if (( ${#COMMAND_QUEUE[@]} != 4 )); then
+  echo "FAIL: expected 4 queued commands after drain, got ${#COMMAND_QUEUE[@]}"
   exit 1
 fi
 
 expected_queue="$(cat <<'OUT'
 select 1
+enter
 more
 quit
 OUT
@@ -75,6 +76,7 @@ fi
 
 expected_consumed=(
   "select 1"
+  "enter"
   "more"
   "quit"
 )
@@ -95,8 +97,8 @@ if consume_next_command; then
   exit 1
 fi
 
-if [[ "$(cat "$COMMAND_OFFSET_FILE")" != "3" ]]; then
-  echo "FAIL: expected offset file to advance to 3"
+if [[ "$(cat "$COMMAND_OFFSET_FILE")" != "4" ]]; then
+  echo "FAIL: expected offset file to advance to 4"
   exit 1
 fi
 
