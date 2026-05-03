@@ -15,6 +15,7 @@
 
 import path from 'node:path';
 import { errorMessage } from './error-utils.ts';
+import { isEvalSuccess } from './eval-success-policy.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getDeepSeekProviderMetadata } from './deepseek-provider.ts';
 import {
@@ -48,6 +49,7 @@ import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
+import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 import type {
   EvalRecord,
   EvalRouteProvenance,
@@ -368,7 +370,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
 
   // 9. Set success flag based on score threshold
   if (record.outcomes) {
-    record.outcomes.success = (record.score as number) >= 0.5;
+    record.outcomes.success = isEvalSuccess(record);
   }
 
   // 9b. Build task descriptor for router training (HOK-1120)
@@ -406,7 +408,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       timeSeconds: record.timeSeconds || undefined,
       interventionCount: record.interventionCount || undefined,
       interventions: interventionRecords || undefined,
-      modelsAvailable: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-sonnet-4-5-20250929', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: getConfiguredModelsForDescriptor(repoDir),
       objective: 'balanced',
       maxCostUsd: evalConstraints?.maxCostUsd,
     });

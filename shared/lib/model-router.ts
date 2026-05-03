@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readEvalRecords } from './eval-persistence.ts';
 import type { EvalRecord } from './eval-schema.ts';
+import { isEvalSuccess } from './eval-success-policy.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { recommendModelLLM } from './llm-router.ts';
 import { loadWavemillConfig } from './config.ts';
@@ -197,7 +198,7 @@ export function aggregateEvalHistory(
           ? avg(taskTypeRecords.map((r) => r.score))
           : null,
       successRate:
-        modelRecords.filter((r) => r.score >= 0.8).length / modelRecords.length,
+        modelRecords.filter((r) => isEvalSuccess(r)).length / modelRecords.length,
       avgTimeSeconds: avg(modelRecords.map((r) => r.timeSeconds)),
       avgInterventionCount: avg(modelRecords.map((r) => r.interventionCount)),
     });
