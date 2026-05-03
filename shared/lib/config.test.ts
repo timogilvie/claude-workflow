@@ -1584,6 +1584,95 @@ test('invalid integration ready policy risk setting throws validation error', ()
   }
 });
 
+test('eval success threshold accepts values between 0 and 1', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: {
+        successThreshold: 0.65,
+      },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.equal(config.eval?.successThreshold, 0.65);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('eval success threshold rejects values above 1', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: {
+        successThreshold: 1.1,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('eval success threshold rejects values below 0', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: {
+        successThreshold: -0.1,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('eval success threshold rejects non-numeric values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: {
+        successThreshold: '0.5',
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 // ────────────────────────────────────────────────────────────────
 // Local Overlay Tests
 // ────────────────────────────────────────────────────────────────
