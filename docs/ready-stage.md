@@ -32,6 +32,8 @@ The target check categories for the ready stage are:
 - merge conflicts
 - branch freshness
 - release and manual-step requirements
+- migration safety checks for risky Alembic DDL
+- migration reversibility
 
 Current implementation details:
 
@@ -223,6 +225,133 @@ Reported merge states:
 - `UNKNOWN`: GitHub is still computing mergeability after retries
 - `ERROR`: GitHub CLI failed or returned an unexpected state
 
+## Migration Reversibility Check (`migration-reversibility`)
+
+The `migration-reversibility` check inspects every migration file added or
+modified by the PR and confirms each one has an executable `downgrade()`
+function. Real incidents need rollback, so a `def downgrade(): pass` quietly
+removes that option without anyone deciding it is OK; this check forces the
+choice to be made deliberately rather than discovered at 3 AM.
+
+### What gets checked
+
+For each migration file matched by `ready.migrationPatterns` and present in
+the PR's changed files, the check parses the file with Python's `ast` module
+(via `shared/lib/migration_ast.py`) and inspects the body of `def downgrade()`.
+
+Hard failures:
+
+| Body shape | Reason key |
+|------------|------------|
+| Function not defined | `missing-downgrade` |
+| Only `pass` | `empty-pass` |
+| Only a docstring | `empty-docstring` |
+| Docstring + `pass` | `empty-pass` |
+| Only `raise NotImplementedError` (bare or called) | `not-implemented` |
+| Docstring + `raise NotImplementedError` | `not-implemented` |
+| Python syntax error / parse failure | `parse-error` |
+
+A `non-trivial` body — anything that contains executable statements other
+than the patterns above — passes.
+
+### Override label
+
+Repositories that genuinely cannot reverse a specific migration can apply the
+`migration:irreversible` label to the PR. When the label is present, hard
+failures are recorded under `details.overriddenFailures` and the check returns
+`pass` so the choice is documented rather than hidden. Label matching is
+case-insensitive.
+
+### Soft warning for destructive upgrades
+
+Even when `downgrade()` is non-trivial, the check emits an advisory entry in
+`details.warnings` whenever `upgrade()` contains `op.drop_column` or
+`op.drop_table`. Recreating a column or table in `downgrade()` will not
+restore data that was already dropped, so reviewers should confirm the data
+loss is acceptable. The warning does not change the check status (`pass`) and
+does not flip the overall ready verdict to `warn`.
+
+### When the check skips
+
+If no changed files match the configured migration patterns, the check
+returns `skip` and does not invoke Python at all.
+
+### Configuration
+
+- `ready.checks` honors `"migration-reversibility"` as a stable check name.
+  Listing it alongside `ci-status`, etc. restricts the ready stage to that
+  subset.
+- `ready.migrationPatterns` controls which paths are treated as migration
+  files for both this check and `migration-chain-integrity`.
+
+### Example fail output
+
+```json
+{
+  "name": "migration-reversibility",
+  "status": "fail",
+  "message": "Migration file has no executable downgrade() — apply the migration:irreversible label to document this decision",
+  "details": {
+    "overrideLabel": "migration:irreversible",
+    "overrideApplied": false,
+    "failures": [
+      {
+        "file": "migrations/versions/2026_05_03_001_add_column.py",
+        "reason": "empty-pass",
+        "classification": "empty-pass",
+        "message": "Migration downgrade() body is only \"pass\""
+      }
+    ],
+    "warnings": [],
+    "migrationFiles": ["migrations/versions/2026_05_03_001_add_column.py"]
+  }
+}
+```
+
+### Example override pass
+
+```json
+{
+  "name": "migration-reversibility",
+  "status": "pass",
+  "message": "Migration reversibility failures overridden by migration:irreversible label",
+  "details": {
+    "overrideLabel": "migration:irreversible",
+    "overrideApplied": true,
+    "overriddenFailures": [
+      {
+        "file": "migrations/versions/2026_05_03_001_drop_legacy.py",
+        "reason": "not-implemented",
+        "classification": "not-implemented",
+        "message": "Migration downgrade() raises NotImplementedError"
+      }
+    ],
+    "warnings": [],
+    "migrationFiles": ["migrations/versions/2026_05_03_001_drop_legacy.py"]
+  }
+}
+```
+
+### Example soft-warn pass
+
+```json
+{
+  "name": "migration-reversibility",
+  "status": "pass",
+  "message": "Migration downgrade() bodies are non-trivial; upgrade() contains destructive operations that downgrade cannot restore data for",
+  "details": {
+    "warnings": [
+      {
+        "file": "migrations/versions/2026_05_03_002_remove_field.py",
+        "destructiveOperations": ["op.drop_column"],
+        "classification": "non-trivial"
+      }
+    ],
+    "migrationFiles": ["migrations/versions/2026_05_03_002_remove_field.py"]
+  }
+}
+```
+
 ## Integration Policy Guards
 
 When `integration.readyPolicy.enabled = true`, autonomous merge uses `ready-engine.ts` to evaluate a focused set of policy guards before `tend` merges a PR into `auto/integration`.
@@ -328,6 +457,32 @@ Recommended merge rule once real checks are live:
 - `warn`: merge allowed only with explicit operator handling of the warning
 - `fail`: merge blocked
 
+## Migration Dry-Run (Ephemeral Postgres)
+
+Use the migration dry-run workflow when label-based or static migration checks are not enough. Running every migration end to end against a clean Postgres instance catches semantic failures that chain checks miss, including missing `create_index` calls, object-name collisions, Postgres-specific `ENUM` behavior, and hidden ordering dependencies between revisions.
+
+Scaffold the workflow into an adopting repository with either entrypoint:
+
+```bash
+npx tsx tools/scaffold-migrate-dryrun.ts <target-repo>
+wavemill scaffold migrate-dryrun <target-repo>
+```
+
+The scaffold writes two files into the target repo:
+
+- `.github/workflows/_migrate-dryrun.yml` - the reusable workflow copied from wavemill
+- `.github/workflows/migrate-dryrun.yml` - a thin wrapper triggered on `pull_request`
+
+The wrapper defaults to `alembic upgrade head`, Python `3.11`, database `app_test`, and `requirements.txt`. Pass `--verify-reversibility` during scaffolding if the repo should also run `alembic downgrade base` followed by a second `upgrade head`.
+
+Tradeoffs:
+
+- Upgrade-only runs are typically about 30 seconds on `ubuntu-latest`
+- Reversibility roughly doubles that to about 60 seconds
+- Budget roughly 2 GitHub Actions minutes per PR when the workflow is enabled
+
+Integration with `checkCIStatus` is automatic. This workflow appears like any other GitHub status check, so the ready stage will pick it up without new ready-specific code.
+
 ## Ready Configuration
 
 The ready stage always runs for mill-managed repositories. The `ready` config section controls which checks run and which checks are required; it does not disable the ready phase itself.
@@ -337,12 +492,26 @@ Configuration cases:
 - `ready` missing from `.wavemill-config.json`: all available ready checks can run
 - `ready.checks`: restricts the set of checks to run
 - `ready.requiredChecks`: marks a subset of checks as merge-blocking
-- `ready.migrationPatterns`: overrides the regex patterns used to discover migration files for migration-related checks
+- `ready.migrationPatterns`: overrides the regex patterns used to discover migration files for migration-related checks (including `migration-reversibility`)
 
 Workflow expectations:
 
 - the ready contract remains stable even as checks are added
 - existing review and merge workflows continue after the ready gate reports `pass` or `warn`
+
+`forbidden-ddl` inspects changed migration files with Python AST parsing and evaluates these rules inside `upgrade()`:
+
+- `add_column_non_nullable_no_default`: `fail`
+- `drop_column`: `fail` unless the PR has `migration:destructive`
+- `drop_table`: `fail` unless the PR has `migration:destructive`
+- `alter_column_type`: `warn` unless the PR has `migration:long-running`
+- `execute_dml`: `warn` with guidance to run the backfill as a separate online job
+
+Analyzer scope:
+
+- only `op.*` calls inside `upgrade()` are inspected
+- `op.execute(...)` only warns on literal SQL strings containing `UPDATE`, `INSERT`, or `DELETE`
+- string literals that merely mention dangerous operations do not trigger findings
 
 Minimal explicit configuration:
 
@@ -351,7 +520,13 @@ Minimal explicit configuration:
   "ready": {
     "checks": [],
     "requiredChecks": [],
-    "migrationPatterns": ["migrations/", "alembic/versions/"]
+    "migrationPatterns": ["migrations/", "alembic/versions/"],
+    "migrationDangerLabels": {
+      "drop_column": "migration:destructive",
+      "drop_table": "migration:destructive",
+      "alter_column_type": "migration:long-running"
+    },
+    "migrationForbiddenPatterns": []
   }
 }
 ```
