@@ -13,6 +13,7 @@ import {
   formatIssueAsPrompt,
   fetchPrContext,
   gatherEvalContext,
+  gatherStageArtifacts,
   convertToRoutingDecision,
   fetchRoutingDecision,
   fetchRoutingCompleteRawWithArchive,
@@ -530,6 +531,63 @@ describe('eval-context-gatherer', () => {
           reviewer: 'model-c',
           maxCostUsd: 7.5,
         });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('gatherStageArtifacts archived routing', () => {
+    function makeTmpDir(): string {
+      return fs.mkdtempSync(nodePath.join(os.tmpdir(), 'stage-artifacts-'));
+    }
+
+    it('converts archived raw routing data into a routing decision', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-1494';
+      const branch = 'task/fix-archived-routing';
+      const archiveDir = nodePath.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId);
+      fs.mkdirSync(archiveDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(archiveDir, 'routing-complete.json'),
+        JSON.stringify({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+          codeDepth: 'deep',
+          reviewMode: 'static+llm',
+        }),
+      );
+
+      try {
+        const result = gatherStageArtifacts(repoDir, issueId, branch);
+        expect(result.routingDecision).toEqual({
+          candidates: [
+            { agentType: 'claude', modelId: 'model-a' },
+            { agentType: 'claude', modelId: 'model-b' },
+            { agentType: 'claude', modelId: 'model-c' },
+          ],
+          chosen: { agentType: 'claude', modelId: 'model-b' },
+          decisionPolicyVersion: 'baseline',
+          decisionRationale:
+            'Routing: planner=model-a, coder=model-b, reviewer=model-c; codeDepth=deep, reviewMode=static+llm',
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('omits routingDecision when archived routing data is malformed', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-1494';
+      const branch = 'task/fix-archived-routing';
+      const archiveDir = nodePath.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId);
+      fs.mkdirSync(archiveDir, { recursive: true });
+      fs.writeFileSync(nodePath.join(archiveDir, 'routing-complete.json'), '{"planner":true}');
+
+      try {
+        const result = gatherStageArtifacts(repoDir, issueId, branch);
+        expect(result.routingDecision).toBeUndefined();
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
