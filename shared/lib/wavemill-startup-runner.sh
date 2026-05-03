@@ -45,13 +45,14 @@ REQUIRE_CONFIRM="$(jq -r '.monitorConfig.requireConfirm // true' "$PLAN_FILE")"
 DRY_RUN="$(jq -r '.monitorConfig.dryRun // false' "$PLAN_FILE")"
 PROJECT_NAME="$(jq -r '.monitorConfig.projectName // empty' "$PLAN_FILE")"
 AUTO_EVAL="$(jq -r '.monitorConfig.autoEval // true' "$PLAN_FILE")"
+ENTER_LAUNCHES_WAVE="$(jq -r '.monitorConfig.enterLaunchesWave // true' "$PLAN_FILE")"
 DASHBOARD_VERBOSITY="$(jq -r '.monitorConfig.dashboardVerbosity // "info"' "$PLAN_FILE")"
 DASHBOARD_LOG_TO_FILE="$(jq -r '.monitorConfig.dashboardLogToFile // true' "$PLAN_FILE")"
 DASHBOARD_PID=""
 
 export SESSION REPO_DIR BASE_BRANCH WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
 export FORCE_MODEL ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
-export POLL_SECONDS REQUIRE_CONFIRM DRY_RUN PROJECT_NAME AUTO_EVAL DASHBOARD_VERBOSITY
+export POLL_SECONDS REQUIRE_CONFIRM DRY_RUN PROJECT_NAME AUTO_EVAL ENTER_LAUNCHES_WAVE DASHBOARD_VERBOSITY
 export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
 
 source "$LIB_DIR/wavemill-common.sh"
@@ -255,6 +256,7 @@ write_monitor_env() {
     write_shell_assignment "ROUTER_ENABLED" "$ROUTER_ENABLED"
     write_shell_assignment "MAX_PARALLEL" "$MAX_PARALLEL"
     write_shell_assignment "AUTO_EVAL" "$AUTO_EVAL"
+    write_shell_assignment "ENTER_LAUNCHES_WAVE" "$ENTER_LAUNCHES_WAVE"
     write_shell_assignment "DASHBOARD_VERBOSITY" "$DASHBOARD_VERBOSITY"
     write_shell_assignment "DASHBOARD_LOG_TO_FILE" "$DASHBOARD_LOG_TO_FILE"
     write_shell_assignment "WAVEMILL_DASHBOARD_PID" "${WAVEMILL_DASHBOARD_PID:-}"

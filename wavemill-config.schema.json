@@ -201,6 +201,18 @@
             },
             "additionalProperties": false
         },
+        "taskSelection": {
+            "type": "object",
+            "description": "Controls default task selection behavior in wavemill mill.",
+            "properties": {
+                "enterLaunchesWave": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "When true, pressing Enter launches the planner's first dependency-safe parallel wave instead of the top scored tasks."
+                }
+            },
+            "additionalProperties": false
+        },
         "eval": {
             "type": "object",
             "description": "Settings for the 'wavemill eval' command.",

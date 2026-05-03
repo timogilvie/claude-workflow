@@ -43,7 +43,7 @@ UNSET_VARS="SESSION MAX_PARALLEL POLL_SECONDS BASE_BRANCH AGENT_CMD WORKTREE_ROO
   REQUIRE_CONFIRM PLANNING_MODE MAX_RETRIES RETRY_DELAY MAX_SELECT MAX_DISPLAY
   PROJECT_NAME LINEAR_PROJECT PLAN_MAX_DISPLAY PLAN_RESEARCH PLAN_MODEL ROUTER_ENABLED
   ROUTER_DEFAULT_MODEL AUTO_EVAL SETUP_CMD DASHBOARD_VERBOSITY DASHBOARD_LOG_TO_FILE
-  GIT_FETCH_TTL_SECONDS
+  GIT_FETCH_TTL_SECONDS ENTER_LAUNCHES_WAVE
   _WAVEMILL_CONFIG_LOADED"
 
 # ============================================================================
@@ -67,6 +67,7 @@ eval "$(
   echo "D_MAX_DISPLAY='$MAX_DISPLAY'"
   echo "D_DASHBOARD_VERBOSITY='$DASHBOARD_VERBOSITY'"
   echo "D_DASHBOARD_LOG_TO_FILE='$DASHBOARD_LOG_TO_FILE'"
+  echo "D_ENTER_LAUNCHES_WAVE='$ENTER_LAUNCHES_WAVE'"
 )"
 
 check_matches "default SESSION" '^wavemill-' "$D_SESSION"
@@ -80,6 +81,7 @@ check "default MAX_SELECT" "3" "$D_MAX_SELECT"
 check "default MAX_DISPLAY" "9" "$D_MAX_DISPLAY"
 check "default DASHBOARD_VERBOSITY" "info" "$D_DASHBOARD_VERBOSITY"
 check "default DASHBOARD_LOG_TO_FILE" "true" "$D_DASHBOARD_LOG_TO_FILE"
+check "default ENTER_LAUNCHES_WAVE" "true" "$D_ENTER_LAUNCHES_WAVE"
 
 # ============================================================================
 # Test 2: Repo config overrides defaults
@@ -108,6 +110,9 @@ cat > "$TMP/.wavemill-config.json" << 'EOF'
   "dashboard": {
     "verbosity": "status",
     "logToFile": false
+  },
+  "taskSelection": {
+    "enterLaunchesWave": false
   }
 }
 EOF
@@ -127,6 +132,7 @@ eval "$(
   echo "R_PROJECT_NAME='$PROJECT_NAME'"
   echo "R_DASHBOARD_VERBOSITY='$DASHBOARD_VERBOSITY'"
   echo "R_DASHBOARD_LOG_TO_FILE='$DASHBOARD_LOG_TO_FILE'"
+  echo "R_ENTER_LAUNCHES_WAVE='$ENTER_LAUNCHES_WAVE'"
 )"
 
 check "repo SESSION override" "custom-session" "$R_SESSION"
@@ -139,6 +145,7 @@ check "repo MAX_DISPLAY override" "6" "$R_MAX_DISPLAY"
 check "repo PROJECT_NAME override" "Repo Project" "$R_PROJECT_NAME"
 check "repo DASHBOARD_VERBOSITY override" "status" "$R_DASHBOARD_VERBOSITY"
 check "repo DASHBOARD_LOG_TO_FILE override" "false" "$R_DASHBOARD_LOG_TO_FILE"
+check "repo ENTER_LAUNCHES_WAVE override" "false" "$R_ENTER_LAUNCHES_WAVE"
 
 write_repo_override_config() {
   cat > "$TMP/.wavemill-config.json" << 'EOF'
@@ -162,6 +169,9 @@ write_repo_override_config() {
   "dashboard": {
     "verbosity": "status",
     "logToFile": false
+  },
+  "taskSelection": {
+    "enterLaunchesWave": false
   }
 }
 EOF

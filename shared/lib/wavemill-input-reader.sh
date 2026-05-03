@@ -25,11 +25,12 @@ while :; do
   fi
 
   line="$(normalize_line "$line")"
-  [[ -z "$line" ]] && continue
 
   shopt -s nocasematch
   event=""
-  if [[ "$line" =~ ^[0-9]+([[:space:]]+[0-9]+)*$ ]]; then
+  if [[ -z "$line" ]]; then
+    event="enter"
+  elif [[ "$line" =~ ^[0-9]+([[:space:]]+[0-9]+)*$ ]]; then
     event="select $line"
   elif [[ "$line" == "m" || "$line" == "more" ]]; then
     event="more"

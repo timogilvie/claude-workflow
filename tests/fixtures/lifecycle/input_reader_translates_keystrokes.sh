@@ -31,6 +31,7 @@ more
 quit
 quit
 quit
+enter
 unknown 1 foo 3
 unknown hello world
 OUT
