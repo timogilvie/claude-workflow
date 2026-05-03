@@ -124,7 +124,7 @@ run_expand() {
     MAX_DISPLAY=9 \
     FAKE_NPX_LOG="$case_dir/npx.log" \
     "${env_args[@]}" \
-    "$EXPAND_SCRIPT" "${cli_args[@]}" >"$stdout_file" 2>"$stderr_file"
+    bash "$EXPAND_SCRIPT" "${cli_args[@]}" >"$stdout_file" 2>"$stderr_file"
   status=$?
   set -e
 
@@ -194,7 +194,7 @@ test_no_arg_mode_still_fetches_backlog_and_prompts() {
     MAX_DISPLAY=9 \
     FAKE_NPX_LOG="$case_dir/npx.log" \
     FAKE_BACKLOG_JSON='[{"identifier":"HOK-1494","title":"Fix direct expand","url":"https://linear.app/hokusai/issue/HOK-1494/fix-direct-expand","priority":2,"estimate":3,"state":{"name":"Todo"},"description":"Short description","labels":{"nodes":[]},"relations":{"nodes":[]},"inverseRelations":{"nodes":[]},"labels":{"nodes":[]},"project":{"name":"wavemill"},"team":{"name":"Hokusai","key":"HOK"},"parent":null,"children":{"nodes":[]}}]' \
-    "$EXPAND_SCRIPT" >"$case_dir/stdout" 2>"$case_dir/stderr"
+    bash "$EXPAND_SCRIPT" >"$case_dir/stdout" 2>"$case_dir/stderr"
   status=$?
   set -e
 
