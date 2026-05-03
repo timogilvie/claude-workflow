@@ -50,9 +50,9 @@ function resolvePostCompletionBudget(input: Pick<PostCompletionEnrichmentInput, 
     ? fetchRoutingCompleteRawWithArchive(input.repoDir, slug, input.issueId || '', input.worktreePath)
     : null;
   return [
+    input.record.constraints?.maxCostUsd,
     routingComplete?.maxCostUsd,
     routingComplete?.constraints?.maxCostUsd,
-    input.record.constraints?.maxCostUsd,
     getMaxCostUsd(input.repoDir),
   ].find(isFiniteNonNegativeBudget);
 }
