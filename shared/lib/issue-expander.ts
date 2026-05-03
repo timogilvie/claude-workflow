@@ -43,16 +43,20 @@ import { buildScopeConstraintContext, type OperatingMode } from './scope-shrinke
  * ```
  */
 export function parseIssueInput(input: string): string {
+  const trimmedInput = input.trim();
+
   // Handle full Linear URLs
-  const urlMatch = input.match(/linear\.app\/[^/]+\/issue\/([A-Z]+-\d+)/);
-  if (urlMatch) return urlMatch[1];
+  const urlMatch = trimmedInput.match(
+    /^https?:\/\/linear\.app\/[^/]+\/issue\/([A-Z]+-\d+)(?:[/?].*)?$/i
+  );
+  if (urlMatch) return urlMatch[1].toUpperCase();
 
   // Handle direct identifier
-  const idMatch = input.match(/^([A-Z]+-\d+)$/);
-  if (idMatch) return idMatch[1];
+  const idMatch = trimmedInput.match(/^([A-Z]+-\d+)$/i);
+  if (idMatch) return idMatch[1].toUpperCase();
 
   throw new Error(
-    `Invalid issue identifier: ${input}. Expected format: LIN-123 or Linear URL`
+    `Invalid issue identifier: ${input}. Expected format: TEAM-123 or Linear issue URL`
   );
 }
 
