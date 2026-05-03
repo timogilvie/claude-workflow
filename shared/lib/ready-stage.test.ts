@@ -9,6 +9,7 @@ import {
   checkCIStatus,
   checkSchemaMigrations,
   checkMigrationChainIntegrity,
+  checkForbiddenDDL,
   checkMigrationReversibility,
   checkDeployPaths,
   computeVerdict,
@@ -40,6 +41,19 @@ async function writeRepoFiles(repoDir: string, files: Record<string, string>) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, 'utf-8');
   }
+}
+
+function makePrContext(changedFiles: string[], labels: string[] = []) {
+  return {
+    prNumber: 42,
+    diff: '',
+    changedFiles,
+    labels,
+    branch: 'feature-branch',
+    baseBranch: 'main',
+    url: 'https://github.com/test/repo/pull/42',
+    ciStatus: 'configured',
+  };
 }
 
 async function loadMigrationFixture(name: string): Promise<string> {
@@ -399,6 +413,169 @@ describe('ready-stage', () => {
       } finally {
         execMock.mock.restore();
       }
+    });
+  });
+
+  describe('checkForbiddenDDL', () => {
+    let repoDir: string;
+    const fixtureDir = path.join(process.cwd(), 'tests/fixtures/forbidden-ddl');
+
+    async function writeFixture(relativeName: string, targetName = relativeName) {
+      const content = await fs.readFile(path.join(fixtureDir, relativeName), 'utf-8');
+      await writeRepoFiles(repoDir, {
+        [`alembic/versions/${targetName}`]: content,
+      });
+    }
+
+    beforeEach(async () => {
+      repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forbidden-ddl-'));
+      const analyzer = await fs.readFile(path.join(process.cwd(), 'shared/lib/forbidden-ddl-analyzer.py'), 'utf-8');
+      await writeRepoFiles(repoDir, {
+        'shared/lib/forbidden-ddl-analyzer.py': analyzer,
+      });
+    });
+
+    afterEach(async () => {
+      await fs.rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('skips when no migration files changed', () => {
+      const spawnMock = mock.method(readyStage.readyStageDeps, 'spawnPython', () => {
+        throw new Error('should not be called');
+      });
+
+      try {
+        const result = checkForbiddenDDL(makePrContext(['src/app.ts']), repoDir);
+        assert.equal(result.status, 'skip');
+        assert.equal(result.message, 'No migration files changed');
+      } finally {
+        spawnMock.mock.restore();
+      }
+    });
+
+    it('fails on add_column(nullable=False) without server_default', async () => {
+      await writeFixture('add_column_non_nullable_no_default.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/add_column_non_nullable_no_default.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'fail');
+      assert.match(result.message, /require changes|acknowledgment/);
+    });
+
+    it('passes on add_column(nullable=False) with server_default', async () => {
+      await writeFixture('add_column_non_nullable_with_default.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/add_column_non_nullable_with_default.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+    });
+
+    it('fails on destructive drops without label', async () => {
+      await writeFixture('drop_column.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/drop_column.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'fail');
+      assert.deepEqual((result.details?.labels as string[]) ?? [], []);
+    });
+
+    it('passes destructive drops when the required label is present', async () => {
+      await writeFixture('drop_table.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/drop_table.py'], ['migration:destructive']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+      assert.equal((result.details?.acknowledgedFindings as unknown[])?.length, 1);
+    });
+
+    it('warns on alter_column(type_=...) without label', async () => {
+      await writeFixture('alter_column_type.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/alter_column_type.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'warn');
+      assert.match(JSON.stringify(result.details), /migration:long-running/);
+    });
+
+    it('passes alter_column(type_=...) with label acknowledgment', async () => {
+      await writeFixture('alter_column_type.py', 'alter_column_type_ack.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/alter_column_type_ack.py'], ['migration:long-running']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+    });
+
+    it('warns on execute update statements', async () => {
+      await writeFixture('execute_update.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/execute_update.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'warn');
+      assert.match(JSON.stringify(result.details), /online job/);
+    });
+
+    it('does not trigger on dangerous strings inside literals', async () => {
+      await writeFixture('string_literal_false_positive.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/string_literal_false_positive.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+    });
+
+    it('fails closed on syntax errors', async () => {
+      await writeFixture('syntax_error.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/syntax_error.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'fail');
+      assert.match(result.message, /could not parse/);
+    });
+
+    it('passes alter_column without type_ (no finding)', async () => {
+      await writeFixture('alter_column_no_type.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/alter_column_no_type.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+    });
+
+    it('passes execute with CREATE INDEX CONCURRENTLY (no execute_dml finding)', async () => {
+      await writeFixture('execute_create_index.py');
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/execute_create_index.py']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+    });
+
+    it('honors custom migration danger labels', async () => {
+      await writeFixture('drop_table.py');
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            migrationDangerLabels: {
+              drop_table: 'db-risk-approved',
+            },
+          },
+        }),
+      });
+
+      const result = checkForbiddenDDL(
+        makePrContext(['alembic/versions/drop_table.py'], ['db-risk-approved']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+      assert.match(JSON.stringify(result.details), /db-risk-approved/);
     });
   });
 
