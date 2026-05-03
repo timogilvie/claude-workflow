@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { getMaxCostUsd } from './config.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
@@ -28,6 +29,55 @@ export interface RouteDecisionWithProvenance extends WorkflowRouteDecision {
   cache_hit?: boolean;
   route_source?: 'batch' | 'single' | 'cache';
   packet_hash?: string;
+}
+
+function isFiniteNonNegativeBudget(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+export interface ResolveRouteBudgetOptions {
+  explicitMaxCostUsd?: number;
+  repoDir?: string;
+}
+
+export function resolveRouteDecisionBudget(
+  decision: Partial<WorkflowRouteDecision>,
+  options: ResolveRouteBudgetOptions = {},
+): number | null {
+  if (isFiniteNonNegativeBudget(options.explicitMaxCostUsd)) {
+    return options.explicitMaxCostUsd;
+  }
+  if (isFiniteNonNegativeBudget(decision.constraints?.maxCostUsd)) {
+    return decision.constraints.maxCostUsd;
+  }
+  if (isFiniteNonNegativeBudget(decision.maxCostUsd)) {
+    return decision.maxCostUsd;
+  }
+
+  const configured = getMaxCostUsd(options.repoDir);
+  return isFiniteNonNegativeBudget(configured) ? configured : null;
+}
+
+export function withResolvedRouteBudget<T extends WorkflowRouteDecision>(
+  decision: T,
+  options: ResolveRouteBudgetOptions = {},
+): T {
+  const maxCostUsd = resolveRouteDecisionBudget(decision, options);
+  if (maxCostUsd === null) {
+    return {
+      ...decision,
+      maxCostUsd: null,
+    };
+  }
+
+  return {
+    ...decision,
+    constraints: {
+      ...(decision.constraints ?? {}),
+      maxCostUsd,
+    },
+    maxCostUsd,
+  };
 }
 
 export interface BuildRouteProvenanceParams {

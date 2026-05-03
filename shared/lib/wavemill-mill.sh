@@ -345,7 +345,8 @@ write_launch_plan() {
         planDepth: $planDepth,
         codeDepth: $codeDepth,
         reviewMode: $reviewMode
-      } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)')"
+        maxCostUsd: $maxCostUsd
+      } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)')"
 
     tasks_json="$(jq -n \
       --argjson tasks "$tasks_json" \
@@ -5334,7 +5335,8 @@ Implement from the issue description plus direct codebase analysis."
         routedAt: (if $provenanceRoutedAt == "" then (now | todateiso8601) else $provenanceRoutedAt end),
         routerMode: (if $provenanceRouterMode == "" then "normal" else $provenanceRouterMode end)
       }
-    } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' \
+      maxCostUsd: $maxCostUsd
+    } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)' \
     | write_json_artifact "$routing_file"
 
   # Save initial route for eval comparison (routed on raw description).

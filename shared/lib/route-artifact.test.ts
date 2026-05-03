@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
+import { clearConfigCache } from './config.ts';
 import {
   buildRouteLifecycleProvenance,
   deriveRouteDecisionSource,
@@ -11,11 +12,39 @@ import {
   hasValidPostExpansionRoute,
   readBothRouteArtifacts,
   readRouteLifecycleArtifacts,
+  resolveRouteDecisionBudget,
   routeChangedMaterially,
   stringifyRouteArtifact,
   validateExpandedRouteArtifact,
+  withResolvedRouteBudget,
   writeRouteArtifact,
 } from './route-artifact.ts';
+import type { WorkflowRouteDecision } from './workflow-router.ts';
+
+function minimalDecision(overrides: Partial<WorkflowRouteDecision> = {}): WorkflowRouteDecision {
+  return {
+    planner: 'claude-sonnet-4-6',
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-4-6',
+    planDepth: 'light',
+    codeDepth: 'medium',
+    reviewRecommended: 'static',
+    expectedSuccess: 0.8,
+    expectedCostPlan: 0.1,
+    expectedCostCode: 0.2,
+    expectedCostReview: 0.1,
+    confidence: 0.7,
+    reasoning: [],
+    signals: {
+      taskType: 'feature',
+      promptLength: 'medium',
+      complexityScore: 0.5,
+      fileTypes: [],
+      riskScore: 0.2,
+    },
+    ...overrides,
+  };
+}
 
 test('same input bytes produce same sha256', () => {
   const a = buildRouteProvenance({
@@ -190,6 +219,60 @@ test('writeRouteArtifact writes strict JSON bytes parseable as-is', () => {
 
 test('writeRouteArtifact rejects non-serializable top-level payloads', () => {
   assert.throws(() => writeRouteArtifact(join(tmpdir(), 'unused.json'), undefined), /serialize to a JSON document/);
+});
+
+test('resolveRouteDecisionBudget preserves explicit zero over defaults', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'route-artifact-budget-'));
+  try {
+    writeFileSync(join(dir, '.wavemill-config.json'), JSON.stringify({
+      mill: { defaultMaxCostUsd: 25 },
+    }));
+    clearConfigCache(dir);
+    assert.equal(
+      resolveRouteDecisionBudget(minimalDecision({ constraints: { maxCostUsd: 4 } }), {
+        explicitMaxCostUsd: 0,
+        repoDir: dir,
+      }),
+      0,
+    );
+  } finally {
+    clearConfigCache(dir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('withResolvedRouteBudget writes constraints and top-level budget from config default', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'route-artifact-budget-'));
+  try {
+    writeFileSync(join(dir, '.wavemill-config.json'), JSON.stringify({
+      mill: { defaultMaxCostUsd: 12.5 },
+    }));
+    clearConfigCache(dir);
+
+    const decision = withResolvedRouteBudget(minimalDecision(), { repoDir: dir });
+
+    assert.equal(decision.maxCostUsd, 12.5);
+    assert.equal(decision.constraints?.maxCostUsd, 12.5);
+  } finally {
+    clearConfigCache(dir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('withResolvedRouteBudget writes top-level null when no budget is available', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'route-artifact-budget-'));
+  try {
+    writeFileSync(join(dir, '.wavemill-config.json'), JSON.stringify({ router: { enabled: false } }));
+    clearConfigCache(dir);
+
+    const decision = withResolvedRouteBudget(minimalDecision(), { repoDir: dir });
+
+    assert.equal(decision.maxCostUsd, null);
+    assert.equal(decision.constraints, undefined);
+  } finally {
+    clearConfigCache(dir);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function makeFeatureDir(): string {
