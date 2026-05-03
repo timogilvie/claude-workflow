@@ -32,6 +32,7 @@ for f in \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_translates_keystrokes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_pane_respawn.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/monitor_consumes_command_file.sh \
@@ -819,7 +820,7 @@ else
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
-  && grep -q 'wavemill_lock_run "git-worktree" git worktree add "\$wt_dir" "\$branch"' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'wavemill_lock_run "git-worktree" ensure_worktree "\$branch" "\$wt_dir"' "$LIB_DIR/wavemill-startup-runner.sh" \
   && grep -q 'wavemill_lock_run "git-worktree" git worktree add "\$wt_dir" -b "\$branch" "origin/\$BASE_BRANCH"' "$LIB_DIR/wavemill-startup-runner.sh"; then
   pass "startup runner serializes git worktree creation"
 else
@@ -2505,6 +2506,7 @@ echo "=== Startup Lifecycle Fixtures ==="
 for fixture in \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_launches_concurrently.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_serializes_state_writes.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/worktree_collision.sh" \
 ; do
   if [[ ! -f "$fixture" ]]; then
     fail "Missing startup fixture $(basename "$fixture")"
