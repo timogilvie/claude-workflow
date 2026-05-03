@@ -77,11 +77,14 @@ Use the other commands around it when needed:
 
 - `wavemill expand` to prepare issue descriptions and task packets
 - `wavemill plan` to break down epics before milling them
+- `wavemill scaffold migrate-dryrun <target-repo>` to install the ephemeral-Postgres migration dry-run CI check into another repo
 - `wavemill review` to inspect a PR directly
 - `wavemill eval` to inspect or export performance data
 - `wavemill route` to inspect model-selection decisions
 - `wavemill context` to manage agent-readable project memory
 - `wavemill hokusai` to manage collective-intelligence opt-in
+
+See [docs/ready-stage.md](docs/ready-stage.md#migration-dry-run-ephemeral-postgres) for the migration dry-run adoption guide and CI tradeoffs.
 
 ### Configuration
 

@@ -1,0 +1,138 @@
+name: Reusable Migration Dry-Run
+
+on:
+  workflow_call:
+    inputs:
+      migration-runner-cmd:
+        description: Command used to apply migrations to head
+        required: false
+        type: string
+        default: alembic upgrade head
+      python-version:
+        description: Python version used to run the migration command
+        required: false
+        type: string
+        default: '3.11'
+      db-name:
+        description: Database name created inside the Postgres service
+        required: false
+        type: string
+        default: app_test
+      requirements-file:
+        description: Requirements file installed before running migrations
+        required: false
+        type: string
+        default: requirements.txt
+      postgres-image:
+        description: Postgres service image
+        required: false
+        type: string
+        default: postgres:16
+      verify-reversibility:
+        description: Run downgrade-to-base then re-upgrade after the initial upgrade
+        required: false
+        type: boolean
+        default: false
+      reversibility-downgrade-cmd:
+        description: Command used for the reversibility downgrade
+        required: false
+        type: string
+        default: alembic downgrade base
+      reversibility-upgrade-cmd:
+        description: Command used for the reversibility re-upgrade
+        required: false
+        type: string
+        default: alembic upgrade head
+    outputs:
+      error_output:
+        description: Captured stderr from the failing migration step, if any
+        value: ${{ jobs.migrate-dryrun.outputs.error_output }}
+
+jobs:
+  migrate-dryrun:
+    name: Migration Dry-Run
+    runs-on: ubuntu-latest
+    outputs:
+      error_output: ${{ steps.surface-error.outputs.error_output }}
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_DB: ${{ inputs.db-name }}
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ${{ inputs.db-name }}"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        run: pip install -r "${{ inputs.requirements-file }}"
+
+      - name: Run migrations
+        id: run-migrations
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/${{ inputs.db-name }}
+          MIGRATION_RUNNER_CMD: ${{ inputs.migration-runner-cmd }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f migration-stderr.txt
+          bash -o pipefail -c "$MIGRATION_RUNNER_CMD" 2> >(tee migration-stderr.txt >&2)
+
+      - name: Verify reversibility
+        if: ${{ inputs.verify-reversibility && steps.run-migrations.outcome == 'success' }}
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/${{ inputs.db-name }}
+          REVERSIBILITY_DOWNGRADE_CMD: ${{ inputs.reversibility-downgrade-cmd }}
+          REVERSIBILITY_UPGRADE_CMD: ${{ inputs.reversibility-upgrade-cmd }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f migration-stderr.txt
+          bash -o pipefail -c "$REVERSIBILITY_DOWNGRADE_CMD" 2> >(tee migration-stderr.txt >&2)
+          bash -o pipefail -c "$REVERSIBILITY_UPGRADE_CMD" 2> >(tee -a migration-stderr.txt >&2)
+
+      - name: Surface migration stderr
+        id: surface-error
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f migration-stderr.txt ]]; then
+            {
+              echo '## Migration dry-run failed'
+              echo
+              echo 'No stderr output was captured.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo 'error_output=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          delimiter="$(openssl rand -hex 8)"
+          {
+            echo '## Migration dry-run failed'
+            echo
+            echo '```text'
+            cat migration-stderr.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "error_output<<$delimiter"
+            cat migration-stderr.txt
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"

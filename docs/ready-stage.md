@@ -312,6 +312,32 @@ Policy for repositories adopting the ready stage:
 
 Manual operator workflow:
 
+## Migration Dry-Run (Ephemeral Postgres)
+
+Use the migration dry-run workflow when label-based or static migration checks are not enough. Running every migration end to end against a clean Postgres instance catches semantic failures that chain checks miss, including missing `create_index` calls, object-name collisions, Postgres-specific `ENUM` behavior, and hidden ordering dependencies between revisions.
+
+Scaffold the workflow into an adopting repository with either entrypoint:
+
+```bash
+npx tsx tools/scaffold-migrate-dryrun.ts <target-repo>
+wavemill scaffold migrate-dryrun <target-repo>
+```
+
+The scaffold writes two files into the target repo:
+
+- `.github/workflows/_migrate-dryrun.yml` - the reusable workflow copied from wavemill
+- `.github/workflows/migrate-dryrun.yml` - a thin wrapper triggered on `pull_request`
+
+The wrapper defaults to `alembic upgrade head`, Python `3.11`, database `app_test`, and `requirements.txt`. Pass `--verify-reversibility` during scaffolding if the repo should also run `alembic downgrade base` followed by a second `upgrade head`.
+
+Tradeoffs:
+
+- Upgrade-only runs are typically about 30 seconds on `ubuntu-latest`
+- Reversibility roughly doubles that to about 60 seconds
+- Budget roughly 2 GitHub Actions minutes per PR when the workflow is enabled
+
+Integration with `checkCIStatus` is automatic. This workflow appears like any other GitHub status check, so the ready stage will pick it up without new ready-specific code.
+
 ```bash
 wavemill ready 42
 ```

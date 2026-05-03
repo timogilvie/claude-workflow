@@ -54,6 +54,11 @@ ${GREEN}Commands:${NC}
              - Select one to decompose with Claude
              - Creates phased milestones and issues in Linear
 
+  ${CYAN}scaffold${NC}  Scaffold reusable CI workflows into another repository
+             Subcommands:
+               ${CYAN}wavemill scaffold migrate-dryrun <target>${NC}
+                          Copy the migration dry-run workflow pair
+
   ${CYAN}eval${NC}      Evaluate LLM performance on a completed workflow
              - Auto-detects recent workflow context
              - Invokes LLM-as-judge with structured rubric
@@ -772,6 +777,21 @@ run_plan() {
   exec "$plan_script" "$@"
 }
 
+run_scaffold() {
+  local subcommand="${1:-}"
+
+  case "$subcommand" in
+    migrate-dryrun)
+      shift
+      exec npx tsx "$TOOLS_DIR/scaffold-migrate-dryrun.ts" "$@"
+      ;;
+    *)
+      echo "Usage: wavemill scaffold migrate-dryrun <target-repo> [options]" >&2
+      exit 1
+      ;;
+  esac
+}
+
 run_review() {
   local review_script="$LIB_DIR/wavemill-review.sh"
 
@@ -895,6 +915,10 @@ case "${1:-}" in
     run_preflight_checks
     shift
     run_plan "$@"
+    ;;
+  scaffold)
+    shift
+    run_scaffold "$@"
     ;;
   review)
     run_preflight_checks
