@@ -280,7 +280,7 @@ const TRAINING_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
 ];
 
 const BUDGET_EVAL_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
-  'missing_budget_snapshot',
+  'missing_budget',
   'missing_cost',
   'missing_routing',
 ];
@@ -289,8 +289,49 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isFiniteNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function resolveBudget(record: EvalRecord): number | undefined {
+  if (isFiniteNonNegativeNumber(record.constraints?.maxCostUsd)) {
+    return record.constraints.maxCostUsd;
+  }
+
+  if (isFiniteNonNegativeNumber(record.taskDescriptor?.constraints?.max_cost_usd)) {
+    return record.taskDescriptor.constraints.max_cost_usd;
+  }
+
+  return undefined;
+}
+
 function hasBudgetSnapshot(record: EvalRecord): boolean {
-  return record.constraints !== undefined || typeof record.budgetViolated === 'boolean';
+  return typeof resolveBudget(record) === 'number';
+}
+
+function normalizeBudgetConstraints(record: EvalRecord): void {
+  const budget = resolveBudget(record);
+  if (typeof budget !== 'number') {
+    if (record.constraints && Object.keys(record.constraints).length === 0) {
+      delete record.constraints;
+    }
+    if (record.taskDescriptor?.constraints && Object.keys(record.taskDescriptor.constraints).length === 0) {
+      delete record.taskDescriptor.constraints;
+    }
+    return;
+  }
+
+  record.constraints = {
+    ...(record.constraints ?? {}),
+    maxCostUsd: budget,
+  };
+
+  if (record.taskDescriptor) {
+    record.taskDescriptor.constraints = {
+      ...(record.taskDescriptor.constraints ?? {}),
+      max_cost_usd: budget,
+    };
+  }
 }
 
 /**
@@ -324,7 +365,7 @@ export function computeEligibility(record: EvalRecord): {
   }
 
   if (!hasBudgetSnapshot(record)) {
-    errors.add('missing_budget_snapshot');
+    errors.add('missing_budget');
   }
 
   const eligibilityErrors = [...errors].sort();
@@ -496,7 +537,7 @@ export function attachConstraints(
   }
 
   const normalized: EvalConstraints = {};
-  if (typeof constraints.maxCostUsd === 'number') {
+  if (isFiniteNonNegativeNumber(constraints.maxCostUsd)) {
     normalized.maxCostUsd = constraints.maxCostUsd;
   }
 
@@ -674,6 +715,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
   attachFallbackEvent(record, metadata.fallbackEvent || null);
   attachConstraints(record, metadata.constraints || null);
+  normalizeBudgetConstraints(record);
   attachBudgetViolation(record);
   if (metadata.rubricEval) {
     attachRubricEval(record, metadata.rubricEval);

@@ -208,12 +208,16 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     planDepth: 'deep',
     codeDepth: 'medium',
     reviewMode: 'llm',
+    maxCostUsd: 8.25,
   }));
   writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
     coder: 'gpt-5.4',
     reviewer: 'claude-sonnet-4-5-20250929',
     codeDepth: 'deep',
     reviewMode: 'static+llm',
+    constraints: {
+      maxCostUsd: 6.5,
+    },
   }));
 
   const result = readBothRouteArtifacts(featureDir);
@@ -224,6 +228,7 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     planDepth: 'deep',
     codeDepth: 'medium',
     reviewMode: 'llm',
+    maxCostUsd: 8.25,
     cache_hit: undefined,
     route_source: undefined,
     packet_hash: undefined,
@@ -235,10 +240,45 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     reviewMode: 'static+llm',
     planDepth: undefined,
     planner: undefined,
+    maxCostUsd: 6.5,
     cache_hit: undefined,
     route_source: undefined,
     packet_hash: undefined,
   });
+});
+
+test('readRouteLifecycleArtifacts preserves budget from archived route files', () => {
+  const archiveDir = mkdtempSync(join(tmpdir(), 'route-artifact-archive-'));
+  try {
+    writeFileSync(join(archiveDir, 'initial-route.json'), JSON.stringify({
+      coder: 'bootstrap-coder',
+      reviewer: 'bootstrap-reviewer',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+      maxCostUsd: 9,
+    }));
+    writeFileSync(join(archiveDir, 'post-expansion-route.json'), JSON.stringify({
+      coder: 'expanded-coder',
+      reviewer: 'expanded-reviewer',
+      codeDepth: 'deep',
+      reviewMode: 'llm',
+      constraints: { maxCostUsd: 7 },
+    }));
+    writeFileSync(join(archiveDir, 'routing-complete.json'), JSON.stringify({
+      coder: 'active-coder',
+      reviewer: 'active-reviewer',
+      codeDepth: 'deep',
+      reviewMode: 'llm',
+      maxCostUsd: 5.5,
+    }));
+
+    const result = readRouteLifecycleArtifacts(undefined, archiveDir);
+    assert.equal(result.bootstrap?.maxCostUsd, 9);
+    assert.equal(result.expanded?.maxCostUsd, 7);
+    assert.equal(result.active?.maxCostUsd, 5.5);
+  } finally {
+    rmSync(archiveDir, { recursive: true, force: true });
+  }
 });
 
 test('readBothRouteArtifacts exposes expanded route as authoritative when snapshots conflict', () => {
@@ -561,6 +601,24 @@ test('hasValidPostExpansionRoute returns ok for valid artifact', () => {
       reviewMode: 'llm',
     }));
     assert.deepEqual(hasValidPostExpansionRoute(dir), { ok: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('hasValidPostExpansionRoute rejects malformed budget metadata when present', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'route-artifact-'));
+  try {
+    writeFileSync(join(dir, '.post-expansion-route.json'), JSON.stringify({
+      coder: 'gpt-5.4',
+      codeDepth: 'medium',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'llm',
+      constraints: {
+        maxCostUsd: -1,
+      },
+    }));
+    assert.deepEqual(hasValidPostExpansionRoute(dir), { ok: false, reason: 'invalid-budget:maxCostUsd' });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

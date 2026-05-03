@@ -62,6 +62,9 @@
  * - **1.18.0**: Added optional `routeProvenance` field to `EvalRecord`
  *   (HOK-1517) so eval artifacts retain bootstrap, expanded, and active
  *   execution route attribution for operator-facing comparisons
+ * - **1.19.0**: Tightened budget-export eligibility and budget metadata
+ *   propagation (HOK-1497) so records require a real non-negative budget and
+ *   surface `missing_budget` when none is available
  *
  * @module eval-schema
  */
@@ -71,7 +74,7 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.18.0';
+export const SCHEMA_VERSION = '1.19.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -238,7 +241,7 @@ export type InterventionSeverity = 'low' | 'med' | 'high';
 export type EligibilityErrorCode =
   | 'missing_routing'
   | 'missing_cost'
-  | 'missing_budget_snapshot'
+  | 'missing_budget'
   | 'missing_outcome'
   | 'missing_task_descriptor'
   | 'missing_model_identity';

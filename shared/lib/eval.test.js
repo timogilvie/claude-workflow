@@ -41,7 +41,7 @@ describe('evaluateTask', () => {
 
     // Core EvalRecord fields from eval-schema.ts
     assert.ok(result.id, 'should have a UUID id');
-    assert.equal(result.schemaVersion, '1.18.0');
+    assert.equal(result.schemaVersion, '1.19.0');
     assert.equal(result.originalPrompt, 'Add a loading spinner');
     assert.ok(result.modelId);
     assert.ok(result.modelVersion);
@@ -57,7 +57,7 @@ describe('evaluateTask', () => {
     assert.equal(result.trainingEligible, false);
     assert.equal(result.budgetEvalEligible, false);
     assert.deepEqual(result.eligibilityErrors, [
-      'missing_budget_snapshot',
+      'missing_budget',
       'missing_cost',
       'missing_outcome',
       'missing_routing',

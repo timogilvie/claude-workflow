@@ -5,6 +5,7 @@
   },
   "mill": {
     "session": "wavemill",
+    "defaultMaxCostUsd": 25,
     "maxParallel": 7,
     "pollSeconds": 10,
     "baseBranch": "main",

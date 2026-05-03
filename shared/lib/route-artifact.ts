@@ -106,6 +106,7 @@ export interface NormalizedExpandedRouteArtifact {
 export interface RouteArtifactSnapshot extends NormalizedExpandedRouteArtifact {
   planDepth?: string;
   planner?: string;
+  maxCostUsd?: number;
   cache_hit?: boolean;
   route_source?: 'batch' | 'single' | 'cache';
   packet_hash?: string;
@@ -235,6 +236,24 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
+function readMaxCostUsd(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function extractMaxCostUsd(artifact: Record<string, unknown>): number | undefined {
+  const topLevel = readMaxCostUsd(artifact.maxCostUsd);
+  if (typeof topLevel === 'number') {
+    return topLevel;
+  }
+
+  const constraints = artifact.constraints;
+  if (!constraints || typeof constraints !== 'object' || Array.isArray(constraints)) {
+    return undefined;
+  }
+
+  return readMaxCostUsd((constraints as Record<string, unknown>).maxCostUsd);
+}
+
 function parseBootstrapRouteArtifact(value: unknown): RouteArtifactSnapshot | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
@@ -257,6 +276,7 @@ function parseBootstrapRouteArtifact(value: unknown): RouteArtifactSnapshot | nu
     reviewMode,
     planDepth: readString(artifact.planDepth),
     planner: readString(artifact.planner),
+    maxCostUsd: extractMaxCostUsd(artifact),
     cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
     route_source: artifact.route_source === 'batch' || artifact.route_source === 'single' || artifact.route_source === 'cache'
       ? artifact.route_source
@@ -292,6 +312,7 @@ function parseExpandedRouteArtifact(value: unknown): RouteArtifactSnapshot | nul
     ...validation.normalized,
     planDepth: readString(artifact.planDepth),
     planner: readString(artifact.planner),
+    maxCostUsd: extractMaxCostUsd(artifact),
     cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
     route_source: artifact.route_source === 'batch' || artifact.route_source === 'single' || artifact.route_source === 'cache'
       ? artifact.route_source
@@ -484,6 +505,19 @@ export function hasValidPostExpansionRoute(routeDir: string): { ok: boolean; rea
       ? validation.missing.join(',')
       : validation.invalid.join(',');
     return { ok: false, reason: `missing-required-field:${fields}` };
+  }
+
+  const artifact = value as Record<string, unknown>;
+  const hasTopLevelBudget = typeof artifact.maxCostUsd !== 'undefined';
+  const constraints = artifact.constraints;
+  const hasNestedBudget = Boolean(
+    constraints
+    && typeof constraints === 'object'
+    && !Array.isArray(constraints)
+    && 'maxCostUsd' in constraints,
+  );
+  if ((hasTopLevelBudget || hasNestedBudget) && typeof extractMaxCostUsd(artifact) !== 'number') {
+    return { ok: false, reason: 'invalid-budget:maxCostUsd' };
   }
 
   return { ok: true };

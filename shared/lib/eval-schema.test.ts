@@ -1315,7 +1315,7 @@ test('Eligibility fields validate and schema stays in parity', () => {
   assert.deepEqual(properties.eligibilityErrors?.items?.enum, [
     'missing_routing',
     'missing_cost',
-    'missing_budget_snapshot',
+    'missing_budget',
     'missing_outcome',
     'missing_task_descriptor',
     'missing_model_identity',
@@ -1366,7 +1366,7 @@ test('routeProvenance remains optional for legacy records', () => {
 test('routeProvenance validates when present', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
-    schemaVersion: '1.18.0',
+    schemaVersion: '1.19.0',
     routeProvenance: {
       decisionSource: 'expanded',
       bootstrapRoute: {
@@ -1435,8 +1435,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.18.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.18.0');
+test('Schema version constant is 1.19.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.19.0');
 });
 
 test('Legacy rows still validate without nonRewardReason', () => {
@@ -1447,7 +1447,7 @@ test('Legacy rows still validate without nonRewardReason', () => {
 test('Records validate with a complete nonRewardReason', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
-    schemaVersion: '1.18.0',
+    schemaVersion: '1.19.0',
     nonRewardReason: {
       code: 'INELIGIBLE_REWARD_NO_JUDGE',
       message: 'Reward not paid: record has no judge evaluation result.',
@@ -1461,7 +1461,7 @@ test('Records validate with a complete nonRewardReason', () => {
 test('Records reject nonRewardReason when message is missing', () => {
   const bad = {
     ...scenarios[0].record,
-    schemaVersion: '1.18.0',
+    schemaVersion: '1.19.0',
     nonRewardReason: {
       code: 'INELIGIBLE_REWARD_NO_JUDGE',
     },

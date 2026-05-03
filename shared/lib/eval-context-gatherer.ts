@@ -307,6 +307,21 @@ export interface RoutingCompleteData {
   maxCostUsd?: number;
 }
 
+function readMaxCostUsdFromRoutingData(data: Record<string, unknown>): number | undefined {
+  const topLevel = data.maxCostUsd;
+  if (typeof topLevel === 'number' && Number.isFinite(topLevel) && topLevel >= 0) {
+    return topLevel;
+  }
+
+  const constraints = data.constraints;
+  if (!constraints || typeof constraints !== 'object' || Array.isArray(constraints)) {
+    return undefined;
+  }
+
+  const nested = (constraints as Record<string, unknown>).maxCostUsd;
+  return typeof nested === 'number' && Number.isFinite(nested) && nested >= 0 ? nested : undefined;
+}
+
 /**
  * Convert raw routing data to the RoutingDecision schema.
  *
@@ -375,12 +390,24 @@ export function fetchRoutingDecision(
           typeof data.planner !== 'string' ||
           typeof data.coder !== 'string' ||
           typeof data.reviewer !== 'string' ||
-          (data.maxCostUsd !== undefined && typeof data.maxCostUsd !== 'number')
+          (
+            (typeof data.maxCostUsd !== 'undefined'
+              || (
+                data.constraints
+                && typeof data.constraints === 'object'
+                && !Array.isArray(data.constraints)
+                && 'maxCostUsd' in (data.constraints as Record<string, unknown>)
+              ))
+            && typeof readMaxCostUsdFromRoutingData(data) !== 'number'
+          )
         ) {
           return null;
         }
 
-        return convertToRoutingDecision(data as unknown as RoutingCompleteData);
+        return convertToRoutingDecision({
+          ...data,
+          maxCostUsd: readMaxCostUsdFromRoutingData(data),
+        } as RoutingCompleteData);
       } catch {
         return null;
       }
@@ -393,15 +420,33 @@ export function fetchRoutingDecision(
 function parseRoutingCompleteData(raw: string): RoutingCompleteData | null {
   try {
     const data = JSON.parse(raw) as Record<string, unknown>;
+    const maxCostUsd = readMaxCostUsdFromRoutingData(data);
     if (
       typeof data.planner !== 'string' ||
       typeof data.coder !== 'string' ||
       typeof data.reviewer !== 'string' ||
-      (data.maxCostUsd !== undefined && typeof data.maxCostUsd !== 'number')
+      (
+        (typeof data.maxCostUsd !== 'undefined'
+          || (
+            data.constraints
+            && typeof data.constraints === 'object'
+            && !Array.isArray(data.constraints)
+            && 'maxCostUsd' in (data.constraints as Record<string, unknown>)
+          ))
+        && typeof maxCostUsd !== 'number'
+      )
     ) {
       return null;
     }
-    return data as RoutingCompleteData;
+    return {
+      planner: data.planner,
+      coder: data.coder,
+      reviewer: data.reviewer,
+      ...(typeof data.planDepth === 'string' ? { planDepth: data.planDepth } : {}),
+      ...(typeof data.codeDepth === 'string' ? { codeDepth: data.codeDepth } : {}),
+      ...(typeof data.reviewMode === 'string' ? { reviewMode: data.reviewMode } : {}),
+      ...(typeof maxCostUsd === 'number' ? { maxCostUsd } : {}),
+    };
   } catch {
     return null;
   }

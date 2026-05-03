@@ -335,13 +335,37 @@ describe('eval-record-builder', () => {
       } as EvalRecord;
 
       expect(computeEligibility(record).eligibilityErrors).toEqual([
-        'missing_budget_snapshot',
+        'missing_budget',
         'missing_cost',
         'missing_model_identity',
         'missing_outcome',
         'missing_routing',
         'missing_task_descriptor',
       ]);
+    });
+
+    it('marks empty constraints as missing budget', () => {
+      const record = makeEligibleRecord();
+      record.constraints = {};
+      if (record.taskDescriptor?.constraints) {
+        delete record.taskDescriptor.constraints.max_cost_usd;
+      }
+
+      const result = computeEligibility({
+        ...record,
+      });
+
+      expect(result.budgetEvalEligible).toBe(false);
+      expect(result.eligibilityErrors).toContain('missing_budget');
+    });
+
+    it('accepts task descriptor budget when record constraints are absent', () => {
+      const record = makeEligibleRecord();
+      delete record.constraints;
+
+      const result = computeEligibility(record);
+      expect(result.budgetEvalEligible).toBe(true);
+      expect(result.eligibilityErrors.includes('missing_budget')).toBe(false);
     });
 
     it('is a no-op for null records', () => {
@@ -388,6 +412,66 @@ describe('eval-record-builder', () => {
       expect(baseRecord.constraints).toEqual({ maxCostUsd: 10 });
       expect(baseRecord.provider).toBe('deepseek');
       expect(baseRecord.endpoint).toBe('https://api.deepseek.com/anthropic');
+    });
+
+    it('enrichEvalRecord dual-writes budget to task descriptor constraints', () => {
+      enrichEvalRecord(baseRecord, {
+        constraints: { maxCostUsd: 10 },
+        taskDescriptor: {
+          category: 'frontend_bugfix',
+          signals: {
+            heuristic: {
+              complexity: 'medium',
+              files_touched: 2,
+              has_tests: true,
+              cross_service: false,
+            },
+            learned: {
+              complexity: 3,
+              domain: 'frontend',
+              risk_flags: [],
+            },
+          },
+          constraints: {
+            objective: 'balanced',
+            models_available: ['gpt-5.4'],
+          },
+          stages: {},
+        },
+      });
+
+      expect(baseRecord.constraints).toEqual({ maxCostUsd: 10 });
+      expect(baseRecord.taskDescriptor?.constraints?.max_cost_usd).toBe(10);
+    });
+
+    it('enrichEvalRecord copies task descriptor budget into record constraints', () => {
+      enrichEvalRecord(baseRecord, {
+        taskDescriptor: {
+          category: 'frontend_bugfix',
+          signals: {
+            heuristic: {
+              complexity: 'medium',
+              files_touched: 2,
+              has_tests: true,
+              cross_service: false,
+            },
+            learned: {
+              complexity: 3,
+              domain: 'frontend',
+              risk_flags: [],
+            },
+          },
+          constraints: {
+            max_cost_usd: 0,
+            objective: 'balanced',
+            models_available: ['gpt-5.4'],
+          },
+          stages: {},
+        },
+      });
+
+      expect(baseRecord.constraints).toEqual({ maxCostUsd: 0 });
+      expect(baseRecord.taskDescriptor?.constraints?.max_cost_usd).toBe(0);
     });
   });
 

@@ -1066,6 +1066,11 @@ test('shell defaults define a 25 USD mill budget', () => {
   assert.match(content, /"defaultMaxCostUsd": 25(?:\.00)?/);
 });
 
+test('committed beta config defines a 25 USD mill budget', () => {
+  const content = readFileSync(join(process.cwd(), '.wavemill-config.json'), 'utf-8');
+  assert.match(content, /"defaultMaxCostUsd": 25(?:\.00)?/);
+});
+
 test('shell defaults define a 60 second git fetch TTL', () => {
   const commonLib = join(process.cwd(), 'shared', 'lib', 'wavemill-common.sh');
   const content = readFileSync(commonLib, 'utf-8');

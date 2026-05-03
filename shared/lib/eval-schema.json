@@ -213,7 +213,7 @@
         "enum": [
           "missing_routing",
           "missing_cost",
-          "missing_budget_snapshot",
+          "missing_budget",
           "missing_outcome",
           "missing_task_descriptor",
           "missing_model_identity"

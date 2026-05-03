@@ -534,5 +534,34 @@ describe('eval-context-gatherer', () => {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
     });
+
+    it('reads nested constraints.maxCostUsd from archived routing data', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-1497';
+      const archiveDir = nodePath.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId);
+      fs.mkdirSync(archiveDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(archiveDir, 'routing-complete.json'),
+        JSON.stringify({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+          constraints: {
+            maxCostUsd: 4.75,
+          },
+        }),
+      );
+
+      try {
+        expect(fetchRoutingCompleteRawWithArchive(repoDir, 'my-feature', issueId)).toEqual({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+          maxCostUsd: 4.75,
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
   });
 });
