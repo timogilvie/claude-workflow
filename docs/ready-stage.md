@@ -32,6 +32,7 @@ The target check categories for the ready stage are:
 - merge conflicts
 - branch freshness
 - release and manual-step requirements
+- migration safety checks for risky Alembic DDL
 
 Current implementation details:
 
@@ -344,6 +345,20 @@ Workflow expectations:
 - the ready contract remains stable even as checks are added
 - existing review and merge workflows continue after the ready gate reports `pass` or `warn`
 
+`forbidden-ddl` inspects changed migration files with Python AST parsing and evaluates these rules inside `upgrade()`:
+
+- `add_column_non_nullable_no_default`: `fail`
+- `drop_column`: `fail` unless the PR has `migration:destructive`
+- `drop_table`: `fail` unless the PR has `migration:destructive`
+- `alter_column_type`: `warn` unless the PR has `migration:long-running`
+- `execute_dml`: `warn` with guidance to run the backfill as a separate online job
+
+Analyzer scope:
+
+- only `op.*` calls inside `upgrade()` are inspected
+- `op.execute(...)` only warns on literal SQL strings containing `UPDATE`, `INSERT`, or `DELETE`
+- string literals that merely mention dangerous operations do not trigger findings
+
 Minimal explicit configuration:
 
 ```json
@@ -351,7 +366,13 @@ Minimal explicit configuration:
   "ready": {
     "checks": [],
     "requiredChecks": [],
-    "migrationPatterns": ["migrations/", "alembic/versions/"]
+    "migrationPatterns": ["migrations/", "alembic/versions/"],
+    "migrationDangerLabels": {
+      "drop_column": "migration:destructive",
+      "drop_table": "migration:destructive",
+      "alter_column_type": "migration:long-running"
+    },
+    "migrationForbiddenPatterns": []
   }
 }
 ```

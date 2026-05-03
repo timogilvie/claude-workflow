@@ -630,6 +630,26 @@
                     ],
                     "description": "Regex patterns used to identify migration files across the repository."
                 },
+                "migrationDangerLabels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "default": {
+                        "drop_column": "migration:destructive",
+                        "drop_table": "migration:destructive",
+                        "alter_column_type": "migration:long-running"
+                    },
+                    "description": "Mapping of forbidden-DDL analyzer rule names to the PR label required to acknowledge that risk."
+                },
+                "migrationForbiddenPatterns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Reserved repository-specific forbidden migration patterns for future ready-stage policy extensions."
+                },
                 "remediation": {
                     "type": "object",
                     "description": "Automatic remediation settings for fixable ready-check failures.",

@@ -308,6 +308,8 @@ export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
   migrationPatterns?: string[];
+  migrationDangerLabels?: Record<string, string>;
+  migrationForbiddenPatterns?: string[];
   remediation?: ReadyRemediationConfig;
 }
 
@@ -421,6 +423,12 @@ export const DEFAULT_READY_MIGRATION_PATTERNS = [
   'migrations/',
   'alembic/versions/',
 ] as const;
+
+export const DEFAULT_READY_MIGRATION_DANGER_LABELS = {
+  drop_column: 'migration:destructive',
+  drop_table: 'migration:destructive',
+  alter_column_type: 'migration:long-running',
+} as const;
 
 // ────────────────────────────────────────────────────────────────
 // Schema Validation
@@ -791,6 +799,11 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
     migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    migrationDangerLabels: {
+      ...DEFAULT_READY_MIGRATION_DANGER_LABELS,
+      ...(config.ready?.migrationDangerLabels ?? {}),
+    },
+    migrationForbiddenPatterns: config.ready?.migrationForbiddenPatterns ?? [],
     remediation: {
       enabled: config.ready?.remediation?.enabled ?? true,
       maxAttempts: config.ready?.remediation?.maxAttempts ?? 3,
