@@ -14,6 +14,7 @@ import {
   computeVerdict,
   checkLegacyMarkers,
   controllerCheckReadiness,
+  MIGRATION_IRREVERSIBLE_LABEL,
   type ReadyResult,
   type ReadyCheck,
   type LegacyMarkerResult,
@@ -405,191 +406,358 @@ describe('ready-stage', () => {
     let repoDir: string;
 
     beforeEach(async () => {
-      repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-migration-reversibility-'));
+      repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-reversibility-'));
     });
 
     afterEach(async () => {
       await fs.rm(repoDir, { recursive: true, force: true });
     });
 
-    async function writeFixture(targetName: string, fixtureName: string): Promise<void> {
-      await writeRepoFiles(repoDir, {
-        [`alembic/versions/${targetName}`]: await loadMigrationFixture(fixtureName),
-      });
+    async function copyFixtureInto(repoSubdir: string, fixtureName: string, asName?: string) {
+      const fixturePath = path.resolve(
+        path.dirname(new URL(import.meta.url).pathname),
+        '..',
+        '..',
+        'tests',
+        'fixtures',
+        'migrations',
+        fixtureName
+      );
+      const content = await fs.readFile(fixturePath, 'utf-8');
+      const target = path.join(repoDir, repoSubdir, asName ?? fixtureName);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, content, 'utf-8');
+      return path.relative(repoDir, target);
     }
 
-    it('fails for pass-only downgrade bodies', async () => {
-      await writeFixture('001_pass.py', 'downgrade_pass.py');
-
-      const result = await checkMigrationReversibility(['alembic/versions/001_pass.py'], repoDir);
-      assert.equal(result.status, 'fail');
-      assert.match(result.message, /non-functional downgrade/);
-      assert.deepEqual(result.details?.invalidDowngrades, [
-        {
-          file: 'alembic/versions/001_pass.py',
-          reason: 'downgrade body only contains pass statements',
-        },
-      ]);
+    it('skips when no migration files are in the change set', async () => {
+      const result = await checkMigrationReversibility(
+        ['src/app.ts', 'README.md'],
+        repoDir,
+        []
+      );
+      assert.equal(result.status, 'skip');
+      assert.equal(result.name, 'migration-reversibility');
     });
 
-    it('fails for docstring-only downgrade bodies', async () => {
-      await writeFixture('002_docstring.py', 'downgrade_docstring_only.py');
-
-      const result = await checkMigrationReversibility(['alembic/versions/002_docstring.py'], repoDir);
+    it('fails on pass-only downgrade', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'empty_pass_downgrade.py'
+      );
+      const result = await checkMigrationReversibility([file], repoDir, []);
       assert.equal(result.status, 'fail');
-      assert.deepEqual(result.details?.invalidDowngrades, [
-        {
-          file: 'alembic/versions/002_docstring.py',
-          reason: 'downgrade body only contains a docstring',
-        },
-      ]);
+      assert.match(result.message, /executable downgrade/);
+      const failures = result.details?.failures as Array<Record<string, unknown>>;
+      assert.ok(Array.isArray(failures) && failures.length === 1);
+      assert.equal(failures[0].reason, 'empty-pass');
     });
 
-    it('fails for docstring plus pass downgrade bodies', async () => {
-      await writeFixture('003_docstring_pass.py', 'downgrade_docstring_pass.py');
-
-      const result = await checkMigrationReversibility(['alembic/versions/003_docstring_pass.py'], repoDir);
+    it('fails on docstring-only downgrade', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'docstring_only_downgrade.py'
+      );
+      const result = await checkMigrationReversibility([file], repoDir, []);
       assert.equal(result.status, 'fail');
-      assert.deepEqual(result.details?.invalidDowngrades, [
-        {
-          file: 'alembic/versions/003_docstring_pass.py',
-          reason: 'downgrade body only contains pass statements',
-        },
-      ]);
+      const failures = result.details?.failures as Array<Record<string, unknown>>;
+      assert.equal(failures[0].reason, 'empty-docstring');
     });
 
-    it('fails for raise NotImplementedError downgrade bodies', async () => {
-      await writeFixture('004_not_implemented_name.py', 'downgrade_not_implemented_name.py');
-      await writeFixture('005_not_implemented_call.py', 'downgrade_not_implemented_call.py');
-
-      const result = await checkMigrationReversibility([
-        'alembic/versions/004_not_implemented_name.py',
-        'alembic/versions/005_not_implemented_call.py',
-      ], repoDir);
-
+    it('fails on docstring + pass downgrade', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'docstring_pass_downgrade.py'
+      );
+      const result = await checkMigrationReversibility([file], repoDir, []);
       assert.equal(result.status, 'fail');
-      assert.deepEqual(result.details?.invalidDowngrades, [
-        {
-          file: 'alembic/versions/004_not_implemented_name.py',
-          reason: 'downgrade body is non-functional (pass or NotImplementedError only)',
-        },
-        {
-          file: 'alembic/versions/005_not_implemented_call.py',
-          reason: 'downgrade body is non-functional (pass or NotImplementedError only)',
-        },
-      ]);
+      const failures = result.details?.failures as Array<Record<string, unknown>>;
+      assert.equal(failures[0].reason, 'empty-pass');
     });
 
-    it('passes for a real downgrade body', async () => {
-      await writeFixture('006_real.py', 'downgrade_real.py');
+    it('fails on bare raise NotImplementedError', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'not_implemented_bare_downgrade.py'
+      );
+      const result = await checkMigrationReversibility([file], repoDir, []);
+      assert.equal(result.status, 'fail');
+      const failures = result.details?.failures as Array<Record<string, unknown>>;
+      assert.equal(failures[0].reason, 'not-implemented');
+    });
 
-      const result = await checkMigrationReversibility(['alembic/versions/006_real.py'], repoDir);
+    it('fails on raise NotImplementedError(...)', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'not_implemented_called_downgrade.py'
+      );
+      const result = await checkMigrationReversibility([file], repoDir, []);
+      assert.equal(result.status, 'fail');
+      const failures = result.details?.failures as Array<Record<string, unknown>>;
+      assert.equal(failures[0].reason, 'not-implemented');
+    });
+
+    it('fails when downgrade() is missing', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'missing_downgrade.py'
+      );
+      const result = await checkMigrationReversibility([file], repoDir, []);
+      assert.equal(result.status, 'fail');
+      const failures = result.details?.failures as Array<Record<string, unknown>>;
+      assert.equal(failures[0].reason, 'missing-downgrade');
+    });
+
+    it('passes when downgrade() is non-trivial', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'non_trivial_downgrade.py'
+      );
+      const result = await checkMigrationReversibility([file], repoDir, []);
       assert.equal(result.status, 'pass');
       assert.match(result.message, /non-trivial downgrade/);
     });
 
-    it('converts failure to pass with the exact migration:irreversible label', async () => {
-      await writeFixture('007_irreversible.py', 'downgrade_pass.py');
-
-      const result = await checkMigrationReversibility(
-        ['alembic/versions/007_irreversible.py'],
-        repoDir,
-        ['migration:irreversible']
+    it('migration:irreversible label converts a hard failure into pass with overrides recorded', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'empty_pass_downgrade.py'
       );
-
+      const result = await checkMigrationReversibility(
+        [file],
+        repoDir,
+        [MIGRATION_IRREVERSIBLE_LABEL]
+      );
       assert.equal(result.status, 'pass');
-      assert.match(result.message, /explicitly approved/);
-      assert.equal(result.details?.overrideLabelApplied, true);
+      assert.match(result.message, /overridden/);
+      assert.equal(result.details?.overrideApplied, true);
+      const overridden = result.details?.overriddenFailures as Array<Record<string, unknown>>;
+      assert.ok(Array.isArray(overridden) && overridden.length === 1);
+      assert.equal(overridden[0].reason, 'empty-pass');
     });
 
-    it('does not accept similarly named labels', async () => {
-      await writeFixture('008_irreversible.py', 'downgrade_pass.py');
-
+    it('migration:irreversible label match is case-insensitive', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'empty_pass_downgrade.py'
+      );
       const result = await checkMigrationReversibility(
-        ['alembic/versions/008_irreversible.py'],
+        [file],
         repoDir,
-        ['Migration:Irreversible', 'irreversible']
+        ['Migration:Irreversible']
+      );
+      assert.equal(result.status, 'pass');
+      assert.equal(result.details?.overrideApplied, true);
+    });
+
+    it('soft-warns when upgrade() drops data even with non-trivial downgrade', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'destructive_upgrade.py'
+      );
+      const result = await checkMigrationReversibility([file], repoDir, []);
+      assert.equal(result.status, 'pass');
+      const warnings = result.details?.warnings as Array<Record<string, unknown>>;
+      assert.ok(Array.isArray(warnings) && warnings.length === 1);
+      const ops = warnings[0].destructiveOperations as string[];
+      assert.deepEqual(new Set(ops), new Set(['op.drop_column', 'op.drop_table']));
+    });
+
+    it('returns a hard failure for malformed Python rather than throwing', async () => {
+      const file = await copyFixtureInto(
+        'migrations/versions',
+        'malformed_syntax.py'
+      );
+      const result = await checkMigrationReversibility([file], repoDir, []);
+      assert.equal(result.status, 'fail');
+      const failures = result.details?.failures as Array<Record<string, unknown>>;
+      assert.equal(failures[0].reason, 'parse-error');
+    });
+
+    it('honors configured ready.migrationPatterns', async () => {
+      const file = await copyFixtureInto(
+        'db/revisions',
+        'empty_pass_downgrade.py'
       );
 
-      assert.equal(result.status, 'fail');
-    });
-
-    it('warns when upgrade drops a column even with a non-trivial downgrade', async () => {
-      await writeFixture('009_drop_column.py', 'upgrade_drops_column.py');
-
-      const result = await checkMigrationReversibility(['alembic/versions/009_drop_column.py'], repoDir);
-      assert.equal(result.status, 'warn');
-      assert.deepEqual(result.details?.destructiveUpgradeOps, [
-        {
-          file: 'alembic/versions/009_drop_column.py',
-          operations: ['drop_column'],
-        },
-      ]);
-    });
-
-    it('warns when upgrade drops a table even with a non-trivial downgrade', async () => {
-      await writeFixture('010_drop_table.py', 'upgrade_drops_table.py');
-
-      const result = await checkMigrationReversibility(['alembic/versions/010_drop_table.py'], repoDir);
-      assert.equal(result.status, 'warn');
-      assert.deepEqual(result.details?.destructiveUpgradeOps, [
-        {
-          file: 'alembic/versions/010_drop_table.py',
-          operations: ['drop_table'],
-        },
-      ]);
-    });
-
-    it('skips when no migration files changed', async () => {
-      const result = await checkMigrationReversibility(['src/app.ts'], repoDir);
-      assert.equal(result.status, 'skip');
-      assert.match(result.message, /No migration files changed/);
-    });
-
-    it('skips when the changed path is not a recognizable migration', async () => {
-      await writeFixture('011_not_a_migration.py', 'not_a_migration.py');
-
-      const result = await checkMigrationReversibility(['alembic/versions/011_not_a_migration.py'], repoDir);
-      assert.equal(result.status, 'skip');
-      assert.match(result.message, /No recognizable migration files changed/);
-    });
-
-    it('fails mixed PRs when any migration has a bad downgrade', async () => {
-      await writeFixture('012_real.py', 'downgrade_real.py');
-      await writeFixture('013_bad.py', 'downgrade_pass.py');
-
-      const result = await checkMigrationReversibility([
-        'alembic/versions/012_real.py',
-        'alembic/versions/013_bad.py',
-      ], repoDir);
-
-      assert.equal(result.status, 'fail');
-      assert.deepEqual(result.details?.invalidDowngrades, [
-        {
-          file: 'alembic/versions/013_bad.py',
-          reason: 'downgrade body only contains pass statements',
-        },
-      ]);
-    });
-
-    it('honors custom migration patterns', async () => {
-      await writeRepoFiles(repoDir, {
-        '.wavemill-config.json': JSON.stringify({
-          ready: {
-            migrationPatterns: ['db/revisions/'],
-          },
-        }),
-        'db/revisions/014_pass.py': await loadMigrationFixture('downgrade_pass.py'),
-      });
+      const skipped = await checkMigrationReversibility([file], repoDir, []);
+      assert.equal(skipped.status, 'skip', 'default patterns should skip db/revisions');
 
       const result = await checkMigrationReversibility(
-        ['db/revisions/014_pass.py'],
+        [file],
         repoDir,
         [],
         ['db/revisions/']
       );
-
       assert.equal(result.status, 'fail');
+    });
+
+    it('reports multiple failures across migration files', async () => {
+      const fileA = await copyFixtureInto(
+        'migrations/versions',
+        'empty_pass_downgrade.py',
+        '001_a.py'
+      );
+      const fileB = await copyFixtureInto(
+        'migrations/versions',
+        'not_implemented_bare_downgrade.py',
+        '002_b.py'
+      );
+      const result = await checkMigrationReversibility([fileA, fileB], repoDir, []);
+      assert.equal(result.status, 'fail');
+      const failures = result.details?.failures as Array<Record<string, unknown>>;
+      assert.equal(failures.length, 2);
+      const reasons = failures.map(f => f.reason).sort();
+      assert.deepEqual(reasons, ['empty-pass', 'not-implemented']);
+    });
+  });
+
+  describe('runReadyStage migration-reversibility integration', () => {
+    it('omits migration-reversibility when ready.checks restricts to ci-status', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-rev-allowlist-'));
+      const fixtureSrc = path.resolve(
+        path.dirname(new URL(import.meta.url).pathname),
+        '..',
+        '..',
+        'tests',
+        'fixtures',
+        'migrations',
+        'empty_pass_downgrade.py'
+      );
+      const fixtureContent = await fs.readFile(fixtureSrc, 'utf-8');
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: { checks: ['ci-status'], requiredChecks: ['ci-status'] },
+        }),
+        'migrations/versions/001_pass.py': fixtureContent,
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+          }
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [{ path: 'migrations/versions/001_pass.py' }],
+            labels: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) return '';
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.deepEqual(result.checks.map(c => c.name), ['ci-status']);
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('runs only migration-reversibility when ready.checks restricts to it and uses PR labels', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-rev-only-'));
+      const fixtureSrc = path.resolve(
+        path.dirname(new URL(import.meta.url).pathname),
+        '..',
+        '..',
+        'tests',
+        'fixtures',
+        'migrations',
+        'empty_pass_downgrade.py'
+      );
+      const fixtureContent = await fs.readFile(fixtureSrc, 'utf-8');
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: { checks: ['migration-reversibility'] },
+        }),
+        'migrations/versions/001_pass.py': fixtureContent,
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+          }
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [{ path: 'migrations/versions/001_pass.py' }],
+            labels: [{ name: MIGRATION_IRREVERSIBLE_LABEL }],
+          });
+        }
+        if (cmd.includes('gh pr diff')) return '';
+        if (cmd.includes('gh pr checks')) return JSON.stringify([]);
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.deepEqual(result.checks.map(c => c.name), ['migration-reversibility']);
+        assert.equal(result.checks[0]?.status, 'pass');
+        assert.equal(result.checks[0]?.details?.overrideApplied, true);
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('treats missing labels in gh pr view payload as no override', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-rev-nolabels-'));
+      const fixtureSrc = path.resolve(
+        path.dirname(new URL(import.meta.url).pathname),
+        '..',
+        '..',
+        'tests',
+        'fixtures',
+        'migrations',
+        'empty_pass_downgrade.py'
+      );
+      const fixtureContent = await fs.readFile(fixtureSrc, 'utf-8');
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: { checks: ['migration-reversibility'] },
+        }),
+        'migrations/versions/001_pass.py': fixtureContent,
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+          }
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [{ path: 'migrations/versions/001_pass.py' }],
+            // labels intentionally omitted to simulate older mocks
+          });
+        }
+        if (cmd.includes('gh pr diff')) return '';
+        if (cmd.includes('gh pr checks')) return JSON.stringify([]);
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.deepEqual(result.checks.map(c => c.name), ['migration-reversibility']);
+        assert.equal(result.checks[0]?.status, 'fail');
+        assert.equal(result.verdict, 'fail');
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
     });
   });
 
