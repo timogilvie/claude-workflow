@@ -12,6 +12,7 @@ import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts
 import {
   buildRouteProvenance,
   withExpandedRouteMetadata,
+  withResolvedRouteBudget,
   withRouteProvenance,
   type RouteInputKind,
   type RouteSource,
@@ -241,7 +242,11 @@ export async function routeBatch(
 
   const results: RouteBatchResult[] = [];
   for (const task of resolvedTasks) {
-    const decision = await routeTaskInBatch(task.prompt, resolvedOptions, operatingMode, stageAwareContext);
+    const routedDecision = await routeTaskInBatch(task.prompt, resolvedOptions, operatingMode, stageAwareContext);
+    const decision = withResolvedRouteBudget(routedDecision, {
+      explicitMaxCostUsd: resolvedOptions.maxCostUsd,
+      repoDir,
+    });
     const source = task.source
       || resolvedOptions.source
       || (mode === 'heuristic' ? 'heuristic-fallback' : task.file ? 'expanded' : 'live');
@@ -354,13 +359,17 @@ export async function routeExpandedPackets(
       continue;
     }
 
+    const cachedDecision = withResolvedRouteBudget(cached.decision, {
+      explicitMaxCostUsd: resolvedOptions.maxCostUsd,
+      repoDir,
+    });
     results.set(task.key, {
       input: task,
       outputFile: task.outputFile,
       packet_hash: task.packet_hash,
       cache_hit: true,
       route_source: 'cache',
-      decision: withExpandedRouteMetadata(cached.decision, {
+      decision: withExpandedRouteMetadata(cachedDecision, {
         cache_hit: true,
         route_source: 'cache',
         packet_hash: task.packet_hash,
@@ -373,7 +382,11 @@ export async function routeExpandedPackets(
     decision: WorkflowRouteDecision,
     routeSource: 'batch' | 'single',
   ): Promise<void> => {
-    const decorated = withExpandedRouteMetadata(decision, {
+    const budgetedDecision = withResolvedRouteBudget(decision, {
+      explicitMaxCostUsd: resolvedOptions.maxCostUsd,
+      repoDir,
+    });
+    const decorated = withExpandedRouteMetadata(budgetedDecision, {
       cache_hit: false,
       route_source: routeSource,
       packet_hash: task.packet_hash,

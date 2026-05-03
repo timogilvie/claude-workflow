@@ -13,7 +13,8 @@
     "requireConfirm": false,
     "planningMode": "interactive",
     "maxRetries": 3,
-    "retryDelay": 2
+    "retryDelay": 2,
+    "defaultMaxCostUsd": 25.00
   },
   "expand": {
     "maxSelect": 3,

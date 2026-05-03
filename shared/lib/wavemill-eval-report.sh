@@ -342,11 +342,15 @@ fi
 # TERMINAL OUTPUT HELPERS
 # ============================================================================
 
+SCORE_COLOR_GREEN_MIN="0.8"
+SCORE_COLOR_YELLOW_MIN="0.5"
+
 score_color() {
   local score="$1"
-  if awk "BEGIN {exit !($score >= 0.8)}" 2>/dev/null; then
+  # Display color bands are intentionally broader than eval-success classification.
+  if awk "BEGIN {exit !($score >= $SCORE_COLOR_GREEN_MIN)}" 2>/dev/null; then
     printf '%s' "$GREEN"
-  elif awk "BEGIN {exit !($score >= 0.5)}" 2>/dev/null; then
+  elif awk "BEGIN {exit !($score >= $SCORE_COLOR_YELLOW_MIN)}" 2>/dev/null; then
     printf '%s' "$YELLOW"
   else
     printf '%s' "$RED"

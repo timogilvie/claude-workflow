@@ -24,7 +24,7 @@ async function test(name: string, fn: () => void | Promise<void>) {
   }
 }
 
-function makeRepo(): { repoDir: string; cleanup: () => void } {
+function makeRepo(configOverrides: Record<string, unknown> = {}): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'hokusai-router-test-'));
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
@@ -33,6 +33,7 @@ function makeRepo(): { repoDir: string; cleanup: () => void } {
         endpoint: 'http://localhost:8080/predict',
         timeout: 100,
       },
+      ...configOverrides,
     },
   }));
   clearConfigCache(repoDir);
@@ -168,6 +169,95 @@ await test('maxCostUsd is passed through to the Hokusai request', async () => {
     await routeViaHokusai('Implement a backend feature with tests.', { repoDir, maxCostUsd: 3.25 });
     const parsed = JSON.parse(requestBody);
     assert.equal(parsed.constraints.max_cost_usd, 3.25);
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+await test('configured router availability populates descriptor and stage pools', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    availableModels: {
+      planner: ['gpt-5.5', 'claude-opus-4-7'],
+      coder: ['gpt-5.4', 'gpt-5.3-codex'],
+      reviewer: ['claude-sonnet-4-6'],
+    },
+  });
+  let requestBody = '';
+  globalThis.fetch = async (_input, init) => {
+    requestBody = String(init?.body ?? '');
+    return new Response(JSON.stringify({
+      schema_version: '1.0',
+      route: {
+        planner_model: 'gpt-5.5',
+        coder_model: 'gpt-5.4',
+        reviewer_model: 'claude-sonnet-4-6',
+        plan_depth: 'medium',
+        code_depth: 'medium',
+        review_mode: 'standard',
+      },
+      predictions: {
+        expected_success_probability: 0.8,
+        expected_cost_usd: 1.7,
+        confidence: 0.65,
+      },
+    }), { status: 200 });
+  };
+
+  try {
+    await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
+    const parsed = JSON.parse(requestBody);
+    assert.deepEqual(parsed.available_models, {
+      planner_models: ['gpt-5.5', 'claude-opus-4-7'],
+      coder_models: ['gpt-5.4', 'gpt-5.3-codex'],
+      reviewer_models: ['claude-sonnet-4-6'],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+await test('explicit modelsAvailable overrides configured descriptor availability', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    availableModels: {
+      planner: ['gpt-5.5', 'claude-opus-4-7'],
+      coder: ['gpt-5.4', 'gpt-5.3-codex'],
+      reviewer: ['claude-sonnet-4-6'],
+    },
+  });
+  let requestBody = '';
+  globalThis.fetch = async (_input, init) => {
+    requestBody = String(init?.body ?? '');
+    return new Response(JSON.stringify({
+      schema_version: '1.0',
+      route: {
+        planner_model: 'override-model',
+        coder_model: 'override-model',
+        reviewer_model: 'override-model',
+        plan_depth: 'low',
+        code_depth: 'low',
+        review_mode: 'light',
+      },
+      predictions: {
+        expected_success_probability: 0.6,
+        expected_cost_usd: 0.9,
+        confidence: 0.55,
+      },
+    }), { status: 200 });
+  };
+
+  try {
+    await routeViaHokusai('Implement a backend feature with tests.', {
+      repoDir,
+      modelsAvailable: ['override-model'],
+    });
+    const parsed = JSON.parse(requestBody);
+    assert.deepEqual(parsed.available_models, {
+      planner_models: ['override-model'],
+      coder_models: ['override-model'],
+      reviewer_models: ['override-model'],
+    });
   } finally {
     globalThis.fetch = originalFetch;
     cleanup();

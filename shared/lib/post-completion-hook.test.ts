@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
+import { clearConfigCache } from './config.ts';
 import { enrichPostCompletionRecord, runPostCompletionEval } from './post-completion-hook.ts';
 
 let passed = 0;
@@ -52,11 +53,49 @@ await test('enrichPostCompletionRecord attaches taskDescriptor for persisted rec
   const featureDir = join(repoDir, 'features', 'enrich-task');
   mkdirSync(featureDir, { recursive: true });
   writeFileSync(
+    join(repoDir, '.wavemill-config.json'),
+    JSON.stringify({
+      router: {
+        availableModels: {
+          planner: ['gpt-5.5', 'claude-opus-4-7'],
+          coder: ['gpt-5.4', 'gpt-5.3-codex'],
+          reviewer: ['claude-sonnet-4-6'],
+        },
+      },
+      modelRegistry: {
+        models: {
+          'gpt-5.3-codex': {
+            vendor: 'openai',
+            class: 'strong_generalist',
+            strengths: ['coding'],
+            weaknesses: ['none'],
+            qualityScores: { coding: 89 },
+            agent: 'codex',
+          },
+        },
+      },
+    }),
+  );
+  clearConfigCache(repoDir);
+  writeFileSync(
     join(featureDir, '.routing-complete'),
     JSON.stringify({
       planner: 'claude-opus-4-6',
       coder: 'gpt-5.3-codex',
       reviewer: 'claude-sonnet-4-5-20250929',
+      codeDepth: 'deep',
+      reviewMode: 'full',
+      maxCostUsd: 6.5,
+    }),
+  );
+  writeFileSync(
+    join(featureDir, '.initial-route.json'),
+    JSON.stringify({
+      planner: 'claude-opus-4-6',
+      coder: 'gpt-5.3-codex',
+      reviewer: 'claude-sonnet-4-5-20250929',
+      codeDepth: 'deep',
+      reviewMode: 'full',
     }),
   );
 
@@ -133,7 +172,17 @@ await test('enrichPostCompletionRecord attaches taskDescriptor for persisted rec
     assert.equal(record.taskDescriptor?.stages.coder?.model, 'gpt-5.3-codex');
     assert.equal(record.taskDescriptor?.outcome?.total_cost_usd, 4.25);
     assert.equal(record.taskDescriptor?.outcome?.interventions, 1);
+    assert.deepEqual(record.taskDescriptor?.constraints.models_available, [
+      'gpt-5.5',
+      'claude-opus-4-7',
+      'gpt-5.4',
+      'gpt-5.3-codex',
+      'claude-sonnet-4-6',
+    ]);
+    assert.equal(record.workflowCostStatus, 'success');
+    assert.equal(record.enrichmentDiagnostics, undefined);
   } finally {
+    clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });
   }
 });
