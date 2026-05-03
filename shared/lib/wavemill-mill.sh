@@ -3262,10 +3262,12 @@ restore_review_task_window() {
     fi
 
     log "status" "⚡ $issue → Recreating worktree for review task"
-    if ! git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" >/dev/null 2>&1; then
+    local resolved_path
+    resolved_path="$(ensure_worktree "$branch" "$wt_dir" "$REPO_DIR" 2>/dev/null)" || {
       log_warn "$issue → Failed to recreate worktree for review task"
       return 1
-    fi
+    }
+    wt_dir="$resolved_path"
     recreated_worktree="true"
   fi
 
@@ -4804,11 +4806,16 @@ launch_task() {
     log "info" "  Worktree exists: $wt_dir (resuming)"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
     log "info" "  Branch $branch exists, resuming"
-    if ! git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" >>"$MILL_LOG_FILE" 2>&1; then
+    local requested_wt_dir="$wt_dir"
+    local resolved_path
+    resolved_path="$(ensure_worktree "$branch" "$wt_dir" "$REPO_DIR" 2>>"$MILL_LOG_FILE")" || {
       log_error "$issue: worktree add failed (log: $MILL_LOG_FILE)"
       return 1
+    }
+    wt_dir="$resolved_path"
+    if [[ "$wt_dir" == "$requested_wt_dir" ]]; then
+      created_new=true
     fi
-    created_new=true
   else
     log "info" "  Creating branch $branch from origin/$BASE_BRANCH"
     if ! git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >>"$MILL_LOG_FILE" 2>&1; then
