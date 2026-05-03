@@ -13,7 +13,7 @@
  * @module eval-record-builder
  */
 
-import { BUDGET_MISSING } from './eval-schema.ts';
+import { BUDGET_MISSING } from './eval-validator.ts';
 import type {
   EvalChallengeRouteContext,
   EvalRouteArtifact,
