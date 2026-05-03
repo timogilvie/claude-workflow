@@ -8,6 +8,7 @@ import type { EvalRecord } from './eval-schema.ts';
 import {
   attachEligibility,
   attachAgentType,
+  attachBudgetMetadata,
   attachChallengeRouteContext,
   attachConstraints,
   attachDifficultyMetadata,
@@ -335,6 +336,7 @@ describe('eval-record-builder', () => {
       } as EvalRecord;
 
       expect(computeEligibility(record).eligibilityErrors).toEqual([
+        'missing_budget',
         'missing_budget_snapshot',
         'missing_cost',
         'missing_model_identity',
@@ -388,6 +390,82 @@ describe('eval-record-builder', () => {
       expect(baseRecord.constraints).toEqual({ maxCostUsd: 10 });
       expect(baseRecord.provider).toBe('deepseek');
       expect(baseRecord.endpoint).toBe('https://api.deepseek.com/anthropic');
+    });
+
+    it('attaches budget metadata to eval and descriptor constraints', () => {
+      baseRecord.taskDescriptor = {
+        schema_version: '1.0',
+        signals: {
+          heuristic: {
+            task_type: 'feature',
+            languages: ['typescript'],
+            framework_tags: [],
+            files_touched: 1,
+            repo_size_loc: 100,
+            description_tokens: 10,
+            is_greenfield: false,
+            has_migration: false,
+            has_ui: false,
+            has_tests: true,
+            cross_service: false,
+          },
+          learned: {
+            complexity: 1,
+            domain: 'core',
+            risk_flags: [],
+          },
+        },
+        constraints: {
+          objective: 'balanced',
+        },
+        stages: {},
+      };
+
+      attachBudgetMetadata(baseRecord, 0);
+
+      expect(baseRecord.constraints).toEqual({ maxCostUsd: 0 });
+      expect(baseRecord.taskDescriptor.constraints.max_cost_usd).toBe(0);
+      expect(baseRecord.budgetEvalEligibilityError).toBe(undefined);
+    });
+
+    it('marks missing budget without writing constraints', () => {
+      baseRecord.constraints = { maxCostUsd: 4 };
+      baseRecord.taskDescriptor = {
+        schema_version: '1.0',
+        signals: {
+          heuristic: {
+            task_type: 'feature',
+            languages: ['typescript'],
+            framework_tags: [],
+            files_touched: 1,
+            repo_size_loc: 100,
+            description_tokens: 10,
+            is_greenfield: false,
+            has_migration: false,
+            has_ui: false,
+            has_tests: true,
+            cross_service: false,
+          },
+          learned: {
+            complexity: 1,
+            domain: 'core',
+            risk_flags: [],
+          },
+        },
+        constraints: {
+          max_cost_usd: 4,
+          objective: 'balanced',
+        },
+        stages: {},
+      };
+
+      attachBudgetMetadata(baseRecord, null);
+
+      expect(baseRecord.constraints).toBe(undefined);
+      expect(baseRecord.taskDescriptor.constraints.max_cost_usd).toBe(undefined);
+      expect(baseRecord.budgetEvalEligible).toBe(false);
+      expect(baseRecord.budgetEvalEligibilityError).toBe('missing_budget');
+      expect(baseRecord.eligibilityErrors).toContain('missing_budget');
     });
   });
 

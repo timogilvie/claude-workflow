@@ -28,7 +28,7 @@ interface ParsedRouteArtifact {
     planner: string;
     coder: string;
     reviewer: string;
-    maxCostUsd?: number;
+    maxCostUsd?: number | null;
     operatingMode?: RouteBatchOptions['operatingMode'];
     routeMode?: RouteBatchOptions['mode'];
   };

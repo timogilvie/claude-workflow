@@ -77,6 +77,7 @@ export interface WorkflowRouteDecision {
   constraints?: {
     maxCostUsd?: number;
   };
+  maxCostUsd?: number | null;
   budgetViolation?: BudgetViolation;
   resourceSelections?: RuntimeResourceSelection[];
   provenance?: RouteProvenance;
