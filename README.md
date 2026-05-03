@@ -149,15 +149,15 @@ MAX_PARALLEL=5 wavemill mill
 
 ### `wavemill expand` - Batch Expand Linear Issues
 
-Interactively expand multiple Linear issues with detailed task packets.
+Expand Linear issues into detailed task packets either interactively or by passing specific issue IDs/URLs.
 
 **What it does:**
-1. Fetches Linear backlog (auto-detects project from repo)
+1. With no args, fetches Linear backlog (auto-detects project from repo)
 2. Filters to issues WITHOUT detailed task packets
 3. Ranks by priority score (same algorithm as wavemill mill)
-4. Shows up to 9 candidates
-5. Lets you select up to 3 issues
-6. Expands each with Claude using issue-writer prompt
+4. Shows up to 9 candidates and lets you select up to 3 issues
+5. With issue args, skips backlog ranking and expands those issues directly
+6. Expands each issue with Claude using issue-writer prompt
 7. Extracts and applies suggested labels
 8. Updates both description and labels in Linear
 
@@ -168,6 +168,12 @@ wavemill expand
 
 # With custom project:
 LINEAR_PROJECT="My Project" wavemill expand
+
+# Expand a specific issue directly
+wavemill expand HOK-1494
+
+# URLs and multiple issues are also accepted
+wavemill expand https://linear.app/hokusai/issue/HOK-1494/fix-archived-routing-decision-parsing-for-eval-enrichment HOK-1531
 ```
 
 **Environment variables:**
@@ -175,6 +181,8 @@ LINEAR_PROJECT="My Project" wavemill expand
 - `PROJECT_NAME` - Legacy project override, only used when no repo project is configured
 - `MAX_SELECT` - Max issues to select (default: 3)
 - `MAX_DISPLAY` - Max issues to display (default: 9)
+
+When you pass issue IDs or Linear issue URLs, Wavemill expands them sequentially in the order provided and does not prompt for backlog selection.
 
 **Output example:**
 ```

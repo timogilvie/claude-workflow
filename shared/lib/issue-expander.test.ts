@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildIssueExpansionCallOptions } from './issue-expander.ts';
+import { buildIssueExpansionCallOptions, parseIssueInput } from './issue-expander.ts';
 
 let passed = 0;
 let failed = 0;
@@ -50,6 +50,48 @@ test('falls back to CLAUDE_CMD when no explicit override is provided', () => {
     }
   }
 });
+
+test('parseIssueInput accepts canonical identifiers', () => {
+  assert.equal(parseIssueInput('HOK-1494'), 'HOK-1494');
+});
+
+test('parseIssueInput canonicalizes lowercase identifiers', () => {
+  assert.equal(parseIssueInput('hok-1494'), 'HOK-1494');
+});
+
+test('parseIssueInput trims surrounding whitespace', () => {
+  assert.equal(parseIssueInput(' HOK-1494 '), 'HOK-1494');
+});
+
+test('parseIssueInput accepts Linear issue URLs', () => {
+  assert.equal(
+    parseIssueInput('https://linear.app/hokusai/issue/HOK-1494/fix'),
+    'HOK-1494'
+  );
+});
+
+test('parseIssueInput accepts case-insensitive Linear issue URLs', () => {
+  assert.equal(
+    parseIssueInput('https://Linear.App/hokusai/issue/hok-1494/fix'),
+    'HOK-1494'
+  );
+});
+
+for (const invalidInput of [
+  'FOOBAR',
+  'HOK-',
+  'HOK-1494/extra',
+  'https://example.com/HOK-1494',
+  '',
+  '   ',
+]) {
+  test(`parseIssueInput rejects invalid input: ${JSON.stringify(invalidInput)}`, () => {
+    assert.throws(
+      () => parseIssueInput(invalidInput),
+      /Expected format: TEAM-123 or Linear issue URL/
+    );
+  });
+}
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
