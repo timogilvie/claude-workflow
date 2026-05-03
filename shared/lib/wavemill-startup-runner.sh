@@ -469,7 +469,8 @@ startup_run_task_phases() {
     local worktree_stderr
     worktree_stderr="$(mktemp)"
     if git show-ref --verify --quiet "refs/heads/$branch"; then
-      if ! wavemill_lock_run "git-worktree" git worktree add "$wt_dir" "$branch" >/dev/null 2>"$worktree_stderr"; then
+      local resolved_path
+      if ! resolved_path="$(wavemill_lock_run "git-worktree" ensure_worktree "$branch" "$wt_dir" 2>"$worktree_stderr")"; then
         startup_phase_failed "$startup_id" worktree "$issue" "worktree creation"
         startup_log "  Error: failed to attach existing branch $branch"
         [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
@@ -478,6 +479,7 @@ startup_run_task_phases() {
         startup_log "  Task will not be launched. Retry with: wavemill mill"
         return 1
       fi
+      wt_dir="$resolved_path"
     else
       if ! wavemill_lock_run "git-worktree" git worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >/dev/null 2>"$worktree_stderr"; then
         startup_phase_failed "$startup_id" worktree "$issue" "worktree creation"
