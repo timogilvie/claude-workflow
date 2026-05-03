@@ -17,6 +17,7 @@ import { computeModelCost, loadPricingTable } from './workflow-cost.ts';
 import type { WorkflowRouteDecision, PlanDepth, CodeDepth, ReviewMode } from './workflow-router.ts';
 import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
+import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 
 export interface StageAwareConstraints {
   modelsAvailable?: string[];
@@ -772,9 +773,10 @@ export function routeStageAwareWithContext(
     0,
     1,
   );
+  const descriptorModelsAvailable = options.modelsAvailable ?? getConfiguredModelsForDescriptor(repoDir);
   const queryDescriptor = buildTaskDescriptor({
     originalPrompt: prompt,
-    modelsAvailable: filteredModelsAvailable,
+    modelsAvailable: descriptorModelsAvailable,
     maxCostUsd: options.maxCostUsd,
     ...options.queryInput,
   });

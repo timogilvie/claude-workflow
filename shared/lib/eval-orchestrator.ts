@@ -48,6 +48,7 @@ import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
+import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 import type {
   EvalRecord,
   EvalRouteProvenance,
@@ -406,7 +407,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       timeSeconds: record.timeSeconds || undefined,
       interventionCount: record.interventionCount || undefined,
       interventions: interventionRecords || undefined,
-      modelsAvailable: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-sonnet-4-5-20250929', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: getConfiguredModelsForDescriptor(repoDir),
       objective: 'balanced',
       maxCostUsd: evalConstraints?.maxCostUsd,
     });

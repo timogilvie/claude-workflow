@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import {
+  getConfiguredModelsForDescriptor,
+  getConfiguredModelsForDescriptorStage,
   configuredDeepSeekModelIds,
   DEFAULT_MODEL_REGISTRY,
   getEffectiveRegistry,
@@ -401,6 +403,136 @@ describe('model-registry', () => {
       assert.deepEqual(getLadder(registry, 'coding'), ['claude-opus-4-7', 'claude-sonnet-4-6']);
     } finally {
       clearConfigCache();
+      cleanUp(repoDir);
+    }
+  });
+
+  it('prefers stage-specific router availability for descriptor stages', () => {
+    const repoDir = makeTempRepo();
+
+    try {
+      writeConfig(repoDir, {
+        router: {
+          availableModels: {
+            planner: ['gpt-5.5', 'claude-opus-4-7'],
+            coder: ['gpt-5.4', 'gpt-5.3-codex'],
+            reviewer: ['claude-sonnet-4-6'],
+          },
+        },
+        modelRegistry: {
+          models: {
+            'gpt-5.3-codex': {
+              vendor: 'openai',
+              class: 'strong_generalist',
+              strengths: ['coding'],
+              weaknesses: ['none'],
+              qualityScores: { coding: 89 },
+              agent: 'codex',
+            },
+          },
+        },
+      });
+      clearConfigCache(repoDir);
+
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.5', 'claude-opus-4-7']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4', 'gpt-5.3-codex']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['claude-sonnet-4-6']);
+      assert.deepEqual(getConfiguredModelsForDescriptor(repoDir), [
+        'gpt-5.5',
+        'claude-opus-4-7',
+        'gpt-5.4',
+        'gpt-5.3-codex',
+        'claude-sonnet-4-6',
+      ]);
+    } finally {
+      clearConfigCache(repoDir);
+      cleanUp(repoDir);
+    }
+  });
+
+  it('falls back to shared router models for every descriptor stage', () => {
+    const repoDir = makeTempRepo();
+
+    try {
+      writeConfig(repoDir, {
+        router: {
+          models: ['gpt-5.4', 'claude-sonnet-4-6'],
+        },
+      });
+      clearConfigCache(repoDir);
+
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.4', 'claude-sonnet-4-6']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4', 'claude-sonnet-4-6']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['gpt-5.4', 'claude-sonnet-4-6']);
+    } finally {
+      clearConfigCache(repoDir);
+      cleanUp(repoDir);
+    }
+  });
+
+  it('falls back to effective registry ladders when router availability is absent', () => {
+    const repoDir = makeTempRepo();
+
+    try {
+      writeConfig(repoDir, {});
+      clearConfigCache(repoDir);
+
+      assert.deepEqual(
+        getConfiguredModelsForDescriptorStage(repoDir, 'planner'),
+        getLadder(getEffectiveRegistry(repoDir), 'planning'),
+      );
+      assert.deepEqual(
+        getConfiguredModelsForDescriptorStage(repoDir, 'coder'),
+        getLadder(getEffectiveRegistry(repoDir), 'coding'),
+      );
+      assert.deepEqual(
+        getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'),
+        getLadder(getEffectiveRegistry(repoDir), 'review'),
+      );
+
+      const descriptorModels = getConfiguredModelsForDescriptor(repoDir);
+      assert.ok(descriptorModels.length > 0);
+      assert.ok(descriptorModels.includes('gpt-5.5'));
+      assert.ok(descriptorModels.includes('gpt-5.4'));
+      assert.notDeepEqual(descriptorModels, [
+        'claude-sonnet-4-6',
+        'claude-opus-4-7',
+        'claude-sonnet-4-5-20250929',
+        'claude-opus-4-6',
+        'claude-haiku-4-5-20251001',
+      ]);
+    } finally {
+      clearConfigCache(repoDir);
+      cleanUp(repoDir);
+    }
+  });
+
+  it('uses model registry ladder overrides when router availability is absent', () => {
+    const repoDir = makeTempRepo();
+
+    try {
+      writeConfig(repoDir, {
+        modelRegistry: {
+          models: {
+            'custom-codex-model': {
+              vendor: 'openai',
+              class: 'strong_generalist',
+              strengths: ['custom coding'],
+              weaknesses: ['none'],
+              qualityScores: { coding: 95 },
+              agent: 'codex',
+            },
+          },
+          ladders: {
+            coding: ['custom-codex-model'],
+          },
+        },
+      });
+      clearConfigCache(repoDir);
+
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['custom-codex-model']);
+    } finally {
+      clearConfigCache(repoDir);
       cleanUp(repoDir);
     }
   });

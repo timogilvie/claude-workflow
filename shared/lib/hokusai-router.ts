@@ -4,7 +4,7 @@
  * @module hokusai-router
  */
 
-import { getAvailableModelsForStage, getHokusaiRouterConfig, getRouterConfig } from './config.ts';
+import { getHokusaiRouterConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 import { fromHokusaiOutput } from './hokusai-adapter.ts';
 import {
@@ -13,6 +13,10 @@ import {
   type HokusaiPredictions,
   type HokusaiRoute,
 } from './hokusai-schema.ts';
+import {
+  getConfiguredModelsForDescriptor,
+  getConfiguredModelsForDescriptorStage,
+} from './model-registry.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
@@ -68,16 +72,16 @@ export async function routeViaHokusai(
 ): Promise<WorkflowRouteDecision | null> {
   const repoDir = options.repoDir;
   const config = getHokusaiRouterConfig(repoDir);
-  const routerConfig = getRouterConfig(repoDir);
   const endpoint = config.endpoint;
 
   if (!endpoint) {
     return null;
   }
 
+  const descriptorModelsAvailable = options.modelsAvailable ?? getConfiguredModelsForDescriptor(repoDir);
   const descriptor = buildTaskDescriptor({
     originalPrompt: prompt,
-    modelsAvailable: options.modelsAvailable,
+    modelsAvailable: descriptorModelsAvailable,
     maxCostUsd: options.maxCostUsd,
   });
   const input = toHokusaiInput(
@@ -87,13 +91,13 @@ export async function routeViaHokusai(
       modelsAvailable: options.modelsAvailable,
       plannerModels: options.plannerModels ?? (options.modelsAvailable
         ? undefined
-        : getAvailableModelsForStage(routerConfig, 'planner')),
+        : getConfiguredModelsForDescriptorStage(repoDir, 'planner')),
       coderModels: options.coderModels ?? (options.modelsAvailable
         ? undefined
-        : getAvailableModelsForStage(routerConfig, 'coder')),
+        : getConfiguredModelsForDescriptorStage(repoDir, 'coder')),
       reviewerModels: options.reviewerModels ?? (options.modelsAvailable
         ? undefined
-        : getAvailableModelsForStage(routerConfig, 'reviewer')),
+        : getConfiguredModelsForDescriptorStage(repoDir, 'reviewer')),
       maxCostUsd: options.maxCostUsd,
     },
     'workflow-route',
