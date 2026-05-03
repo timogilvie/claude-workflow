@@ -25,7 +25,7 @@ import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
 import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
-import { attachStageOutcomes, enrichEvalRecord } from './eval-record-builder.ts';
+import { attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
@@ -199,7 +199,7 @@ export function enrichPostCompletionRecord(
     console.warn(`Post-completion eval: failed to build task descriptor — ${errorMsg}`);
   }
 
-  enrichEvalRecord(record, {
+  enrichTrainingMetadata(record, {
     agentType: input.agentType,
     provider: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.provider,
     endpoint: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.endpoint,
