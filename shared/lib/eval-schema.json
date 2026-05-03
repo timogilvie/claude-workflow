@@ -206,6 +206,19 @@
       "type": "boolean",
       "description": "Whether the record includes the fields required for budget-eval export."
     },
+    "budgetEvalEligibilityError": {
+      "type": "string",
+      "enum": [
+        "missing_routing",
+        "missing_cost",
+        "missing_budget",
+        "missing_budget_snapshot",
+        "missing_outcome",
+        "missing_task_descriptor",
+        "missing_model_identity"
+      ],
+      "description": "Primary stable reason why the record is ineligible for budget-eval export."
+    },
     "eligibilityErrors": {
       "type": "array",
       "items": {
@@ -213,6 +226,7 @@
         "enum": [
           "missing_routing",
           "missing_cost",
+          "missing_budget",
           "missing_budget_snapshot",
           "missing_outcome",
           "missing_task_descriptor",
@@ -319,6 +333,13 @@
       },
       "required": ["reason"],
       "additionalProperties": false
+    },
+    "enrichmentDiagnostics": {
+      "type": "array",
+      "description": "List of enrichment metadata fields still missing after shared training-record enrichment.",
+      "items": {
+        "type": "string"
+      }
     },
     "pricingSnapshot": {
       "type": "object",

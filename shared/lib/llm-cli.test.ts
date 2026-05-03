@@ -292,7 +292,7 @@ describe('quota fallback', () => {
 
     const records = readFallbackRecords();
     assert.equal(records.length, 1);
-    assert.equal(records[0].schemaVersion, '1.18.0');
+    assert.equal(records[0].schemaVersion, '1.20.0');
     assert.equal(records[0].modelId, 'model-b');
     assert.equal(records[0].score, 1);
     assert.equal(records[0].fallbackEvent?.preferred_model, 'model-a');

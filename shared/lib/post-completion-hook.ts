@@ -25,9 +25,10 @@ import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
 import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
-import { attachStageOutcomes, enrichEvalRecord } from './eval-record-builder.ts';
+import { attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
+import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 import {
   buildRouteLifecycleProvenance,
   deriveRouteDecisionSource,
@@ -39,6 +40,23 @@ import type { EvalRecord, EvalRouteProvenance, InterventionRecord, RoutingDecisi
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome } from './workflow-cost.ts';
+
+function isFiniteNonNegativeBudget(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function resolvePostCompletionBudget(input: Pick<PostCompletionEnrichmentInput, 'repoDir' | 'issueId' | 'branchName' | 'worktreePath' | 'record'>): number | undefined {
+  const slug = input.branchName?.replace(/^(task|bug)\//, '') || input.issueId?.toLowerCase() || '';
+  const routingComplete = slug
+    ? fetchRoutingCompleteRawWithArchive(input.repoDir, slug, input.issueId || '', input.worktreePath)
+    : null;
+  return [
+    input.record.constraints?.maxCostUsd,
+    routingComplete?.maxCostUsd,
+    routingComplete?.constraints?.maxCostUsd,
+    getMaxCostUsd(input.repoDir),
+  ].find(isFiniteNonNegativeBudget);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -145,9 +163,7 @@ export function buildTaskDescriptorForPostCompletion(
   const workflowTokenUsage = input.costOutcome?.status === 'success'
     ? input.costOutcome.models
     : input.record.workflowTokenUsage;
-  const maxCostUsd = routingComplete?.maxCostUsd
-    ?? input.record.constraints?.maxCostUsd
-    ?? getMaxCostUsd(input.repoDir);
+  const maxCostUsd = resolvePostCompletionBudget(input);
 
   return buildTaskDescriptor({
     originalPrompt: input.originalPrompt,
@@ -165,9 +181,9 @@ export function buildTaskDescriptorForPostCompletion(
     interventionCount: input.record.interventionCount || undefined,
     interventions: input.interventionRecords || undefined,
     rubricEval: input.record.rubricEval || undefined,
-    modelsAvailable: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-sonnet-4-5-20250929', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
+    modelsAvailable: getConfiguredModelsForDescriptor(input.repoDir),
     objective: 'balanced',
-    maxCostUsd: typeof maxCostUsd === 'number' ? maxCostUsd : undefined,
+    maxCostUsd,
   });
 }
 
@@ -183,7 +199,7 @@ export function enrichPostCompletionRecord(
     console.warn(`Post-completion eval: failed to build task descriptor — ${errorMsg}`);
   }
 
-  enrichEvalRecord(record, {
+  enrichTrainingMetadata(record, {
     agentType: input.agentType,
     provider: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.provider,
     endpoint: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.endpoint,
@@ -202,16 +218,10 @@ export function enrichPostCompletionRecord(
     repoContext: input.repoContextData,
     workflowCost: input.costOutcome,
     taskDescriptor,
-    constraints: typeof input.record.constraints?.maxCostUsd === 'number'
-      ? input.record.constraints
-      : (() => {
-          const slug = input.branchName?.replace(/^(task|bug)\//, '') || input.issueId?.toLowerCase() || '';
-          const routingComplete = slug
-            ? fetchRoutingCompleteRawWithArchive(input.repoDir, slug, input.issueId || '', input.worktreePath)
-            : null;
-          const maxCostUsd = routingComplete?.maxCostUsd ?? getMaxCostUsd(input.repoDir);
-          return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
-        })(),
+    constraints: (() => {
+      const maxCostUsd = resolvePostCompletionBudget(input);
+      return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
+    })(),
   });
 }
 

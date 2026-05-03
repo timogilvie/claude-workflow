@@ -702,12 +702,12 @@ describe('hokusai-schema', () => {
       const success = expectSuccess(toHokusaiSubmission(makeRecord({
         trainingEligible: true,
         outcomes: undefined,
-        score: 0.5,
+        score: 0.8,
       })));
       const failure = expectSuccess(toHokusaiSubmission(makeRecord({
         trainingEligible: true,
         outcomes: undefined,
-        score: 0.4,
+        score: 0.7,
       })));
 
       assert.equal(success.observed_outcomes.completed_successfully, true);

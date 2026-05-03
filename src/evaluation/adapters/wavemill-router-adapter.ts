@@ -6,6 +6,7 @@ import {
   type EvalRecord,
   type WavemillRouterMeasurementPolicy,
 } from '../../../shared/lib/eval-schema.ts';
+import { isEvalSuccess } from '../../../shared/lib/eval-success-policy.ts';
 import { appendEvalRecord, readEvalRecords } from '../../../shared/lib/eval-persistence.ts';
 import { routeBatch, type RouteBatchOptions } from '../../../shared/lib/route-batch.ts';
 import { meetsMintEligibility, type MintEligibilityEvaluation } from '../../../shared/lib/eval-aggregator.ts';
@@ -28,7 +29,7 @@ interface ParsedRouteArtifact {
     planner: string;
     coder: string;
     reviewer: string;
-    maxCostUsd?: number;
+    maxCostUsd?: number | null;
     operatingMode?: RouteBatchOptions['operatingMode'];
     routeMode?: RouteBatchOptions['mode'];
   };
@@ -330,7 +331,7 @@ function completionSuccess(record: EvalRecord): boolean | undefined {
     return record.outcomes.success;
   }
   if (typeof record.score === 'number') {
-    return record.score >= 0.5;
+    return isEvalSuccess(record);
   }
   return undefined;
 }

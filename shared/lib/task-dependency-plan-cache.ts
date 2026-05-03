@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { DependencyEdge } from './task-dependency-planner.ts';
 import { mutateJsonState, StateLockTimeoutError } from './state-mutex.ts';
 
 export const CACHE_SCHEMA_VERSION = 1;
@@ -12,6 +13,7 @@ export interface CachedEdge {
   fromFingerprint: string;
   toFingerprint: string;
   kind: 'inferred';
+  type?: 'depends_on' | 'shared_surface';
   label?: string;
   confidence?: number;
   classifiedAt: string;
@@ -34,6 +36,13 @@ export interface FingerprintableTask {
   estimate?: unknown;
   state?: unknown;
   blocks?: unknown;
+}
+
+export interface BacklogDiff {
+  added: string[];
+  changed: string[];
+  completed: string[];
+  removed: string[];
 }
 
 interface CacheStats {
@@ -105,6 +114,7 @@ function isCachedEdge(value: unknown): value is CachedEdge {
     typeof value.fromFingerprint === 'string' &&
     typeof value.toFingerprint === 'string' &&
     typeof value.classifiedAt === 'string' &&
+    (value.type === undefined || value.type === 'depends_on' || value.type === 'shared_surface') &&
     (value.label === undefined || typeof value.label === 'string') &&
     (value.confidence === undefined || typeof value.confidence === 'number')
   );
@@ -180,6 +190,101 @@ export function getCacheStats(before: CacheFile, after: CacheFile): CacheStats {
     totalEdges: before.edges.length,
     retainedEdges: after.edges.length,
   };
+}
+
+export function computeBacklogDiff(
+  prevFingerprints: Record<string, string>,
+  currentTasks: FingerprintableTask[],
+  isCompletedTask?: (taskId: string) => boolean,
+): BacklogDiff {
+  const added: string[] = [];
+  const changed: string[] = [];
+  const completed: string[] = [];
+  const removed: string[] = [];
+  const currentTaskIds = new Set<string>();
+
+  for (const task of currentTasks) {
+    currentTaskIds.add(task.id);
+    const nextFingerprint = computeTaskFingerprint(task);
+    const prevFingerprint = prevFingerprints[task.id];
+    if (prevFingerprint === undefined) {
+      added.push(task.id);
+      continue;
+    }
+    if (prevFingerprint !== nextFingerprint) {
+      changed.push(task.id);
+    }
+  }
+
+  for (const taskId of Object.keys(prevFingerprints).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
+    if (currentTaskIds.has(taskId)) continue;
+    if (isCompletedTask?.(taskId) === true) {
+      completed.push(taskId);
+      continue;
+    }
+    removed.push(taskId);
+  }
+
+  added.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  changed.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+  return { added, changed, completed, removed };
+}
+
+export function mergeEdges(
+  cachedEdges: CachedEdge[],
+  freshEdges: CachedEdge[],
+  opts: { changedTaskIds: Set<string>; removedTaskIds: Set<string> },
+): CachedEdge[] {
+  const retained = cachedEdges.filter(
+    (edge) =>
+      !opts.removedTaskIds.has(edge.from) &&
+      !opts.removedTaskIds.has(edge.to) &&
+      !opts.changedTaskIds.has(edge.from) &&
+      !opts.changedTaskIds.has(edge.to),
+  );
+
+  const validFresh: CachedEdge[] = [];
+  for (const edge of freshEdges) {
+    if (!opts.changedTaskIds.has(edge.from) && !opts.changedTaskIds.has(edge.to)) {
+      console.warn(`[task-dep-cache] dropping fresh edge outside changed scope: ${edge.from}->${edge.to}`);
+      continue;
+    }
+    if (opts.removedTaskIds.has(edge.from) || opts.removedTaskIds.has(edge.to)) {
+      continue;
+    }
+    validFresh.push(edge);
+  }
+
+  const deduped = new Map<string, CachedEdge>();
+  for (const edge of [...retained, ...validFresh]) {
+    const key = `${edge.type ?? 'depends_on'}\u0000${edge.from}\u0000${edge.to}`;
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, edge);
+      continue;
+    }
+
+    if (existing.classifiedAt <= edge.classifiedAt) {
+      deduped.set(key, edge);
+    }
+  }
+
+  return [...deduped.values()].sort((a, b) => {
+    const fromCompare = a.from.localeCompare(b.from, undefined, { numeric: true });
+    if (fromCompare !== 0) return fromCompare;
+    return a.to.localeCompare(b.to, undefined, { numeric: true });
+  });
+}
+
+export function cachedEdgesToDependencyEdges(edges: CachedEdge[]): DependencyEdge[] {
+  return edges.map((edge) => ({
+    from: edge.from,
+    to: edge.to,
+    type: edge.type ?? 'depends_on',
+    source: 'inferred',
+    ...(typeof edge.label === 'string' && edge.label.length > 0 ? { reason: edge.label } : {}),
+  }));
 }
 
 export function lookupEdge(
