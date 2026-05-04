@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 # Wavemill Common Library
 # Shared functions used across wavemill-mill.sh and wavemill-expand.sh
 
@@ -226,6 +226,13 @@ load_config() {
 
   # Sentinel so downstream scripts can skip re-loading
   _WAVEMILL_CONFIG_LOADED=1
+}
+
+wavemill_config_annotation() {
+  local path="${1:-}"
+  local value="${2:-}"
+
+  printf ' (%s=%s)' "$path" "$value"
 }
 
 wavemill_fetch_base_branch() {
@@ -1422,4 +1429,47 @@ state_mutate() {
   fi
 
   return "$status"
+}
+
+queue_add_task() {
+  local issue_id="${1:-}" blocker_issue_id="${2:-}" blocker_pr_number="${3:-}" desired_base_branch="${4:-}" linear_issue_url="${5:-}"
+  if [[ -z "$issue_id" || -z "$blocker_issue_id" || -z "$blocker_pr_number" || -z "$desired_base_branch" || -z "$linear_issue_url" ]]; then
+    echo "Usage: queue_add_task <issue_id> <blocker_issue_id> <blocker_pr_number> <desired_base_branch> <linear_url>" >&2
+    return 1
+  fi
+
+  state_mutate "$STATE_FILE" \
+    '.queued_tasks = ((.queued_tasks // []) | map(select(.issue_id != $issue_id))) + [{
+      issue_id: $issue_id,
+      blocker_issue_id: $blocker_issue_id,
+      blocker_pr_number: (if $blocker_pr_number == "null" then null else ($blocker_pr_number | tonumber) end),
+      desired_base_branch: $desired_base_branch,
+      linear_issue_url: $linear_issue_url,
+      queued_at: (now | todate)
+    }]' \
+    --arg issue_id "$issue_id" \
+    --arg blocker_issue_id "$blocker_issue_id" \
+    --arg blocker_pr_number "$blocker_pr_number" \
+    --arg desired_base_branch "$desired_base_branch" \
+    --arg linear_issue_url "$linear_issue_url"
+}
+
+queue_remove_task() {
+  local issue_id="${1:-}"
+  if [[ -z "$issue_id" ]]; then
+    echo "Usage: queue_remove_task <issue_id>" >&2
+    return 1
+  fi
+
+  state_mutate "$STATE_FILE" \
+    '.queued_tasks = ((.queued_tasks // []) | map(select(.issue_id != $issue_id)))' \
+    --arg issue_id "$issue_id"
+}
+
+queue_list_tasks() {
+  [[ -f "$STATE_FILE" ]] || {
+    printf '[]\n'
+    return 0
+  }
+  jq -r '.queued_tasks // []' "$STATE_FILE"
 }

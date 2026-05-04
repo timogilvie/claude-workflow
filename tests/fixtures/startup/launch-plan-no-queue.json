@@ -1,0 +1,63 @@
+{
+  "session": "test-session-1",
+  "repoDir": "/tmp/test-repo",
+  "baseBranch": "main",
+  "worktreeRoot": "/tmp/test-worktrees",
+  "planningMode": "interactive",
+  "agentCmd": "claude",
+  "agentCmdExplicit": false,
+  "forceModel": null,
+  "routerEnabled": true,
+  "maxParallel": 2,
+  "stateDir": "/tmp/test-state",
+  "stateFile": "/tmp/test-state/state.json",
+  "toolsDir": "/tmp/test-tools",
+  "libDir": "/tmp/test-lib",
+  "initialPhase": "planning",
+  "tasks": [
+    {
+      "issue": "HOK-1532",
+      "slug": "persist-queue-plan-metadata",
+      "title": "Persist queue plan metadata in startup launch plans",
+      "branch": "task/persist-queue-plan-metadata",
+      "worktreeDir": "/tmp/test-worktrees/persist-queue-plan-metadata",
+      "linearIssueId": "HOK-1532",
+      "taskPacketFile": "/tmp/test-session-1-HOK-1532-taskpacket.md",
+      "taskPacketDetailsFile": "/tmp/test-session-1-HOK-1532-taskpacket-details.md",
+      "issueJsonFile": "/tmp/test-session-1-HOK-1532-issue.json",
+      "routeFile": "/tmp/test-session-1-HOK-1532-route.json",
+      "route": {
+        "planner": "claude-sonnet-4-6",
+        "coder": "claude-opus-4-7",
+        "reviewer": "claude-sonnet-4-6",
+        "planDepth": "deep",
+        "codeDepth": "deep",
+        "reviewMode": "static",
+        "maxCostUsd": null
+      },
+      "challenge": false,
+      "challengePairId": null,
+      "challengeRole": null,
+      "challengeModel": null,
+      "migrationNumber": null,
+      "agent": "claude"
+    }
+  ],
+  "startupConfig": {
+    "statusLogFile": "/tmp/test-status.log",
+    "monitorEnv": "/tmp/test-monitor.env",
+    "monitorScript": "/tmp/test-monitor.sh",
+    "launchedIssuesFile": "/tmp/test-launched.txt",
+    "millLogFile": "/tmp/test-mill.log"
+  },
+  "monitorConfig": {
+    "pollSeconds": 10,
+    "requireConfirm": true,
+    "dryRun": false,
+    "projectName": "test-project",
+    "autoEval": true,
+    "enterLaunchesWave": true,
+    "dashboardVerbosity": "info",
+    "dashboardLogToFile": true
+  }
+}

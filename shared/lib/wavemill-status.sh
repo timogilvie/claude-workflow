@@ -499,6 +499,29 @@ render_active_section() {
   done
 }
 
+render_queued_section() {
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  local count
+  count=$(jq '(.queued_tasks // []) | length' "$STATE_FILE" 2>/dev/null || echo 0)
+  (( count == 0 )) && return 0
+
+  printf "${EL}\n${B}%s${N} ${D}(%s)${N}${EL}\n" "⏸ PENDING DEPENDENCY" "$count" >> "$FRAME"
+  printf "${D}%-10s  %-12s  %-8s  %s${N}${EL}\n" "ISSUE" "BLOCKER" "PR" "BASE" >> "$FRAME"
+  printf "${D}%s${N}${EL}\n" "──────────────────────────────────────────────" >> "$FRAME"
+
+  jq -r '
+    (.queued_tasks // [])[] |
+    [
+      .issue_id,
+      (.blocker_issue_id // "?"),
+      (if .blocker_pr_number != null then "#\(.blocker_pr_number)" else "(no PR)" end),
+      (.desired_base_branch // "?")
+    ] | @tsv
+  ' "$STATE_FILE" 2>/dev/null | while IFS=$'\t' read -r issue blocker pr base; do
+    printf "%-10s  %-12s  %-8s  %s${EL}\n" "$issue" "$blocker" "$pr" "$base" >> "$FRAME"
+  done
+}
+
 # Clear saved scrollback lines without blanking the visible pane. This keeps
 # tmux history from accumulating stale dashboards while avoiding a full-screen
 # flash on every refresh.
@@ -568,6 +591,7 @@ render_dashboard() {
 
     render_inbox_section
     render_active_section
+    render_queued_section
   fi
 
   printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"

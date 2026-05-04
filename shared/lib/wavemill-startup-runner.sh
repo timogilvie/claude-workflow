@@ -1,7 +1,6 @@
 #!/opt/homebrew/bin/bash
 set -Eeuo pipefail
 
-command -v tmux >/dev/null || { echo "Error: tmux is required but not installed" >&2; exit 1; }
 command -v git >/dev/null || { echo "Error: git is required but not installed" >&2; exit 1; }
 command -v npx >/dev/null || { echo "Error: npx is required but not installed" >&2; exit 1; }
 command -v jq >/dev/null || { echo "Error: jq is required but not installed" >&2; exit 1; }
@@ -43,12 +42,24 @@ MILL_LOG_FILE="$(jq -r '.startupConfig.millLogFile // empty' "$PLAN_FILE")"
 POLL_SECONDS="$(jq -r '.monitorConfig.pollSeconds // 10' "$PLAN_FILE")"
 REQUIRE_CONFIRM="$(jq -r '.monitorConfig.requireConfirm // true' "$PLAN_FILE")"
 DRY_RUN="$(jq -r '.monitorConfig.dryRun // false' "$PLAN_FILE")"
+if [[ "${WAVEMILL_DRY_RUN:-}" == "1" || "${WAVEMILL_DRY_RUN:-}" == "true" || "$DRY_RUN" == "true" ]]; then
+  export WAVEMILL_DRY_RUN=1
+  DRY_RUN="true"
+else
+  DRY_RUN="false"
+  command -v tmux >/dev/null || { echo "Error: tmux is required but not installed" >&2; exit 1; }
+fi
 PROJECT_NAME="$(jq -r '.monitorConfig.projectName // empty' "$PLAN_FILE")"
 AUTO_EVAL="$(jq -r '.monitorConfig.autoEval // true' "$PLAN_FILE")"
 ENTER_LAUNCHES_WAVE="$(jq -r '.monitorConfig.enterLaunchesWave // true' "$PLAN_FILE")"
 DASHBOARD_VERBOSITY="$(jq -r '.monitorConfig.dashboardVerbosity // "info"' "$PLAN_FILE")"
 DASHBOARD_LOG_TO_FILE="$(jq -r '.monitorConfig.dashboardLogToFile // true' "$PLAN_FILE")"
+# Parsed but intentionally unused; behavior change ships in follow-up.
+QUEUE_PLAN="$(jq -c '.queuePlan // []' "$PLAN_FILE")"
 DASHBOARD_PID=""
+# Optional queue plan metadata (HOK-1532) — read but not acted on.
+# Runner ignores these fields; queue execution lands in a follow-up.
+LAUNCH_QUEUE_PLAN="$(jq -c '.queuePlan // empty' "$PLAN_FILE" 2>/dev/null || true)"
 
 export SESSION REPO_DIR BASE_BRANCH WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
 export FORCE_MODEL ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
@@ -235,6 +246,41 @@ ensure_state_file() {
   fi
 }
 
+seed_queued_tasks_from_plan() {
+  local plan_file="$1"
+  local queue_plan
+  queue_plan=$(jq -c '.queuePlan // []' "$plan_file")
+  [[ "$queue_plan" == "[]" || "$queue_plan" == "null" ]] && return 0
+
+  while IFS= read -r entry; do
+    local issue_id blocker_issue_id blocker_pr desired_base linear_url
+    issue_id=$(printf '%s' "$entry" | jq -r '.issue_id')
+    blocker_issue_id=$(printf '%s' "$entry" | jq -r '.blocker_issue_id')
+    blocker_pr=$(printf '%s' "$entry" | jq -r '.blocker_pr_number // "null"')
+    desired_base=$(printf '%s' "$entry" | jq -r '.desired_base_branch')
+    linear_url=$(printf '%s' "$entry" | jq -r '.linear_issue_url // ""')
+
+    [[ -z "$linear_url" ]] && linear_url="https://linear.app/issue/$issue_id"
+    [[ -z "$blocker_issue_id" ]] && blocker_issue_id="unknown"
+    [[ -z "$desired_base" ]] && desired_base="$blocker_issue_id"
+
+    queue_add_task "$issue_id" "$blocker_issue_id" "$blocker_pr" "$desired_base" "$linear_url"
+  done < <(jq -c '
+    .queuePlan as $qp
+    | .tasks as $tasks
+    | $qp[] | select(.wave > 1)
+    | .taskIds[] as $tid
+    | ($tasks[] | select(.issue == $tid)) as $task
+    | {
+      issue_id: $tid,
+      blocker_issue_id: ($task.dependsOn[0] // $task.baseFromTask // ""),
+      blocker_pr_number: null,
+      desired_base_branch: ($task.baseFromTask // ""),
+      linear_issue_url: ($task.linearIssueUrl // "")
+    }
+  ' "$plan_file")
+}
+
 write_monitor_env() {
   local tasks_file="$1"
   {
@@ -268,6 +314,7 @@ write_monitor_env() {
 }
 
 setup_control_dashboard() {
+  [[ "${DRY_RUN:-false}" == "true" ]] && return 0
   local status_script="$LIB_DIR/wavemill-status.sh"
   local pane_count
   pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l | tr -d ' ')
@@ -300,6 +347,7 @@ setup_control_dashboard() {
 }
 
 spawn_integration_window() {
+  [[ "${DRY_RUN:-false}" == "true" ]] && return 0
   local merged enabled use_mill_session integration_cmd
 
   merged="$(wavemill_load_config "$REPO_DIR")"
@@ -398,6 +446,7 @@ startup_run_task_phases() {
   local issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file
   local planner_model coder_model reviewer_model plan_depth code_depth review_mode route_max_cost_usd
   local challenge challenge_pair challenge_role challenge_model task_agent win
+  local depends_on base_from_task
   local packet_content issue_json issue_description issue_context details_context labels_json
   local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false
 
@@ -429,6 +478,9 @@ startup_run_task_phases() {
   challenge_role="$(echo "$task_json" | jq -r '.challengeRole // empty')"
   challenge_model="$(echo "$task_json" | jq -r '.challengeModel // empty')"
   task_agent="$(echo "$task_json" | jq -r '.agent // empty')"
+  # Parsed but intentionally unused; behavior change ships in follow-up.
+  depends_on="$(echo "$task_json" | jq -c '.dependsOn // []')"
+  base_from_task="$(echo "$task_json" | jq -r '.baseFromTask // empty')"
   STARTUP_TASK_LOG_FILE=""
   if [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]]; then
     STARTUP_TASK_LOG_FILE="/tmp/wavemill-${SESSION}-${issue}.startup.log"
@@ -450,7 +502,7 @@ startup_run_task_phases() {
     startup_phase_failed "$startup_id" route "$issue" "agent unavailable"
     return 1
   fi
-  if [[ "$task_agent" != "$AGENT_CMD" ]] && ! agent_check_auth "$task_agent" "$coder_model" "$REPO_DIR"; then
+  if [[ "$DRY_RUN" != "true" && "$task_agent" != "$AGENT_CMD" ]] && ! agent_check_auth "$task_agent" "$coder_model" "$REPO_DIR"; then
     startup_phase_failed "$startup_id" route "$issue" "agent unauthenticated"
     return 1
   fi
@@ -526,12 +578,16 @@ startup_run_task_phases() {
   startup_step "[2/7] Pre-trusting directory... ✓"
 
   win="$issue-$slug"
-  wavemill_lock_run "tmux-win" tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" >/dev/null
-  tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
-  tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
-  tmux set-option -t "$SESSION:$win" remain-on-exit on >/dev/null 2>&1 || true
-  created_window=true
-  startup_step "[3/7] Creating tmux window...   ✓"
+  if [[ "$DRY_RUN" == "true" ]]; then
+    startup_step "[3/7] Creating tmux window...   [DRY-RUN skip]"
+  else
+    wavemill_lock_run "tmux-win" tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" >/dev/null
+    tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
+    tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
+    tmux set-option -t "$SESSION:$win" remain-on-exit on >/dev/null 2>&1 || true
+    created_window=true
+    startup_step "[3/7] Creating tmux window...   ✓"
+  fi
 
   packet_content="$(cat "$task_packet_file" 2>/dev/null || true)"
   issue_json="$(cat "$issue_json_file" 2>/dev/null || echo '{}')"
@@ -649,6 +705,17 @@ $details_context"
   fi
   state_written=true
   startup_step "[5/7] Saving workflow state...  ✓"
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    startup_step "[6/7] Launching agent...        [DRY-RUN skip]"
+    [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent done
+    startup_step "[7/7] Setting Linear → In Progress... [DRY-RUN skip]"
+    [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" linear done
+    printf '%s\n' "$issue" >> "$LAUNCHED_ISSUES_FILE"
+    startup_log "✓ $issue validated in dry-run (${coder_model:-$planner_model}, phase: $persisted_phase)"
+    STARTUP_TASK_LOG_FILE=""
+    return 0
+  fi
 
   planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
   build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
@@ -773,6 +840,7 @@ main() {
   local -a linear_batch_ids=()
 
   ensure_state_file
+  seed_queued_tasks_from_plan "$PLAN_FILE"
   : > "$STATUS_LOG_FILE"
   : > "$LAUNCHED_ISSUES_FILE"
 
@@ -783,6 +851,10 @@ main() {
 
   startup_log "═══ Wavemill Startup ═══"
   startup_log "Reading launch plan: $PLAN_FILE"
+
+  if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
+    startup_log "Queue plan metadata present (ignored; reserved for future queue execution)"
+  fi
 
   task_count="$(jq '.tasks | length' "$PLAN_FILE")"
   startup_log "Tasks to launch: $task_count"
@@ -834,12 +906,17 @@ main() {
   if [[ "$launched_count" -eq 0 && "${resumed_count:-0}" -eq 0 ]]; then
     startup_log ""
     startup_log "No tasks launched. Keeping startup diagnostics visible in control window."
+    [[ "$DRY_RUN" == "true" ]] && return 0
     tmux respawn-pane -k -t "$SESSION:control.0" "bash -lc \"clear; cat '$STATUS_LOG_FILE'; printf '\\nPress Ctrl+B then D to detach.\\n'; tail -f /dev/null\""
     return 0
   fi
 
   startup_log ""
   startup_log "Starting monitor in control window..."
+  if [[ "$DRY_RUN" == "true" ]]; then
+    startup_log "[DRY-RUN] Skipping control dashboard, integration window, and monitor startup."
+    return 0
+  fi
   local input_reader_script cmd_file offset_file
   input_reader_script="$LIB_DIR/wavemill-input-reader.sh"
   cmd_file="$(wavemill_command_file_path "$SESSION")"

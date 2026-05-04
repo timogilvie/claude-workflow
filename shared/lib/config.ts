@@ -185,6 +185,10 @@ export interface RouterConfig {
   difficulty?: DifficultyClassifierConfig;
 }
 
+export interface ChallengeGateConfig {
+  coolOffSeconds?: number;
+}
+
 export interface ChallengeConfig {
   enabled?: boolean;
   rate?: number;
@@ -192,6 +196,7 @@ export interface ChallengeConfig {
   allowDeepseek?: boolean;
   comparisonModel?: string;
   autoMergeWinner?: boolean;
+  gate?: ChallengeGateConfig;
 }
 
 export interface ChallengeSchedulerConfig {
@@ -772,6 +777,13 @@ export function getHokusaiSubmissionConfig(repoDir?: string): HokusaiDataSubmiss
  */
 export function getChallengeConfig(repoDir?: string): ChallengeConfig {
   return loadWavemillConfig(repoDir).challenge || {};
+}
+
+export function getChallengeGateConfig(repoDir?: string): Required<ChallengeGateConfig> {
+  const gate = loadWavemillConfig(repoDir).challenge?.gate ?? {};
+  return {
+    coolOffSeconds: gate.coolOffSeconds ?? 300,
+  };
 }
 
 /**

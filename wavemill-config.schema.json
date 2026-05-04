@@ -465,6 +465,19 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Whether to automatically merge the recommended winner and close the loser."
+                },
+                "gate": {
+                    "type": "object",
+                    "description": "Challenge gate settings for tend merge controller race prevention.",
+                    "properties": {
+                        "coolOffSeconds": {
+                            "type": "integer",
+                            "default": 300,
+                            "minimum": 0,
+                            "description": "Seconds to hold a fresh wavemill task/* PR before allowing merge when no challenge pair signal exists. Set to 0 to disable. Default: 300 (5 minutes)."
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false

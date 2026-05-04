@@ -42,6 +42,19 @@ function writeSpec(repoDir: string, subsystemId: string, name: string, keyFile: 
   return specPath;
 }
 
+function writeSpecWithoutKeyFiles(repoDir: string, subsystemId: string, name: string): string {
+  const specPath = path.join(repoDir, '.wavemill', 'context', `${subsystemId}.md`);
+  writeFileSync(
+    specPath,
+    `# Subsystem: ${name}
+
+## Purpose
+Manual subsystem spec without tracked key files.
+`
+  );
+  return specPath;
+}
+
 function runCheckDrift(repoDir: string) {
   const env = { ...process.env };
   delete env.npm_config_verify_deps_before_run;
@@ -89,6 +102,19 @@ describe('check-drift tool', () => {
 
     assert.strictEqual(result.status, 1);
     assert.strictEqual(result.stdout.trim(), '');
+  });
+
+  it('exits 1 with no output when a spec has no tracked key files', () => {
+    const repoDir = makeRepo();
+    const specPath = writeSpecWithoutKeyFiles(repoDir, 'quota-tracking', 'Quota Tracking');
+    const oldTime = new Date(Date.now() - 16 * 24 * 60 * 60 * 1000);
+    utimesSync(specPath, oldTime, oldTime);
+
+    const result = runCheckDrift(repoDir);
+
+    assert.strictEqual(result.status, 1);
+    assert.strictEqual(result.stdout.trim(), '');
+    assert.strictEqual(result.stderr.trim(), '');
   });
 
   it('exits 1 with no output when no context directory exists', () => {
