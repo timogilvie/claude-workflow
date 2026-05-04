@@ -1772,6 +1772,7 @@ for t in "${TASKS[@]}"; do
     if [[ -d "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}" ]]; then
       challenge_args+=(--feature-dir "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}")
     fi
+    [[ -f "/tmp/${SESSION}-${ISSUE}-taskpacket.md" ]] && challenge_args+=(--file "/tmp/${SESSION}-${ISSUE}-taskpacket.md")
     [[ -n "$rec_model" ]] && challenge_args+=(--primary-model "$rec_model")
     challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
     challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
