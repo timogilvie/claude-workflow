@@ -57,6 +57,9 @@ DASHBOARD_LOG_TO_FILE="$(jq -r '.monitorConfig.dashboardLogToFile // true' "$PLA
 # Parsed but intentionally unused; behavior change ships in follow-up.
 QUEUE_PLAN="$(jq -c '.queuePlan // []' "$PLAN_FILE")"
 DASHBOARD_PID=""
+# Optional queue plan metadata (HOK-1532) — read but not acted on.
+# Runner ignores these fields; queue execution lands in a follow-up.
+LAUNCH_QUEUE_PLAN="$(jq -c '.queuePlan // empty' "$PLAN_FILE" 2>/dev/null || true)"
 
 export SESSION REPO_DIR BASE_BRANCH WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
 export FORCE_MODEL ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
@@ -812,6 +815,10 @@ main() {
 
   startup_log "═══ Wavemill Startup ═══"
   startup_log "Reading launch plan: $PLAN_FILE"
+
+  if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
+    startup_log "Queue plan metadata present (ignored; reserved for future queue execution)"
+  fi
 
   task_count="$(jq '.tasks | length' "$PLAN_FILE")"
   startup_log "Tasks to launch: $task_count"
