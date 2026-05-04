@@ -537,14 +537,18 @@ function readPrChecks(
   repoDir: string,
   shellRunner: MergeExecutionDeps['shellRunner'],
 ): string {
-  const output = shellRunner(
-    `gh pr checks ${prNumber} --json name,state,bucket 2>&1 || true`,
-    { encoding: 'utf-8', cwd: repoDir },
-  );
-  if (String(output).includes('no checks reported')) {
-    return '[]';
+  try {
+    return shellRunner(
+      `gh pr checks ${prNumber} --json name,state,bucket`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('no checks reported')) {
+      return '[]';
+    }
+    throw err;
   }
-  return output;
 }
 
 async function defaultRunReadyCheck(

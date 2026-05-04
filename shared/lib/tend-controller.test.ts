@@ -624,7 +624,7 @@ describe('executeMerge', () => {
       assert.ok(hasCall(options.calls, /git fetch origin 'auto\/integration'/));
       assert.ok(hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
       assert.ok(hasCall(options.calls, /git push --force-with-lease/));
-      assert.ok(hasCall(options.calls, /gh pr checks 42 --json name,state,bucket 2>&1 \|\| true/));
+      assert.ok(hasCall(options.calls, /gh pr checks 42 --json name,state,bucket/));
       assert.ok(hasCall(options.calls, /gh pr merge 42 --squash --delete-branch/));
       assert.ok(hasCall(options.calls, /git worktree remove --force/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);

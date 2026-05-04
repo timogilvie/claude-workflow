@@ -822,8 +822,8 @@ linear_get_issue() {
       return 1
     fi
     local result
-    result=$(echo "$BACKLOG_JSON_CACHE" | jq --arg issue "$issue" '.[] | select(.identifier == $issue)' 2>/dev/null || echo "{}")
-    if [[ "$result" == "{}" ]]; then
+    result=$(echo "$BACKLOG_JSON_CACHE" | jq --arg issue "$issue" '.[] | select(.identifier == $issue)' 2>/dev/null || true)
+    if [[ -z "$result" ]]; then
       log_error "DRY_RUN: Issue $issue not found in backlog fixture"
       return 1
     fi
