@@ -44,10 +44,15 @@ export interface ChallengeBlockedCandidate {
   reason: string;
 }
 
+/** Options for overriding gate behaviour in tests or specialized callers. */
 export interface ChallengeGateOptions {
+  /** Returns current epoch-ms; defaults to Date.now(). */
   nowMs?: () => number;
+  /** Minimum age (seconds) a PR must reach before it is eligible for tend. */
   coolOffSeconds?: number;
+  /** Pre-fetched list of remote branch names (skips git ls-remote call). */
   remoteBranches?: string[];
+  /** Custom remote-branch lister; replaces the default git ls-remote call. */
   listRemoteBranches?: (repoDir: string) => string[];
 }
 
@@ -300,6 +305,10 @@ function resolvePrRole(
 
 const CHALLENGER_SUFFIX = '-challenger';
 
+/**
+ * Returns the paired branch name for a `task/<slug>` or `task/<slug>-challenger` branch.
+ * Returns null if the branch does not follow the `task/` naming convention.
+ */
 export function getSiblingBranch(branch: string): string | null {
   if (!branch.startsWith('task/')) return null;
   if (branch.endsWith(CHALLENGER_SUFFIX)) {
@@ -308,6 +317,10 @@ export function getSiblingBranch(branch: string): string | null {
   return branch + CHALLENGER_SUFFIX;
 }
 
+/**
+ * Lists all remote `task/*` branches via `git ls-remote`.
+ * Returns an empty array on error so callers degrade gracefully.
+ */
 export function listRemoteTaskBranches(repoDir: string): string[] {
   try {
     const output = String(execShellCommand(
@@ -321,6 +334,10 @@ export function listRemoteTaskBranches(repoDir: string): string[] {
   }
 }
 
+/**
+ * Parses raw `git ls-remote --heads` output into branch name strings.
+ * Filters to only `task/`-prefixed names.
+ */
 export function parseRemoteBranchOutput(output: string): string[] {
   return output
     .split('\n')

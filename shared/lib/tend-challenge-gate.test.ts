@@ -382,13 +382,10 @@ describe('git ls-remote failure fallback', () => {
         coolOffSeconds: 0,
       };
 
-      // listRemoteBranches failure is handled inside applyChallengePairGates
-      // but we pass it via the option so the function uses it directly.
-      // Since it throws, the calling code (options.remoteBranches ?? listRemoteBranches)
-      // will propagate. But the gate itself catches errors from listRemoteTaskBranches.
-      // When passed via options.listRemoteBranches, the throw IS propagated.
-      // Let's test that the built-in listRemoteTaskBranches handles errors gracefully
-      // by using remoteBranches: [] which simulates the post-failure state.
+      // listRemoteTaskBranches (the default implementation) catches its own errors
+      // and returns []. The listRemoteBranches option bypasses that catch, so a
+      // throwing custom override would propagate. This test instead validates the
+      // post-failure path: when no remote branches are found the PR is eligible.
       const optionsSafe: ChallengeGateOptions = {
         remoteBranches: [],
         coolOffSeconds: 0,
