@@ -344,7 +344,7 @@ write_launch_plan() {
         reviewer: $reviewer,
         planDepth: $planDepth,
         codeDepth: $codeDepth,
-        reviewMode: $reviewMode
+        reviewMode: $reviewMode,
         maxCostUsd: $maxCostUsd
       } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)')"
 
@@ -5433,7 +5433,7 @@ Implement from the issue description plus direct codebase analysis."
         inputHash: $provenanceInputHash,
         routedAt: (if $provenanceRoutedAt == "" then (now | todateiso8601) else $provenanceRoutedAt end),
         routerMode: (if $provenanceRouterMode == "" then "normal" else $provenanceRouterMode end)
-      }
+      },
       maxCostUsd: $maxCostUsd
     } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)' \
     | write_json_artifact "$routing_file"
