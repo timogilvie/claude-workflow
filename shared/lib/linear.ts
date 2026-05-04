@@ -150,6 +150,15 @@ export interface LinearIssue {
   canceledAt?: string | null;
 }
 
+export interface LinearIssueSummary {
+  id: string;
+  identifier: string;
+  title: string;
+  state?: LinearState;
+  completedAt?: string | null;
+  canceledAt?: string | null;
+}
+
 /**
  * Linear initiative.
  */
@@ -804,6 +813,51 @@ export async function getIssueCompletionState(identifier: string): Promise<Pick<
 }
 
 /**
+ * List the open primary/challenger issues for a challenge root identifier.
+ *
+ * @param prefix - Root identifier such as "HOK-123"
+ * @returns Open issues matching the root and challenger identifiers
+ */
+export async function listOpenIssuesByIdentifierPrefix(prefix: string): Promise<LinearIssueSummary[]> {
+  const root = parseIdentifier(prefix);
+  const identifier = `${root.teamKey}-${root.number}`;
+  const identifiers = new Set([identifier, deriveChallengerIdentifier(identifier)]);
+  const data = await request(
+    `
+      query($term: String!, $teamKey: String!) {
+        searchIssues(
+          term: $term
+          first: 10
+          includeArchived: false
+          filter: {
+            team: { key: { eq: $teamKey } }
+            completedAt: { null: true }
+            canceledAt: { null: true }
+          }
+        ) {
+          nodes {
+            id
+            identifier
+            title
+            state { name }
+            completedAt
+            canceledAt
+          }
+        }
+      }
+    `,
+    { term: identifier, teamKey: root.teamKey },
+  );
+
+  const nodes = (data.searchIssues as { nodes?: LinearIssueSummary[] } | undefined)?.nodes || [];
+  return nodes.filter((issue) =>
+    issue.completedAt == null
+    && issue.canceledAt == null
+    && identifiers.has(issue.identifier),
+  );
+}
+
+/**
  * Lightweight: id + team + current labels (for add-issue-label.ts).
  *
  * @param identifier - Issue identifier
@@ -815,6 +869,10 @@ export async function getIssueForLabeling(identifier: string): Promise<LinearIss
     team { id }
     labels { nodes { id name } }
   `);
+}
+
+function deriveChallengerIdentifier(identifier: string): string {
+  return `${identifier}_c`;
 }
 
 /**
