@@ -1,27 +1,103 @@
 {
-  "session": "wavemill-test",
-  "queuePlan": [
-    {
-      "wave": 1,
-      "taskIds": ["HOK-1"]
-    },
-    {
-      "wave": 2,
-      "taskIds": ["HOK-2"]
-    }
-  ],
+  "session": "test-session-2",
+  "repoDir": "/tmp/test-repo",
+  "baseBranch": "main",
+  "worktreeRoot": "/tmp/test-worktrees",
+  "planningMode": "interactive",
+  "agentCmd": "claude",
+  "agentCmdExplicit": false,
+  "forceModel": null,
+  "routerEnabled": true,
+  "maxParallel": 2,
+  "stateDir": "/tmp/test-state",
+  "stateFile": "/tmp/test-state/state.json",
+  "toolsDir": "/tmp/test-tools",
+  "libDir": "/tmp/test-lib",
+  "initialPhase": "planning",
   "tasks": [
     {
-      "issue": "HOK-1",
+      "issue": "HOK-1531",
       "slug": "task-a",
-      "title": "Task A"
+      "title": "Task A",
+      "branch": "task/task-a",
+      "worktreeDir": "/tmp/test-worktrees/task-a",
+      "linearIssueId": "HOK-1531",
+      "taskPacketFile": "/tmp/test-session-2-HOK-1531-taskpacket.md",
+      "taskPacketDetailsFile": "/tmp/test-session-2-HOK-1531-taskpacket-details.md",
+      "issueJsonFile": "/tmp/test-session-2-HOK-1531-issue.json",
+      "routeFile": "/tmp/test-session-2-HOK-1531-route.json",
+      "route": {
+        "planner": "claude-sonnet-4-6",
+        "coder": "claude-opus-4-7",
+        "reviewer": "claude-sonnet-4-6",
+        "planDepth": "light",
+        "codeDepth": "medium",
+        "reviewMode": "static",
+        "maxCostUsd": null
+      },
+      "challenge": false,
+      "challengePairId": null,
+      "challengeRole": null,
+      "challengeModel": null,
+      "migrationNumber": null,
+      "agent": "claude"
     },
     {
-      "issue": "HOK-2",
+      "issue": "HOK-1532",
       "slug": "task-b",
       "title": "Task B",
-      "dependsOn": ["HOK-1"],
-      "baseFromTask": "HOK-1"
+      "branch": "task/task-b",
+      "worktreeDir": "/tmp/test-worktrees/task-b",
+      "linearIssueId": "HOK-1532",
+      "taskPacketFile": "/tmp/test-session-2-HOK-1532-taskpacket.md",
+      "taskPacketDetailsFile": "/tmp/test-session-2-HOK-1532-taskpacket-details.md",
+      "issueJsonFile": "/tmp/test-session-2-HOK-1532-issue.json",
+      "routeFile": "/tmp/test-session-2-HOK-1532-route.json",
+      "route": {
+        "planner": "claude-sonnet-4-6",
+        "coder": "claude-opus-4-7",
+        "reviewer": "claude-sonnet-4-6",
+        "planDepth": "deep",
+        "codeDepth": "deep",
+        "reviewMode": "static",
+        "maxCostUsd": null
+      },
+      "challenge": false,
+      "challengePairId": null,
+      "challengeRole": null,
+      "challengeModel": null,
+      "migrationNumber": null,
+      "agent": "claude",
+      "dependsOn": ["HOK-1531"],
+      "baseFromTask": "HOK-1531"
     }
-  ]
+  ],
+  "queuePlan": {
+    "availableNow": ["HOK-1531"],
+    "queuedAfterDependencies": [
+      {
+        "taskId": "HOK-1532",
+        "ancestors": ["HOK-1531"]
+      }
+    ],
+    "avoidRunningTogether": [],
+    "needsTriage": false
+  },
+  "startupConfig": {
+    "statusLogFile": "/tmp/test-status.log",
+    "monitorEnv": "/tmp/test-monitor.env",
+    "monitorScript": "/tmp/test-monitor.sh",
+    "launchedIssuesFile": "/tmp/test-launched.txt",
+    "millLogFile": "/tmp/test-mill.log"
+  },
+  "monitorConfig": {
+    "pollSeconds": 10,
+    "requireConfirm": true,
+    "dryRun": false,
+    "projectName": "test-project",
+    "autoEval": true,
+    "enterLaunchesWave": true,
+    "dashboardVerbosity": "info",
+    "dashboardLogToFile": true
+  }
 }
