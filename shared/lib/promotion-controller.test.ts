@@ -28,7 +28,7 @@ function shellHarness(overrides: {
   isAncestor?: boolean;
   openPrs?: Array<{ number: number; url: string; body?: string }>;
   mergedPrs?: Array<{ number: number; title: string; labels?: Array<{ name: string }> }>;
-  checks?: Array<{ name: string; state?: string; conclusion?: string | null }>;
+  checks?: Array<{ name: string; state?: string; conclusion?: string | null; bucket?: string | null }>;
 } = {}): {
   shellRunner: (cmd: string, opts?: { encoding?: string; cwd?: string }) => string;
   calls: string[];
@@ -72,7 +72,7 @@ function shellHarness(overrides: {
 
       if (cmd.includes('gh pr checks')) {
         return JSON.stringify(overrides.checks ?? [
-          { name: 'ci', state: 'COMPLETED', conclusion: 'success' },
+          { name: 'ci', state: 'COMPLETED', bucket: 'pass' },
         ]);
       }
 
@@ -148,6 +148,33 @@ describe('runPromotion', () => {
     }
   });
 
+  it('reports pending checks when gh has not created checks yet', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+    });
+    const shellRunner = (cmd: string, opts?: { encoding?: string; cwd?: string }) => {
+      if (cmd.includes('gh pr checks')) {
+        shell.calls.push(cmd);
+        return "no checks reported on the 'auto/integration' branch";
+      }
+      return shell.shellRunner(cmd, opts);
+    };
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner,
+      });
+
+      assert.equal(result.status, 'updated');
+      assert.equal(result.checkSummary, 'pending: No PR checks reported.');
+      assert(!shell.calls.some((cmd) => cmd.includes('pr merge')));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
   it('reports failing checks without merging', async () => {
     const repo = makeRepo();
     const shell = shellHarness({
@@ -163,6 +190,28 @@ describe('runPromotion', () => {
 
       assert.equal(result.status, 'updated');
       assert.match(result.checkSummary ?? '', /^failing:/);
+      assert(!shell.calls.some((cmd) => cmd.includes('pr merge')));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('reports failing checks from gh bucket output without merging', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+      checks: [{ name: 'ci', state: 'COMPLETED', bucket: 'fail' }],
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+      });
+
+      assert.equal(result.status, 'updated');
+      assert.match(result.checkSummary ?? '', /^failing:/);
+      assert.match(result.checkSummary ?? '', /ci: fail/);
       assert(!shell.calls.some((cmd) => cmd.includes('pr merge')));
     } finally {
       repo.cleanup();

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import type { LinearIssueSummary } from './linear.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import {
   executeMerge,
@@ -56,6 +57,10 @@ function buildTestOptions(
     repoDir,
     prFetcher: async () => prList,
     healthChecker: async () => healthOverride,
+    challengeGateDeps: {
+      linearSiblingLookup: async () => [],
+      branchExists: async () => false,
+    },
     cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
   };
 }
@@ -458,6 +463,315 @@ describe('challenge-mode gating', () => {
       assert.equal(decision.nextPR, 201);
     });
   });
+
+  it('blocks a primary PR when workflow state is empty but Linear exposes an open challenger sibling', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      body: metadata(['task: HOK-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async (): Promise<LinearIssueSummary[]> => [
+        {
+          id: 'issue-primary',
+          identifier: 'HOK-1523',
+          title: 'Primary issue',
+          state: { name: 'In Progress' },
+          completedAt: null,
+          canceledAt: null,
+        },
+        {
+          id: 'issue-challenger',
+          identifier: 'HOK-1523_c',
+          title: 'Challenger issue',
+          state: { name: 'Backlog' },
+          completedAt: null,
+          canceledAt: null,
+        },
+      ],
+      branchExists: async () => false,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:linear-sibling:HOK-1523_c']],
+      );
+      assert.equal(decision.nextPR, null);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks a primary PR when workflow state has the challenge pair but the challenger PR is not open', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      body: metadata(['task: HOK-1523', 'challengePairId: pair-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async () => [],
+      branchExists: async () => false,
+    };
+    writeWorkflowState(options.repoDir, {
+      HOK_1523: { pr: 497, challengePairId: 'pair-1523', challengeRole: 'primary' },
+      HOK_1523_c: { challengePairId: 'pair-1523', challengeRole: 'challenger' },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:no-comparison']],
+      );
+      assert.equal(decision.nextPR, null);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks a primary PR when workflow state is empty but the challenger branch exists', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      body: metadata(['task: HOK-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async () => [],
+      branchExists: async (branch) => branch === 'task/hok-1523-example-challenger',
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:branch-twin:task/hok-1523-example-challenger']],
+      );
+      assert.equal(decision.nextPR, null);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('fails closed when a challenge lookup throws for a Wavemill PR', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      body: metadata(['task: HOK-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async () => {
+        throw new Error('Linear unavailable');
+      },
+      branchExists: async () => false,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:lookup-error:linear']],
+      );
+      assert.equal(decision.nextPR, null);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('replays the registration race timing and only exposes the winner once comparison resolves', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      createdAt: '2026-04-01T00:00:00Z',
+      body: metadata(['task: HOK-1523']),
+    });
+    const challenger = pr({
+      number: 501,
+      title: 'Challenger',
+      headRefName: 'task/hok-1523-example-challenger',
+      createdAt: '2026-04-01T00:10:00Z',
+      body: metadata(['task: HOK-1523_c', 'challenge: true', 'challengePairId: pair-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async (): Promise<LinearIssueSummary[]> => [
+        {
+          id: 'issue-primary',
+          identifier: 'HOK-1523',
+          title: 'Primary issue',
+          state: { name: 'In Progress' },
+          completedAt: null,
+          canceledAt: null,
+        },
+        {
+          id: 'issue-challenger',
+          identifier: 'HOK-1523_c',
+          title: 'Challenger issue',
+          state: { name: 'Backlog' },
+          completedAt: null,
+          canceledAt: null,
+        },
+      ],
+      branchExists: async () => false,
+    };
+
+    try {
+      let decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:linear-sibling:HOK-1523_c']],
+      );
+
+      writeWorkflowState(options.repoDir, {
+        HOK_1523: { pr: 497, challengePairId: 'pair-1523', challengeRole: 'primary' },
+        HOK_1523_c: { challengePairId: 'pair-1523', challengeRole: 'challenger' },
+      });
+      decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:no-comparison']],
+      );
+
+      options.prFetcher = async () => [primary, challenger];
+      writeWorkflowState(options.repoDir, {
+        HOK_1523: { pr: 497, challengePairId: 'pair-1523', challengeRole: 'primary' },
+        HOK_1523_c: { pr: 501, challengePairId: 'pair-1523', challengeRole: 'challenger' },
+      });
+      writeChallengeComparisons(options.repoDir, [{
+        challengePairId: 'pair-1523',
+        primaryPrUrl: 'https://github.com/example/repo/pull/497',
+        challengerPrUrl: 'https://github.com/example/repo/pull/501',
+        winner: 'challenger',
+        timestamp: '2026-04-28T12:00:00Z',
+      }]);
+
+      decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible.map((candidate) => candidate.number), [501]);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:loser:pair-1523']],
+      );
+      assert.equal(decision.nextPR, 501);
+    } finally {
+      options.cleanup();
+    }
+  });
+});
+
+describe('challenge-gate race prevention', () => {
+  it('blocks primary when challenger sibling branch exists but no workflow state', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523',
+      createdAt: '2020-01-01T00:00:00Z',
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateOptions = {
+      remoteBranches: ['task/hok-1523', 'task/hok-1523-challenger'],
+      coolOffSeconds: 0,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.nextPR, null);
+      assert.equal(decision.blocked[0]?.reason, 'challenge:pair-unresolved:branch-pair');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks primary when challenger task is in workflow state but has no open PR', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523',
+      body: metadata(['task: HOK-1523', 'challenge: true', 'challengePairId: pair-hok-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateOptions = {
+      remoteBranches: ['task/hok-1523'],
+      coolOffSeconds: 0,
+    };
+    writeWorkflowState(options.repoDir, {
+      HOK_1523: { pr: 497, challengePairId: 'pair-hok-1523', challengeRole: 'primary' },
+      HOK_1523_c: { challengePairId: 'pair-hok-1523', challengeRole: 'challenger' },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.nextPR, null);
+      assert.equal(decision.blocked[0]?.reason, 'challenge:pair-unresolved:no-comparison');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks a young task PR via cool-off when no branch/workflow signal exists', async () => {
+    const now = Date.parse('2026-04-01T00:03:00Z');
+    const young = pr({
+      number: 301,
+      title: 'Young PR',
+      headRefName: 'task/young',
+      createdAt: '2026-04-01T00:01:00Z',
+    });
+    const options = buildTestOptions([young]);
+    options.challengeGateOptions = {
+      remoteBranches: [],
+      coolOffSeconds: 300,
+      nowMs: () => now,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.blocked[0]?.reason, 'challenge:cool-off');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('allows an old task PR when no branch/workflow signal exists', async () => {
+    const now = Date.parse('2026-04-01T01:00:00Z');
+    const old = pr({
+      number: 302,
+      title: 'Old PR',
+      headRefName: 'task/old',
+      createdAt: '2026-04-01T00:01:00Z',
+    });
+    const options = buildTestOptions([old]);
+    options.challengeGateOptions = {
+      remoteBranches: [],
+      coolOffSeconds: 300,
+      nowMs: () => now,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 1);
+      assert.equal(decision.nextPR, 302);
+    } finally {
+      options.cleanup();
+    }
+  });
 });
 
 describe('selectNextCandidate dependency cycles', () => {
@@ -524,7 +838,7 @@ describe('executeMerge', () => {
       assert.ok(hasCall(options.calls, /git fetch origin 'auto\/integration'/));
       assert.ok(hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
       assert.ok(hasCall(options.calls, /git push --force-with-lease/));
-      assert.ok(hasCall(options.calls, /gh pr checks 42/));
+      assert.ok(hasCall(options.calls, /gh pr checks 42 --json name,state,bucket 2>&1 \|\| true/));
       assert.ok(hasCall(options.calls, /gh pr merge 42 --squash --delete-branch/));
       assert.ok(hasCall(options.calls, /git worktree remove --force/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
@@ -659,6 +973,29 @@ describe('executeMerge', () => {
         if (cmd.includes('gh pr list --label')) return '[]';
         if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
         if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'failure' }]);
+        return '';
+      },
+    });
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'checks');
+      assert.ok(!hasCall(options.calls, /gh pr merge/));
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks when PR checks report a failing gh bucket', async () => {
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', bucket: 'fail' }]);
         return '';
       },
     });

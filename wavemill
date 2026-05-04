@@ -41,6 +41,11 @@ ${GREEN}Commands:${NC}
              Options:
                ${CYAN}--agent <name>${NC}  Agent CLI to use (claude, codex, ...)
                ${CYAN}--no-progress${NC}   Use legacy startup status lines
+               ${CYAN}--dry-run${NC}       Build a launch plan without tmux or agents
+               ${CYAN}--dry-run-backlog <file>${NC}
+                               Read backlog JSON from a fixture file
+               ${CYAN}--dry-run-plan-out <file>${NC}
+                               Write the launch plan JSON to a chosen path
 
   ${CYAN}expand${NC}    Expand Linear issues into task packets
              - No args: shows ranked backlog candidates
@@ -182,6 +187,9 @@ ${GREEN}Examples:${NC}
 
   # Start mill with a specific agent
   wavemill mill --agent codex
+
+  # Build a launch plan from fixture backlog data without launching
+  wavemill mill --dry-run --dry-run-backlog ./backlog.json --dry-run-plan-out ./launch-plan.json
 
   # Override a config value with an env var
   MAX_PARALLEL=5 wavemill mill
@@ -422,7 +430,7 @@ run_mill() {
   fi
 
   echo -e "${CYAN}Starting Wavemill Mill...${NC}"
-  exec "$mill_script" "$@"
+  exec "$BASH" "$mill_script" "$@"
 }
 
 run_init() {
@@ -902,6 +910,27 @@ case "${1:-}" in
           ;;
         --no-progress)
           export WAVEMILL_NO_PROGRESS=1
+          shift
+          ;;
+        --dry-run)
+          export WAVEMILL_DRY_RUN=1
+          export DRY_RUN=true
+          shift
+          ;;
+        --dry-run-backlog)
+          export WAVEMILL_DRY_RUN_BACKLOG_FILE="$2"
+          shift 2
+          ;;
+        --dry-run-backlog=*)
+          export WAVEMILL_DRY_RUN_BACKLOG_FILE="${1#*=}"
+          shift
+          ;;
+        --dry-run-plan-out)
+          export WAVEMILL_DRY_RUN_PLAN_OUT="$2"
+          shift 2
+          ;;
+        --dry-run-plan-out=*)
+          export WAVEMILL_DRY_RUN_PLAN_OUT="${1#*=}"
           shift
           ;;
         *)

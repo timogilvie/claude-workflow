@@ -35,6 +35,7 @@ for f in \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_translates_keystrokes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_pane_respawn.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/mill_dry_run_full_pipeline.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/monitor_consumes_command_file.sh \
   "$REPO_DIR/wavemill" \
 ; do
@@ -258,6 +259,55 @@ if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" 2>/dev/null || true' "$MI
   pass "dynamic task launch uses cached fetch helper"
 else
   fail "dynamic task launch is not using cached fetch helper"
+fi
+
+# ============================================================================
+# TEST 2E: Config annotation log guards
+# ============================================================================
+echo ""
+echo "=== Config Annotation Log Guards ==="
+
+if helper_output="$(bash -lc 'source "'"$COMMON_SCRIPT"'"; wavemill_config_annotation "mill.requireConfirm" "true"')" \
+  && [[ "$helper_output" == ' (mill.requireConfirm=true)' ]]; then
+  pass "wavemill_config_annotation formats path/value suffix"
+else
+  fail "wavemill_config_annotation formatting changed"
+fi
+
+if grep -q '^wavemill_config_annotation()' "$COMMON_SCRIPT"; then
+  pass "wavemill_config_annotation helper is defined"
+else
+  fail "wavemill-common.sh is missing wavemill_config_annotation helper"
+fi
+
+if grep -qF 'Router: ${ROUTER_ENABLED:-true} (per-task agent+model selection)$(wavemill_config_annotation "router.enabled" "${ROUTER_ENABLED:-true}")' "$MILL_SCRIPT"; then
+  pass "router summary logs router.enabled annotation"
+else
+  fail "router summary is missing router.enabled annotation"
+fi
+
+if grep -qF 'Max parallel: $MAX_PARALLEL$(wavemill_config_annotation "mill.maxParallel" "$MAX_PARALLEL")' "$MILL_SCRIPT" \
+  && grep -qF 'Max parallel: $EFFECTIVE_MAX_PARALLEL (reduced from $MAX_PARALLEL - all models degraded)$(wavemill_config_annotation "mill.maxParallel" "$MAX_PARALLEL")' "$MILL_SCRIPT"; then
+  pass "max parallel summaries log mill.maxParallel annotation"
+else
+  fail "max parallel summaries are missing mill.maxParallel annotation"
+fi
+
+if grep -qF 'Checking every ${POLL_SECONDS}s$(wavemill_config_annotation "mill.pollSeconds" "$POLL_SECONDS")' "$MILL_SCRIPT"; then
+  pass "poll interval summary logs mill.pollSeconds annotation"
+else
+  fail "poll interval summary is missing mill.pollSeconds annotation"
+fi
+
+if grep -qF 'Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")' "$MILL_SCRIPT"; then
+  window_count="$(grep -cF 'Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")' "$MILL_SCRIPT")"
+  if [[ "$window_count" -eq 2 ]]; then
+    pass "window hold-open logs include mill.requireConfirm at both sites"
+  else
+    fail "window hold-open annotation expected at 2 sites, found $window_count"
+  fi
+else
+  fail "window hold-open logs are missing mill.requireConfirm annotation"
 fi
 
 if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" --force' "$MILL_SCRIPT"; then
@@ -2504,6 +2554,7 @@ echo ""
 echo "=== Startup Lifecycle Fixtures ==="
 
 for fixture in \
+  "$REPO_DIR/tests/fixtures/lifecycle/mill_dry_run_full_pipeline.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_launches_concurrently.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_serializes_state_writes.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/worktree_collision.sh" \

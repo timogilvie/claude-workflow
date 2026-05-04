@@ -4,11 +4,39 @@
  * Verifies drift detection logic.
  */
 
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatDriftWarning } from '../shared/lib/drift-detector.ts';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { checkSubsystemDrift, formatDriftWarning } from '../shared/lib/drift-detector.ts';
 import type { DriftCheckResult } from '../shared/lib/drift-detector.ts';
 import type { Subsystem } from '../shared/lib/subsystem-detector.ts';
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+function makeRepo(): string {
+  const repoDir = mkdtempSync(path.join(os.tmpdir(), 'drift-detector-'));
+  tempDirs.push(repoDir);
+  mkdirSync(path.join(repoDir, '.wavemill', 'context'), { recursive: true });
+  mkdirSync(path.join(repoDir, 'shared', 'lib'), { recursive: true });
+  return repoDir;
+}
+
+function writeSpec(repoDir: string, subsystemId: string, body = '# Subsystem: Test\n'): string {
+  const specPath = path.join(repoDir, '.wavemill', 'context', `${subsystemId}.md`);
+  writeFileSync(specPath, body);
+  return specPath;
+}
 
 describe('drift-detector', () => {
   const mockSubsystem: Subsystem = {
@@ -103,6 +131,76 @@ describe('drift-detector', () => {
 
       assert.match(warning, /Linear API/, 'Should include first subsystem');
       assert.match(warning, /Eval System/, 'Should include second subsystem');
+    });
+  });
+
+  describe('checkSubsystemDrift', () => {
+    it('does not mark a spec stale when it has no tracked key files', () => {
+      const repoDir = makeRepo();
+      const specPath = writeSpec(repoDir, 'quota-tracking');
+      const oldTime = new Date(Date.now() - 16 * 24 * 60 * 60 * 1000);
+      utimesSync(specPath, oldTime, oldTime);
+
+      const subsystem: Subsystem = {
+        ...mockSubsystem,
+        id: 'quota-tracking',
+        name: 'Quota Tracking',
+        keyFiles: [],
+      };
+
+      const status = checkSubsystemDrift(subsystem, repoDir);
+
+      assert.strictEqual(status.isStale, false);
+      assert.strictEqual(status.filesLastModified, null);
+      assert.ok(status.daysSinceUpdate >= 15);
+    });
+
+    it('marks a spec stale when tracked source files are newer and the spec is overdue', () => {
+      const repoDir = makeRepo();
+      const specPath = writeSpec(repoDir, 'linear-api');
+      const keyFile = path.join(repoDir, 'shared', 'lib', 'linear.ts');
+      writeFileSync(keyFile, 'export const value = 1;\n');
+
+      const oldTime = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+      const newTime = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000);
+      utimesSync(specPath, oldTime, oldTime);
+      utimesSync(keyFile, newTime, newTime);
+
+      const status = checkSubsystemDrift(mockSubsystem, repoDir);
+
+      assert.strictEqual(status.isStale, true);
+      assert.ok(status.filesLastModified instanceof Date);
+      assert.ok(status.filesLastModified! > status.specLastModified);
+    });
+
+    it('keeps a spec fresh after refresh when the spec is newer than tracked source files', () => {
+      const repoDir = makeRepo();
+      const specPath = writeSpec(repoDir, 'linear-api');
+      const keyFile = path.join(repoDir, 'shared', 'lib', 'linear.ts');
+      writeFileSync(keyFile, 'export const value = 1;\n');
+
+      const recentTime = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000);
+      const olderTime = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+      utimesSync(specPath, recentTime, recentTime);
+      utimesSync(keyFile, olderTime, olderTime);
+
+      const status = checkSubsystemDrift(mockSubsystem, repoDir);
+
+      assert.strictEqual(status.isStale, false);
+      assert.ok(status.filesLastModified instanceof Date);
+      assert.ok(status.filesLastModified! < status.specLastModified);
+    });
+
+    it('treats a missing spec as not stale', () => {
+      const repoDir = makeRepo();
+
+      const status = checkSubsystemDrift(mockSubsystem, repoDir);
+
+      assert.strictEqual(status.isStale, false);
+      assert.strictEqual(status.daysSinceUpdate, 0);
+      assert.strictEqual(status.filesLastModified, null);
+      assert.deepStrictEqual(status.recentPRs, []);
+      assert.strictEqual(status.specLastModified.getTime(), 0);
     });
   });
 });

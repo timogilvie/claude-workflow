@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launch-plan.schema.json",
+  "title": "LaunchPlan",
+  "type": "object",
+  "required": ["session", "repoDir", "baseBranch", "worktreeRoot", "agentCmd", "tasks"],
+  "additionalProperties": true,
+  "properties": {
+    "session": {
+      "type": "string",
+      "description": "Wavemill session identifier"
+    },
+    "repoDir": {
+      "type": "string",
+      "description": "Repository root directory path"
+    },
+    "baseBranch": {
+      "type": "string",
+      "description": "Git base branch for worktrees"
+    },
+    "worktreeRoot": {
+      "type": "string",
+      "description": "Root directory for git worktrees"
+    },
+    "agentCmd": {
+      "type": "string",
+      "description": "Default agent command (e.g., 'claude')"
+    },
+    "tasks": {
+      "type": "array",
+      "description": "Tasks to launch in this session",
+      "items": {
+        "type": "object",
+        "required": ["issue", "slug", "branch"],
+        "additionalProperties": true,
+        "properties": {
+          "issue": {
+            "type": "string",
+            "description": "Issue ID (e.g., 'HOK-1532')"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Issue slug for branch naming"
+          },
+          "branch": {
+            "type": "string",
+            "description": "Git branch name"
+          },
+          "dependsOn": {
+            "type": "array",
+            "description": "Task IDs this task depends on (HOK-1532)",
+            "items": {
+              "type": "string"
+            }
+          },
+          "baseFromTask": {
+            "type": ["string", "null"],
+            "description": "Task ID to base branch from, or null (HOK-1532)"
+          }
+        }
+      }
+    },
+    "queuePlan": {
+      "type": "object",
+      "description": "Planner-supplied wave ordering. Runner ignores; reserved for future queue execution (HOK-1532)."
+    }
+  }
+}

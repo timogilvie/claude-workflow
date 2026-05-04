@@ -15,7 +15,7 @@ import { extractMetadataBlock, parsePrMetadata, type PrMetadata } from './pr-met
 import { evaluateReady } from './ready-engine.ts';
 import { runReadyStage } from './ready-stage.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
-import { applyChallengePairGates } from './tend-challenge-gate.ts';
+import { applyChallengePairGates, type ChallengeGateDeps, type ChallengeGateOptions } from './tend-challenge-gate.ts';
 
 export interface TendCandidate {
   number: number;
@@ -89,6 +89,8 @@ export interface SelectNextCandidateOptions {
   prFetcher?: PrFetcher;
   healthChecker?: HealthChecker;
   loserCleanup?: (prNumber: number, repoDir: string) => void;
+  challengeGateDeps?: ChallengeGateDeps;
+  challengeGateOptions?: ChallengeGateOptions;
 }
 
 interface EligibleWorkItem {
@@ -100,6 +102,8 @@ const BRANCH_NAME_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const PR_DEPENDENCY_PATTERN = /^PR#(\d+)$/i;
 const FAILING_CHECK_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled']);
 const PASSING_CHECK_CONCLUSIONS = new Set(['success', 'skipped', 'neutral']);
+const FAILING_CHECK_BUCKETS = new Set(['fail', 'cancel']);
+const PASSING_CHECK_BUCKETS = new Set(['pass', 'skipping']);
 const CHECK_POLL_INTERVAL_MS = 30_000;
 
 export async function defaultPrFetcher(integrationBranch: string, repoDir: string): Promise<GhPrListEntry[]> {
@@ -197,7 +201,12 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
   const cycleResult = computeDependencyDepths(eligibleWorkItems);
   blocked.push(...cycleResult.cycleBlocked);
 
-  const challengeResult = applyChallengePairGates(cycleResult.eligible, blocked, options.repoDir);
+  const challengeResult = await applyChallengePairGates(
+    cycleResult.eligible,
+    blocked,
+    options.repoDir,
+    { ...options.challengeGateOptions, ...options.challengeGateDeps },
+  );
   blocked.length = 0;
   blocked.push(...challengeResult.blocked);
 
@@ -507,21 +516,14 @@ export async function waitForChecks(
   const deadline = Date.now() + timeoutMs;
 
   while (true) {
-    // gh CLI removed the `conclusion` field from `gh pr checks --json`
-    // (gh ≥ 2.72.0). Use `bucket` (gh's pre-categorized pass/fail/pending)
-    // and `state`. parseCheckRuns synthesizes a `conclusion`-shaped field
-    // so downstream comparison logic keeps working without churn.
-    const output = shellRunner(
-      `gh pr checks ${prNumber} --json name,state,bucket`,
-      { encoding: 'utf-8', cwd: repoDir },
-    );
+    const output = readPrChecks(prNumber, repoDir, shellRunner);
     const checks = parseCheckRuns(output);
     const failed = checks.find((check) => isFailingCheck(check));
     if (failed) {
       return { outcome: 'fail', summary: summarizeChecks(checks) };
     }
 
-    if (checks.every((check) => isPassingCheck(check))) {
+    if (checks.length > 0 && checks.every((check) => isPassingCheck(check))) {
       return { outcome: 'pass', summary: summarizeChecks(checks) };
     }
 
@@ -534,6 +536,21 @@ export async function waitForChecks(
 
     await sleep(CHECK_POLL_INTERVAL_MS);
   }
+}
+
+function readPrChecks(
+  prNumber: number,
+  repoDir: string,
+  shellRunner: MergeExecutionDeps['shellRunner'],
+): string {
+  const output = shellRunner(
+    `gh pr checks ${prNumber} --json name,state,bucket 2>&1 || true`,
+    { encoding: 'utf-8', cwd: repoDir },
+  );
+  if (String(output).includes('no checks reported')) {
+    return '[]';
+  }
+  return output;
 }
 
 async function defaultRunReadyCheck(
@@ -634,50 +651,44 @@ function defaultLoserCleanup(prNumber: number, repoDir: string): void {
   );
 }
 
-function parseCheckRuns(output: string): Array<{ name?: string; state?: string | null; conclusion?: string | null; bucket?: string | null }> {
+interface PrCheckRun {
+  name?: string;
+  state?: string | null;
+  conclusion?: string | null;
+  bucket?: string | null;
+}
+
+function parseCheckRuns(output: string): PrCheckRun[] {
   const parsed = JSON.parse(String(output)) as unknown;
   if (!Array.isArray(parsed)) {
     throw new Error('tend: gh pr checks returned non-array JSON');
   }
-  // Synthesize a `conclusion`-shaped value from `bucket` when conclusion is
-  // absent (gh ≥ 2.72.0). Downstream isFailingCheck/isPassingCheck/summarize
-  // code reads `conclusion` directly; mapping at the boundary keeps them
-  // unchanged.
-  return (parsed as Array<{ name?: string; state?: string | null; conclusion?: string | null; bucket?: string | null }>)
-    .map((entry) => ({
-      ...entry,
-      conclusion: entry.conclusion ?? bucketToConclusion(entry.bucket),
-    }));
+  return parsed as PrCheckRun[];
 }
 
-function bucketToConclusion(bucket: string | null | undefined): string | null {
-  switch (bucket) {
-    case 'pass': return 'success';
-    case 'fail': return 'failure';
-    case 'skipping': return 'skipped';
-    case 'cancel': return 'cancelled';
-    case 'pending': return null;  // still in flight
-    default: return null;
-  }
-}
-
-function isFailingCheck(check: { state?: string | null; conclusion?: string | null }): boolean {
+function isFailingCheck(check: PrCheckRun): boolean {
   const conclusion = (check.conclusion || '').toLowerCase();
+  const bucket = (check.bucket || '').toLowerCase();
   const state = (check.state || '').toUpperCase();
-  return FAILING_CHECK_CONCLUSIONS.has(conclusion) || FAILING_CHECK_CONCLUSIONS.has(state.toLowerCase());
+  return (
+    FAILING_CHECK_CONCLUSIONS.has(conclusion)
+    || FAILING_CHECK_BUCKETS.has(bucket)
+    || FAILING_CHECK_CONCLUSIONS.has(state.toLowerCase())
+  );
 }
 
-function isPassingCheck(check: { state?: string | null; conclusion?: string | null }): boolean {
+function isPassingCheck(check: PrCheckRun): boolean {
   const conclusion = (check.conclusion || '').toLowerCase();
-  return PASSING_CHECK_CONCLUSIONS.has(conclusion);
+  const bucket = (check.bucket || '').toLowerCase();
+  return PASSING_CHECK_CONCLUSIONS.has(conclusion) || PASSING_CHECK_BUCKETS.has(bucket);
 }
 
-function summarizeChecks(checks: Array<{ name?: string; state?: string | null; conclusion?: string | null }>): string {
+function summarizeChecks(checks: PrCheckRun[]): string {
   if (checks.length === 0) {
     return 'No PR checks reported.';
   }
   return checks
-    .map((check) => `${check.name || 'check'}: ${check.conclusion || check.state || 'pending'}`)
+    .map((check) => `${check.name || 'check'}: ${check.conclusion || check.bucket || check.state || 'pending'}`)
     .join('\n');
 }
 
