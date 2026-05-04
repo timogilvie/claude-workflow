@@ -24,13 +24,17 @@ mkdir -p "$REPO_DIR/.wavemill" "$TMP_DIR/worktrees" "$TMP_DIR/home"
 cat > "$REPO_DIR/.wavemill-config.json" <<EOF
 {
   "version": 1,
-  "projectName": "Fixture Project",
-  "agent": "codex",
-  "baseBranch": "auto/integration",
-  "worktreeRoot": "$TMP_DIR/worktrees",
-  "maxParallel": 2,
-  "requireConfirm": false,
-  "enterLaunchesWave": true
+  "linear": { "project": "Fixture Project" },
+  "mill": {
+    "agentCmd": "codex",
+    "baseBranch": "auto/integration",
+    "worktreeRoot": "$TMP_DIR/worktrees",
+    "maxParallel": 2,
+    "requireConfirm": false
+  },
+  "taskSelection": {
+    "enterLaunchesWave": true
+  }
 }
 EOF
 
