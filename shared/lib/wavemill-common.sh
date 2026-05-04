@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 # Wavemill Common Library
 # Shared functions used across wavemill-mill.sh and wavemill-expand.sh
 
@@ -111,8 +111,8 @@ load_config() {
       "_CFG_PLAN_RESEARCH=\($c.plan.research // false)",
       "_CFG_PLAN_MODEL=\($c.plan.model // "claude-opus-4-7" | @sh)",
       "_CFG_DASHBOARD_VERBOSITY=\($c.dashboard.verbosity // "info" | @sh)",
-      "_CFG_DASHBOARD_LOG_TO_FILE=\(if ($c.dashboard | has("logToFile")) then $c.dashboard.logToFile else true end)",
-      "_CFG_ENTER_LAUNCHES_WAVE=\(if ($c.taskSelection | has("enterLaunchesWave")) then $c.taskSelection.enterLaunchesWave else true end)",
+      "_CFG_DASHBOARD_LOG_TO_FILE=\($c.dashboard.logToFile // true)",
+      "_CFG_ENTER_LAUNCHES_WAVE=\($c.taskSelection.enterLaunchesWave // true)",
       "_CFG_CHALLENGE_ENABLED=\($c.challenge.enabled // false)",
       "_CFG_CHALLENGE_RATE=\($c.challenge.rate // 0.10)",
       "_CFG_CHALLENGE_MODELS=\(($c.challenge.models // null) | @json | @sh)",
