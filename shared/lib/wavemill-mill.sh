@@ -453,7 +453,7 @@ write_launch_plan() {
     --arg dashboardVerbosity "$DASHBOARD_VERBOSITY" \
     --arg dashboardLogToFile "$DASHBOARD_LOG_TO_FILE" \
     --arg millLogFile "$MILL_LOG_FILE" \
-    --argjson queuePlan "$(if [[ -n "$queue_plan_json" ]]; then printf '%s' "$queue_plan_json"; else printf 'null'; fi)" \
+    --argjson queuePlan "$(if [[ -n "$queue_plan_json" ]]; then printf "%s" "$queue_plan_json"; else printf "null"; fi)" \
     '{
       session: $session,
       repoDir: $repoDir,
@@ -5513,7 +5513,7 @@ Implement from the issue description plus direct codebase analysis."
         inputHash: $provenanceInputHash,
         routedAt: (if $provenanceRoutedAt == "" then (now | todateiso8601) else $provenanceRoutedAt end),
         routerMode: (if $provenanceRouterMode == "" then "normal" else $provenanceRouterMode end)
-      }
+      },
       maxCostUsd: $maxCostUsd
     } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)' \
     | write_json_artifact "$routing_file"
