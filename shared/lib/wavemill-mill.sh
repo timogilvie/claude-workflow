@@ -1269,15 +1269,15 @@ log "info" "  Base branch: $BASE_BRANCH"
 log "info" "  Worktree root: $WORKTREE_ROOT"
 log "info" "  Project: ${PROJECT_NAME:-(all projects)}"
 log "info" "  Agent: $AGENT_CMD ($(agent_name "$AGENT_CMD"))${AGENT_CMD_EXPLICIT:+ [explicit override]}"
-log "info" "  Router: ${ROUTER_ENABLED:-true} (per-task agent+model selection)"
+log "info" "  Router: ${ROUTER_ENABLED:-true} (per-task agent+model selection)$(wavemill_config_annotation "router.enabled" "${ROUTER_ENABLED:-true}")"
 if (( EFFECTIVE_MAX_PARALLEL < MAX_PARALLEL )); then
-  log "status" "  Max parallel: $EFFECTIVE_MAX_PARALLEL (reduced from $MAX_PARALLEL - all models degraded)"
+  log "status" "  Max parallel: $EFFECTIVE_MAX_PARALLEL (reduced from $MAX_PARALLEL - all models degraded)$(wavemill_config_annotation "mill.maxParallel" "$MAX_PARALLEL")"
 else
-  log "info" "  Max parallel: $MAX_PARALLEL"
+  log "info" "  Max parallel: $MAX_PARALLEL$(wavemill_config_annotation "mill.maxParallel" "$MAX_PARALLEL")"
 fi
 log "info" "  Planning mode: $PLANNING_MODE"
 log "info" "  Dashboard verbosity: ${DASHBOARD_VERBOSITY:-info}"
-[[ -n "${SETUP_CMD:-}" ]] && log "info" "  Setup command: $SETUP_CMD"
+[[ -n "${SETUP_CMD:-}" ]] && log "info" "  Setup command: $SETUP_CMD$(wavemill_config_annotation "mill.setupCommand" "$SETUP_CMD")"
 log "info" "  State file: $STATE_FILE"
 if [[ -n "${inflight_tasks:-}" ]]; then
   log "info" "  Resume detected: ${inflight_count:-0} in-flight task(s), startup slot limit: $STARTUP_SLOT_LIMIT"
@@ -5521,11 +5521,11 @@ done < "$TASKS_FILE"
 log "status" "Monitoring tasks and managing work queue..."
 [[ "$PLANNING_MODE" == "interactive" ]] && log "info" "  Planning mode: interactive (watching for plan approval)"
 if (( EFFECTIVE_MAX_PARALLEL < MAX_PARALLEL )); then
-  log "status" "  Max parallel: $EFFECTIVE_MAX_PARALLEL (reduced from $MAX_PARALLEL - all models degraded)"
+  log "status" "  Max parallel: $EFFECTIVE_MAX_PARALLEL (reduced from $MAX_PARALLEL - all models degraded)$(wavemill_config_annotation "mill.maxParallel" "$MAX_PARALLEL")"
 else
-  log "info" "  Max parallel: $MAX_PARALLEL"
+  log "info" "  Max parallel: $MAX_PARALLEL$(wavemill_config_annotation "mill.maxParallel" "$MAX_PARALLEL")"
 fi
-log "info" "  Checking every ${POLL_SECONDS}s"
+log "info" "  Checking every ${POLL_SECONDS}s$(wavemill_config_annotation "mill.pollSeconds" "$POLL_SECONDS")"
 log "info" "  Type 'q' to quit, or 'touch $STATE_DIR/.stop-loop' to stop"
 printf '\033[1mTask Backlog\033[0m\n'
 
@@ -5808,7 +5808,7 @@ monitor_issue_state() {
         fi
 
         if [[ "$REQUIRE_CONFIRM" == "true" ]]; then
-          log "status" "  → Window stays open for review - close it when ready"
+          log "status" "  → Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")"
           if should_update_linear_state "$ISSUE"; then
             linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
           fi
@@ -6597,7 +6597,7 @@ monitor_issue_state() {
       elif [[ "$AUTO_EVAL" == "true" ]]; then
         log "debug" "  ✓ Eval already completed for $ISSUE"
       fi
-      log "status" "  → Window stays open for review - close it when ready"
+      log "status" "  → Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")"
       if should_update_linear_state "$ISSUE"; then
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
       fi
