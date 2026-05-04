@@ -24,7 +24,9 @@ mkdir -p "$REPO_DIR/.wavemill" "$TMP_DIR/worktrees" "$TMP_DIR/home"
 cat > "$REPO_DIR/.wavemill-config.json" <<EOF
 {
   "version": 1,
-  "linear": { "project": "Fixture Project" },
+  "linear": {
+    "project": "Fixture Project"
+  },
   "mill": {
     "agentCmd": "codex",
     "baseBranch": "auto/integration",

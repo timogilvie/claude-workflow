@@ -110,7 +110,7 @@ describe('parseRemoteBranchOutput', () => {
 });
 
 describe('branch sibling detection in applyChallengePairGates', () => {
-  it('blocks a primary when challenger sibling branch exists on remote', () => {
+  it('blocks a primary when challenger sibling branch exists on remote', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const items = [makeWorkItem({ number: 101, headRefName: 'task/foo' })];
@@ -119,7 +119,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
         coolOffSeconds: 0,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 0);
       assert.equal(result.blocked.length, 1);
       assert.equal(result.blocked[0].reason, 'challenge:pair-unresolved:branch-pair');
@@ -128,7 +128,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
     }
   });
 
-  it('blocks a challenger when primary sibling branch exists on remote', () => {
+  it('blocks a challenger when primary sibling branch exists on remote', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const items = [makeWorkItem({ number: 102, headRefName: 'task/foo-challenger' })];
@@ -137,7 +137,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
         coolOffSeconds: 0,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 0);
       assert.equal(result.blocked.length, 1);
       assert.equal(result.blocked[0].reason, 'challenge:pair-unresolved:branch-pair');
@@ -146,7 +146,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
     }
   });
 
-  it('allows a task PR when no sibling branch exists', () => {
+  it('allows a task PR when no sibling branch exists', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const items = [makeWorkItem({
@@ -159,7 +159,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
         coolOffSeconds: 0,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 1);
       assert.equal(result.blocked.length, 0);
     } finally {
@@ -167,7 +167,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
     }
   });
 
-  it('does not let branch detection re-block a resolved winner', () => {
+  it('does not let branch detection re-block a resolved winner', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const items = [makeWorkItem({
@@ -198,7 +198,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
         coolOffSeconds: 0,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 1);
       assert.equal(result.eligible[0].pr.number, 101);
     } finally {
@@ -208,7 +208,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
 });
 
 describe('cool-off window in applyChallengePairGates', () => {
-  it('blocks a fresh task PR within the cool-off window', () => {
+  it('blocks a fresh task PR within the cool-off window', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const now = Date.parse('2026-04-01T00:05:00Z');
@@ -223,7 +223,7 @@ describe('cool-off window in applyChallengePairGates', () => {
         nowMs: () => now,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 0);
       assert.equal(result.blocked.length, 1);
       assert.equal(result.blocked[0].reason, 'challenge:cool-off');
@@ -232,7 +232,7 @@ describe('cool-off window in applyChallengePairGates', () => {
     }
   });
 
-  it('allows a task PR after the cool-off window expires', () => {
+  it('allows a task PR after the cool-off window expires', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const now = Date.parse('2026-04-01T00:10:00Z');
@@ -247,7 +247,7 @@ describe('cool-off window in applyChallengePairGates', () => {
         nowMs: () => now,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 1);
       assert.equal(result.blocked.length, 0);
     } finally {
@@ -255,7 +255,7 @@ describe('cool-off window in applyChallengePairGates', () => {
     }
   });
 
-  it('skips cool-off when coolOffSeconds is 0', () => {
+  it('skips cool-off when coolOffSeconds is 0', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const now = Date.parse('2026-04-01T00:00:01Z');
@@ -270,14 +270,14 @@ describe('cool-off window in applyChallengePairGates', () => {
         nowMs: () => now,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 1);
     } finally {
       cleanup();
     }
   });
 
-  it('skips cool-off for non-task branches', () => {
+  it('skips cool-off for non-task branches', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const now = Date.parse('2026-04-01T00:00:01Z');
@@ -292,14 +292,14 @@ describe('cool-off window in applyChallengePairGates', () => {
         nowMs: () => now,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 1);
     } finally {
       cleanup();
     }
   });
 
-  it('skips cool-off when createdAt is invalid', () => {
+  it('skips cool-off when createdAt is invalid', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const items = [makeWorkItem({
@@ -313,14 +313,14 @@ describe('cool-off window in applyChallengePairGates', () => {
         nowMs: () => Date.now(),
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 1);
     } finally {
       cleanup();
     }
   });
 
-  it('uses config default when coolOffSeconds not passed in options', () => {
+  it('uses config default when coolOffSeconds not passed in options', async () => {
     const { repoDir, cleanup } = setupRepoDir({
       challenge: { gate: { coolOffSeconds: 60 } },
     });
@@ -336,7 +336,7 @@ describe('cool-off window in applyChallengePairGates', () => {
         nowMs: () => now,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 0);
       assert.equal(result.blocked[0].reason, 'challenge:cool-off');
     } finally {
@@ -344,7 +344,7 @@ describe('cool-off window in applyChallengePairGates', () => {
     }
   });
 
-  it('branch-pair detection takes precedence over cool-off', () => {
+  it('branch-pair detection takes precedence over cool-off', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const now = Date.parse('2026-04-01T00:01:00Z');
@@ -359,7 +359,7 @@ describe('cool-off window in applyChallengePairGates', () => {
         nowMs: () => now,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.blocked.length, 1);
       assert.equal(result.blocked[0].reason, 'challenge:pair-unresolved:branch-pair');
     } finally {
@@ -369,7 +369,7 @@ describe('cool-off window in applyChallengePairGates', () => {
 });
 
 describe('git ls-remote failure fallback', () => {
-  it('uses empty branch list when listRemoteBranches fails', () => {
+  it('uses empty branch list when listRemoteBranches fails', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const items = [makeWorkItem({
@@ -382,7 +382,7 @@ describe('git ls-remote failure fallback', () => {
         coolOffSeconds: 0,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, options);
+      const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 1);
     } finally {
       cleanup();

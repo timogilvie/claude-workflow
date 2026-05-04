@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import type { LinearIssueSummary } from './linear.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import {
   executeMerge,
@@ -56,6 +57,10 @@ function buildTestOptions(
     repoDir,
     prFetcher: async () => prList,
     healthChecker: async () => healthOverride,
+    challengeGateDeps: {
+      linearSiblingLookup: async () => [],
+      branchExists: async () => false,
+    },
     cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
   };
 }
@@ -457,6 +462,215 @@ describe('challenge-mode gating', () => {
       assert.deepEqual(decision.blocked, []);
       assert.equal(decision.nextPR, 201);
     });
+  });
+
+  it('blocks a primary PR when workflow state is empty but Linear exposes an open challenger sibling', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      body: metadata(['task: HOK-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async (): Promise<LinearIssueSummary[]> => [
+        {
+          id: 'issue-primary',
+          identifier: 'HOK-1523',
+          title: 'Primary issue',
+          state: { name: 'In Progress' },
+          completedAt: null,
+          canceledAt: null,
+        },
+        {
+          id: 'issue-challenger',
+          identifier: 'HOK-1523_c',
+          title: 'Challenger issue',
+          state: { name: 'Backlog' },
+          completedAt: null,
+          canceledAt: null,
+        },
+      ],
+      branchExists: async () => false,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:linear-sibling:HOK-1523_c']],
+      );
+      assert.equal(decision.nextPR, null);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks a primary PR when workflow state has the challenge pair but the challenger PR is not open', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      body: metadata(['task: HOK-1523', 'challengePairId: pair-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async () => [],
+      branchExists: async () => false,
+    };
+    writeWorkflowState(options.repoDir, {
+      HOK_1523: { pr: 497, challengePairId: 'pair-1523', challengeRole: 'primary' },
+      HOK_1523_c: { challengePairId: 'pair-1523', challengeRole: 'challenger' },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:no-comparison']],
+      );
+      assert.equal(decision.nextPR, null);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks a primary PR when workflow state is empty but the challenger branch exists', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      body: metadata(['task: HOK-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async () => [],
+      branchExists: async (branch) => branch === 'task/hok-1523-example-challenger',
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:branch-twin:task/hok-1523-example-challenger']],
+      );
+      assert.equal(decision.nextPR, null);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('fails closed when a challenge lookup throws for a Wavemill PR', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      body: metadata(['task: HOK-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async () => {
+        throw new Error('Linear unavailable');
+      },
+      branchExists: async () => false,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:lookup-error:linear']],
+      );
+      assert.equal(decision.nextPR, null);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('replays the registration race timing and only exposes the winner once comparison resolves', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523-example',
+      createdAt: '2026-04-01T00:00:00Z',
+      body: metadata(['task: HOK-1523']),
+    });
+    const challenger = pr({
+      number: 501,
+      title: 'Challenger',
+      headRefName: 'task/hok-1523-example-challenger',
+      createdAt: '2026-04-01T00:10:00Z',
+      body: metadata(['task: HOK-1523_c', 'challenge: true', 'challengePairId: pair-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateDeps = {
+      linearSiblingLookup: async (): Promise<LinearIssueSummary[]> => [
+        {
+          id: 'issue-primary',
+          identifier: 'HOK-1523',
+          title: 'Primary issue',
+          state: { name: 'In Progress' },
+          completedAt: null,
+          canceledAt: null,
+        },
+        {
+          id: 'issue-challenger',
+          identifier: 'HOK-1523_c',
+          title: 'Challenger issue',
+          state: { name: 'Backlog' },
+          completedAt: null,
+          canceledAt: null,
+        },
+      ],
+      branchExists: async () => false,
+    };
+
+    try {
+      let decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:linear-sibling:HOK-1523_c']],
+      );
+
+      writeWorkflowState(options.repoDir, {
+        HOK_1523: { pr: 497, challengePairId: 'pair-1523', challengeRole: 'primary' },
+        HOK_1523_c: { challengePairId: 'pair-1523', challengeRole: 'challenger' },
+      });
+      decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible, []);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:pair-unresolved:no-comparison']],
+      );
+
+      options.prFetcher = async () => [primary, challenger];
+      writeWorkflowState(options.repoDir, {
+        HOK_1523: { pr: 497, challengePairId: 'pair-1523', challengeRole: 'primary' },
+        HOK_1523_c: { pr: 501, challengePairId: 'pair-1523', challengeRole: 'challenger' },
+      });
+      writeChallengeComparisons(options.repoDir, [{
+        challengePairId: 'pair-1523',
+        primaryPrUrl: 'https://github.com/example/repo/pull/497',
+        challengerPrUrl: 'https://github.com/example/repo/pull/501',
+        winner: 'challenger',
+        timestamp: '2026-04-28T12:00:00Z',
+      }]);
+
+      decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible.map((candidate) => candidate.number), [501]);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [[497, 'challenge:loser:pair-1523']],
+      );
+      assert.equal(decision.nextPR, 501);
+    } finally {
+      options.cleanup();
+    }
   });
 });
 
