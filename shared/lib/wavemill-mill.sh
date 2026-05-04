@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Wavemill Mill - Continuous Task Execution System
@@ -953,7 +953,7 @@ smart_select_from_candidates() {
       # Accept this task
       result+=("$issue|$slug|$title")
       [[ -n "$area" ]] && area_used["$area"]=1
-      ((count++))
+      count=$((count + 1))
     done <<<"$candidates"
 
 
@@ -1361,8 +1361,8 @@ fi
 echo ""
 
 
-# Safety check: first-time repo confirmation
-if [[ ! -f "$STATE_DIR/.initialized" ]] && [[ "$REQUIRE_CONFIRM" == "true" ]]; then
+# Safety check: first-time repo confirmation (skipped in dry-run)
+if [[ ! -f "$STATE_DIR/.initialized" ]] && [[ "$REQUIRE_CONFIRM" == "true" ]] && [[ "$DRY_RUN" != "true" ]]; then
   echo "⚠️  First-time run in this repository"
   confirm "Continue with autonomous workflow in $REPO_DIR?" || exit 1
   execute touch "$STATE_DIR/.initialized"
@@ -1931,7 +1931,7 @@ MONITOR_ENV="/tmp/${SESSION}-monitor.env"
 MONITOR_SCRIPT="/tmp/${SESSION}-monitor.sh"
 LAUNCHED_ISSUES_FILE="/tmp/${SESSION}-launched-issues.txt"
 cat > "$MONITOR_SCRIPT" <<'MONITOR_EOF'
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 set -Eeuo pipefail
 
 

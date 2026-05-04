@@ -96,10 +96,12 @@ export function checkSubsystemDrift(
   // Get recent PRs affecting this subsystem
   const recentPRs = getRecentPRsForSubsystem(subsystem, repoDir, specLastModified);
 
-  // Determine if stale
+  // Specs without tracked source files have no drift signal, so age alone should
+  // not mark them stale. Otherwise, require both a newer source file and an
+  // overdue spec before surfacing the warning.
   const isStale = filesLastModified !== null
-    ? filesLastModified > specLastModified && daysSinceUpdate >= thresholdDays
-    : daysSinceUpdate >= thresholdDays;
+    && filesLastModified > specLastModified
+    && daysSinceUpdate >= thresholdDays;
 
   return {
     isStale,
