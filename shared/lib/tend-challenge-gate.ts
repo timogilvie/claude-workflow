@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readChallengeComparisons, type StoredChallengeComparison } from './challenge-comparison.ts';
-import { getChallengeConfig } from './config.ts';
+import { getChallengeConfig, getChallengeGateConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 import type { PrMetadata } from './pr-metadata.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 type ChallengeRole = 'primary' | 'challenger';
 
@@ -27,6 +28,7 @@ interface ChallengeEligiblePr {
   number: number;
   title: string;
   headRefName: string;
+  createdAt: string;
   labels: Array<{ name: string }>;
 }
 
@@ -42,9 +44,22 @@ export interface ChallengeBlockedCandidate {
   reason: string;
 }
 
+/** Options for overriding gate behaviour in tests or specialized callers. */
+export interface ChallengeGateOptions {
+  /** Returns current epoch-ms; defaults to Date.now(). */
+  nowMs?: () => number;
+  /** Minimum age (seconds) a PR must reach before it is eligible for tend. */
+  coolOffSeconds?: number;
+  /** Pre-fetched list of remote branch names (skips git ls-remote call). */
+  remoteBranches?: string[];
+  /** Custom remote-branch lister; replaces the default git ls-remote call. */
+  listRemoteBranches?: (repoDir: string) => string[];
+}
+
 export type ChallengeGate =
   | { kind: 'not-in-challenge' }
   | { kind: 'pair-unresolved'; pairId: string; otherPr: number | null; reason: string }
+  | { kind: 'cool-off'; reason: string }
   | { kind: 'winner'; pairId: string; loserPr: number | null; autoMerge: boolean }
   | { kind: 'loser'; pairId: string; winnerPr: number | null };
 
@@ -158,6 +173,7 @@ export function applyChallengePairGates<T extends ChallengeEligibleWorkItem>(
   eligibleItems: T[],
   blocked: ChallengeBlockedCandidate[],
   repoDir: string,
+  options: ChallengeGateOptions = {},
 ): { eligible: T[]; blocked: ChallengeBlockedCandidate[]; losers: number[] } {
   const allPrNumbers = new Set([
     ...eligibleItems.map((item) => item.pr.number),
@@ -174,6 +190,16 @@ export function applyChallengePairGates<T extends ChallengeEligibleWorkItem>(
   }
 
   const autoMerge = getChallengeConfig(repoDir).autoMergeWinner ?? true;
+  const gateConfig = getChallengeGateConfig(repoDir);
+  const coolOffSeconds = options.coolOffSeconds ?? gateConfig.coolOffSeconds;
+  const nowMs = options.nowMs ?? (() => Date.now());
+
+  const remoteBranches = options.remoteBranches
+    ?? (options.listRemoteBranches
+      ? options.listRemoteBranches(repoDir)
+      : listRemoteTaskBranches(repoDir));
+  const remoteBranchSet = new Set(remoteBranches);
+
   const nextEligible: T[] = [];
   const nextBlocked = [...blocked];
   const losers = new Set<number>();
@@ -189,6 +215,20 @@ export function applyChallengePairGates<T extends ChallengeEligibleWorkItem>(
     );
 
     if (state.kind === 'not-in-challenge') {
+      const sibling = getSiblingBranch(item.pr.headRefName);
+      if (sibling && remoteBranchSet.has(sibling)) {
+        nextBlocked.push(toBlockedCandidate(item, 'challenge:pair-unresolved:branch-pair'));
+        continue;
+      }
+
+      if (coolOffSeconds > 0 && item.pr.headRefName.startsWith('task/')) {
+        const createdMs = Date.parse(item.pr.createdAt);
+        if (!Number.isNaN(createdMs) && nowMs() - createdMs < coolOffSeconds * 1000) {
+          nextBlocked.push(toBlockedCandidate(item, 'challenge:cool-off'));
+          continue;
+        }
+      }
+
       nextEligible.push(item);
       continue;
     }
@@ -261,6 +301,53 @@ function resolvePrRole(
   }
 
   return workflowRole ?? null;
+}
+
+const CHALLENGER_SUFFIX = '-challenger';
+
+/**
+ * Returns the paired branch name for a `task/<slug>` or `task/<slug>-challenger` branch.
+ * Returns null if the branch does not follow the `task/` naming convention.
+ */
+export function getSiblingBranch(branch: string): string | null {
+  if (!branch.startsWith('task/')) return null;
+  if (branch.endsWith(CHALLENGER_SUFFIX)) {
+    return branch.slice(0, -CHALLENGER_SUFFIX.length);
+  }
+  return branch + CHALLENGER_SUFFIX;
+}
+
+/**
+ * Lists all remote `task/*` branches via `git ls-remote`.
+ * Returns an empty array on error so callers degrade gracefully.
+ */
+export function listRemoteTaskBranches(repoDir: string): string[] {
+  try {
+    const output = String(execShellCommand(
+      `git ls-remote --heads origin ${escapeShellArg('refs/heads/task/*')}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    ));
+    return parseRemoteBranchOutput(output);
+  } catch (error) {
+    console.warn(`[tend-challenge-gate] Failed to list remote branches: ${errorMessage(error)}`);
+    return [];
+  }
+}
+
+/**
+ * Parses raw `git ls-remote --heads` output into branch name strings.
+ * Filters to only `task/`-prefixed names.
+ */
+export function parseRemoteBranchOutput(output: string): string[] {
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const ref = line.split(/\s+/).pop() ?? '';
+      return ref.replace(/^refs\/heads\//, '');
+    })
+    .filter((name) => name.startsWith('task/'));
 }
 
 function parsePrNumberFromUrl(url: string | undefined): number | null {
