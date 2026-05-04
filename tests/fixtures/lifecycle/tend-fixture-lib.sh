@@ -103,7 +103,7 @@ write_fake_npx() {
   local real_npx
   local real_tsx
   real_npx="$(command -v npx)"
-  real_tsx="$(command -v tsx)"
+  real_tsx="$(command -v tsx 2>/dev/null || true)"
 
   cat > "$FAKE_BIN/npx" <<EOF
 #!/usr/bin/env bash
