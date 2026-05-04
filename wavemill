@@ -430,7 +430,7 @@ run_mill() {
   fi
 
   echo -e "${CYAN}Starting Wavemill Mill...${NC}"
-  exec "$mill_script" "$@"
+  exec bash "$mill_script" "$@"
 }
 
 run_init() {
