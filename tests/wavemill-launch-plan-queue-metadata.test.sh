@@ -28,74 +28,39 @@ expect_true "legacy has no queuePlan key" 'has("queuePlan") | not' "$LEGACY"
 expect_true "legacy tasks have no dependsOn key" '[.tasks[] | has("dependsOn")] | any | not' "$LEGACY"
 expect_true "legacy tasks have no baseFromTask key" '[.tasks[] | has("baseFromTask")] | any | not' "$LEGACY"
 
-# 2. Queue fixture shape
-expect_true "queuePlan contains two waves" '.queuePlan | length == 2' "$QUEUE"
-expect_true "wave 1 contains HOK-1" '.queuePlan[0] == {"wave":1,"taskIds":["HOK-1"]}' "$QUEUE"
-expect_true "wave 2 contains HOK-2" '.queuePlan[1] == {"wave":2,"taskIds":["HOK-2"]}' "$QUEUE"
-expect_true "HOK-2 dependsOn is HOK-1" '(.tasks[] | select(.issue=="HOK-2") | .dependsOn) == ["HOK-1"]' "$QUEUE"
-expect_true "HOK-2 baseFromTask is HOK-1" '(.tasks[] | select(.issue=="HOK-2") | .baseFromTask) == "HOK-1"' "$QUEUE"
-expect_true "HOK-1 has no dependency metadata" '(.tasks[] | select(.issue=="HOK-1") | has("dependsOn") or has("baseFromTask")) | not' "$QUEUE"
+# 2. Queue fixture shape (raw queuePlan format: {availableNow, queuedAfterDependencies, ...})
+expect_true "queuePlan has availableNow field" '.queuePlan | has("availableNow")' "$QUEUE"
+expect_true "queuePlan has queuedAfterDependencies field" '.queuePlan | has("queuedAfterDependencies")' "$QUEUE"
+expect_true "HOK-1531 is in availableNow" '.queuePlan.availableNow | contains(["HOK-1531"])' "$QUEUE"
+expect_true "HOK-1532 dependsOn is HOK-1531" '(.tasks[] | select(.issue=="HOK-1532") | .dependsOn) == ["HOK-1531"]' "$QUEUE"
+expect_true "HOK-1532 baseFromTask is HOK-1531" '(.tasks[] | select(.issue=="HOK-1532") | .baseFromTask) == "HOK-1531"' "$QUEUE"
+expect_true "HOK-1531 has no dependency metadata" '(.tasks[] | select(.issue=="HOK-1531") | has("dependsOn") or has("baseFromTask")) | not' "$QUEUE"
 
 # 3. Runner tolerance - legacy fixture
 expect_true "legacy queuePlan read defaults to []" '(.queuePlan // []) == []' "$LEGACY"
 expect_true "legacy task dependsOn read defaults to []" '[.tasks[] | (.dependsOn // []) == []] | all' "$LEGACY"
 expect_true "legacy task baseFromTask read defaults to empty" '[.tasks[] | (.baseFromTask // empty) | (type == "string")] | all' "$LEGACY"
 
-# 4. Runner tolerance - queue fixture
-expect_true "queue fixture queuePlan read succeeds" '(.queuePlan // []) | length == 2' "$QUEUE"
-expect_true "queue fixture dependsOn read succeeds" '[(.tasks[] | select(.issue=="HOK-2") | (.dependsOn // [])) == ["HOK-1"]] | all' "$QUEUE"
-expect_true "queue fixture baseFromTask read succeeds" '[(.tasks[] | select(.issue=="HOK-2") | (.baseFromTask // empty)) == "HOK-1"] | all' "$QUEUE"
+# 4. Runner tolerance - queue fixture (raw format)
+expect_true "queue fixture queuePlan is an object" '(.queuePlan // {}) | type == "object"' "$QUEUE"
+expect_true "queue fixture dependsOn read succeeds" '[(.tasks[] | select(.issue=="HOK-1532") | (.dependsOn // [])) == ["HOK-1531"]] | all' "$QUEUE"
+expect_true "queue fixture baseFromTask read succeeds" '[(.tasks[] | select(.issue=="HOK-1532") | (.baseFromTask // empty)) == "HOK-1531"] | all' "$QUEUE"
 
-# 5. Launch sequence unchanged
-legacy_order="$(jq -c '[.tasks[].issue]' "$LEGACY")"
+# 5. Task ordering preserved in queue fixture (HOK-1531 before HOK-1532)
 queue_order="$(jq -c '[.tasks[].issue]' "$QUEUE")"
-if [[ "$legacy_order" == "$queue_order" ]]; then
-  pass "task order unchanged across legacy and queue fixtures"
+if [[ "$queue_order" == '["HOK-1531","HOK-1532"]' ]]; then
+  pass "task order preserved: independent task before dependent task"
 else
-  fail "task order unchanged across legacy and queue fixtures"
+  fail "task order preserved: expected HOK-1531 before HOK-1532, got: $queue_order"
 fi
 
-# 6. Mill jq logic - no queue plan
+# 6. Mill jq logic - no queue plan (challenger approach: depends_on='[]', base_from_task='null')
 no_queue_task_json="$(jq -cn \
-  --arg issue "HOK-2" \
-  --arg slug "task-b" \
-  --arg title "Task B" \
-  --arg branch "task/task-b" \
-  --arg worktreeDir "/tmp/task-b" \
-  --arg linearIssueId "HOK-2" \
-  --arg taskPacketFile "/tmp/taskpacket.md" \
-  --arg taskPacketDetailsFile "/tmp/taskpacket-details.md" \
-  --arg issueJsonFile "/tmp/issue.json" \
-  --arg routeFile "/tmp/route.json" \
-  --argjson route '{}' \
-  --arg challenge "false" \
-  --arg challengePairId "" \
-  --arg challengeRole "" \
-  --arg challengeModel "" \
-  --arg migrationNumber "" \
-  --arg agent "codex" \
+  --arg issue "HOK-1532" \
   --argjson dependsOn '[]' \
-  --arg baseFromTask "" \
-  '{
-    issue: $issue,
-    slug: $slug,
-    title: $title,
-    branch: $branch,
-    worktreeDir: $worktreeDir,
-    linearIssueId: $linearIssueId,
-    taskPacketFile: $taskPacketFile,
-    taskPacketDetailsFile: $taskPacketDetailsFile,
-    issueJsonFile: $issueJsonFile,
-    routeFile: $routeFile,
-    route: $route,
-    challenge: ($challenge == "true"),
-    challengePairId: (if $challengePairId == "" then null else $challengePairId end),
-    challengeRole: (if $challengeRole == "" then null else $challengeRole end),
-    challengeModel: (if $challengeModel == "" then null else $challengeModel end),
-    migrationNumber: (if $migrationNumber == "" then null else ($migrationNumber | tonumber) end),
-    agent: $agent
-  } + (if ($dependsOn | length) > 0 then {dependsOn: $dependsOn} else {} end)
-    + (if $baseFromTask != "" then {baseFromTask: $baseFromTask} else {} end)')"
+  --arg baseFromTask "null" \
+  '{issue:$issue}
+  + (if ($baseFromTask != "null" or ($dependsOn | length > 0)) then {dependsOn: $dependsOn, baseFromTask: (if $baseFromTask == "null" then null else $baseFromTask end)} else {} end)')"
 
 if jq -e '(has("dependsOn") | not) and (has("baseFromTask") | not)' <<<"$no_queue_task_json" >/dev/null; then
   pass "mill jq emits no per-task queue metadata when queue plan unavailable"
@@ -103,20 +68,27 @@ else
   fail "mill jq emits no per-task queue metadata when queue plan unavailable"
 fi
 
-# 7. Mill jq logic - with queue plan
-queue_plan_json='{"availableNow":["HOK-1"],"queuedAfterDependencies":[{"taskId":"HOK-2","ancestors":["HOK-1"]}]}'
-computed_depends_on="$(printf '%s' "$queue_plan_json" | jq -c --arg id "HOK-2" '[ .queuedAfterDependencies[]? | select(.taskId == $id) | .ancestors[] ] // []')"
-computed_base_from="$(printf '%s' "$queue_plan_json" | jq -r --arg id "HOK-2" '[ .queuedAfterDependencies[]? | select(.taskId == $id) | .ancestors[0] ] | first // empty')"
+# 7. Mill jq logic - with queue plan (challenger approach: jq filter via heredoc, base_from_task as string or "null")
+queue_plan_json='{"availableNow":["HOK-1531"],"queuedAfterDependencies":[{"taskId":"HOK-1532","ancestors":["HOK-1531"]}]}'
+computed_depends_on="$(jq -c --arg id "HOK-1532" '
+  (.queuedAfterDependencies // [])
+  | map(select(.taskId == $id))
+  | if length > 0 then .[0].ancestors else [] end
+' <<<"$queue_plan_json" 2>/dev/null || echo '[]')"
+computed_base_from="$(jq -r --arg id "HOK-1532" '
+  (.queuedAfterDependencies // [])
+  | map(select(.taskId == $id))
+  | if length > 0 then (.[0].ancestors[0] // "null") else "null" end
+' <<<"$queue_plan_json" 2>/dev/null || echo 'null')"
 
 with_queue_task_json="$(jq -cn \
-  --arg issue "HOK-2" \
+  --arg issue "HOK-1532" \
   --argjson dependsOn "$computed_depends_on" \
   --arg baseFromTask "$computed_base_from" \
   '{issue:$issue}
-  + (if ($dependsOn | length) > 0 then {dependsOn: $dependsOn} else {} end)
-  + (if $baseFromTask != "" then {baseFromTask: $baseFromTask} else {} end)')"
+  + (if ($baseFromTask != "null" or ($dependsOn | length > 0)) then {dependsOn: $dependsOn, baseFromTask: (if $baseFromTask == "null" then null else $baseFromTask end)} else {} end)')"
 
-if jq -e '.dependsOn == ["HOK-1"] and .baseFromTask == "HOK-1"' <<<"$with_queue_task_json" >/dev/null; then
+if jq -e '.dependsOn == ["HOK-1531"] and .baseFromTask == "HOK-1531"' <<<"$with_queue_task_json" >/dev/null; then
   pass "mill jq emits dependsOn and baseFromTask when queue plan exists"
 else
   fail "mill jq emits dependsOn and baseFromTask when queue plan exists"

@@ -304,15 +304,22 @@ create_tmux_session() {
   tmux send-keys -t "$SESSION:control" "echo 'Control window for $SESSION'" C-m
 }
 
+# Write the launch plan JSON for startup runner consumption.
+# Optional fields added when queue planning data is available (HOK-1532).
+# Runner currently ignores; reserved for future queue execution work.
+# queuePlan (object): planner-supplied wave ordering from plan-queue.ts
+# tasks[].dependsOn (string[]): task IDs this task depends on
+# tasks[].baseFromTask (string|null): task ID to base branch from
 write_launch_plan() {
   local launch_plan_file="$1"
+  local queue_plan_json="${2:-}"
   local initial_phase="planning"
 
   local tasks_json='[]'
   local t issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file route_file
   local route_json route_planner route_coder route_reviewer route_plan_depth route_code_depth route_review_mode route_max_cost_usd
   local route_payload challenge_flag challenge_pair challenge_role challenge_model migration_number task_agent
-  local task_depends_on task_base_from_task queue_plan_arg
+  local depends_on base_from_task
 
   for t in "${LAUNCH_ARGS[@]}"; do
     IFS='|' read -r issue slug title <<<"$t"
@@ -340,17 +347,20 @@ write_launch_plan() {
     challenge_model="${TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]:-}"
     migration_number="$(jq -r --arg issue "$issue" '.migrationReservations[$issue] // empty' "$STATE_FILE" 2>/dev/null || echo "")"
     task_agent="${TASK_AGENT_BY_ISSUE[$issue]:-$AGENT_CMD}"
-    task_depends_on='[]'
-    task_base_from_task=""
-    if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
-      task_depends_on=$(printf '%s' "$LAUNCH_QUEUE_PLAN" | jq -c \
-        --arg id "$issue" \
-        '[ .queuedAfterDependencies[]? | select(.taskId == $id) | .ancestors[] ] // []' \
-        2>/dev/null || echo '[]')
-      task_base_from_task=$(printf '%s' "$LAUNCH_QUEUE_PLAN" | jq -r \
-        --arg id "$issue" \
-        '[ .queuedAfterDependencies[]? | select(.taskId == $id) | .ancestors[0] ] | first // empty' \
-        2>/dev/null || echo "")
+    # Extract per-task queue metadata when queue plan is available (HOK-1532)
+    depends_on="[]"
+    base_from_task="null"
+    if [[ -n "$queue_plan_json" ]]; then
+      depends_on="$(jq -c --arg id "$issue" '
+        (.queuedAfterDependencies // [])
+        | map(select(.taskId == $id))
+        | if length > 0 then .[0].ancestors else [] end
+      ' <<<"$queue_plan_json" 2>/dev/null || echo '[]')"
+      base_from_task="$(jq -r --arg id "$issue" '
+        (.queuedAfterDependencies // [])
+        | map(select(.taskId == $id))
+        | if length > 0 then (.[0].ancestors[0] // "null") else "null" end
+      ' <<<"$queue_plan_json" 2>/dev/null || echo 'null')"
     fi
 
     route_payload="$(jq -n \
@@ -390,8 +400,8 @@ write_launch_plan() {
       --arg challengeModel "$challenge_model" \
       --arg migrationNumber "$migration_number" \
       --arg agent "$task_agent" \
-      --argjson dependsOn "$task_depends_on" \
-      --arg baseFromTask "$task_base_from_task" \
+      --argjson dependsOn "$depends_on" \
+      --arg baseFromTask "$base_from_task" \
       '$tasks + [{
         issue: $issue,
         slug: $slug,
@@ -410,20 +420,8 @@ write_launch_plan() {
         challengeModel: (if $challengeModel == "" then null else $challengeModel end),
         migrationNumber: (if $migrationNumber == "" then null else ($migrationNumber | tonumber) end),
         agent: $agent
-      } + (if ($dependsOn | length) > 0 then {dependsOn: $dependsOn} else {} end)
-        + (if $baseFromTask != "" then {baseFromTask: $baseFromTask} else {} end)]')"
+      } + (if ($baseFromTask != "null" or ($dependsOn | length > 0)) then {dependsOn: $dependsOn, baseFromTask: (if $baseFromTask == "null" then null else $baseFromTask end)} else {} end)]')"
   done
-
-  queue_plan_arg="null"
-  if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
-    queue_plan_arg=$(printf '%s' "$LAUNCH_QUEUE_PLAN" | jq -c \
-      --argjson tasks "$tasks_json" \
-      '[
-        {wave: 1, taskIds: [.availableNow[] | select(. as $id | $tasks | any(.issue == $id))]},
-        {wave: 2, taskIds: [.queuedAfterDependencies[]?.taskId | select(. as $id | $tasks | any(.issue == $id))]}
-      ] | map(select(.taskIds | length > 0))' \
-      2>/dev/null || echo "null")
-  fi
 
   jq -n \
     --arg session "$SESSION" \
@@ -446,7 +444,6 @@ write_launch_plan() {
     --arg monitorScript "$MONITOR_SCRIPT" \
     --arg launchedIssuesFile "$LAUNCHED_ISSUES_FILE" \
     --argjson tasks "$tasks_json" \
-    --argjson queuePlan "$queue_plan_arg" \
     --arg pollSeconds "$POLL_SECONDS" \
     --arg requireConfirm "$REQUIRE_CONFIRM" \
     --arg dryRun "$DRY_RUN" \
@@ -456,6 +453,7 @@ write_launch_plan() {
     --arg dashboardVerbosity "$DASHBOARD_VERBOSITY" \
     --arg dashboardLogToFile "$DASHBOARD_LOG_TO_FILE" \
     --arg millLogFile "$MILL_LOG_FILE" \
+    --argjson queuePlan "$(if [[ -n "$queue_plan_json" ]]; then printf '%s' "$queue_plan_json"; else printf 'null'; fi)" \
     '{
       session: $session,
       repoDir: $repoDir,
@@ -7492,7 +7490,13 @@ if ! mkdir -p "$(dirname "$LAUNCH_PLAN_FILE")"; then
   log_error "Failed to create launch-plan directory: $(dirname "$LAUNCH_PLAN_FILE")"
   exit 1
 fi
-write_launch_plan "$LAUNCH_PLAN_FILE"
+LAUNCH_QUEUE_PLAN=""
+if [[ -n "${QUEUE_PLAN_CACHE:-}" ]]; then
+  LAUNCH_QUEUE_PLAN="$QUEUE_PLAN_CACHE"
+elif [[ -n "${BACKLOG_JSON_CACHE:-}" ]]; then
+  LAUNCH_QUEUE_PLAN="$(build_queue_plan_once "$BACKLOG_JSON_CACHE" 2>/dev/null)" || LAUNCH_QUEUE_PLAN=""
+fi
+write_launch_plan "$LAUNCH_PLAN_FILE" "$LAUNCH_QUEUE_PLAN"
 if ! jq empty "$LAUNCH_PLAN_FILE" >/dev/null 2>&1; then
   log_error "Generated launch plan is not valid JSON: $LAUNCH_PLAN_FILE"
   exit 1

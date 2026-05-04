@@ -90,6 +90,7 @@ export SESSION="mill-dry-run-$$"
 export SKIP_CONFIG_CHECK=true
 export SKIP_CONTEXT_CHECK=true
 export WAVEMILL_NO_PROGRESS=1
+export REQUIRE_CONFIRM=false
 export WAVEMILL_DRY_RUN_BACKLOG_FILE="$BACKLOG_FILE"
 export WAVEMILL_DRY_RUN_PLAN_OUT="$LAUNCH_PLAN_FILE"
 export GH_REPO="acme/wavemill"
@@ -109,7 +110,8 @@ set -e
 
 if [[ "$status" -ne 0 ]]; then
   echo "FAIL: wavemill mill --dry-run exited $status"
-  cat "$STDERR_FILE"
+  if [[ -s "$STDERR_FILE" ]]; then echo "--- stderr ---"; cat "$STDERR_FILE"; fi
+  if [[ -s "$STDOUT_FILE" ]]; then echo "--- stdout ---"; cat "$STDOUT_FILE"; fi
   exit 1
 fi
 

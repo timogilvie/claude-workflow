@@ -501,6 +501,26 @@ else
   fail "startup runner did not hand off to the monitor after partial startup failure"
 fi
 
+# Queue Plan Backward/Forward Tolerance (HOK-1532)
+# Verify backward compatibility: no queue plan fields when not present
+BACKWARD_PLAN="$TMP_ROOT/backward-plan.json"
+write_plan "$BACKWARD_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-backward" "$TMP_ROOT/bw-monitor.env" "$TMP_ROOT/bw-monitor.sh" "$TMP_ROOT/bw-status.log" "$TMP_ROOT/bw-launched.txt" "[$TASK_ONE_JSON]"
+
+# Verify the backward plan has no queuePlan field
+if ! jq -e '.queuePlan' "$BACKWARD_PLAN" >/dev/null 2>&1; then
+  pass "launch plan without queue data has no queuePlan field (backward compatible)"
+else
+  fail "launch plan should not have queuePlan field when queue data is not present"
+fi
+
+# Verify tasks in backward plan have no queue fields
+if ! jq -e '.tasks[0].dependsOn' "$BACKWARD_PLAN" >/dev/null 2>&1 && \
+   ! jq -e '.tasks[0].baseFromTask' "$BACKWARD_PLAN" >/dev/null 2>&1; then
+  pass "launch plan tasks without queue data have no dependsOn/baseFromTask fields (backward compatible)"
+else
+  fail "launch plan tasks should not have queue fields when queue data is not present"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
