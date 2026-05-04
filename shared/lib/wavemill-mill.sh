@@ -137,8 +137,8 @@ command -v git >/dev/null || { echo "Error: git required"; exit 1; }
 if [[ "$DRY_RUN" != "true" ]]; then
   command -v gh >/dev/null || { echo "Error: gh required (install: brew install gh && gh auth login)"; exit 1; }
   command -v tmux >/dev/null || { echo "Error: tmux required (install: brew install tmux)"; exit 1; }
+  agent_validate "$AGENT_CMD" || { echo "Error: agent '$AGENT_CMD' not found"; exit 1; }
 fi
-agent_validate "$AGENT_CMD" || { echo "Error: agent '$AGENT_CMD' not found"; exit 1; }
 
 # Check agent authentication before launching tasks
 if [[ "$DRY_RUN" != "true" ]] && ! agent_check_auth "$AGENT_CMD"; then
