@@ -54,6 +54,8 @@ AUTO_EVAL="$(jq -r '.monitorConfig.autoEval // true' "$PLAN_FILE")"
 ENTER_LAUNCHES_WAVE="$(jq -r '.monitorConfig.enterLaunchesWave // true' "$PLAN_FILE")"
 DASHBOARD_VERBOSITY="$(jq -r '.monitorConfig.dashboardVerbosity // "info"' "$PLAN_FILE")"
 DASHBOARD_LOG_TO_FILE="$(jq -r '.monitorConfig.dashboardLogToFile // true' "$PLAN_FILE")"
+# Parsed but intentionally unused; behavior change ships in follow-up.
+QUEUE_PLAN="$(jq -c '.queuePlan // []' "$PLAN_FILE")"
 DASHBOARD_PID=""
 
 export SESSION REPO_DIR BASE_BRANCH WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
@@ -406,6 +408,7 @@ startup_run_task_phases() {
   local issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file
   local planner_model coder_model reviewer_model plan_depth code_depth review_mode route_max_cost_usd
   local challenge challenge_pair challenge_role challenge_model task_agent win
+  local depends_on base_from_task
   local packet_content issue_json issue_description issue_context details_context labels_json
   local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false
 
@@ -437,6 +440,9 @@ startup_run_task_phases() {
   challenge_role="$(echo "$task_json" | jq -r '.challengeRole // empty')"
   challenge_model="$(echo "$task_json" | jq -r '.challengeModel // empty')"
   task_agent="$(echo "$task_json" | jq -r '.agent // empty')"
+  # Parsed but intentionally unused; behavior change ships in follow-up.
+  depends_on="$(echo "$task_json" | jq -c '.dependsOn // []')"
+  base_from_task="$(echo "$task_json" | jq -r '.baseFromTask // empty')"
   STARTUP_TASK_LOG_FILE=""
   if [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]]; then
     STARTUP_TASK_LOG_FILE="/tmp/wavemill-${SESSION}-${issue}.startup.log"

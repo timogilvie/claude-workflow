@@ -1,0 +1,15 @@
+{
+  "session": "wavemill-test",
+  "tasks": [
+    {
+      "issue": "HOK-1",
+      "slug": "task-a",
+      "title": "Task A"
+    },
+    {
+      "issue": "HOK-2",
+      "slug": "task-b",
+      "title": "Task B"
+    }
+  ]
+}
