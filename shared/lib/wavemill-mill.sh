@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "DEBUG: wavemill-mill.sh exiting at line ${LINENO}, exit code $?" >&2' EXIT
 
 # Wavemill Mill - Continuous Task Execution System
 #
