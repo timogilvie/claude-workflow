@@ -243,6 +243,41 @@ ensure_state_file() {
   fi
 }
 
+seed_queued_tasks_from_plan() {
+  local plan_file="$1"
+  local queue_plan
+  queue_plan=$(jq -c '.queuePlan // []' "$plan_file")
+  [[ "$queue_plan" == "[]" || "$queue_plan" == "null" ]] && return 0
+
+  while IFS= read -r entry; do
+    local issue_id blocker_issue_id blocker_pr desired_base linear_url
+    issue_id=$(printf '%s' "$entry" | jq -r '.issue_id')
+    blocker_issue_id=$(printf '%s' "$entry" | jq -r '.blocker_issue_id')
+    blocker_pr=$(printf '%s' "$entry" | jq -r '.blocker_pr_number // "null"')
+    desired_base=$(printf '%s' "$entry" | jq -r '.desired_base_branch')
+    linear_url=$(printf '%s' "$entry" | jq -r '.linear_issue_url // ""')
+
+    [[ -z "$linear_url" ]] && linear_url="https://linear.app/issue/$issue_id"
+    [[ -z "$blocker_issue_id" ]] && blocker_issue_id="unknown"
+    [[ -z "$desired_base" ]] && desired_base="$blocker_issue_id"
+
+    queue_add_task "$issue_id" "$blocker_issue_id" "$blocker_pr" "$desired_base" "$linear_url"
+  done < <(jq -c '
+    .queuePlan as $qp
+    | .tasks as $tasks
+    | $qp[] | select(.wave > 1)
+    | .taskIds[] as $tid
+    | ($tasks[] | select(.issue == $tid)) as $task
+    | {
+      issue_id: $tid,
+      blocker_issue_id: ($task.dependsOn[0] // $task.baseFromTask // ""),
+      blocker_pr_number: null,
+      desired_base_branch: ($task.baseFromTask // ""),
+      linear_issue_url: ($task.linearIssueUrl // "")
+    }
+  ' "$plan_file")
+}
+
 write_monitor_env() {
   local tasks_file="$1"
   {
@@ -802,6 +837,7 @@ main() {
   local -a linear_batch_ids=()
 
   ensure_state_file
+  seed_queued_tasks_from_plan "$PLAN_FILE"
   : > "$STATUS_LOG_FILE"
   : > "$LAUNCHED_ISSUES_FILE"
 
