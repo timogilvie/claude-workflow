@@ -6952,8 +6952,44 @@ monitor_issue_state() {
     fi
 
     ready_verdict=$(ready_stage_pending_verdict "$ready_state_dir_path")
+    if [[ "$ready_status" == "failed" ]]; then
+      log "status" "↻ $ISSUE → Re-running failed ready checks for PR #$PR"
+      title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
+      if [[ -z "$title" ]]; then
+        issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
+        title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+      fi
+
+      if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+        launch_rc=0
+      else
+        launch_rc=$?
+      fi
+      if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+        log "status" "⛔ $ISSUE → Workflow aborted during failed-ready re-check"
+        set_task_phase "$ISSUE" "aborted"
+        set_window_attention_state "$WIN" "needs-user"
+        return 0
+      fi
+      if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+        set_window_attention_state "$WIN" "clear"
+        active_count=$((active_count + 1))
+        return 0
+      fi
+      if [[ "$launch_rc" -ne 0 ]]; then
+        log "status" "⚠ $ISSUE → Ready re-check still failed (PR #$PR)"
+        set_window_attention_state "$WIN" "needs-user"
+        return 0
+      fi
+
+      log "status" "✓ $ISSUE → Ready re-check passed for PR #$PR"
+      set_window_attention_state "$WIN" "clear"
+      active_count=$((active_count + 1))
+      return 0
+    fi
+
     # Re-run ready checks when CI is still computing (verdict=pending) OR when
-    # a remediation agent has pushed new commits past the launch head — without
+	    # a remediation agent has pushed new commits past the launch head — without
     # the second case, a successful remediation leaves status=running/verdict=fail
     # and the controller never re-evaluates CI.
     if [[ "$ready_status" == "running" ]] && { [[ "$ready_verdict" == "pending" ]] || [[ -n "$launch_head" && "$launch_head" != "$current_head" ]]; }; then
