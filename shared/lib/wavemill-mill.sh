@@ -72,7 +72,12 @@ export WAVEMILL_MILL_ACTIVE="$REPO_DIR"
 # ─────────────────────────────────────────────────────────────────
 
 # Derived variables (not in config files)
-DRY_RUN="${DRY_RUN:-false}"
+if [[ "${WAVEMILL_DRY_RUN:-}" == "1" || "${WAVEMILL_DRY_RUN:-}" == "true" || "${DRY_RUN:-}" == "true" ]]; then
+  export WAVEMILL_DRY_RUN=1
+  DRY_RUN="true"
+else
+  DRY_RUN="false"
+fi
 STATE_DIR="${STATE_DIR:-$REPO_DIR/.wavemill}"
 STATE_FILE="$STATE_DIR/workflow-state.json"
 MILL_LOG_DIR="$REPO_DIR/.wavemill/logs"
@@ -127,13 +132,16 @@ fi
 
 
 command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq)"; exit 1; }
-command -v gh >/dev/null || { echo "Error: gh required (install: brew install gh && gh auth login)"; exit 1; }
 command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
-command -v tmux >/dev/null || { echo "Error: tmux required (install: brew install tmux)"; exit 1; }
+command -v git >/dev/null || { echo "Error: git required"; exit 1; }
+if [[ "$DRY_RUN" != "true" ]]; then
+  command -v gh >/dev/null || { echo "Error: gh required (install: brew install gh && gh auth login)"; exit 1; }
+  command -v tmux >/dev/null || { echo "Error: tmux required (install: brew install tmux)"; exit 1; }
+fi
 agent_validate "$AGENT_CMD" || { echo "Error: agent '$AGENT_CMD' not found"; exit 1; }
 
 # Check agent authentication before launching tasks
-if ! agent_check_auth "$AGENT_CMD"; then
+if [[ "$DRY_RUN" != "true" ]] && ! agent_check_auth "$AGENT_CMD"; then
   exit 1
 fi
 
@@ -344,7 +352,7 @@ write_launch_plan() {
         reviewer: $reviewer,
         planDepth: $planDepth,
         codeDepth: $codeDepth,
-        reviewMode: $reviewMode
+        reviewMode: $reviewMode,
         maxCostUsd: $maxCostUsd
       } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)')"
 
@@ -775,6 +783,24 @@ cleanup_completed_task() {
 
 
 linear_list_backlog() {
+  if [[ "$DRY_RUN" == "true" ]]; then
+    local backlog_file="${WAVEMILL_DRY_RUN_BACKLOG_FILE:-}"
+    if [[ -z "$backlog_file" ]]; then
+      log_error "Dry-run requires WAVEMILL_DRY_RUN_BACKLOG_FILE or --dry-run-backlog."
+      return 1
+    fi
+    if [[ ! -f "$backlog_file" ]]; then
+      log_error "Dry-run backlog fixture not found: $backlog_file"
+      return 1
+    fi
+    if ! jq empty "$backlog_file" >/dev/null 2>&1; then
+      log_error "Dry-run backlog fixture is not valid JSON: $backlog_file"
+      return 1
+    fi
+    cat "$backlog_file"
+    return 0
+  fi
+
   # Capture stdout (JSON); collect stderr so we can show it on failure
   local stderr_file
   stderr_file=$(mktemp)
@@ -789,6 +815,26 @@ linear_list_backlog() {
   fi
 }
 linear_get_issue() {
+  if [[ "$DRY_RUN" == "true" ]]; then
+    local backlog_file="${WAVEMILL_DRY_RUN_BACKLOG_FILE:-}"
+    local issue="$1"
+    if [[ -z "$backlog_file" || ! -f "$backlog_file" ]]; then
+      log_error "Dry-run issue lookup requires backlog fixture file."
+      return 1
+    fi
+
+    local selected
+    selected="$(jq -cer --arg issue "$issue" '
+      map(select(.identifier == $issue or .id == $issue)) | .[0]
+    ' "$backlog_file" 2>/dev/null || true)"
+    if [[ -z "$selected" || "$selected" == "null" ]]; then
+      log_error "Dry-run issue fixture not found for: $issue"
+      return 1
+    fi
+    printf '%s\n' "$selected"
+    return 0
+  fi
+
   # Capture stdout (JSON); collect stderr so we can show it on failure
   local stderr_file
   stderr_file=$(mktemp)
@@ -1480,8 +1526,12 @@ declare -A TASK_REVIEW_MODE_BY_ISSUE
 if (( ${#TASKS[@]} > 0 )); then
   # Pre-allocate migration numbers for parallel work
   # Fetch first so we scan the latest state of the base branch (not stale local files)
-  log "debug" "Fetching latest $BASE_BRANCH for migration scan..."
-  wavemill_fetch_base_branch "$BASE_BRANCH" --force 2>/dev/null || true
+  if [[ "$DRY_RUN" == "true" ]]; then
+    log "debug" "Dry-run: skipping base-branch fetch before migration scan."
+  else
+    log "debug" "Fetching latest $BASE_BRANCH for migration scan..."
+    wavemill_fetch_base_branch "$BASE_BRANCH" --force 2>/dev/null || true
+  fi
 
   # Scan the git tree (not local filesystem) for the highest existing migration number
   HIGHEST=$(scan_highest_migration)
@@ -7397,13 +7447,30 @@ chmod +x "$MONITOR_SCRIPT"
 
 # Fetch latest base branch so worktrees start from up-to-date main
 log "info" "Fetching latest $BASE_BRANCH from remote..."
-wavemill_fetch_base_branch "$BASE_BRANCH" --force
+if [[ "$DRY_RUN" == "true" ]]; then
+  log "info" "Dry-run: skipping forced base-branch fetch."
+else
+  wavemill_fetch_base_branch "$BASE_BRANCH" --force
+fi
 
 : > "$STATUS_LOG_FILE"
 : > "$LAUNCHED_ISSUES_FILE"
 
-LAUNCH_PLAN_FILE="/tmp/${SESSION}-launch-plan.json"
+LAUNCH_PLAN_FILE="${WAVEMILL_DRY_RUN_PLAN_OUT:-/tmp/${SESSION}-launch-plan.json}"
+if ! mkdir -p "$(dirname "$LAUNCH_PLAN_FILE")"; then
+  log_error "Failed to create launch-plan directory: $(dirname "$LAUNCH_PLAN_FILE")"
+  exit 1
+fi
 write_launch_plan "$LAUNCH_PLAN_FILE"
+if ! jq empty "$LAUNCH_PLAN_FILE" >/dev/null 2>&1; then
+  log_error "Generated launch plan is not valid JSON: $LAUNCH_PLAN_FILE"
+  exit 1
+fi
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  log "status" "Dry-run launch plan written: $LAUNCH_PLAN_FILE"
+  exit 0
+fi
 
 STARTUP_RUNNER="$SCRIPT_DIR/wavemill-startup-runner.sh"
 if [[ ! -f "$STARTUP_RUNNER" ]]; then
