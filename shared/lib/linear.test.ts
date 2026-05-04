@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { setIssueState, setIssuesState, updateIssue } from './linear.ts';
+import { listOpenIssuesByIdentifierPrefix, setIssueState, setIssuesState, updateIssue } from './linear.ts';
 
 type GraphQLPayload = {
   query: string;
@@ -211,6 +211,56 @@ test('updateIssue mutation does not request userErrors', async () => {
     assert.equal(result.success, true);
     assert.match(capturedQuery, /success/);
     assert.doesNotMatch(capturedQuery, /userErrors/);
+  } finally {
+    restore();
+  }
+});
+
+test('listOpenIssuesByIdentifierPrefix returns only open primary/challenger issues', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  let receivedIdentifiers: unknown[] = [];
+
+  const restore = installFetchMock((payload) => {
+    if (payload.query.includes('searchIssues(')) {
+      receivedIdentifiers = [payload.variables?.term, `${payload.variables?.term}_c`];
+      return {
+        searchIssues: {
+          nodes: [
+            {
+              id: 'issue-1',
+              identifier: 'HOK-701',
+              title: 'Primary',
+              state: { name: 'In Progress' },
+              completedAt: null,
+              canceledAt: null,
+            },
+            {
+              id: 'issue-2',
+              identifier: 'HOK-701_c',
+              title: 'Challenger',
+              state: { name: 'Backlog' },
+              completedAt: null,
+              canceledAt: null,
+            },
+            {
+              id: 'issue-3',
+              identifier: 'HOK-701_c',
+              title: 'Closed challenger',
+              state: { name: 'Done' },
+              completedAt: '2026-05-01T00:00:00Z',
+              canceledAt: null,
+            },
+          ],
+        },
+      };
+    }
+    throw new Error(`Unhandled query: ${payload.query}`);
+  });
+
+  try {
+    const issues = await listOpenIssuesByIdentifierPrefix('HOK-701');
+    assert.deepEqual(receivedIdentifiers, ['HOK-701', 'HOK-701_c']);
+    assert.deepEqual(issues.map((issue) => issue.identifier), ['HOK-701', 'HOK-701_c']);
   } finally {
     restore();
   }

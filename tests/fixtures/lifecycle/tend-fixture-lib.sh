@@ -163,6 +163,19 @@ if [[ "${1:-}" == "fetch" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "ls-remote" && "${2:-}" == "--heads" && "${3:-}" == "origin" ]]; then
+  if [[ -n "${GIT_LS_REMOTE_BRANCHES:-}" ]]; then
+    target_branch="${4:-}"
+    while IFS= read -r configured_branch; do
+      if [[ -n "$configured_branch" && "$configured_branch" == "$target_branch" ]]; then
+        printf '%s\trefs/heads/%s\n' "${GIT_BRANCH_SHA:-2222222222222222222222222222222222222222}" "$target_branch"
+        exit 0
+      fi
+    done <<< "$GIT_LS_REMOTE_BRANCHES"
+  fi
+  exit 0
+fi
+
 if [[ "${1:-}" == "rebase" && "${2:-}" == "--abort" ]]; then
   exit 0
 fi

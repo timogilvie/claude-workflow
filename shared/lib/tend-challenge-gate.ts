@@ -3,10 +3,14 @@ import { join } from 'node:path';
 import { readChallengeComparisons, type StoredChallengeComparison } from './challenge-comparison.ts';
 import { getChallengeConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
+import { listOpenIssuesByIdentifierPrefix, type LinearIssueSummary } from './linear.ts';
 import type { PrMetadata } from './pr-metadata.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 type ChallengeRole = 'primary' | 'challenger';
+const BRANCH_NAME_PATTERN = /^[a-zA-Z0-9._/-]+$/;
+const TASK_IDENTIFIER_PATTERN = /^[A-Z]+-\d+(?:_c)?$/;
 
 interface ChallengePairInfo {
   pairId: string;
@@ -41,6 +45,27 @@ export interface ChallengeBlockedCandidate {
   headBranch: string;
   reason: string;
 }
+
+export interface ChallengeGateDeps {
+  linearSiblingLookup?: (identifierRoot: string) => Promise<LinearIssueSummary[]>;
+  branchExists?: (branch: string, repoDir: string) => boolean | Promise<boolean>;
+}
+
+interface ChallengeGateRuntimeDeps {
+  linearSiblingLookup: (identifierRoot: string) => Promise<LinearIssueSummary[]>;
+  branchExists: (branch: string, repoDir: string) => Promise<boolean>;
+  linearCache: Map<string, Promise<LinearIssueSummary[]>>;
+  branchCache: Map<string, Promise<boolean>>;
+}
+
+type PendingSignal =
+  | { kind: 'linear-sibling'; value: string }
+  | { kind: 'branch-twin'; value: string };
+
+type PendingSignalResult =
+  | { kind: 'none' }
+  | { kind: 'signals'; signals: PendingSignal[] }
+  | { kind: 'lookup-error'; source: 'linear' | 'branch'; message: string };
 
 export type ChallengeGate =
   | { kind: 'not-in-challenge' }
@@ -154,16 +179,18 @@ export function classifyChallengeState(
   };
 }
 
-export function applyChallengePairGates<T extends ChallengeEligibleWorkItem>(
+export async function applyChallengePairGates<T extends ChallengeEligibleWorkItem>(
   eligibleItems: T[],
   blocked: ChallengeBlockedCandidate[],
   repoDir: string,
-): { eligible: T[]; blocked: ChallengeBlockedCandidate[]; losers: number[] } {
+  deps: ChallengeGateDeps = {},
+): Promise<{ eligible: T[]; blocked: ChallengeBlockedCandidate[]; losers: number[] }> {
   const allPrNumbers = new Set([
     ...eligibleItems.map((item) => item.pr.number),
     ...blocked.map((item) => item.number),
   ]);
   const challengePairMap = loadWorkflowStateChallengePairs(repoDir);
+  const runtimeDeps = createRuntimeDeps(deps);
 
   let comparisons: StoredChallengeComparison[];
   try {
@@ -189,6 +216,20 @@ export function applyChallengePairGates<T extends ChallengeEligibleWorkItem>(
     );
 
     if (state.kind === 'not-in-challenge') {
+      const pendingSignals = await detectPendingChallengeSignals(item, repoDir, runtimeDeps);
+      if (pendingSignals.kind === 'lookup-error') {
+        console.warn(
+          `[tend-challenge-gate] Lookup failed for PR #${item.pr.number} (${pendingSignals.source}): ${pendingSignals.message}`,
+        );
+        nextBlocked.push(toBlockedCandidate(item, `challenge:pair-unresolved:lookup-error:${pendingSignals.source}`));
+        continue;
+      }
+
+      if (pendingSignals.kind === 'signals') {
+        nextBlocked.push(toBlockedCandidate(item, `challenge:${formatPendingSignalReason(pendingSignals.signals)}`));
+        continue;
+      }
+
       nextEligible.push(item);
       continue;
     }
@@ -214,6 +255,15 @@ export function applyChallengePairGates<T extends ChallengeEligibleWorkItem>(
   }
 
   return { eligible: nextEligible, blocked: nextBlocked, losers: [...losers] };
+}
+
+function createRuntimeDeps(deps: ChallengeGateDeps): ChallengeGateRuntimeDeps {
+  return {
+    linearSiblingLookup: deps.linearSiblingLookup ?? listOpenIssuesByIdentifierPrefix,
+    branchExists: async (branch, repoDir) => Boolean(await (deps.branchExists ?? defaultBranchExists)(branch, repoDir)),
+    linearCache: new Map(),
+    branchCache: new Map(),
+  };
 }
 
 function labelSet(pr: ChallengeEligiblePr): Set<string> {
@@ -277,3 +327,109 @@ function parsePrNumberFromUrl(url: string | undefined): number | null {
   return Number.isInteger(prNumber) ? prNumber : null;
 }
 
+async function detectPendingChallengeSignals(
+  item: ChallengeEligibleWorkItem,
+  repoDir: string,
+  deps: ChallengeGateRuntimeDeps,
+): Promise<PendingSignalResult> {
+  const signals: PendingSignal[] = [];
+  const taskRoot = normalizeChallengeIdentifierRoot(item.metadata.task);
+  if (taskRoot) {
+    try {
+      const siblings = await getLinearSiblings(taskRoot, item.metadata.task || null, deps);
+      for (const sibling of siblings) {
+        signals.push({ kind: 'linear-sibling', value: sibling.identifier });
+      }
+    } catch (error) {
+      return { kind: 'lookup-error', source: 'linear', message: errorMessage(error) };
+    }
+  } else if (item.metadata.task) {
+    console.warn(`[tend-challenge-gate] Skipping Linear sibling lookup for invalid task id "${item.metadata.task}"`);
+  }
+
+  const twinBranch = deriveTwinBranch(item.pr.headRefName);
+  if (twinBranch) {
+    try {
+      const exists = await getBranchExistence(twinBranch, repoDir, deps);
+      if (exists) {
+        signals.push({ kind: 'branch-twin', value: twinBranch });
+      }
+    } catch (error) {
+      return { kind: 'lookup-error', source: 'branch', message: errorMessage(error) };
+    }
+  }
+
+  return signals.length > 0 ? { kind: 'signals', signals } : { kind: 'none' };
+}
+
+async function getLinearSiblings(
+  identifierRoot: string,
+  currentIdentifier: string | null,
+  deps: ChallengeGateRuntimeDeps,
+): Promise<LinearIssueSummary[]> {
+  let lookup = deps.linearCache.get(identifierRoot);
+  if (!lookup) {
+    lookup = deps.linearSiblingLookup(identifierRoot);
+    deps.linearCache.set(identifierRoot, lookup);
+  }
+
+  const siblings = await lookup;
+  return siblings.filter((issue) => issue.identifier !== currentIdentifier);
+}
+
+async function getBranchExistence(
+  branch: string,
+  repoDir: string,
+  deps: ChallengeGateRuntimeDeps,
+): Promise<boolean> {
+  const cacheKey = `${repoDir}\u0000${branch}`;
+  let lookup = deps.branchCache.get(cacheKey);
+  if (!lookup) {
+    lookup = deps.branchExists(branch, repoDir);
+    deps.branchCache.set(cacheKey, lookup);
+  }
+
+  return await lookup;
+}
+
+function normalizeChallengeIdentifierRoot(identifier: string | undefined): string | null {
+  if (!identifier || !TASK_IDENTIFIER_PATTERN.test(identifier)) {
+    return null;
+  }
+
+  return identifier.endsWith('_c') ? identifier.slice(0, -2) : identifier;
+}
+
+function deriveTwinBranch(headBranch: string): string | null {
+  if (!headBranch.startsWith('task/')) {
+    return null;
+  }
+
+  const slug = headBranch.slice('task/'.length);
+  if (!slug || !BRANCH_NAME_PATTERN.test(headBranch)) {
+    return null;
+  }
+
+  return slug.endsWith('-challenger')
+    ? `task/${slug.slice(0, -'-challenger'.length)}`
+    : `task/${slug}-challenger`;
+}
+
+function formatPendingSignalReason(signals: PendingSignal[]): string {
+  return `pair-unresolved:${signals.map((signal) => `${signal.kind}:${signal.value}`).join('+')}`;
+}
+
+async function defaultBranchExists(branch: string, repoDir: string): Promise<boolean> {
+  validateBranchName(branch, 'challenge twin branch');
+  const output = String(execShellCommand(
+    `git ls-remote --heads origin ${escapeShellArg(branch)}`,
+    { encoding: 'utf-8', cwd: repoDir },
+  )).trim();
+  return output.length > 0;
+}
+
+function validateBranchName(branchName: string, label: string): void {
+  if (!BRANCH_NAME_PATTERN.test(branchName)) {
+    throw new Error(`tend-challenge-gate: invalid ${label} name`);
+  }
+}
