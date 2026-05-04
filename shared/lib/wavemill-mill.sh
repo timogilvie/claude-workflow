@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Wavemill Mill - Continuous Task Execution System
@@ -1931,7 +1931,7 @@ MONITOR_ENV="/tmp/${SESSION}-monitor.env"
 MONITOR_SCRIPT="/tmp/${SESSION}-monitor.sh"
 LAUNCHED_ISSUES_FILE="/tmp/${SESSION}-launched-issues.txt"
 cat > "$MONITOR_SCRIPT" <<'MONITOR_EOF'
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 set -Eeuo pipefail
 
 
