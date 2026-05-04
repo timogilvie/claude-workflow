@@ -157,6 +157,14 @@ JSON
 {"stage":"ready","status":"running","artifacts":{"verdict":"pending"}}
 JSON
         ;;
+      ready_failed_resume_repolls)
+        CURRENT_PHASE="ready"
+        READY_STATUS="failed"
+        READY_LAUNCH_RC=0
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"failed","artifacts":{"verdict":"fail"}}
+JSON
+        ;;
       ready_remediation_repolls_active)
         CURRENT_PHASE="ready"
         READY_STATUS="running"
@@ -385,6 +393,11 @@ check_contains "pending ready pass holds slot active" "$ready_pending_transition
 ready_pending_failure_needs_user_output="$(run_monitor_case ready_pending_failure_needs_user)"
 check_contains "pending ready failure relaunches once" "$ready_pending_failure_needs_user_output" "ready_launches=1"
 check_contains "pending ready failure needs user" "$ready_pending_failure_needs_user_output" "attention=needs-user"
+
+ready_failed_resume_repolls_output="$(run_monitor_case ready_failed_resume_repolls)"
+check_contains "failed ready resumes by re-running checks" "$ready_failed_resume_repolls_output" "ready_launches=1"
+check_contains "failed ready pass clears attention" "$ready_failed_resume_repolls_output" "attention=clear"
+check_contains "failed ready pass holds slot active" "$ready_failed_resume_repolls_output" "active_count=1"
 
 ready_remediation_repolls_active_output="$(run_monitor_case ready_remediation_repolls_active)"
 check_contains "ready remediation rc 5 relaunches once" "$ready_remediation_repolls_active_output" "ready_launches=1"
