@@ -1,0 +1,27 @@
+{
+  "session": "wavemill-test",
+  "queuePlan": [
+    {
+      "wave": 1,
+      "taskIds": ["HOK-1"]
+    },
+    {
+      "wave": 2,
+      "taskIds": ["HOK-2"]
+    }
+  ],
+  "tasks": [
+    {
+      "issue": "HOK-1",
+      "slug": "task-a",
+      "title": "Task A"
+    },
+    {
+      "issue": "HOK-2",
+      "slug": "task-b",
+      "title": "Task B",
+      "dependsOn": ["HOK-1"],
+      "baseFromTask": "HOK-1"
+    }
+  ]
+}

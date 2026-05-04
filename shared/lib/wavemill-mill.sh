@@ -83,6 +83,8 @@ LIB_DIR="${LIB_DIR:-$REPO_DIR/shared/lib}"
 MONITOR_PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 export MONITOR_PR_CACHE
 EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
+# Persists queue plan for launch-plan JSON emission (set during task selection).
+LAUNCH_QUEUE_PLAN=""
 
 trim_outer_whitespace() {
   local value="${1-}"
@@ -302,6 +304,7 @@ write_launch_plan() {
   local t issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file route_file
   local route_json route_planner route_coder route_reviewer route_plan_depth route_code_depth route_review_mode route_max_cost_usd
   local route_payload challenge_flag challenge_pair challenge_role challenge_model migration_number task_agent
+  local task_depends_on task_base_from_task queue_plan_arg
 
   for t in "${LAUNCH_ARGS[@]}"; do
     IFS='|' read -r issue slug title <<<"$t"
@@ -329,6 +332,18 @@ write_launch_plan() {
     challenge_model="${TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]:-}"
     migration_number="$(jq -r --arg issue "$issue" '.migrationReservations[$issue] // empty' "$STATE_FILE" 2>/dev/null || echo "")"
     task_agent="${TASK_AGENT_BY_ISSUE[$issue]:-$AGENT_CMD}"
+    task_depends_on='[]'
+    task_base_from_task=""
+    if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
+      task_depends_on=$(printf '%s' "$LAUNCH_QUEUE_PLAN" | jq -c \
+        --arg id "$issue" \
+        '[ .queuedAfterDependencies[]? | select(.taskId == $id) | .ancestors[] ] // []' \
+        2>/dev/null || echo '[]')
+      task_base_from_task=$(printf '%s' "$LAUNCH_QUEUE_PLAN" | jq -r \
+        --arg id "$issue" \
+        '[ .queuedAfterDependencies[]? | select(.taskId == $id) | .ancestors[0] ] | first // empty' \
+        2>/dev/null || echo "")
+    fi
 
     route_payload="$(jq -n \
       --arg planner "$route_planner" \
@@ -367,6 +382,8 @@ write_launch_plan() {
       --arg challengeModel "$challenge_model" \
       --arg migrationNumber "$migration_number" \
       --arg agent "$task_agent" \
+      --argjson dependsOn "$task_depends_on" \
+      --arg baseFromTask "$task_base_from_task" \
       '$tasks + [{
         issue: $issue,
         slug: $slug,
@@ -385,8 +402,20 @@ write_launch_plan() {
         challengeModel: (if $challengeModel == "" then null else $challengeModel end),
         migrationNumber: (if $migrationNumber == "" then null else ($migrationNumber | tonumber) end),
         agent: $agent
-      }]')"
+      } + (if ($dependsOn | length) > 0 then {dependsOn: $dependsOn} else {} end)
+        + (if $baseFromTask != "" then {baseFromTask: $baseFromTask} else {} end)]')"
   done
+
+  queue_plan_arg="null"
+  if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
+    queue_plan_arg=$(printf '%s' "$LAUNCH_QUEUE_PLAN" | jq -c \
+      --argjson tasks "$tasks_json" \
+      '[
+        {wave: 1, taskIds: [.availableNow[] | select(. as $id | $tasks | any(.issue == $id))]},
+        {wave: 2, taskIds: [.queuedAfterDependencies[]?.taskId | select(. as $id | $tasks | any(.issue == $id))]}
+      ] | map(select(.taskIds | length > 0))' \
+      2>/dev/null || echo "null")
+  fi
 
   jq -n \
     --arg session "$SESSION" \
@@ -409,6 +438,7 @@ write_launch_plan() {
     --arg monitorScript "$MONITOR_SCRIPT" \
     --arg launchedIssuesFile "$LAUNCHED_ISSUES_FILE" \
     --argjson tasks "$tasks_json" \
+    --argjson queuePlan "$queue_plan_arg" \
     --arg pollSeconds "$POLL_SECONDS" \
     --arg requireConfirm "$REQUIRE_CONFIRM" \
     --arg dryRun "$DRY_RUN" \
@@ -452,7 +482,7 @@ write_launch_plan() {
         dashboardVerbosity: $dashboardVerbosity,
         dashboardLogToFile: ($dashboardLogToFile == "true")
       }
-    }' > "$launch_plan_file"
+    } + (if $queuePlan != null then {queuePlan: $queuePlan} else {} end)' > "$launch_plan_file"
 }
 
 
@@ -1421,6 +1451,7 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
       if [[ "${ENTER_LAUNCHES_WAVE:-true}" == "true" ]]; then
         WAVE_LAUNCH_USED=true
         startup_queue_plan=$(build_queue_plan_once "$BACKLOG" 2>/dev/null) || startup_queue_plan=""
+        LAUNCH_QUEUE_PLAN="$startup_queue_plan"
         if [[ -n "$startup_queue_plan" ]]; then
           wave_result=$(invoke_first_wave_helper "$startup_queue_plan" "$UNBLOCKED" "$STARTUP_SLOT_LIMIT" 2>/dev/null) || wave_result=""
           wave_ids=$(jq -r '.wave[]?' <<<"$wave_result" 2>/dev/null) || wave_ids=""
