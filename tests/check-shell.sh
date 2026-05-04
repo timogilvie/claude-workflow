@@ -35,6 +35,7 @@ for f in \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_translates_keystrokes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_pane_respawn.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/mill_dry_run_full_pipeline.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/monitor_consumes_command_file.sh \
   "$REPO_DIR/wavemill" \
 ; do
@@ -2553,6 +2554,7 @@ echo ""
 echo "=== Startup Lifecycle Fixtures ==="
 
 for fixture in \
+  "$REPO_DIR/tests/fixtures/lifecycle/mill_dry_run_full_pipeline.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_launches_concurrently.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_serializes_state_writes.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/worktree_collision.sh" \

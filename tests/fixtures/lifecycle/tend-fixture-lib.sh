@@ -127,8 +127,18 @@ set -euo pipefail
 
 printf '%s\n' "$*" >> "$GIT_CALL_LOG"
 
+if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--git-dir" ]]; then
+  printf '%s\n' "$GIT_DIR"
+  exit 0
+fi
+
 if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--git-common-dir" ]]; then
   printf '%s\n' "$GIT_COMMON_DIR"
+  exit 0
+fi
+
+if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--show-toplevel" ]]; then
+  printf '%s\n' "$REPO_DIR"
   exit 0
 fi
 
@@ -139,6 +149,14 @@ fi
 
 if [[ "${1:-}" == "rev-parse" && "${2:-}" == origin/* ]]; then
   printf '%s\n' "${GIT_BRANCH_SHA:-2222222222222222222222222222222222222222}"
+  exit 0
+fi
+
+if [[ "${1:-}" == "show-ref" && "${2:-}" == "--verify" && "${3:-}" == "--quiet" ]]; then
+  exit 1
+fi
+
+if [[ "${1:-}" == "-C" && "${3:-}" == "ls-tree" ]]; then
   exit 0
 fi
 
@@ -201,8 +219,22 @@ echo "unexpected git args: $*" >&2
 exit 1
 EOF
   chmod +x "$FAKE_BIN/git"
+  mkdir -p "$STATE_DIR/git-dir"
   mkdir -p "$STATE_DIR/git-common"
+  export GIT_DIR="$STATE_DIR/git-dir"
   export GIT_COMMON_DIR="$STATE_DIR/git-common"
+}
+
+write_fake_tmux() {
+  cat > "$FAKE_BIN/tmux" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "$TMUX_CALL_LOG"
+echo "unexpected tmux args: $*" >&2
+exit 1
+EOF
+  chmod +x "$FAKE_BIN/tmux"
 }
 
 write_pr_view() {

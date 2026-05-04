@@ -72,7 +72,12 @@ export WAVEMILL_MILL_ACTIVE="$REPO_DIR"
 # ─────────────────────────────────────────────────────────────────
 
 # Derived variables (not in config files)
-DRY_RUN="${DRY_RUN:-false}"
+if [[ "${WAVEMILL_DRY_RUN:-}" == "1" || "${WAVEMILL_DRY_RUN:-}" == "true" || "${DRY_RUN:-}" == "true" ]]; then
+  export WAVEMILL_DRY_RUN=1
+  DRY_RUN="true"
+else
+  DRY_RUN="false"
+fi
 STATE_DIR="${STATE_DIR:-$REPO_DIR/.wavemill}"
 STATE_FILE="$STATE_DIR/workflow-state.json"
 MILL_LOG_DIR="$REPO_DIR/.wavemill/logs"
@@ -83,6 +88,8 @@ LIB_DIR="${LIB_DIR:-$REPO_DIR/shared/lib}"
 MONITOR_PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 export MONITOR_PR_CACHE
 EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
+# Persists queue plan for launch-plan JSON emission (set during task selection).
+LAUNCH_QUEUE_PLAN=""
 
 trim_outer_whitespace() {
   local value="${1-}"
@@ -127,13 +134,16 @@ fi
 
 
 command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq)"; exit 1; }
-command -v gh >/dev/null || { echo "Error: gh required (install: brew install gh && gh auth login)"; exit 1; }
 command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
-command -v tmux >/dev/null || { echo "Error: tmux required (install: brew install tmux)"; exit 1; }
-agent_validate "$AGENT_CMD" || { echo "Error: agent '$AGENT_CMD' not found"; exit 1; }
+command -v git >/dev/null || { echo "Error: git required"; exit 1; }
+if [[ "$DRY_RUN" != "true" ]]; then
+  command -v gh >/dev/null || { echo "Error: gh required (install: brew install gh && gh auth login)"; exit 1; }
+  command -v tmux >/dev/null || { echo "Error: tmux required (install: brew install tmux)"; exit 1; }
+  agent_validate "$AGENT_CMD" || { echo "Error: agent '$AGENT_CMD' not found"; exit 1; }
+fi
 
 # Check agent authentication before launching tasks
-if ! agent_check_auth "$AGENT_CMD"; then
+if [[ "$DRY_RUN" != "true" ]] && ! agent_check_auth "$AGENT_CMD"; then
   exit 1
 fi
 
@@ -302,6 +312,7 @@ write_launch_plan() {
   local t issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file route_file
   local route_json route_planner route_coder route_reviewer route_plan_depth route_code_depth route_review_mode route_max_cost_usd
   local route_payload challenge_flag challenge_pair challenge_role challenge_model migration_number task_agent
+  local task_depends_on task_base_from_task queue_plan_arg
 
   for t in "${LAUNCH_ARGS[@]}"; do
     IFS='|' read -r issue slug title <<<"$t"
@@ -329,6 +340,18 @@ write_launch_plan() {
     challenge_model="${TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]:-}"
     migration_number="$(jq -r --arg issue "$issue" '.migrationReservations[$issue] // empty' "$STATE_FILE" 2>/dev/null || echo "")"
     task_agent="${TASK_AGENT_BY_ISSUE[$issue]:-$AGENT_CMD}"
+    task_depends_on='[]'
+    task_base_from_task=""
+    if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
+      task_depends_on=$(printf '%s' "$LAUNCH_QUEUE_PLAN" | jq -c \
+        --arg id "$issue" \
+        '[ .queuedAfterDependencies[]? | select(.taskId == $id) | .ancestors[] ] // []' \
+        2>/dev/null || echo '[]')
+      task_base_from_task=$(printf '%s' "$LAUNCH_QUEUE_PLAN" | jq -r \
+        --arg id "$issue" \
+        '[ .queuedAfterDependencies[]? | select(.taskId == $id) | .ancestors[0] ] | first // empty' \
+        2>/dev/null || echo "")
+    fi
 
     route_payload="$(jq -n \
       --arg planner "$route_planner" \
@@ -344,7 +367,7 @@ write_launch_plan() {
         reviewer: $reviewer,
         planDepth: $planDepth,
         codeDepth: $codeDepth,
-        reviewMode: $reviewMode
+        reviewMode: $reviewMode,
         maxCostUsd: $maxCostUsd
       } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)')"
 
@@ -367,6 +390,8 @@ write_launch_plan() {
       --arg challengeModel "$challenge_model" \
       --arg migrationNumber "$migration_number" \
       --arg agent "$task_agent" \
+      --argjson dependsOn "$task_depends_on" \
+      --arg baseFromTask "$task_base_from_task" \
       '$tasks + [{
         issue: $issue,
         slug: $slug,
@@ -385,8 +410,20 @@ write_launch_plan() {
         challengeModel: (if $challengeModel == "" then null else $challengeModel end),
         migrationNumber: (if $migrationNumber == "" then null else ($migrationNumber | tonumber) end),
         agent: $agent
-      }]')"
+      } + (if ($dependsOn | length) > 0 then {dependsOn: $dependsOn} else {} end)
+        + (if $baseFromTask != "" then {baseFromTask: $baseFromTask} else {} end)]')"
   done
+
+  queue_plan_arg="null"
+  if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
+    queue_plan_arg=$(printf '%s' "$LAUNCH_QUEUE_PLAN" | jq -c \
+      --argjson tasks "$tasks_json" \
+      '[
+        {wave: 1, taskIds: [.availableNow[] | select(. as $id | $tasks | any(.issue == $id))]},
+        {wave: 2, taskIds: [.queuedAfterDependencies[]?.taskId | select(. as $id | $tasks | any(.issue == $id))]}
+      ] | map(select(.taskIds | length > 0))' \
+      2>/dev/null || echo "null")
+  fi
 
   jq -n \
     --arg session "$SESSION" \
@@ -409,6 +446,7 @@ write_launch_plan() {
     --arg monitorScript "$MONITOR_SCRIPT" \
     --arg launchedIssuesFile "$LAUNCHED_ISSUES_FILE" \
     --argjson tasks "$tasks_json" \
+    --argjson queuePlan "$queue_plan_arg" \
     --arg pollSeconds "$POLL_SECONDS" \
     --arg requireConfirm "$REQUIRE_CONFIRM" \
     --arg dryRun "$DRY_RUN" \
@@ -452,7 +490,7 @@ write_launch_plan() {
         dashboardVerbosity: $dashboardVerbosity,
         dashboardLogToFile: ($dashboardLogToFile == "true")
       }
-    }' > "$launch_plan_file"
+    } + (if $queuePlan != null then {queuePlan: $queuePlan} else {} end)' > "$launch_plan_file"
 }
 
 
@@ -775,6 +813,24 @@ cleanup_completed_task() {
 
 
 linear_list_backlog() {
+  if [[ "$DRY_RUN" == "true" ]]; then
+    local backlog_file="${WAVEMILL_DRY_RUN_BACKLOG_FILE:-}"
+    if [[ -z "$backlog_file" ]]; then
+      log_error "Dry-run requires WAVEMILL_DRY_RUN_BACKLOG_FILE or --dry-run-backlog."
+      return 1
+    fi
+    if [[ ! -f "$backlog_file" ]]; then
+      log_error "Dry-run backlog fixture not found: $backlog_file"
+      return 1
+    fi
+    if ! jq empty "$backlog_file" >/dev/null 2>&1; then
+      log_error "Dry-run backlog fixture is not valid JSON: $backlog_file"
+      return 1
+    fi
+    cat "$backlog_file"
+    return 0
+  fi
+
   # Capture stdout (JSON); collect stderr so we can show it on failure
   local stderr_file
   stderr_file=$(mktemp)
@@ -789,6 +845,26 @@ linear_list_backlog() {
   fi
 }
 linear_get_issue() {
+  if [[ "$DRY_RUN" == "true" ]]; then
+    local backlog_file="${WAVEMILL_DRY_RUN_BACKLOG_FILE:-}"
+    local issue="$1"
+    if [[ -z "$backlog_file" || ! -f "$backlog_file" ]]; then
+      log_error "Dry-run issue lookup requires backlog fixture file."
+      return 1
+    fi
+
+    local selected
+    selected="$(jq -cer --arg issue "$issue" '
+      map(select(.identifier == $issue or .id == $issue)) | .[0]
+    ' "$backlog_file" 2>/dev/null || true)"
+    if [[ -z "$selected" || "$selected" == "null" ]]; then
+      log_error "Dry-run issue fixture not found for: $issue"
+      return 1
+    fi
+    printf '%s\n' "$selected"
+    return 0
+  fi
+
   # Capture stdout (JSON); collect stderr so we can show it on failure
   local stderr_file
   stderr_file=$(mktemp)
@@ -1421,6 +1497,7 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
       if [[ "${ENTER_LAUNCHES_WAVE:-true}" == "true" ]]; then
         WAVE_LAUNCH_USED=true
         startup_queue_plan=$(build_queue_plan_once "$BACKLOG" 2>/dev/null) || startup_queue_plan=""
+        LAUNCH_QUEUE_PLAN="$startup_queue_plan"
         if [[ -n "$startup_queue_plan" ]]; then
           wave_result=$(invoke_first_wave_helper "$startup_queue_plan" "$UNBLOCKED" "$STARTUP_SLOT_LIMIT" 2>/dev/null) || wave_result=""
           wave_ids=$(jq -r '.wave[]?' <<<"$wave_result" 2>/dev/null) || wave_ids=""
@@ -1480,8 +1557,12 @@ declare -A TASK_REVIEW_MODE_BY_ISSUE
 if (( ${#TASKS[@]} > 0 )); then
   # Pre-allocate migration numbers for parallel work
   # Fetch first so we scan the latest state of the base branch (not stale local files)
-  log "debug" "Fetching latest $BASE_BRANCH for migration scan..."
-  wavemill_fetch_base_branch "$BASE_BRANCH" --force 2>/dev/null || true
+  if [[ "$DRY_RUN" == "true" ]]; then
+    log "debug" "Dry-run: skipping base-branch fetch before migration scan."
+  else
+    log "debug" "Fetching latest $BASE_BRANCH for migration scan..."
+    wavemill_fetch_base_branch "$BASE_BRANCH" --force 2>/dev/null || true
+  fi
 
   # Scan the git tree (not local filesystem) for the highest existing migration number
   HIGHEST=$(scan_highest_migration)
@@ -7397,13 +7478,30 @@ chmod +x "$MONITOR_SCRIPT"
 
 # Fetch latest base branch so worktrees start from up-to-date main
 log "info" "Fetching latest $BASE_BRANCH from remote..."
-wavemill_fetch_base_branch "$BASE_BRANCH" --force
+if [[ "$DRY_RUN" == "true" ]]; then
+  log "info" "Dry-run: skipping forced base-branch fetch."
+else
+  wavemill_fetch_base_branch "$BASE_BRANCH" --force
+fi
 
 : > "$STATUS_LOG_FILE"
 : > "$LAUNCHED_ISSUES_FILE"
 
-LAUNCH_PLAN_FILE="/tmp/${SESSION}-launch-plan.json"
+LAUNCH_PLAN_FILE="${WAVEMILL_DRY_RUN_PLAN_OUT:-/tmp/${SESSION}-launch-plan.json}"
+if ! mkdir -p "$(dirname "$LAUNCH_PLAN_FILE")"; then
+  log_error "Failed to create launch-plan directory: $(dirname "$LAUNCH_PLAN_FILE")"
+  exit 1
+fi
 write_launch_plan "$LAUNCH_PLAN_FILE"
+if ! jq empty "$LAUNCH_PLAN_FILE" >/dev/null 2>&1; then
+  log_error "Generated launch plan is not valid JSON: $LAUNCH_PLAN_FILE"
+  exit 1
+fi
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  log "status" "Dry-run launch plan written: $LAUNCH_PLAN_FILE"
+  exit 0
+fi
 
 STARTUP_RUNNER="$SCRIPT_DIR/wavemill-startup-runner.sh"
 if [[ ! -f "$STARTUP_RUNNER" ]]; then
