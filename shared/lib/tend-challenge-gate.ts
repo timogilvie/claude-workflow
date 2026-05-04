@@ -300,11 +300,19 @@ function createRuntimeDeps(
   defaultBranchLookup: (branch: string, repoDir: string) => Promise<boolean>,
 ): ChallengeGateRuntimeDeps {
   return {
-    linearSiblingLookup: deps.linearSiblingLookup ?? listOpenIssuesByIdentifierPrefix,
+    linearSiblingLookup: deps.linearSiblingLookup ?? defaultLinearSiblingLookup,
     branchExists: async (branch, repoDir) => Boolean(await (deps.branchExists ?? defaultBranchLookup)(branch, repoDir)),
     linearCache: new Map(),
     branchCache: new Map(),
   };
+}
+
+async function defaultLinearSiblingLookup(identifierRoot: string): Promise<LinearIssueSummary[]> {
+  if (!process.env.LINEAR_API_KEY) {
+    return [];
+  }
+
+  return await listOpenIssuesByIdentifierPrefix(identifierRoot);
 }
 
 function labelSet(pr: ChallengeEligiblePr): Set<string> {
