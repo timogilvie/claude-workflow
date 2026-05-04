@@ -674,6 +674,106 @@ describe('challenge-mode gating', () => {
   });
 });
 
+describe('challenge-gate race prevention', () => {
+  it('blocks primary when challenger sibling branch exists but no workflow state', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523',
+      createdAt: '2020-01-01T00:00:00Z',
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateOptions = {
+      remoteBranches: ['task/hok-1523', 'task/hok-1523-challenger'],
+      coolOffSeconds: 0,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.nextPR, null);
+      assert.equal(decision.blocked[0]?.reason, 'challenge:pair-unresolved:branch-pair');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks primary when challenger task is in workflow state but has no open PR', async () => {
+    const primary = pr({
+      number: 497,
+      title: 'Primary',
+      headRefName: 'task/hok-1523',
+      body: metadata(['task: HOK-1523', 'challenge: true', 'challengePairId: pair-hok-1523']),
+    });
+    const options = buildTestOptions([primary]);
+    options.challengeGateOptions = {
+      remoteBranches: ['task/hok-1523'],
+      coolOffSeconds: 0,
+    };
+    writeWorkflowState(options.repoDir, {
+      HOK_1523: { pr: 497, challengePairId: 'pair-hok-1523', challengeRole: 'primary' },
+      HOK_1523_c: { challengePairId: 'pair-hok-1523', challengeRole: 'challenger' },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.nextPR, null);
+      assert.equal(decision.blocked[0]?.reason, 'challenge:pair-unresolved:no-comparison');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks a young task PR via cool-off when no branch/workflow signal exists', async () => {
+    const now = Date.parse('2026-04-01T00:03:00Z');
+    const young = pr({
+      number: 301,
+      title: 'Young PR',
+      headRefName: 'task/young',
+      createdAt: '2026-04-01T00:01:00Z',
+    });
+    const options = buildTestOptions([young]);
+    options.challengeGateOptions = {
+      remoteBranches: [],
+      coolOffSeconds: 300,
+      nowMs: () => now,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.blocked[0]?.reason, 'challenge:cool-off');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('allows an old task PR when no branch/workflow signal exists', async () => {
+    const now = Date.parse('2026-04-01T01:00:00Z');
+    const old = pr({
+      number: 302,
+      title: 'Old PR',
+      headRefName: 'task/old',
+      createdAt: '2026-04-01T00:01:00Z',
+    });
+    const options = buildTestOptions([old]);
+    options.challengeGateOptions = {
+      remoteBranches: [],
+      coolOffSeconds: 300,
+      nowMs: () => now,
+    };
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 1);
+      assert.equal(decision.nextPR, 302);
+    } finally {
+      options.cleanup();
+    }
+  });
+});
+
 describe('selectNextCandidate dependency cycles', () => {
   it('blocks a 2-cycle', async () => {
     await withDecision([

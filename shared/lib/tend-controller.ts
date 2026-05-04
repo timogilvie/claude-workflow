@@ -15,7 +15,7 @@ import { extractMetadataBlock, parsePrMetadata, type PrMetadata } from './pr-met
 import { evaluateReady } from './ready-engine.ts';
 import { runReadyStage } from './ready-stage.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
-import { applyChallengePairGates, type ChallengeGateDeps } from './tend-challenge-gate.ts';
+import { applyChallengePairGates, type ChallengeGateDeps, type ChallengeGateOptions } from './tend-challenge-gate.ts';
 
 export interface TendCandidate {
   number: number;
@@ -90,6 +90,7 @@ export interface SelectNextCandidateOptions {
   healthChecker?: HealthChecker;
   loserCleanup?: (prNumber: number, repoDir: string) => void;
   challengeGateDeps?: ChallengeGateDeps;
+  challengeGateOptions?: ChallengeGateOptions;
 }
 
 interface EligibleWorkItem {
@@ -204,7 +205,7 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
     cycleResult.eligible,
     blocked,
     options.repoDir,
-    options.challengeGateDeps,
+    { ...options.challengeGateOptions, ...options.challengeGateDeps },
   );
   blocked.length = 0;
   blocked.push(...challengeResult.blocked);

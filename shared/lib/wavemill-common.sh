@@ -228,6 +228,13 @@ load_config() {
   _WAVEMILL_CONFIG_LOADED=1
 }
 
+wavemill_config_annotation() {
+  local path="${1:-}"
+  local value="${2:-}"
+
+  printf ' (%s=%s)' "$path" "$value"
+}
+
 wavemill_fetch_base_branch() {
   local base_branch="${1:-}"
   shift || true
