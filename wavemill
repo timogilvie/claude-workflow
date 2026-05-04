@@ -39,8 +39,10 @@ ${GREEN}Commands:${NC}
              - Monitors PRs and auto-cleans completed work
              - Continuously prompts for next batch
              Options:
-               ${CYAN}--agent <name>${NC}  Agent CLI to use (claude, codex, ...)
-               ${CYAN}--no-progress${NC}   Use legacy startup status lines
+               ${CYAN}--agent <name>${NC}        Agent CLI to use (claude, codex, ...)
+               ${CYAN}--no-progress${NC}         Use legacy startup status lines
+               ${CYAN}--dry-run${NC}             Validate launch plan without execution
+               ${CYAN}--dry-run-out <path>${NC}  Output launch plan to custom path
 
   ${CYAN}expand${NC}    Expand Linear issues into task packets
              - No args: shows ranked backlog candidates
@@ -890,11 +892,26 @@ run_quota() {
 # Main command dispatcher
 case "${1:-}" in
   mill)
-    run_preflight_checks
     shift
-    # Parse mill-specific flags before delegating
+    # Parse mill-specific flags before preflight (dry-run must bypass prompts)
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --dry-run)
+          export WAVEMILL_DRY_RUN=1
+          export DRY_RUN=true
+          export SKIP_CONFIG_CHECK=true
+          export SKIP_CONTEXT_CHECK=true
+          export WAVEMILL_NO_PROGRESS=1
+          shift
+          ;;
+        --dry-run-out)
+          export WAVEMILL_DRY_RUN_OUT_PATH="$2"
+          shift 2
+          ;;
+        --dry-run-out=*)
+          export WAVEMILL_DRY_RUN_OUT_PATH="${1#*=}"
+          shift
+          ;;
         --agent)
           export AGENT_CMD="$2"
           export AGENT_CMD_EXPLICIT=true
@@ -909,6 +926,7 @@ case "${1:-}" in
           ;;
       esac
     done
+    run_preflight_checks
     run_mill "$@"
     ;;
   expand)

@@ -2557,6 +2557,7 @@ for fixture in \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_serializes_state_writes.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/worktree_collision.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/worktree_overlay_propagation.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/mill_dry_run_full_pipeline.sh" \
 ; do
   if [[ ! -f "$fixture" ]]; then
     fail "Missing startup fixture $(basename "$fixture")"

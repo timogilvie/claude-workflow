@@ -1,7 +1,7 @@
 #!/opt/homebrew/bin/bash
 set -Eeuo pipefail
 
-command -v tmux >/dev/null || { echo "Error: tmux is required but not installed" >&2; exit 1; }
+# Required commands (except tmux which is checked later based on dry-run mode)
 command -v git >/dev/null || { echo "Error: git is required but not installed" >&2; exit 1; }
 command -v npx >/dev/null || { echo "Error: npx is required but not installed" >&2; exit 1; }
 command -v jq >/dev/null || { echo "Error: jq is required but not installed" >&2; exit 1; }
@@ -10,6 +10,12 @@ PLAN_FILE="${1:-}"
 if [[ -z "$PLAN_FILE" || ! -f "$PLAN_FILE" ]]; then
   echo "Usage: $0 /tmp/<session>-launch-plan.json" >&2
   exit 1
+fi
+
+# Parse plan file to determine if we're in dry-run mode before requiring tmux
+DRY_RUN_CHECK="$(jq -r '.monitorConfig.dryRun // false' "$PLAN_FILE" 2>/dev/null || echo "false")"
+if [[ "$DRY_RUN_CHECK" != "true" ]]; then
+  command -v tmux >/dev/null || { echo "Error: tmux is required but not installed" >&2; exit 1; }
 fi
 
 if [[ ! -t 2 ]]; then
@@ -783,6 +789,67 @@ main() {
 
   startup_log "═══ Wavemill Startup ═══"
   startup_log "Reading launch plan: $PLAN_FILE"
+
+  # In dry-run mode, validate the plan structure and exit without launching
+  if [[ "$DRY_RUN" == "true" ]]; then
+    startup_log "Dry-run mode: validating launch plan structure..."
+
+    # Validate required top-level fields
+    local required_fields=(
+      "session" "repoDir" "baseBranch" "worktreeRoot" "stateDir" "stateFile"
+      "toolsDir" "libDir" "tasks"
+      "startupConfig.statusLogFile" "startupConfig.monitorEnv"
+      "startupConfig.monitorScript" "startupConfig.launchedIssuesFile"
+      "monitorConfig.dryRun"
+    )
+
+    local field validation_errors=0
+    for field in "${required_fields[@]}"; do
+      if ! jq -e ".$field" "$PLAN_FILE" >/dev/null 2>&1; then
+        startup_log "✗ Missing required field: $field"
+        validation_errors=$((validation_errors + 1))
+      fi
+    done
+
+    # Validate tasks array structure
+    local task_idx=0
+    while IFS= read -r task_json; do
+      [[ -z "$task_json" ]] && continue
+      local required_task_fields=(
+        "issue" "slug" "title" "branch" "worktreeDir" "linearIssueId"
+        "taskPacketFile" "issueJsonFile" "routeFile" "route" "agent"
+      )
+      local task_field
+      for task_field in "${required_task_fields[@]}"; do
+        if ! printf '%s' "$task_json" | jq -e ".$task_field" >/dev/null 2>&1; then
+          startup_log "✗ Task $task_idx missing field: $task_field"
+          validation_errors=$((validation_errors + 1))
+        fi
+      done
+
+      # Validate route object structure
+      local route_fields=("planner" "coder" "reviewer" "planDepth" "codeDepth" "reviewMode")
+      local route_field
+      for route_field in "${route_fields[@]}"; do
+        if ! printf '%s' "$task_json" | jq -e ".route.$route_field" >/dev/null 2>&1; then
+          startup_log "✗ Task $task_idx route missing field: $route_field"
+          validation_errors=$((validation_errors + 1))
+        fi
+      done
+
+      task_idx=$((task_idx + 1))
+    done < <(jq -c '.tasks[]' "$PLAN_FILE" 2>/dev/null || echo "")
+
+    if [[ "$validation_errors" -gt 0 ]]; then
+      startup_log "✗ Dry-run validation failed with $validation_errors error(s)"
+      exit 1
+    fi
+
+    startup_log "✓ Launch plan structure is valid"
+    startup_log "✓ All required fields present"
+    startup_log "✓ $task_idx task(s) validated"
+    exit 0
+  fi
 
   task_count="$(jq '.tasks | length' "$PLAN_FILE")"
   startup_log "Tasks to launch: $task_count"

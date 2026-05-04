@@ -72,6 +72,13 @@ export WAVEMILL_MILL_ACTIVE="$REPO_DIR"
 # ─────────────────────────────────────────────────────────────────
 
 # Derived variables (not in config files)
+# Normalize dry-run flags - both forms should be equivalent
+if [[ "${WAVEMILL_DRY_RUN:-}" == "1" ]]; then
+  DRY_RUN=true
+fi
+if [[ "${DRY_RUN:-false}" == "true" ]]; then
+  export WAVEMILL_DRY_RUN=1
+fi
 DRY_RUN="${DRY_RUN:-false}"
 STATE_DIR="${STATE_DIR:-$REPO_DIR/.wavemill}"
 STATE_FILE="$STATE_DIR/workflow-state.json"
@@ -344,7 +351,7 @@ write_launch_plan() {
         reviewer: $reviewer,
         planDepth: $planDepth,
         codeDepth: $codeDepth,
-        reviewMode: $reviewMode
+        reviewMode: $reviewMode,
         maxCostUsd: $maxCostUsd
       } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)')"
 
@@ -775,6 +782,24 @@ cleanup_completed_task() {
 
 
 linear_list_backlog() {
+  # In dry-run mode, use fixture backlog instead of live Linear API
+  if [[ "$DRY_RUN" == "true" ]]; then
+    if [[ -z "${WAVEMILL_DRY_RUN_BACKLOG_FILE:-}" ]]; then
+      log_error "DRY_RUN requires WAVEMILL_DRY_RUN_BACKLOG_FILE to be set"
+      return 1
+    fi
+    if [[ ! -f "$WAVEMILL_DRY_RUN_BACKLOG_FILE" ]]; then
+      log_error "Backlog fixture file not found: $WAVEMILL_DRY_RUN_BACKLOG_FILE"
+      return 1
+    fi
+    if ! jq -e 'type == "array"' "$WAVEMILL_DRY_RUN_BACKLOG_FILE" >/dev/null 2>&1; then
+      log_error "Backlog fixture must be a JSON array: $WAVEMILL_DRY_RUN_BACKLOG_FILE"
+      return 1
+    fi
+    cat "$WAVEMILL_DRY_RUN_BACKLOG_FILE"
+    return 0
+  fi
+
   # Capture stdout (JSON); collect stderr so we can show it on failure
   local stderr_file
   stderr_file=$(mktemp)
@@ -789,6 +814,23 @@ linear_list_backlog() {
   fi
 }
 linear_get_issue() {
+  # In dry-run mode, extract from cached backlog
+  if [[ "$DRY_RUN" == "true" ]]; then
+    local issue="$1"
+    if [[ -z "${BACKLOG_JSON_CACHE:-}" ]]; then
+      log_error "DRY_RUN: BACKLOG_JSON_CACHE not set"
+      return 1
+    fi
+    local result
+    result=$(echo "$BACKLOG_JSON_CACHE" | jq --arg issue "$issue" '.[] | select(.identifier == $issue)' 2>/dev/null || echo "{}")
+    if [[ "$result" == "{}" ]]; then
+      log_error "DRY_RUN: Issue $issue not found in backlog fixture"
+      return 1
+    fi
+    echo "$result"
+    return 0
+  fi
+
   # Capture stdout (JSON); collect stderr so we can show it on failure
   local stderr_file
   stderr_file=$(mktemp)
@@ -7396,14 +7438,36 @@ chmod +x "$MONITOR_SCRIPT"
 
 
 # Fetch latest base branch so worktrees start from up-to-date main
-log "info" "Fetching latest $BASE_BRANCH from remote..."
-wavemill_fetch_base_branch "$BASE_BRANCH" --force
+if [[ "$DRY_RUN" != "true" ]]; then
+  log "info" "Fetching latest $BASE_BRANCH from remote..."
+  wavemill_fetch_base_branch "$BASE_BRANCH" --force
+fi
 
 : > "$STATUS_LOG_FILE"
 : > "$LAUNCHED_ISSUES_FILE"
 
-LAUNCH_PLAN_FILE="/tmp/${SESSION}-launch-plan.json"
+LAUNCH_PLAN_FILE="${WAVEMILL_DRY_RUN_OUT_PATH:-/tmp/${SESSION}-launch-plan.json}"
 write_launch_plan "$LAUNCH_PLAN_FILE"
+
+# In dry-run mode, optionally validate the plan with the startup runner, then exit
+if [[ "$DRY_RUN" == "true" ]]; then
+  STARTUP_RUNNER="$SCRIPT_DIR/wavemill-startup-runner.sh"
+  if [[ -f "$STARTUP_RUNNER" ]]; then
+    log "status" "Validating launch plan in dry-run mode..."
+    if /opt/homebrew/bin/bash "$STARTUP_RUNNER" "$LAUNCH_PLAN_FILE"; then
+      log "status" "Dry-run validation successful"
+      log "info" "Launch plan written to: $LAUNCH_PLAN_FILE"
+      exit 0
+    else
+      log_error "Dry-run validation failed"
+      exit 1
+    fi
+  else
+    log "status" "Startup runner not found, skipping validation"
+    log "info" "Launch plan written to: $LAUNCH_PLAN_FILE"
+    exit 0
+  fi
+fi
 
 STARTUP_RUNNER="$SCRIPT_DIR/wavemill-startup-runner.sh"
 if [[ ! -f "$STARTUP_RUNNER" ]]; then

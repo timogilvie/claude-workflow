@@ -32,6 +32,45 @@ WAVEMILL_DASHBOARD_REFRESH_SECONDS=3 wavemill mill
 
 `WAVEMILL_DASHBOARD_REFRESH_SECONDS` accepts integer values from `1` through `10`. Invalid values fall back to the default `2` second dashboard refresh cadence.
 
+## Dry Run
+
+`wavemill mill --dry-run` constructs and validates a launch plan without actually launching agents or creating tmux sessions. This is useful for:
+
+- CI/CD pipeline validation
+- Testing startup configuration changes
+- Verifying backlog fixtures in integration tests
+
+Example:
+
+```bash
+SESSION=test-run \
+WAVEMILL_DRY_RUN_BACKLOG_FILE=/tmp/fixture-backlog.json \
+WAVEMILL_DRY_RUN_OUT_PATH=/tmp/launch-plan.json \
+wavemill mill --dry-run
+```
+
+The backlog fixture must be a JSON array of Linear issue objects with at least these fields:
+
+```json
+[
+  {
+    "identifier": "PROJ-123",
+    "title": "Task title",
+    "description": "Task description",
+    "labels": { "nodes": [] },
+    "inverseRelations": { "nodes": [] }
+  }
+]
+```
+
+In dry-run mode:
+- No network calls to Linear, GitHub, or LLM APIs
+- No tmux sessions created
+- No worktrees created
+- Startup runner validates the plan structure and exits
+
+The launch plan is written to `WAVEMILL_DRY_RUN_OUT_PATH` (or `/tmp/<session>-launch-plan.json` if not specified).
+
 ## Startup Progress Table
 
 During task launch, `wavemill mill` shows a live startup table on stderr:
