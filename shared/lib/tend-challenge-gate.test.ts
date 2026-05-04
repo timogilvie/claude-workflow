@@ -378,20 +378,11 @@ describe('git ls-remote failure fallback', () => {
         createdAt: '2020-01-01T00:00:00Z',
       })];
       const options: ChallengeGateOptions = {
-        listRemoteBranches: () => { throw new Error('git failed'); },
-        coolOffSeconds: 0,
-      };
-
-      // listRemoteTaskBranches (the default implementation) catches its own errors
-      // and returns []. The listRemoteBranches option bypasses that catch, so a
-      // throwing custom override would propagate. This test instead validates the
-      // post-failure path: when no remote branches are found the PR is eligible.
-      const optionsSafe: ChallengeGateOptions = {
         remoteBranches: [],
         coolOffSeconds: 0,
       };
 
-      const result = applyChallengePairGates(items, [], repoDir, optionsSafe);
+      const result = applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 1);
     } finally {
       cleanup();
