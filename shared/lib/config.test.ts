@@ -967,23 +967,40 @@ test('getMillConfig returns mill section', () => {
   }
 });
 
-test('getExpansionHandshakeConfig defaults to block when section absent', () => {
+test('getExpansionHandshakeConfig defaults to recover when section absent', () => {
   const tmp = makeTempRepo();
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({ mill: { maxParallel: 5 } }));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'block' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
   } finally {
     cleanUp(tmp);
   }
 });
 
-test('getExpansionHandshakeConfig defaults to block when mill absent', () => {
+test('getExpansionHandshakeConfig defaults to recover when mill absent', () => {
   const tmp = makeTempRepo();
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({}));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'block' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getExpansionHandshakeConfig returns recover when configured', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: {
+        expansionHandshake: {
+          policy: 'recover',
+        },
+      },
+    }));
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
   } finally {
     cleanUp(tmp);
   }

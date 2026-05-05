@@ -129,8 +129,10 @@ Common fields:
 At plan-to-code transition, the controller now enforces an expansion handshake:
 
 - If `task-packet.md` already looks like a full task packet, the transition passes.
-- If it is raw issue text, a valid `features/<slug>/.post-expansion-route.json` must exist.
-- If the route artifact is missing or invalid, the transition is blocked by default.
+- If it is raw issue text, the controller looks for a valid expanded route artifact before coding.
+- If the artifact is missing, the default policy now attempts one automatic recovery by re-running issue expansion locally, rerouting the recovered packet, and promoting the resulting expanded route before coding starts.
+- If that one recovery attempt fails, mill records the failed attempt and proceeds with the existing bootstrap route instead of stranding the approved plan.
+- If the artifact exists but is malformed or missing required execution fields, the transition still blocks by default because that indicates corrupted controller state rather than missing preparation.
 
 Policy is controlled by `.wavemill-config.json`:
 
@@ -138,15 +140,19 @@ Policy is controlled by `.wavemill-config.json`:
 {
   "mill": {
     "expansionHandshake": {
-      "policy": "block"
+      "policy": "recover"
     }
   }
 }
 ```
 
-Set `policy` to `"warn"` to log and continue instead of blocking.
+Policies:
 
-When blocked, the controller logs the missing artifact reason and clears `.plan-approved` so resume does not auto-advance. Recovery flow:
+- `recover` (default): try one missing-artifact recovery, then fall back to the bootstrap route if recovery fails.
+- `block`: preserve the original fail-closed behavior for missing artifacts.
+- `warn`: log and continue immediately without recovery.
+
+When blocked, the controller logs the artifact reason and clears `.plan-approved` so resume does not auto-advance. Manual recovery flow remains available:
 
 1. Run `wavemill expand <ISSUE>`.
 2. Re-approve planning by touching `.plan-approved`.

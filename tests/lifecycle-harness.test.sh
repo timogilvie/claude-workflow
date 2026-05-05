@@ -276,6 +276,10 @@ harness_common_route_overrides() {
       HANDSHAKE_CALLED="true"
       mill_check_expansion_handshake_real "\$@"
     }
+    eval "\$(declare -f mill_expansion_handshake_reason | sed '1s/mill_expansion_handshake_reason/mill_expansion_handshake_reason_real/')"
+    mill_expansion_handshake_reason() {
+      mill_expansion_handshake_reason_real "\$@"
+    }
     read_phase_config() {
       local feature_dir="\$1" stage="\$2" field="\$3"
       jq -r --arg stage "\$stage" --arg field "\$field" '.[\$stage][\$field] // ""' "\$feature_dir/.phase-config.json" 2>/dev/null || true
@@ -398,6 +402,9 @@ harness_run_tick() {
     route_lifecycle_route_id() { :; }
     reroute_expanded_packets_for_coding_handoff() { REROUTE_CALLED="true"; return 0; }
     apply_expanded_route_if_present() { APPLY_CALLED="true"; return 0; }
+    mill_expansion_handshake_reason() { printf "%s\n" "already-expanded"; }
+    get_expansion_handshake_policy() { printf "%s\n" "recover"; }
+    recover_missing_expansion_artifact() { return 1; }
     mill_check_expansion_handshake() { HANDSHAKE_CALLED="true"; return 0; }
     restore_review_task_window() { return 0; }
     _restore_inflight_task_window_if_missing() { _RESTORE_STATE="none"; return 0; }
@@ -620,6 +627,131 @@ EOF
   check_eq "expanded wins: initial route remains bootstrap-only" "$initial_before" "$(cat "$repo/features/$slug/.initial-route.json")"
 }
 
+test_missing_expansion_recovery_success_launches_with_expanded_route() {
+  local slug="missing-expansion-recovery-success"
+  local issue="HOK-1569-RECOVER-OK"
+  local repo tick overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+  printf 'raw issue text\n' > "$repo/features/$slug/task-packet.md"
+
+  overrides="$(harness_common_route_overrides)
+    recover_missing_expansion_artifact() {
+      local issue=\"\$1\" slug=\"\$2\" feature_dir=\"\$3\"
+      local count_file=\"\$REPO_UNDER_TEST/.wavemill/recovery-count\"
+      local count
+      count=\$(cat \"\$count_file\" 2>/dev/null || echo 0)
+      printf '%s\n' \$((count + 1)) > \"\$count_file\"
+      expansion_recovery_mark_attempted \"\$feature_dir\" \"\$issue\" \"missing\"
+      cat > \"\$feature_dir/task-packet.md\" <<'EOF'
+## 1. Objective
+
+Recover the missing expanded routing artifact.
+EOF
+      cat > \"\$feature_dir/.post-expansion-route.json\" <<'EOF'
+{
+  \"planner\": \"expanded-planner\",
+  \"coder\": \"gpt-5.4\",
+  \"reviewer\": \"claude-sonnet-4-6\",
+  \"planDepth\": \"deep\",
+  \"codeDepth\": \"deep\",
+  \"reviewMode\": \"static+llm\",
+  \"provenance\": {
+    \"source\": \"expanded-test\"
+  }
+}
+EOF
+      expansion_recovery_mark_result \"\$feature_dir\" \"\$issue\" \"succeeded\" \"stub-success\" \"0\"
+      return 0
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "recover ok: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "recover ok: coding model from expanded route" "gpt-5.4" "$(kv_value "$tick" coding_model)"
+  check_eq "recover ok: coding depth from expanded route" "deep" "$(kv_value "$tick" coding_depth)"
+  check_eq "recover ok: routing provenance expanded" "expanded" "$(jq -r '.provenance.source' "$repo/features/$slug/.routing-complete")"
+  check_eq "recover ok: recovery state succeeded" "succeeded" "$(jq -r '.status' "$repo/features/$slug/.expansion-recovery-state.json")"
+  check_eq "recover ok: recovery attempted once" "1" "$(cat "$repo/.wavemill/recovery-count")"
+  check_not_contains "recover ok: no blocked warning" "$(kv_value "$tick" warn_output)" "[expansion-handshake] BLOCKED"
+}
+
+test_missing_expansion_recovery_failure_launches_with_bootstrap() {
+  local slug="missing-expansion-recovery-failure"
+  local issue="HOK-1569-RECOVER-FAIL"
+  local repo tick overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+  printf 'raw issue text\n' > "$repo/features/$slug/task-packet.md"
+
+  overrides="$(harness_common_route_overrides)
+    recover_missing_expansion_artifact() {
+      local issue=\"\$1\" feature_dir=\"\$3\"
+      local count_file=\"\$REPO_UNDER_TEST/.wavemill/recovery-count\"
+      local count
+      count=\$(cat \"\$count_file\" 2>/dev/null || echo 0)
+      printf '%s\n' \$((count + 1)) > \"\$count_file\"
+      if expansion_recovery_already_attempted \"\$feature_dir\"; then
+        log warn \"[expansion-handshake] RECOVERY_SKIPPED_ALREADY_ATTEMPTED issue=\$issue\"
+        return 1
+      fi
+      expansion_recovery_mark_attempted \"\$feature_dir\" \"\$issue\" \"missing\"
+      expansion_recovery_mark_result \"\$feature_dir\" \"\$issue\" \"failed\" \"stubbed-failure\" \"1\"
+      log warn \"[expansion-handshake] RECOVERY_FAILED issue=\$issue detail=stubbed-failure\"
+      return 1
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "recover fail: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "recover fail: coding model stays bootstrap" "bootstrap-coder" "$(kv_value "$tick" coding_model)"
+  check_eq "recover fail: coding depth stays bootstrap" "shallow" "$(kv_value "$tick" coding_depth)"
+  check_eq "recover fail: recovery state failed" "failed" "$(jq -r '.status' "$repo/features/$slug/.expansion-recovery-state.json")"
+  check_file_exists "recover fail: plan approval preserved" "$repo/features/$slug/.plan-approved"
+  check_contains "recover fail: warning includes recovery failure" "$(kv_value "$tick" warn_output)" "RECOVERY_FAILED"
+  check_contains "recover fail: warning includes bootstrap fallback" "$(kv_value "$tick" warn_output)" "RECOVERY_FALLBACK_BOOTSTRAP"
+}
+
+test_missing_expansion_recovery_not_repeated() {
+  local slug="missing-expansion-recovery-not-repeated"
+  local issue="HOK-1569-RECOVER-ONCE"
+  local repo tick1 tick2 overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+  printf 'raw issue text\n' > "$repo/features/$slug/task-packet.md"
+
+  overrides="$(harness_common_route_overrides)
+    recover_missing_expansion_artifact() {
+      local issue=\"\$1\" feature_dir=\"\$3\"
+      local count_file=\"\$REPO_UNDER_TEST/.wavemill/recovery-count\"
+      local count
+      count=\$(cat \"\$count_file\" 2>/dev/null || echo 0)
+      if expansion_recovery_already_attempted \"\$feature_dir\"; then
+        log warn \"[expansion-handshake] RECOVERY_SKIPPED_ALREADY_ATTEMPTED issue=\$issue\"
+        return 1
+      fi
+      printf '%s\n' \$((count + 1)) > \"\$count_file\"
+      expansion_recovery_mark_attempted \"\$feature_dir\" \"\$issue\" \"missing\"
+      expansion_recovery_mark_result \"\$feature_dir\" \"\$issue\" \"failed\" \"stubbed-failure\" \"1\"
+      log warn \"[expansion-handshake] RECOVERY_FAILED issue=\$issue detail=stubbed-failure\"
+      return 1
+    }
+  "
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "recover once: first tick launches coding" "true" "$(kv_value "$tick1" coding_launched)"
+  check_eq "recover once: second tick also launches coding" "true" "$(kv_value "$tick2" coding_launched)"
+  check_eq "recover once: helper invoked only once" "1" "$(cat "$repo/.wavemill/recovery-count")"
+  check_contains "recover once: second tick reports skip" "$(kv_value "$tick2" warn_output)" "RECOVERY_SKIPPED_ALREADY_ATTEMPTED"
+}
+
 test_invalid_expanded_route_blocks_lifecycle_handoff() {
   local case_name route_json slug issue repo tick feature_dir note overrides
 
@@ -651,6 +783,7 @@ EOF
     check_eq "invalid $case_name: planning awaits user" "awaiting_user" "$(harness_read_stage_status "$repo" "$slug" planning)"
     check_contains "invalid $case_name: planning note names handshake" "$note" "Expansion handshake blocked"
     check_contains "invalid $case_name: warning reports block" "$(kv_value "$tick" warn_output)" "[expansion-handshake] BLOCKED"
+    check_file_absent "invalid $case_name: no recovery state written" "$feature_dir/.expansion-recovery-state.json"
     if cmp -s "$feature_dir/.routing-complete" "$TEST_TMP/$slug-routing-before.json" \
       && cmp -s "$feature_dir/.phase-config.json" "$TEST_TMP/$slug-phase-before.json"; then
       pass "invalid $case_name: route artifacts unchanged"
@@ -758,6 +891,9 @@ test_regression_without_wavemill_allowance
 test_mixed_artifacts_source_edit_wins
 test_claude_local_settings_allowed
 test_coding_uses_expanded_route_over_bootstrap
+test_missing_expansion_recovery_success_launches_with_expanded_route
+test_missing_expansion_recovery_failure_launches_with_bootstrap
+test_missing_expansion_recovery_not_repeated
 test_invalid_expanded_route_blocks_lifecycle_handoff
 test_already_expanded_packet_skips_mandatory_expansion
 test_resume_uses_expanded_phase_config_over_stale_state

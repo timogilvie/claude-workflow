@@ -515,6 +515,21 @@ find_expanded_route_artifact() {
   return 1
 }
 
+get_expansion_handshake_policy() {
+  local repo_dir="$1"
+  local cfg_policy=""
+
+  cfg_policy=$(wavemill_load_config "$repo_dir" | jq -r '.mill.expansionHandshake.policy // "recover"' 2>/dev/null || echo "recover")
+  case "$cfg_policy" in
+    recover|block|warn)
+      printf '%s\n' "$cfg_policy"
+      ;;
+    *)
+      printf 'recover\n'
+      ;;
+  esac
+}
+
 validate_expanded_route_artifact() {
   local route_file="$1"
 
@@ -527,6 +542,39 @@ validate_expanded_route_artifact() {
     and (.reviewer | type == "string" and length > 0)
     and ((.reviewMode // .reviewRecommended // "") | type == "string" and length > 0)
   ' "$route_file" >/dev/null 2>&1
+}
+
+mill_expansion_handshake_reason() {
+  local feature_dir="$1"
+  local packet_file="$feature_dir/task-packet.md"
+  local route_file=""
+  local packet_content=""
+
+  if [[ -f "$packet_file" ]]; then
+    packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
+  fi
+
+  if is_task_packet "$packet_content"; then
+    printf 'already-expanded\n'
+    return 0
+  fi
+
+  route_file="$(find_expanded_route_artifact "$feature_dir" 2>/dev/null || true)"
+  if [[ -n "$route_file" ]]; then
+    if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
+      printf 'invalid-json\n'
+      return 0
+    fi
+    if validate_expanded_route_artifact "$route_file"; then
+      printf 'expanded-route-present\n'
+      return 0
+    fi
+    printf 'missing-required-field\n'
+    return 0
+  fi
+
+  printf 'missing\n'
+  return 0
 }
 
 route_lifecycle_route_id() {
@@ -796,47 +844,89 @@ apply_expanded_route_if_present() {
 # Returns 0 (pass or warn) or 1 (block).
 mill_check_expansion_handshake() {
   local feature_dir="$1" issue="$2" repo_dir="$3"
-  local packet_file="$feature_dir/task-packet.md"
-  local route_file="$feature_dir/.post-expansion-route.json"
-  local packet_content=""
+  local reason policy
 
-  if [[ -f "$packet_file" ]]; then
-    packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
-  fi
+  reason="$(mill_expansion_handshake_reason "$feature_dir")"
+  case "$reason" in
+    already-expanded|expanded-route-present)
+      log "info" "[expansion-handshake] PASS issue=$issue reason=$reason"
+      return 0
+      ;;
+  esac
 
-  if is_task_packet "$packet_content"; then
-    log "info" "[expansion-handshake] PASS issue=$issue reason=already-expanded"
-    return 0
-  fi
-
-  if [[ -f "$route_file" ]] && validate_expanded_route_artifact "$route_file"; then
-    log "info" "[expansion-handshake] PASS issue=$issue reason=expanded-route-present"
-    return 0
-  fi
-
-  local reason="missing"
-  if [[ -f "$route_file" ]]; then
-    if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
-      reason="invalid-json"
-    else
-      reason="missing-required-field"
-    fi
-  fi
-
-  local policy="block"
-  local cfg_policy
-  cfg_policy=$(wavemill_load_config "$repo_dir" | jq -r '.mill.expansionHandshake.policy // "block"' 2>/dev/null || echo "block")
-  if [[ "$cfg_policy" == "warn" ]]; then
-    policy="warn"
-  fi
+  policy="$(get_expansion_handshake_policy "$repo_dir")"
 
   if [[ "$policy" == "warn" ]]; then
     log "warn" "[expansion-handshake] WARN issue=$issue reason=$reason policy=warn"
     return 0
   fi
 
-  log "warn" "[expansion-handshake] BLOCKED issue=$issue reason=$reason recover=\"wavemill expand $issue\""
+  log "warn" "[expansion-handshake] BLOCKED issue=$issue reason=$reason policy=$policy recover=\"wavemill expand $issue\""
   return 1
+}
+
+expansion_recovery_state_file() {
+  local feature_dir="$1"
+  printf '%s/.expansion-recovery-state.json\n' "$feature_dir"
+}
+
+ensure_expansion_recovery_state_file() {
+  local feature_dir="$1"
+  local state_file
+  state_file="$(expansion_recovery_state_file "$feature_dir")"
+
+  if [[ -f "$state_file" ]]; then
+    return 0
+  fi
+
+  printf '{}\n' | write_json_artifact "$state_file"
+}
+
+expansion_recovery_already_attempted() {
+  local feature_dir="$1"
+  local state_file
+  state_file="$(expansion_recovery_state_file "$feature_dir")"
+
+  [[ -f "$state_file" ]] || return 1
+  jq -e '.attempted == true' "$state_file" >/dev/null 2>&1
+}
+
+expansion_recovery_mark_attempted() {
+  local feature_dir="$1" issue="$2" reason="$3"
+  local state_file
+  state_file="$(expansion_recovery_state_file "$feature_dir")"
+
+  ensure_expansion_recovery_state_file "$feature_dir" || return 1
+  state_mutate "$state_file" \
+    '.attempted = true
+     | .issue = $issue
+     | .reason = $reason
+     | .status = (.status // "pending")
+     | .attemptedAt = (.attemptedAt // (now | todateiso8601))
+     | .completedAt = (.completedAt // null)
+     | .exitCode = (.exitCode // null)
+     | .detail = (.detail // "")' \
+    --arg issue "$issue" \
+    --arg reason "$reason"
+}
+
+expansion_recovery_mark_result() {
+  local feature_dir="$1" issue="$2" status="$3" detail="${4:-}" exit_code="${5:-}"
+  local state_file
+  state_file="$(expansion_recovery_state_file "$feature_dir")"
+
+  ensure_expansion_recovery_state_file "$feature_dir" || return 1
+  state_mutate "$state_file" \
+    '.attempted = true
+     | .issue = $issue
+     | .status = $status
+     | .detail = $detail
+     | .completedAt = (now | todateiso8601)
+     | .exitCode = (if $exitCode == "" then null else ($exitCode | tonumber) end)' \
+    --arg issue "$issue" \
+    --arg status "$status" \
+    --arg detail "$detail" \
+    --arg exitCode "$exit_code"
 }
 
 wavemill_command_file_path() {
