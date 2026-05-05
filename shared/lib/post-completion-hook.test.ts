@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
@@ -14,6 +14,7 @@ import {
 
 let passed = 0;
 let failed = 0;
+const defaultPostCompletionHookDeps = { ...postCompletionHookDeps };
 
 async function test(name: string, fn: () => void | Promise<void>) {
   try {
@@ -100,6 +101,79 @@ function makeEligibleRepo(repoDir: string, slug: string, issueId: string): void 
   mkdirSync(join(repoDir, '.wavemill', 'evals', 'artifacts', issueId), { recursive: true });
 }
 
+function makeContextUpdateRepo(repoDir: string, slug: string, issueId: string): void {
+  makeEligibleRepo(repoDir, slug, issueId);
+  writeFileSync(join(repoDir, '.wavemill', 'project-context.md'), '# Project Context\n');
+  mkdirSync(join(repoDir, '.wavemill', 'context'), { recursive: true });
+}
+
+function readWarningLines(repoDir: string): Array<Record<string, unknown>> {
+  const warningPath = join(repoDir, '.wavemill', 'evals', 'eval-context-update-warnings.jsonl');
+  if (!existsSync(warningPath)) {
+    return [];
+  }
+  return readFileSync(warningPath, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function stubBaseEvalDeps(executionModel = 'gpt-5.4'): void {
+  postCompletionHookDeps.gatherEvalContext = () => ({
+    taskPrompt: 'Persist outcomes in post-completion evals',
+    prDiff: '+++ shared/lib/post-completion-hook.ts',
+    prUrl: 'https://example.test/pr/1550',
+    issueData: null,
+  });
+  postCompletionHookDeps.gatherStageArtifacts = () => ({
+    taskPacket: undefined,
+    planContent: undefined,
+    selfReviewSummary: undefined,
+    routingDecision: undefined,
+    executionModel,
+  });
+  postCompletionHookDeps.detectAndFormatInterventions = () => ({
+    meta: [],
+    records: [],
+    text: 'No interventions.',
+    totalCount: 0,
+    summary: makeInterventionSummary(0),
+  });
+  postCompletionHookDeps.runEvalAnalysis = async () => ({
+    difficultyData: null,
+    taskContextData: null,
+    repoContextData: null,
+  });
+  postCompletionHookDeps.collectCiOutcome = () => ({ ran: true, passed: true, checks: [] });
+  postCompletionHookDeps.collectTestsOutcome = () => ({ added: false });
+  postCompletionHookDeps.collectStaticAnalysisOutcome = () => ({});
+  postCompletionHookDeps.collectReviewOutcome = () => ({
+    humanReviewRequired: false,
+    rounds: 1,
+    approvals: 1,
+    changeRequests: 0,
+  });
+  postCompletionHookDeps.collectReworkOutcome = () => ({ agentIterations: 0 });
+  postCompletionHookDeps.collectDeliveryOutcome = () => ({ prCreated: true, merged: false });
+  postCompletionHookDeps.evaluateTask = async (_input, outcomes) => ({
+    ...makeRecord(),
+    modelId: '',
+    modelVersion: '',
+    workflowCost: 1.5,
+    workflowTokenUsage: {},
+    constraints: { maxCostUsd: 6.5 },
+    routingDecision: undefined,
+    outcomes,
+  });
+  postCompletionHookDeps.getCurrentOperatingMode = () => 'normal';
+  postCompletionHookDeps.getEvalContextUpdatesConfig = () => ({
+    enabled: true,
+    timeoutSeconds: 60,
+    maxRetries: 0,
+  });
+}
+
 async function withMockedPostCompletionDeps(fn: () => Promise<void> | void): Promise<void> {
   const evalContextGatherer = await import('./eval-context-gatherer.ts');
   const shellUtils = await import('./shell-utils.ts');
@@ -125,6 +199,10 @@ async function withMockedPostCompletionDeps(fn: () => Promise<void> | void): Pro
     postCompletionHookDeps.collectReviewOutcome = outcomeCollectors.collectReviewOutcome;
     postCompletionHookDeps.collectReworkOutcome = outcomeCollectors.collectReworkOutcome;
     postCompletionHookDeps.collectDeliveryOutcome = outcomeCollectors.collectDeliveryOutcome;
+    postCompletionHookDeps.getEvalContextUpdatesConfig = defaultPostCompletionHookDeps.getEvalContextUpdatesConfig;
+    postCompletionHookDeps.getCurrentOperatingMode = defaultPostCompletionHookDeps.getCurrentOperatingMode;
+    postCompletionHookDeps.runContextUpdateWork = defaultPostCompletionHookDeps.runContextUpdateWork;
+    postCompletionHookDeps.appendContextUpdateWarning = defaultPostCompletionHookDeps.appendContextUpdateWarning;
   }
 }
 
@@ -486,6 +564,241 @@ await test('runPostCompletionEval degrades to default outcomes when a collector 
     assert.ok(warnings.some((entry) => entry.includes('failed to collect ci outcome - ci exploded')));
   } finally {
     console.warn = originalWarn;
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval keeps eval persisted when context updates time out', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-timeout-'));
+  makeContextUpdateRepo(repoDir, 'context-timeout', 'HOK-1577');
+  clearConfigCache(repoDir);
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.getEvalContextUpdatesConfig = () => ({
+        enabled: true,
+        timeoutSeconds: 0.01,
+        maxRetries: 0,
+      });
+      postCompletionHookDeps.runContextUpdateWork = async () => await new Promise<void>(() => {});
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1577',
+        prNumber: '1577',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/context-timeout',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    const evalsPath = join(repoDir, '.wavemill', 'evals', 'evals.jsonl');
+    assert.ok(existsSync(evalsPath));
+
+    const warnings = readWarningLines(repoDir);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].reason, 'timeout');
+    assert.equal(warnings[0].evalId, 'eval-hook-1');
+    assert.equal(warnings[0].issueId, 'HOK-1577');
+    assert.equal(warnings[0].retryCount, 0);
+    assert.equal(typeof warnings[0].durationMs, 'number');
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval records warning when context updates throw', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-context-error-'));
+  makeContextUpdateRepo(repoDir, 'context-error', 'HOK-1578');
+  clearConfigCache(repoDir);
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.runContextUpdateWork = async () => {
+        throw new Error('context exploded');
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1578',
+        prNumber: '1578',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/context-error',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    const warnings = readWarningLines(repoDir);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].reason, 'error');
+    assert.equal(warnings[0].errorMessage, 'context exploded');
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval skips optional updates via env override', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-skip-env-'));
+  makeContextUpdateRepo(repoDir, 'skip-env', 'HOK-1579');
+  clearConfigCache(repoDir);
+  const previous = process.env.WAVEMILL_SKIP_POST_EVAL_CONTEXT_UPDATES;
+  let calls = 0;
+
+  try {
+    process.env.WAVEMILL_SKIP_POST_EVAL_CONTEXT_UPDATES = '1';
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.runContextUpdateWork = async () => {
+        calls += 1;
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1579',
+        prNumber: '1579',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/skip-env',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    assert.equal(calls, 0);
+    const warnings = readWarningLines(repoDir);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].reason, 'skipped-env');
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_SKIP_POST_EVAL_CONTEXT_UPDATES;
+    } else {
+      process.env.WAVEMILL_SKIP_POST_EVAL_CONTEXT_UPDATES = previous;
+    }
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval skips optional updates via config', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-skip-config-'));
+  makeContextUpdateRepo(repoDir, 'skip-config', 'HOK-1580');
+  clearConfigCache(repoDir);
+  let calls = 0;
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.getEvalContextUpdatesConfig = () => ({
+        enabled: false,
+        timeoutSeconds: 60,
+        maxRetries: 0,
+      });
+      postCompletionHookDeps.runContextUpdateWork = async () => {
+        calls += 1;
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1580',
+        prNumber: '1580',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/skip-config',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    assert.equal(calls, 0);
+    const warnings = readWarningLines(repoDir);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].reason, 'skipped-config');
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval skips optional updates in constrained mode', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-skip-mode-'));
+  makeContextUpdateRepo(repoDir, 'skip-mode', 'HOK-1581');
+  clearConfigCache(repoDir);
+  let calls = 0;
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.getCurrentOperatingMode = () => 'constrained';
+      postCompletionHookDeps.runContextUpdateWork = async () => {
+        calls += 1;
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1581',
+        prNumber: '1581',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/skip-mode',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    assert.equal(calls, 0);
+    const warnings = readWarningLines(repoDir);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].reason, 'skipped-operating-mode');
+    assert.equal(warnings[0].operatingMode, 'constrained');
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval leaves no warning file on context update success', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-context-success-'));
+  makeContextUpdateRepo(repoDir, 'context-success', 'HOK-1582');
+  clearConfigCache(repoDir);
+  let calls = 0;
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.runContextUpdateWork = async () => {
+        calls += 1;
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1582',
+        prNumber: '1582',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/context-success',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    assert.equal(calls, 1);
+    assert.equal(readWarningLines(repoDir).length, 0);
+  } finally {
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });
   }

@@ -154,6 +154,12 @@ export interface EvalConfig {
   mintEligibility?: MintEligibilityConfig;
 }
 
+export interface EvalContextUpdatesConfig {
+  enabled?: boolean;
+  timeoutSeconds?: number;
+  maxRetries?: number;
+}
+
 export interface DifficultyClassifierConfig {
   enabled?: boolean;
   classifierModel?: string;
@@ -397,6 +403,7 @@ export interface WavemillConfig {
   dashboard?: DashboardConfig;
   taskSelection?: TaskSelectionConfig;
   eval?: EvalConfig;
+  evalContextUpdates?: EvalContextUpdatesConfig;
   autoEval?: boolean;
   hokusai?: HokusaiConfig;
   router?: RouterConfig;
@@ -800,6 +807,15 @@ export function getChallengeSchedulerConfig(repoDir?: string): ChallengeSchedule
  */
 export function getEvalConfig(repoDir?: string): EvalConfig {
   return loadWavemillConfig(repoDir).eval || {};
+}
+
+export function getEvalContextUpdatesConfig(repoDir?: string): Required<EvalContextUpdatesConfig> {
+  const config = loadWavemillConfig(repoDir).evalContextUpdates ?? {};
+  return {
+    enabled: config.enabled ?? true,
+    timeoutSeconds: config.timeoutSeconds ?? 60,
+    maxRetries: config.maxRetries ?? 0,
+  };
 }
 
 export function getMintEligibilityConfig(repoDir?: string): MintEligibilityConfig | undefined {

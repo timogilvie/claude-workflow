@@ -37,6 +37,11 @@ export interface SubsystemUpdateContext {
   repoDir: string;
 }
 
+export interface SubsystemUpdateExecutionOptions {
+  timeoutMs?: number;
+  maxRetries?: number;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Update Functions
 // ────────────────────────────────────────────────────────────────
@@ -48,7 +53,8 @@ export interface SubsystemUpdateContext {
  */
 export async function updateAffectedSubsystems(
   subsystems: Subsystem[],
-  context: SubsystemUpdateContext
+  context: SubsystemUpdateContext,
+  options: SubsystemUpdateExecutionOptions = {},
 ): Promise<void> {
   const { prDiff, repoDir } = context;
 
@@ -65,7 +71,7 @@ export async function updateAffectedSubsystems(
 
   // Update affected subsystems in parallel
   const results = await Promise.allSettled(
-    affected.map(subsystem => updateSubsystemSpec(subsystem, context))
+    affected.map(subsystem => updateSubsystemSpec(subsystem, context, options))
   );
 
   for (let i = 0; i < affected.length; i++) {
@@ -84,7 +90,8 @@ export async function updateAffectedSubsystems(
  */
 export async function updateSubsystemSpec(
   subsystem: Subsystem,
-  context: SubsystemUpdateContext
+  context: SubsystemUpdateContext,
+  options: SubsystemUpdateExecutionOptions = {},
 ): Promise<void> {
   const { issueId, issueTitle, prUrl, prDiff, issueDescription, repoDir } = context;
 
@@ -112,6 +119,8 @@ export async function updateSubsystemSpec(
     prUrl,
     filteredDiff,
     issueDescription,
+    timeoutMs: options.timeoutMs,
+    maxRetries: options.maxRetries,
   });
 
   // Write updated spec
@@ -129,6 +138,8 @@ async function generateSubsystemUpdate(opts: {
   prUrl: string;
   filteredDiff: string;
   issueDescription: string;
+  timeoutMs?: number;
+  maxRetries?: number;
 }): Promise<string> {
   const promptPath = join(dirname(dirname(__dirname)), 'tools', 'prompts', 'subsystem-update-template.md');
   const promptTemplate = readFileSync(promptPath, 'utf-8');
@@ -152,10 +163,10 @@ async function generateSubsystemUpdate(opts: {
     cliCmd: claudeCmd,
     model: 'claude-haiku-4-5-20251001',
     taskType: 'classify',
-    timeout: 300_000,
-    activityTimeout: 60_000,
-    retry: true,
-    maxRetries: 1,
+    timeout: opts.timeoutMs ?? 300_000,
+    activityTimeout: opts.timeoutMs ?? 60_000,
+    retry: (opts.maxRetries ?? 1) > 0,
+    maxRetries: opts.maxRetries ?? 1,
     cliFlags: [
       '--tools', '',
       '--append-system-prompt',
