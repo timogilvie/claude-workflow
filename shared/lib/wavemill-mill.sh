@@ -4786,6 +4786,85 @@ reroute_expanded_packets_for_coding_handoff() {
   return 0
 }
 
+recover_missing_expansion_artifact() {
+  local issue="$1" slug="$2" feature_dir="$3"
+  local expand_tool="$TOOLS_DIR/expand-issue.ts"
+  local packet_file="$feature_dir/task-packet.md"
+  local route_file="$feature_dir/.post-expansion-route.json"
+  local recovery_log_dir="$REPO_DIR/.wavemill/logs"
+  local recovery_log_file="$recovery_log_dir/expansion-recovery-${issue}.log"
+  local packet_content="" detail="" rc=0
+
+  if expansion_recovery_already_attempted "$feature_dir"; then
+    log "warn" "[expansion-handshake] RECOVERY_SKIPPED_ALREADY_ATTEMPTED issue=$issue"
+    return 1
+  fi
+
+  if ! expansion_recovery_mark_attempted "$feature_dir" "$issue" "missing"; then
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=failed-to-record-attempt"
+    return 1
+  fi
+
+  mkdir -p "$recovery_log_dir"
+
+  if [[ ! -f "$expand_tool" ]]; then
+    detail="expand-tool-missing"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "127" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail"
+    return 1
+  fi
+
+  if _with_timeout "$API_TIMEOUT" npx tsx "$expand_tool" "$issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
+    :
+  else
+    rc=$?
+    detail="expand-issue-exited-non-zero"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "$rc" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail exit=$rc log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  packet_content="$(cat "$packet_file" 2>/dev/null || echo "")"
+  if [[ ! -s "$packet_file" ]] || ! is_task_packet "$packet_content"; then
+    detail="expanded-task-packet-missing-or-invalid"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
+    detail="expanded-reroute-${REROUTE_EXPANDED_LAST_REASON:-failed}"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  if [[ ! -f "$route_file" ]]; then
+    detail="expanded-route-artifact-missing-after-reroute"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
+    detail="expanded-route-invalid-json-after-reroute"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  if ! validate_expanded_route_artifact "$route_file"; then
+    detail="expanded-route-missing-required-field-after-reroute"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  expansion_recovery_mark_result "$feature_dir" "$issue" "succeeded" "expanded-route-recovered" "0" || true
+  log "info" "[expansion-handshake] RECOVERY_OK issue=$issue log=\"$recovery_log_file\""
+  return 0
+}
+
 
 # ============================================================================
 # BACKLOG FETCHING & CANDIDATE SCORING
@@ -6610,10 +6689,35 @@ monitor_issue_state() {
             fi
             emit_execution_active_route "$FEATURE_DIR" "$ISSUE"
 
-            if ! mill_check_expansion_handshake "$FEATURE_DIR" "$ISSUE" "$REPO_DIR"; then
+            local handshake_reason handshake_policy handshake_block_note
+            handshake_reason="$(mill_expansion_handshake_reason "$FEATURE_DIR")"
+            handshake_policy="$(get_expansion_handshake_policy "$REPO_DIR")"
+
+            if [[ "$handshake_reason" == "missing" && "$handshake_policy" == "recover" ]]; then
+              if recover_missing_expansion_artifact "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
+                if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
+                  expansion_recovery_mark_result "$FEATURE_DIR" "$ISSUE" "failed" "expanded-route-promotion-failed" "1" || true
+                  log_warn "$ISSUE → recovered expanded route was invalid during promotion; using bootstrap execution route for coding"
+                  handshake_reason="recovery-fallback-bootstrap"
+                else
+                  handshake_reason="$(mill_expansion_handshake_reason "$FEATURE_DIR")"
+                fi
+                emit_execution_active_route "$FEATURE_DIR" "$ISSUE"
+              else
+                log_warn "$ISSUE → expansion recovery failed; RECOVERY_FALLBACK_BOOTSTRAP"
+                emit_execution_active_route "$FEATURE_DIR" "$ISSUE"
+                handshake_reason="recovery-fallback-bootstrap"
+              fi
+            fi
+
+            if [[ "$handshake_reason" != "recovery-fallback-bootstrap" ]] && ! mill_check_expansion_handshake "$FEATURE_DIR" "$ISSUE" "$REPO_DIR"; then
               rm -f "$FEATURE_DIR/.plan-approved"
-              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" \
-                "Expansion handshake blocked: raw input requires wavemill expand $ISSUE"
+              if [[ "$handshake_reason" == "missing" ]]; then
+                handshake_block_note="Expansion handshake blocked: raw input requires wavemill expand $ISSUE"
+              else
+                handshake_block_note="Expansion handshake blocked: invalid expanded routing artifact ($handshake_reason)"
+              fi
+              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "$handshake_block_note"
               set_window_attention_state "$WIN" "needs-user"
               active_count=$((active_count + 1))
               return 0

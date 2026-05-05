@@ -117,11 +117,12 @@
                         "policy": {
                             "type": "string",
                             "enum": [
+                                "recover",
                                 "block",
                                 "warn"
                             ],
-                            "default": "block",
-                            "description": "block (default): halt transition. warn: proceed with a warning log line."
+                            "default": "recover",
+                            "description": "recover (default): attempt one missing-artifact recovery, then fall back to the bootstrap route if recovery fails. block: halt transition. warn: proceed with a warning log line and skip recovery."
                         }
                     },
                     "additionalProperties": false

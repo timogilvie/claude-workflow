@@ -325,32 +325,34 @@ state remains in place.
 Before coding starts, mill now checks for a mandatory expansion handshake:
 
 - Expanded packet input (`task-packet.md` has task-packet markers): pass.
-- Raw issue text input: requires a valid `features/<slug>/.post-expansion-route.json`.
+- Raw issue text input: first attempts to recover a missing expanded route artifact automatically.
 
-If the handshake fails, transition is blocked by default and logs one of:
+Default behavior (`policy: "recover"`):
+
+- If the expanded route artifact is missing, mill attempts recovery once by re-expanding the issue into the feature-local task packet, rerouting that packet, and promoting the recovered expanded route before coding starts.
+- If that recovery fails, mill records the failed attempt, logs a clear fallback warning, and continues coding with the existing bootstrap route.
+- If the artifact exists but is malformed or missing required execution fields, mill still blocks because that indicates corrupted routing state.
+
+If the handshake blocks, transition logs one of:
 
 - `[expansion-handshake] BLOCKED issue=<ISSUE> reason=missing`
 - `[expansion-handshake] BLOCKED issue=<ISSUE> reason=invalid-json`
 - `[expansion-handshake] BLOCKED issue=<ISSUE> reason=missing-required-field`
 
-Recovery:
-
-1. Run `wavemill expand <ISSUE>`.
-2. Re-approve planning (`touch features/<slug>/.plan-approved`).
-
-Optional bypass (warn-only):
+Strict and permissive overrides:
 
 ```json
 {
   "mill": {
     "expansionHandshake": {
-      "policy": "warn"
+      "policy": "block"
     }
   }
 }
 ```
 
-With `policy: "warn"`, mill logs `[expansion-handshake] WARN ...` and proceeds.
+- `policy: "block"` restores the original fail-closed behavior for missing artifacts.
+- `policy: "warn"` logs `[expansion-handshake] WARN ...` and proceeds immediately without recovery.
 
 ## See Also
 
