@@ -499,6 +499,60 @@ render_active_section() {
   done
 }
 
+render_monitored_jobs_section() {
+  local jobs_file="${REPO_DIR:-.}/.wavemill/state/monitored-jobs.json"
+  [[ -f "$jobs_file" ]] || return 0
+
+  local running failed
+  running=$(jq -r '.jobs | to_entries[] | select(.value.status == "running") | .key' "$jobs_file" 2>/dev/null) || true
+  failed=$(jq  -r '.jobs | to_entries[] | select(.value.status | test("failed|timed_out")) | .key' "$jobs_file" 2>/dev/null) || true
+  [[ -z "$running" && -z "$failed" ]] && return 0
+
+  render_section_header "⧗  Monitored Jobs"
+  local now_epoch
+  now_epoch=$(date +%s)
+
+  if [[ -n "$running" ]]; then
+    while IFS= read -r jid; do
+      [[ -z "$jid" ]] && continue
+      local jrec kind sa start_epoch elapsed elapsed_str pr_info
+      jrec=$(jq --arg id "$jid" '.jobs[$id]' "$jobs_file" 2>/dev/null) || continue
+      kind=$(printf '%s' "$jrec" | jq -r '.kind // "?"')
+      sa=$(printf '%s' "$jrec"   | jq -r '.started_at // ""')
+      start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$sa" +%s 2>/dev/null \
+                    || date -d "$sa" +%s 2>/dev/null \
+                    || echo "$now_epoch")
+      elapsed=$(( now_epoch - start_epoch ))
+      if   (( elapsed < 60 ));   then elapsed_str="${elapsed}s"
+      elif (( elapsed < 3600 )); then elapsed_str="$((elapsed / 60))m"
+      else                            elapsed_str="$((elapsed / 3600))h"
+      fi
+      pr_info=$(printf '%s' "$jrec" | jq -r '.pr_number // .primary_pr_number // ""')
+      [[ -n "$pr_info" ]] && pr_info=" #${pr_info}" || pr_info=""
+      printf "  ${Y}●${N} %s%s  %s${EL}\n" "$kind" "$pr_info" "$elapsed_str" >> "$FRAME"
+    done <<< "$running"
+  fi
+
+  if [[ -n "$failed" ]]; then
+    while IFS= read -r jid; do
+      [[ -z "$jid" ]] && continue
+      local jrec status lp icon
+      jrec=$(jq --arg id "$jid" '.jobs[$id]' "$jobs_file" 2>/dev/null) || continue
+      status=$(printf '%s' "$jrec" | jq -r '.status // "?"')
+      lp=$(printf '%s' "$jrec"     | jq -r '.log_path // ""')
+      icon="✗"; [[ "$status" == "timed_out" ]] && icon="⏱"
+      printf "  ${R}%s${N} %s (%s)${EL}\n" "$icon" "$jid" "$status" >> "$FRAME"
+      if [[ -f "$lp" ]]; then
+        tail -n 3 "$lp" 2>/dev/null | while IFS= read -r ln; do
+          printf "    ${D}%s${N}${EL}\n" "$ln" >> "$FRAME"
+        done
+      else
+        printf "    ${D}<log not found>${N}${EL}\n" >> "$FRAME"
+      fi
+    done <<< "$failed"
+  fi
+}
+
 render_queued_section() {
   [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
   local count
@@ -592,6 +646,7 @@ render_dashboard() {
     render_inbox_section
     render_active_section
     render_queued_section
+    render_monitored_jobs_section
   fi
 
   printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
