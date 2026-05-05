@@ -27,8 +27,9 @@ import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer
 import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
 import { attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
-import { getMaxCostUsd } from './config.ts';
+import { getMaxCostUsd, getPostEvalConfig } from './config.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
+import { getCurrentOperatingMode } from './operating-mode.ts';
 import { isEvalSuccess } from './eval-success-policy.ts';
 import {
   collectCiOutcome,
@@ -70,6 +71,138 @@ function resolvePostCompletionBudget(input: Pick<PostCompletionEnrichmentInput, 
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// ────────────────────────────────────────────────────────────────
+// Post-Eval Update Settings
+// ────────────────────────────────────────────────────────────────
+
+export interface PostEvalUpdateSettings {
+  shouldRun: boolean;
+  reason?: 'env' | 'config' | 'degraded-mode';
+  timeoutMs: number;
+  activityTimeoutMs: number;
+  maxRetries: number;
+}
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+let operatingModeWarned = false;
+
+/**
+ * Resolve whether post-eval context/subsystem updates should run.
+ *
+ * Precedence:
+ * 1. WAVEMILL_SKIP_POST_EVAL_CONTEXT env var (if truthy)
+ * 2. postEval.skipContextUpdates config
+ * 3. postEval.skipInDegradedModes + current operating mode
+ * 4. Default: run with configured timeouts/retries
+ */
+export function resolvePostEvalUpdateSettings(
+  repoDir: string,
+  env: NodeJS.ProcessEnv = process.env
+): PostEvalUpdateSettings {
+  const config = getPostEvalConfig(repoDir);
+
+  // Check env var first (highest precedence)
+  if (isTruthyEnvValue(env.WAVEMILL_SKIP_POST_EVAL_CONTEXT)) {
+    return {
+      shouldRun: false,
+      reason: 'env',
+      timeoutMs: config.timeoutMs,
+      activityTimeoutMs: config.activityTimeoutMs,
+      maxRetries: config.maxRetries,
+    };
+  }
+
+  // Check config skip
+  if (config.skipContextUpdates) {
+    return {
+      shouldRun: false,
+      reason: 'config',
+      timeoutMs: config.timeoutMs,
+      activityTimeoutMs: config.activityTimeoutMs,
+      maxRetries: config.maxRetries,
+    };
+  }
+
+  // Check degraded mode skip
+  if (config.skipInDegradedModes) {
+    let operatingMode: 'normal' | 'constrained' | 'survival' = 'normal';
+    try {
+      operatingMode = postCompletionHookDeps.getCurrentOperatingMode(repoDir);
+    } catch (err) {
+      if (!operatingModeWarned) {
+        console.warn(
+          `Post-eval settings: failed to read operating mode — ${errorMessage(err)}. ` +
+          'Continuing in normal mode.'
+        );
+        operatingModeWarned = true;
+      }
+    }
+
+    if (operatingMode === 'constrained' || operatingMode === 'survival') {
+      return {
+        shouldRun: false,
+        reason: 'degraded-mode',
+        timeoutMs: config.timeoutMs,
+        activityTimeoutMs: config.activityTimeoutMs,
+        maxRetries: config.maxRetries,
+      };
+    }
+  }
+
+  // Default: run updates with configured bounds
+  return {
+    shouldRun: true,
+    timeoutMs: config.timeoutMs,
+    activityTimeoutMs: config.activityTimeoutMs,
+    maxRetries: config.maxRetries,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────
+// Post-Eval Warning Diagnostics
+// ────────────────────────────────────────────────────────────────
+
+export interface PostEvalWarningRecord {
+  timestamp: string;
+  issueId?: string;
+  prUrl?: string;
+  phase: 'project-context' | 'subsystem-update' | 'post-eval-updates';
+  reason: 'timeout' | 'non-zero-exit' | 'error' | 'unknown';
+  message: string;
+  command?: string;
+  model?: string;
+  exitCode?: number;
+  timedOut?: boolean;
+  durationMs?: number;
+  attempts?: number;
+  stderrTail?: string;
+}
+
+/**
+ * Write a post-eval warning to the sidecar JSONL file.
+ * Best-effort: failures are logged but don't throw.
+ */
+function writePostEvalWarning(
+  warning: PostEvalWarningRecord,
+  repoDir: string
+): void {
+  try {
+    const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
+    const warningPath = join(evalsDir, 'post-eval-warnings.jsonl');
+    const line = JSON.stringify(warning) + '\n';
+    appendFileSync(warningPath, line, 'utf-8');
+  } catch (err) {
+    console.warn(
+      `Failed to write post-eval warning to sidecar file: ${errorMessage(err)}`
+    );
+  }
+}
 
 export interface PostCompletionContext {
   issueId?: string;
@@ -132,6 +265,8 @@ export const postCompletionHookDeps = {
   collectReviewOutcome,
   collectReworkOutcome,
   collectDeliveryOutcome,
+  updateProjectContext,
+  getCurrentOperatingMode,
 };
 
 export function collectPostCompletionOutcomes(input: PostCompletionOutcomeInput): Outcomes {
@@ -331,6 +466,74 @@ export function enrichPostCompletionRecord(
       return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
     })(),
   });
+}
+
+/**
+ * Run optional post-eval context and subsystem updates.
+ *
+ * This is a best-effort phase that runs after the core eval record has been persisted.
+ * Failures are logged as warnings but never fail the eval.
+ */
+async function runPostEvalOptionalUpdates(
+  ctx: PostCompletionContext,
+  prDiff: string,
+  issueContext: string,
+  repoDir: string
+): Promise<void> {
+  const settings = resolvePostEvalUpdateSettings(repoDir);
+
+  if (!settings.shouldRun) {
+    console.log(`Post-eval updates: skipped (reason=${settings.reason})`);
+    return;
+  }
+
+  const startTime = Date.now();
+  try {
+    await postCompletionHookDeps.updateProjectContext(
+      ctx,
+      prDiff,
+      issueContext,
+      {
+        timeoutMs: settings.timeoutMs,
+        activityTimeoutMs: settings.activityTimeoutMs,
+        maxRetries: settings.maxRetries,
+      }
+    );
+  } catch (error: unknown) {
+    const durationMs = Date.now() - startTime;
+    const message = errorMessage(error);
+
+    // Determine reason from error message
+    let reason: PostEvalWarningRecord['reason'] = 'error';
+    let timedOut = false;
+    if (message.includes('timeout') || message.includes('timed out')) {
+      reason = 'timeout';
+      timedOut = true;
+    } else if (message.includes('exit code') || message.includes('exited with')) {
+      reason = 'non-zero-exit';
+    }
+
+    const warning: PostEvalWarningRecord = {
+      timestamp: new Date().toISOString(),
+      issueId: ctx.issueId,
+      prUrl: ctx.prUrl,
+      phase: 'post-eval-updates',
+      reason,
+      message,
+      command: 'claude',
+      model: 'claude-haiku-4-5-20251001',
+      timedOut,
+      durationMs,
+      attempts: settings.maxRetries + 1,
+    };
+
+    console.warn(
+      `[post-eval-warning] phase=${warning.phase} issue=${warning.issueId || 'unknown'} ` +
+      `reason=${warning.reason} message=${warning.message.substring(0, 100)}`
+    );
+
+    writePostEvalWarning(warning, repoDir);
+  }
 }
 
 /**
@@ -559,17 +762,24 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     postCompletionHookDeps.appendEvalRecord(record, { dir: evalsDir });
     persisted = true;
 
-    // 8. Update project context
-    await updateProjectContext(ctx, evalContext.prDiff, evalContext.taskPrompt);
-
-    // 9. Print summary
+    // 8. Print summary (immediately after persistence, before optional work)
     printEvalSummary(record);
+
+    // 9. Run optional post-eval updates (best-effort, bounded)
+    await runPostEvalOptionalUpdates(ctx, evalContext.prDiff, evalContext.taskPrompt, repoDir);
+
     return true;
   } catch (error: unknown) {
     const message = errorMessage(error);
     console.warn(`Post-completion eval: failed (workflow unaffected) — ${message}`);
     return persisted;
   }
+}
+
+export interface PostEvalUpdateOptions {
+  timeoutMs?: number;
+  activityTimeoutMs?: number;
+  maxRetries?: number;
 }
 
 /**
@@ -581,7 +791,8 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
 async function updateProjectContext(
   ctx: PostCompletionContext,
   prDiff: string,
-  issueContext: string
+  issueContext: string,
+  options?: PostEvalUpdateOptions
 ): Promise<void> {
   const repoDir = ctx.repoDir || process.cwd();
   const contextPath = join(repoDir, '.wavemill', 'project-context.md');
@@ -601,7 +812,7 @@ async function updateProjectContext(
       prUrl: ctx.prUrl || '',
       prDiff,
       issueContext,
-    });
+    }, options);
 
     // Append to project-context.md
     appendContextUpdate(contextPath, summary);
@@ -609,7 +820,7 @@ async function updateProjectContext(
     console.log('Project context: updated successfully');
 
     // Update subsystem specs (cold memory)
-    await updateSubsystemSpecs(ctx, prDiff, issueContext, repoDir);
+    await updateSubsystemSpecs(ctx, prDiff, issueContext, repoDir, options);
 
     const lintResults = await lintSubsystemSpecs(repoDir, {
       rules: ['orphaned-spec', 'missing-spec'],
@@ -635,7 +846,8 @@ async function updateSubsystemSpecs(
   ctx: PostCompletionContext,
   prDiff: string,
   issueContext: string,
-  repoDir: string
+  repoDir: string,
+  options?: PostEvalUpdateOptions
 ): Promise<void> {
   const contextDir = join(repoDir, '.wavemill', 'context');
 
@@ -694,7 +906,7 @@ async function updateSubsystemSpecs(
       prDiff,
       issueDescription: issueContext,
       repoDir,
-    });
+    }, options);
 
   } catch (error: unknown) {
     const message = errorMessage(error);
@@ -710,7 +922,7 @@ async function generateContextUpdate(opts: {
   prUrl: string;
   prDiff: string;
   issueContext: string;
-}): Promise<string> {
+}, updateOptions?: PostEvalUpdateOptions): Promise<string> {
   const promptPath = resolve(__dirname, '../../tools/prompts/context-update-template.md');
   const promptTemplate = readFileSync(promptPath, 'utf-8');
 
@@ -729,15 +941,19 @@ async function generateContextUpdate(opts: {
     .replace('{PR_DIFF}', opts.prDiff.substring(0, 50000)); // Limit diff size
 
   const claudeCmd = process.env.CLAUDE_CMD || 'claude';
+  const timeoutMs = updateOptions?.timeoutMs ?? 300_000;
+  const activityTimeoutMs = updateOptions?.activityTimeoutMs ?? 60_000;
+  const maxRetries = updateOptions?.maxRetries ?? 1;
+
   const result = await callClaude(prompt, {
     mode: 'stream',
     cliCmd: claudeCmd,
     model: 'claude-haiku-4-5-20251001',
     taskType: 'classify',
-    timeout: 300_000,
-    activityTimeout: 60_000,
-    retry: true,
-    maxRetries: 1,
+    timeout: timeoutMs,
+    activityTimeout: activityTimeoutMs,
+    retry: maxRetries > 0,
+    maxRetries,
     cliFlags: [
       '--tools', '',
       '--append-system-prompt',

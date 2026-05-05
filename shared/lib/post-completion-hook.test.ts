@@ -108,6 +108,7 @@ async function withMockedPostCompletionDeps(fn: () => Promise<void> | void): Pro
   const evalModule = await import('./eval.ts');
   const evalPersistence = await import('./eval-persistence.ts');
   const outcomeCollectors = await import('./outcome-collectors.ts');
+  const operatingMode = await import('./operating-mode.ts');
 
   try {
     await fn();
@@ -125,6 +126,7 @@ async function withMockedPostCompletionDeps(fn: () => Promise<void> | void): Pro
     postCompletionHookDeps.collectReviewOutcome = outcomeCollectors.collectReviewOutcome;
     postCompletionHookDeps.collectReworkOutcome = outcomeCollectors.collectReworkOutcome;
     postCompletionHookDeps.collectDeliveryOutcome = outcomeCollectors.collectDeliveryOutcome;
+    postCompletionHookDeps.getCurrentOperatingMode = operatingMode.getCurrentOperatingMode;
   }
 }
 
@@ -696,6 +698,362 @@ await test('enrichPostCompletionRecord marks complete records with outcomes as t
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });
   }
+});
+
+console.log('\n--- Post-Eval Optional Updates Tests ---\n');
+
+await test('eval persists before optional update starts', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-eval-persist-'));
+  const issueId = 'HOK-TEST-1';
+  mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+  mkdirSync(join(repoDir, '.wavemill', 'context'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill', 'project-context.md'), '# Context\n');
+  writeFileSync(join(repoDir, '.wavemill-config.json'), '{}');
+
+  await withMockedPostCompletionDeps(async () => {
+    let evalPersisted = false;
+
+    postCompletionHookDeps.gatherEvalContext = () => ({
+      taskPrompt: 'Test task',
+      prDiff: '+test',
+      prUrl: 'https://github.com/test/pr/1',
+      issueData: { id: issueId, title: 'Test' },
+    });
+
+    postCompletionHookDeps.gatherStageArtifacts = () => ({
+      taskPacket: '',
+      planContent: '',
+      selfReviewSummary: '',
+      routingDecision: undefined,
+      executionModel: 'claude-sonnet-4-6',
+    });
+
+    postCompletionHookDeps.detectAndFormatInterventions = () => ({
+      meta: {},
+      text: '',
+      summary: makeInterventionSummary(0),
+      records: [],
+      totalCount: 0,
+    });
+
+    postCompletionHookDeps.runEvalAnalysis = async () => ({
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+    });
+
+    postCompletionHookDeps.evaluateTask = async () => makeRecord();
+
+    postCompletionHookDeps.appendEvalRecord = () => {
+      evalPersisted = true;
+    };
+
+    // updateProjectContext should see the eval already persisted
+    postCompletionHookDeps.updateProjectContext = async () => {
+      assert.equal(evalPersisted, true, 'Eval should be persisted before optional updates');
+    };
+
+    const result = await runPostCompletionEval({
+      issueId,
+      workflowType: 'feature',
+      repoDir,
+    });
+
+    assert.equal(result, true);
+    assert.equal(evalPersisted, true);
+  });
+
+  rmSync(repoDir, { recursive: true, force: true });
+  clearConfigCache(repoDir);
+});
+
+await test('optional context timeout does not fail eval', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-eval-timeout-'));
+  const issueId = 'HOK-TEST-2';
+  mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+  mkdirSync(join(repoDir, '.wavemill', 'context'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill', 'project-context.md'), '# Context\n');
+  writeFileSync(join(repoDir, '.wavemill-config.json'), '{}');
+
+  await withMockedPostCompletionDeps(async () => {
+    let evalPersisted = false;
+
+    postCompletionHookDeps.gatherEvalContext = () => ({
+      taskPrompt: 'Test task',
+      prDiff: '+test',
+      prUrl: 'https://github.com/test/pr/2',
+      issueData: { id: issueId, title: 'Test' },
+    });
+
+    postCompletionHookDeps.gatherStageArtifacts = () => ({
+      taskPacket: '',
+      planContent: '',
+      selfReviewSummary: '',
+      routingDecision: undefined,
+      executionModel: 'claude-sonnet-4-6',
+    });
+
+    postCompletionHookDeps.detectAndFormatInterventions = () => ({
+      meta: {},
+      text: '',
+      summary: makeInterventionSummary(0),
+      records: [],
+      totalCount: 0,
+    });
+
+    postCompletionHookDeps.runEvalAnalysis = async () => ({
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+    });
+
+    postCompletionHookDeps.evaluateTask = async () => {
+      const record = makeRecord();
+      record.outcomes = {
+        success: true,
+        review: { humanReviewRequired: false, rounds: 0, approvals: 1, changeRequests: 0 },
+        rework: { agentIterations: 0 },
+        delivery: { prCreated: true, merged: false },
+      };
+      return record;
+    };
+
+    postCompletionHookDeps.appendEvalRecord = () => {
+      evalPersisted = true;
+    };
+
+    // updateProjectContext throws timeout error
+    postCompletionHookDeps.updateProjectContext = async () => {
+      throw new Error('Operation timed out after 120000ms');
+    };
+
+    const result = await runPostCompletionEval({
+      issueId,
+      workflowType: 'feature',
+      repoDir,
+    });
+
+    assert.equal(result, true, 'Eval should succeed even if optional update fails');
+    assert.equal(evalPersisted, true);
+    assert.ok(isEvalSuccess(makeRecord()), 'Eval success should be derived from eval record');
+  });
+
+  rmSync(repoDir, { recursive: true, force: true });
+  clearConfigCache(repoDir);
+});
+
+await test('WAVEMILL_SKIP_POST_EVAL_CONTEXT=1 skips optional updates', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-eval-env-skip-'));
+  const issueId = 'HOK-TEST-3';
+  mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+  mkdirSync(join(repoDir, '.wavemill', 'context'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill', 'project-context.md'), '# Context\n');
+  writeFileSync(join(repoDir, '.wavemill-config.json'), '{}');
+
+  process.env.WAVEMILL_SKIP_POST_EVAL_CONTEXT = '1';
+
+  await withMockedPostCompletionDeps(async () => {
+    let updateCalled = false;
+
+    postCompletionHookDeps.gatherEvalContext = () => ({
+      taskPrompt: 'Test task',
+      prDiff: '+test',
+      prUrl: 'https://github.com/test/pr/3',
+      issueData: { id: issueId, title: 'Test' },
+    });
+
+    postCompletionHookDeps.gatherStageArtifacts = () => ({
+      taskPacket: '',
+      planContent: '',
+      selfReviewSummary: '',
+      routingDecision: undefined,
+      executionModel: 'claude-sonnet-4-6',
+    });
+
+    postCompletionHookDeps.detectAndFormatInterventions = () => ({
+      meta: {},
+      text: '',
+      summary: makeInterventionSummary(0),
+      records: [],
+      totalCount: 0,
+    });
+
+    postCompletionHookDeps.runEvalAnalysis = async () => ({
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+    });
+
+    postCompletionHookDeps.evaluateTask = async () => makeRecord();
+    postCompletionHookDeps.appendEvalRecord = () => {};
+
+    postCompletionHookDeps.updateProjectContext = async () => {
+      updateCalled = true;
+    };
+
+    await runPostCompletionEval({
+      issueId,
+      workflowType: 'feature',
+      repoDir,
+    });
+
+    assert.equal(updateCalled, false, 'updateProjectContext should not be called when env var is set');
+  });
+
+  delete process.env.WAVEMILL_SKIP_POST_EVAL_CONTEXT;
+  rmSync(repoDir, { recursive: true, force: true });
+  clearConfigCache(repoDir);
+});
+
+await test('postEval.skipContextUpdates=true skips optional updates', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-eval-config-skip-'));
+  const issueId = 'HOK-TEST-4';
+  mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+  mkdirSync(join(repoDir, '.wavemill', 'context'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill', 'project-context.md'), '# Context\n');
+  writeFileSync(
+    join(repoDir, '.wavemill-config.json'),
+    JSON.stringify({ postEval: { skipContextUpdates: true } })
+  );
+
+  await withMockedPostCompletionDeps(async () => {
+    let updateCalled = false;
+
+    postCompletionHookDeps.gatherEvalContext = () => ({
+      taskPrompt: 'Test task',
+      prDiff: '+test',
+      prUrl: 'https://github.com/test/pr/4',
+      issueData: { id: issueId, title: 'Test' },
+    });
+
+    postCompletionHookDeps.gatherStageArtifacts = () => ({
+      taskPacket: '',
+      planContent: '',
+      selfReviewSummary: '',
+      routingDecision: undefined,
+      executionModel: 'claude-sonnet-4-6',
+    });
+
+    postCompletionHookDeps.detectAndFormatInterventions = () => ({
+      meta: {},
+      text: '',
+      summary: makeInterventionSummary(0),
+      records: [],
+      totalCount: 0,
+    });
+
+    postCompletionHookDeps.runEvalAnalysis = async () => ({
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+    });
+
+    postCompletionHookDeps.evaluateTask = async () => makeRecord();
+    postCompletionHookDeps.appendEvalRecord = () => {};
+
+    postCompletionHookDeps.updateProjectContext = async () => {
+      updateCalled = true;
+    };
+
+    await runPostCompletionEval({
+      issueId,
+      workflowType: 'feature',
+      repoDir,
+    });
+
+    assert.equal(updateCalled, false, 'updateProjectContext should not be called when config skip is set');
+  });
+
+  rmSync(repoDir, { recursive: true, force: true });
+  clearConfigCache(repoDir);
+});
+
+await test('degraded operating mode skips optional updates', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-eval-degraded-skip-'));
+  const issueId = 'HOK-TEST-5';
+  mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+  mkdirSync(join(repoDir, '.wavemill', 'context'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill', 'project-context.md'), '# Context\n');
+
+  // Configure model registry with frontier models
+  writeFileSync(
+    join(repoDir, '.wavemill-config.json'),
+    JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-opus-4-7': { class: 'frontier', vendor: 'anthropic' },
+          'claude-sonnet-4-6': { class: 'frontier', vendor: 'anthropic' },
+        },
+      },
+    })
+  );
+
+  // Write quota state to force constrained mode
+  mkdirSync(join(repoDir, '.wavemill', 'quota'), { recursive: true });
+  writeFileSync(
+    join(repoDir, '.wavemill', 'quota', 'snapshot.json'),
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      models: {
+        'claude-opus-4-7': { status: 'degrading', reason: 'test' },
+        'claude-sonnet-4-6': { status: 'degrading', reason: 'test' },
+      },
+    })
+  );
+
+  await withMockedPostCompletionDeps(async () => {
+    let updateCalled = false;
+
+    // Mock getCurrentOperatingMode to return constrained
+    postCompletionHookDeps.getCurrentOperatingMode = () => 'constrained';
+
+    postCompletionHookDeps.gatherEvalContext = () => ({
+      taskPrompt: 'Test task',
+      prDiff: '+test',
+      prUrl: 'https://github.com/test/pr/5',
+      issueData: { id: issueId, title: 'Test' },
+    });
+
+    postCompletionHookDeps.gatherStageArtifacts = () => ({
+      taskPacket: '',
+      planContent: '',
+      selfReviewSummary: '',
+      routingDecision: undefined,
+      executionModel: 'claude-sonnet-4-6',
+    });
+
+    postCompletionHookDeps.detectAndFormatInterventions = () => ({
+      meta: {},
+      text: '',
+      summary: makeInterventionSummary(0),
+      records: [],
+      totalCount: 0,
+    });
+
+    postCompletionHookDeps.runEvalAnalysis = async () => ({
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+    });
+
+    postCompletionHookDeps.evaluateTask = async () => makeRecord();
+    postCompletionHookDeps.appendEvalRecord = () => {};
+
+    postCompletionHookDeps.updateProjectContext = async () => {
+      updateCalled = true;
+    };
+
+    await runPostCompletionEval({
+      issueId,
+      workflowType: 'feature',
+      repoDir,
+    });
+
+    assert.equal(updateCalled, false, 'updateProjectContext should not be called in degraded mode');
+  });
+
+  rmSync(repoDir, { recursive: true, force: true });
+  clearConfigCache(repoDir);
 });
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);

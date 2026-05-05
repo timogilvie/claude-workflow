@@ -387,6 +387,14 @@ export interface BudgetConfig {
   survivalMode?: number;
 }
 
+export interface PostEvalConfig {
+  skipContextUpdates?: boolean;
+  timeoutMs?: number;
+  activityTimeoutMs?: number;
+  maxRetries?: number;
+  skipInDegradedModes?: boolean;
+}
+
 export interface WavemillConfig {
   configVersion?: string;
   linear?: LinearConfig;
@@ -398,6 +406,7 @@ export interface WavemillConfig {
   taskSelection?: TaskSelectionConfig;
   eval?: EvalConfig;
   autoEval?: boolean;
+  postEval?: PostEvalConfig;
   hokusai?: HokusaiConfig;
   router?: RouterConfig;
   challenge?: ChallengeConfig;
@@ -804,6 +813,30 @@ export function getEvalConfig(repoDir?: string): EvalConfig {
 
 export function getMintEligibilityConfig(repoDir?: string): MintEligibilityConfig | undefined {
   return getEvalConfig(repoDir).mintEligibility;
+}
+
+/**
+ * Get the post-eval config section with defaults.
+ * Returns configured values merged with defaults.
+ *
+ * Default values:
+ * - skipContextUpdates: false
+ * - timeoutMs: 120000 (2 minutes)
+ * - activityTimeoutMs: 60000 (1 minute)
+ * - maxRetries: 1
+ * - skipInDegradedModes: true
+ */
+export function getPostEvalConfig(repoDir?: string): Required<PostEvalConfig> {
+  const config = loadWavemillConfig(repoDir).postEval || {};
+  const timeoutMs = config.timeoutMs ?? 120_000;
+  const activityTimeoutMs = config.activityTimeoutMs ?? Math.min(60_000, timeoutMs);
+  return {
+    skipContextUpdates: config.skipContextUpdates ?? false,
+    timeoutMs,
+    activityTimeoutMs,
+    maxRetries: config.maxRetries ?? 1,
+    skipInDegradedModes: config.skipInDegradedModes ?? true,
+  };
 }
 
 /**

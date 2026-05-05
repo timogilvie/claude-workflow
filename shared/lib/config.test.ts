@@ -40,6 +40,7 @@ import {
   getMintEligibilityConfig,
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
+  getPostEvalConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -1833,6 +1834,193 @@ test('malformed local overlay throws a clear parse error', () => {
     assert.throws(() => {
       loadWavemillConfig(tmp);
     }, /Failed to parse.*\.wavemill-config\.local\.json/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
+// Post-Eval Config Tests
+// ────────────────────────────────────────────────────────────────
+
+console.log('\n--- Post-Eval Config Tests ---\n');
+
+test('getPostEvalConfig returns defaults when config is missing', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, '{}');
+
+    const postEvalConfig = getPostEvalConfig(tmp);
+    assert.equal(postEvalConfig.skipContextUpdates, false);
+    assert.equal(postEvalConfig.timeoutMs, 120_000);
+    assert.equal(postEvalConfig.activityTimeoutMs, 60_000);
+    assert.equal(postEvalConfig.maxRetries, 1);
+    assert.equal(postEvalConfig.skipInDegradedModes, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getPostEvalConfig returns configured values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      postEval: {
+        skipContextUpdates: true,
+        timeoutMs: 60_000,
+        activityTimeoutMs: 30_000,
+        maxRetries: 0,
+        skipInDegradedModes: false,
+      },
+    }));
+
+    const postEvalConfig = getPostEvalConfig(tmp);
+    assert.equal(postEvalConfig.skipContextUpdates, true);
+    assert.equal(postEvalConfig.timeoutMs, 60_000);
+    assert.equal(postEvalConfig.activityTimeoutMs, 30_000);
+    assert.equal(postEvalConfig.maxRetries, 0);
+    assert.equal(postEvalConfig.skipInDegradedModes, false);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getPostEvalConfig clamps activityTimeoutMs to timeoutMs', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      postEval: {
+        timeoutMs: 30_000,
+        // activityTimeoutMs not set, should be clamped to 30_000
+      },
+    }));
+
+    const postEvalConfig = getPostEvalConfig(tmp);
+    assert.equal(postEvalConfig.timeoutMs, 30_000);
+    assert.equal(postEvalConfig.activityTimeoutMs, 30_000);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid postEval timeoutMs below 5000 fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      postEval: {
+        timeoutMs: 4000,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid postEval timeoutMs above 600000 fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      postEval: {
+        timeoutMs: 700_000,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid postEval maxRetries above 1 fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      postEval: {
+        maxRetries: 2,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid postEval activityTimeoutMs below 1000 fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      postEval: {
+        activityTimeoutMs: 500,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('postEval unknown fields fail validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      postEval: {
+        unknownField: true,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
   } finally {
     cleanUp(tmp);
   }

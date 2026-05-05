@@ -390,6 +390,44 @@
             "default": true,
             "description": "When true, automatically run eval after workflow/bugfix command completion (PR creation). Eval failures are logged as warnings and never fail the workflow."
         },
+        "postEval": {
+            "type": "object",
+            "description": "Settings for optional post-eval context and subsystem updates. These updates are best-effort and bounded to avoid blocking eval completion.",
+            "properties": {
+                "skipContextUpdates": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip post-eval project context and subsystem updates. When true, eval completes immediately after the core eval record is persisted."
+                },
+                "timeoutMs": {
+                    "type": "integer",
+                    "default": 120000,
+                    "minimum": 5000,
+                    "maximum": 600000,
+                    "description": "Hard timeout in milliseconds for LLM calls during post-eval updates. Default: 120000 (2 minutes)."
+                },
+                "activityTimeoutMs": {
+                    "type": "integer",
+                    "default": 60000,
+                    "minimum": 1000,
+                    "maximum": 600000,
+                    "description": "Activity timeout in milliseconds (max idle time) for LLM calls during post-eval updates. Default: 60000 (1 minute)."
+                },
+                "maxRetries": {
+                    "type": "integer",
+                    "default": 1,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Maximum retry attempts for failed LLM calls during post-eval updates. Default: 1."
+                },
+                "skipInDegradedModes": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically skip post-eval updates when operating in constrained or survival mode. Default: true."
+                }
+            },
+            "additionalProperties": false
+        },
         "hokusai": {
             "type": "object",
             "description": "Hokusai data submission settings.",
