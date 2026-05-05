@@ -112,12 +112,35 @@ do
 done
 source "$FUNCS_FILE"
 
+WATCHDOG_FUNCS_FILE="$TMP_DIR/watchdog-funcs.sh"
+: > "$WATCHDOG_FUNCS_FILE"
+for fn in ready_watchdog_config_json run_ready_watchdog_tick; do
+  extracted="$(extract_function "$MILL_SCRIPT" "$fn")"
+  if [[ -z "$extracted" ]]; then
+    echo "FAIL: missing extracted function $fn"
+    exit 1
+  fi
+  printf '%s\n\n' "$extracted" >> "$WATCHDOG_FUNCS_FILE"
+done
+source "$WATCHDOG_FUNCS_FILE"
+
 log() { :; }
 log_warn() { :; }
 clear_task_list_display() { :; }
 batch_route_selected_tasks() { return 0; }
 launch_task() { LAST_LAUNCHED_SLOTS=0; }
 invoke_first_wave_helper() { return 1; }
+ready_watchdog_config_json() { echo '{"enabled":true,"timeoutSeconds":30}'; }
+_with_timeout() { return 1; }
+TOOLS_DIR="$REPO_DIR/tools"
+REPO_DIR="$REPO_DIR"
+watchdog_warned=0
+log_warn() { watchdog_warned=$((watchdog_warned + 1)); }
+
+run_ready_watchdog_tick
+assert_eq "failed watchdog tick is downgraded to a warning" "1" "$watchdog_warned"
+
+log_warn() { :; }
 
 POLL_SECONDS=10
 COMMAND_QUEUE=()

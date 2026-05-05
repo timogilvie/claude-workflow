@@ -194,6 +194,19 @@ ready_attention_detail() {
   head -1 "$attention_file" 2>/dev/null | tr -d '\r'
 }
 
+ready_watchdog_state_file() {
+  [[ -n "$STATE_FILE" ]] || return 0
+  printf '%s\n' "$(dirname "$STATE_FILE")/ready-watchdog-state.json"
+}
+
+ready_watchdog_field() {
+  local issue="$1" field="$2"
+  local watchdog_file
+  watchdog_file="$(ready_watchdog_state_file)"
+  [[ -n "$watchdog_file" && -f "$watchdog_file" ]] || return 0
+  jq -r --arg issue "$issue" --arg field "$field" '.tasks[$issue][$field] // empty' "$watchdog_file" 2>/dev/null || true
+}
+
 # Legacy compat wrapper — used in the render loop below.
 plan_waiting_for_review() {
   local task_phase="$1"
@@ -365,7 +378,8 @@ is_actionable_state() {
   local task_phase="${2:-}"
   local worktree="${3:-}"
   local slug="${4:-}"
-  local ready_status attention_detail
+  local issue="${5:-}"
+  local ready_status attention_detail watchdog_classification
 
   attention_detail=$(ready_attention_detail "$worktree" "$slug")
   if [[ -n "$attention_detail" ]]; then
@@ -374,6 +388,18 @@ is_actionable_state() {
   fi
 
   if [[ "$task_phase" == "ready" ]]; then
+    watchdog_classification=$(ready_watchdog_field "$issue" "classification")
+    case "$watchdog_classification" in
+      stuck|needs-user)
+        echo "actionable"
+        return
+        ;;
+      waiting-on-ci|waiting-on-eval-comparison)
+        echo "active"
+        return
+        ;;
+    esac
+
     ready_status=$(get_ready_display_status "$worktree" "$slug")
     case "$ready_status" in
       completed|failed|aborted)
@@ -416,10 +442,12 @@ render_section_header() {
 render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
-  local t st_str pr_str pr_info checks phase_str plan_status ready_status attention_detail reported ds pane
+  local t st_str pr_str pr_info checks phase_str plan_status ready_status attention_detail reported ds pane watchdog_classification watchdog_detail
 
   t=$(elapsed "$worktree")
   reported=""
+  watchdog_classification=""
+  watchdog_detail=""
 
   if [[ "$task_status" == "merged" ]]; then
     st_str="${G}✓ merged${N}"
@@ -481,14 +509,22 @@ render_task_row() {
     coding)    phase_str="${G}💻 coding${N}" ;;
     review)    phase_str="${Y}🔍 review${N}" ;;
     ready)
+      watchdog_classification=$(ready_watchdog_field "$issue" "classification")
+      watchdog_detail=$(ready_watchdog_field "$issue" "detail")
       if is_ready_conflicted "$worktree" "$slug"; then
         phase_str="${Y}⚠ ready${N}"
       else
-        ready_status=$(get_ready_display_status "$worktree" "$slug")
-        case "$ready_status" in
-          failed|aborted) phase_str="${R}🚦 ready${N}" ;;
-          completed)      phase_str="${Y}🚦 ready${N}" ;;
-          *)              phase_str="${G}🚦 ready${N}" ;;
+        case "$watchdog_classification" in
+          stuck|needs-user) phase_str="${R}🚦 ready${N}" ;;
+          waiting-on-ci|waiting-on-eval-comparison) phase_str="${Y}🚦 ready${N}" ;;
+          *)
+            ready_status=$(get_ready_display_status "$worktree" "$slug")
+            case "$ready_status" in
+              failed|aborted) phase_str="${R}🚦 ready${N}" ;;
+              completed)      phase_str="${Y}🚦 ready${N}" ;;
+              *)              phase_str="${G}🚦 ready${N}" ;;
+            esac
+            ;;
         esac
       fi
       ;;
@@ -508,6 +544,9 @@ render_task_row() {
   attention_detail=$(ready_attention_detail "$worktree" "$slug")
   if [[ -z "$reported" && -n "$attention_detail" ]]; then
     reported="$attention_detail"
+  fi
+  if [[ -z "$reported" && -n "$watchdog_detail" ]]; then
+    reported="$watchdog_detail"
   fi
   case "$reported" in
     working|waiting|done) reported="" ;;
@@ -686,7 +725,7 @@ render_dashboard() {
         agent_state=$(agent_status "$win")
       fi
 
-      classification=$(is_actionable_state "$agent_state" "$task_phase" "$worktree" "$slug")
+      classification=$(is_actionable_state "$agent_state" "$task_phase" "$worktree" "$slug" "$issue")
       task_data="$issue|$slug|$branch|$worktree|$win|$task_status|$task_phase|$state_pr|$agent_state"
 
       if [[ "$classification" == "actionable" ]]; then

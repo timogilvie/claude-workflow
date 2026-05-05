@@ -2745,6 +2745,61 @@ ready_remediation_config_json() {
     ' 2>/dev/null || echo '{"enabled":true,"maxAttempts":3,"agentCmd":""}'
 }
 
+ready_watchdog_config_json() {
+  local wt_dir="$1"
+  local user_config="$HOME/.wavemill/config.json"
+  local repo_config="$wt_dir/.wavemill-config.json"
+  local local_config="$wt_dir/.wavemill-config.local.json"
+  local user_json='{}'
+  local repo_json='{}'
+  local local_json='{}'
+
+  [[ -f "$user_config" ]] && user_json=$(cat "$user_config" 2>/dev/null || echo '{}')
+  [[ -f "$repo_config" ]] && repo_json=$(cat "$repo_config" 2>/dev/null || echo '{}')
+  [[ -f "$local_config" ]] && local_json=$(cat "$local_config" 2>/dev/null || echo '{}')
+
+  jq -n -c \
+    --argjson user "$user_json" \
+    --argjson repo "$repo_json" \
+    --argjson local "$local_json" \
+    '
+    ({ready:{watchdog:{enabled:true,thresholdMinutes:10,autoRecover:true,timeoutSeconds:30}}} * $user * $repo * $local) as $merged
+    | (($merged.monitor.readyWatchdog // {}) + ($merged.ready.watchdog // {}))
+    ' 2>/dev/null || echo '{"enabled":true,"thresholdMinutes":10,"autoRecover":true,"timeoutSeconds":30}'
+}
+
+run_ready_watchdog_tick() {
+  local watchdog_json watchdog_enabled watchdog_timeout
+  watchdog_json=$(ready_watchdog_config_json "$REPO_DIR")
+  watchdog_enabled=$(printf '%s' "$watchdog_json" | jq -r '.enabled // true' 2>/dev/null || echo "true")
+  [[ "$watchdog_enabled" == "true" ]] || return 0
+
+  watchdog_timeout=$(printf '%s' "$watchdog_json" | jq -r '.timeoutSeconds // 30' 2>/dev/null || echo "30")
+  [[ "$watchdog_timeout" =~ ^[0-9]+$ ]] || watchdog_timeout=30
+
+  local watchdog_output
+  if ! watchdog_output=$(_with_timeout "$watchdog_timeout" \
+    npx tsx "$TOOLS_DIR/ready-watchdog.ts" \
+      --once \
+      --repo-dir "$REPO_DIR" \
+      --state-file "$STATE_FILE" \
+      --json 2>/dev/null); then
+    log_warn "ready watchdog tick failed"
+    return 0
+  fi
+
+  while IFS= read -r finding; do
+    [[ -n "$finding" ]] || continue
+    local issue label detail action
+    issue=$(printf '%s' "$finding" | jq -r '.issueId // empty' 2>/dev/null || echo "")
+    label=$(printf '%s' "$finding" | jq -r '.displayLabel // empty' 2>/dev/null || echo "")
+    detail=$(printf '%s' "$finding" | jq -r '.detail // empty' 2>/dev/null || echo "")
+    action=$(printf '%s' "$finding" | jq -r '.action // empty' 2>/dev/null || echo "")
+    [[ -n "$issue" && -n "$label" && -n "$detail" ]] || continue
+    log "status" "ready watchdog: $issue $label ($action) - $detail"
+  done < <(printf '%s' "$watchdog_output" | jq -c '.findings[]?' 2>/dev/null)
+}
+
 ready_remediation_enabled() {
   local wt_dir="$1"
   local remediation_json
@@ -7809,6 +7864,7 @@ while :; do
     esac
   done
   poll_challenge_jobs
+  run_ready_watchdog_tick
   check_control_pane_health
   wavemill_pr_cache_refresh
   active_count=0

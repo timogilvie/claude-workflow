@@ -326,12 +326,24 @@ export interface ReadyConfig {
   migrationDangerLabels?: Record<string, string>;
   migrationForbiddenPatterns?: string[];
   remediation?: ReadyRemediationConfig;
+  watchdog?: ReadyWatchdogConfig;
 }
 
 export interface ReadyRemediationConfig {
   enabled?: boolean;
   maxAttempts?: number;
   agentCmd?: string;
+}
+
+export interface ReadyWatchdogConfig {
+  enabled?: boolean;
+  thresholdMinutes?: number;
+  autoRecover?: boolean;
+  timeoutSeconds?: number;
+}
+
+export interface MonitorConfig {
+  readyWatchdog?: ReadyWatchdogConfig;
 }
 
 export interface RegistryConfig {
@@ -416,6 +428,7 @@ export interface WavemillConfig {
   providers?: ProvidersConfig;
   integration?: Partial<IntegrationConfig>;
   ready?: ReadyConfig;
+  monitor?: MonitorConfig;
   permissions?: PermissionsConfig;
   modelRegistry?: ModelRegistryConfig;
   quota?: QuotaConfig;
@@ -842,6 +855,24 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
       maxAttempts: config.ready?.remediation?.maxAttempts ?? 3,
       agentCmd: config.ready?.remediation?.agentCmd ?? '',
     },
+    watchdog: getReadyWatchdogConfig(repoDir),
+  };
+}
+
+export function getReadyWatchdogConfig(repoDir?: string): Required<ReadyWatchdogConfig> {
+  const config = loadWavemillConfig(repoDir);
+  const readyWatchdog = config.ready?.watchdog ?? {};
+  const legacyMonitorWatchdog = config.monitor?.readyWatchdog ?? {};
+  const merged = {
+    ...legacyMonitorWatchdog,
+    ...readyWatchdog,
+  };
+
+  return {
+    enabled: merged.enabled ?? true,
+    thresholdMinutes: merged.thresholdMinutes ?? 10,
+    autoRecover: merged.autoRecover ?? true,
+    timeoutSeconds: merged.timeoutSeconds ?? 30,
   };
 }
 

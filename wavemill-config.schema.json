@@ -721,6 +721,67 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "watchdog": {
+                    "type": "object",
+                    "description": "Ready-stage stale-state watchdog settings.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Enable the ready watchdog during mill monitor ticks."
+                        },
+                        "thresholdMinutes": {
+                            "type": "integer",
+                            "default": 10,
+                            "minimum": 1,
+                            "description": "Minutes without ready-stage progress before a task is classified as stale."
+                        },
+                        "autoRecover": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Allow safe local ready-state recovery when GitHub truth is clean and green."
+                        },
+                        "timeoutSeconds": {
+                            "type": "integer",
+                            "default": 30,
+                            "minimum": 1,
+                            "description": "Maximum watchdog subprocess runtime per monitor tick."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "monitor": {
+            "type": "object",
+            "description": "Legacy monitor-specific settings kept for backwards-compatible aliases.",
+            "properties": {
+                "readyWatchdog": {
+                    "type": "object",
+                    "description": "Alias for ready.watchdog.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "thresholdMinutes": {
+                            "type": "integer",
+                            "default": 10,
+                            "minimum": 1
+                        },
+                        "autoRecover": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "timeoutSeconds": {
+                            "type": "integer",
+                            "default": 30,
+                            "minimum": 1
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false
