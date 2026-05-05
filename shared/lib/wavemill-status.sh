@@ -335,8 +335,15 @@ truncate_detail() {
 
 format_job_elapsed() {
   local started_at="$1"
-  local start_epoch now elapsed
-  start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${started_at%%.*}" "+%s" 2>/dev/null || echo 0)
+  local start_epoch now elapsed ts
+  ts="${started_at%%.*}"
+  if date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" "+%s" >/dev/null 2>&1; then
+    # BSD/macOS date
+    start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" "+%s" 2>/dev/null || echo 0)
+  else
+    # GNU/Linux date
+    start_epoch=$(date -d "${ts/T/ }" "+%s" 2>/dev/null || echo 0)
+  fi
   now=$(date +%s)
   if (( start_epoch <= 0 || now < start_epoch )); then
     echo "—"

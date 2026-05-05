@@ -4222,6 +4222,7 @@ maybe_run_challenge_eval() {
     --debug \
     >"$log_path" 2>&1 &
   pid=$!
+  disown "$pid" 2>/dev/null || true
 
   launch_tracked_job "eval" "$job_id" "$issue" "$side" "$pair_id" "$pr" "$pid" "420" "$log_path" "$result_path"
   log "status" "  📊 Challenge eval running in background for $issue (pid $pid)"
@@ -4336,6 +4337,7 @@ maybe_run_challenge_comparison() {
     --result-file "$result_path" \
     >"$log_path" 2>&1 &
   pid=$!
+  disown "$pid" 2>/dev/null || true
 
   launch_tracked_job "comparison" "$job_id" "" "" "$pair_id" "${primary_pr},${challenger_pr}" "$pid" "240" "$log_path" "$result_path"
   log "status" "  ⚖ Challenge comparison running in background for $pair_id (pid $pid)"
