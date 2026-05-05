@@ -5703,15 +5703,17 @@ queued_command_upsert() {
   local id="$1" line_num="$2" cmd="$3" reason="${4:-unknown}"
   [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
   state_mutate "$STATE_FILE" \
-    '.queued_commands = ((.queued_commands // []) | map(select(.id != $id))) + [{
-      id: $id,
-      line: ($line_num | tonumber),
-      command: $cmd,
-      status: "queued",
-      reason: $reason,
-      enqueued_at: (now | todate),
-      updated_at: (now | todate)
-    }]' \
+    '.queued_commands = ((.queued_commands // []) |
+      (map(select(.id == $id)) | .[0].enqueued_at // (now | todate)) as $orig_enqueued |
+      map(select(.id != $id)) + [{
+        id: $id,
+        line: ($line_num | tonumber),
+        command: $cmd,
+        status: "queued",
+        reason: $reason,
+        enqueued_at: $orig_enqueued,
+        updated_at: (now | todate)
+      }])' \
     --arg id "$id" \
     --arg line_num "$line_num" \
     --arg cmd "$cmd" \
@@ -7356,6 +7358,7 @@ while :; do
 
         REPLY=""
         QUEUED_CMD_ID=""
+        QUEUED_CMD_RAW=""
         if consume_next_command; then
           case "$REPLY" in
             enter) ;;
@@ -7367,6 +7370,7 @@ while :; do
           esac
         elif consume_queued_command_for_selection; then
           # REPLY and QUEUED_CMD_ID are now set from durable state.
+          QUEUED_CMD_RAW="$REPLY"
           case "$REPLY" in
             enter) ;;
             select\ *) REPLY="${REPLY#select }" ;;
@@ -7489,7 +7493,7 @@ while :; do
             fi
           done <<<"$selected_lines"
           if (( launched == 0 )) && [[ -n "$QUEUED_CMD_ID" ]]; then
-            queued_command_upsert "$QUEUED_CMD_ID" "${QUEUED_CMD_ID##*:}" "select $REPLY" "blocked_dependency"
+            queued_command_upsert "$QUEUED_CMD_ID" "${QUEUED_CMD_ID##*:}" "${QUEUED_CMD_RAW:-select $REPLY}" "blocked_dependency"
             QUEUED_CMD_ID=""
           fi
           # Invalidate caches after launching so next cycle re-renders
