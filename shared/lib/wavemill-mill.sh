@@ -7843,9 +7843,6 @@ while :; do
     poll_sleep "$POLL_SECONDS"
     continue
   fi
-
-  poll_sleep "$POLL_SECONDS"
-  poll_sleep "$POLL_SECONDS"
 done
 MONITOR_EOF
 

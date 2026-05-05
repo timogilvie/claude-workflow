@@ -664,7 +664,9 @@ else
 
   RAW_POLL_SLEEPS=$(grep -cE '^[[:space:]]*sleep "\$POLL_SECONDS"$' <<< "$MONITOR_LOOP_BLOCK" || true)
   INTERRUPTIBLE_POLL_SLEEPS=$(grep -cE '^[[:space:]]*poll_sleep "\$POLL_SECONDS"$' <<< "$MONITOR_LOOP_BLOCK" || true)
-  if [[ "$RAW_POLL_SLEEPS" -eq 0 && "$INTERRUPTIBLE_POLL_SLEEPS" -eq 8 ]]; then
+  # HOK-1565: removed 2 unreachable poll_sleep calls (after if/elif/else/fi where every branch ends with
+  # continue); count is now 6 reachable calls.
+  if [[ "$RAW_POLL_SLEEPS" -eq 0 && "$INTERRUPTIBLE_POLL_SLEEPS" -eq 6 ]]; then
     pass "monitor uses interruptible poll_sleep in every poll branch"
   else
     fail "monitor poll branches are not fully using interruptible poll_sleep"
@@ -2664,6 +2666,48 @@ if [[ -f "$LIB_DIR/agent-adapters.sh" ]]; then
   fi
 else
   fail "agent-adapters.sh not found"
+fi
+
+# ============================================================================
+# TEST 17: HOK-1565 – command draining independence guards
+# ============================================================================
+echo ""
+echo "=== HOK-1565: Command Draining Independence Guards ==="
+
+if [[ -n "$HEREDOC_CONTENT" ]]; then
+  CHALLENGE_EVAL_FN=$(awk '
+    /^maybe_run_challenge_eval\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' <<< "$HEREDOC_CONTENT")
+
+  if grep -Fq 'monitor_save_lifecycle_job "$job_key"' <<< "$CHALLENGE_EVAL_FN" \
+    && grep -Fq 'pid=$!' <<< "$CHALLENGE_EVAL_FN"; then
+    pass "maybe_run_challenge_eval launches long eval as background lifecycle job"
+  else
+    fail "maybe_run_challenge_eval may block the monitor loop (missing background job tracking)"
+  fi
+
+  CHALLENGE_COMPARE_FN=$(awk '
+    /^maybe_run_challenge_comparison\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' <<< "$HEREDOC_CONTENT")
+
+  if grep -Fq 'monitor_save_lifecycle_job "$job_key"' <<< "$CHALLENGE_COMPARE_FN" \
+    && grep -Fq 'pid=$!' <<< "$CHALLENGE_COMPARE_FN"; then
+    pass "maybe_run_challenge_comparison launches long comparison as background lifecycle job"
+  else
+    fail "maybe_run_challenge_comparison may block the monitor loop (missing background job tracking)"
+  fi
+else
+  skip "HOK-1565 command draining guards (HEREDOC_CONTENT not available)"
+fi
+
+if grep -qE '^render_monitor_command_queue_section\(\) \{' "$STATUS_SCRIPT" 2>/dev/null; then
+  pass "wavemill-status.sh renders queued monitor commands section"
+else
+  fail "wavemill-status.sh is missing render_monitor_command_queue_section"
 fi
 
 # ============================================================================
