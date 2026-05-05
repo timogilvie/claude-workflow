@@ -9,6 +9,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
@@ -136,12 +137,17 @@ function extractFilePaths(markdown: string): string[] {
   return Array.from(paths);
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Extract a markdown section by heading
  */
 function extractSection(markdown: string, heading: string): string | null {
-  // Match ## Heading or ### Heading (case insensitive)
-  const headingRegex = new RegExp(`^#{2,3}\\s+${heading}\\s*$`, 'im');
+  // Match ## Heading or ### Heading with optional numeric prefix (e.g. "## 6. Heading")
+  const escapedHeading = escapeRegex(heading);
+  const headingRegex = new RegExp(`^#{2,3}\\s*(?:\\d+\\.\\s*)?${escapedHeading}\\s*$`, 'im');
   const match = markdown.match(headingRegex);
 
   if (!match || match.index === undefined) {
@@ -149,19 +155,83 @@ function extractSection(markdown: string, heading: string): string | null {
   }
 
   const startIndex = match.index + match[0].length;
+  const headingLevelMatch = match[0].match(/^#{2,3}/);
+  const headingLevel = headingLevelMatch ? headingLevelMatch[0].length : 2;
 
-  // Find the next heading of same or higher level, but not inside code blocks
+  // Find the next heading of same or higher level, but not inside code blocks.
+  // Lower-level headings (e.g. ### under ##) remain part of this section.
   const restOfDoc = markdown.substring(startIndex);
 
   // Remove code blocks before searching for next heading
   const withoutCodeBlocks = restOfDoc.replace(/```[\s\S]*?```/g, match => ' '.repeat(match.length));
-  const nextHeadingMatch = withoutCodeBlocks.match(/^#{1,3}\s+\w/m);
+  const nextHeadingRegex = new RegExp(`^#{1,${headingLevel}}\\s+\\S`, 'm');
+  const nextHeadingMatch = withoutCodeBlocks.match(nextHeadingRegex);
 
   const endIndex = nextHeadingMatch && nextHeadingMatch.index !== undefined
     ? startIndex + nextHeadingMatch.index
     : markdown.length;
 
   return markdown.substring(startIndex, endIndex).trim();
+}
+
+interface KeyFileEntry {
+  path: string;
+  planned: boolean;
+}
+
+function extractPathFromLine(line: string): { path: string; endIndex: number } | null {
+  const backtickedPath = line.match(/`([^`\n]+\.[a-zA-Z0-9]{1,8})`/);
+  if (backtickedPath && backtickedPath.index !== undefined) {
+    return {
+      path: backtickedPath[1],
+      endIndex: backtickedPath.index + backtickedPath[0].length,
+    };
+  }
+
+  const plainPath = line.match(/(?:^|\s)([a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)+\.[a-zA-Z0-9]{1,8})(?=\s|$|[),.;:])/);
+  if (plainPath && plainPath.index !== undefined) {
+    return {
+      path: plainPath[1],
+      endIndex: plainPath.index + plainPath[0].length,
+    };
+  }
+
+  return null;
+}
+
+function parseKeyFileEntries(markdown: string): KeyFileEntry[] {
+  const entriesByPath = new Map<string, KeyFileEntry>();
+  const lines = markdown.split('\n');
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!/^[-*]\s+/.test(line)) {
+      continue;
+    }
+
+    const pathInfo = extractPathFromLine(line);
+    if (!pathInfo) {
+      continue;
+    }
+
+    const path = pathInfo.path.trim();
+    const suffix = line.slice(pathInfo.endIndex);
+    const planned = /\((?:new|planned)\)/i.test(suffix);
+    const existing = entriesByPath.get(path);
+
+    if (!existing) {
+      entriesByPath.set(path, { path, planned });
+      continue;
+    }
+
+    existing.planned = existing.planned || planned;
+  }
+
+  return Array.from(entriesByPath.values());
+}
+
+function isPathWithinRepo(repoPath: string, fullPath: string): boolean {
+  return fullPath === repoPath || fullPath.startsWith(`${repoPath}${sep}`);
 }
 
 /**
@@ -216,20 +286,25 @@ function isBoilerplateValidation(validationSteps: string): boolean {
  */
 export function validateFileExistence(taskPacket: string, repoPath: string): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
+  const repoRoot = resolve(repoPath);
 
   // Check "Key Files" section
   const keyFilesSection = extractSection(taskPacket, 'Key Files');
   if (keyFilesSection) {
-    const filePaths = extractFilePaths(keyFilesSection);
+    const keyFileEntries = parseKeyFileEntries(keyFilesSection);
 
-    for (const filePath of filePaths) {
-      const fullPath = resolve(repoPath, filePath);
-      if (!existsSync(fullPath)) {
+    for (const entry of keyFileEntries) {
+      if (entry.planned) {
+        continue;
+      }
+
+      const fullPath = resolve(repoRoot, entry.path);
+      if (!isPathWithinRepo(repoRoot, fullPath) || !existsSync(fullPath)) {
         issues.push({
           type: 'file-not-found',
           severity: 'error',
           section: 'Key Files',
-          description: `File does not exist: ${filePath}`,
+          description: `File does not exist: ${entry.path}`,
           suggestedFix: `Verify the file path or remove from Key Files if not needed`,
         });
       }
@@ -242,8 +317,8 @@ export function validateFileExistence(taskPacket: string, repoPath: string): Val
     const filePaths = extractFilePaths(filesToModifySection);
 
     for (const filePath of filePaths) {
-      const fullPath = resolve(repoPath, filePath);
-      if (!existsSync(fullPath)) {
+      const fullPath = resolve(repoRoot, filePath);
+      if (!isPathWithinRepo(repoRoot, fullPath) || !existsSync(fullPath)) {
         issues.push({
           type: 'file-not-found',
           severity: 'warning', // Warning because these files might be created

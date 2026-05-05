@@ -418,6 +418,44 @@ fi
 STATE_FILE_PHASES="$TMP_DIR/state-phases.json"
 cat > "$STATE_FILE_PHASES" <<EOF
 {
+  "jobs": {
+    "eval-HOK-1564-primary-101": {
+      "id": "eval-HOK-1564-primary-101",
+      "kind": "eval",
+      "issueId": "HOK-1564",
+      "side": "primary",
+      "pairId": "HOK-1564",
+      "prNumbers": [101],
+      "pid": 123,
+      "startedAt": "2026-05-05T12:00:00Z",
+      "timeoutSeconds": 420,
+      "logPath": "/tmp/eval-HOK-1564-primary-101.log",
+      "resultPath": "/tmp/eval-HOK-1564-primary-101.result.json",
+      "status": "running",
+      "exitCode": null,
+      "finishedAt": null,
+      "reason": null,
+      "excerpt": null,
+      "settled": false
+    },
+    "comparison-HOK-1564-101-102": {
+      "id": "comparison-HOK-1564-101-102",
+      "kind": "comparison",
+      "pairId": "HOK-1564",
+      "prNumbers": [101, 102],
+      "pid": 124,
+      "startedAt": "2026-05-05T12:00:00Z",
+      "timeoutSeconds": 240,
+      "logPath": "/tmp/comparison-HOK-1564-101-102.log",
+      "resultPath": "/tmp/comparison-HOK-1564-101-102.result.json",
+      "status": "failed",
+      "exitCode": 1,
+      "finishedAt": "2026-05-05T12:05:00Z",
+      "reason": "missing_eval_records",
+      "excerpt": "Missing eval records for challenge pair HOK-1564",
+      "settled": false
+    }
+  },
   "tasks": {
     "HOK-1300": {
       "slug": "coding-task",
@@ -467,6 +505,16 @@ if grep -q 'HOK-1301.*review-task.*🔍 review.*● running' "$OUTPUT_PHASES"; t
   pass "shows review phase with emoji"
 else
   fail "review phase row is missing emoji"
+fi
+
+if grep -q '🛠 JOBS' "$OUTPUT_PHASES" \
+  && grep -q 'Tracked background jobs (2)' "$OUTPUT_PHASES" \
+  && grep -q 'eval-HOK-1564-primary-101.log' "$OUTPUT_PHASES" \
+  && grep -q 'comparison-HOK-1564-101-102.log' "$OUTPUT_PHASES" \
+  && grep -q 'Missing eval records for challenge pair HOK-1564' "$OUTPUT_PHASES"; then
+  pass "renders tracked challenge jobs and failure excerpts"
+else
+  fail "dashboard is missing tracked challenge jobs section"
 fi
 
 STATE_FILE_READY="$TMP_DIR/state-ready.json"

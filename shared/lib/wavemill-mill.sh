@@ -3990,48 +3990,72 @@ mark_challenge_compared() {
   fi
 }
 
-monitor_lifecycle_job_key() {
-  local kind="$1" id="$2"
-  printf '%s:%s\n' "$kind" "$id"
+sanitize_job_token() {
+  printf '%s' "${1:-unknown}" | sed 's/[^A-Za-z0-9._-]/-/g'
 }
 
-monitor_lifecycle_job_json() {
-  local key="$1"
-  read_state_value "{}" --arg key "$key" '.monitorLifecycleJobs[$key] // {}'
+challenge_job_dir() {
+  local dir="$REPO_DIR/.wavemill/jobs/$SESSION"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
 }
 
-monitor_save_lifecycle_job() {
-  local key="$1" job_json="$2"
-  state_mutate "$STATE_FILE" \
-    '.monitorLifecycleJobs = (.monitorLifecycleJobs // {}) | .monitorLifecycleJobs[$key] = ($job | fromjson) | .updated = (now | todate)' \
-    --arg key "$key" --arg job "$job_json" >/dev/null || true
+build_eval_job_id() {
+  local issue="$1" side="$2" pr="$3"
+  printf 'eval-%s-%s-%s\n' \
+    "$(sanitize_job_token "$issue")" \
+    "$(sanitize_job_token "$side")" \
+    "$pr"
 }
 
-monitor_remove_lifecycle_job() {
-  local key="$1"
-  state_mutate "$STATE_FILE" \
-    'if (.monitorLifecycleJobs // {} | has($key)) then del(.monitorLifecycleJobs[$key]) | .updated = (now | todate) else . end' \
-    --arg key "$key" >/dev/null || true
+build_comparison_job_id() {
+  local pair_id="$1" primary_pr="$2" challenger_pr="$3"
+  printf 'comparison-%s-%s-%s\n' \
+    "$(sanitize_job_token "$pair_id")" \
+    "$primary_pr" \
+    "$challenger_pr"
 }
 
-log_lifecycle_job_output() {
-  local prefix="$1" log_file="$2" level="${3:-debug}"
-  [[ -f "$log_file" ]] || return 0
-  while IFS= read -r line; do
-    log "$level" "  [$prefix] $line"
-  done < "$log_file"
+read_job_state_value() {
+  local job_id="$1" default="$2" expr="$3"
+  read_state_value "$default" --arg id "$job_id" "$expr"
 }
 
-finalize_challenge_comparison_success() {
-  local pair_id="$1" primary_key="$2" challenger_key="$3" primary_pr="$4" challenger_pr="$5" primary_model="$6" challenger_model="$7"
+launch_tracked_job() {
+  local kind="$1" job_id="$2" issue_id="$3" side="$4" pair_id="$5" pr_numbers="$6" pid="$7" timeout_seconds="$8" log_path="$9" result_path="${10}"
+  local args=(
+    launch
+    --state-file "$STATE_FILE" \
+    --kind "$kind" \
+    --job-id "$job_id" \
+    --pr-numbers "$pr_numbers" \
+    --pid "$pid" \
+    --timeout-seconds "$timeout_seconds" \
+    --log-path "$log_path" \
+    --result-path "$result_path"
+  )
+  [[ -n "$issue_id" ]] && args+=(--issue-id "$issue_id")
+  [[ -n "$side" ]] && args+=(--side "$side")
+  [[ -n "$pair_id" ]] && args+=(--pair-id "$pair_id")
+  npx tsx "$TOOLS_DIR/job-tracker.ts" "${args[@]}" >/dev/null
+}
+
+settle_tracked_job() {
+  local job_id="$1"
+  npx tsx "$TOOLS_DIR/job-tracker.ts" mark-settled \
+    --state-file "$STATE_FILE" \
+    --job-id "$job_id" \
+    >/dev/null
+}
+
+render_challenge_comparison_summary() {
+  local pair_id="$1" primary_pr="$2" challenger_pr="$3" primary_model="$4" challenger_model="$5" result_path="$6"
+  [[ -r "$result_path" ]] || return 0
+
   local compare_json winner winner_model rationale
   local comp_p comp_c cor_p cor_c qual_p qual_c impact_p impact_c auto_p auto_c
-  local primary_eval_score challenger_eval_score loser_key loser_slug loser_pr
-  local disp_primary disp_challenger disp_winner
-
-  mark_challenge_compared "$pair_id"
-
-  compare_json=$(tail -1 "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" 2>/dev/null)
+  local primary_eval_score challenger_eval_score
+  compare_json=$(jq -c '.comparison // {}' "$result_path" 2>/dev/null || echo "{}")
   winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
   winner_model=$(echo "$compare_json" | jq -r '.winnerModel // empty' 2>/dev/null)
   rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
@@ -4048,6 +4072,7 @@ finalize_challenge_comparison_success() {
   auto_p=$(echo "$compare_json" | jq -r '.dimensions.autonomy.primary // "—"' 2>/dev/null)
   auto_c=$(echo "$compare_json" | jq -r '.dimensions.autonomy.challenger // "—"' 2>/dev/null)
 
+  local disp_primary disp_challenger disp_winner
   disp_primary=$(echo "$primary_model" | sed 's/-[0-9]\{8\}$//')
   disp_challenger=$(echo "$challenger_model" | sed 's/-[0-9]\{8\}$//')
   disp_winner=$(echo "$winner_model" | sed 's/-[0-9]\{8\}$//')
@@ -4078,12 +4103,22 @@ finalize_challenge_comparison_success() {
   done
   log "status" "  └────────────────────────────────────────────────────────────┘"
   log "status" ""
+}
 
+handle_comparison_job_success() {
+  local pair_id="$1" primary_key="$2" challenger_key="$3" primary_pr="$4" challenger_pr="$5" result_path="$6"
+  local primary_model challenger_model loser_key loser_slug loser_pr winner
+  primary_model=$(get_task_meta "$primary_key" "challengeModel")
+  challenger_model=$(get_task_meta "$challenger_key" "challengeModel")
+  render_challenge_comparison_summary "$pair_id" "$primary_pr" "$challenger_pr" "$primary_model" "$challenger_model" "$result_path"
+
+  winner=$(jq -r '.comparison.winner // empty' "$result_path" 2>/dev/null || echo "")
   if [[ "$winner" == "primary" ]]; then
     loser_key="$challenger_key"
   elif [[ "$winner" == "challenger" ]]; then
     loser_key="$primary_key"
   fi
+
   if [[ -n "${loser_key:-}" ]]; then
     loser_slug=$(get_task_meta "$loser_key" "slug")
     loser_pr=$(get_task_meta "$loser_key" "pr")
@@ -4103,118 +4138,103 @@ finalize_challenge_comparison_success() {
   fi
 }
 
-finalize_monitor_lifecycle_job() {
-  local key="$1"
-  local job_json kind pid result_file log_file rc issue pr linear_issue pair_id primary_key challenger_key primary_pr challenger_pr primary_model challenger_model
-
-  job_json="$(monitor_lifecycle_job_json "$key")"
-  [[ -n "$job_json" && "$job_json" != "{}" ]] || return 1
-
-  kind=$(jq -r '.kind // empty' <<<"$job_json" 2>/dev/null)
-  pid=$(jq -r '.pid // empty' <<<"$job_json" 2>/dev/null)
-  result_file=$(jq -r '.result // empty' <<<"$job_json" 2>/dev/null)
-  log_file=$(jq -r '.log // empty' <<<"$job_json" 2>/dev/null)
-
-  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-    return 1
+poll_challenge_jobs() {
+  local poll_json
+  if ! poll_json=$(npx tsx "$TOOLS_DIR/job-tracker.ts" poll --state-file "$STATE_FILE" 2>/dev/null); then
+    log_warn "challenge job poll failed"
+    return 0
   fi
-  [[ -n "$result_file" && -f "$result_file" ]] || return 1
 
-  rc=$(cat "$result_file" 2>/dev/null || echo "1")
-  case "$kind" in
-    challenge-eval)
-      issue=$(jq -r '.issue // empty' <<<"$job_json" 2>/dev/null)
-      pr=$(jq -r '.pr // empty' <<<"$job_json" 2>/dev/null)
-      linear_issue=$(jq -r '.linearIssue // empty' <<<"$job_json" 2>/dev/null)
-      log_lifecycle_job_output "challenge-eval" "$log_file" "debug"
-      if [[ "$rc" -eq 0 ]]; then
-        mark_eval_completed "$issue"
-      elif eval_record_exists_for_issue_pr "$linear_issue" "$pr"; then
-        log_warn "challenge eval for $issue exited $rc but a persisted eval record exists; marking evalCompleted=true"
-        mark_eval_completed "$issue"
-      else
-        log_warn "challenge eval failed for $issue (exit $rc); setting evalFailed=true"
-        mark_eval_failed "$issue"
-      fi
-      ;;
-    challenge-comparison)
-      pair_id=$(jq -r '.pairId // empty' <<<"$job_json" 2>/dev/null)
-      primary_key=$(jq -r '.primaryKey // empty' <<<"$job_json" 2>/dev/null)
-      challenger_key=$(jq -r '.challengerKey // empty' <<<"$job_json" 2>/dev/null)
-      primary_pr=$(jq -r '.primaryPr // empty' <<<"$job_json" 2>/dev/null)
-      challenger_pr=$(jq -r '.challengerPr // empty' <<<"$job_json" 2>/dev/null)
-      primary_model=$(jq -r '.primaryModel // empty' <<<"$job_json" 2>/dev/null)
-      challenger_model=$(jq -r '.challengerModel // empty' <<<"$job_json" 2>/dev/null)
-      if [[ "$rc" -eq 0 ]]; then
-        finalize_challenge_comparison_success "$pair_id" "$primary_key" "$challenger_key" "$primary_pr" "$challenger_pr" "$primary_model" "$challenger_model"
-      else
-        log_lifecycle_job_output "challenge-compare" "$log_file" "warn"
-      fi
-      ;;
-  esac
+  while IFS= read -r job_json; do
+    [[ -z "$job_json" ]] && continue
+    local job_id kind status issue_id pair_id excerpt reason log_path result_path side
+    local primary_pr challenger_pr primary_key challenger_key
+    job_id=$(echo "$job_json" | jq -r '.id')
+    kind=$(echo "$job_json" | jq -r '.kind')
+    status=$(echo "$job_json" | jq -r '.status')
+    issue_id=$(echo "$job_json" | jq -r '.issueId // empty')
+    pair_id=$(echo "$job_json" | jq -r '.pairId // empty')
+    excerpt=$(echo "$job_json" | jq -r '.excerpt // empty')
+    reason=$(echo "$job_json" | jq -r '.reason // empty')
+    log_path=$(echo "$job_json" | jq -r '.logPath // empty')
+    result_path=$(echo "$job_json" | jq -r '.resultPath // empty')
+    side=$(echo "$job_json" | jq -r '.side // empty')
 
-  rm -f "$result_file" "$log_file"
-  monitor_remove_lifecycle_job "$key"
-  return 0
+    if [[ "$kind" == "eval" && "$status" == "succeeded" ]]; then
+      log "status" "  ✓ Challenge eval completed for $issue_id${side:+ ($side)}"
+      settle_tracked_job "$job_id"
+      continue
+    fi
+
+    if [[ "$kind" == "comparison" && "$status" == "succeeded" ]]; then
+      primary_pr=$(echo "$job_json" | jq -r '.prNumbers[0] // empty')
+      challenger_pr=$(echo "$job_json" | jq -r '.prNumbers[1] // empty')
+      primary_key="$pair_id"
+      challenger_key="${pair_id}_c"
+      handle_comparison_job_success "$pair_id" "$primary_key" "$challenger_key" "$primary_pr" "$challenger_pr" "$result_path"
+      settle_tracked_job "$job_id"
+      continue
+    fi
+
+    if [[ "$kind" == "eval" && "$reason" == "no_result_file" && -n "$issue_id" ]]; then
+      local pr_num
+      pr_num=$(echo "$job_json" | jq -r '.prNumbers[0] // empty')
+      if [[ -n "$pr_num" ]] && eval_record_exists_for_issue_pr "$issue_id" "$pr_num"; then
+        log_warn "challenge eval for $issue_id had no result file but eval record was persisted; marking completed"
+        mark_eval_completed "$issue_id"
+        settle_tracked_job "$job_id"
+        continue
+      fi
+    fi
+    if [[ "$kind" == "eval" ]]; then
+      log_warn "challenge eval failed for $issue_id (${reason:-$status}); log: $log_path"
+    else
+      log_warn "challenge comparison failed for $pair_id (${reason:-$status}); log: $log_path"
+    fi
+    if [[ -n "$excerpt" ]]; then
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && log_warn "  $line"
+      done <<<"$excerpt"
+    fi
+    settle_tracked_job "$job_id"
+  done < <(echo "$poll_json" | jq -c '.unsettled[]?')
 }
 
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
-  local eval_completed pair_id solution_model linear_issue eval_agent job_key eval_log result_file job_json pid
+  local eval_completed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
-
-  job_key=$(monitor_lifecycle_job_key "challenge-eval" "$issue")
-  if finalize_monitor_lifecycle_job "$job_key"; then
-    eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
-    [[ "$eval_completed" == "true" ]] && return 0
-  fi
-  job_json="$(monitor_lifecycle_job_json "$job_key")"
-  pid=$(jq -r '.pid // empty' <<<"$job_json" 2>/dev/null)
-  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-    return 0
-  fi
 
   pair_id=$(get_task_meta "$issue" "challengePairId")
   solution_model=$(get_task_meta "$issue" "challengeModel")
   linear_issue=$(get_linear_issue_id "$issue")
   eval_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+  side=$(get_task_meta "$issue" "challengeRole")
+  [[ -z "$side" ]] && side="primary"
+  job_id=$(build_eval_job_id "$issue" "$side" "$pr")
+  job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
+  [[ -n "$job_status" ]] && return 0
 
-  eval_log="/tmp/${SESSION}-eval-${issue}.log"
-  result_file="/tmp/${SESSION}-eval-${issue}.rc"
-  rm -f "$eval_log" "$result_file"
-  (
-    rc=0
-    if _with_timeout 420 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
-      --issue "$linear_issue" --pr "$pr" --branch "$branch" \
-      --worktree "${WORKTREE_ROOT}/${slug}" \
-      --workflow-type mill --repo-dir "$REPO_DIR" \
-      --agent "$eval_agent" \
-      --solution-model "$solution_model" \
-      --challenge-pair "$pair_id" \
-      --debug \
-      >"$eval_log" 2>&1; then
-      rc=0
-    else
-      rc=$?
-    fi
-    printf '%s\n' "$rc" > "$result_file"
-  ) &
+  job_dir=$(challenge_job_dir)
+  log_path="$job_dir/${job_id}.log"
+  result_path="$job_dir/${job_id}.result.json"
+
+  npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+    --issue "$linear_issue" --pr "$pr" --branch "$branch" \
+    --worktree "${WORKTREE_ROOT}/${slug}" \
+    --workflow-type mill --repo-dir "$REPO_DIR" \
+    --agent "$eval_agent" \
+    --solution-model "$solution_model" \
+    --challenge-pair "$pair_id" \
+    --result-file "$result_path" \
+    --debug \
+    >"$log_path" 2>&1 &
   pid=$!
-  monitor_save_lifecycle_job "$job_key" "$(jq -cn \
-    --arg kind "challenge-eval" \
-    --arg issue "$issue" \
-    --arg pr "$pr" \
-    --arg branch "$branch" \
-    --arg slug "$slug" \
-    --arg linearIssue "$linear_issue" \
-    --arg log "$eval_log" \
-    --arg result "$result_file" \
-    --arg startedAt "$(monitor_command_timestamp)" \
-    --argjson pid "$pid" \
-    '{kind: $kind, issue: $issue, pr: $pr, branch: $branch, slug: $slug, linearIssue: $linearIssue, log: $log, result: $result, started_at: $startedAt, pid: $pid}')"
-  log "debug" "  ↳ Challenge eval running in background; log: $eval_log"
+
+  launch_tracked_job "eval" "$job_id" "$issue" "$side" "$pair_id" "$pr" "$pid" "420" "$log_path" "$result_path"
+  log "status" "  📊 Challenge eval running in background for $issue (pid $pid)"
 }
 
 launch_background_post_merge_eval() {
@@ -4273,10 +4293,10 @@ launch_background_post_merge_eval() {
 
 maybe_run_challenge_comparison() {
   local issue="$1"
-  local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model compare_log
+  local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model
   local primary_planner primary_reviewer primary_plan_depth primary_code_depth primary_review_mode
   local challenger_planner challenger_reviewer challenger_plan_depth challenger_code_depth challenger_review_mode
-  local job_key job_json pid result_file
+  local job_id job_status job_dir log_path result_path pid
   pair_id=$(get_task_meta "$issue" "challengePairId")
   [[ -z "$pair_id" ]] && return 0
   primary_key="$pair_id"
@@ -4284,22 +4304,14 @@ maybe_run_challenge_comparison() {
   compared=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].challengeCompared // false')
   [[ "$compared" == "true" ]] && return 0
 
-  job_key=$(monitor_lifecycle_job_key "challenge-comparison" "$pair_id")
-  if finalize_monitor_lifecycle_job "$job_key"; then
-    compared=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].challengeCompared // false')
-    [[ "$compared" == "true" ]] && return 0
-  fi
-  job_json="$(monitor_lifecycle_job_json "$job_key")"
-  pid=$(jq -r '.pid // empty' <<<"$job_json" 2>/dev/null)
-  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-    return 0
-  fi
-
   primary_pr=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].pr // empty')
   challenger_pr=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].pr // empty')
   primary_eval=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
   challenger_eval=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
   [[ -z "$primary_pr" || -z "$challenger_pr" || "$primary_eval" != "true" || "$challenger_eval" != "true" ]] && return 0
+  job_id=$(build_comparison_job_id "$pair_id" "$primary_pr" "$challenger_pr")
+  job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
+  [[ -n "$job_status" ]] && return 0
 
   linear_issue=$(get_linear_issue_id "$primary_key")
   primary_model=$(get_task_meta "$primary_key" "challengeModel")
@@ -4318,55 +4330,25 @@ maybe_run_challenge_comparison() {
   challenger_code_depth=$(get_task_meta "$challenger_key" "codeDepth")
   challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
 
-  compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
-  if ! _with_timeout 60 npx tsx "$TOOLS_DIR/compare-prs.ts" \
+  log "status" "  ⚖ Running challenge comparison for $pair_id"
+  job_dir=$(challenge_job_dir)
+  log_path="$job_dir/${job_id}.log"
+  result_path="$job_dir/${job_id}.result.json"
+  npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
     --primary-model "$primary_model" --challenger-model "$challenger_model" \
-    --repo-dir "$REPO_DIR" --check-only >"$compare_log" 2>&1; then
-    log_warn "challenge comparison skipped for $pair_id: evalCompleted=true but eval records are missing"
-    while IFS= read -r line; do log "debug" "  [challenge-compare] $line"; done < "$compare_log"
-    rm -f "$compare_log"
-    return 0
-  fi
-  rm -f "$compare_log"
-
-  log "status" "  ⚖ Running challenge comparison for $pair_id"
-  compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
-  result_file="/tmp/${SESSION}-compare-${pair_id}.rc"
-  rm -f "$compare_log" "$result_file"
-  (
-    rc=0
-    if _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
-      --issue "$linear_issue" --pair-id "$pair_id" \
-      --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
-      --primary-model "$primary_model" --challenger-model "$challenger_model" \
-      --primary-planner "$primary_planner" --primary-reviewer "$primary_reviewer" \
-      --primary-plan-depth "$primary_plan_depth" --primary-code-depth "$primary_code_depth" --primary-review-mode "$primary_review_mode" \
-      --challenger-planner "$challenger_planner" --challenger-reviewer "$challenger_reviewer" \
-      --challenger-plan-depth "$challenger_plan_depth" --challenger-code-depth "$challenger_code_depth" --challenger-review-mode "$challenger_review_mode" \
-      --repo-dir "$REPO_DIR" --comment >"$compare_log" 2>&1; then
-      rc=0
-    else
-      rc=$?
-    fi
-    printf '%s\n' "$rc" > "$result_file"
-  ) &
+    --primary-planner "$primary_planner" --primary-reviewer "$primary_reviewer" \
+    --primary-plan-depth "$primary_plan_depth" --primary-code-depth "$primary_code_depth" --primary-review-mode "$primary_review_mode" \
+    --challenger-planner "$challenger_planner" --challenger-reviewer "$challenger_reviewer" \
+    --challenger-plan-depth "$challenger_plan_depth" --challenger-code-depth "$challenger_code_depth" --challenger-review-mode "$challenger_review_mode" \
+    --repo-dir "$REPO_DIR" --comment \
+    --result-file "$result_path" \
+    >"$log_path" 2>&1 &
   pid=$!
-  monitor_save_lifecycle_job "$job_key" "$(jq -cn \
-    --arg kind "challenge-comparison" \
-    --arg pairId "$pair_id" \
-    --arg primaryKey "$primary_key" \
-    --arg challengerKey "$challenger_key" \
-    --arg primaryPr "$primary_pr" \
-    --arg challengerPr "$challenger_pr" \
-    --arg primaryModel "$primary_model" \
-    --arg challengerModel "$challenger_model" \
-    --arg log "$compare_log" \
-    --arg result "$result_file" \
-    --arg startedAt "$(monitor_command_timestamp)" \
-    --argjson pid "$pid" \
-    '{kind: $kind, pairId: $pairId, primaryKey: $primaryKey, challengerKey: $challengerKey, primaryPr: $primaryPr, challengerPr: $challengerPr, primaryModel: $primaryModel, challengerModel: $challengerModel, log: $log, result: $result, started_at: $startedAt, pid: $pid}')"
+
+  launch_tracked_job "comparison" "$job_id" "" "" "$pair_id" "${primary_pr},${challenger_pr}" "$pid" "240" "$log_path" "$result_path"
+  log "status" "  ⚖ Challenge comparison running in background for $pair_id (pid $pid)"
 }
 
 # Archive stage artifacts from worktree before cleanup.
@@ -7632,7 +7614,6 @@ while :; do
   while consume_next_command; do
     case "$REPLY" in
       quit)
-        acknowledge_command_offset "$REPLY_OFFSET"
         if [[ "$QUIT_REQUESTED" == "true" ]]; then
           quit_and_kill_session "Force quitting (${_active_count_prev} task(s) still active)."
         elif (( _active_count_prev == 0 )); then
@@ -7643,11 +7624,12 @@ while :; do
         fi
         ;;
       *)
-        requeue_consumed_command_front
+        COMMAND_QUEUE=("$REPLY" "${COMMAND_QUEUE[@]+"${COMMAND_QUEUE[@]}"}")
         break
         ;;
     esac
   done
+  poll_challenge_jobs
   check_control_pane_health
   wavemill_pr_cache_refresh
   active_count=0
@@ -7689,10 +7671,7 @@ while :; do
     # Still have active tasks — keep monitoring but accept 'q' for force-quit
     if consume_next_command; then
       if [[ "$REPLY" == "quit" ]]; then
-        acknowledge_command_offset "$REPLY_OFFSET"
         quit_and_kill_session "Force quitting ($active_count task(s) still active)."
-      else
-        requeue_consumed_command_front
       fi
     fi
     poll_sleep "$POLL_SECONDS"
@@ -7704,144 +7683,251 @@ while :; do
   free_slots=$((EFFECTIVE_MAX_PARALLEL - (active_count - active_challenger_count)))
   update_free_slots_state "$free_slots"
 
-  candidates=""
-  available=""
-  avail_unblocked=""
-  avail_blocked=""
-  avail_blocked_count=0
-  queue_plan_json=""
-  GROUPED_DISPLAY=""
-  GROUPED_SELECT_FROM=""
-
   if (( free_slots > 0 )); then
     candidates=$(fetch_candidates)
+
     if [[ -n "$candidates" ]]; then
       available=$(filter_active_issues "$candidates")
-    fi
-  fi
 
-  if [[ -n "$available" ]]; then
-    avail_unblocked=$(echo "$available" | awk -F'|' '$6 == 0 || $6 == ""')
-    avail_blocked=$(echo "$available" | awk -F'|' '$6 > 0')
-    [[ -n "$avail_blocked" ]] && avail_blocked_count=$(echo "$avail_blocked" | grep -c .)
+      if [[ -n "$available" ]]; then
+        # Split into unblocked and blocked
+        # Field 6 is blocked_by_count (has_detailed_plan stripped by fetch_candidates)
+        avail_unblocked=$(echo "$available" | awk -F'|' '$6 == 0 || $6 == ""')
+        avail_blocked=$(echo "$available" | awk -F'|' '$6 > 0')
+        avail_blocked_count=0
+        [[ -n "$avail_blocked" ]] && avail_blocked_count=$(echo "$avail_blocked" | grep -c .)
 
-    if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
-      render_grouped_task_list "$queue_plan_json" "$available"
-      if [[ -n "$GROUPED_DISPLAY" ]]; then
-        USING_GROUPED_VIEW=true
+        # Only re-render the prompt when the display would actually change
+        queue_fp="${QUEUE_PLAN_CACHE:0:50}"
+        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}"
+        if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
+          SELECT_SHOW_ALL=false
+          if (( TASK_LIST_RENDERED == 1 )); then
+            tput rc 2>/dev/null || true
+            tput ed 2>/dev/null || printf '\033[J'
+          else
+            echo ""
+            tput sc 2>/dev/null || true
+          fi
+          echo "Next tasks:"
+          queue_plan_json=""
+          GROUPED_DISPLAY=""
+          GROUPED_SELECT_FROM=""
+          if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
+            render_grouped_task_list "$queue_plan_json" "$available"
+            if [[ -n "$GROUPED_DISPLAY" ]]; then
+              echo "$GROUPED_DISPLAY"
+              select_from="$GROUPED_SELECT_FROM"
+              USING_GROUPED_VIEW=true
+            fi
+          fi
+          if [[ -z "$GROUPED_DISPLAY" ]]; then
+            USING_GROUPED_VIEW=false
+            [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
+            if [[ -n "$avail_unblocked" ]]; then
+              echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
+            else
+              echo "  (no unblocked tasks)"
+            fi
+            if (( avail_blocked_count > 0 )); then
+              echo ""
+              echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
+            fi
+          fi
+          echo ""
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+          elif (( avail_blocked_count > 0 )); then
+            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+          else
+            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+          fi
+          LAST_DISPLAY="$display_fingerprint"
+          LAST_ACTIVE_COUNT=$active_count
+          LAST_WAITING_MSG=""  # Clear waiting state when tasks are available
+          TASK_LIST_RENDERED=1
+        fi
+
+        # Default: selection against unblocked list only
+        select_from="$avail_unblocked"
+        if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+          select_from="$GROUPED_SELECT_FROM"
+        elif [[ "$SELECT_SHOW_ALL" == "true" ]]; then
+          select_from=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
+        fi
+
+        REPLY=""
+        if consume_next_command; then
+          case "$REPLY" in
+            enter) ;;
+            select\ *) REPLY="${REPLY#select }" ;;
+            more) REPLY="m" ;;
+            quit) REPLY="q" ;;
+            unknown\ *) REPLY="unknown ${REPLY#unknown }" ;;
+            *) REPLY="" ;;
+          esac
+        fi
+
+        if [[ "$REPLY" =~ ^[Qq]$ ]]; then
+          if (( active_count == 0 )); then
+            quit_and_kill_session "Quitting."
+          elif [[ "$QUIT_REQUESTED" == "true" ]]; then
+            quit_and_kill_session "Force quitting ($active_count task(s) still active)."
+          else
+            log "status" "Will quit after $active_count active task(s) finish. Press q again to force quit."
+            QUIT_REQUESTED=true
+          fi
+        elif [[ "$REPLY" =~ ^[mM]$ ]]; then
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            :
+          else
+            clear_task_list_display
+            all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
+            echo ""
+            log "info" "All tasks:"
+            ln=0
+            while IFS= read -r mline; do
+              ln=$((ln + 1))
+              IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
+              if (( mblocked > 0 )); then
+                printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
+              else
+                printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
+              fi
+            done <<<"$all_avail"
+            echo ""
+            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            SELECT_SHOW_ALL=true
+          fi
+        elif [[ "$REPLY" =~ ^unknown\  ]]; then
+          log_warn "Unknown input: ${REPLY#unknown }"
+        elif [[ "$REPLY" == "enter" ]]; then
+          if [[ "${ENTER_LAUNCHES_WAVE:-true}" == "true" ]] && [[ -n "$QUEUE_PLAN_CACHE" ]]; then
+            wave_result=$(invoke_first_wave_helper "$QUEUE_PLAN_CACHE" "$avail_unblocked" "$free_slots" 2>/dev/null) || wave_result=""
+            if [[ -n "$wave_result" ]]; then
+              wave_ids=$(jq -r '.wave[]?' <<<"$wave_result" 2>/dev/null) || wave_ids=""
+              deferred_ids=$(jq -r '.deferred[]?' <<<"$wave_result" 2>/dev/null) || deferred_ids=""
+              if [[ -z "$wave_ids" ]]; then
+                log "status" "No tasks currently available, waiting on dependencies."
+              else
+                [[ -n "$deferred_ids" ]] && log "debug" "[wave-launch] deferred=$(tr '\n' ',' <<<"$deferred_ids" | sed 's/,$//')"
+                wave_selected_lines=""
+                while IFS= read -r wid; do
+                  [[ -z "$wid" ]] && continue
+                  wline=$(grep -m1 "^${wid}|" <<<"$avail_unblocked" 2>/dev/null || echo "")
+                  [[ -n "$wline" ]] && wave_selected_lines+="${wline}"$'\n'
+                done <<<"$wave_ids"
+                if [[ -n "$wave_selected_lines" ]]; then
+                  launched=0
+                  while IFS= read -r local_line; do
+                    [[ -z "$local_line" ]] && continue
+                    (( launched >= free_slots )) && break
+                    IFS='|' read -r sel_issue sel_slug sel_title _rest <<<"$local_line"
+                    launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+                    launched=$((launched + LAST_LAUNCHED_SLOTS))
+                  done <<<"$wave_selected_lines"
+                  LAST_BACKLOG_FETCH=0; LAST_DISPLAY=""; SELECT_SHOW_ALL=false
+                  USING_GROUPED_VIEW=false
+                  clear_task_list_display
+                fi
+              fi
+            fi
+          fi
+        elif [[ -n "$REPLY" ]]; then
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            select_from="$GROUPED_SELECT_FROM"
+          elif [[ "$SELECT_SHOW_ALL" == "true" ]]; then
+            select_from=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
+          fi
+          # Parse user selection and launch tasks (up to free_slots)
+          launched=0
+          selected_lines=""
+          for n in $REPLY; do
+            # Validate n is a positive integer to prevent sed injection
+            if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
+              log_warn "Invalid selection: $n (must be a number)"
+              continue
+            fi
+            if (( launched >= free_slots )); then
+              log_warn "No more free slots — skipping remaining selections"
+              break
+            fi
+            local_line=$(echo "$select_from" | sed -n "${n}p")
+            if [[ -z "$local_line" ]]; then
+              log_warn "Invalid selection: $n"
+              continue
+            fi
+            selected_lines+="${local_line}"$'\n'
+            launched=$((launched + 1))
+          done
+
+          if (( launched > 1 )); then
+            if batch_route_selected_tasks "$selected_lines"; then
+              log "info" "Prepared batch routing for $launched selected tasks"
+            else
+              log_warn "Batch routing failed for selected tasks; falling back to per-task routing"
+            fi
+          fi
+
+          launched=0
+          while IFS= read -r local_line; do
+            [[ -z "$local_line" ]] && continue
+            IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
+            launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+            launched=$((launched + LAST_LAUNCHED_SLOTS))
+            if (( launched >= free_slots )); then
+              break
+            fi
+          done <<<"$selected_lines"
+          # Invalidate caches after launching so next cycle re-renders
+          LAST_BACKLOG_FETCH=0
+          LAST_DISPLAY=""
+          LAST_WAITING_MSG=""  # Clear waiting state
+          SELECT_SHOW_ALL=false
+          USING_GROUPED_VIEW=false
+          clear_task_list_display
+        fi
+        poll_sleep "$POLL_SECONDS"
       else
-        USING_GROUPED_VIEW=false
+        # All candidates are already active
+        clear_task_list_display
+        if (( active_count == 0 )); then
+          waiting_msg="No new tasks available. Waiting... (type 'q' to quit)"
+          if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
+            log "status" "$waiting_msg"
+            LAST_WAITING_MSG="$waiting_msg"
+          fi
+          if consume_next_command && [[ "$REPLY" == "quit" ]]; then
+            quit_and_kill_session
+          fi
+          poll_sleep "$POLL_SECONDS"
+        else
+          poll_sleep "$POLL_SECONDS"
+        fi
       fi
     else
-      queue_plan_json=""
-      USING_GROUPED_VIEW=false
+      # Backlog empty
+      clear_task_list_display
+      if (( active_count == 0 )); then
+        waiting_msg="Backlog empty. Waiting for new tasks... (type 'q' to quit)"
+        if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
+          log "status" "$waiting_msg"
+          LAST_WAITING_MSG="$waiting_msg"
+        fi
+        # Invalidate cache so we re-fetch next cycle
+        LAST_BACKLOG_FETCH=0
+        if consume_next_command && [[ "$REPLY" == "quit" ]]; then
+          quit_and_kill_session
+        fi
+        poll_sleep "$POLL_SECONDS"
+      else
+        poll_sleep "$POLL_SECONDS"
+      fi
     fi
   else
-    USING_GROUPED_VIEW=false
-  fi
-
-  select_from="$avail_unblocked"
-  if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
-    select_from="$GROUPED_SELECT_FROM"
-  elif [[ "$SELECT_SHOW_ALL" == "true" ]]; then
-    select_from=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep . || true)
-  fi
-
-  process_new_monitor_commands "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked" "$select_from"
-  free_slots="$REMAINING_FREE_SLOTS"
-
-  select_from="$avail_unblocked"
-  if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
-    select_from="$GROUPED_SELECT_FROM"
-  elif [[ "$SELECT_SHOW_ALL" == "true" ]]; then
-    select_from=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep . || true)
-  fi
-
-  process_deferred_monitor_commands "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked" "$select_from"
-  free_slots="$REMAINING_FREE_SLOTS"
-
-  if [[ -n "$available" ]]; then
-    queue_fp="${QUEUE_PLAN_CACHE:0:50}"
-    display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}|${SELECT_SHOW_ALL}|${USING_GROUPED_VIEW}"
-    if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
-      if (( TASK_LIST_RENDERED == 1 )); then
-        tput rc 2>/dev/null || true
-        tput ed 2>/dev/null || printf '\033[J'
-      else
-        echo ""
-        tput sc 2>/dev/null || true
-      fi
-      echo "Next tasks:"
-      if [[ "$USING_GROUPED_VIEW" == "true" && -n "$GROUPED_DISPLAY" ]]; then
-        echo "$GROUPED_DISPLAY"
-      else
-        [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
-        if [[ "$SELECT_SHOW_ALL" == "true" ]]; then
-          log "info" "All tasks:"
-          all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep . || true)
-          ln=0
-          while IFS= read -r mline; do
-            [[ -z "$mline" ]] && continue
-            ln=$((ln + 1))
-            IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
-            if (( mblocked > 0 )); then
-              printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
-            else
-              printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
-            fi
-          done <<<"$all_avail"
-        elif [[ -n "$avail_unblocked" ]]; then
-          echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
-        else
-          echo "  (no unblocked tasks)"
-        fi
-        if [[ "$SELECT_SHOW_ALL" != "true" ]] && (( avail_blocked_count > 0 )); then
-          echo ""
-          echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
-        fi
-      fi
-      echo ""
-      if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
-        echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
-      elif (( avail_blocked_count > 0 )) && [[ "$SELECT_SHOW_ALL" != "true" ]]; then
-        echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
-      else
-        echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
-      fi
-      LAST_DISPLAY="$display_fingerprint"
-      LAST_ACTIVE_COUNT=$active_count
-      LAST_WAITING_MSG=""
-      TASK_LIST_RENDERED=1
-    fi
-    poll_sleep "$POLL_SECONDS"
-    continue
-  elif (( free_slots > 0 )) && [[ -n "$candidates" ]]; then
-    clear_task_list_display
-    if (( active_count == 0 )); then
-      waiting_msg="No new tasks available. Waiting... (type 'q' to quit)"
-      if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
-        log "status" "$waiting_msg"
-        LAST_WAITING_MSG="$waiting_msg"
-      fi
-    fi
-    poll_sleep "$POLL_SECONDS"
-    continue
-  elif (( free_slots > 0 )); then
-    clear_task_list_display
-    if (( active_count == 0 )); then
-      waiting_msg="Backlog empty. Waiting for new tasks... (type 'q' to quit)"
-      if [[ "$waiting_msg" != "$LAST_WAITING_MSG" ]]; then
-        log "status" "$waiting_msg"
-        LAST_WAITING_MSG="$waiting_msg"
-      fi
-      LAST_BACKLOG_FETCH=0
-    fi
-    poll_sleep "$POLL_SECONDS"
-    continue
-  else
+    # All slots full — just monitor
     clear_task_list_display
     poll_sleep "$POLL_SECONDS"
-    continue
   fi
 done
 MONITOR_EOF
