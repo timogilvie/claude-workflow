@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
 import { clearConfigCache } from './config.ts';
-import { enrichPostCompletionRecord, runPostCompletionEval } from './post-completion-hook.ts';
+import { isEvalSuccess } from './eval-success-policy.ts';
+import {
+  collectPostCompletionOutcomes,
+  enrichPostCompletionRecord,
+  postCompletionHookDeps,
+  runPostCompletionEval,
+} from './post-completion-hook.ts';
 
 let passed = 0;
 let failed = 0;
@@ -44,6 +50,82 @@ function makeRecord(): EvalRecord {
       },
     },
   };
+}
+
+function makeInterventionSummary(reviewComments = 0) {
+  return {
+    interventions: reviewComments > 0
+      ? [{ type: 'review_comment', count: reviewComments, details: ['requested change'] }]
+      : [],
+    totalInterventionScore: reviewComments > 0 ? 0.1 : 0,
+  };
+}
+
+function makeEligibleRepo(repoDir: string, slug: string, issueId: string): void {
+  const featureDir = join(repoDir, 'features', slug);
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(
+    join(repoDir, '.wavemill-config.json'),
+    JSON.stringify({
+      router: {
+        availableModels: {
+          planner: ['gpt-5.5'],
+          coder: ['gpt-5.4'],
+          reviewer: ['claude-sonnet-4-6'],
+        },
+      },
+    }),
+  );
+  writeFileSync(
+    join(featureDir, '.routing-complete'),
+    JSON.stringify({
+      planner: 'gpt-5.5',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-4-6',
+      codeDepth: 'deep',
+      reviewMode: 'full',
+      maxCostUsd: 6.5,
+    }),
+  );
+  writeFileSync(
+    join(featureDir, '.initial-route.json'),
+    JSON.stringify({
+      planner: 'gpt-5.5',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-4-6',
+      codeDepth: 'deep',
+      reviewMode: 'full',
+    }),
+  );
+  mkdirSync(join(repoDir, '.wavemill', 'evals', 'artifacts', issueId), { recursive: true });
+}
+
+async function withMockedPostCompletionDeps(fn: () => Promise<void> | void): Promise<void> {
+  const evalContextGatherer = await import('./eval-context-gatherer.ts');
+  const shellUtils = await import('./shell-utils.ts');
+  const interventionDetector = await import('./intervention-detector.ts');
+  const evalAnalysis = await import('./eval-analysis.ts');
+  const evalModule = await import('./eval.ts');
+  const evalPersistence = await import('./eval-persistence.ts');
+  const outcomeCollectors = await import('./outcome-collectors.ts');
+
+  try {
+    await fn();
+  } finally {
+    postCompletionHookDeps.gatherEvalContext = evalContextGatherer.gatherEvalContext;
+    postCompletionHookDeps.gatherStageArtifacts = evalContextGatherer.gatherStageArtifacts;
+    postCompletionHookDeps.execShellCommand = shellUtils.execShellCommand;
+    postCompletionHookDeps.detectAndFormatInterventions = interventionDetector.detectAndFormatInterventions;
+    postCompletionHookDeps.runEvalAnalysis = evalAnalysis.runEvalAnalysis;
+    postCompletionHookDeps.evaluateTask = evalModule.evaluateTask;
+    postCompletionHookDeps.appendEvalRecord = evalPersistence.appendEvalRecord;
+    postCompletionHookDeps.collectCiOutcome = outcomeCollectors.collectCiOutcome;
+    postCompletionHookDeps.collectTestsOutcome = outcomeCollectors.collectTestsOutcome;
+    postCompletionHookDeps.collectStaticAnalysisOutcome = outcomeCollectors.collectStaticAnalysisOutcome;
+    postCompletionHookDeps.collectReviewOutcome = outcomeCollectors.collectReviewOutcome;
+    postCompletionHookDeps.collectReworkOutcome = outcomeCollectors.collectReworkOutcome;
+    postCompletionHookDeps.collectDeliveryOutcome = outcomeCollectors.collectDeliveryOutcome;
+  }
 }
 
 console.log('\n--- post-completion-hook Tests ---\n');
@@ -196,6 +278,219 @@ await test('runPostCompletionEval returns false when no issue or PR is provided'
   assert.equal(persisted, false);
 });
 
+await test('collectPostCompletionOutcomes returns stable defaults without PR or branch', () => {
+  const outcomes = collectPostCompletionOutcomes({
+    repoDir: process.cwd(),
+    interventionSummary: makeInterventionSummary(1),
+  });
+
+  assert.equal(outcomes.success, false);
+  assert.equal(outcomes.ci, undefined);
+  assert.equal(outcomes.tests, undefined);
+  assert.equal(outcomes.staticAnalysis, undefined);
+  assert.deepEqual(outcomes.review, {
+    humanReviewRequired: true,
+    rounds: 0,
+    approvals: 0,
+    changeRequests: 0,
+  });
+  assert.deepEqual(outcomes.rework, { agentIterations: 0 });
+  assert.deepEqual(outcomes.delivery, { prCreated: false, merged: false });
+});
+
+await test('runPostCompletionEval persists outcomes and clears missing_outcome eligibility failure', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-persist-'));
+  makeEligibleRepo(repoDir, 'persist-outcomes', 'HOK-1550');
+  clearConfigCache(repoDir);
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      postCompletionHookDeps.gatherEvalContext = () => ({
+        taskPrompt: 'Persist outcomes in post-completion evals',
+        prDiff: '+++ shared/lib/post-completion-hook.ts',
+        prUrl: 'https://example.test/pr/1550',
+        issueData: null,
+      });
+      postCompletionHookDeps.gatherStageArtifacts = () => ({
+        taskPacket: undefined,
+        planContent: undefined,
+        selfReviewSummary: undefined,
+        routingDecision: {
+          candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+          chosen: { agentType: 'codex', modelId: 'gpt-5.4' },
+          decisionPolicyVersion: 'baseline',
+          decisionRationale: 'selected coder',
+        },
+        executionModel: 'gpt-5.4',
+      });
+      postCompletionHookDeps.detectAndFormatInterventions = () => ({
+        meta: [],
+        records: [],
+        text: 'No interventions.',
+        totalCount: 0,
+        summary: makeInterventionSummary(0),
+      });
+      postCompletionHookDeps.runEvalAnalysis = async () => ({
+        difficultyData: {
+          difficultyBand: 'medium',
+          difficultySignals: { locTouched: 20, filesTouched: 1 },
+          stratum: 'ts_node_med',
+        },
+        taskContextData: {
+          taskType: 'feature',
+          changeKind: 'modify_existing',
+          complexity: 'm',
+        },
+        repoContextData: {
+          repoId: 'repo',
+          repoVisibility: 'private',
+          primaryLanguage: 'TypeScript',
+          languages: { TypeScript: 100 },
+          frameworks: ['Node'],
+          repoSize: { fileCount: 10, loc: 1000, dependencyCount: 3 },
+        },
+      });
+      postCompletionHookDeps.collectCiOutcome = () => ({ ran: true, passed: true, checks: [] });
+      postCompletionHookDeps.collectTestsOutcome = () => ({ added: true, passRate: 1 });
+      postCompletionHookDeps.collectStaticAnalysisOutcome = () => ({ lintDelta: 0, typecheckPassed: true });
+      postCompletionHookDeps.collectReviewOutcome = () => ({
+        humanReviewRequired: false,
+        rounds: 1,
+        approvals: 1,
+        changeRequests: 0,
+      });
+      postCompletionHookDeps.collectReworkOutcome = () => ({ agentIterations: 2 });
+      postCompletionHookDeps.collectDeliveryOutcome = () => ({ prCreated: true, merged: false });
+      postCompletionHookDeps.evaluateTask = async (_input, outcomes) => ({
+        ...makeRecord(),
+        modelId: '',
+        modelVersion: '',
+        workflowCost: 2.25,
+        workflowTokenUsage: {},
+        constraints: { maxCostUsd: 6.5 },
+        routingDecision: {
+          candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+          chosen: { agentType: 'codex', modelId: 'gpt-5.4' },
+          decisionPolicyVersion: 'baseline',
+          decisionRationale: 'selected coder',
+        },
+        outcomes,
+      });
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1550',
+        prNumber: '1550',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/persist-outcomes',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    const evalsPath = join(repoDir, '.wavemill', 'evals', 'evals.jsonl');
+    const persistedLines = readFileSync(evalsPath, 'utf8').trim().split('\n');
+    const record = JSON.parse(persistedLines.at(-1) || '{}');
+
+    assert.ok(record.outcomes);
+    assert.equal(record.outcomes.success, isEvalSuccess(record));
+    assert.deepEqual(record.outcomes.ci, { ran: true, passed: true, checks: [] });
+    assert.deepEqual(record.outcomes.tests, { added: true, passRate: 1 });
+    assert.ok(!record.eligibilityErrors.includes('missing_outcome'));
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval degrades to default outcomes when a collector throws', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-fallback-'));
+  makeEligibleRepo(repoDir, 'collector-fallback', 'HOK-1551');
+  clearConfigCache(repoDir);
+
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message?: unknown, ...args: unknown[]) => {
+    warnings.push([message, ...args].map(String).join(' '));
+  };
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      postCompletionHookDeps.gatherEvalContext = () => ({
+        taskPrompt: 'Persist outcomes in post-completion evals',
+        prDiff: '+++ shared/lib/post-completion-hook.ts',
+        prUrl: 'https://example.test/pr/1551',
+        issueData: null,
+      });
+      postCompletionHookDeps.gatherStageArtifacts = () => ({
+        taskPacket: undefined,
+        planContent: undefined,
+        selfReviewSummary: undefined,
+        routingDecision: undefined,
+        executionModel: 'gpt-5.4',
+      });
+      postCompletionHookDeps.detectAndFormatInterventions = () => ({
+        meta: [],
+        records: [],
+        text: 'No interventions.',
+        totalCount: 0,
+        summary: makeInterventionSummary(1),
+      });
+      postCompletionHookDeps.runEvalAnalysis = async () => ({
+        difficultyData: null,
+        taskContextData: null,
+        repoContextData: null,
+      });
+      postCompletionHookDeps.collectCiOutcome = () => {
+        throw new Error('ci exploded');
+      };
+      postCompletionHookDeps.collectTestsOutcome = () => ({ added: false });
+      postCompletionHookDeps.collectStaticAnalysisOutcome = () => ({});
+      postCompletionHookDeps.collectReviewOutcome = () => ({
+        humanReviewRequired: true,
+        rounds: 0,
+        approvals: 0,
+        changeRequests: 0,
+      });
+      postCompletionHookDeps.collectReworkOutcome = () => ({ agentIterations: 0 });
+      postCompletionHookDeps.collectDeliveryOutcome = () => ({ prCreated: true, merged: false });
+      postCompletionHookDeps.evaluateTask = async (_input, outcomes) => ({
+        ...makeRecord(),
+        workflowCost: 1.5,
+        workflowTokenUsage: {},
+        constraints: { maxCostUsd: 6.5 },
+        routingDecision: undefined,
+        outcomes,
+      });
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1551',
+        prNumber: '1551',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/collector-fallback',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    const evalsPath = join(repoDir, '.wavemill', 'evals', 'evals.jsonl');
+    const persistedLines = readFileSync(evalsPath, 'utf8').trim().split('\n');
+    const record = JSON.parse(persistedLines.at(-1) || '{}');
+
+    assert.deepEqual(record.outcomes.ci, { ran: false, passed: true, checks: [] });
+    assert.ok(warnings.some((entry) => entry.includes('failed to collect ci outcome - ci exploded')));
+  } finally {
+    console.warn = originalWarn;
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 await test('enrichPostCompletionRecord falls back to archived routing-complete data', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-archive-'));
   const archiveDir = join(repoDir, '.wavemill', 'evals', 'artifacts', 'HOK-1123');
@@ -292,6 +587,113 @@ await test('enrichPostCompletionRecord preserves DeepSeek model identity before 
     assert.equal(record.trainingEligible, true);
     assert.ok(!record.eligibilityErrors?.includes('missing_model_identity'));
   } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('enrichPostCompletionRecord marks complete records with outcomes as training eligible', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-eligible-'));
+  const featureDir = join(repoDir, 'features', 'eligible-task');
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(
+    join(repoDir, '.wavemill-config.json'),
+    JSON.stringify({
+      router: {
+        availableModels: {
+          planner: ['gpt-5.5'],
+          coder: ['gpt-5.4'],
+          reviewer: ['claude-sonnet-4-6'],
+        },
+      },
+    }),
+  );
+  writeFileSync(
+    join(featureDir, '.routing-complete'),
+    JSON.stringify({
+      planner: 'gpt-5.5',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-4-6',
+      codeDepth: 'deep',
+      reviewMode: 'full',
+      maxCostUsd: 6.5,
+    }),
+  );
+  writeFileSync(
+    join(featureDir, '.initial-route.json'),
+    JSON.stringify({
+      planner: 'gpt-5.5',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-4-6',
+      codeDepth: 'deep',
+      reviewMode: 'full',
+    }),
+  );
+
+  try {
+    const record = makeRecord();
+    record.modelId = 'gpt-5.4';
+    record.modelVersion = 'gpt-5.4';
+    record.routingDecision = {
+      candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+      chosen: { agentType: 'codex', modelId: 'gpt-5.4' },
+      decisionPolicyVersion: 'baseline',
+      decisionRationale: 'selected coder',
+    };
+    record.workflowCost = 2.1;
+    record.workflowTokenUsage = {};
+    record.outcomes = {
+      success: true,
+      ci: { ran: true, passed: true, checks: [] },
+      tests: { added: true, passRate: 1 },
+      staticAnalysis: { lintDelta: 0, typecheckPassed: true },
+      review: { humanReviewRequired: false, rounds: 1, approvals: 1, changeRequests: 0 },
+      rework: { agentIterations: 1 },
+      delivery: { prCreated: true, merged: false },
+    };
+
+    enrichPostCompletionRecord(record, {
+      repoDir,
+      issueId: 'HOK-1550',
+      branchName: 'task/eligible-task',
+      worktreePath: repoDir,
+      agentType: 'codex',
+      originalPrompt: 'Persist outcomes in post-completion evals',
+      prDiff: '+++ shared/lib/post-completion-hook.ts',
+      record,
+      difficultyData: {
+        difficultyBand: 'medium',
+        difficultySignals: { locTouched: 20, filesTouched: 1 },
+        stratum: 'ts_node_med',
+      },
+      taskContextData: {
+        taskType: 'feature',
+        changeKind: 'modify_existing',
+        complexity: 'm',
+      },
+      repoContextData: {
+        repoId: 'repo',
+        repoVisibility: 'private',
+        primaryLanguage: 'TypeScript',
+        languages: { TypeScript: 100 },
+        frameworks: ['Node'],
+        repoSize: { fileCount: 10, loc: 1000, dependencyCount: 3 },
+      },
+      costOutcome: {
+        status: 'success',
+        totalCostUsd: 2.1,
+        models: {},
+        sessionCount: 1,
+        turnCount: 2,
+        pricingUsed: {},
+      },
+      interventionRecords: [],
+      routingDecision: record.routingDecision,
+    });
+
+    assert.equal(record.trainingEligible, true);
+    assert.ok(!record.eligibilityErrors?.includes('missing_outcome'));
+  } finally {
+    clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });
   }
 });

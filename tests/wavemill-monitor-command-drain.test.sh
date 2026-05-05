@@ -408,24 +408,27 @@ mapfile -t T8 < "$TEST_TMP/t8.out"
 [[ "${T8[0]:-0}" == "1" ]] && pass "run_with_command_drain drains commands during child execution" || fail "run_with_command_drain drains commands during child execution (got ${T8[0]:-?})"
 
 # ============================================================================
-# TEST 9: Structural guard — run_with_command_drain wraps lifecycle calls
+# TEST 9: Structural guard — lifecycle work runs without blocking the monitor
 # ============================================================================
+# Lifecycle calls must keep the monitor responsive. Two acceptable patterns:
+#   - run_with_command_drain (synchronous wrapper that drains while child runs)
+#   - launch_tracked_job (background &-detached job tracked by the job poller)
 echo ""
-echo "=== Test 9: structural guard — run_with_command_drain in lifecycle ==="
+echo "=== Test 9: structural guard — lifecycle work does not block monitor ==="
 
 EVAL_FN=$(awk '/^maybe_run_challenge_eval\(\) \{/,/^\}/' <<< "$HEREDOC_CONTENT")
 COMP_FN=$(awk '/^maybe_run_challenge_comparison\(\) \{/,/^\}/' <<< "$HEREDOC_CONTENT")
 
-if grep -q 'run_with_command_drain' <<< "$EVAL_FN"; then
-  pass "maybe_run_challenge_eval uses run_with_command_drain"
+if grep -qE 'run_with_command_drain|launch_tracked_job' <<< "$EVAL_FN"; then
+  pass "maybe_run_challenge_eval keeps monitor responsive (drain or tracked job)"
 else
-  fail "maybe_run_challenge_eval uses run_with_command_drain"
+  fail "maybe_run_challenge_eval keeps monitor responsive (drain or tracked job)"
 fi
 
-if grep -q 'run_with_command_drain' <<< "$COMP_FN"; then
-  pass "maybe_run_challenge_comparison uses run_with_command_drain"
+if grep -qE 'run_with_command_drain|launch_tracked_job' <<< "$COMP_FN"; then
+  pass "maybe_run_challenge_comparison keeps monitor responsive (drain or tracked job)"
 else
-  fail "maybe_run_challenge_comparison uses run_with_command_drain"
+  fail "maybe_run_challenge_comparison keeps monitor responsive (drain or tracked job)"
 fi
 
 if grep -qE '^run_with_command_drain\(\) \{' <<< "$HEREDOC_CONTENT"; then

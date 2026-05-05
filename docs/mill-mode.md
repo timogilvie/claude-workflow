@@ -162,6 +162,12 @@ Challenge mode adds a second PR for the same task and records a comparison resul
 - winner
 - loser
 
+Challenge post-PR evals and PR comparisons now run as monitored background jobs instead of blocking the main monitor loop.
+
+- Job state is persisted under `.wavemill/workflow-state.json` in `jobs`.
+- Logs and structured result files live under `.wavemill/jobs/<session>/`.
+- Failed or timed-out jobs surface compact excerpts in the dashboard so the monitor can keep draining commands and launching other work.
+
 If the pair is unresolved, tend blocks both sides from autonomous merge. If a winner is recorded and challenge auto-merge is enabled, the winner remains eligible, the loser is marked superseded, and tend closes the loser PR with a cleanup comment. If auto-merge is disabled for winners, the winning PR is still held for manual action.
 
 ## Promotion

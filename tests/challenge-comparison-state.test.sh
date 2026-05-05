@@ -44,6 +44,16 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 FUNCTION_FILE="$TEST_TMP/challenge-comparison-functions.sh"
 extract_function_occurrence "$MILL_SCRIPT" "save_task_state" 2 > "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
+extract_function_occurrence "$MILL_SCRIPT" "sanitize_job_token" 1 >> "$FUNCTION_FILE"
+printf '\n' >> "$FUNCTION_FILE"
+extract_function_occurrence "$MILL_SCRIPT" "challenge_job_dir" 1 >> "$FUNCTION_FILE"
+printf '\n' >> "$FUNCTION_FILE"
+extract_function_occurrence "$MILL_SCRIPT" "build_comparison_job_id" 1 >> "$FUNCTION_FILE"
+printf '\n' >> "$FUNCTION_FILE"
+extract_function_occurrence "$MILL_SCRIPT" "read_job_state_value" 1 >> "$FUNCTION_FILE"
+printf '\n' >> "$FUNCTION_FILE"
+extract_function_occurrence "$MILL_SCRIPT" "launch_tracked_job" 1 >> "$FUNCTION_FILE"
+printf '\n' >> "$FUNCTION_FILE"
 extract_function_occurrence "$MILL_SCRIPT" "maybe_run_challenge_comparison" 1 >> "$FUNCTION_FILE"
 
 if [[ ! -s "$FUNCTION_FILE" ]]; then
@@ -101,9 +111,9 @@ bash -lc '
 
   SESSION="challenge-comparison-state-test"
   TOOLS_DIR="/tmp"
-  REPO_DIR="/tmp"
+  REPO_DIR="$(mktemp -d)"
   STATE_FILE="$2"
-  COMPARE_CALLS=0
+  TRACK_LAUNCH_CALLS=0
 
   log() { :; }
   log_warn() { :; }
@@ -136,9 +146,11 @@ bash -lc '
       ".tasks[\$issue][\$field] // empty" "$STATE_FILE"
   }
 
-  _with_timeout() {
-    COMPARE_CALLS=$((COMPARE_CALLS + 1))
-    return 1
+  npx() {
+    if [[ "$*" == *"job-tracker.ts"* && "$*" == *" launch "* ]]; then
+      TRACK_LAUNCH_CALLS=$((TRACK_LAUNCH_CALLS + 1))
+    fi
+    return 0
   }
 
   save_task_state "pair-1" "pair-1" "task/pair-1" "/tmp/pair-1" "324" "merged" "codex"
@@ -147,15 +159,23 @@ bash -lc '
   status_after_merge=$(jq -r ".tasks[\"pair-1\"].status" "$STATE_FILE")
 
   maybe_run_challenge_comparison "pair-1_c"
+  launches_after_compared="$TRACK_LAUNCH_CALLS"
 
-  printf "%s\n%s\n%s\n" "$compared_after_merge" "$status_after_merge" "$COMPARE_CALLS"
+  jq --arg id "comparison-pair-1-324-325" \
+    ".jobs = {(\$id): {id:\$id, status:\"running\"}}" "$STATE_FILE" > "$STATE_FILE.tmp"
+  mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  maybe_run_challenge_comparison "pair-1_c"
+
+  printf "%s\n%s\n%s\n%s\n" "$compared_after_merge" "$status_after_merge" "$launches_after_compared" "$TRACK_LAUNCH_CALLS"
 ' bash "$FUNCTION_FILE" "$STATE_FILE" "$REPO_DIR" > "$TEST_DIR/output.txt"
 
 mapfile -t RESULTS < "$TEST_DIR/output.txt"
 
 check_eq "challengeCompared survives monitor save_task_state" "true" "${RESULTS[0]:-}"
 check_eq "merge update still sets merged status" "merged" "${RESULTS[1]:-}"
-check_eq "comparison does not rerun after merged update" "0" "${RESULTS[2]:-}"
+check_eq "comparison does not relaunch when already compared" "0" "${RESULTS[2]:-}"
+check_eq "active comparison job suppresses duplicate launch" "0" "${RESULTS[3]:-}"
 
 echo ""
 echo "Passed: $PASS"
