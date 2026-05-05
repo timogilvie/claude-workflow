@@ -289,6 +289,27 @@ gather_tasks() {
   fi
 }
 
+gather_jobs() {
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  jq -r '
+    (.jobs // {}) |
+    if type == "array" then .[] else (to_entries[] | .value) end |
+    select(.kind == "eval" or .kind == "comparison") |
+    [
+      .id,
+      .kind,
+      (.status // ""),
+      (.issueId // "-"),
+      (.side // "-"),
+      (.pairId // "-"),
+      ((.prNumbers // []) | map(tostring) | join("/")),
+      (.startedAt // "-"),
+      (.logPath // "-"),
+      ((.excerpt // "") | gsub("[\r\n]+"; " "))
+    ] | join("|")
+  ' "$STATE_FILE" 2>/dev/null
+}
+
 # ── Check if a task is still active ──────────────────────────────────────
 # A task is active if its worktree exists OR its tmux window exists.
 
@@ -309,6 +330,23 @@ truncate_detail() {
     echo "${detail:0:52}..."
   else
     echo "$detail"
+  fi
+}
+
+format_job_elapsed() {
+  local started_at="$1"
+  local start_epoch now elapsed
+  start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${started_at%%.*}" "+%s" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  if (( start_epoch <= 0 || now < start_epoch )); then
+    echo "—"
+    return
+  fi
+  elapsed=$(( (now - start_epoch) / 60 ))
+  if (( elapsed < 60 )); then
+    printf "%dm" "$elapsed"
+  else
+    printf "%dh%dm" $((elapsed / 60)) $((elapsed % 60))
   fi
 }
 
@@ -522,6 +560,44 @@ render_queued_section() {
   done
 }
 
+render_jobs_section() {
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  local jobs count=0 line
+  jobs=$(gather_jobs)
+  [[ -z "$jobs" ]] && return 0
+
+  printf "${EL}\n${B}%s${N}${EL}\n" "🛠 JOBS" >> "$FRAME"
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    count=$((count + 1))
+  done <<<"$jobs"
+  printf "${D}Tracked background jobs (${count})${N}${EL}\n" >> "$FRAME"
+
+  while IFS='|' read -r job_id kind job_status issue side pair_id prs started_at log_path excerpt; do
+    local label elapsed status_str target detail
+    elapsed=$(format_job_elapsed "$started_at")
+    label="$kind"
+    target="$issue"
+    [[ "$kind" == "eval" && "$side" != "-" ]] && target="${issue}:${side}"
+    [[ "$kind" == "comparison" ]] && target="${pair_id}:${prs}"
+
+    case "$job_status" in
+      running) status_str="${G}running${N}" ;;
+      succeeded) status_str="${G}succeeded${N}" ;;
+      timeout) status_str="${Y}timeout${N}" ;;
+      *) status_str="${R}${job_status}${N}" ;;
+    esac
+
+    printf "%-10s  %-18s  %6s  %b  %s${EL}\n" "$label" "$target" "$elapsed" "$status_str" "$(basename "$log_path")" >> "$FRAME"
+    if [[ "$job_status" == "failed" || "$job_status" == "timeout" ]]; then
+      detail="$excerpt"
+      [[ -z "$detail" ]] && detail="$log_path"
+      detail=$(truncate_detail "$detail")
+      printf "${D}%10s  %18s  %6s  └─ %s${N}${EL}\n" "" "" "" "$detail" >> "$FRAME"
+    fi
+  done <<<"$jobs"
+}
+
 # Clear saved scrollback lines without blanking the visible pane. This keeps
 # tmux history from accumulating stale dashboards while avoiding a full-screen
 # flash on every refresh.
@@ -591,6 +667,7 @@ render_dashboard() {
 
     render_inbox_section
     render_active_section
+    render_jobs_section
     render_queued_section
   fi
 
