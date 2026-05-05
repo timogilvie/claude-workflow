@@ -36,10 +36,20 @@ import {
 } from './route-artifact.ts';
 import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, formatRepoContextDisplay, formatInterventionDisplay } from './eval-summary-printer.ts';
 import { errorMessage } from './error-utils.ts';
-import type { EvalRecord, EvalRouteProvenance, InterventionRecord, RoutingDecision, TaskContext, RepoContext } from './eval-schema.ts';
+import { isEvalSuccess } from './eval-success-policy.ts';
+import {
+  collectCiOutcome,
+  collectTestsOutcome,
+  collectStaticAnalysisOutcome,
+  collectReviewOutcome,
+  collectReworkOutcome,
+  collectDeliveryOutcome,
+} from './outcome-collectors.ts';
+import type { EvalRecord, EvalRouteProvenance, InterventionRecord, RoutingDecision, TaskContext, RepoContext, Outcomes } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome } from './workflow-cost.ts';
+import type { InterventionSummary } from './intervention-detector.ts';
 
 function isFiniteNonNegativeBudget(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -60,6 +70,24 @@ function resolvePostCompletionBudget(input: Pick<PostCompletionEnrichmentInput, 
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+export const postCompletionHookDeps = {
+  gatherEvalContext,
+  gatherStageArtifacts,
+  execShellCommand,
+  detectAndFormatInterventions,
+  runEvalAnalysis,
+  collectCiOutcome,
+  collectTestsOutcome,
+  collectStaticAnalysisOutcome,
+  collectReviewOutcome,
+  collectReworkOutcome,
+  collectDeliveryOutcome,
+  evaluateTask,
+  appendEvalRecord,
+  loadPricingTable,
+  computeWorkflowCost,
+};
 
 export interface PostCompletionContext {
   issueId?: string;
@@ -143,6 +171,106 @@ function deriveRouteProvenance(
 ): EvalRouteProvenance | null {
   const { featureDir, archiveDir } = resolveRouteArtifactDirs(repoDir, branchName, worktreePath, issueId);
   return buildRouteLifecycleProvenance(readRouteLifecycleArtifacts(featureDir, archiveDir), repoDir);
+}
+
+function collectOutcomePart<T>(name: string, collect: () => T, fallback: T): T {
+  try {
+    return collect();
+  } catch (err) {
+    const message = errorMessage(err);
+    console.warn(`Post-completion eval: failed to collect ${name} outcome - ${message}`);
+    return fallback;
+  }
+}
+
+function collectPostCompletionOutcomes(input: {
+  prNumber?: string;
+  branchName: string;
+  repoDir: string;
+  worktreePath?: string;
+  agentType?: string;
+  issueId?: string;
+  interventionSummary: InterventionSummary;
+}): Outcomes {
+  // Don't initialize success - it will be computed from score after evaluation via isEvalSuccess().
+  // If we set success: false initially, isEvalSuccess will just return false without checking score.
+  const outcomes: any = {};
+
+  // Required fields with fallbacks
+  if (input.prNumber) {
+    outcomes.ci = collectOutcomePart(
+      'ci',
+      () => postCompletionHookDeps.collectCiOutcome(input.prNumber!, input.repoDir),
+      undefined
+    );
+
+    if (input.branchName) {
+      outcomes.tests = collectOutcomePart(
+        'tests',
+        () => postCompletionHookDeps.collectTestsOutcome(input.prNumber!, input.branchName, 'main', input.repoDir),
+        undefined
+      );
+
+      outcomes.staticAnalysis = collectOutcomePart(
+        'staticAnalysis',
+        () => postCompletionHookDeps.collectStaticAnalysisOutcome(input.prNumber!, input.branchName, 'main', input.repoDir),
+        undefined
+      );
+    }
+
+    outcomes.review = collectOutcomePart(
+      'review',
+      () => postCompletionHookDeps.collectReviewOutcome(
+        input.prNumber!,
+        input.interventionSummary,
+        input.repoDir,
+        undefined,
+        input.issueId,
+        input.branchName
+      ),
+      {
+        humanReviewRequired: input.interventionSummary.interventions.some(
+          (e) => e.type === 'review_comment' && e.count > 0
+        ),
+        rounds: 0,
+        approvals: 0,
+        changeRequests: 0,
+      }
+    );
+
+    outcomes.delivery = collectOutcomePart(
+      'delivery',
+      () => postCompletionHookDeps.collectDeliveryOutcome(input.prNumber!, input.repoDir),
+      { prCreated: false, merged: false }
+    );
+  } else {
+    outcomes.review = {
+      humanReviewRequired: input.interventionSummary.interventions.some(
+        (e) => e.type === 'review_comment' && e.count > 0
+      ),
+      rounds: 0,
+      approvals: 0,
+      changeRequests: 0,
+    };
+
+    outcomes.delivery = {
+      prCreated: false,
+      merged: false,
+    };
+  }
+
+  outcomes.rework = collectOutcomePart(
+    'rework',
+    () => postCompletionHookDeps.collectReworkOutcome(
+      input.worktreePath || input.repoDir,
+      input.branchName,
+      input.agentType,
+      input.repoDir
+    ),
+    { agentIterations: 0 }
+  );
+
+  return outcomes as Outcomes;
 }
 
 export function buildTaskDescriptorForPostCompletion(
@@ -269,7 +397,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     console.log('Post-completion eval: gathering context...');
 
     // 1. Gather eval context (issue + PR data)
-    const evalContext = gatherEvalContext({
+    const evalContext = postCompletionHookDeps.gatherEvalContext({
       issueId: ctx.issueId,
       prNumber: ctx.prNumber,
       prUrl: ctx.prUrl,
@@ -280,13 +408,13 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     let branchName = ctx.branchName || '';
     if (!branchName) {
       try {
-        branchName = execShellCommand('git branch --show-current', {
+        branchName = postCompletionHookDeps.execShellCommand('git branch --show-current', {
           encoding: 'utf-8', cwd: repoDir,
         }).trim();
       } catch { /* best-effort */ }
     }
 
-    const stageArtifacts = gatherStageArtifacts(
+    const stageArtifacts = postCompletionHookDeps.gatherStageArtifacts(
       repoDir,
       ctx.issueId || '',
       branchName,
@@ -296,7 +424,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     // 3. Detect all interventions
     console.log('Post-completion eval: detecting interventions...');
 
-    const interventionData = detectAndFormatInterventions({
+    const interventionData = postCompletionHookDeps.detectAndFormatInterventions({
       prNumber: ctx.prNumber,
       branchName,
       baseBranch: 'main',
@@ -308,7 +436,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     console.log(`Post-completion eval: ${formatInterventionDisplay(interventionData.totalCount)}`);
 
     // 3. Run independent analyses in parallel (non-blocking, failures logged as warnings)
-    const { difficultyData, repoContextData, taskContextData } = await runEvalAnalysis({
+    const { difficultyData, repoContextData, taskContextData } = await postCompletionHookDeps.runEvalAnalysis({
       prDiff: evalContext.prDiff,
       prNumber: ctx.prNumber,
       repoDir,
@@ -321,9 +449,34 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       },
     });
 
-    // 4. Run eval judge
+    // 4. Collect outcome components
+    console.log('Post-completion eval: collecting outcome components...');
+    const outcomes = collectPostCompletionOutcomes({
+      prNumber: ctx.prNumber,
+      branchName,
+      repoDir,
+      worktreePath: ctx.worktreePath,
+      agentType: ctx.agentType,
+      issueId: ctx.issueId,
+      interventionSummary: interventionData.summary,
+    });
+
+    // Log concise outcome summary
+    console.log(
+      `  CI: ${outcomes.ci?.ran ? (outcomes.ci.passed ? 'passed' : 'failed') : 'not run'}`
+    );
+    console.log(`  Tests: ${outcomes.tests?.added ? 'added' : 'none added'}`);
+    console.log(
+      `  Review: ${outcomes.review.approvals} approvals, ${outcomes.review.changeRequests} change requests`
+    );
+    console.log(`  Rework: ${outcomes.rework.agentIterations} iterations`);
+    console.log(
+      `  Delivery: ${outcomes.delivery.merged ? 'merged' : outcomes.delivery.prCreated ? 'PR created' : 'no PR'}`
+    );
+
+    // 5. Run eval judge
     console.log('Post-completion eval: invoking LLM judge...');
-    const record = await evaluateTask({
+    const record = await postCompletionHookDeps.evaluateTask({
       taskPrompt: evalContext.taskPrompt,
       prReviewOutput: evalContext.prDiff,
       interventions: interventionData.meta,
@@ -336,7 +489,12 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       planContent: stageArtifacts.planContent,
       selfReviewSummary: stageArtifacts.selfReviewSummary,
       routingDecision: stageArtifacts.routingDecision,
-    });
+    }, outcomes);
+
+    // Set success flag based on score threshold
+    if (record.outcomes) {
+      record.outcomes.success = isEvalSuccess(record);
+    }
 
     const executionModel = ctx.solutionModel || stageArtifacts.executionModel;
     if (executionModel) {
@@ -344,7 +502,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       record.modelVersion = executionModel;
     }
 
-    // 5. Compute workflow cost
+    // 6. Compute workflow cost
     let costOutcome: ReturnType<typeof computeWorkflowCost> | null = null;
     if (ctx.worktreePath && branchName) {
       console.log('Post-completion eval: computing workflow cost...');
@@ -358,13 +516,13 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
 
       try {
         const wavemillConfigDir = resolve(__dirname, '../..');
-        const pricingTable = loadPricingTable(wavemillConfigDir);
+        const pricingTable = postCompletionHookDeps.loadPricingTable(wavemillConfigDir);
 
         if (debug) {
           console.log(`[DEBUG_COST]   Loaded pricing for ${Object.keys(pricingTable).length} model(s)`);
         }
 
-        costOutcome = computeWorkflowCost({
+        costOutcome = postCompletionHookDeps.computeWorkflowCost({
           worktreePath: ctx.worktreePath,
           branchName,
           repoDir,
@@ -411,7 +569,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       console.log('Post-completion eval: skipping workflow cost (missing worktreePath or branchName)');
     }
 
-    // 6. Enrich record with all metadata
+    // 7. Enrich record with all metadata
     enrichPostCompletionRecord(record, {
       repoDir,
       issueId: ctx.issueId,
@@ -430,15 +588,15 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       routingDecision: stageArtifacts.routingDecision,
     });
 
-    // 7. Persist
+    // 8. Persist
     const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
-    appendEvalRecord(record, { dir: evalsDir });
+    postCompletionHookDeps.appendEvalRecord(record, { dir: evalsDir });
     persisted = true;
 
-    // 8. Update project context
+    // 9. Update project context
     await updateProjectContext(ctx, evalContext.prDiff, evalContext.taskPrompt);
 
-    // 9. Print summary
+    // 10. Print summary
     printEvalSummary(record);
     return true;
   } catch (error: unknown) {

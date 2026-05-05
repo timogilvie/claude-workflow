@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { mock } from 'node:test';
 import type { EvalRecord } from './eval-schema.ts';
 import { clearConfigCache } from './config.ts';
-import { enrichPostCompletionRecord, runPostCompletionEval } from './post-completion-hook.ts';
+import { enrichPostCompletionRecord, runPostCompletionEval, postCompletionHookDeps } from './post-completion-hook.ts';
 
 let passed = 0;
 let failed = 0;
@@ -291,6 +292,341 @@ await test('enrichPostCompletionRecord preserves DeepSeek model identity before 
     assert.equal(record.provider, 'deepseek');
     assert.equal(record.trainingEligible, true);
     assert.ok(!record.eligibilityErrors?.includes('missing_model_identity'));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval passes collected outcomes to evaluateTask and persists success', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-outcomes-'));
+  const evalsDir = join(repoDir, '.wavemill', 'evals');
+  mkdirSync(evalsDir, { recursive: true });
+
+  const capturedRecord: any[] = [];
+  const capturedOutcomes: any[] = [];
+
+  const testContext = {
+    issueId: 'HOK-1550',
+    prNumber: '789',
+    prUrl: 'https://github.com/example/repo/pull/789',
+    workflowType: 'mill',
+    repoDir,
+    branchName: 'task/test-outcomes',
+    worktreePath: repoDir,
+    agentType: 'claude',
+  };
+
+  try {
+    // Stub all dependencies using mocks with proper cleanup
+    const stubs = {
+      gatherEvalContext: mock.method(postCompletionHookDeps, 'gatherEvalContext', () => ({
+        issueId: 'HOK-1550',
+        prNumber: '789',
+        prUrl: 'https://github.com/example/repo/pull/789',
+        taskPrompt: 'Implement feature X',
+        prDiff: '+++ src/index.ts\n+function newFeature() {}',
+      })),
+      gatherStageArtifacts: mock.method(postCompletionHookDeps, 'gatherStageArtifacts', () => ({
+        taskPacket: 'Task packet content',
+        planContent: 'Plan content',
+        selfReviewSummary: 'Review summary',
+        executionModel: 'claude-sonnet-4-6',
+        routingDecision: undefined,
+      })),
+      execShellCommand: mock.method(postCompletionHookDeps, 'execShellCommand', () => 'task/test-outcomes'),
+      detectAndFormatInterventions: mock.method(postCompletionHookDeps, 'detectAndFormatInterventions', () => ({
+        totalCount: 1,
+        summary: { interventions: [{ type: 'clarification', count: 1 }], totalInterventionScore: 0.1 },
+        meta: [],
+        records: [],
+        text: 'One clarification',
+      })),
+      runEvalAnalysis: mock.method(postCompletionHookDeps, 'runEvalAnalysis', async () => ({
+        difficultyData: null,
+        repoContextData: null,
+        taskContextData: null,
+      })),
+      collectCiOutcome: mock.method(postCompletionHookDeps, 'collectCiOutcome', () => ({
+        ran: true,
+        passed: true,
+        checks: [],
+      })),
+      collectTestsOutcome: mock.method(postCompletionHookDeps, 'collectTestsOutcome', () => ({
+        added: true,
+        passRate: 1.0,
+      })),
+      collectStaticAnalysisOutcome: mock.method(postCompletionHookDeps, 'collectStaticAnalysisOutcome', () => ({
+        typecheckPassed: true,
+      })),
+      collectReviewOutcome: mock.method(postCompletionHookDeps, 'collectReviewOutcome', () => ({
+        humanReviewRequired: false,
+        rounds: 1,
+        approvals: 1,
+        changeRequests: 0,
+      })),
+      collectReworkOutcome: mock.method(postCompletionHookDeps, 'collectReworkOutcome', () => ({
+        agentIterations: 1,
+      })),
+      collectDeliveryOutcome: mock.method(postCompletionHookDeps, 'collectDeliveryOutcome', () => ({
+        prCreated: true,
+        merged: false,
+      })),
+      evaluateTask: mock.method(postCompletionHookDeps, 'evaluateTask', async (input: any, outcomes: any) => {
+        assert.ok(outcomes, 'outcomes should be passed to evaluateTask');
+        assert.ok(outcomes.ci, 'outcomes.ci should be present');
+        assert.equal(outcomes.review.approvals, 1, 'outcomes.review should have correct approvals');
+        capturedOutcomes.push(outcomes);
+        return {
+          ...makeRecord(),
+          outcomes,
+          score: 0.9,
+          scoreBand: 'Minor Feedback',
+        };
+      }),
+      appendEvalRecord: mock.method(postCompletionHookDeps, 'appendEvalRecord', (record: any) => {
+        capturedRecord.push(record);
+      }),
+      loadPricingTable: mock.method(postCompletionHookDeps, 'loadPricingTable', () => ({})),
+      computeWorkflowCost: mock.method(postCompletionHookDeps, 'computeWorkflowCost', () => ({
+        status: 'skipped',
+        reason: 'test',
+      })),
+    };
+
+    const result = await runPostCompletionEval(testContext);
+
+    assert.equal(result, true, 'should return true when eval persists');
+    assert.equal(capturedRecord.length, 1, 'should capture one record');
+    assert.equal(capturedOutcomes.length, 1, 'should pass outcomes to evaluateTask');
+
+    const record = capturedRecord[0];
+    assert.ok(record.outcomes, 'record should have outcomes');
+    assert.equal(record.outcomes.success, true, 'outcomes.success should be true for score 0.9');
+    assert.ok(record.outcomes.ci, 'outcomes should have ci');
+    assert.equal(record.outcomes.review.approvals, 1, 'outcomes should have correct review data');
+
+    // Cleanup
+    Object.values(stubs).forEach(stub => {
+      if (stub && typeof stub === 'object' && 'restore' in stub) {
+        (stub as any).restore();
+      }
+    });
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval degrades throwing collectors to partial outcomes', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-degrade-'));
+  const evalsDir = join(repoDir, '.wavemill', 'evals');
+  mkdirSync(evalsDir, { recursive: true });
+
+  const capturedRecord: any[] = [];
+
+  const testContext = {
+    issueId: 'HOK-1551',
+    prNumber: '790',
+    prUrl: 'https://github.com/example/repo/pull/790',
+    workflowType: 'mill',
+    repoDir,
+    branchName: 'task/test-degrade',
+    worktreePath: repoDir,
+    agentType: 'claude',
+  };
+
+  try {
+    const stubs = {
+      gatherEvalContext: mock.method(postCompletionHookDeps, 'gatherEvalContext', () => ({
+        issueId: 'HOK-1551',
+        prNumber: '790',
+        prUrl: 'https://github.com/example/repo/pull/790',
+        taskPrompt: 'Implement feature Y',
+        prDiff: '+++ src/index.ts\n+function anotherFeature() {}',
+      })),
+      gatherStageArtifacts: mock.method(postCompletionHookDeps, 'gatherStageArtifacts', () => ({
+        taskPacket: 'Task packet',
+        planContent: 'Plan',
+        selfReviewSummary: 'Review',
+        executionModel: 'claude-sonnet-4-6',
+        routingDecision: undefined,
+      })),
+      execShellCommand: mock.method(postCompletionHookDeps, 'execShellCommand', () => 'task/test-degrade'),
+      detectAndFormatInterventions: mock.method(postCompletionHookDeps, 'detectAndFormatInterventions', () => ({
+        totalCount: 0,
+        summary: { interventions: [], totalInterventionScore: 0 },
+        meta: [],
+        records: [],
+        text: 'No interventions',
+      })),
+      runEvalAnalysis: mock.method(postCompletionHookDeps, 'runEvalAnalysis', async () => ({
+        difficultyData: null,
+        repoContextData: null,
+        taskContextData: null,
+      })),
+      collectCiOutcome: mock.method(postCompletionHookDeps, 'collectCiOutcome', () => {
+        throw new Error('GitHub API error');
+      }),
+      collectTestsOutcome: mock.method(postCompletionHookDeps, 'collectTestsOutcome', () => ({
+        added: true,
+      })),
+      collectStaticAnalysisOutcome: mock.method(postCompletionHookDeps, 'collectStaticAnalysisOutcome', () => ({
+        typecheckPassed: true,
+      })),
+      collectReviewOutcome: mock.method(postCompletionHookDeps, 'collectReviewOutcome', () => ({
+        humanReviewRequired: false,
+        rounds: 0,
+        approvals: 1,
+        changeRequests: 0,
+      })),
+      collectReworkOutcome: mock.method(postCompletionHookDeps, 'collectReworkOutcome', () => ({
+        agentIterations: 0,
+      })),
+      collectDeliveryOutcome: mock.method(postCompletionHookDeps, 'collectDeliveryOutcome', () => ({
+        prCreated: true,
+        merged: false,
+      })),
+      evaluateTask: mock.method(postCompletionHookDeps, 'evaluateTask', async (input: any, outcomes: any) => {
+        assert.equal(outcomes.ci, undefined, 'outcomes.ci should be undefined when collector throws');
+        assert.ok(outcomes.review, 'outcomes.review should still be populated');
+        return {
+          ...makeRecord(),
+          outcomes,
+          score: 0.75,
+          scoreBand: 'Assisted Success',
+        };
+      }),
+      appendEvalRecord: mock.method(postCompletionHookDeps, 'appendEvalRecord', (record: any) => {
+        capturedRecord.push(record);
+      }),
+      loadPricingTable: mock.method(postCompletionHookDeps, 'loadPricingTable', () => ({})),
+      computeWorkflowCost: mock.method(postCompletionHookDeps, 'computeWorkflowCost', () => ({
+        status: 'skipped',
+        reason: 'test',
+      })),
+    };
+
+    const result = await runPostCompletionEval(testContext);
+
+    assert.equal(result, true, 'hook should return true on collector failure');
+    assert.equal(capturedRecord.length, 1, 'should still capture record');
+
+    const record = capturedRecord[0];
+    assert.ok(record.outcomes, 'record should have outcomes');
+    assert.equal(record.outcomes.ci, undefined, 'outcomes.ci should be undefined');
+    assert.ok(record.outcomes.review, 'outcomes.review should be present');
+
+    Object.values(stubs).forEach(stub => {
+      if (stub && typeof stub === 'object' && 'restore' in stub) {
+        (stub as any).restore();
+      }
+    });
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval sets outcomes.success false for failing scores', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-failing-'));
+  const evalsDir = join(repoDir, '.wavemill', 'evals');
+  mkdirSync(evalsDir, { recursive: true });
+
+  const capturedRecord: any[] = [];
+
+  const testContext = {
+    issueId: 'HOK-1552',
+    prNumber: '791',
+    prUrl: 'https://github.com/example/repo/pull/791',
+    workflowType: 'mill',
+    repoDir,
+    branchName: 'task/test-failing',
+    worktreePath: repoDir,
+    agentType: 'claude',
+  };
+
+  try {
+    const stubs = {
+      gatherEvalContext: mock.method(postCompletionHookDeps, 'gatherEvalContext', () => ({
+        issueId: 'HOK-1552',
+        prNumber: '791',
+        prUrl: 'https://github.com/example/repo/pull/791',
+        taskPrompt: 'Task description',
+        prDiff: '+++ index.ts',
+      })),
+      gatherStageArtifacts: mock.method(postCompletionHookDeps, 'gatherStageArtifacts', () => ({
+        taskPacket: undefined,
+        planContent: undefined,
+        selfReviewSummary: undefined,
+        executionModel: undefined,
+      })),
+      execShellCommand: mock.method(postCompletionHookDeps, 'execShellCommand', () => 'task/test-failing'),
+      detectAndFormatInterventions: mock.method(postCompletionHookDeps, 'detectAndFormatInterventions', () => ({
+        totalCount: 0,
+        summary: { interventions: [], totalInterventionScore: 0 },
+        meta: [],
+        records: [],
+        text: '',
+      })),
+      runEvalAnalysis: mock.method(postCompletionHookDeps, 'runEvalAnalysis', async () => ({
+        difficultyData: null,
+        repoContextData: null,
+        taskContextData: null,
+      })),
+      collectCiOutcome: mock.method(postCompletionHookDeps, 'collectCiOutcome', () => ({
+        ran: false,
+        passed: false,
+        checks: [],
+      })),
+      collectTestsOutcome: mock.method(postCompletionHookDeps, 'collectTestsOutcome', () => ({
+        added: false,
+      })),
+      collectStaticAnalysisOutcome: mock.method(postCompletionHookDeps, 'collectStaticAnalysisOutcome', () => ({
+        typecheckPassed: false,
+      })),
+      collectReviewOutcome: mock.method(postCompletionHookDeps, 'collectReviewOutcome', () => ({
+        humanReviewRequired: true,
+        rounds: 0,
+        approvals: 0,
+        changeRequests: 1,
+      })),
+      collectReworkOutcome: mock.method(postCompletionHookDeps, 'collectReworkOutcome', () => ({
+        agentIterations: 0,
+      })),
+      collectDeliveryOutcome: mock.method(postCompletionHookDeps, 'collectDeliveryOutcome', () => ({
+        prCreated: false,
+        merged: false,
+      })),
+      evaluateTask: mock.method(postCompletionHookDeps, 'evaluateTask', async (input: any, outcomes: any) => {
+        return {
+          ...makeRecord(),
+          outcomes,
+          score: 0.05,
+          scoreBand: 'Failure',
+        };
+      }),
+      appendEvalRecord: mock.method(postCompletionHookDeps, 'appendEvalRecord', (record: any) => {
+        capturedRecord.push(record);
+      }),
+      loadPricingTable: mock.method(postCompletionHookDeps, 'loadPricingTable', () => ({})),
+      computeWorkflowCost: mock.method(postCompletionHookDeps, 'computeWorkflowCost', () => ({
+        status: 'skipped',
+        reason: 'test',
+      })),
+    };
+
+    const result = await runPostCompletionEval(testContext);
+
+    assert.equal(result, true, 'should return true');
+    assert.equal(capturedRecord.length, 1, 'should capture record');
+
+    const record = capturedRecord[0];
+    assert.ok(record.outcomes, 'record should have outcomes');
+    assert.equal(record.outcomes.success, false, 'outcomes.success should be false for score 0.05');
+
+    Object.values(stubs).forEach(stub => {
+      if (stub && typeof stub === 'object' && 'restore' in stub) {
+        (stub as any).restore();
+      }
+    });
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
