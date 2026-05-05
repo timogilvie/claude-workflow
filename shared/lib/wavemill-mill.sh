@@ -4232,7 +4232,6 @@ maybe_run_challenge_eval() {
     --debug \
     >"$log_path" 2>&1 &
   pid=$!
-  disown "$pid" 2>/dev/null || true
 
   launch_tracked_job "eval" "$job_id" "$issue" "$side" "$pair_id" "$pr" "$pid" "420" "$log_path" "$result_path"
   log "status" "  📊 Challenge eval running in background for $issue (pid $pid)"
@@ -4347,7 +4346,6 @@ maybe_run_challenge_comparison() {
     --result-file "$result_path" \
     >"$log_path" 2>&1 &
   pid=$!
-  disown "$pid" 2>/dev/null || true
 
   launch_tracked_job "comparison" "$job_id" "" "" "$pair_id" "${primary_pr},${challenger_pr}" "$pid" "240" "$log_path" "$result_path"
   log "status" "  ⚖ Challenge comparison running in background for $pair_id (pid $pid)"
@@ -5744,8 +5742,8 @@ USING_GROUPED_VIEW=false
 GROUPED_SELECT_FROM=""
 GROUPED_DISPLAY=""
 declare -a COMMAND_QUEUE=()
+declare -a COMMAND_QUEUE_OFFSETS=()
 COMMAND_FILE="$(wavemill_command_file_path "$SESSION")"
-COMMAND_OFFSET_FILE="$(wavemill_command_offset_path "$SESSION")"
 COMMAND_OFFSET_WARNED=false
 
 clear_task_list_display() {
@@ -5756,68 +5754,181 @@ clear_task_list_display() {
   fi
 }
 
-read_command_offset() {
-  local line_count offset_raw
-  line_count=0
+monitor_command_timestamp() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+read_command_file_line_count() {
+  local line_count=0
   [[ -f "$COMMAND_FILE" ]] && line_count=$(wc -l < "$COMMAND_FILE" 2>/dev/null | tr -d ' ')
   [[ "$line_count" =~ ^[0-9]+$ ]] || line_count=0
+  printf '%s\n' "$line_count"
+}
 
-  # Persist any init-at-EOF decision: returning $line_count without writing it
-  # back leaves drain_command_events permanently stuck at "line_count <= offset"
-  # because every subsequent read recomputes the same EOF position.
-  if [[ ! -f "$COMMAND_OFFSET_FILE" ]]; then
+read_command_offset() {
+  local line_count offset_raw
+  line_count=$(read_command_file_line_count)
+
+  if [[ ! -r "$STATE_FILE" || ! -s "$STATE_FILE" ]]; then
+    printf '%s\n' "0"
+    return 0
+  fi
+
+  offset_raw=$(jq -r '.monitorCommandOffset // empty' "$STATE_FILE" 2>/dev/null || echo "")
+  if [[ -z "$offset_raw" || "$offset_raw" == "null" ]]; then
     if (( line_count > 0 )); then
       [[ "$COMMAND_OFFSET_WARNED" == "false" ]] && log_warn "Command offset missing (init at EOF)."
       COMMAND_OFFSET_WARNED=true
       write_command_offset "$line_count" || true
-      echo "$line_count"
+      printf '%s\n' "$line_count"
       return 0
     fi
     write_command_offset "0" || true
-    echo "0"
+    printf '%s\n' "0"
     return 0
   fi
 
-  offset_raw="$(cat "$COMMAND_OFFSET_FILE" 2>/dev/null || echo "0")"
   if ! [[ "$offset_raw" =~ ^[0-9]+$ ]]; then
     [[ "$COMMAND_OFFSET_WARNED" == "false" ]] && log_warn "Command offset invalid (init at EOF)."
     COMMAND_OFFSET_WARNED=true
     write_command_offset "$line_count" || true
-    echo "$line_count"
+    printf '%s\n' "$line_count"
     return 0
   fi
   if (( offset_raw > line_count )); then
     write_command_offset "$line_count" || true
-    echo "$line_count"
+    printf '%s\n' "$line_count"
     return 0
   fi
-  echo "$offset_raw"
+  printf '%s\n' "$offset_raw"
 }
 
 write_command_offset() {
-  local new_offset="$1" tmp
-  tmp="$(mktemp "/tmp/wavemill-${SESSION}-commands.offset.XXXXXX")" || return 1
-  printf '%s\n' "$new_offset" > "$tmp"
-  mv "$tmp" "$COMMAND_OFFSET_FILE"
+  local new_offset="$1"
+  [[ "$new_offset" =~ ^[0-9]+$ ]] || return 1
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 1
+  state_mutate "$STATE_FILE" \
+    '.monitorCommandOffset = $offset | .updated = (now | todate)' \
+    --argjson offset "$new_offset" >/dev/null
+}
+
+highest_pending_command_offset() {
+  local highest=0 offset
+  for offset in "${COMMAND_QUEUE_OFFSETS[@]:-}"; do
+    [[ "$offset" =~ ^[0-9]+$ ]] || continue
+    if (( offset > highest )); then
+      highest=$offset
+    fi
+  done
+  printf '%s\n' "$highest"
+}
+
+queue_command_event() {
+  local offset="$1" event="$2"
+  COMMAND_QUEUE+=("$event")
+  COMMAND_QUEUE_OFFSETS+=("$offset")
+}
+
+requeue_consumed_command_front() {
+  if [[ -n "${REPLY:-}" && -n "${REPLY_OFFSET:-}" ]]; then
+    COMMAND_QUEUE=("$REPLY" "${COMMAND_QUEUE[@]}")
+    COMMAND_QUEUE_OFFSETS=("$REPLY_OFFSET" "${COMMAND_QUEUE_OFFSETS[@]}")
+  fi
+}
+
+acknowledge_command_offset() {
+  local offset="$1" current
+  [[ "$offset" =~ ^[0-9]+$ ]] || return 1
+  current="$(read_command_offset)"
+  [[ "$current" =~ ^[0-9]+$ ]] || current=0
+  if (( offset > current )); then
+    write_command_offset "$offset" || true
+  fi
+}
+
+monitor_list_deferred_commands() {
+  if [[ ! -r "$STATE_FILE" || ! -s "$STATE_FILE" ]]; then
+    printf '[]\n'
+    return 0
+  fi
+  jq -c '.monitorDeferredCommands // []' "$STATE_FILE" 2>/dev/null || printf '[]\n'
+}
+
+monitor_remove_deferred_command() {
+  local event="$1"
+  [[ -n "$event" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.monitorDeferredCommands = ((.monitorDeferredCommands // []) | map(select(.event != $event))) | .updated = (now | todate)' \
+    --arg event "$event" >/dev/null || true
+}
+
+monitor_defer_command() {
+  local event="$1" reason="$2"
+  local kind args_json now_ts
+
+  case "$event" in
+    select\ *)
+      kind="select"
+      args_json=$(printf '%s\n' "${event#select }" | tr ' ' '\n' | sed '/^$/d' | jq -Rsc 'split("\n") | map(select(length > 0))')
+      ;;
+    enter)
+      kind="enter"
+      args_json='[]'
+      ;;
+    more)
+      kind="more"
+      args_json='[]'
+      ;;
+    *)
+      kind="unknown"
+      args_json='[]'
+      ;;
+  esac
+
+  now_ts="$(monitor_command_timestamp)"
+  state_mutate "$STATE_FILE" '
+    .monitorDeferredCommands = (
+      (.monitorDeferredCommands // []) as $existing
+      | ($existing | map(select(.event == $event)) | .[0]) as $prior
+      | ($existing | map(select(.event != $event))) + [{
+          event: $event,
+          kind: $kind,
+          args: $args,
+          reason: $reason,
+          queued_at: ($prior.queued_at // $now),
+          last_checked_at: $now
+        }]
+    )
+    | .updated = (now | todate)
+  ' \
+    --arg event "$event" \
+    --arg kind "$kind" \
+    --arg reason "$reason" \
+    --arg now "$now_ts" \
+    --argjson args "$args_json" >/dev/null || true
 }
 
 drain_command_events() {
-  local line_count offset start new_lines final_offset
+  local line_count offset highest_pending start new_lines current_offset
   [[ -f "$COMMAND_FILE" ]] || return 0
-  line_count=$(wc -l < "$COMMAND_FILE" 2>/dev/null | tr -d ' ')
-  [[ "$line_count" =~ ^[0-9]+$ ]] || line_count=0
+  line_count=$(read_command_file_line_count)
   offset="$(read_command_offset)"
   [[ "$offset" =~ ^[0-9]+$ ]] || offset=0
+  highest_pending="$(highest_pending_command_offset)"
+  [[ "$highest_pending" =~ ^[0-9]+$ ]] || highest_pending=0
+  if (( highest_pending > offset )); then
+    offset=$highest_pending
+  fi
   (( line_count <= offset )) && return 0
 
   start=$((offset + 1))
   new_lines="$(sed -n "${start},${line_count}p" "$COMMAND_FILE" 2>/dev/null || true)"
+  current_offset=$start
   while IFS= read -r evt; do
     [[ -z "$evt" ]] && continue
-    COMMAND_QUEUE+=("$evt")
+    queue_command_event "$current_offset" "$evt"
+    current_offset=$((current_offset + 1))
   done <<< "$new_lines"
-  final_offset=$line_count
-  write_command_offset "$final_offset" || true
 }
 
 consume_next_command() {
@@ -5825,12 +5936,293 @@ consume_next_command() {
     return 1
   fi
   REPLY="${COMMAND_QUEUE[0]}"
+  REPLY_OFFSET="${COMMAND_QUEUE_OFFSETS[0]}"
   if (( ${#COMMAND_QUEUE[@]} == 1 )); then
     COMMAND_QUEUE=()
+    COMMAND_QUEUE_OFFSETS=()
   else
     COMMAND_QUEUE=("${COMMAND_QUEUE[@]:1}")
+    COMMAND_QUEUE_OFFSETS=("${COMMAND_QUEUE_OFFSETS[@]:1}")
   fi
   return 0
+}
+
+invalidate_backlog_prompt_state() {
+  LAST_BACKLOG_FETCH=0
+  LAST_DISPLAY=""
+  LAST_WAITING_MSG=""
+  SELECT_SHOW_ALL=false
+  USING_GROUPED_VIEW=false
+  clear_task_list_display
+}
+
+launch_selected_task_lines() {
+  local selected_lines="$1" free_slots="$2"
+  local launched=0 local_line sel_issue sel_slug sel_title
+  LAST_COMMAND_LAUNCHED_SLOTS=0
+
+  [[ -n "$selected_lines" ]] || return 0
+
+  if (( $(grep -c . <<<"$selected_lines") > 1 )); then
+    if batch_route_selected_tasks "$selected_lines"; then
+      log "info" "Prepared batch routing for $(grep -c . <<<"$selected_lines") selected tasks"
+    else
+      log_warn "Batch routing failed for selected tasks; falling back to per-task routing"
+    fi
+  fi
+
+  while IFS= read -r local_line; do
+    [[ -z "$local_line" ]] && continue
+    (( launched >= free_slots )) && break
+    IFS='|' read -r sel_issue sel_slug sel_title _rest <<<"$local_line"
+    launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+    launched=$((launched + LAST_LAUNCHED_SLOTS))
+  done <<<"$selected_lines"
+
+  LAST_COMMAND_LAUNCHED_SLOTS=$launched
+  if (( launched > 0 )); then
+    invalidate_backlog_prompt_state
+  fi
+}
+
+handle_enter_command() {
+  local event="$1" free_slots="$2" queue_plan_json="$3" avail_unblocked="$4" avail_blocked="$5"
+  local wave_result wave_ids deferred_ids wave_selected_lines wid wline
+
+  MONITOR_COMMAND_STATUS="noop"
+  MONITOR_COMMAND_DEFER_EVENT=""
+  MONITOR_COMMAND_DEFER_REASON=""
+
+  if (( free_slots <= 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    MONITOR_COMMAND_DEFER_REASON="no_slots_available"
+    return 0
+  fi
+
+  if [[ "${ENTER_LAUNCHES_WAVE:-true}" != "true" ]]; then
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  if [[ -z "$queue_plan_json" ]]; then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    if [[ -n "$avail_blocked" ]]; then
+      MONITOR_COMMAND_DEFER_REASON="dependency_blocked"
+    else
+      MONITOR_COMMAND_DEFER_REASON="no_launchable_candidates"
+    fi
+    return 0
+  fi
+
+  wave_result=$(invoke_first_wave_helper "$queue_plan_json" "$avail_unblocked" "$free_slots" 2>/dev/null) || wave_result=""
+  if [[ -z "$wave_result" ]]; then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    if [[ -n "$avail_blocked" ]]; then
+      MONITOR_COMMAND_DEFER_REASON="dependency_blocked"
+    else
+      MONITOR_COMMAND_DEFER_REASON="no_launchable_candidates"
+    fi
+    return 0
+  fi
+
+  wave_ids=$(jq -r '.wave[]?' <<<"$wave_result" 2>/dev/null) || wave_ids=""
+  deferred_ids=$(jq -r '.deferred[]?' <<<"$wave_result" 2>/dev/null) || deferred_ids=""
+  if [[ -z "$wave_ids" ]]; then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    if [[ -n "$deferred_ids" || -n "$avail_blocked" ]]; then
+      MONITOR_COMMAND_DEFER_REASON="dependency_blocked"
+    else
+      MONITOR_COMMAND_DEFER_REASON="no_launchable_candidates"
+    fi
+    return 0
+  fi
+
+  wave_selected_lines=""
+  while IFS= read -r wid; do
+    [[ -z "$wid" ]] && continue
+    wline=$(grep -m1 "^${wid}|" <<<"$avail_unblocked" 2>/dev/null || echo "")
+    [[ -n "$wline" ]] && wave_selected_lines+="${wline}"$'\n'
+  done <<<"$wave_ids"
+
+  if [[ -z "$wave_selected_lines" ]]; then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    MONITOR_COMMAND_DEFER_REASON="selection_not_currently_visible"
+    return 0
+  fi
+
+  [[ -n "$deferred_ids" ]] && log "debug" "[wave-launch] deferred=$(tr '\n' ',' <<<"$deferred_ids" | sed 's/,$//')"
+  launch_selected_task_lines "$wave_selected_lines" "$free_slots"
+  if (( LAST_COMMAND_LAUNCHED_SLOTS > 0 )); then
+    MONITOR_COMMAND_STATUS="launched"
+  else
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    MONITOR_COMMAND_DEFER_REASON="no_launchable_candidates"
+  fi
+}
+
+handle_select_command() {
+  local event="$1" free_slots="$2" select_from="$3"
+  local numbers_str selected_lines remaining_numbers unresolved_numbers blocked_numbers
+  local n local_line sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked
+  local launch_budget=0 launchable_count=0
+
+  MONITOR_COMMAND_STATUS="noop"
+  MONITOR_COMMAND_DEFER_EVENT=""
+  MONITOR_COMMAND_DEFER_REASON=""
+
+  numbers_str="${event#select }"
+  if [[ -z "$numbers_str" ]]; then
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  if (( free_slots <= 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    MONITOR_COMMAND_DEFER_REASON="no_slots_available"
+    return 0
+  fi
+
+  selected_lines=""
+  remaining_numbers=()
+  unresolved_numbers=()
+  blocked_numbers=()
+  launch_budget=$free_slots
+
+  for n in $numbers_str; do
+    if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
+      log_warn "Invalid selection: $n (must be a number)"
+      continue
+    fi
+    local_line=$(sed -n "${n}p" <<<"$select_from")
+    if [[ -z "$local_line" ]]; then
+      unresolved_numbers+=("$n")
+      continue
+    fi
+    IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
+    if [[ "${_sel_blocked:-0}" =~ ^[0-9]+$ ]] && (( _sel_blocked > 0 )); then
+      blocked_numbers+=("$n")
+      continue
+    fi
+    if (( launchable_count >= launch_budget )); then
+      remaining_numbers+=("$n")
+      continue
+    fi
+    selected_lines+="${local_line}"$'\n'
+    launchable_count=$((launchable_count + 1))
+  done
+
+  if [[ -n "$selected_lines" ]]; then
+    launch_selected_task_lines "$selected_lines" "$free_slots"
+  fi
+
+  if (( ${#remaining_numbers[@]} > 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="select ${remaining_numbers[*]}"
+    MONITOR_COMMAND_DEFER_REASON="no_slots_available"
+    return 0
+  fi
+
+  if (( ${#blocked_numbers[@]} > 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="select ${blocked_numbers[*]}"
+    MONITOR_COMMAND_DEFER_REASON="dependency_blocked"
+    return 0
+  fi
+
+  if (( ${#unresolved_numbers[@]} > 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="select ${unresolved_numbers[*]}"
+    MONITOR_COMMAND_DEFER_REASON="selection_not_currently_visible"
+    return 0
+  fi
+
+  if (( LAST_COMMAND_LAUNCHED_SLOTS > 0 )); then
+    MONITOR_COMMAND_STATUS="launched"
+  else
+    MONITOR_COMMAND_STATUS="invalid"
+  fi
+}
+
+execute_or_defer_monitor_command() {
+  local source="$1" event="$2" event_offset="$3" free_slots="$4" queue_plan_json="$5" avail_unblocked="$6" avail_blocked="$7" select_from="$8"
+
+  MONITOR_COMMAND_STATUS="noop"
+  MONITOR_COMMAND_DEFER_EVENT=""
+  MONITOR_COMMAND_DEFER_REASON=""
+
+  case "$event" in
+    more)
+      if [[ "$USING_GROUPED_VIEW" != "true" ]]; then
+        SELECT_SHOW_ALL=true
+      fi
+      MONITOR_COMMAND_STATUS="handled"
+      ;;
+    unknown\ *)
+      log_warn "Unknown input: ${event#unknown }"
+      MONITOR_COMMAND_STATUS="invalid"
+      ;;
+    enter)
+      handle_enter_command "$event" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked"
+      ;;
+    select\ *)
+      handle_select_command "$event" "$free_slots" "$select_from"
+      ;;
+    *)
+      MONITOR_COMMAND_STATUS="invalid"
+      ;;
+  esac
+
+  if [[ "$MONITOR_COMMAND_STATUS" == "deferred" && -n "$MONITOR_COMMAND_DEFER_EVENT" ]]; then
+    monitor_defer_command "$MONITOR_COMMAND_DEFER_EVENT" "$MONITOR_COMMAND_DEFER_REASON"
+  fi
+
+  if [[ "$source" == "deferred" ]]; then
+    if [[ "$MONITOR_COMMAND_STATUS" != "deferred" || "$MONITOR_COMMAND_DEFER_EVENT" != "$event" ]]; then
+      monitor_remove_deferred_command "$event"
+    fi
+  elif [[ "$MONITOR_COMMAND_STATUS" != "noop" && "$MONITOR_COMMAND_STATUS" != "pending" ]]; then
+    acknowledge_command_offset "$event_offset"
+  fi
+}
+
+process_new_monitor_commands() {
+  local free_slots="$1" queue_plan_json="$2" avail_unblocked="$3" avail_blocked="$4" select_from="$5"
+  while consume_next_command; do
+    if [[ "$REPLY" == "quit" ]]; then
+      requeue_consumed_command_front
+      break
+    fi
+    execute_or_defer_monitor_command "new" "$REPLY" "$REPLY_OFFSET" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked" "$select_from"
+    if (( LAST_COMMAND_LAUNCHED_SLOTS > 0 )); then
+      free_slots=$((free_slots - LAST_COMMAND_LAUNCHED_SLOTS))
+      (( free_slots < 0 )) && free_slots=0
+    fi
+  done
+  REMAINING_FREE_SLOTS="$free_slots"
+}
+
+process_deferred_monitor_commands() {
+  local free_slots="$1" queue_plan_json="$2" avail_unblocked="$3" avail_blocked="$4" select_from="$5"
+  local deferred_json event
+
+  deferred_json="$(monitor_list_deferred_commands)"
+  while IFS= read -r event; do
+    [[ -z "$event" ]] && continue
+    execute_or_defer_monitor_command "deferred" "$event" "" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked" "$select_from"
+    if (( LAST_COMMAND_LAUNCHED_SLOTS > 0 )); then
+      free_slots=$((free_slots - LAST_COMMAND_LAUNCHED_SLOTS))
+      (( free_slots < 0 )) && free_slots=0
+    fi
+  done < <(jq -r '.[].event // empty' <<<"$deferred_json" 2>/dev/null)
+
+  REMAINING_FREE_SLOTS="$free_slots"
 }
 
 poll_sleep() {

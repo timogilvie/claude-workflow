@@ -252,6 +252,49 @@ else
   fail "dashboard did not render skipped-check PR as passing"
 fi
 
+STATE_FILE_MONITOR_QUEUE="$TMP_DIR/state-monitor-queue.json"
+cat > "$STATE_FILE_MONITOR_QUEUE" <<EOF
+{
+  "monitorDeferredCommands": [
+    {
+      "event": "select 1 2",
+      "reason": "no_slots_available",
+      "queued_at": "2026-05-05T12:00:00Z"
+    }
+  ],
+  "tasks": {}
+}
+EOF
+
+BEHAVIOR_MONITOR_QUEUE="$TMP_DIR/behavior-monitor-queue.json"
+cat > "$BEHAVIOR_MONITOR_QUEUE" <<'EOF'
+{
+  "pane": {},
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_MONITOR_QUEUE="$TMP_DIR/output-monitor-queue.txt"
+run_render "$STATE_FILE_MONITOR_QUEUE" "$WORKTREES_DIR" "$BEHAVIOR_MONITOR_QUEUE" "$OUTPUT_MONITOR_QUEUE"
+
+if grep -q '⌛ QUEUED COMMANDS (1)' "$OUTPUT_MONITOR_QUEUE" \
+  && grep -q 'select 1 2' "$OUTPUT_MONITOR_QUEUE" \
+  && grep -q 'no slots available' "$OUTPUT_MONITOR_QUEUE"; then
+  pass "renders queued monitor commands when selections are deferred"
+else
+  fail "queued monitor command section is missing expected content"
+fi
+
+if ! grep -q '⌛ QUEUED COMMANDS' "$OUTPUT_ONE"; then
+  pass "omits queued monitor command section when empty"
+else
+  fail "queued monitor command section should be hidden when empty"
+fi
+
 if grep -q 'Ctrl+B <PANE>: switch task' "$OUTPUT_ONE"; then
   pass "footer advertises pane-number switching"
 else

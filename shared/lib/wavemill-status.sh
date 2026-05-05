@@ -607,6 +607,28 @@ render_jobs_section() {
   done <<<"$jobs"
 }
 
+render_monitor_command_queue_section() {
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  local count
+  count=$(jq '(.monitorDeferredCommands // []) | length' "$STATE_FILE" 2>/dev/null || echo 0)
+  (( count == 0 )) && return 0
+
+  printf "${EL}\n${B}%s${N} ${D}(%s)${N}${EL}\n" "⌛ QUEUED COMMANDS" "$count" >> "$FRAME"
+  printf "${D}%-18s  %-28s  %s${N}${EL}\n" "COMMAND" "REASON" "QUEUED" >> "$FRAME"
+  printf "${D}%s${N}${EL}\n" "────────────────────────────────────────────────────────────────────────" >> "$FRAME"
+
+  jq -r '
+    (.monitorDeferredCommands // [])[] |
+    [
+      (.event // "?"),
+      ((.reason // "?") | gsub("_"; " ")),
+      (.queued_at // "?")
+    ] | @tsv
+  ' "$STATE_FILE" 2>/dev/null | while IFS=$'\t' read -r event reason queued_at; do
+    printf "%-18s  %-28s  %s${EL}\n" "$event" "$reason" "$queued_at" >> "$FRAME"
+  done
+}
+
 # Clear saved scrollback lines without blanking the visible pane. This keeps
 # tmux history from accumulating stale dashboards while avoiding a full-screen
 # flash on every refresh.
@@ -674,11 +696,13 @@ render_dashboard() {
       fi
     done <<<"$tasks"
 
-    render_inbox_section
-    render_active_section
-    render_jobs_section
-    render_queued_section
   fi
+
+  render_inbox_section
+  render_active_section
+  render_jobs_section
+  render_queued_section
+  render_monitor_command_queue_section
 
   printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
 }
