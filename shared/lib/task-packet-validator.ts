@@ -65,6 +65,8 @@ export interface ValidationResult {
   layer1Issues: ValidationIssue[];
   /** Layer 2 (LLM) issues */
   layer2Issues: ValidationIssue[];
+  /** Key Files entries explicitly marked as planned new files */
+  plannedNewFiles?: string[];
 }
 
 /**
@@ -104,6 +106,14 @@ export const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
 };
 
 const TIMEOUT_MS = 30_000; // 30 seconds for Layer 2 LLM call
+const VALIDATION_STEPS_HEADING_RE = /^#{2,3}\s*(?:\d+\.\s*)?validation\s+steps\s*$/im;
+const PLANNED_NEW_FILE_MARKER_RE = /(?:\(\s*(?:new|planned|new\s+file)\s*\)|\*\(\s*new\s+file\s*\)\*)/i;
+
+interface ParsedFileReference {
+  path: string;
+  lineText: string;
+  plannedNew: boolean;
+}
 
 // ============================================================================
 // LAYER 1: DETERMINISTIC VALIDATION
@@ -149,14 +159,36 @@ function extractSection(markdown: string, heading: string): string | null {
   }
 
   const startIndex = match.index + match[0].length;
+  const headingLevel = match[0].match(/^#+/)?.[0].length ?? 2;
 
   // Find the next heading of same or higher level, but not inside code blocks
   const restOfDoc = markdown.substring(startIndex);
 
   // Remove code blocks before searching for next heading
   const withoutCodeBlocks = restOfDoc.replace(/```[\s\S]*?```/g, match => ' '.repeat(match.length));
-  const nextHeadingMatch = withoutCodeBlocks.match(/^#{1,3}\s+\w/m);
+  const nextHeadingMatch = withoutCodeBlocks.match(new RegExp(`^#{1,${headingLevel}}\\s+\\S`, 'm'));
 
+  const endIndex = nextHeadingMatch && nextHeadingMatch.index !== undefined
+    ? startIndex + nextHeadingMatch.index
+    : markdown.length;
+
+  return markdown.substring(startIndex, endIndex).trim();
+}
+
+function extractSectionByHeadingRegex(markdown: string, headingRegex: RegExp): string | null {
+  const flags = headingRegex.flags.includes('g') ? headingRegex.flags : `${headingRegex.flags}g`;
+  const globalRegex = new RegExp(headingRegex.source, flags);
+  const match = globalRegex.exec(markdown);
+
+  if (!match || match.index === undefined) {
+    return null;
+  }
+
+  const startIndex = match.index + match[0].length;
+  const headingLevel = match[0].match(/^#+/)?.[0].length ?? 2;
+  const restOfDoc = markdown.substring(startIndex);
+  const withoutCodeBlocks = restOfDoc.replace(/```[\s\S]*?```/g, codeBlock => ' '.repeat(codeBlock.length));
+  const nextHeadingMatch = withoutCodeBlocks.match(new RegExp(`^#{1,${headingLevel}}\\s+\\S`, 'm'));
   const endIndex = nextHeadingMatch && nextHeadingMatch.index !== undefined
     ? startIndex + nextHeadingMatch.index
     : markdown.length;
@@ -211,6 +243,41 @@ function isBoilerplateValidation(validationSteps: string): boolean {
   return allBoilerplate;
 }
 
+function parseFileReferencesFromBullets(markdown: string): ParsedFileReference[] {
+  const references: ParsedFileReference[] = [];
+  const seenPaths = new Set<string>();
+  const bulletLines = markdown.match(/^[-*]\s+.+$/gm) ?? [];
+
+  for (const lineText of bulletLines) {
+    const codePathMatch = lineText.match(/`([^`]+\.[a-z]{1,10})`/i);
+    const plainPathMatch = lineText.match(/([a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)+\.[a-z]{1,10})/);
+    const filePath = codePathMatch?.[1] ?? plainPathMatch?.[1];
+    if (!filePath || seenPaths.has(filePath)) {
+      continue;
+    }
+
+    seenPaths.add(filePath);
+    references.push({
+      path: filePath,
+      lineText,
+      plannedNew: PLANNED_NEW_FILE_MARKER_RE.test(lineText),
+    });
+  }
+
+  return references;
+}
+
+export function extractPlannedNewFiles(taskPacket: string): string[] {
+  const keyFilesSection = extractSection(taskPacket, 'Key Files');
+  if (!keyFilesSection) {
+    return [];
+  }
+
+  return parseFileReferencesFromBullets(keyFilesSection)
+    .filter(reference => reference.plannedNew)
+    .map(reference => reference.path);
+}
+
 /**
  * Layer 1: File existence validation
  */
@@ -220,11 +287,11 @@ export function validateFileExistence(taskPacket: string, repoPath: string): Val
   // Check "Key Files" section
   const keyFilesSection = extractSection(taskPacket, 'Key Files');
   if (keyFilesSection) {
-    const filePaths = extractFilePaths(keyFilesSection);
+    const fileReferences = parseFileReferencesFromBullets(keyFilesSection);
 
-    for (const filePath of filePaths) {
+    for (const { path: filePath, plannedNew } of fileReferences) {
       const fullPath = resolve(repoPath, filePath);
-      if (!existsSync(fullPath)) {
+      if (!existsSync(fullPath) && !plannedNew) {
         issues.push({
           type: 'file-not-found',
           severity: 'error',
@@ -264,7 +331,7 @@ export function validateFileExistence(taskPacket: string, repoPath: string): Val
 export function validateValidationSteps(taskPacket: string): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
-  const validationSection = extractSection(taskPacket, 'Validation Steps');
+  const validationSection = extractSectionByHeadingRegex(taskPacket, VALIDATION_STEPS_HEADING_RE);
   if (!validationSection) {
     issues.push({
       type: 'boilerplate-validation',
@@ -612,5 +679,6 @@ export async function validateTaskPacket(
     issues: allIssues,
     layer1Issues,
     layer2Issues,
+    plannedNewFiles: extractPlannedNewFiles(taskPacket),
   };
 }

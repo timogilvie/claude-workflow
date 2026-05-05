@@ -17,6 +17,8 @@
 
 {List top 5 files that will be created or modified - use actual paths from codebase context}
 
+If a listed file is intended to be created by the task, mark it with `(new)` on the same bullet.
+
 - `path/to/file1.ts`
 - `path/to/file2.tsx`
 - `path/to/file3.ts`

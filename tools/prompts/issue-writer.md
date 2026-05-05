@@ -123,7 +123,10 @@ subsystems in the codebase.
 *Which repo(s) this work happens in. CHECK the codebase context above.*
 
 ### Key Files
-*Exact file paths that will be created or modified. Use paths from the codebase context wherever possible. Use glob patterns if multiple files follow a pattern.*
+*Exact file paths that will be created or modified. Use paths from the codebase context wherever possible. Use glob patterns if multiple files follow a pattern. If a file is intended to be created by this task, mark that same bullet with `(new)` so validators know it is planned rather than missing.*
+
+Example:
+- `shared/lib/new-validator.ts` (new) - Planned helper file created by this task
 
 ### Relevant Subsystem Specs
 
@@ -551,6 +554,7 @@ Your response MUST contain two parts in this exact order:
 - `path/to/file1.ts`
 - `path/to/file2.tsx`
 - `path/to/file3.ts`
+- `shared/lib/new-validator.ts` (new)
 
 ## Critical Constraints
 
