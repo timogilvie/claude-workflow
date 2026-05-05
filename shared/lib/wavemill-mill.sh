@@ -5766,7 +5766,7 @@ drain_command_events() {
       select\ *|enter|more|unknown\ *)
         # Persist durably so it survives restarts and remains visible.
         cmd_id="${SESSION}:${current_line}"
-        queued_command_upsert "$cmd_id" "$current_line" "$line_text" "lifecycle_busy"
+        queued_command_upsert "$cmd_id" "$current_line" "$line_text" "pending"
         write_command_offset "$current_line" || true
         ;;
       *)
@@ -5808,10 +5808,14 @@ consume_queued_command_for_selection() {
 }
 
 poll_sleep() {
-  local secs="${1:-$POLL_SECONDS}" elapsed
+  local secs="${1:-$POLL_SECONDS}" elapsed _qlen_start=0 _qlen
   if ! [[ "$secs" =~ ^[0-9]+$ ]]; then
     sleep "$secs"
     return 0
+  fi
+  # Snapshot queue length so we can detect newly-arrived commands vs already-pending ones.
+  if [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]]; then
+    _qlen_start=$(jq '(.queued_commands // []) | length' "$STATE_FILE" 2>/dev/null || echo 0)
   fi
   elapsed=0
   while (( elapsed < secs )); do
@@ -5819,11 +5823,11 @@ poll_sleep() {
     if (( ${#COMMAND_QUEUE[@]} > 0 )); then
       return 0
     fi
-    # Also wake early if a queued command arrived in state.
+    # Wake early only when a *new* command has been added to the queue since we started sleeping.
+    # Comparing against the baseline avoids spinning when already-pending commands cannot run.
     if [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]]; then
-      local _qlen
       _qlen=$(jq '(.queued_commands // []) | length' "$STATE_FILE" 2>/dev/null || echo 0)
-      (( _qlen > 0 )) && return 0
+      (( _qlen > _qlen_start )) && return 0
     fi
     sleep 1
     elapsed=$((elapsed + 1))

@@ -59,7 +59,7 @@ run_case() {
   local out_file="$1"
   local body_file="$TEST_TMP/body_$$.sh"
   cat > "$body_file"
-  /opt/homebrew/bin/bash "$body_file" \
+  bash "$body_file" \
     "$COMMON_LIB" "$SHARED_FN_FILE" "$TEST_TMP" \
     > "$out_file" 2>/dev/null
   rm -f "$body_file"
@@ -101,7 +101,7 @@ BODY
 mapfile -t T1 < "$TEST_TMP/t1.out"
 [[ "${T1[0]:-0}" == "1" ]]              && pass "drain queues select to state"                    || fail "drain queues select to state (got ${T1[0]:-?})"
 [[ "${T1[1]:-}" == "select 1 2" ]]      && pass "drain preserves raw command text"                || fail "drain preserves raw command text (got ${T1[1]:-?})"
-[[ "${T1[2]:-}" == "lifecycle_busy" ]]  && pass "drain sets lifecycle_busy reason"                || fail "drain sets lifecycle_busy reason (got ${T1[2]:-?})"
+[[ "${T1[2]:-}" == "pending" ]]         && pass "drain sets pending reason"                       || fail "drain sets pending reason (got ${T1[2]:-?})"
 [[ "${T1[3]:-}" == "1" ]]               && pass "drain advances state offset to 1"                || fail "drain advances state offset to 1 (got ${T1[3]:-?})"
 [[ "${T1[4]:-}" == "0" ]]               && pass "select does not enter in-memory COMMAND_QUEUE"   || fail "select does not enter in-memory COMMAND_QUEUE (got ${T1[4]:-?})"
 
@@ -209,7 +209,7 @@ cat > "$TEST_TMP/state-4.json" <<'JSON'
       "line": 1,
       "command": "select 1 2",
       "status": "queued",
-      "reason": "lifecycle_busy",
+      "reason": "pending",
       "enqueued_at": "2026-01-01T00:00:00Z",
       "updated_at": "2026-01-01T00:00:00Z"
     }
@@ -242,7 +242,7 @@ if grep -q "select 1 2" "$FRAME"; then
 else
   fail "dashboard shows queued command text"
 fi
-if grep -q "lifecycle_busy" "$FRAME"; then
+if grep -q "pending" "$FRAME"; then
   pass "dashboard shows reason"
 else
   fail "dashboard shows reason"
