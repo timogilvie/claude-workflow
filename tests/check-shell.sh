@@ -395,6 +395,13 @@ else
     fail "monitor does not overlay new tasks from TASKS_FILE"
   fi
 
+  if grep -q '^poll_challenge_jobs() {' <<< "$HEREDOC_CONTENT" \
+    && grep -q 'job-tracker.ts" poll' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor defines tracked challenge job poller"
+  else
+    fail "monitor is missing tracked challenge job poller"
+  fi
+
   if grep -q 'update-linear-state.ts' <<< "$HEREDOC_CONTENT"; then
     fail "monitor references removed update-linear-state.ts tool"
   else
@@ -417,6 +424,11 @@ else
     in_loop { print }
     in_loop && /^done$/ { exit }
   ' <<< "$HEREDOC_CONTENT")
+  if grep -qF 'poll_challenge_jobs' <<< "$MONITOR_LOOP_BLOCK"; then
+    pass "monitor loop polls challenge jobs before issue processing"
+  else
+    fail "monitor loop does not poll challenge jobs"
+  fi
   if grep -qE '^[[:space:]]*local[[:space:]]' <<< "$MONITOR_LOOP_BLOCK"; then
     fail "monitor loop contains top-level local declarations (invalid outside functions)"
   else
@@ -430,6 +442,32 @@ else
     pass "monitor loop guards per-issue processing with explicit error handling"
   else
     fail "monitor loop is missing guarded per-issue processing checks"
+  fi
+
+  CHALLENGE_EVAL_BLOCK=$(awk '
+    /^maybe_run_challenge_eval\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' <<< "$HEREDOC_CONTENT")
+  if grep -q 'run-eval-hook.ts' <<< "$CHALLENGE_EVAL_BLOCK" \
+    && ! grep -q '_with_timeout 420' <<< "$CHALLENGE_EVAL_BLOCK" \
+    && grep -q 'launch_tracked_job "eval"' <<< "$CHALLENGE_EVAL_BLOCK"; then
+    pass "challenge eval launches as tracked background job without blocking timeout wrapper"
+  else
+    fail "challenge eval still looks synchronous or untracked"
+  fi
+
+  CHALLENGE_COMPARE_BLOCK=$(awk '
+    /^maybe_run_challenge_comparison\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' <<< "$HEREDOC_CONTENT")
+  if grep -q 'compare-prs.ts' <<< "$CHALLENGE_COMPARE_BLOCK" \
+    && ! grep -q '_with_timeout' <<< "$CHALLENGE_COMPARE_BLOCK" \
+    && grep -q 'launch_tracked_job "comparison"' <<< "$CHALLENGE_COMPARE_BLOCK"; then
+    pass "challenge comparison launches as tracked background job without blocking timeout wrapper"
+  else
+    fail "challenge comparison still looks synchronous or untracked"
   fi
 
   MONITOR_ISSUE_BLOCK=$(awk '
