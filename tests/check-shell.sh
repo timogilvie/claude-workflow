@@ -121,17 +121,26 @@ else
     # Extract function definitions from wavemill-common.sh (also sourced by monitor)
     COMMON_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/wavemill-common.sh" | sed 's/()//' | sort -u)
 
+    # Extract function definitions from the hook protocol sourced by common helpers.
+    HOOK_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh" | sed 's/()//' | sort -u)
+
     # Combine all available function definitions
-    ALL_DEFINED=$(printf '%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" | sort -u)
+    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$HOOK_FUNCS" | sort -u)
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
     KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
 
-    # Extract function calls from the heredoc
-    # Look for word-boundary function-like names that appear as commands
-    # (start of line after optional whitespace, or after $(), ||, &&, if, then, etc.)
-    CALLED_FUNCS=$(grep -oE '\b[a-z_][a-z0-9_]{2,}\b' <<< "$HEREDOC_CONTENT" \
+    # Extract function calls from the heredoc.
+    # Restrict matches to actual command positions instead of every bare word;
+    # the monitor body is large enough that tokenizing every identifier turns
+    # this guard into an accidental quadratic scan.
+    CALLED_FUNCS=$(
+      {
+        grep -oE '^[[:space:]]*[a-z_][a-z0-9_]*[[:space:]]' <<< "$HEREDOC_CONTENT"
+        grep -oE '(if[[:space:]]+|\$\( *|[;&|][;&|]?[[:space:]]*)[a-z_][a-z0-9_]*([[:space:];)]|$)' <<< "$HEREDOC_CONTENT"
+      } \
+      | sed -E 's/^[[:space:]]*//; s/^(if[[:space:]]+|\$\( *|[;&|][;&|]?[[:space:]]*)//; s/[[:space:];)]*$//' \
       | sort -u \
       | grep -vE "^($KNOWN_EXTERNALS)$" \
       | grep -vE '^(done|else|elif|esac|fi|for|function|if|in|then|until|while|do|case)$' \
@@ -140,7 +149,8 @@ else
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
       | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling)$' \
-      | grep -vE '^(bad|internal|marking|rate|service|timed|too|using|wavemill)$')
+      | grep -vE '^(bad|internal|marking|rate|service|timed|too|using|wavemill)$' \
+      | grep -vE '^(a|already|available|blocked_by_count|break|coding|cp|debug|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
 
     # Check which called names look like they could be custom functions
     # and verify they're defined
@@ -148,11 +158,7 @@ else
     while IFS= read -r name; do
       [[ -z "$name" ]] && continue
       if ! grep -qx "$name" <<< "$ALL_DEFINED"; then
-        # Only flag names that are actually used as function calls in the heredoc
-        # (appear at start of a line after whitespace, or after || or && or $( )
-        if grep -qE "(^|[;&|] *|\$\( *)$name " <<< "$HEREDOC_CONTENT" 2>/dev/null; then
-          MISSING="$MISSING $name"
-        fi
+        MISSING="$MISSING $name"
       fi
     done <<< "$CALLED_FUNCS"
 
