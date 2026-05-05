@@ -36,6 +36,7 @@ import {
   getHokusaiSubmissionConfig,
   getProvidersConfig,
   getReadyConfig,
+  getReadyWatchdogConfig,
   getModelRegistryConfig,
   getMintEligibilityConfig,
   getEvalContextUpdatesConfig,
@@ -251,6 +252,21 @@ test('evalContextUpdates accessor returns defaults when absent', () => {
   }
 });
 
+test('ready watchdog defaults are returned when config is absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    assert.deepEqual(getReadyWatchdogConfig(tmp), {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('evalContextUpdates accessor returns explicit config values', () => {
   const tmp = makeTempRepo();
   try {
@@ -267,6 +283,36 @@ test('evalContextUpdates accessor returns explicit config values', () => {
       enabled: false,
       timeoutSeconds: 90,
       maxRetries: 2,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready watchdog supports canonical and legacy alias config', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      monitor: {
+        readyWatchdog: {
+          thresholdMinutes: 20,
+          autoRecover: false,
+        },
+      },
+      ready: {
+        watchdog: {
+          enabled: false,
+          timeoutSeconds: 45,
+        },
+      },
+    }));
+
+    assert.deepEqual(getReadyWatchdogConfig(tmp), {
+      enabled: false,
+      thresholdMinutes: 20,
+      autoRecover: false,
+      timeoutSeconds: 45,
     });
   } finally {
     cleanUp(tmp);
@@ -293,6 +339,28 @@ test('invalid evalContextUpdates values fail validation', () => {
       assert.doesNotThrow(() => {
         loadWavemillConfig(tmp);
       });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready watchdog schema rejects thresholdMinutes below 1', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        watchdog: {
+          thresholdMinutes: 0,
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/i);
     }
   } finally {
     cleanUp(tmp);

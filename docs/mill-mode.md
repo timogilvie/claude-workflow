@@ -97,8 +97,40 @@ In that phase, the monitor is responsible for:
 - recording whether the PR is ready, blocked, or warning-only
 - holding merge completion until required ready checks pass
 - surfacing manual release steps and merge-conflict remediation needs
+- detecting stale ready-stage local state with the ready watchdog
 
-The current implementation is scaffolded and returns a stub ready result, which keeps the workflow backwards-compatible while the full readiness engine is built out. For operator details, see [Ready Stage](ready-stage.md).
+The ready watchdog runs once per monitor tick for `phase=ready` tasks. After `ready.watchdog.thresholdMinutes` of no local progress, it compares controller state with GitHub truth and classifies the task as one of:
+
+- `stuck`
+- `waiting on CI`
+- `waiting on eval/comparison`
+- `needs user`
+
+When GitHub says the PR is open, mergeable, and green, the watchdog only performs local recovery. It never mutates the PR itself. Safe recovery is limited to clearing stale local ready markers and resetting the controller-owned ready result back to a pending rerun. If auto-recovery is disabled or unsafe, the watchdog prints an explicit `tools/ready-watchdog.ts --recover <ISSUE>` command instead.
+
+Configuration lives under `ready.watchdog`:
+
+```json
+{
+  "ready": {
+    "watchdog": {
+      "enabled": true,
+      "thresholdMinutes": 10,
+      "autoRecover": true,
+      "timeoutSeconds": 30
+    }
+  }
+}
+```
+
+`monitor.readyWatchdog` is also accepted as a backwards-compatible alias, but `ready.watchdog` is canonical.
+
+Runtime artifacts:
+
+- `.wavemill/ready-watchdog-state.json`: latest per-issue classification for the dashboard
+- `.wavemill/ready-watchdog.jsonl`: append-only audit trail of stale-task detections and recovery decisions
+
+For operator details, see [Ready Stage](ready-stage.md).
 
 ## Operator Controls
 

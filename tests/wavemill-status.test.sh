@@ -692,6 +692,149 @@ else
   fail "failed ready task detail or status is missing"
 fi
 
+STATE_FILE_READY_WATCHDOG="$TMP_DIR/state-ready-watchdog.json"
+rm -f "$WORKTREES_DIR/ready-failed-task/features/ready-failed-task/.needs-attention"
+cat > "$STATE_FILE_READY_WATCHDOG" <<EOF
+{
+  "tasks": {
+    "HOK-1306": {
+      "slug": "ready-task",
+      "branch": "task/ready-task",
+      "worktree": "$WORKTREES_DIR/ready-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    },
+    "HOK-1307": {
+      "slug": "active-task",
+      "branch": "task/active-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    },
+    "HOK-1308": {
+      "slug": "ready-complete-task",
+      "branch": "task/ready-complete-task",
+      "worktree": "$WORKTREES_DIR/ready-complete-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    },
+    "HOK-1309": {
+      "slug": "ready-failed-task",
+      "branch": "task/ready-failed-task",
+      "worktree": "$WORKTREES_DIR/ready-failed-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+cat > "$TMP_DIR/ready-watchdog-state.json" <<'EOF'
+{
+  "updatedAt": "2026-05-05T12:30:00.000Z",
+  "tasks": {
+    "HOK-1306": {
+      "issueId": "HOK-1306",
+      "slug": "ready-task",
+      "prNumber": 414,
+      "classification": "waiting-on-ci",
+      "displayLabel": "waiting on CI",
+      "detail": "Checks still pending: build (PENDING).",
+      "action": "reported",
+      "updatedAt": "2026-05-05T12:30:00.000Z",
+      "idleMinutes": 12,
+      "lastProgressAt": "2026-05-05T12:18:00.000Z"
+    },
+    "HOK-1307": {
+      "issueId": "HOK-1307",
+      "slug": "active-task",
+      "prNumber": 415,
+      "classification": "waiting-on-eval-comparison",
+      "displayLabel": "waiting on eval/comparison",
+      "detail": "Background jobs still running: eval:eval-HOK-1307-primary-415.",
+      "action": "reported",
+      "updatedAt": "2026-05-05T12:30:00.000Z",
+      "idleMinutes": 14,
+      "lastProgressAt": "2026-05-05T12:16:00.000Z"
+    },
+    "HOK-1308": {
+      "issueId": "HOK-1308",
+      "slug": "ready-complete-task",
+      "prNumber": 411,
+      "classification": "stuck",
+      "displayLabel": "stuck",
+      "detail": "Local ready state has been idle for 30m while PR #411 is clean and green.",
+      "action": "auto-recovered",
+      "updatedAt": "2026-05-05T12:30:00.000Z",
+      "idleMinutes": 30,
+      "lastProgressAt": "2026-05-05T12:00:00.000Z"
+    },
+    "HOK-1309": {
+      "issueId": "HOK-1309",
+      "slug": "ready-failed-task",
+      "prNumber": 412,
+      "classification": "needs-user",
+      "displayLabel": "needs user",
+      "detail": "PR #412 has real merge conflicts on GitHub.",
+      "action": "reported",
+      "updatedAt": "2026-05-05T12:30:00.000Z",
+      "idleMinutes": 18,
+      "lastProgressAt": "2026-05-05T12:12:00.000Z"
+    }
+  }
+}
+EOF
+
+BEHAVIOR_READY_WATCHDOG="$TMP_DIR/behavior-ready-watchdog.json"
+cat > "$BEHAVIOR_READY_WATCHDOG" <<'EOF'
+{
+  "pane": {
+    "HOK-1306-ready-task": "8",
+    "HOK-1307-stale-task": "13",
+    "HOK-1307-active-task": "13",
+    "HOK-1308-ready-complete-task": "9",
+    "HOK-1309-ready-failed-task": "10"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {
+    "task/ready-task": "414|OPEN",
+    "task/active-task": "415|OPEN",
+    "task/ready-complete-task": "411|OPEN",
+    "task/ready-failed-task": "412|OPEN"
+  },
+  "checks": {
+    "task/ready-task": "pending",
+    "task/active-task": "pass",
+    "task/ready-complete-task": "pass",
+    "task/ready-failed-task": "fail"
+  }
+}
+EOF
+
+OUTPUT_READY_WATCHDOG="$TMP_DIR/output-ready-watchdog.txt"
+run_render "$STATE_FILE_READY_WATCHDOG" "$WORKTREES_DIR" "$BEHAVIOR_READY_WATCHDOG" "$OUTPUT_READY_WATCHDOG"
+
+if grep -q '📥 INBOX (2)' "$OUTPUT_READY_WATCHDOG" && grep -q '⚡ ACTIVE (2)' "$OUTPUT_READY_WATCHDOG"; then
+  pass "watchdog puts stuck and needs-user ready tasks in inbox while CI/eval waits stay active"
+else
+  fail "watchdog classification did not split ready tasks into inbox and active sections"
+fi
+
+if grep -q 'Checks still pending: build (PENDING).' "$OUTPUT_READY_WATCHDOG" \
+  && grep -q 'Background jobs still running:' "$OUTPUT_READY_WATCHDOG" \
+  && grep -q 'Local ready state has been idle for 30m' "$OUTPUT_READY_WATCHDOG" \
+  && grep -q 'PR #412 has real merge conflicts' "$OUTPUT_READY_WATCHDOG"; then
+  pass "watchdog detail lines render all ready classifications"
+else
+  fail "watchdog detail lines are missing one or more ready classifications"
+fi
+
 echo ""
 echo "=== wavemill-status pr_checks rollup handling ==="
 
