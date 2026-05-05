@@ -48,6 +48,10 @@ LAUNCH_FUNC_FILE="$TEST_TMP/launch_ready_phase.sh"
 extract_function "$MILL_SCRIPT" "ready_conflict_attention_head" > "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "record_ready_conflict_attention" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_ready_conflict_attention" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "transient_mergeability_count" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "increment_transient_mergeability_count" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "write_transient_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "launch_ready_phase" >> "$LAUNCH_FUNC_FILE"
 
 if [[ ! -s "$LAUNCH_FUNC_FILE" ]]; then
@@ -67,6 +71,7 @@ run_launch_case() {
     SESSION="ready-phase-test"
     TOOLS_DIR="$CASE_DIR/tools"
     AGENT_CMD="codex"
+    READY_TRANSIENT_MAX_ATTEMPTS=6
     mkdir -p "$TOOLS_DIR"
 
     STATE_DIR="$CASE_DIR/feature/ready"
@@ -81,6 +86,14 @@ run_launch_case() {
         touch "$STATE_DIR/.conflict-detected" "$STATE_DIR/.conflict-attention-reported"
         printf "%s\n" "abc123" > "$STATE_DIR/.conflict-attention-head"
         printf "%s\n" "stale attention" > "$STATE_DIR/.needs-attention"
+        ;;
+      unknown_capped)
+        printf "%s\n" "6" > "$STATE_DIR/.transient-mergeability-count"
+        ;;
+      clean_after_unknown)
+        printf "%s\n" "stale transient attention" > "$STATE_DIR/.needs-attention"
+        : > "$STATE_DIR/.needs-attention-transient"
+        printf "%s\n" "3" > "$STATE_DIR/.transient-mergeability-count"
         ;;
     esac
 
@@ -166,6 +179,8 @@ run_launch_case() {
     }
     write_ready_attention_file() {
       printf -v READY_ATTENTION_CALLS "%s%s|%s\n" "$READY_ATTENTION_CALLS" "$1" "$2"
+      mkdir -p "$1"
+      printf "%s\n" "$2" > "$1/.needs-attention"
     }
     npx() {
       if [[ "${1:-}" != "tsx" ]]; then
@@ -178,6 +193,18 @@ run_launch_case() {
           return 2
           ;;
         pass_after_remediation)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"attempts\":1}}"
+          return 0
+          ;;
+        unknown_first|unknown_capped)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"UNKNOWN\",\"message\":\"GitHub is still computing mergeability\",\"mergeable\":\"UNKNOWN\",\"mergeStateStatus\":\"UNKNOWN\",\"attempts\":3}}"
+          return 0
+          ;;
+        error_first)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"ERROR\",\"message\":\"Unable to fetch mergeability from GitHub\",\"attempts\":3,\"error\":\"HTTP 504\"}}"
+          return 0
+          ;;
+        clean_after_unknown)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"attempts\":1}}"
           return 0
           ;;
@@ -228,9 +255,12 @@ run_launch_case() {
     [[ -f "$STATE_DIR/.conflict-detected" ]] && conflict_detected="present"
     needs_attention="absent"
     [[ -f "$STATE_DIR/.needs-attention" ]] && needs_attention="present"
+    transient_attention="absent"
+    [[ -f "$STATE_DIR/.needs-attention-transient" ]] && transient_attention="present"
+    transient_count="$(cat "$STATE_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
 
-    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\n" \
-      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention"
+    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\n" \
+      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count"
   ' 2>&1
 }
 
@@ -253,6 +283,33 @@ check_contains "pending re-check logs launch at debug level" "$output" "logs=deb
 check_contains "pending re-check logs retry at debug level" "$output" "debug   CI checks pending for HOK-1300 (PR #304) - will retry"
 check_not_contains "pending re-check does not log launch at info level" "$output" "info   Launching ready phase for HOK-1300 (PR #304)"
 check_not_contains "pending re-check does not log retry at info level" "$output" "info   CI checks pending for HOK-1300 (PR #304) - will retry"
+
+output="$(run_launch_case unknown_first)"
+check_contains "unknown first poll returns retry code" "$output" "rc=4"
+check_contains "unknown first poll writes running stage result" "$output" "|ready|running|"
+check_contains "unknown first poll records pending verdict" "$output" "\"verdict\":\"pending\""
+check_contains "unknown first poll tracks transient attempt" "$output" "\"transientMergeabilityAttempts\":1"
+check_contains "unknown first poll leaves no attention file" "$output" "needs_attention=absent"
+check_contains "unknown first poll leaves no transient attention marker" "$output" "transient_attention=absent"
+check_contains "unknown first poll stores retry count" "$output" "transient_count=1"
+check_contains "unknown first poll logs retry" "$output" "Merge status for HOK-1300 is UNKNOWN - will retry (attempt 1/6)"
+
+output="$(run_launch_case error_first)"
+check_contains "error first poll returns retry code" "$output" "rc=4"
+check_contains "error first poll writes running stage result" "$output" "|ready|running|"
+check_contains "error first poll records pending verdict" "$output" "\"verdict\":\"pending\""
+check_contains "error first poll tracks transient attempt" "$output" "\"transientMergeabilityAttempts\":1"
+check_contains "error first poll stores retry count" "$output" "transient_count=1"
+check_contains "error first poll leaves no attention file" "$output" "needs_attention=absent"
+check_contains "error first poll logs retry" "$output" "Merge status for HOK-1300 is ERROR - will retry (attempt 1/6)"
+
+output="$(run_launch_case unknown_capped)"
+check_contains "unknown capped returns failure" "$output" "rc=1"
+check_contains "unknown capped writes attention" "$output" "Merge status UNKNOWN persisted after 7 checks for PR #304."
+check_contains "unknown capped writes transient marker" "$output" "transient_attention=present"
+check_contains "unknown capped keeps attention file" "$output" "needs_attention=present"
+check_contains "unknown capped increments counter past cap" "$output" "transient_count=7"
+check_contains "unknown capped logs persistent failure" "$output" "Merge status UNKNOWN persisted for HOK-1300 after 7 attempts"
 
 output="$(run_launch_case remediation_launch)"
 check_contains "first remediation launch returns rc 5" "$output" "rc=5"
@@ -312,6 +369,12 @@ check_contains "pass after remediation clears conflict marker" "$output" "confli
 check_contains "pass after remediation clears attention head" "$output" "conflict_attention_head="
 check_contains "pass after remediation clears reported marker" "$output" "conflict_attention_reported=absent"
 check_contains "pass after remediation clears needs attention" "$output" "needs_attention=absent"
+
+output="$(run_launch_case clean_after_unknown)"
+check_contains "clean after unknown returns success" "$output" "rc=0"
+check_contains "clean after unknown clears attention" "$output" "needs_attention=absent"
+check_contains "clean after unknown clears transient marker" "$output" "transient_attention=absent"
+check_contains "clean after unknown clears transient count" "$output" "transient_count="
 
 output="$(run_launch_case clean_with_stderr)"
 check_contains "success stderr is not treated as error" "$output" "error_count=0"

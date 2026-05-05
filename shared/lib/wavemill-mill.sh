@@ -3585,10 +3585,54 @@ ready_stage_pending_verdict() {
   jq -r '.artifacts.verdict // empty' "$result_file" 2>/dev/null || echo ""
 }
 
+READY_TRANSIENT_MAX_ATTEMPTS=6
+
 write_ready_attention_file() {
   local state_dir="$1" message="$2"
   mkdir -p "$state_dir"
   printf '%s\n' "$message" > "$state_dir/.needs-attention"
+}
+
+transient_mergeability_count() {
+  local state_dir="$1"
+  local count_file="$state_dir/.transient-mergeability-count"
+
+  if [[ ! -f "$count_file" ]]; then
+    echo "0"
+    return 0
+  fi
+
+  local count
+  count=$(cat "$count_file" 2>/dev/null || echo "0")
+  if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+    echo "0"
+    return 0
+  fi
+
+  echo "$count"
+}
+
+increment_transient_mergeability_count() {
+  local state_dir="$1"
+  local count
+  count=$(transient_mergeability_count "$state_dir")
+  count=$((count + 1))
+  mkdir -p "$state_dir"
+  printf '%s\n' "$count" > "$state_dir/.transient-mergeability-count"
+  echo "$count"
+}
+
+clear_transient_mergeability_state() {
+  local state_dir="$1"
+  rm -f \
+    "$state_dir/.transient-mergeability-count" \
+    "$state_dir/.needs-attention-transient"
+}
+
+write_transient_ready_attention_file() {
+  local state_dir="$1" message="$2"
+  write_ready_attention_file "$state_dir" "$message"
+  : > "$state_dir/.needs-attention-transient"
 }
 
 launch_ready_phase() {
@@ -3697,13 +3741,42 @@ launch_ready_phase() {
   fi
 
   if [[ "$merge_status" == "UNKNOWN" || "$merge_status" == "ERROR" ]]; then
-    write_ready_attention_file "$state_dir" "Ready stage reported merge status $merge_status for PR #$pr_number."
-    log_error "  Ready merge status for $issue is $merge_status"
-    [[ -n "$result" ]] && log_error "$result"
+    local transient_count transient_limit pending_artifacts_json
+    transient_limit="${READY_TRANSIENT_MAX_ATTEMPTS:-6}"
+    transient_count=$(increment_transient_mergeability_count "$state_dir")
+
+    if (( transient_count <= transient_limit )); then
+      pending_artifacts_json=$(jq -cn \
+        --arg merge_status "${merge_status:-UNKNOWN}" \
+        --argjson checks_run "${checks_run:-0}" \
+        --argjson checks_passed "${checks_passed:-0}" \
+        --argjson pr_number "${pr_number}" \
+        --argjson attempts "$transient_count" \
+        '{
+          type: "ready",
+          verdict: "pending",
+          checksRun: $checks_run,
+          checksPassed: $checks_passed,
+          mergeConflict: $merge_status,
+          prNumber: $pr_number,
+          transientMergeabilityAttempts: $attempts
+        }')
+      write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
+        "pending GitHub mergeability - will retry (attempt ${transient_count}/${transient_limit})" \
+        "$pending_artifacts_json"
+      rm -f "$state_dir/.needs-attention" "$state_dir/.needs-attention-transient"
+      log "info" "  Merge status for $issue is $merge_status - will retry (attempt ${transient_count}/${transient_limit})"
+      return 4
+    fi
+
+    write_transient_ready_attention_file "$state_dir" \
+      "Merge status $merge_status persisted after $transient_count checks for PR #$pr_number."
+    log_error "  Merge status $merge_status persisted for $issue after $transient_count attempts"
     return 1
   fi
 
-  rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention"
+  rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention" "$state_dir/.needs-attention-transient"
+  clear_transient_mergeability_state "$state_dir"
   clear_ready_conflict_attention "$state_dir"
 
   if [[ "$ready_rc" -eq 0 ]]; then
@@ -6346,6 +6419,9 @@ monitor_issue_state() {
         merged_before_ready=true
         ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
         write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
+      else
+        clear_transient_mergeability_state "$merged_ready_dir"
+        rm -f "$merged_ready_dir/.needs-attention"
       fi
     fi
 
@@ -7269,6 +7345,9 @@ monitor_issue_state() {
       merged_before_ready=true
       ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
       write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
+    else
+      clear_transient_mergeability_state "$merged_ready_dir"
+      rm -f "$merged_ready_dir/.needs-attention"
     fi
 
     log "status" "✓ $ISSUE → PR #$PR MERGED"

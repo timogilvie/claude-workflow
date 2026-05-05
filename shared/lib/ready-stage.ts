@@ -195,6 +195,10 @@ export interface MergeConflictResult {
   error?: string;
 }
 
+export const MAX_TRANSIENT_ATTEMPTS = 3;
+export const INITIAL_BACKOFF_MS = 5000;
+export const MAX_BACKOFF_MS = 15000;
+
 export async function sleep(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -1381,9 +1385,9 @@ export async function checkMergeConflicts(
   prNumber: number,
   repoDir: string
 ): Promise<MergeConflictResult> {
-  const maxAttempts = 3;
+  let lastError: string | undefined;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  for (let attempt = 1; attempt <= MAX_TRANSIENT_ATTEMPTS; attempt += 1) {
     try {
       const mergeabilityJson = readyStageDeps.execShellCommand(
         `gh pr view ${escapeShellArg(String(prNumber))} --json mergeable,mergeStateStatus`,
@@ -1418,8 +1422,10 @@ export async function checkMergeConflicts(
       }
 
       if (mergeable === 'UNKNOWN' || mergeStateStatus === 'UNKNOWN' || (!mergeable && !mergeStateStatus)) {
-        if (attempt < maxAttempts) {
-          await readyStageDeps.sleep(5000);
+        if (attempt < MAX_TRANSIENT_ATTEMPTS) {
+          await readyStageDeps.sleep(
+            Math.min(INITIAL_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS)
+          );
           continue;
         }
 
@@ -1440,11 +1446,19 @@ export async function checkMergeConflicts(
         attempts: attempt,
       };
     } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < MAX_TRANSIENT_ATTEMPTS) {
+        await readyStageDeps.sleep(
+          Math.min(INITIAL_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS)
+        );
+        continue;
+      }
+
       return {
         status: 'ERROR',
         message: 'Unable to fetch mergeability from GitHub',
         attempts: attempt,
-        error: error instanceof Error ? error.message : String(error),
+        error: lastError,
       };
     }
   }
@@ -1452,7 +1466,8 @@ export async function checkMergeConflicts(
   return {
     status: 'UNKNOWN',
     message: 'GitHub is still computing mergeability',
-    attempts: maxAttempts,
+    attempts: MAX_TRANSIENT_ATTEMPTS,
+    ...(lastError ? { error: lastError } : {}),
   };
 }
 
