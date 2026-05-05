@@ -336,7 +336,9 @@ truncate_detail() {
 format_job_elapsed() {
   local started_at="$1"
   local start_epoch now elapsed ts
+  # Strip fractional seconds and timezone suffix (handles both 2006-01-02T15:04:05.999Z and no-fraction forms)
   ts="${started_at%%.*}"
+  ts="${ts%Z}"
   if date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" "+%s" >/dev/null 2>&1; then
     # BSD/macOS date
     start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" "+%s" 2>/dev/null || echo 0)

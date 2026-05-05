@@ -4176,6 +4176,16 @@ poll_challenge_jobs() {
       continue
     fi
 
+    if [[ "$kind" == "eval" && "$reason" == "no_result_file" && -n "$issue_id" ]]; then
+      local pr_num
+      pr_num=$(echo "$job_json" | jq -r '.prNumbers[0] // empty')
+      if [[ -n "$pr_num" ]] && eval_record_exists_for_issue_pr "$issue_id" "$pr_num"; then
+        log_warn "challenge eval for $issue_id had no result file but eval record was persisted; marking completed"
+        mark_eval_completed "$issue_id"
+        settle_tracked_job "$job_id"
+        continue
+      fi
+    fi
     if [[ "$kind" == "eval" ]]; then
       log_warn "challenge eval failed for $issue_id (${reason:-$status}); log: $log_path"
     else
