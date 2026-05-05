@@ -125,6 +125,11 @@ subsystems in the codebase.
 ### Key Files
 *Exact file paths that will be created or modified. Use paths from the codebase context wherever possible. Use glob patterns if multiple files follow a pattern.*
 
+**Key Files path contract**:
+- Existing files must be listed as real, current paths in the repository.
+- Intended new files are allowed, but must be explicitly marked immediately after the path with `(new)` or `(planned)`.
+- Example: ``- `shared/lib/new-module.ts` (new) - new validator helper``
+
 ### Relevant Subsystem Specs
 
 *If subsystem specs were provided in the codebase context above, list them here with key constraints:*
@@ -193,6 +198,7 @@ subsystems in the codebase.
 ## 6. Validation Steps
 
 **CRITICAL**: This section must provide concrete, specific test scenarios that an autonomous agent can execute to verify their work. Generic commands like "pnpm test" are necessary but insufficient.
+**CRITICAL**: Use the heading label `Validation Steps` exactly (e.g. `## 6. Validation Steps`) so automated quality gates can detect this section.
 
 **For each functional requirement**, specify:
 1. **Exact user actions or API calls** to perform

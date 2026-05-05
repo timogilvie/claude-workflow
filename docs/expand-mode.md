@@ -174,7 +174,7 @@ Direct mode expands multiple issues sequentially in the order provided so output
 |------|---------|
 | `tools/expand-issue.ts` | Core expansion tool — fetches issue, gathers context, invokes Claude |
 | `tools/prompts/issue-writer.md` | Task packet generation prompt template |
-| `shared/lib/task-packet-validator.js` | Quality gate validation logic |
+| `shared/lib/task-packet-validator.ts` | Quality gate validation logic |
 | `.wavemill/project-context.md` | Living documentation of patterns and conventions |
 | `.wavemill-config.json` | Validation thresholds and project settings |
 

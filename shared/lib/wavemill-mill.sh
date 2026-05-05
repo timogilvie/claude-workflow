@@ -3988,9 +3988,219 @@ mark_challenge_compared() {
   fi
 }
 
+sanitize_job_token() {
+  printf '%s' "${1:-unknown}" | sed 's/[^A-Za-z0-9._-]/-/g'
+}
+
+challenge_job_dir() {
+  local dir="$REPO_DIR/.wavemill/jobs/$SESSION"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
+}
+
+build_eval_job_id() {
+  local issue="$1" side="$2" pr="$3"
+  printf 'eval-%s-%s-%s\n' \
+    "$(sanitize_job_token "$issue")" \
+    "$(sanitize_job_token "$side")" \
+    "$pr"
+}
+
+build_comparison_job_id() {
+  local pair_id="$1" primary_pr="$2" challenger_pr="$3"
+  printf 'comparison-%s-%s-%s\n' \
+    "$(sanitize_job_token "$pair_id")" \
+    "$primary_pr" \
+    "$challenger_pr"
+}
+
+read_job_state_value() {
+  local job_id="$1" default="$2" expr="$3"
+  read_state_value "$default" --arg id "$job_id" "$expr"
+}
+
+launch_tracked_job() {
+  local kind="$1" job_id="$2" issue_id="$3" side="$4" pair_id="$5" pr_numbers="$6" pid="$7" timeout_seconds="$8" log_path="$9" result_path="${10}"
+  local args=(
+    launch
+    --state-file "$STATE_FILE" \
+    --kind "$kind" \
+    --job-id "$job_id" \
+    --pr-numbers "$pr_numbers" \
+    --pid "$pid" \
+    --timeout-seconds "$timeout_seconds" \
+    --log-path "$log_path" \
+    --result-path "$result_path"
+  )
+  [[ -n "$issue_id" ]] && args+=(--issue-id "$issue_id")
+  [[ -n "$side" ]] && args+=(--side "$side")
+  [[ -n "$pair_id" ]] && args+=(--pair-id "$pair_id")
+  npx tsx "$TOOLS_DIR/job-tracker.ts" "${args[@]}" >/dev/null
+}
+
+settle_tracked_job() {
+  local job_id="$1"
+  npx tsx "$TOOLS_DIR/job-tracker.ts" mark-settled \
+    --state-file "$STATE_FILE" \
+    --job-id "$job_id" \
+    >/dev/null
+}
+
+render_challenge_comparison_summary() {
+  local pair_id="$1" primary_pr="$2" challenger_pr="$3" primary_model="$4" challenger_model="$5" result_path="$6"
+  [[ -r "$result_path" ]] || return 0
+
+  local compare_json winner winner_model rationale
+  local comp_p comp_c cor_p cor_c qual_p qual_c impact_p impact_c auto_p auto_c
+  local primary_eval_score challenger_eval_score
+  compare_json=$(jq -c '.comparison // {}' "$result_path" 2>/dev/null || echo "{}")
+  winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
+  winner_model=$(echo "$compare_json" | jq -r '.winnerModel // empty' 2>/dev/null)
+  rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
+  primary_eval_score=$(echo "$compare_json" | jq -r '.primaryEvalScore // "—"' 2>/dev/null)
+  challenger_eval_score=$(echo "$compare_json" | jq -r '.challengerEvalScore // "—"' 2>/dev/null)
+  comp_p=$(echo "$compare_json" | jq -r '.dimensions.completeness.primary // "—"' 2>/dev/null)
+  comp_c=$(echo "$compare_json" | jq -r '.dimensions.completeness.challenger // "—"' 2>/dev/null)
+  cor_p=$(echo "$compare_json" | jq -r '.dimensions.correctness.primary // "—"' 2>/dev/null)
+  cor_c=$(echo "$compare_json" | jq -r '.dimensions.correctness.challenger // "—"' 2>/dev/null)
+  qual_p=$(echo "$compare_json" | jq -r '.dimensions.code_quality.primary // .dimensions.codeQuality.primary // "—"' 2>/dev/null)
+  qual_c=$(echo "$compare_json" | jq -r '.dimensions.code_quality.challenger // .dimensions.codeQuality.challenger // "—"' 2>/dev/null)
+  impact_p=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.primary // .dimensions.scopeDiscipline.primary // "—"' 2>/dev/null)
+  impact_c=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.challenger // .dimensions.scopeDiscipline.challenger // "—"' 2>/dev/null)
+  auto_p=$(echo "$compare_json" | jq -r '.dimensions.autonomy.primary // "—"' 2>/dev/null)
+  auto_c=$(echo "$compare_json" | jq -r '.dimensions.autonomy.challenger // "—"' 2>/dev/null)
+
+  local disp_primary disp_challenger disp_winner
+  disp_primary=$(echo "$primary_model" | sed 's/-[0-9]\{8\}$//')
+  disp_challenger=$(echo "$challenger_model" | sed 's/-[0-9]\{8\}$//')
+  disp_winner=$(echo "$winner_model" | sed 's/-[0-9]\{8\}$//')
+
+  log "status" ""
+  log "status" "  ┌────────────────────────────────────────────────────────────┐"
+  log "status" "  │  ⚖  Challenge Comparison: $pair_id"
+  log "status" "  ├────────────────────────────────────────────────────────────┤"
+  log "status" "  │                    Primary            Challenger           │"
+  log "status" "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
+  log "status" "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
+  log "status" "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
+  log "status" "  ├────────────────────────────────────────────────────────────┤"
+  log "status" "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
+  log "status" "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
+  log "status" "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
+  log "status" "  │  Intervention    $(printf '%-20s' "$impact_p") $(printf '%-19s' "$impact_c")│"
+  log "status" "  │  Autonomy        $(printf '%-20s' "$auto_p") $(printf '%-19s' "$auto_c")│"
+  log "status" "  ├────────────────────────────────────────────────────────────┤"
+  if [[ "$winner" == "primary" ]]; then
+    log "status" "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
+  else
+    log "status" "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
+  fi
+  log "status" "  │                                                            │"
+  echo "$rationale" | fold -s -w 56 | while IFS= read -r rline; do
+    log "status" "  │  $(printf '%-58s' "$rline")│"
+  done
+  log "status" "  └────────────────────────────────────────────────────────────┘"
+  log "status" ""
+}
+
+handle_comparison_job_success() {
+  local pair_id="$1" primary_key="$2" challenger_key="$3" primary_pr="$4" challenger_pr="$5" result_path="$6"
+  local primary_model challenger_model loser_key loser_slug loser_pr winner
+  primary_model=$(get_task_meta "$primary_key" "challengeModel")
+  challenger_model=$(get_task_meta "$challenger_key" "challengeModel")
+  render_challenge_comparison_summary "$pair_id" "$primary_pr" "$challenger_pr" "$primary_model" "$challenger_model" "$result_path"
+
+  winner=$(jq -r '.comparison.winner // empty' "$result_path" 2>/dev/null || echo "")
+  if [[ "$winner" == "primary" ]]; then
+    loser_key="$challenger_key"
+  elif [[ "$winner" == "challenger" ]]; then
+    loser_key="$primary_key"
+  fi
+
+  if [[ -n "${loser_key:-}" ]]; then
+    loser_slug=$(get_task_meta "$loser_key" "slug")
+    loser_pr=$(get_task_meta "$loser_key" "pr")
+    if [[ -n "$loser_slug" ]]; then
+      if [[ "${CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
+        log "status" "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
+        if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
+          gh pr close "$loser_pr" \
+            --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
+          log "status" "  ✓ Closed losing PR #$loser_pr"
+        fi
+        cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
+      else
+        log "status" "  ⚖ Both PRs remain open for manual review (autoMergeWinner=false)"
+      fi
+    fi
+  fi
+}
+
+poll_challenge_jobs() {
+  local poll_json
+  if ! poll_json=$(npx tsx "$TOOLS_DIR/job-tracker.ts" poll --state-file "$STATE_FILE" 2>/dev/null); then
+    log_warn "challenge job poll failed"
+    return 0
+  fi
+
+  while IFS= read -r job_json; do
+    [[ -z "$job_json" ]] && continue
+    local job_id kind status issue_id pair_id excerpt reason log_path result_path side
+    local primary_pr challenger_pr primary_key challenger_key
+    job_id=$(echo "$job_json" | jq -r '.id')
+    kind=$(echo "$job_json" | jq -r '.kind')
+    status=$(echo "$job_json" | jq -r '.status')
+    issue_id=$(echo "$job_json" | jq -r '.issueId // empty')
+    pair_id=$(echo "$job_json" | jq -r '.pairId // empty')
+    excerpt=$(echo "$job_json" | jq -r '.excerpt // empty')
+    reason=$(echo "$job_json" | jq -r '.reason // empty')
+    log_path=$(echo "$job_json" | jq -r '.logPath // empty')
+    result_path=$(echo "$job_json" | jq -r '.resultPath // empty')
+    side=$(echo "$job_json" | jq -r '.side // empty')
+
+    if [[ "$kind" == "eval" && "$status" == "succeeded" ]]; then
+      log "status" "  ✓ Challenge eval completed for $issue_id${side:+ ($side)}"
+      settle_tracked_job "$job_id"
+      continue
+    fi
+
+    if [[ "$kind" == "comparison" && "$status" == "succeeded" ]]; then
+      primary_pr=$(echo "$job_json" | jq -r '.prNumbers[0] // empty')
+      challenger_pr=$(echo "$job_json" | jq -r '.prNumbers[1] // empty')
+      primary_key="$pair_id"
+      challenger_key="${pair_id}_c"
+      handle_comparison_job_success "$pair_id" "$primary_key" "$challenger_key" "$primary_pr" "$challenger_pr" "$result_path"
+      settle_tracked_job "$job_id"
+      continue
+    fi
+
+    if [[ "$kind" == "eval" && "$reason" == "no_result_file" && -n "$issue_id" ]]; then
+      local pr_num
+      pr_num=$(echo "$job_json" | jq -r '.prNumbers[0] // empty')
+      if [[ -n "$pr_num" ]] && eval_record_exists_for_issue_pr "$issue_id" "$pr_num"; then
+        log_warn "challenge eval for $issue_id had no result file but eval record was persisted; marking completed"
+        mark_eval_completed "$issue_id"
+        settle_tracked_job "$job_id"
+        continue
+      fi
+    fi
+    if [[ "$kind" == "eval" ]]; then
+      log_warn "challenge eval failed for $issue_id (${reason:-$status}); log: $log_path"
+    else
+      log_warn "challenge comparison failed for $pair_id (${reason:-$status}); log: $log_path"
+    fi
+    if [[ -n "$excerpt" ]]; then
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && log_warn "  $line"
+      done <<<"$excerpt"
+    fi
+    settle_tracked_job "$job_id"
+  done < <(echo "$poll_json" | jq -c '.unsettled[]?')
+}
+
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
-  local eval_completed pair_id solution_model linear_issue eval_agent rc
+  local eval_completed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
 
@@ -3999,32 +4209,31 @@ maybe_run_challenge_eval() {
   linear_issue=$(get_linear_issue_id "$issue")
   eval_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+  side=$(get_task_meta "$issue" "challengeRole")
+  [[ -z "$side" ]] && side="primary"
+  job_id=$(build_eval_job_id "$issue" "$side" "$pr")
+  job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
+  [[ -n "$job_status" ]] && return 0
 
-  local eval_log="/tmp/${SESSION}-eval-${issue}.log"
-  if _with_timeout 420 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+  job_dir=$(challenge_job_dir)
+  log_path="$job_dir/${job_id}.log"
+  result_path="$job_dir/${job_id}.result.json"
+
+  npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
     --issue "$linear_issue" --pr "$pr" --branch "$branch" \
     --worktree "${WORKTREE_ROOT}/${slug}" \
     --workflow-type mill --repo-dir "$REPO_DIR" \
     --agent "$eval_agent" \
     --solution-model "$solution_model" \
     --challenge-pair "$pair_id" \
+    --result-file "$result_path" \
     --debug \
-    >"$eval_log" 2>&1; then
-    rc=0
-  else
-    rc=$?
-  fi
-  while IFS= read -r line; do log "debug" "  [challenge-eval] $line"; done < "$eval_log"
-  rm -f "$eval_log"
-  if [[ "$rc" -eq 0 ]]; then
-    mark_eval_completed "$issue"
-  elif eval_record_exists_for_issue_pr "$linear_issue" "$pr"; then
-    log_warn "challenge eval for $issue exited $rc but a persisted eval record exists; marking evalCompleted=true"
-    mark_eval_completed "$issue"
-  else
-    log_warn "challenge eval failed for $issue (exit $rc); setting evalFailed=true"
-    mark_eval_failed "$issue"
-  fi
+    >"$log_path" 2>&1 &
+  pid=$!
+  disown "$pid" 2>/dev/null || true
+
+  launch_tracked_job "eval" "$job_id" "$issue" "$side" "$pair_id" "$pr" "$pid" "420" "$log_path" "$result_path"
+  log "status" "  📊 Challenge eval running in background for $issue (pid $pid)"
 }
 
 launch_background_post_merge_eval() {
@@ -4083,7 +4292,10 @@ launch_background_post_merge_eval() {
 
 maybe_run_challenge_comparison() {
   local issue="$1"
-  local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model compare_log
+  local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model
+  local primary_planner primary_reviewer primary_plan_depth primary_code_depth primary_review_mode
+  local challenger_planner challenger_reviewer challenger_plan_depth challenger_code_depth challenger_review_mode
+  local job_id job_status job_dir log_path result_path pid
   pair_id=$(get_task_meta "$issue" "challengePairId")
   [[ -z "$pair_id" ]] && return 0
   primary_key="$pair_id"
@@ -4096,6 +4308,9 @@ maybe_run_challenge_comparison() {
   primary_eval=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
   challenger_eval=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
   [[ -z "$primary_pr" || -z "$challenger_pr" || "$primary_eval" != "true" || "$challenger_eval" != "true" ]] && return 0
+  job_id=$(build_comparison_job_id "$pair_id" "$primary_pr" "$challenger_pr")
+  job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
+  [[ -n "$job_status" ]] && return 0
 
   linear_issue=$(get_linear_issue_id "$primary_key")
   primary_model=$(get_task_meta "$primary_key" "challengeModel")
@@ -4114,22 +4329,11 @@ maybe_run_challenge_comparison() {
   challenger_code_depth=$(get_task_meta "$challenger_key" "codeDepth")
   challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
 
-  compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
-  if ! _with_timeout 60 npx tsx "$TOOLS_DIR/compare-prs.ts" \
-    --issue "$linear_issue" --pair-id "$pair_id" \
-    --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
-    --primary-model "$primary_model" --challenger-model "$challenger_model" \
-    --repo-dir "$REPO_DIR" --check-only >"$compare_log" 2>&1; then
-    log_warn "challenge comparison skipped for $pair_id: evalCompleted=true but eval records are missing"
-    while IFS= read -r line; do log "debug" "  [challenge-compare] $line"; done < "$compare_log"
-    rm -f "$compare_log"
-    return 0
-  fi
-  rm -f "$compare_log"
-
   log "status" "  ⚖ Running challenge comparison for $pair_id"
-  compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
-  if _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
+  job_dir=$(challenge_job_dir)
+  log_path="$job_dir/${job_id}.log"
+  result_path="$job_dir/${job_id}.result.json"
+  npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
     --primary-model "$primary_model" --challenger-model "$challenger_model" \
@@ -4137,94 +4341,14 @@ maybe_run_challenge_comparison() {
     --primary-plan-depth "$primary_plan_depth" --primary-code-depth "$primary_code_depth" --primary-review-mode "$primary_review_mode" \
     --challenger-planner "$challenger_planner" --challenger-reviewer "$challenger_reviewer" \
     --challenger-plan-depth "$challenger_plan_depth" --challenger-code-depth "$challenger_code_depth" --challenger-review-mode "$challenger_review_mode" \
-    --repo-dir "$REPO_DIR" --comment >"$compare_log" 2>&1; then
-    mark_challenge_compared "$pair_id"
+    --repo-dir "$REPO_DIR" --comment \
+    --result-file "$result_path" \
+    >"$log_path" 2>&1 &
+  pid=$!
+  disown "$pid" 2>/dev/null || true
 
-    # Read comparison result from challenge records
-    local compare_json winner winner_model rationale
-    local comp_p comp_c cor_p cor_c qual_p qual_c impact_p impact_c auto_p auto_c
-    local primary_eval_score challenger_eval_score
-    compare_json=$(tail -1 "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" 2>/dev/null)
-    winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
-    winner_model=$(echo "$compare_json" | jq -r '.winnerModel // empty' 2>/dev/null)
-    rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
-    primary_eval_score=$(echo "$compare_json" | jq -r '.primaryEvalScore // "—"' 2>/dev/null)
-    challenger_eval_score=$(echo "$compare_json" | jq -r '.challengerEvalScore // "—"' 2>/dev/null)
-    comp_p=$(echo "$compare_json" | jq -r '.dimensions.completeness.primary // "—"' 2>/dev/null)
-    comp_c=$(echo "$compare_json" | jq -r '.dimensions.completeness.challenger // "—"' 2>/dev/null)
-    cor_p=$(echo "$compare_json" | jq -r '.dimensions.correctness.primary // "—"' 2>/dev/null)
-    cor_c=$(echo "$compare_json" | jq -r '.dimensions.correctness.challenger // "—"' 2>/dev/null)
-    qual_p=$(echo "$compare_json" | jq -r '.dimensions.code_quality.primary // .dimensions.codeQuality.primary // "—"' 2>/dev/null)
-    qual_c=$(echo "$compare_json" | jq -r '.dimensions.code_quality.challenger // .dimensions.codeQuality.challenger // "—"' 2>/dev/null)
-    impact_p=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.primary // .dimensions.scopeDiscipline.primary // "—"' 2>/dev/null)
-    impact_c=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.challenger // .dimensions.scopeDiscipline.challenger // "—"' 2>/dev/null)
-    auto_p=$(echo "$compare_json" | jq -r '.dimensions.autonomy.primary // "—"' 2>/dev/null)
-    auto_c=$(echo "$compare_json" | jq -r '.dimensions.autonomy.challenger // "—"' 2>/dev/null)
-
-    # Shorten model names for display (strip date suffix)
-    local disp_primary disp_challenger disp_winner
-    disp_primary=$(echo "$primary_model" | sed 's/-[0-9]\{8\}$//')
-    disp_challenger=$(echo "$challenger_model" | sed 's/-[0-9]\{8\}$//')
-    disp_winner=$(echo "$winner_model" | sed 's/-[0-9]\{8\}$//')
-
-    # Display formatted comparison summary
-    log "status" ""
-    log "status" "  ┌────────────────────────────────────────────────────────────┐"
-    log "status" "  │  ⚖  Challenge Comparison: $pair_id"
-    log "status" "  ├────────────────────────────────────────────────────────────┤"
-    log "status" "  │                    Primary            Challenger           │"
-    log "status" "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
-    log "status" "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
-    log "status" "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
-    log "status" "  ├────────────────────────────────────────────────────────────┤"
-    log "status" "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
-    log "status" "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
-    log "status" "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
-    log "status" "  │  Intervention    $(printf '%-20s' "$impact_p") $(printf '%-19s' "$impact_c")│"
-    log "status" "  │  Autonomy        $(printf '%-20s' "$auto_p") $(printf '%-19s' "$auto_c")│"
-    log "status" "  ├────────────────────────────────────────────────────────────┤"
-    if [[ "$winner" == "primary" ]]; then
-      log "status" "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
-    else
-      log "status" "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
-    fi
-    log "status" "  │                                                            │"
-    # Word-wrap rationale to ~56 chars per line
-    echo "$rationale" | fold -s -w 56 | while IFS= read -r rline; do
-      log "status" "  │  $(printf '%-58s' "$rline")│"
-    done
-    log "status" "  └────────────────────────────────────────────────────────────┘"
-    log "status" ""
-
-    # Determine loser for cleanup
-    local loser_key loser_slug loser_pr
-    if [[ "$winner" == "primary" ]]; then
-      loser_key="$challenger_key"
-    elif [[ "$winner" == "challenger" ]]; then
-      loser_key="$primary_key"
-    fi
-    if [[ -n "${loser_key:-}" ]]; then
-      loser_slug=$(get_task_meta "$loser_key" "slug")
-      loser_pr=$(get_task_meta "$loser_key" "pr")
-      if [[ -n "$loser_slug" ]]; then
-        if [[ "${CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
-          log "status" "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
-          # Close PR if not already closed/merged
-          if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
-            gh pr close "$loser_pr" \
-              --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
-            log "status" "  ✓ Closed losing PR #$loser_pr"
-          fi
-          cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
-        else
-          log "status" "  ⚖ Both PRs remain open for manual review (autoMergeWinner=false)"
-        fi
-      fi
-    fi
-  else
-    while IFS= read -r line; do log_warn "  [challenge-compare] $line"; done < "$compare_log"
-  fi
-  rm -f "$compare_log"
+  launch_tracked_job "comparison" "$job_id" "" "" "$pair_id" "${primary_pr},${challenger_pr}" "$pid" "240" "$log_path" "$result_path"
+  log "status" "  ⚖ Challenge comparison running in background for $pair_id (pid $pid)"
 }
 
 # Archive stage artifacts from worktree before cleanup.
@@ -7109,6 +7233,7 @@ while :; do
         ;;
     esac
   done
+  poll_challenge_jobs
   check_control_pane_health
   wavemill_pr_cache_refresh
   active_count=0

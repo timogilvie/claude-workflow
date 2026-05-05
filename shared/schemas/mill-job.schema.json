@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wavemill.dev/schemas/mill-job.schema.json",
+  "title": "Wavemill Challenge Job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "prNumbers",
+    "pid",
+    "startedAt",
+    "timeoutSeconds",
+    "logPath",
+    "resultPath",
+    "status",
+    "exitCode",
+    "finishedAt",
+    "reason",
+    "excerpt",
+    "settled"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "enum": ["eval", "comparison"] },
+    "issueId": { "type": "string" },
+    "side": { "type": "string", "enum": ["primary", "challenger"] },
+    "pairId": { "type": "string" },
+    "prNumbers": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 1 },
+      "minItems": 1
+    },
+    "pid": { "type": "integer", "minimum": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "timeoutSeconds": { "type": "integer", "minimum": 1 },
+    "logPath": { "type": "string", "minLength": 1 },
+    "resultPath": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["running", "succeeded", "failed", "timeout"] },
+    "exitCode": { "type": ["integer", "null"] },
+    "finishedAt": { "type": ["string", "null"], "format": "date-time" },
+    "reason": { "type": ["string", "null"] },
+    "excerpt": { "type": ["string", "null"] },
+    "settled": { "type": "boolean" }
+  }
+}

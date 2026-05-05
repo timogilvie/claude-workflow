@@ -24,6 +24,7 @@ import {
   withBodyFile,
   type ValidatedComparisonResult,
 } from '../shared/lib/pr-comparison.ts';
+import { writeJobResultFile } from '../shared/lib/job-tracker.ts';
 
 runTool({
   name: 'compare-prs',
@@ -50,8 +51,11 @@ runTool({
     comment: { type: 'boolean', description: 'Post recommendation comments on both PRs' },
     'auto-merge': { type: 'boolean', description: 'Merge winner and close loser after comparison' },
     'check-only': { type: 'boolean', description: 'Only verify required eval records exist' },
+    'result-file': { type: 'string', description: 'Optional path for structured job results' },
   },
   async run({ args }) {
+    const resultFile = args['result-file'] as string | undefined;
+    let exitCode = 0;
     const repoDir = (args['repo-dir'] as string) || process.cwd();
     const issueId = args.issue as string;
     const pairId = args['pair-id'] as string;
@@ -59,94 +63,96 @@ runTool({
     const challengerPr = args['challenger-pr'] as string;
     const primaryModel = args['primary-model'] as string;
     const challengerModel = args['challenger-model'] as string;
-    if (!issueId || !pairId || !primaryPr || !challengerPr || !primaryModel || !challengerModel) {
-      throw new Error('Missing required arguments for compare-prs');
-    }
+    let recordForResult: ChallengeComparison | undefined;
+    try {
+      if (!issueId || !pairId || !primaryPr || !challengerPr || !primaryModel || !challengerModel) {
+        throw new Error('Missing required arguments for compare-prs');
+      }
 
-    const config = loadWavemillConfig(repoDir);
-    const comparisonModel = (args.model as string) || config.challenge?.comparisonModel || 'claude-opus-4-7';
-    const issuePrompt = formatIssueAsPrompt(fetchIssueData(issueId, repoDir), issueId);
-    const primaryNumber = prNumberFromValue(primaryPr);
-    const challengerNumber = prNumberFromValue(challengerPr);
-    const primaryPrUrl = prUrlFromNumber(primaryPr, repoDir);
-    const challengerPrUrl = prUrlFromNumber(challengerPr, repoDir);
-    const evalsDir = resolveEvalsDir(undefined, repoDir).dir;
-    const hasRequiredEvalRecords = hasChallengeEvalRecordPair(
-      pairId,
-      primaryPrUrl,
-      challengerPrUrl,
-      { dir: evalsDir },
-    );
-    if (!hasRequiredEvalRecords) {
-      throw new Error(`Missing eval records for challenge pair ${pairId}`);
-    }
-    if (args['check-only']) {
-      console.log(JSON.stringify({
+      const config = loadWavemillConfig(repoDir);
+      const comparisonModel = (args.model as string) || config.challenge?.comparisonModel || 'claude-opus-4-7';
+      const issuePrompt = formatIssueAsPrompt(fetchIssueData(issueId, repoDir), issueId);
+      const primaryNumber = prNumberFromValue(primaryPr);
+      const challengerNumber = prNumberFromValue(challengerPr);
+      const primaryPrUrl = prUrlFromNumber(primaryPr, repoDir);
+      const challengerPrUrl = prUrlFromNumber(challengerPr, repoDir);
+      const evalsDir = resolveEvalsDir(undefined, repoDir).dir;
+      const hasRequiredEvalRecords = hasChallengeEvalRecordPair(
         pairId,
         primaryPrUrl,
         challengerPrUrl,
-        hasRequiredEvalRecords,
-      }, null, 2));
-      return;
-    }
-
-    const primaryDiff = fetchPrContext(primaryNumber, repoDir).diff;
-    const challengerDiff = fetchPrContext(challengerNumber, repoDir).diff;
-    const evals = readEvalRecords({ dir: evalsDir });
-    const primaryEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === primaryPrUrl);
-    const challengerEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === challengerPrUrl);
-    if (!primaryEval || !challengerEval) {
-      throw new Error(`Missing eval records for challenge pair ${pairId}`);
-    }
-    if (typeof primaryEval.score !== 'number' || typeof challengerEval.score !== 'number') {
-      throw new Error(`Invalid eval scores for challenge pair ${pairId}`);
-    }
-
-    // Build routing metadata if provided
-    const primaryRouting: ChallengeRoutingMeta | undefined = args['primary-planner'] ? {
-      planner: (args['primary-planner'] as string) || '',
-      coder: primaryModel,
-      reviewer: (args['primary-reviewer'] as string) || '',
-      planDepth: (args['primary-plan-depth'] as string) || '',
-      codeDepth: (args['primary-code-depth'] as string) || '',
-      reviewMode: (args['primary-review-mode'] as string) || '',
-    } : undefined;
-
-    const challengerRouting: ChallengeRoutingMeta | undefined = args['challenger-planner'] ? {
-      planner: (args['challenger-planner'] as string) || '',
-      coder: challengerModel,
-      reviewer: (args['challenger-reviewer'] as string) || '',
-      planDepth: (args['challenger-plan-depth'] as string) || '',
-      codeDepth: (args['challenger-code-depth'] as string) || '',
-      reviewMode: (args['challenger-review-mode'] as string) || '',
-    } : undefined;
-
-    const prompt = buildComparisonPrompt({
-      issuePrompt,
-      primaryDiff,
-      challengerDiff,
-      primaryEvalScore: primaryEval.score,
-      challengerEvalScore: challengerEval.score,
-      primaryRouting,
-      challengerRouting,
-    });
-    let response = await callClaude(prompt, {
-      mode: 'sync',
-      model: comparisonModel,
-      timeout: 180_000,
-      retry: true,
-      maxRetries: 2,
-    });
-    let verdict: ValidatedComparisonResult;
-    try {
-      verdict = validateComparisonJson(parseJsonFromLLM(response.text));
-    } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes('JavaScript code instead of JSON')) {
-        throw error;
+        { dir: evalsDir },
+      );
+      if (!hasRequiredEvalRecords) {
+        throw new Error(`Missing eval records for challenge pair ${pairId}`);
+      }
+      if (args['check-only']) {
+        console.log(JSON.stringify({
+          pairId,
+          primaryPrUrl,
+          challengerPrUrl,
+          hasRequiredEvalRecords,
+        }, null, 2));
+        return;
       }
 
-      console.warn('LLM returned JavaScript syntax. Retrying with stricter JSON instructions...');
-      const stricterPrompt = `${prompt}
+      const primaryDiff = fetchPrContext(primaryNumber, repoDir).diff;
+      const challengerDiff = fetchPrContext(challengerNumber, repoDir).diff;
+      const evals = readEvalRecords({ dir: evalsDir });
+      const primaryEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === primaryPrUrl);
+      const challengerEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === challengerPrUrl);
+      if (!primaryEval || !challengerEval) {
+        throw new Error(`Missing eval records for challenge pair ${pairId}`);
+      }
+      if (typeof primaryEval.score !== 'number' || typeof challengerEval.score !== 'number') {
+        throw new Error(`Invalid eval scores for challenge pair ${pairId}`);
+      }
+
+    // Build routing metadata if provided
+      const primaryRouting: ChallengeRoutingMeta | undefined = args['primary-planner'] ? {
+        planner: (args['primary-planner'] as string) || '',
+        coder: primaryModel,
+        reviewer: (args['primary-reviewer'] as string) || '',
+        planDepth: (args['primary-plan-depth'] as string) || '',
+        codeDepth: (args['primary-code-depth'] as string) || '',
+        reviewMode: (args['primary-review-mode'] as string) || '',
+      } : undefined;
+
+      const challengerRouting: ChallengeRoutingMeta | undefined = args['challenger-planner'] ? {
+        planner: (args['challenger-planner'] as string) || '',
+        coder: challengerModel,
+        reviewer: (args['challenger-reviewer'] as string) || '',
+        planDepth: (args['challenger-plan-depth'] as string) || '',
+        codeDepth: (args['challenger-code-depth'] as string) || '',
+        reviewMode: (args['challenger-review-mode'] as string) || '',
+      } : undefined;
+
+      const prompt = buildComparisonPrompt({
+        issuePrompt,
+        primaryDiff,
+        challengerDiff,
+        primaryEvalScore: primaryEval.score,
+        challengerEvalScore: challengerEval.score,
+        primaryRouting,
+        challengerRouting,
+      });
+      let response = await callClaude(prompt, {
+        mode: 'sync',
+        model: comparisonModel,
+        timeout: 180_000,
+        retry: true,
+        maxRetries: 2,
+      });
+      let verdict: ValidatedComparisonResult;
+      try {
+        verdict = validateComparisonJson(parseJsonFromLLM(response.text));
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes('JavaScript code instead of JSON')) {
+          throw error;
+        }
+
+        console.warn('LLM returned JavaScript syntax. Retrying with stricter JSON instructions...');
+        const stricterPrompt = `${prompt}
 
 IMPORTANT: Return ONLY valid JSON. Do NOT use:
 - JavaScript shorthand properties (use "key": value, not key)
@@ -155,79 +161,100 @@ IMPORTANT: Return ONLY valid JSON. Do NOT use:
 - Code comments or explanations
 
 Return a raw JSON object with no code fences, no comments, and no JavaScript syntax.`;
-      response = await callClaude(stricterPrompt, {
-        mode: 'sync',
-        model: comparisonModel,
-        timeout: 180_000,
-        retry: false,
+        response = await callClaude(stricterPrompt, {
+          mode: 'sync',
+          model: comparisonModel,
+          timeout: 180_000,
+          retry: false,
+        });
+        verdict = validateComparisonJson(parseJsonFromLLM(response.text));
+      }
+      const winnerModel = verdict.winner === 'primary' ? primaryModel : challengerModel;
+
+      // Compute enrichment fields
+      const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
+      const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
+
+      const record: ChallengeComparison = {
+        challengePairId: pairId,
+        primaryModel,
+        challengerModel,
+        primaryPrUrl,
+        challengerPrUrl,
+        primaryEvalScore: primaryEval.score,
+        challengerEvalScore: challengerEval.score,
+        winner: verdict.winner,
+        winnerModel,
+        rationale: verdict.rationale,
+        dimensions: verdict.dimensions,
+        timestamp: new Date().toISOString(),
+        primaryRouting,
+        challengerRouting,
+        variedDimensions,
+        challengeType,
+        workflowInsight: verdict.workflowInsight,
+      };
+      recordForResult = record;
+
+      appendChallengeComparison(record);
+
+      const routingSummary = formatRoutingSummary(primaryRouting, challengerRouting, challengeType);
+      const primaryCommentBody = buildChallengeCommentBody({
+        pairId,
+        winner: record.winner,
+        winnerModel: record.winnerModel,
+        rationale: record.rationale,
+        otherPrUrl: challengerPrUrl,
+        routingSummary,
       });
-      verdict = validateComparisonJson(parseJsonFromLLM(response.text));
+      const challengerCommentBody = buildChallengeCommentBody({
+        pairId,
+        winner: record.winner,
+        winnerModel: record.winnerModel,
+        rationale: record.rationale,
+        otherPrUrl: primaryPrUrl,
+        routingSummary,
+      });
+
+      if (args.comment || config.challenge?.autoMergeWinner) {
+        withBodyFile(primaryCommentBody, (bodyFile) => {
+          tryGh(['pr', 'comment', primaryNumber, '--body-file', bodyFile], repoDir, `comment primary PR ${primaryNumber}`);
+        });
+        withBodyFile(challengerCommentBody, (bodyFile) => {
+          tryGh(['pr', 'comment', challengerNumber, '--body-file', bodyFile], repoDir, `comment challenger PR ${challengerNumber}`);
+        });
+      }
+
+      if (args['auto-merge'] || config.challenge?.autoMergeWinner) {
+        const winnerNumber = record.winner === 'primary' ? primaryNumber : challengerNumber;
+        const loserNumber = record.winner === 'primary' ? challengerNumber : primaryNumber;
+        tryGh(['pr', 'merge', winnerNumber, '--merge', '--delete-branch=false'], repoDir, `merge winner PR ${winnerNumber}`);
+        withBodyFile(`Closing after challenge comparison. Recommended winner: ${record.winnerModel}`, (bodyFile) => {
+          tryGh(['pr', 'comment', loserNumber, '--body-file', bodyFile], repoDir, `comment loser PR ${loserNumber}`);
+        });
+        tryGh(['pr', 'close', loserNumber], repoDir, `close loser PR ${loserNumber}`);
+      }
+
+      console.log(JSON.stringify(record, null, 2));
+    } catch (error) {
+      exitCode = 1;
+      if (resultFile) {
+        writeJobResultFile(resultFile, {
+          ok: false,
+          exitCode,
+          reason: error instanceof Error ? error.message : 'comparison_failed',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      throw error;
     }
-    const winnerModel = verdict.winner === 'primary' ? primaryModel : challengerModel;
 
-    // Compute enrichment fields
-    const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
-    const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
-
-    const record: ChallengeComparison = {
-      challengePairId: pairId,
-      primaryModel,
-      challengerModel,
-      primaryPrUrl,
-      challengerPrUrl,
-      primaryEvalScore: primaryEval.score,
-      challengerEvalScore: challengerEval.score,
-      winner: verdict.winner,
-      winnerModel,
-      rationale: verdict.rationale,
-      dimensions: verdict.dimensions,
-      timestamp: new Date().toISOString(),
-      primaryRouting,
-      challengerRouting,
-      variedDimensions,
-      challengeType,
-      workflowInsight: verdict.workflowInsight,
-    };
-
-    appendChallengeComparison(record);
-
-    const routingSummary = formatRoutingSummary(primaryRouting, challengerRouting, challengeType);
-    const primaryCommentBody = buildChallengeCommentBody({
-      pairId,
-      winner: record.winner,
-      winnerModel: record.winnerModel,
-      rationale: record.rationale,
-      otherPrUrl: challengerPrUrl,
-      routingSummary,
-    });
-    const challengerCommentBody = buildChallengeCommentBody({
-      pairId,
-      winner: record.winner,
-      winnerModel: record.winnerModel,
-      rationale: record.rationale,
-      otherPrUrl: primaryPrUrl,
-      routingSummary,
-    });
-
-    if (args.comment || config.challenge?.autoMergeWinner) {
-      withBodyFile(primaryCommentBody, (bodyFile) => {
-        tryGh(['pr', 'comment', primaryNumber, '--body-file', bodyFile], repoDir, `comment primary PR ${primaryNumber}`);
-      });
-      withBodyFile(challengerCommentBody, (bodyFile) => {
-        tryGh(['pr', 'comment', challengerNumber, '--body-file', bodyFile], repoDir, `comment challenger PR ${challengerNumber}`);
+    if (resultFile) {
+      writeJobResultFile(resultFile, {
+        ok: true,
+        exitCode,
+        comparison: recordForResult,
       });
     }
-
-    if (args['auto-merge'] || config.challenge?.autoMergeWinner) {
-      const winnerNumber = record.winner === 'primary' ? primaryNumber : challengerNumber;
-      const loserNumber = record.winner === 'primary' ? challengerNumber : primaryNumber;
-      tryGh(['pr', 'merge', winnerNumber, '--merge', '--delete-branch=false'], repoDir, `merge winner PR ${winnerNumber}`);
-      withBodyFile(`Closing after challenge comparison. Recommended winner: ${record.winnerModel}`, (bodyFile) => {
-        tryGh(['pr', 'comment', loserNumber, '--body-file', bodyFile], repoDir, `comment loser PR ${loserNumber}`);
-      });
-      tryGh(['pr', 'close', loserNumber], repoDir, `close loser PR ${loserNumber}`);
-    }
-
-    console.log(JSON.stringify(record, null, 2));
   },
 });
