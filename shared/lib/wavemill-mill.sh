@@ -4003,7 +4003,7 @@ maybe_run_challenge_eval() {
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
 
   local eval_log="/tmp/${SESSION}-eval-${issue}.log"
-  if _with_timeout 420 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+  if run_with_command_drain _with_timeout 420 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
     --issue "$linear_issue" --pr "$pr" --branch "$branch" \
     --worktree "${WORKTREE_ROOT}/${slug}" \
     --workflow-type mill --repo-dir "$REPO_DIR" \
@@ -4117,7 +4117,7 @@ maybe_run_challenge_comparison() {
   challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
 
   compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
-  if ! _with_timeout 60 npx tsx "$TOOLS_DIR/compare-prs.ts" \
+  if ! run_with_command_drain _with_timeout 60 npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
     --primary-model "$primary_model" --challenger-model "$challenger_model" \
@@ -4131,7 +4131,7 @@ maybe_run_challenge_comparison() {
 
   log "status" "  ⚖ Running challenge comparison for $pair_id"
   compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
-  if _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
+  if run_with_command_drain _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
     --primary-model "$primary_model" --challenger-model "$challenger_model" \
@@ -5633,10 +5633,24 @@ clear_task_list_display() {
 }
 
 read_command_offset() {
-  local line_count offset_raw
+  local line_count offset_raw state_offset
   line_count=0
   [[ -f "$COMMAND_FILE" ]] && line_count=$(wc -l < "$COMMAND_FILE" 2>/dev/null | tr -d ' ')
   [[ "$line_count" =~ ^[0-9]+$ ]] || line_count=0
+
+  # Prefer durable state offset over the legacy tmp file — survives monitor restarts.
+  if [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]]; then
+    state_offset=$(jq -r '.command_queue.offset // empty' "$STATE_FILE" 2>/dev/null || true)
+    if [[ "$state_offset" =~ ^[0-9]+$ ]]; then
+      if (( state_offset > line_count )); then
+        write_command_offset "$line_count" || true
+        echo "$line_count"
+        return 0
+      fi
+      echo "$state_offset"
+      return 0
+    fi
+  fi
 
   # Persist any init-at-EOF decision: returning $line_count without writing it
   # back leaves drain_command_events permanently stuck at "line_count <= offset"
@@ -5675,10 +5689,55 @@ write_command_offset() {
   tmp="$(mktemp "/tmp/wavemill-${SESSION}-commands.offset.XXXXXX")" || return 1
   printf '%s\n' "$new_offset" > "$tmp"
   mv "$tmp" "$COMMAND_OFFSET_FILE"
+  # Also persist in state for restart-safe recovery.
+  if [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]]; then
+    state_mutate "$STATE_FILE" \
+      '.command_queue.offset = ($offset | tonumber)' \
+      --arg offset "$new_offset" 2>/dev/null || true
+  fi
+}
+
+# Durably record a command that cannot yet be executed.
+# Upserts by id so re-draining after a crash is idempotent.
+queued_command_upsert() {
+  local id="$1" line_num="$2" cmd="$3" reason="${4:-unknown}"
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.queued_commands = ((.queued_commands // []) | map(select(.id != $id))) + [{
+      id: $id,
+      line: ($line_num | tonumber),
+      command: $cmd,
+      status: "queued",
+      reason: $reason,
+      enqueued_at: (now | todate),
+      updated_at: (now | todate)
+    }]' \
+    --arg id "$id" \
+    --arg line_num "$line_num" \
+    --arg cmd "$cmd" \
+    --arg reason "$reason" 2>/dev/null || true
+}
+
+# Remove a queued command entry by id after it has been handled.
+queued_command_remove() {
+  local id="$1"
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.queued_commands = ((.queued_commands // []) | map(select(.id != $id)))' \
+    --arg id "$id" 2>/dev/null || true
+}
+
+# Update the reason on all queued commands (e.g. no_slots, lifecycle_busy).
+queued_commands_set_reason() {
+  local reason="$1"
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.queued_commands = ((.queued_commands // []) | map(. + {reason: $reason, updated_at: (now | todate)}))' \
+    --arg reason "$reason" 2>/dev/null || true
 }
 
 drain_command_events() {
-  local line_count offset start new_lines final_offset
+  local line_count offset current_line line_text cmd_id
   [[ -f "$COMMAND_FILE" ]] || return 0
   line_count=$(wc -l < "$COMMAND_FILE" 2>/dev/null | tr -d ' ')
   [[ "$line_count" =~ ^[0-9]+$ ]] || line_count=0
@@ -5686,14 +5745,36 @@ drain_command_events() {
   [[ "$offset" =~ ^[0-9]+$ ]] || offset=0
   (( line_count <= offset )) && return 0
 
-  start=$((offset + 1))
-  new_lines="$(sed -n "${start},${line_count}p" "$COMMAND_FILE" 2>/dev/null || true)"
-  while IFS= read -r evt; do
-    [[ -z "$evt" ]] && continue
-    COMMAND_QUEUE+=("$evt")
-  done <<< "$new_lines"
-  final_offset=$line_count
-  write_command_offset "$final_offset" || true
+  current_line=$((offset + 1))
+  while (( current_line <= line_count )); do
+    line_text="$(sed -n "${current_line}p" "$COMMAND_FILE" 2>/dev/null || true)"
+    if [[ -z "$line_text" ]]; then
+      # Empty line — no-op, advance offset.
+      write_command_offset "$current_line" || true
+      current_line=$((current_line + 1))
+      continue
+    fi
+
+    case "$line_text" in
+      quit)
+        # Handle quit in-memory immediately — advance offset.
+        COMMAND_QUEUE+=("quit")
+        write_command_offset "$current_line" || true
+        ;;
+      select\ *|enter|more|unknown\ *)
+        # Persist durably so it survives restarts and remains visible.
+        cmd_id="${SESSION}:${current_line}"
+        queued_command_upsert "$cmd_id" "$current_line" "$line_text" "lifecycle_busy"
+        write_command_offset "$current_line" || true
+        ;;
+      *)
+        # Unknown command — log and acknowledge.
+        log_warn "drain_command_events: unrecognised command at line $current_line: $line_text"
+        write_command_offset "$current_line" || true
+        ;;
+    esac
+    current_line=$((current_line + 1))
+  done
 }
 
 consume_next_command() {
@@ -5709,6 +5790,21 @@ consume_next_command() {
   return 0
 }
 
+# Retrieve the oldest queued command from state for Phase C selection handling.
+# Sets REPLY and QUEUED_CMD_ID on success — return 1 when queue is empty.
+consume_queued_command_for_selection() {
+  local oldest_json oldest_id oldest_cmd
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 1
+  oldest_json=$(jq -c '(.queued_commands // []) | sort_by(.line) | .[0] // empty' "$STATE_FILE" 2>/dev/null || true)
+  [[ -z "$oldest_json" || "$oldest_json" == "null" ]] && return 1
+  oldest_id=$(jq -r '.id // empty' <<< "$oldest_json" 2>/dev/null || true)
+  oldest_cmd=$(jq -r '.command // empty' <<< "$oldest_json" 2>/dev/null || true)
+  [[ -z "$oldest_id" || -z "$oldest_cmd" ]] && return 1
+  QUEUED_CMD_ID="$oldest_id"
+  REPLY="$oldest_cmd"
+  return 0
+}
+
 poll_sleep() {
   local secs="${1:-$POLL_SECONDS}" elapsed
   if ! [[ "$secs" =~ ^[0-9]+$ ]]; then
@@ -5721,9 +5817,32 @@ poll_sleep() {
     if (( ${#COMMAND_QUEUE[@]} > 0 )); then
       return 0
     fi
+    # Also wake early if a queued command arrived in state.
+    if [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]]; then
+      local _qlen
+      _qlen=$(jq '(.queued_commands // []) | length' "$STATE_FILE" 2>/dev/null || echo 0)
+      (( _qlen > 0 )) && return 0
+    fi
     sleep 1
     elapsed=$((elapsed + 1))
   done
+}
+
+# Run a command in the background while draining command events every second.
+# Preserves the synchronous return contract — propagates the child exit code.
+run_with_command_drain() {
+  local child_pid rc
+  "$@" &
+  child_pid=$!
+  while kill -0 "$child_pid" 2>/dev/null; do
+    drain_command_events
+    sleep 1
+  done
+  wait "$child_pid" 2>/dev/null
+  rc=$?
+  # Final drain after the child exits.
+  drain_command_events
+  return "$rc"
 }
 
 monitor_issue_state() {
@@ -7107,10 +7226,6 @@ while :; do
           QUIT_REQUESTED=true
         fi
         ;;
-      *)
-        COMMAND_QUEUE=("$REPLY" "${COMMAND_QUEUE[@]+"${COMMAND_QUEUE[@]}"}")
-        break
-        ;;
     esac
   done
   check_control_pane_health
@@ -7240,7 +7355,18 @@ while :; do
         fi
 
         REPLY=""
+        QUEUED_CMD_ID=""
         if consume_next_command; then
+          case "$REPLY" in
+            enter) ;;
+            select\ *) REPLY="${REPLY#select }" ;;
+            more) REPLY="m" ;;
+            quit) REPLY="q" ;;
+            unknown\ *) REPLY="unknown ${REPLY#unknown }" ;;
+            *) REPLY="" ;;
+          esac
+        elif consume_queued_command_for_selection; then
+          # REPLY and QUEUED_CMD_ID are now set from durable state.
           case "$REPLY" in
             enter) ;;
             select\ *) REPLY="${REPLY#select }" ;;
@@ -7362,6 +7488,10 @@ while :; do
               break
             fi
           done <<<"$selected_lines"
+          if (( launched == 0 )) && [[ -n "$QUEUED_CMD_ID" ]]; then
+            queued_command_upsert "$QUEUED_CMD_ID" "${QUEUED_CMD_ID##*:}" "select $REPLY" "blocked_dependency"
+            QUEUED_CMD_ID=""
+          fi
           # Invalidate caches after launching so next cycle re-renders
           LAST_BACKLOG_FETCH=0
           LAST_DISPLAY=""
@@ -7370,6 +7500,8 @@ while :; do
           USING_GROUPED_VIEW=false
           clear_task_list_display
         fi
+        # Remove the durable queued command once it has been consumed and acted on.
+        [[ -n "$QUEUED_CMD_ID" ]] && queued_command_remove "$QUEUED_CMD_ID"
         poll_sleep "$POLL_SECONDS"
       else
         # All candidates are already active
@@ -7408,7 +7540,8 @@ while :; do
       fi
     fi
   else
-    # All slots full — just monitor
+    # All slots full — mark any queued commands so the dashboard shows why they are waiting.
+    queued_commands_set_reason "no_slots"
     clear_task_list_display
     poll_sleep "$POLL_SECONDS"
   fi

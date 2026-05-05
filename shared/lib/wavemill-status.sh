@@ -522,6 +522,44 @@ render_queued_section() {
   done
 }
 
+render_queued_commands_section() {
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  local count
+  count=$(jq '(.queued_commands // []) | length' "$STATE_FILE" 2>/dev/null || echo 0)
+  (( count == 0 )) && return 0
+
+  printf "${EL}\n${B}%s${N} ${D}(%s)${N}${EL}\n" "⏳ QUEUED COMMANDS" "$count" >> "$FRAME"
+  printf "${D}%-20s  %-20s  %s${N}${EL}\n" "COMMAND" "REASON" "AGE" >> "$FRAME"
+  printf "${D}%s${N}${EL}\n" "──────────────────────────────────────────────" >> "$FRAME"
+
+  jq -r '
+    (.queued_commands // []) | sort_by(.line) | .[] |
+    [
+      (.command // "?"),
+      (.reason // "?"),
+      (.enqueued_at // "")
+    ] | @tsv
+  ' "$STATE_FILE" 2>/dev/null | while IFS=$'\t' read -r cmd reason enqueued_at; do
+    local age="?"
+    if [[ -n "$enqueued_at" ]]; then
+      local now_epoch enqueued_epoch
+      now_epoch=$(date +%s 2>/dev/null || echo 0)
+      enqueued_epoch=$(date -j -f '%Y-%m-%dT%H:%M:%SZ' "$enqueued_at" +%s 2>/dev/null \
+                       || date -d "$enqueued_at" +%s 2>/dev/null \
+                       || echo 0)
+      if (( enqueued_epoch > 0 && now_epoch >= enqueued_epoch )); then
+        local secs=$(( now_epoch - enqueued_epoch ))
+        if (( secs < 60 )); then
+          age="${secs}s"
+        else
+          age="$((secs / 60))m"
+        fi
+      fi
+    fi
+    printf "%-20s  %-20s  %s${EL}\n" "$cmd" "$reason" "$age" >> "$FRAME"
+  done
+}
+
 # Clear saved scrollback lines without blanking the visible pane. This keeps
 # tmux history from accumulating stale dashboards while avoiding a full-screen
 # flash on every refresh.
@@ -592,6 +630,7 @@ render_dashboard() {
     render_inbox_section
     render_active_section
     render_queued_section
+    render_queued_commands_section
   fi
 
   printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"

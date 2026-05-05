@@ -113,6 +113,7 @@ The current implementation is scaffolded and returns a stub ready result, which 
 - `control.1` dashboard
 - `control.2` status log
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
+- The monitor drains command events every loop iteration, including while tasks are in challenge eval or comparison states. Selections entered during long-running lifecycle work are durably persisted in the session state as `.queued_commands` and are shown in the dashboard until slots are available to execute them.
 
 ## When to Prefer Mill Mode
 
