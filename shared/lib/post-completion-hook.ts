@@ -12,7 +12,7 @@ import { dirname } from "node:path";
 import path from 'node:path';
 import { evaluateTask } from './eval.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
-import { resolveEvalsDir } from './evals-paths.ts';
+import { resolveEvalsDir, resolveRouteArtifactArchiveDir } from './evals-paths.ts';
 import { execShellCommand } from './shell-utils.ts';
 import { detectAndFormatInterventions } from './intervention-detector.ts';
 import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
@@ -215,7 +215,7 @@ function resolveRouteArtifactDirs(
 
   return {
     ...(slug && worktreePath ? { featureDir: join(worktreePath, 'features', slug) } : {}),
-    ...(issueId ? { archiveDir: join(repoDir, '.wavemill', 'evals', 'artifacts', issueId) } : {}),
+    ...(issueId ? { archiveDir: resolveRouteArtifactArchiveDir(issueId, repoDir) } : {}),
   };
 }
 

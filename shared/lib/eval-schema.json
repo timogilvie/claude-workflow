@@ -1408,6 +1408,19 @@
         "routeSource": {
           "type": "string",
           "enum": ["batch", "single", "cache"]
+        },
+        "routerMode": {
+          "type": "string",
+          "enum": ["normal", "constrained", "survival"]
+        },
+        "routingMode": {
+          "type": "string"
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "artifactHash": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -1437,7 +1450,27 @@
         "coder": { "type": "string" },
         "codeDepth": { "type": "string" },
         "reviewer": { "type": "string" },
-        "reviewMode": { "type": "string" }
+        "reviewMode": { "type": "string" },
+        "planner": { "type": "string" },
+        "planDepth": { "type": "string" },
+        "artifactPath": { "type": "string" },
+        "artifactHash": { "type": "string" },
+        "inputHash": { "type": "string" },
+        "source": { "type": "string" },
+        "cacheHit": { "type": "boolean" },
+        "routeSource": {
+          "type": "string",
+          "enum": ["batch", "single", "cache"]
+        },
+        "routerMode": {
+          "type": "string",
+          "enum": ["normal", "constrained", "survival"]
+        },
+        "routingMode": { "type": "string" },
+        "expectedMetrics": {
+          "type": "object",
+          "additionalProperties": true
+        }
       },
       "required": ["coder", "codeDepth", "reviewer", "reviewMode"],
       "additionalProperties": false

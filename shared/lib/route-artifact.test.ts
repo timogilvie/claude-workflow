@@ -300,7 +300,19 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
   }));
 
   const result = readBothRouteArtifacts(featureDir);
-  assert.deepEqual(result.bootstrap, {
+  assert.equal(result.bootstrap?.artifactPath?.endsWith('/features/demo/.initial-route.json'), true);
+  assert.match(result.bootstrap?.artifactHash ?? '', /^[a-f0-9]{64}$/);
+  assert.deepEqual(result.bootstrap && {
+    planner: 'gpt-5.4',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-6',
+    planDepth: 'deep',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+    cache_hit: undefined,
+    route_source: undefined,
+    packet_hash: undefined,
+  }, {
     planner: 'gpt-5.4',
     coder: 'claude-sonnet-4-6',
     reviewer: 'claude-opus-4-6',
@@ -311,7 +323,19 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     route_source: undefined,
     packet_hash: undefined,
   });
-  assert.deepEqual(result.expanded, {
+  assert.equal(result.expanded?.artifactPath?.endsWith('/features/demo/.post-expansion-route.json'), true);
+  assert.match(result.expanded?.artifactHash ?? '', /^[a-f0-9]{64}$/);
+  assert.deepEqual(result.expanded && {
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-4-5-20250929',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+    planDepth: undefined,
+    planner: undefined,
+    cache_hit: undefined,
+    route_source: undefined,
+    packet_hash: undefined,
+  }, {
     coder: 'gpt-5.4',
     reviewer: 'claude-sonnet-4-5-20250929',
     codeDepth: 'deep',
@@ -388,7 +412,19 @@ test('readBothRouteArtifacts reads expanded-only artifacts', () => {
 
   const result = readBothRouteArtifacts(featureDir);
   assert.equal(result.bootstrap, null);
-  assert.deepEqual(result.expanded, {
+  assert.equal(result.expanded?.artifactPath?.endsWith('/features/demo/.post-expansion-route.json'), true);
+  assert.match(result.expanded?.artifactHash ?? '', /^[a-f0-9]{64}$/);
+  assert.deepEqual(result.expanded && {
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'static',
+    planDepth: undefined,
+    planner: undefined,
+    cache_hit: true,
+    route_source: 'cache',
+    packet_hash: 'a'.repeat(64),
+  }, {
     coder: 'gpt-5.4',
     reviewer: 'claude-opus-4-6',
     codeDepth: 'deep',
@@ -431,7 +467,7 @@ test('readBothRouteArtifacts ignores malformed expanded snapshot while keeping b
   assert.equal(result.expanded, null);
 });
 
-test('readBothRouteArtifacts keeps normalized expanded fields and drops provenance-only metadata', () => {
+test('readBothRouteArtifacts keeps normalized expanded fields and includes provenance metadata', () => {
   const featureDir = makeFeatureDir();
   writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
     planner: 'expanded-planner',
@@ -447,7 +483,9 @@ test('readBothRouteArtifacts keeps normalized expanded fields and drops provenan
   }));
 
   const result = readBothRouteArtifacts(featureDir);
-  assert.deepEqual(result.expanded, {
+  assert.equal(result.expanded?.artifactPath?.endsWith('/features/demo/.post-expansion-route.json'), true);
+  assert.match(result.expanded?.artifactHash ?? '', /^[a-f0-9]{64}$/);
+  assert.deepEqual(result.expanded && {
     planner: 'expanded-planner',
     coder: 'gpt-5.4',
     reviewer: 'claude-sonnet-4-6',
@@ -457,8 +495,25 @@ test('readBothRouteArtifacts keeps normalized expanded fields and drops provenan
     cache_hit: true,
     route_source: 'batch',
     packet_hash: 'b'.repeat(64),
+    inputHash: 'ignored-in-snapshot',
+    source: 'expanded',
+    routerMode: undefined,
+    routingMode: undefined,
+  }, {
+    planner: 'expanded-planner',
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-4-6',
+    planDepth: 'deep',
+    codeDepth: 'deep',
+    reviewMode: 'static+llm',
+    cache_hit: true,
+    route_source: 'batch',
+    packet_hash: 'b'.repeat(64),
+    inputHash: 'ignored-in-snapshot',
+    source: 'expanded',
+    routerMode: undefined,
+    routingMode: undefined,
   });
-  assert.equal('provenance' in (result.expanded as object), false);
 });
 
 test('formatRouteArtifactSignature renders compact operator-facing route ids', () => {
@@ -588,6 +643,8 @@ test('buildRouteLifecycleProvenance includes active route and expanded cache met
       codeDepth: 'deep',
       reviewer: 'claude-sonnet-4-6',
       reviewMode: 'static',
+      cacheHit: true,
+      routeSource: 'cache',
     },
     activeRoute: {
       coder: 'gpt-5.4',
