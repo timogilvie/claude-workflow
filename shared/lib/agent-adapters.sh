@@ -275,8 +275,59 @@ _agent_check_deepseek_api_key() {
 # Args: $1 = agent command name (e.g. "claude", "codex", "claude-deepseek")
 # Returns: 0 if authenticated, 1 if not authenticated
 # Output: Error message to stderr if not authenticated
-# Note: Results are cached per-process to avoid redundant checks
-declare -A _AGENT_AUTH_CACHE
+# Note: Results are cached per-process to avoid redundant checks.
+# Bash 3.2 lacks associative arrays, so keep a fallback cache for reduced-PATH
+# environments that resolve `bash` to /bin/bash.
+if (( BASH_VERSINFO[0] >= 4 )); then
+  declare -A _AGENT_AUTH_CACHE=()
+else
+  _AGENT_AUTH_CACHE_FALLBACK=""
+fi
+
+_agent_auth_cache_get() {
+  local cache_key="$1"
+
+  if (( BASH_VERSINFO[0] >= 4 )); then
+    if [[ -n "${_AGENT_AUTH_CACHE[$cache_key]:-}" ]]; then
+      printf '%s\n' "${_AGENT_AUTH_CACHE[$cache_key]}"
+      return 0
+    fi
+    return 1
+  fi
+
+  local entry key value
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    key="${entry%%=*}"
+    value="${entry#*=}"
+    if [[ "$key" == "$cache_key" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done <<< "$_AGENT_AUTH_CACHE_FALLBACK"
+
+  return 1
+}
+
+_agent_auth_cache_set() {
+  local cache_key="$1"
+  local cache_value="$2"
+
+  if (( BASH_VERSINFO[0] >= 4 )); then
+    _AGENT_AUTH_CACHE[$cache_key]="$cache_value"
+    return 0
+  fi
+
+  local entry key filtered=""
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    key="${entry%%=*}"
+    if [[ "$key" != "$cache_key" ]]; then
+      filtered+="$entry"$'\n'
+    fi
+  done <<< "$_AGENT_AUTH_CACHE_FALLBACK"
+  _AGENT_AUTH_CACHE_FALLBACK="${filtered}${cache_key}=${cache_value}"$'\n'
+}
 
 agent_check_auth() {
   local cmd="$1"
@@ -289,31 +340,32 @@ agent_check_auth() {
   fi
 
   # Return cached result if available (valid for this process lifetime)
-  if [[ -n "${_AGENT_AUTH_CACHE[$cache_key]:-}" ]]; then
-    return "${_AGENT_AUTH_CACHE[$cache_key]}"
+  local cached_status
+  if cached_status="$(_agent_auth_cache_get "$cache_key")"; then
+    return "$cached_status"
   fi
 
   case "$cmd" in
     claude-deepseek)
       # claude-deepseek uses the claude binary + DeepSeek env; validate DEEPSEEK_API_KEY
       if ! _agent_check_deepseek_api_key "$repo_dir"; then
-        _AGENT_AUTH_CACHE[$cache_key]=1
+        _agent_auth_cache_set "$cache_key" 1
         return 1
       fi
       ;;
     claude)
       if agent_model_is_deepseek "$model"; then
         if ! agent_validate_deepseek_launch "$model" "$repo_dir"; then
-          _AGENT_AUTH_CACHE[$cache_key]=1
+          _agent_auth_cache_set "$cache_key" 1
           return 1
         fi
-        _AGENT_AUTH_CACHE[$cache_key]=0
+        _agent_auth_cache_set "$cache_key" 0
         return 0
       fi
       # Use 'claude auth status' which exits 0 when logged in
       if ! claude auth status >/dev/null 2>&1; then
         echo "Error: Claude authentication required. Run: claude auth login" >&2
-        _AGENT_AUTH_CACHE[$cache_key]=1
+        _agent_auth_cache_set "$cache_key" 1
         return 1
       fi
       ;;
@@ -322,18 +374,18 @@ agent_check_auth() {
       local auth_file="$HOME/.codex/auth.json"
       if [[ ! -s "$auth_file" ]]; then
         echo "Error: Codex authentication required. Run: codex login" >&2
-        _AGENT_AUTH_CACHE[$cache_key]=1
+        _agent_auth_cache_set "$cache_key" 1
         return 1
       fi
       ;;
     *)
       # Unknown agent - assume authenticated (don't block unknown agents)
-      _AGENT_AUTH_CACHE[$cache_key]=0
+      _agent_auth_cache_set "$cache_key" 0
       return 0
       ;;
   esac
 
-  _AGENT_AUTH_CACHE[$cache_key]=0
+  _agent_auth_cache_set "$cache_key" 0
   return 0
 }
 

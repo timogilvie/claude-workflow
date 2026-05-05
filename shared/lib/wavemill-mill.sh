@@ -780,12 +780,10 @@ cleanup_completed_task() {
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-    execute git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-    log "debug" "  ✓ Deleted local branch: $task_branch"
-    if execute git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
-      log "debug" "  ✓ Deleted remote branch: $task_branch"
+    if execute git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "  ✓ Deleted local branch: $task_branch"
     else
-      log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
+      log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
     fi
   fi
 
@@ -4327,12 +4325,10 @@ cleanup_completed_task() {
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-    git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-    log "debug" "  ✓ Deleted local branch: $task_branch"
-    if git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
-      log "debug" "  ✓ Deleted remote branch: $task_branch"
+    if git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "  ✓ Deleted local branch: $task_branch"
     else
-      log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
+      log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
     fi
   fi
 
