@@ -127,18 +127,34 @@ poll_monitored_jobs() {
   now_epoch=$(date +%s)
   now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-  running=$(jq -r '.jobs | to_entries[] | select(.value.status == "running") | .key' < "$sf" 2>/dev/null) || true
-  [[ -z "$running" ]] && return 0
+  # Poll running jobs for completion/timeout and timed_out jobs for SIGKILL grace
+  local active_jobs
+  active_jobs=$(jq -r '.jobs | to_entries[] | select(.value.status == "running" or (.value.status == "timed_out" and (.value.kill_at // 0) > 0)) | .key' < "$sf" 2>/dev/null) || true
+  [[ -z "$active_jobs" ]] && return 0
 
   while IFS= read -r job_id; do
     [[ -z "$job_id" ]] && continue
-    local rec pid timeout_sec started_at log_path exit_path elapsed started_epoch
+    local rec pid timeout_sec started_at log_path exit_path elapsed started_epoch status
     rec=$(mj_get "$job_id")
     pid=$(printf '%s' "$rec" | jq -r '.pid')
+    status=$(printf '%s' "$rec" | jq -r '.status')
     timeout_sec=$(printf '%s' "$rec" | jq -r '.timeout_seconds // 420')
     started_at=$(printf '%s' "$rec" | jq -r '.started_at // ""')
     log_path=$(printf '%s' "$rec" | jq -r '.log_path // ""')
     exit_path="${log_path%.log}.exit"
+
+    # ── timed_out jobs: SIGKILL grace check only ──
+    if [[ "$status" == "timed_out" ]]; then
+      local kill_at
+      kill_at=$(printf '%s' "$rec" | jq -r '.kill_at // 0')
+      if (( now_epoch >= kill_at )) && kill -0 "$pid" 2>/dev/null; then
+        log "debug" "  ⏱ job timeout (SIGKILL): $job_id"
+        kill -KILL "$pid" 2>/dev/null || true
+        state_mutate "$sf" '.jobs[$id].kill_at = null' \
+          --arg id "$job_id" 2>/dev/null || true
+      fi
+      continue
+    fi
 
     # ── Completed: exit sentinel present ──
     if [[ -f "$exit_path" ]]; then
@@ -160,17 +176,18 @@ poll_monitored_jobs() {
       continue
     fi
 
-    # ── Timed out ──
+    # ── Timed out: send SIGTERM, transition to timed_out ──
     started_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$started_at" +%s 2>/dev/null \
                     || date -d "$started_at" +%s 2>/dev/null \
                     || echo "$now_epoch")
     elapsed=$(( now_epoch - started_epoch ))
     if (( elapsed >= timeout_sec )); then
-      log "debug" "  ⏱ job timeout: $job_id (${elapsed}s >= ${timeout_sec}s)"
+      log "debug" "  ⏱ job timeout (SIGTERM): $job_id (${elapsed}s >= ${timeout_sec}s)"
       kill -TERM "$pid" 2>/dev/null || true
+      local kill_epoch=$(( now_epoch + 10 ))
       state_mutate "$sf" \
-        '.jobs[$id].status = "timed_out" | .jobs[$id].finished_at = $ts' \
-        --arg id "$job_id" --arg ts "$now_iso" 2>/dev/null || true
+        '.jobs[$id].status = "timed_out" | .jobs[$id].finished_at = $ts | .jobs[$id].kill_at = ($ka | tonumber)' \
+        --arg id "$job_id" --arg ts "$now_iso" --arg ka "$kill_epoch" 2>/dev/null || true
       continue
     fi
 
@@ -184,7 +201,7 @@ poll_monitored_jobs() {
     fi
 
     log "debug" "  ⧗ job running: $job_id (pid $pid, ${elapsed}s elapsed)"
-  done <<< "$running"
+  done <<< "$active_jobs"
 }
 
 # Return the last N lines from a job's log (for failure surfacing)

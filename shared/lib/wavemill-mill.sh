@@ -4153,7 +4153,7 @@ maybe_run_challenge_comparison() {
     --primary-plan-depth "$primary_plan_depth" --primary-code-depth "$primary_code_depth" --primary-review-mode "$primary_review_mode" \
     --challenger-planner "$challenger_planner" --challenger-reviewer "$challenger_reviewer" \
     --challenger-plan-depth "$challenger_plan_depth" --challenger-code-depth "$challenger_code_depth" --challenger-review-mode "$challenger_review_mode" \
-    --repo-dir "$REPO_DIR" --check-only --comment
+    --repo-dir "$REPO_DIR" --comment
 }
 
 # Archive stage artifacts from worktree before cleanup.

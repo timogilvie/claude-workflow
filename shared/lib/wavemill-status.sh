@@ -505,7 +505,7 @@ render_monitored_jobs_section() {
 
   local running failed
   running=$(jq -r '.jobs | to_entries[] | select(.value.status == "running") | .key' "$jobs_file" 2>/dev/null) || true
-  failed=$(jq  -r '.jobs | to_entries[] | select(.value.status | test("failed|timed_out")) | .key' "$jobs_file" 2>/dev/null) || true
+  failed=$(jq  -r '.jobs | to_entries[] | select((.value.status | test("failed|timed_out")) and (.value.reaped == false)) | .key' "$jobs_file" 2>/dev/null) || true
   [[ -z "$running" && -z "$failed" ]] && return 0
 
   render_section_header "⧗  Monitored Jobs"
