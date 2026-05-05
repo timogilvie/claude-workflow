@@ -194,7 +194,7 @@ function collectPostCompletionOutcomes(input: {
 }): Outcomes {
   // Don't initialize success - it will be computed from score after evaluation via isEvalSuccess().
   // If we set success: false initially, isEvalSuccess will just return false without checking score.
-  const outcomes: any = {};
+  const outcomes: Partial<Outcomes> = {};
 
   // Required fields with fallbacks
   if (input.prNumber) {

@@ -316,9 +316,10 @@ await test('runPostCompletionEval passes collected outcomes to evaluateTask and 
     agentType: 'claude',
   };
 
+  // Declare stubs before try so they're accessible in finally for cleanup
+  let stubs: Record<string, { restore?: () => void }> | undefined;
   try {
-    // Stub all dependencies using mocks with proper cleanup
-    const stubs = {
+    stubs = {
       gatherEvalContext: mock.method(postCompletionHookDeps, 'gatherEvalContext', () => ({
         issueId: 'HOK-1550',
         prNumber: '789',
@@ -404,14 +405,10 @@ await test('runPostCompletionEval passes collected outcomes to evaluateTask and 
     assert.equal(record.outcomes.success, true, 'outcomes.success should be true for score 0.9');
     assert.ok(record.outcomes.ci, 'outcomes should have ci');
     assert.equal(record.outcomes.review.approvals, 1, 'outcomes should have correct review data');
-
-    // Cleanup
-    Object.values(stubs).forEach(stub => {
-      if (stub && typeof stub === 'object' && 'restore' in stub) {
-        (stub as any).restore();
-      }
-    });
   } finally {
+    if (stubs) {
+      Object.values(stubs).forEach(stub => stub?.restore?.());
+    }
     rmSync(repoDir, { recursive: true, force: true });
   }
 });
@@ -434,8 +431,13 @@ await test('runPostCompletionEval degrades throwing collectors to partial outcom
     agentType: 'claude',
   };
 
+  const warnMessages: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
+
+  let degradeStubs: Record<string, { restore?: () => void }> | undefined;
   try {
-    const stubs = {
+    degradeStubs = {
       gatherEvalContext: mock.method(postCompletionHookDeps, 'gatherEvalContext', () => ({
         issueId: 'HOK-1551',
         prNumber: '790',
@@ -515,12 +517,13 @@ await test('runPostCompletionEval degrades throwing collectors to partial outcom
     assert.equal(record.outcomes.ci, undefined, 'outcomes.ci should be undefined');
     assert.ok(record.outcomes.review, 'outcomes.review should be present');
 
-    Object.values(stubs).forEach(stub => {
-      if (stub && typeof stub === 'object' && 'restore' in stub) {
-        (stub as any).restore();
-      }
-    });
+    const ciWarn = warnMessages.find(m => m.includes('ci'));
+    assert.ok(ciWarn, 'console.warn should mention the failing ci collector');
   } finally {
+    console.warn = originalWarn;
+    if (degradeStubs) {
+      Object.values(degradeStubs).forEach(stub => stub?.restore?.());
+    }
     rmSync(repoDir, { recursive: true, force: true });
   }
 });
@@ -543,8 +546,9 @@ await test('runPostCompletionEval sets outcomes.success false for failing scores
     agentType: 'claude',
   };
 
+  let failingStubs: Record<string, { restore?: () => void }> | undefined;
   try {
-    const stubs = {
+    failingStubs = {
       gatherEvalContext: mock.method(postCompletionHookDeps, 'gatherEvalContext', () => ({
         issueId: 'HOK-1552',
         prNumber: '791',
@@ -621,13 +625,10 @@ await test('runPostCompletionEval sets outcomes.success false for failing scores
     const record = capturedRecord[0];
     assert.ok(record.outcomes, 'record should have outcomes');
     assert.equal(record.outcomes.success, false, 'outcomes.success should be false for score 0.05');
-
-    Object.values(stubs).forEach(stub => {
-      if (stub && typeof stub === 'object' && 'restore' in stub) {
-        (stub as any).restore();
-      }
-    });
   } finally {
+    if (failingStubs) {
+      Object.values(failingStubs).forEach(stub => stub?.restore?.());
+    }
     rmSync(repoDir, { recursive: true, force: true });
   }
 });
