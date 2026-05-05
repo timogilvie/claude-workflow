@@ -385,6 +385,29 @@
                 }
             }
         },
+        "evalContextUpdates": {
+            "type": "object",
+            "description": "Best-effort post-eval project context and subsystem update settings.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Whether to run post-eval project context and subsystem updates after the eval record is persisted."
+                },
+                "timeoutSeconds": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 600,
+                    "description": "Per-attempt timeout budget in seconds for best-effort post-eval context updates."
+                },
+                "maxRetries": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3,
+                    "description": "Maximum number of retries for best-effort post-eval context updates after the first attempt fails."
+                }
+            },
+            "additionalProperties": false
+        },
         "autoEval": {
             "type": "boolean",
             "default": true,

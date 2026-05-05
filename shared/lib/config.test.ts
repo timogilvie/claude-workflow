@@ -38,6 +38,7 @@ import {
   getReadyConfig,
   getModelRegistryConfig,
   getMintEligibilityConfig,
+  getEvalContextUpdatesConfig,
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
 } from './config.ts';
@@ -229,6 +230,70 @@ test('valid config passes validation', () => {
     assert.deepEqual(config.router?.availableModels?.planner, ['claude-sonnet-4-5-20250929']);
     assert.deepEqual(config.router?.availableModels?.coder, ['gpt-5.4']);
     assert.equal(config.resources?.runtimeSelection?.defaultVariant, 'optimized');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('evalContextUpdates accessor returns defaults when absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.deepEqual(getEvalContextUpdatesConfig(tmp), {
+      enabled: true,
+      timeoutSeconds: 60,
+      maxRetries: 0,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('evalContextUpdates accessor returns explicit config values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      evalContextUpdates: {
+        enabled: false,
+        timeoutSeconds: 90,
+        maxRetries: 2,
+      },
+    }));
+
+    assert.deepEqual(getEvalContextUpdatesConfig(tmp), {
+      enabled: false,
+      timeoutSeconds: 90,
+      maxRetries: 2,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid evalContextUpdates values fail validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      evalContextUpdates: {
+        enabled: 'yes',
+        timeoutSeconds: 4,
+        maxRetries: 4,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
   } finally {
     cleanUp(tmp);
   }

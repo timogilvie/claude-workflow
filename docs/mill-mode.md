@@ -232,6 +232,28 @@ This ensures that agent #5 knows what agents #1-4 built, leading to more consist
 - Other sections (Architecture, Conventions) can be manually edited
 - Agents receive this context when expanding Linear issues
 
+### Post-Eval Update Controls
+
+The eval result is persisted before project-context and subsystem maintenance runs. Those follow-up updates are best-effort: failures or timeouts do not make the eval fail.
+
+Configure the optional post-eval update phase in `.wavemill-config.json`:
+
+```json
+{
+  "evalContextUpdates": {
+    "enabled": true,
+    "timeoutSeconds": 60,
+    "maxRetries": 0
+  }
+}
+```
+
+Skip the optional phase entirely with `WAVEMILL_SKIP_POST_EVAL_CONTEXT_UPDATES=1`.
+
+When operating mode is `constrained` or `survival`, wavemill skips these updates automatically to keep mill sessions bounded.
+
+Skipped or failed optional updates are appended to `.wavemill/evals/eval-context-update-warnings.jsonl`.
+
 ## Routing And Learning
 
 At startup, `wavemill mill` runs routing for each task so different task types can use different models and execution depths. Routing decisions are based on historical eval records and fallback heuristics.

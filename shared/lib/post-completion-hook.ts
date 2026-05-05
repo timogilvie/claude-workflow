@@ -5,7 +5,7 @@
  * Non-blocking: eval failures log a warning but never fail the workflow.
  */
 
-import { readFileSync, existsSync, appendFileSync } from "node:fs";
+import { readFileSync, existsSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -27,8 +27,9 @@ import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer
 import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
 import { attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
-import { getMaxCostUsd } from './config.ts';
+import { getEvalContextUpdatesConfig, getMaxCostUsd } from './config.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
+import { getCurrentOperatingMode } from './operating-mode.ts';
 import { isEvalSuccess } from './eval-success-policy.ts';
 import {
   collectCiOutcome,
@@ -50,6 +51,7 @@ import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome } from './workflow-cost.ts';
 import type { InterventionSummary } from './intervention-detector.ts';
+import type { OperatingMode } from './operating-mode.ts';
 
 function isFiniteNonNegativeBudget(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -94,6 +96,38 @@ interface PostCompletionOutcomeInput {
   interventionSummary: InterventionSummary;
 }
 
+export type ContextUpdateWarningReason =
+  | 'timeout'
+  | 'error'
+  | 'skipped-config'
+  | 'skipped-env'
+  | 'skipped-operating-mode';
+
+export interface ContextUpdateOutcome {
+  ran: boolean;
+  reason?: ContextUpdateWarningReason;
+  durationMs: number;
+  retryCount: number;
+  errorMessage?: string;
+  operatingMode: OperatingMode;
+}
+
+interface ContextUpdateWarningRecord {
+  timestamp: string;
+  evalId: string;
+  issueId?: string;
+  reason: ContextUpdateWarningReason;
+  operatingMode: OperatingMode;
+  durationMs: number;
+  retryCount: number;
+  errorMessage?: string;
+}
+
+interface ContextUpdateExecutionOptions {
+  timeoutMs: number;
+  maxRetries: number;
+}
+
 function defaultReviewOutcome(interventionSummary: InterventionSummary) {
   return {
     humanReviewRequired: interventionSummary.interventions.some(
@@ -132,6 +166,10 @@ export const postCompletionHookDeps = {
   collectReviewOutcome,
   collectReworkOutcome,
   collectDeliveryOutcome,
+  getEvalContextUpdatesConfig,
+  getCurrentOperatingMode,
+  runContextUpdateWork: updateProjectContext,
+  appendContextUpdateWarning,
 };
 
 export function collectPostCompletionOutcomes(input: PostCompletionOutcomeInput): Outcomes {
@@ -559,8 +597,8 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     postCompletionHookDeps.appendEvalRecord(record, { dir: evalsDir });
     persisted = true;
 
-    // 8. Update project context
-    await updateProjectContext(ctx, evalContext.prDiff, evalContext.taskPrompt);
+    // 8. Run bounded best-effort project context and subsystem updates
+    await runPostEvalContextUpdates(ctx, record, evalContext.prDiff, evalContext.taskPrompt);
 
     // 9. Print summary
     printEvalSummary(record);
@@ -572,16 +610,172 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
   }
 }
 
+function makeContextUpdateTimeoutError(timeoutMs: number): Error {
+  const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+  const error = new Error(`post-eval context updates timed out after ${seconds}s`);
+  error.name = 'TimeoutError';
+  return error;
+}
+
+async function runWithTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutId: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(makeContextUpdateTimeoutError(timeoutMs)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+function isTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return err.name === 'TimeoutError' || /timed out/i.test(err.message);
+}
+
+function buildContextUpdateWarningRecord(
+  ctx: PostCompletionContext,
+  record: EvalRecord,
+  outcome: ContextUpdateOutcome,
+): ContextUpdateWarningRecord | null {
+  if (!outcome.reason) {
+    return null;
+  }
+
+  return {
+    timestamp: new Date().toISOString(),
+    evalId: record.id,
+    issueId: ctx.issueId,
+    reason: outcome.reason,
+    operatingMode: outcome.operatingMode,
+    durationMs: outcome.durationMs,
+    retryCount: outcome.retryCount,
+    ...(outcome.errorMessage ? { errorMessage: outcome.errorMessage } : {}),
+  };
+}
+
+export async function appendContextUpdateWarning(
+  repoDir: string,
+  warning: ContextUpdateWarningRecord,
+): Promise<void> {
+  try {
+    const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
+    mkdirSync(evalsDir, { recursive: true });
+    appendFileSync(join(evalsDir, 'eval-context-update-warnings.jsonl'), `${JSON.stringify(warning)}\n`, 'utf-8');
+  } catch (err) {
+    console.warn(`Post-completion eval: failed to persist context update warning - ${errorMessage(err)}`);
+  }
+}
+
+export async function runPostEvalContextUpdates(
+  ctx: PostCompletionContext,
+  record: EvalRecord,
+  prDiff: string,
+  issueContext: string,
+): Promise<void> {
+  const repoDir = ctx.repoDir || process.cwd();
+  const operatingMode = postCompletionHookDeps.getCurrentOperatingMode(repoDir);
+  const config = postCompletionHookDeps.getEvalContextUpdatesConfig(repoDir);
+  const executionOptions: ContextUpdateExecutionOptions = {
+    timeoutMs: config.timeoutSeconds * 1000,
+    maxRetries: config.maxRetries,
+  };
+
+  let outcome: ContextUpdateOutcome | null = null;
+
+  if (process.env.WAVEMILL_SKIP_POST_EVAL_CONTEXT_UPDATES === '1') {
+    outcome = {
+      ran: false,
+      reason: 'skipped-env',
+      durationMs: 0,
+      retryCount: 0,
+      operatingMode,
+    };
+  } else if (config.enabled === false) {
+    outcome = {
+      ran: false,
+      reason: 'skipped-config',
+      durationMs: 0,
+      retryCount: 0,
+      operatingMode,
+    };
+  } else if (operatingMode === 'constrained' || operatingMode === 'survival') {
+    outcome = {
+      ran: false,
+      reason: 'skipped-operating-mode',
+      durationMs: 0,
+      retryCount: 0,
+      operatingMode,
+    };
+  } else {
+    const startedAt = Date.now();
+    const attempts = executionOptions.maxRetries + 1;
+    let attempt = 0;
+
+    while (attempt < attempts) {
+      attempt += 1;
+      try {
+        await runWithTimeout(
+          postCompletionHookDeps.runContextUpdateWork(ctx, prDiff, issueContext, executionOptions),
+          executionOptions.timeoutMs,
+        );
+        outcome = {
+          ran: true,
+          durationMs: Date.now() - startedAt,
+          retryCount: attempt - 1,
+          operatingMode,
+        };
+        break;
+      } catch (err) {
+        const timedOut = isTimeoutError(err);
+        if (attempt >= attempts) {
+          outcome = {
+            ran: true,
+            reason: timedOut ? 'timeout' : 'error',
+            durationMs: Date.now() - startedAt,
+            retryCount: attempt - 1,
+            errorMessage: errorMessage(err),
+            operatingMode,
+          };
+          break;
+        }
+        console.warn(
+          `Post-completion eval: context update attempt ${attempt}/${attempts} failed - ${errorMessage(err)}`
+        );
+      }
+    }
+  }
+
+  if (!outcome || !outcome.reason) {
+    return;
+  }
+
+  const warning = buildContextUpdateWarningRecord(ctx, record, outcome);
+  if (warning) {
+    await postCompletionHookDeps.appendContextUpdateWarning(repoDir, warning);
+  }
+
+  const details = outcome.errorMessage ? ` - ${outcome.errorMessage}` : '';
+  console.warn(`Post-completion eval: context updates ${outcome.reason}${details}`);
+}
+
 /**
  * Update project context after PR merge.
  *
  * Analyzes the PR diff and generates a summary to append to project-context.md.
- * Non-blocking: failures log warnings but don't fail the workflow.
  */
 async function updateProjectContext(
   ctx: PostCompletionContext,
   prDiff: string,
-  issueContext: string
+  issueContext: string,
+  executionOptions: ContextUpdateExecutionOptions,
 ): Promise<void> {
   const repoDir = ctx.repoDir || process.cwd();
   const contextPath = join(repoDir, '.wavemill', 'project-context.md');
@@ -592,36 +786,32 @@ async function updateProjectContext(
     return;
   }
 
-  try {
-    console.log('Project context: generating update...');
+  console.log('Project context: generating update...');
 
-    // Generate summary using Claude CLI
-    const summary = await generateContextUpdate({
-      issueId: ctx.issueId || 'Unknown',
-      prUrl: ctx.prUrl || '',
-      prDiff,
-      issueContext,
-    });
+  // Generate summary using Claude CLI
+  const summary = await generateContextUpdate({
+    issueId: ctx.issueId || 'Unknown',
+    prUrl: ctx.prUrl || '',
+    prDiff,
+    issueContext,
+    timeoutMs: executionOptions.timeoutMs,
+    maxRetries: 0,
+  });
 
-    // Append to project-context.md
-    appendContextUpdate(contextPath, summary);
+  // Append to project-context.md
+  appendContextUpdate(contextPath, summary);
 
-    console.log('Project context: updated successfully');
+  console.log('Project context: updated successfully');
 
-    // Update subsystem specs (cold memory)
-    await updateSubsystemSpecs(ctx, prDiff, issueContext, repoDir);
+  // Update subsystem specs (cold memory)
+  await updateSubsystemSpecs(ctx, prDiff, issueContext, repoDir, executionOptions);
 
-    const lintResults = await lintSubsystemSpecs(repoDir, {
-      rules: ['orphaned-spec', 'missing-spec'],
-    });
-    if (lintResults.length > 0) {
-      console.log('\nSpec lint results:');
-      console.log(formatLintResults(lintResults));
-    }
-
-  } catch (error: unknown) {
-    const message = errorMessage(error);
-    console.warn(`Project context: update failed — ${message}`);
+  const lintResults = await lintSubsystemSpecs(repoDir, {
+    rules: ['orphaned-spec', 'missing-spec'],
+  });
+  if (lintResults.length > 0) {
+    console.log('\nSpec lint results:');
+    console.log(formatLintResults(lintResults));
   }
 }
 
@@ -635,7 +825,8 @@ async function updateSubsystemSpecs(
   ctx: PostCompletionContext,
   prDiff: string,
   issueContext: string,
-  repoDir: string
+  repoDir: string,
+  executionOptions: ContextUpdateExecutionOptions,
 ): Promise<void> {
   const contextDir = join(repoDir, '.wavemill', 'context');
 
@@ -645,61 +836,58 @@ async function updateSubsystemSpecs(
     return;
   }
 
-  try {
-    // Detect subsystems
-    console.log('Subsystem update: detecting subsystems...');
-    const subsystems = detectSubsystems(repoDir, {
-      minFiles: 3,
-      useGitAnalysis: false, // Skip git analysis for speed
-      maxSubsystems: 20,
-    });
+  // Detect subsystems
+  console.log('Subsystem update: detecting subsystems...');
+  const subsystems = detectSubsystems(repoDir, {
+    minFiles: 3,
+    useGitAnalysis: false, // Skip git analysis for speed
+    maxSubsystems: 20,
+  });
 
-    if (subsystems.length === 0) {
-      console.log('Subsystem update: no subsystems detected');
-      return;
-    }
-
-    // Extract issue title from context
-    const titleMatch = issueContext.match(/^#\s*[A-Z]+-\d+:\s*(.+)$/m);
-    const issueTitle = titleMatch ? titleMatch[1] : 'Unknown';
-
-    // Detect affected subsystems before updating
-    const affectedSubsystems = detectAffectedSubsystems(prDiff, subsystems, repoDir);
-
-    // Knowledge gap detection: warn if PR has significant changes but no subsystems matched
-    if (affectedSubsystems.length === 0) {
-      const prSize = prDiff.split('\n').length;
-      if (prSize > 100) {
-        console.log('');
-        console.log('⚠️  KNOWLEDGE GAP: No subsystem specs matched this PR');
-        console.log(`   PR has ${prSize} lines of changes, but no subsystem docs were updated`);
-        console.log('   This may indicate:');
-        console.log('   - New subsystem(s) introduced in this PR');
-        console.log('   - Subsystem specs are incomplete or missing');
-        console.log('');
-        console.log('   Recommendation: Run the following to create/update subsystem docs:');
-        console.log('     wavemill context init --force');
-        console.log('');
-        console.log('   This enables "persistent downstream acceleration" for future tasks');
-        console.log('   (per Codified Context paper, Case Study 3)');
-        console.log('');
-      }
-    }
-
-    // Update affected subsystems
-    await updateAffectedSubsystems(subsystems, {
-      issueId: ctx.issueId || 'Unknown',
-      issueTitle,
-      prUrl: ctx.prUrl || '',
-      prDiff,
-      issueDescription: issueContext,
-      repoDir,
-    });
-
-  } catch (error: unknown) {
-    const message = errorMessage(error);
-    console.warn(`Subsystem update: failed — ${message}`);
+  if (subsystems.length === 0) {
+    console.log('Subsystem update: no subsystems detected');
+    return;
   }
+
+  // Extract issue title from context
+  const titleMatch = issueContext.match(/^#\s*[A-Z]+-\d+:\s*(.+)$/m);
+  const issueTitle = titleMatch ? titleMatch[1] : 'Unknown';
+
+  // Detect affected subsystems before updating
+  const affectedSubsystems = detectAffectedSubsystems(prDiff, subsystems, repoDir);
+
+  // Knowledge gap detection: warn if PR has significant changes but no subsystems matched
+  if (affectedSubsystems.length === 0) {
+    const prSize = prDiff.split('\n').length;
+    if (prSize > 100) {
+      console.log('');
+      console.log('⚠️  KNOWLEDGE GAP: No subsystem specs matched this PR');
+      console.log(`   PR has ${prSize} lines of changes, but no subsystem docs were updated`);
+      console.log('   This may indicate:');
+      console.log('   - New subsystem(s) introduced in this PR');
+      console.log('   - Subsystem specs are incomplete or missing');
+      console.log('');
+      console.log('   Recommendation: Run the following to create/update subsystem docs:');
+      console.log('     wavemill context init --force');
+      console.log('');
+      console.log('   This enables "persistent downstream acceleration" for future tasks');
+      console.log('   (per Codified Context paper, Case Study 3)');
+      console.log('');
+    }
+  }
+
+  // Update affected subsystems
+  await updateAffectedSubsystems(subsystems, {
+    issueId: ctx.issueId || 'Unknown',
+    issueTitle,
+    prUrl: ctx.prUrl || '',
+    prDiff,
+    issueDescription: issueContext,
+    repoDir,
+  }, {
+    timeoutMs: executionOptions.timeoutMs,
+    maxRetries: 0,
+  });
 }
 
 /**
@@ -710,6 +898,8 @@ async function generateContextUpdate(opts: {
   prUrl: string;
   prDiff: string;
   issueContext: string;
+  timeoutMs?: number;
+  maxRetries?: number;
 }): Promise<string> {
   const promptPath = resolve(__dirname, '../../tools/prompts/context-update-template.md');
   const promptTemplate = readFileSync(promptPath, 'utf-8');
@@ -734,10 +924,10 @@ async function generateContextUpdate(opts: {
     cliCmd: claudeCmd,
     model: 'claude-haiku-4-5-20251001',
     taskType: 'classify',
-    timeout: 300_000,
-    activityTimeout: 60_000,
-    retry: true,
-    maxRetries: 1,
+    timeout: opts.timeoutMs ?? 300_000,
+    activityTimeout: opts.timeoutMs ?? 60_000,
+    retry: (opts.maxRetries ?? 1) > 0,
+    maxRetries: opts.maxRetries ?? 1,
     cliFlags: [
       '--tools', '',
       '--append-system-prompt',
