@@ -30,6 +30,7 @@ for f in \
   "$REPO_DIR"/shared/hooks/*.sh \
   "$REPO_DIR"/tests/dashboard-refresh.test.sh \
   "$REPO_DIR"/tests/state-mutex.test.sh \
+  "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -37,6 +38,8 @@ for f in \
   "$REPO_DIR"/tests/fixtures/lifecycle/input_reader_pane_respawn.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/mill_dry_run_full_pipeline.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/monitor_consumes_command_file.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/parent_pr_triggers_child_launch.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/parent_branch_missing_fails_clearly.sh \
   "$REPO_DIR/wavemill" \
 ; do
   if [[ ! -f "$f" ]]; then
@@ -64,6 +67,18 @@ else
   fail "state_mutate behavior: $state_mutex_output"
 fi
 unset state_mutex_status
+
+echo ""
+echo "=== Dependent Launch ==="
+
+dependent_launch_output="$(bash "$REPO_DIR/tests/wavemill-dependent-launch.test.sh" 2>&1)" || dependent_launch_status=$?
+dependent_launch_status="${dependent_launch_status:-0}"
+if [[ "$dependent_launch_status" -eq 0 ]]; then
+  pass "dependent task launch lifecycle"
+else
+  fail "dependent task launch lifecycle: $dependent_launch_output"
+fi
+unset dependent_launch_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check
@@ -148,7 +163,7 @@ else
       | grep -vE '^(pipefail|euo|noglob|errexit|nounset)$' \
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
-      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling)$' \
+      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling|tostring)$' \
       | grep -vE '^(bad|internal|marking|rate|service|timed|too|using|wavemill)$' \
       | grep -vE '^(a|already|available|blocked_by_count|break|coding|cp|debug|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
 
@@ -261,7 +276,7 @@ else
   fail "startup migration scan is not using forced fetch helper"
 fi
 
-if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" 2>/dev/null || true' "$MILL_SCRIPT"; then
+if grep -qF 'wavemill_fetch_base_branch "$effective_base" 2>/dev/null || true' "$MILL_SCRIPT"; then
   pass "dynamic task launch uses cached fetch helper"
 else
   fail "dynamic task launch is not using cached fetch helper"
