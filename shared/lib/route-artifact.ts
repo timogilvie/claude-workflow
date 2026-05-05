@@ -153,12 +153,25 @@ export interface NormalizedExpandedRouteArtifact {
   reviewMode: string;
 }
 
+export type RouteArtifactRouterMode = 'normal' | 'constrained' | 'survival';
+export type RouteArtifactBatchSource = 'batch' | 'single' | 'cache';
+
 export interface RouteArtifactSnapshot extends NormalizedExpandedRouteArtifact {
   planDepth?: string;
   planner?: string;
   cache_hit?: boolean;
-  route_source?: 'batch' | 'single' | 'cache';
+  route_source?: RouteArtifactBatchSource;
   packet_hash?: string;
+  routerMode?: RouteArtifactRouterMode;
+  artifactSource?: RouteSource;
+  expectedSuccess?: number;
+  confidence?: number;
+  expectedCost?: number;
+  expectedCostPlan?: number;
+  expectedCostCode?: number;
+  expectedCostReview?: number;
+  artifactPath?: string;
+  artifactHash?: string;
 }
 
 export interface RouteArtifactView {
@@ -166,6 +179,21 @@ export interface RouteArtifactView {
   codeDepth: string;
   reviewer: string;
   reviewMode: string;
+  planner?: string;
+  planDepth?: string;
+  packetHash?: string;
+  cacheHit?: boolean;
+  routeSource?: RouteArtifactBatchSource;
+  routerMode?: RouteArtifactRouterMode;
+  artifactSource?: RouteSource;
+  expectedSuccess?: number;
+  confidence?: number;
+  expectedCost?: number;
+  expectedCostPlan?: number;
+  expectedCostCode?: number;
+  expectedCostReview?: number;
+  artifactPath?: string;
+  artifactHash?: string;
 }
 
 export interface RouteLifecycleArtifacts {
@@ -182,7 +210,7 @@ export interface RouteLifecycleProvenance {
   decisionSource?: 'bootstrap' | 'expanded' | 'preserved';
   expandedCacheHit?: boolean;
   packetHash?: string;
-  routeSource?: 'batch' | 'single' | 'cache';
+  routeSource?: RouteArtifactBatchSource;
 }
 
 export type ExpandedRouteValidation = {
@@ -285,7 +313,96 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
-function parseBootstrapRouteArtifact(value: unknown): RouteArtifactSnapshot | null {
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readBatchSource(value: unknown): RouteArtifactBatchSource | undefined {
+  return value === 'batch' || value === 'single' || value === 'cache' ? value : undefined;
+}
+
+function readRouterMode(value: unknown): RouteArtifactRouterMode | undefined {
+  return value === 'normal' || value === 'constrained' || value === 'survival' ? value : undefined;
+}
+
+const ROUTE_SOURCE_VALUES = new Set<RouteSource>([
+  'bootstrap',
+  'expanded',
+  'startup-cache',
+  'batch-cache',
+  'live',
+  'heuristic-fallback',
+]);
+
+function readArtifactSource(value: unknown): RouteSource | undefined {
+  return typeof value === 'string' && ROUTE_SOURCE_VALUES.has(value as RouteSource)
+    ? (value as RouteSource)
+    : undefined;
+}
+
+interface RouteArtifactExtras {
+  planner?: string;
+  planDepth?: string;
+  cache_hit?: boolean;
+  route_source?: RouteArtifactBatchSource;
+  packet_hash?: string;
+  routerMode?: RouteArtifactRouterMode;
+  artifactSource?: RouteSource;
+  expectedSuccess?: number;
+  confidence?: number;
+  expectedCost?: number;
+  expectedCostPlan?: number;
+  expectedCostCode?: number;
+  expectedCostReview?: number;
+  artifactPath?: string;
+  artifactHash?: string;
+}
+
+function extractRouteArtifactExtras(
+  artifact: Record<string, unknown>,
+  meta?: ArtifactMeta,
+): RouteArtifactExtras {
+  const provenance = artifact.provenance && typeof artifact.provenance === 'object' && !Array.isArray(artifact.provenance)
+    ? (artifact.provenance as Record<string, unknown>)
+    : undefined;
+
+  const extras: RouteArtifactExtras = {};
+  const planner = readString(artifact.planner);
+  if (planner) extras.planner = planner;
+  const planDepth = readString(artifact.planDepth);
+  if (planDepth) extras.planDepth = planDepth;
+  if (typeof artifact.cache_hit === 'boolean') extras.cache_hit = artifact.cache_hit;
+  const routeSource = readBatchSource(artifact.route_source);
+  if (routeSource) extras.route_source = routeSource;
+  if (typeof artifact.packet_hash === 'string') extras.packet_hash = artifact.packet_hash;
+
+  const routerMode = readRouterMode(provenance?.routerMode);
+  if (routerMode) extras.routerMode = routerMode;
+  const artifactSource = readArtifactSource(provenance?.source);
+  if (artifactSource) extras.artifactSource = artifactSource;
+
+  const expectedSuccess = readFiniteNumber(artifact.expectedSuccess);
+  if (typeof expectedSuccess === 'number') extras.expectedSuccess = expectedSuccess;
+  const confidence = readFiniteNumber(artifact.confidence);
+  if (typeof confidence === 'number') extras.confidence = confidence;
+  const expectedCost = readFiniteNumber(artifact.expectedCost);
+  if (typeof expectedCost === 'number') extras.expectedCost = expectedCost;
+  const expectedCostPlan = readFiniteNumber(artifact.expectedCostPlan);
+  if (typeof expectedCostPlan === 'number') extras.expectedCostPlan = expectedCostPlan;
+  const expectedCostCode = readFiniteNumber(artifact.expectedCostCode);
+  if (typeof expectedCostCode === 'number') extras.expectedCostCode = expectedCostCode;
+  const expectedCostReview = readFiniteNumber(artifact.expectedCostReview);
+  if (typeof expectedCostReview === 'number') extras.expectedCostReview = expectedCostReview;
+
+  if (meta?.path) extras.artifactPath = meta.path;
+  if (meta?.hash) extras.artifactHash = meta.hash;
+  return extras;
+}
+
+function parseBootstrapRouteArtifact(
+  value: unknown,
+  meta?: ArtifactMeta,
+): RouteArtifactSnapshot | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
   }
@@ -305,29 +422,34 @@ function parseBootstrapRouteArtifact(value: unknown): RouteArtifactSnapshot | nu
     codeDepth,
     reviewer,
     reviewMode,
-    planDepth: readString(artifact.planDepth),
-    planner: readString(artifact.planner),
-    cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
-    route_source: artifact.route_source === 'batch' || artifact.route_source === 'single' || artifact.route_source === 'cache'
-      ? artifact.route_source
-      : undefined,
-    packet_hash: typeof artifact.packet_hash === 'string' ? artifact.packet_hash : undefined,
+    ...extractRouteArtifactExtras(artifact, meta),
   };
 }
 
-function loadJson(filePath: string): unknown | null {
+interface ArtifactMeta {
+  path: string;
+  hash: string;
+}
+
+function loadJsonWithMeta(filePath: string): { value: unknown; path: string; hash: string } | null {
   if (!existsSync(filePath)) {
     return null;
   }
 
   try {
-    return JSON.parse(readFileSync(filePath, 'utf-8'));
+    const raw = readFileSync(filePath, 'utf-8');
+    const value = JSON.parse(raw);
+    const hash = createHash('sha256').update(raw).digest('hex');
+    return { value, path: filePath, hash };
   } catch {
     return null;
   }
 }
 
-function parseExpandedRouteArtifact(value: unknown): RouteArtifactSnapshot | null {
+function parseExpandedRouteArtifact(
+  value: unknown,
+  meta?: ArtifactMeta,
+): RouteArtifactSnapshot | null {
   if (value === null) {
     return null;
   }
@@ -340,22 +462,20 @@ function parseExpandedRouteArtifact(value: unknown): RouteArtifactSnapshot | nul
   const artifact = value as Record<string, unknown>;
   return {
     ...validation.normalized,
-    planDepth: readString(artifact.planDepth),
-    planner: readString(artifact.planner),
-    cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
-    route_source: artifact.route_source === 'batch' || artifact.route_source === 'single' || artifact.route_source === 'cache'
-      ? artifact.route_source
-      : undefined,
-    packet_hash: typeof artifact.packet_hash === 'string' ? artifact.packet_hash : undefined,
+    ...extractRouteArtifactExtras(artifact, meta),
   };
 }
 
 function loadBootstrapRouteArtifact(filePath: string): RouteArtifactSnapshot | null {
-  return parseBootstrapRouteArtifact(loadJson(filePath));
+  const meta = loadJsonWithMeta(filePath);
+  if (!meta) return null;
+  return parseBootstrapRouteArtifact(meta.value, { path: meta.path, hash: meta.hash });
 }
 
 function loadExpandedRouteArtifact(filePath: string): RouteArtifactSnapshot | null {
-  return parseExpandedRouteArtifact(loadJson(filePath));
+  const meta = loadJsonWithMeta(filePath);
+  if (!meta) return null;
+  return parseExpandedRouteArtifact(meta.value, { path: meta.path, hash: meta.hash });
 }
 
 export function readBothRouteArtifacts(featureDir: string): {
@@ -405,6 +525,21 @@ export function toRouteArtifactView(route: RouteArtifactSnapshot): RouteArtifact
     codeDepth: route.codeDepth,
     reviewer: route.reviewer,
     reviewMode: route.reviewMode,
+    ...(route.planner ? { planner: route.planner } : {}),
+    ...(route.planDepth ? { planDepth: route.planDepth } : {}),
+    ...(route.packet_hash ? { packetHash: route.packet_hash } : {}),
+    ...(typeof route.cache_hit === 'boolean' ? { cacheHit: route.cache_hit } : {}),
+    ...(route.route_source ? { routeSource: route.route_source } : {}),
+    ...(route.routerMode ? { routerMode: route.routerMode } : {}),
+    ...(route.artifactSource ? { artifactSource: route.artifactSource } : {}),
+    ...(typeof route.expectedSuccess === 'number' ? { expectedSuccess: route.expectedSuccess } : {}),
+    ...(typeof route.confidence === 'number' ? { confidence: route.confidence } : {}),
+    ...(typeof route.expectedCost === 'number' ? { expectedCost: route.expectedCost } : {}),
+    ...(typeof route.expectedCostPlan === 'number' ? { expectedCostPlan: route.expectedCostPlan } : {}),
+    ...(typeof route.expectedCostCode === 'number' ? { expectedCostCode: route.expectedCostCode } : {}),
+    ...(typeof route.expectedCostReview === 'number' ? { expectedCostReview: route.expectedCostReview } : {}),
+    ...(route.artifactPath ? { artifactPath: route.artifactPath } : {}),
+    ...(route.artifactHash ? { artifactHash: route.artifactHash } : {}),
   };
 }
 

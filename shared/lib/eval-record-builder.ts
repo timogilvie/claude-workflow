@@ -152,6 +152,21 @@ function toEvalRouteArtifact(route: EvalRouteArtifact): EvalRouteArtifact {
     codeDepth: route.codeDepth,
     reviewer: route.reviewer,
     reviewMode: route.reviewMode,
+    ...(route.planner ? { planner: route.planner } : {}),
+    ...(route.planDepth ? { planDepth: route.planDepth } : {}),
+    ...(route.packetHash ? { packetHash: route.packetHash } : {}),
+    ...(typeof route.cacheHit === 'boolean' ? { cacheHit: route.cacheHit } : {}),
+    ...(route.routeSource ? { routeSource: route.routeSource } : {}),
+    ...(route.routerMode ? { routerMode: route.routerMode } : {}),
+    ...(route.artifactSource ? { artifactSource: route.artifactSource } : {}),
+    ...(route.artifactPath ? { artifactPath: route.artifactPath } : {}),
+    ...(route.artifactHash ? { artifactHash: route.artifactHash } : {}),
+    ...(typeof route.expectedSuccess === 'number' ? { expectedSuccess: route.expectedSuccess } : {}),
+    ...(typeof route.confidence === 'number' ? { confidence: route.confidence } : {}),
+    ...(typeof route.expectedCost === 'number' ? { expectedCost: route.expectedCost } : {}),
+    ...(typeof route.expectedCostPlan === 'number' ? { expectedCostPlan: route.expectedCostPlan } : {}),
+    ...(typeof route.expectedCostCode === 'number' ? { expectedCostCode: route.expectedCostCode } : {}),
+    ...(typeof route.expectedCostReview === 'number' ? { expectedCostReview: route.expectedCostReview } : {}),
   };
 }
 

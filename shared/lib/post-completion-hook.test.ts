@@ -591,6 +591,211 @@ await test('enrichPostCompletionRecord preserves DeepSeek model identity before 
   }
 });
 
+await test('enrichPostCompletionRecord attaches full routeProvenance from feature artifacts (HOK-1551)', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-route-prov-'));
+  const featureDir = join(repoDir, 'features', 'route-prov');
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(
+    join(featureDir, '.initial-route.json'),
+    JSON.stringify({
+      planner: 'claude-opus-4-6',
+      coder: 'claude-sonnet-4-6',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'shallow',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+      expectedSuccess: 0.78,
+      confidence: 0.62,
+      expectedCostPlan: 0.05,
+      expectedCostCode: 0.2,
+      expectedCostReview: 0.05,
+      provenance: { source: 'bootstrap', routerMode: 'normal' },
+    }),
+  );
+  writeFileSync(
+    join(featureDir, '.post-expansion-route.json'),
+    JSON.stringify({
+      planner: 'claude-opus-4-6',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-4-6',
+      planDepth: 'deep',
+      codeDepth: 'deep',
+      reviewMode: 'static+llm',
+      cache_hit: true,
+      route_source: 'cache',
+      packet_hash: 'a'.repeat(64),
+      expectedSuccess: 0.84,
+      confidence: 0.7,
+      expectedCost: 0.6,
+      expectedCostPlan: 0.1,
+      expectedCostCode: 0.4,
+      expectedCostReview: 0.1,
+      provenance: { source: 'expanded', routerMode: 'normal' },
+    }),
+  );
+  writeFileSync(
+    join(featureDir, '.routing-complete'),
+    JSON.stringify({
+      planner: 'claude-opus-4-6',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-4-6',
+      codeDepth: 'deep',
+      reviewMode: 'static+llm',
+      maxCostUsd: 6.5,
+      provenance: { source: 'live', routerMode: 'normal' },
+    }),
+  );
+
+  try {
+    const record = makeRecord();
+    enrichPostCompletionRecord(record, {
+      repoDir,
+      issueId: 'HOK-1551',
+      branchName: 'task/route-prov',
+      worktreePath: repoDir,
+      originalPrompt: 'Persist route provenance fully',
+      prDiff: '+++ shared/lib/route-artifact.ts',
+      record,
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+      costOutcome: null,
+      interventionRecords: [],
+    });
+
+    const provenance = record.routeProvenance;
+    assert.ok(provenance, 'expected routeProvenance to be attached');
+    assert.equal(provenance.decisionSource, 'expanded');
+    assert.equal(provenance.routeChanged, true);
+    assert.equal(provenance.expandedCacheHit, true);
+    assert.equal(provenance.routeSource, 'cache');
+    assert.equal(provenance.packetHash, 'a'.repeat(64));
+
+    assert.equal(provenance.bootstrapRoute?.planner, 'claude-opus-4-6');
+    assert.equal(provenance.bootstrapRoute?.planDepth, 'shallow');
+    assert.equal(provenance.bootstrapRoute?.routerMode, 'normal');
+    assert.equal(provenance.bootstrapRoute?.artifactSource, 'bootstrap');
+    assert.equal(provenance.bootstrapRoute?.artifactPath, join(featureDir, '.initial-route.json'));
+    assert.match(provenance.bootstrapRoute?.artifactHash || '', /^[0-9a-f]{64}$/);
+    assert.equal(provenance.bootstrapRoute?.expectedSuccess, 0.78);
+    assert.equal(provenance.bootstrapRoute?.confidence, 0.62);
+    assert.equal(provenance.bootstrapRoute?.expectedCostPlan, 0.05);
+
+    assert.equal(provenance.expandedRoute?.planner, 'claude-opus-4-6');
+    assert.equal(provenance.expandedRoute?.planDepth, 'deep');
+    assert.equal(provenance.expandedRoute?.routerMode, 'normal');
+    assert.equal(provenance.expandedRoute?.artifactSource, 'expanded');
+    assert.equal(provenance.expandedRoute?.cacheHit, true);
+    assert.equal(provenance.expandedRoute?.routeSource, 'cache');
+    assert.equal(provenance.expandedRoute?.packetHash, 'a'.repeat(64));
+    assert.equal(provenance.expandedRoute?.artifactPath, join(featureDir, '.post-expansion-route.json'));
+    assert.match(provenance.expandedRoute?.artifactHash || '', /^[0-9a-f]{64}$/);
+    assert.equal(provenance.expandedRoute?.expectedSuccess, 0.84);
+    assert.equal(provenance.expandedRoute?.expectedCost, 0.6);
+
+    assert.equal(provenance.activeRoute?.coder, 'gpt-5.4');
+    assert.equal(provenance.activeRoute?.routerMode, 'normal');
+    assert.equal(provenance.activeRoute?.artifactSource, 'live');
+    assert.equal(provenance.activeRoute?.artifactPath, join(featureDir, '.routing-complete'));
+    assert.match(provenance.activeRoute?.artifactHash || '', /^[0-9a-f]{64}$/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('enrichPostCompletionRecord attaches routeProvenance from archive when worktree lacks artifacts (HOK-1551)', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-route-archive-'));
+  const archiveDir = join(repoDir, '.wavemill', 'evals', 'artifacts', 'HOK-1551-archive');
+  mkdirSync(archiveDir, { recursive: true });
+  writeFileSync(
+    join(archiveDir, 'initial-route.json'),
+    JSON.stringify({
+      planner: 'archived-planner',
+      coder: 'archived-coder',
+      reviewer: 'archived-reviewer',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+      planDepth: 'light',
+      provenance: { source: 'bootstrap', routerMode: 'constrained' },
+    }),
+  );
+  writeFileSync(
+    join(archiveDir, 'post-expansion-route.json'),
+    JSON.stringify({
+      planner: 'archived-planner',
+      coder: 'archived-coder',
+      reviewer: 'archived-reviewer',
+      codeDepth: 'deep',
+      reviewMode: 'llm',
+      packet_hash: 'f'.repeat(64),
+      cache_hit: false,
+      route_source: 'single',
+      provenance: { source: 'expanded', routerMode: 'normal' },
+    }),
+  );
+
+  try {
+    const record = makeRecord();
+    enrichPostCompletionRecord(record, {
+      repoDir,
+      issueId: 'HOK-1551-archive',
+      branchName: 'task/missing-worktree',
+      worktreePath: join(repoDir, 'no-worktree-here'),
+      originalPrompt: 'Re-run after worktree cleanup',
+      prDiff: '+++ src/auth.ts',
+      record,
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+      costOutcome: null,
+      interventionRecords: [],
+    });
+
+    const provenance = record.routeProvenance;
+    assert.ok(provenance, 'expected archive-only provenance to attach');
+    assert.equal(provenance.bootstrapRoute?.planner, 'archived-planner');
+    assert.equal(provenance.bootstrapRoute?.routerMode, 'constrained');
+    assert.equal(provenance.bootstrapRoute?.artifactPath, join(archiveDir, 'initial-route.json'));
+    assert.equal(provenance.expandedRoute?.cacheHit, false);
+    assert.equal(provenance.expandedRoute?.routeSource, 'single');
+    assert.equal(provenance.expandedRoute?.packetHash, 'f'.repeat(64));
+    assert.equal(provenance.expandedRoute?.artifactPath, join(archiveDir, 'post-expansion-route.json'));
+    // bootstrap.codeDepth=medium → expanded.codeDepth=deep is a material change.
+    assert.equal(provenance.routeChanged, true);
+    assert.equal(provenance.expandedCacheHit, false);
+    assert.equal(provenance.packetHash, 'f'.repeat(64));
+    assert.equal(provenance.routeSource, 'single');
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('enrichPostCompletionRecord omits routeProvenance when no artifacts exist (HOK-1551)', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-route-empty-'));
+
+  try {
+    const record = makeRecord();
+    enrichPostCompletionRecord(record, {
+      repoDir,
+      issueId: 'HOK-1551-empty',
+      branchName: 'task/empty',
+      worktreePath: repoDir,
+      originalPrompt: 'No route artifacts present',
+      prDiff: '',
+      record,
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+      costOutcome: null,
+      interventionRecords: [],
+    });
+
+    assert.equal(record.routeProvenance, undefined);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 await test('enrichPostCompletionRecord marks complete records with outcomes as training eligible', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-eligible-'));
   const featureDir = join(repoDir, 'features', 'eligible-task');

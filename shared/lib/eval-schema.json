@@ -1448,7 +1448,85 @@
         "coder": { "type": "string" },
         "codeDepth": { "type": "string" },
         "reviewer": { "type": "string" },
-        "reviewMode": { "type": "string" }
+        "reviewMode": { "type": "string" },
+        "planner": {
+          "type": "string",
+          "description": "Planner model identifier when the source artifact carried one."
+        },
+        "planDepth": {
+          "type": "string",
+          "description": "Planner depth label when the source artifact carried one."
+        },
+        "packetHash": {
+          "type": "string",
+          "description": "Hash of the task packet that produced this route."
+        },
+        "cacheHit": {
+          "type": "boolean",
+          "description": "Whether the expanded route came from the route cache."
+        },
+        "routeSource": {
+          "type": "string",
+          "enum": ["batch", "single", "cache"],
+          "description": "Expanded route source (batch/single/cache)."
+        },
+        "routerMode": {
+          "type": "string",
+          "enum": ["normal", "constrained", "survival"],
+          "description": "Router operating mode at the time the route was emitted."
+        },
+        "artifactSource": {
+          "type": "string",
+          "enum": [
+            "bootstrap",
+            "expanded",
+            "startup-cache",
+            "batch-cache",
+            "live",
+            "heuristic-fallback"
+          ],
+          "description": "Lifecycle source classification of the underlying route artifact."
+        },
+        "artifactPath": {
+          "type": "string",
+          "description": "Path to the originating route artifact file at write time."
+        },
+        "artifactHash": {
+          "type": "string",
+          "description": "SHA-256 of the originating route artifact bytes."
+        },
+        "expectedSuccess": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Expected workflow success probability emitted by the router."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Router confidence score for this decision."
+        },
+        "expectedCost": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected total cost for this route in USD."
+        },
+        "expectedCostPlan": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected planning stage cost in USD."
+        },
+        "expectedCostCode": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected coding stage cost in USD."
+        },
+        "expectedCostReview": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected review stage cost in USD."
+        }
       },
       "required": ["coder", "codeDepth", "reviewer", "reviewMode"],
       "additionalProperties": false

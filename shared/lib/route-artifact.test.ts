@@ -284,7 +284,9 @@ function makeFeatureDir(): string {
 
 test('readBothRouteArtifacts returns both snapshots when present', () => {
   const featureDir = makeFeatureDir();
-  writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+  const bootstrapPath = join(featureDir, '.initial-route.json');
+  const expandedPath = join(featureDir, '.post-expansion-route.json');
+  writeFileSync(bootstrapPath, JSON.stringify({
     planner: 'gpt-5.4',
     coder: 'claude-sonnet-4-6',
     reviewer: 'claude-opus-4-6',
@@ -292,7 +294,7 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     codeDepth: 'medium',
     reviewMode: 'llm',
   }));
-  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+  writeFileSync(expandedPath, JSON.stringify({
     coder: 'gpt-5.4',
     reviewer: 'claude-sonnet-4-5-20250929',
     codeDepth: 'deep',
@@ -300,28 +302,27 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
   }));
 
   const result = readBothRouteArtifacts(featureDir);
-  assert.deepEqual(result.bootstrap, {
-    planner: 'gpt-5.4',
-    coder: 'claude-sonnet-4-6',
-    reviewer: 'claude-opus-4-6',
-    planDepth: 'deep',
-    codeDepth: 'medium',
-    reviewMode: 'llm',
-    cache_hit: undefined,
-    route_source: undefined,
-    packet_hash: undefined,
-  });
-  assert.deepEqual(result.expanded, {
-    coder: 'gpt-5.4',
-    reviewer: 'claude-sonnet-4-5-20250929',
-    codeDepth: 'deep',
-    reviewMode: 'static+llm',
-    planDepth: undefined,
-    planner: undefined,
-    cache_hit: undefined,
-    route_source: undefined,
-    packet_hash: undefined,
-  });
+  assert.equal(result.bootstrap?.planner, 'gpt-5.4');
+  assert.equal(result.bootstrap?.coder, 'claude-sonnet-4-6');
+  assert.equal(result.bootstrap?.reviewer, 'claude-opus-4-6');
+  assert.equal(result.bootstrap?.planDepth, 'deep');
+  assert.equal(result.bootstrap?.codeDepth, 'medium');
+  assert.equal(result.bootstrap?.reviewMode, 'llm');
+  assert.equal(result.bootstrap?.cache_hit, undefined);
+  assert.equal(result.bootstrap?.route_source, undefined);
+  assert.equal(result.bootstrap?.packet_hash, undefined);
+  assert.equal(result.bootstrap?.artifactPath, bootstrapPath);
+  assert.match(result.bootstrap?.artifactHash || '', /^[0-9a-f]{64}$/);
+
+  assert.equal(result.expanded?.coder, 'gpt-5.4');
+  assert.equal(result.expanded?.reviewer, 'claude-sonnet-4-5-20250929');
+  assert.equal(result.expanded?.codeDepth, 'deep');
+  assert.equal(result.expanded?.reviewMode, 'static+llm');
+  assert.equal(result.expanded?.planner, undefined);
+  assert.equal(result.expanded?.planDepth, undefined);
+  assert.equal(result.expanded?.cache_hit, undefined);
+  assert.equal(result.expanded?.artifactPath, expandedPath);
+  assert.match(result.expanded?.artifactHash || '', /^[0-9a-f]{64}$/);
 });
 
 test('readBothRouteArtifacts exposes expanded route as authoritative when snapshots conflict', () => {
@@ -376,7 +377,8 @@ test('readBothRouteArtifacts normalizes expanded reviewRecommended to reviewMode
 
 test('readBothRouteArtifacts reads expanded-only artifacts', () => {
   const featureDir = makeFeatureDir();
-  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+  const expandedPath = join(featureDir, '.post-expansion-route.json');
+  writeFileSync(expandedPath, JSON.stringify({
     coder: 'gpt-5.4',
     reviewer: 'claude-opus-4-6',
     codeDepth: 'deep',
@@ -388,17 +390,17 @@ test('readBothRouteArtifacts reads expanded-only artifacts', () => {
 
   const result = readBothRouteArtifacts(featureDir);
   assert.equal(result.bootstrap, null);
-  assert.deepEqual(result.expanded, {
-    coder: 'gpt-5.4',
-    reviewer: 'claude-opus-4-6',
-    codeDepth: 'deep',
-    reviewMode: 'static',
-    planDepth: undefined,
-    planner: undefined,
-    cache_hit: true,
-    route_source: 'cache',
-    packet_hash: 'a'.repeat(64),
-  });
+  assert.equal(result.expanded?.coder, 'gpt-5.4');
+  assert.equal(result.expanded?.reviewer, 'claude-opus-4-6');
+  assert.equal(result.expanded?.codeDepth, 'deep');
+  assert.equal(result.expanded?.reviewMode, 'static');
+  assert.equal(result.expanded?.cache_hit, true);
+  assert.equal(result.expanded?.route_source, 'cache');
+  assert.equal(result.expanded?.packet_hash, 'a'.repeat(64));
+  assert.equal(result.expanded?.planner, undefined);
+  assert.equal(result.expanded?.planDepth, undefined);
+  assert.equal(result.expanded?.artifactPath, expandedPath);
+  assert.match(result.expanded?.artifactHash || '', /^[0-9a-f]{64}$/);
 });
 
 test('readBothRouteArtifacts returns null for malformed artifacts without throwing', () => {
@@ -431,9 +433,10 @@ test('readBothRouteArtifacts ignores malformed expanded snapshot while keeping b
   assert.equal(result.expanded, null);
 });
 
-test('readBothRouteArtifacts keeps normalized expanded fields and drops provenance-only metadata', () => {
+test('readBothRouteArtifacts keeps normalized expanded fields and surfaces provenance metadata', () => {
   const featureDir = makeFeatureDir();
-  writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+  const expandedPath = join(featureDir, '.post-expansion-route.json');
+  writeFileSync(expandedPath, JSON.stringify({
     planner: 'expanded-planner',
     coder: 'gpt-5.4',
     reviewer: 'claude-sonnet-4-6',
@@ -443,21 +446,38 @@ test('readBothRouteArtifacts keeps normalized expanded fields and drops provenan
     cache_hit: true,
     route_source: 'batch',
     packet_hash: 'b'.repeat(64),
-    provenance: { source: 'expanded', inputHash: 'ignored-in-snapshot' },
+    expectedSuccess: 0.82,
+    confidence: 0.7,
+    expectedCostPlan: 0.1,
+    expectedCostCode: 0.4,
+    expectedCostReview: 0.05,
+    provenance: {
+      source: 'expanded',
+      inputHash: 'ignored-in-snapshot',
+      routerMode: 'normal',
+    },
   }));
 
   const result = readBothRouteArtifacts(featureDir);
-  assert.deepEqual(result.expanded, {
-    planner: 'expanded-planner',
-    coder: 'gpt-5.4',
-    reviewer: 'claude-sonnet-4-6',
-    planDepth: 'deep',
-    codeDepth: 'deep',
-    reviewMode: 'static+llm',
-    cache_hit: true,
-    route_source: 'batch',
-    packet_hash: 'b'.repeat(64),
-  });
+  assert.equal(result.expanded?.planner, 'expanded-planner');
+  assert.equal(result.expanded?.coder, 'gpt-5.4');
+  assert.equal(result.expanded?.reviewer, 'claude-sonnet-4-6');
+  assert.equal(result.expanded?.planDepth, 'deep');
+  assert.equal(result.expanded?.codeDepth, 'deep');
+  assert.equal(result.expanded?.reviewMode, 'static+llm');
+  assert.equal(result.expanded?.cache_hit, true);
+  assert.equal(result.expanded?.route_source, 'batch');
+  assert.equal(result.expanded?.packet_hash, 'b'.repeat(64));
+  assert.equal(result.expanded?.routerMode, 'normal');
+  assert.equal(result.expanded?.artifactSource, 'expanded');
+  assert.equal(result.expanded?.expectedSuccess, 0.82);
+  assert.equal(result.expanded?.confidence, 0.7);
+  assert.equal(result.expanded?.expectedCostPlan, 0.1);
+  assert.equal(result.expanded?.expectedCostCode, 0.4);
+  assert.equal(result.expanded?.expectedCostReview, 0.05);
+  assert.equal(result.expanded?.artifactPath, expandedPath);
+  assert.match(result.expanded?.artifactHash || '', /^[0-9a-f]{64}$/);
+  // Nested provenance object remains internal — we surface fields, not the raw map.
   assert.equal('provenance' in (result.expanded as object), false);
 });
 
@@ -551,7 +571,113 @@ test('deriveRouteDecisionSource returns preserved when active route stays bootst
   assert.equal(decisionSource, 'preserved');
 });
 
-test('buildRouteLifecycleProvenance includes active route and expanded cache metadata', () => {
+test('buildRouteLifecycleProvenance preserves planner/depth and route identity per route', () => {
+  const provenance = buildRouteLifecycleProvenance({
+    bootstrap: {
+      planner: 'claude-opus-4-6',
+      coder: 'claude-sonnet-4-6',
+      codeDepth: 'medium',
+      planDepth: 'shallow',
+      reviewer: 'claude-opus-4-6',
+      reviewMode: 'llm',
+      artifactPath: '/repo/features/demo/.initial-route.json',
+      artifactHash: 'a'.repeat(64),
+      routerMode: 'normal',
+      artifactSource: 'bootstrap',
+      expectedSuccess: 0.78,
+      confidence: 0.6,
+      expectedCostPlan: 0.05,
+      expectedCostCode: 0.2,
+      expectedCostReview: 0.05,
+    },
+    expanded: {
+      planner: 'claude-opus-4-6',
+      coder: 'gpt-5.4',
+      codeDepth: 'deep',
+      planDepth: 'deep',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'static',
+      cache_hit: true,
+      route_source: 'cache',
+      packet_hash: 'd'.repeat(64),
+      routerMode: 'normal',
+      artifactSource: 'expanded',
+      expectedSuccess: 0.84,
+      confidence: 0.72,
+      expectedCost: 0.6,
+      expectedCostPlan: 0.1,
+      expectedCostCode: 0.4,
+      expectedCostReview: 0.1,
+      artifactPath: '/repo/features/demo/.post-expansion-route.json',
+      artifactHash: 'b'.repeat(64),
+    },
+    active: {
+      coder: 'gpt-5.4',
+      codeDepth: 'deep',
+      reviewer: 'claude-sonnet-4-6',
+      reviewMode: 'static',
+      artifactPath: '/repo/features/demo/.routing-complete',
+      artifactHash: 'c'.repeat(64),
+    },
+  });
+
+  assert.equal(provenance?.decisionSource, 'expanded');
+  assert.equal(provenance?.routeChanged, true);
+  assert.equal(provenance?.expandedCacheHit, true);
+  assert.equal(provenance?.packetHash, 'd'.repeat(64));
+  assert.equal(provenance?.routeSource, 'cache');
+
+  assert.deepEqual(provenance?.bootstrapRoute, {
+    planner: 'claude-opus-4-6',
+    coder: 'claude-sonnet-4-6',
+    codeDepth: 'medium',
+    planDepth: 'shallow',
+    reviewer: 'claude-opus-4-6',
+    reviewMode: 'llm',
+    routerMode: 'normal',
+    artifactSource: 'bootstrap',
+    expectedSuccess: 0.78,
+    confidence: 0.6,
+    expectedCostPlan: 0.05,
+    expectedCostCode: 0.2,
+    expectedCostReview: 0.05,
+    artifactPath: '/repo/features/demo/.initial-route.json',
+    artifactHash: 'a'.repeat(64),
+  });
+
+  assert.deepEqual(provenance?.expandedRoute, {
+    planner: 'claude-opus-4-6',
+    coder: 'gpt-5.4',
+    codeDepth: 'deep',
+    planDepth: 'deep',
+    reviewer: 'claude-sonnet-4-6',
+    reviewMode: 'static',
+    packetHash: 'd'.repeat(64),
+    cacheHit: true,
+    routeSource: 'cache',
+    routerMode: 'normal',
+    artifactSource: 'expanded',
+    expectedSuccess: 0.84,
+    confidence: 0.72,
+    expectedCost: 0.6,
+    expectedCostPlan: 0.1,
+    expectedCostCode: 0.4,
+    expectedCostReview: 0.1,
+    artifactPath: '/repo/features/demo/.post-expansion-route.json',
+    artifactHash: 'b'.repeat(64),
+  });
+
+  assert.deepEqual(provenance?.activeRoute, {
+    coder: 'gpt-5.4',
+    codeDepth: 'deep',
+    reviewer: 'claude-sonnet-4-6',
+    reviewMode: 'static',
+    artifactPath: '/repo/features/demo/.routing-complete',
+    artifactHash: 'c'.repeat(64),
+  });
+});
+
+test('buildRouteLifecycleProvenance returns minimal view for legacy snapshots without optional fields', () => {
   const provenance = buildRouteLifecycleProvenance({
     bootstrap: {
       coder: 'claude-sonnet-4-6',
@@ -559,21 +685,8 @@ test('buildRouteLifecycleProvenance includes active route and expanded cache met
       reviewer: 'claude-opus-4-6',
       reviewMode: 'llm',
     },
-    expanded: {
-      coder: 'gpt-5.4',
-      codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
-      reviewMode: 'static',
-      cache_hit: true,
-      route_source: 'cache',
-      packet_hash: 'd'.repeat(64),
-    },
-    active: {
-      coder: 'gpt-5.4',
-      codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
-      reviewMode: 'static',
-    },
+    expanded: null,
+    active: null,
   });
 
   assert.deepEqual(provenance, {
@@ -583,24 +696,91 @@ test('buildRouteLifecycleProvenance includes active route and expanded cache met
       reviewer: 'claude-opus-4-6',
       reviewMode: 'llm',
     },
-    expandedRoute: {
-      coder: 'gpt-5.4',
-      codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
-      reviewMode: 'static',
-    },
     activeRoute: {
+      coder: 'claude-sonnet-4-6',
+      codeDepth: 'medium',
+      reviewer: 'claude-opus-4-6',
+      reviewMode: 'llm',
+    },
+    routeChanged: false,
+    decisionSource: 'bootstrap',
+  });
+});
+
+test('buildRouteLifecycleProvenance returns null when no artifacts are present', () => {
+  const provenance = buildRouteLifecycleProvenance({
+    bootstrap: null,
+    expanded: null,
+    active: null,
+  });
+
+  assert.equal(provenance, null);
+});
+
+test('buildRouteLifecycleProvenance attaches when only bootstrap artifact exists', () => {
+  const provenance = buildRouteLifecycleProvenance({
+    bootstrap: {
+      planner: 'gpt-5.5',
       coder: 'gpt-5.4',
-      codeDepth: 'deep',
+      codeDepth: 'medium',
       reviewer: 'claude-sonnet-4-6',
       reviewMode: 'static',
+      planDepth: 'light',
+      routerMode: 'normal',
+      artifactSource: 'bootstrap',
     },
-    routeChanged: true,
-    decisionSource: 'expanded',
-    expandedCacheHit: true,
-    packetHash: 'd'.repeat(64),
-    routeSource: 'cache',
+    expanded: null,
+    active: null,
   });
+
+  assert.equal(provenance?.decisionSource, 'bootstrap');
+  assert.equal(provenance?.bootstrapRoute?.planner, 'gpt-5.5');
+  assert.equal(provenance?.bootstrapRoute?.planDepth, 'light');
+  assert.equal(provenance?.bootstrapRoute?.routerMode, 'normal');
+  assert.equal(provenance?.expandedRoute, undefined);
+  assert.equal(provenance?.activeRoute?.coder, 'gpt-5.4');
+});
+
+test('readRouteLifecycleArtifacts surfaces artifactPath and artifactHash for archived files', () => {
+  const featureDir = makeFeatureDir();
+  const archiveDir = join(dirname(featureDir), 'archive2');
+  mkdirSync(archiveDir, { recursive: true });
+
+  const archivedBootstrap = join(archiveDir, 'initial-route.json');
+  const archivedExpanded = join(archiveDir, 'post-expansion-route.json');
+  writeFileSync(archivedBootstrap, JSON.stringify({
+    planner: 'archived-planner',
+    coder: 'archived-coder',
+    reviewer: 'archived-reviewer',
+    codeDepth: 'medium',
+    reviewMode: 'static',
+    planDepth: 'shallow',
+    provenance: { source: 'bootstrap', routerMode: 'constrained' },
+  }));
+  writeFileSync(archivedExpanded, JSON.stringify({
+    planner: 'archived-expanded',
+    coder: 'archived-coder',
+    reviewer: 'archived-reviewer',
+    codeDepth: 'deep',
+    reviewMode: 'llm',
+    cache_hit: false,
+    route_source: 'single',
+    packet_hash: 'e'.repeat(64),
+  }));
+
+  const result = readRouteLifecycleArtifacts(undefined, archiveDir);
+  assert.equal(result.bootstrap?.planner, 'archived-planner');
+  assert.equal(result.bootstrap?.planDepth, 'shallow');
+  assert.equal(result.bootstrap?.routerMode, 'constrained');
+  assert.equal(result.bootstrap?.artifactSource, 'bootstrap');
+  assert.equal(result.bootstrap?.artifactPath, archivedBootstrap);
+  assert.match(result.bootstrap?.artifactHash || '', /^[0-9a-f]{64}$/);
+
+  assert.equal(result.expanded?.cache_hit, false);
+  assert.equal(result.expanded?.route_source, 'single');
+  assert.equal(result.expanded?.packet_hash, 'e'.repeat(64));
+  assert.equal(result.expanded?.artifactPath, archivedExpanded);
+  assert.match(result.expanded?.artifactHash || '', /^[0-9a-f]{64}$/);
 });
 
 test('hasValidPostExpansionRoute returns missing when file is absent', () => {

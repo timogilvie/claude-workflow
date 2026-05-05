@@ -67,6 +67,13 @@
  * - **1.20.0**: Added optional `enrichmentDiagnostics` field to `EvalRecord`
  *   (HOK-1495) so shared eval enrichment paths can surface missing metadata
  *   inputs instead of silently omitting them
+ * - **1.21.0**: Expanded `routeProvenance` route artifact shape (HOK-1551) to
+ *   carry full route attribution on each eval record. Each route view now
+ *   accepts optional `planner`, `planDepth`, `packetHash`, `cacheHit`,
+ *   `routeSource`, `routerMode`, `artifactSource`, `artifactPath`,
+ *   `artifactHash`, plus expected route metrics (`expectedSuccess`,
+ *   `confidence`, `expectedCost*`). All fields are optional; legacy records
+ *   with the smaller four-field shape continue to validate.
  *
  * @module eval-schema
  */
@@ -76,7 +83,27 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.20.0';
+export const SCHEMA_VERSION = '1.21.0';
+
+/**
+ * Lifecycle source for a stored route artifact, mirroring `RouteSource` from
+ * `route-artifact.ts`. Surfaced on `EvalRouteArtifact.artifactSource` so
+ * downstream consumers can distinguish bootstrap vs expanded vs cached/live
+ * sources without re-reading the underlying JSON.
+ */
+export type EvalRouteArtifactSource =
+  | 'bootstrap'
+  | 'expanded'
+  | 'startup-cache'
+  | 'batch-cache'
+  | 'live'
+  | 'heuristic-fallback';
+
+/** Operating mode of the router that emitted a stored route artifact. */
+export type EvalRouteArtifactRouterMode = 'normal' | 'constrained' | 'survival';
+
+/** Expanded-route source classification (`route_source` field on artifacts). */
+export type EvalRouteArtifactBatchSource = 'batch' | 'single' | 'cache';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -1110,6 +1137,36 @@ export interface EvalRouteArtifact {
   codeDepth: string;
   reviewer: string;
   reviewMode: string;
+  /** Planner model identifier when the source artifact carried one. */
+  planner?: string;
+  /** Planner depth label when the source artifact carried one. */
+  planDepth?: string;
+  /** Hash of the task packet that produced this route. */
+  packetHash?: string;
+  /** Whether the expanded route came from the route cache. */
+  cacheHit?: boolean;
+  /** Expanded route source (batch/single/cache). */
+  routeSource?: EvalRouteArtifactBatchSource;
+  /** Router operating mode at the time the route was emitted. */
+  routerMode?: EvalRouteArtifactRouterMode;
+  /** Lifecycle source classification (bootstrap, expanded, live, etc.). */
+  artifactSource?: EvalRouteArtifactSource;
+  /** Path to the originating route artifact file at write time. */
+  artifactPath?: string;
+  /** SHA-256 of the originating route artifact bytes. */
+  artifactHash?: string;
+  /** Expected workflow success probability (router-emitted). */
+  expectedSuccess?: number;
+  /** Router confidence score for this decision. */
+  confidence?: number;
+  /** Expected total cost for this route in USD. */
+  expectedCost?: number;
+  /** Expected planning stage cost in USD. */
+  expectedCostPlan?: number;
+  /** Expected coding stage cost in USD. */
+  expectedCostCode?: number;
+  /** Expected review stage cost in USD. */
+  expectedCostReview?: number;
 }
 
 export interface EvalRouteProvenance {
@@ -1120,7 +1177,7 @@ export interface EvalRouteProvenance {
   decisionSource?: 'bootstrap' | 'expanded' | 'preserved';
   expandedCacheHit?: boolean;
   packetHash?: string;
-  routeSource?: 'batch' | 'single' | 'cache';
+  routeSource?: EvalRouteArtifactBatchSource;
 }
 
 // ────────────────────────────────────────────────────────────────

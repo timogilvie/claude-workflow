@@ -1406,6 +1406,130 @@ test('routeProvenance validates when present', () => {
   assert.equal(properties.routeProvenance?.type, 'object');
 });
 
+test('routeProvenance with legacy four-field route shape still validates (HOK-1551)', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.18.0',
+    routeProvenance: {
+      decisionSource: 'bootstrap',
+      bootstrapRoute: {
+        coder: 'claude-sonnet-4-6',
+        codeDepth: 'medium',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'llm',
+      },
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('routeProvenance validates with widened route artifact fields (HOK-1551)', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.21.0',
+    routeProvenance: {
+      decisionSource: 'expanded',
+      bootstrapRoute: {
+        planner: 'claude-opus-4-6',
+        coder: 'claude-sonnet-4-6',
+        codeDepth: 'medium',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'llm',
+        planDepth: 'shallow',
+        routerMode: 'normal',
+        artifactSource: 'bootstrap',
+        artifactPath: '/repo/features/demo/.initial-route.json',
+        artifactHash: 'a'.repeat(64),
+        expectedSuccess: 0.78,
+        confidence: 0.6,
+        expectedCostPlan: 0.05,
+        expectedCostCode: 0.2,
+        expectedCostReview: 0.05,
+      },
+      expandedRoute: {
+        planner: 'claude-opus-4-6',
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-sonnet-4-6',
+        reviewMode: 'static',
+        planDepth: 'deep',
+        cacheHit: true,
+        routeSource: 'cache',
+        packetHash: 'd'.repeat(64),
+        routerMode: 'normal',
+        artifactSource: 'expanded',
+        artifactPath: '/repo/features/demo/.post-expansion-route.json',
+        artifactHash: 'b'.repeat(64),
+        expectedCost: 0.6,
+      },
+      activeRoute: {
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-sonnet-4-6',
+        reviewMode: 'static',
+      },
+      routeChanged: true,
+      expandedCacheHit: true,
+      packetHash: 'd'.repeat(64),
+      routeSource: 'cache',
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const defs = schema.$defs as Record<string, Record<string, unknown>>;
+  const routeProps = defs.RouteArtifact?.properties as Record<string, Record<string, unknown>>;
+  // Spot-check that all newly added optional fields are exposed and not required.
+  for (const field of [
+    'planner',
+    'planDepth',
+    'packetHash',
+    'cacheHit',
+    'routeSource',
+    'routerMode',
+    'artifactSource',
+    'artifactPath',
+    'artifactHash',
+    'expectedSuccess',
+    'confidence',
+    'expectedCost',
+    'expectedCostPlan',
+    'expectedCostCode',
+    'expectedCostReview',
+  ]) {
+    assert.ok(routeProps[field], `Schema RouteArtifact missing field: ${field}`);
+  }
+  const required = (defs.RouteArtifact?.required as string[]) ?? [];
+  assert.deepEqual(required.sort(), ['codeDepth', 'coder', 'reviewMode', 'reviewer']);
+});
+
+test('routeProvenance rejects unknown route artifact fields (HOK-1551)', () => {
+  const bad = {
+    ...scenarios[0].record,
+    schemaVersion: '1.21.0',
+    routeProvenance: {
+      decisionSource: 'bootstrap',
+      bootstrapRoute: {
+        coder: 'claude-sonnet-4-6',
+        codeDepth: 'medium',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'llm',
+        bogusField: 'reject me',
+      },
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(
+    result.errors.some((e) => e.includes('bogusField')),
+    'Should mention unexpected route artifact field',
+  );
+});
+
 test('Wavemill router fields validate and schema stays in parity', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
@@ -1440,8 +1564,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.20.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.20.0');
+test('Schema version constant is 1.21.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.21.0');
 });
 
 test('Legacy rows still validate without nonRewardReason', () => {
