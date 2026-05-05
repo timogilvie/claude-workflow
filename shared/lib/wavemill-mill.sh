@@ -3897,9 +3897,10 @@ launch_ready_phase() {
     return 1
   fi
 
-  rm -f "$state_dir/.needs-attention-transient"
+  rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention" \
+    "$state_dir/.conflict-recheck-at" "$state_dir/.needs-attention-transient"
+  clear_ready_conflict_attention "$state_dir"
   clear_transient_mergeability_state "$state_dir"
-  clear_ready_conflict_markers "$state_dir"
 
   if [[ "$ready_rc" -eq 0 ]]; then
     # Record ready stage result (HOK-1177)
