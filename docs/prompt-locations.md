@@ -22,6 +22,8 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 - `tools/prompts/review-general-scoped.md`: Degraded-mode scoped review persona prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `shared/lib/review-engine.ts` when operating mode is `constrained` or `survival`).
 - `tools/prompts/initiative-planner.md`: Standard initiative decomposition prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `tools/plan-initiative.ts` via `shared/lib/plan-prompt-selector.ts`). Used when operating mode is `normal`. GEPA-optimizable.
 - `tools/prompts/initiative-planner-compressed.md`: Compressed initiative decomposition prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `tools/plan-initiative.ts` via `shared/lib/plan-prompt-selector.ts`). Used when operating mode is `constrained` or `survival`. GEPA-optimizable.
+- `tools/prompts/issue-writer.md`: Expand-mode task packet generation template. Keep section naming and Key Files semantics aligned with `shared/lib/task-packet-validator.ts`.
+- `shared/lib/task-packet-validator.ts`: Expand-mode quality gate for task-packet structure and path semantics. Update in lockstep with `tools/prompts/issue-writer.md` when changing validation-section or Key Files contracts.
 - `.wavemill/project-context.md`: Typed `memory` lookup role `project-context`.
 - `.wavemill/context/*.md`: Typed `memory` lookup role `subsystem-spec`.
 - `.wavemill/context/concepts/*.md`: Typed `memory` lookup role `concept-page`.
