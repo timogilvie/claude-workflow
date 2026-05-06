@@ -2547,6 +2547,48 @@ mark_eval_failed() {
   fi
 }
 
+# Duplicated intentionally: the pre-heredoc definitions do not enter the
+# generated monitor script, so challenge launchers need local monitor copies.
+mark_challenge_eval_running() {
+  local issue="$1" side="$2" pr="$3" phase="${4:-eval}"
+  state_mutate "$STATE_FILE" '
+    .tasks[$issue].evalRunning = {
+      issue: $issue,
+      side: $side,
+      pr: ($pr | tonumber),
+      phase: $phase,
+      startedAt: (now | todateiso8601)
+    } |
+    .tasks[$issue].updated = (now | todateiso8601)
+  ' \
+    --arg issue "$issue" \
+    --arg side "$side" \
+    --arg pr "$pr" \
+    --arg phase "$phase"
+}
+
+mark_challenge_comparison_running() {
+  local pair_id="$1" primary_pr="$2" challenger_pr="$3"
+  state_mutate "$STATE_FILE" '
+    .tasks |= with_entries(
+      if (.value.challengePairId // "") == $pair then
+        .value.comparisonRunning = {
+          pairId: $pair,
+          primaryPr: ($primaryPr | tonumber),
+          challengerPr: ($challengerPr | tonumber),
+          startedAt: (now | todateiso8601)
+        } |
+        .value.updated = (now | todateiso8601)
+      else
+        .
+      end
+    )
+  ' \
+    --arg pair "$pair_id" \
+    --arg primaryPr "$primary_pr" \
+    --arg challengerPr "$challenger_pr"
+}
+
 eval_record_exists_for_issue_pr() {
   local issue="$1" pr="$2"
   local pr_url evals_dir evals_file

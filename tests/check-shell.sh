@@ -68,6 +68,27 @@ else
 fi
 unset state_mutex_status
 
+if command -v zsh >/dev/null 2>&1; then
+  state_mutate_zsh_output="$(
+    REPO_DIR="$REPO_DIR" zsh -f -c '
+      state_file="$(mktemp "${TMPDIR:-/tmp}/wavemill-zsh-state.XXXXXX")" || exit 1
+      print -r -- "{\"tasks\":{}}" > "$state_file"
+      source "$REPO_DIR/shared/lib/wavemill-common.sh"
+      state_mutate "$state_file" ".tasks.test.value = 1" >/dev/null || exit 1
+      jq -e ".tasks.test.value == 1" "$state_file" >/dev/null
+    ' 2>&1
+  )" || state_mutate_zsh_status=$?
+  state_mutate_zsh_status="${state_mutate_zsh_status:-0}"
+  if [[ "$state_mutate_zsh_status" -eq 0 ]]; then
+    pass "state_mutate works when sourced from zsh"
+  else
+    fail "state_mutate zsh compatibility: $state_mutate_zsh_output"
+  fi
+  unset state_mutate_zsh_status
+else
+  skip "state_mutate zsh compatibility (zsh unavailable)"
+fi
+
 echo ""
 echo "=== Dependent Launch ==="
 
@@ -481,6 +502,12 @@ else
     pass "challenge eval launch skips tasks already marked evalFailed"
   else
     fail "challenge eval launch may relaunch failed eval jobs"
+  fi
+  if grep -q '^mark_challenge_eval_running()' <<< "$HEREDOC_CONTENT" \
+    && grep -q '^mark_challenge_comparison_running()' <<< "$HEREDOC_CONTENT"; then
+    pass "monitor heredoc defines challenge running-state persistence helpers"
+  else
+    fail "monitor heredoc is missing challenge running-state persistence helpers"
   fi
 
   CHALLENGE_COMPARE_BLOCK=$(awk '
