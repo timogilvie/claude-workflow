@@ -1527,21 +1527,21 @@ state_mutate() {
     sleep "$sleep_seconds"
   done
 
-  local status=0
+  local mutate_status=0
   if jq "$@" "$jq_filter" "$state_path" > "$tmp_file" 2>"$err_file"; then
-    mv "$tmp_file" "$state_path" || status=$?
+    mv "$tmp_file" "$state_path" || mutate_status=$?
   else
-    status=$?
+    mutate_status=$?
     cat "$err_file" >&2
   fi
 
   rm -f "$tmp_file" "$err_file"
-  if ! rmdir "$lock_dir" 2>/dev/null && (( status == 0 )); then
+  if ! rmdir "$lock_dir" 2>/dev/null && (( mutate_status == 0 )); then
     echo "state_mutate: failed to release lock: $lock_dir" >&2
     return 1
   fi
 
-  return "$status"
+  return "$mutate_status"
 }
 
 queue_add_task() {
