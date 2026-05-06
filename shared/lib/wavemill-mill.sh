@@ -621,6 +621,70 @@ save_task_state() {
   fi
 }
 
+mark_challenge_eval_running() {
+  local issue="$1" side="$2" pr="$3" phase="${4:-eval}"
+  state_mutate "$STATE_FILE" '
+    .tasks[$issue].evalRunning = {
+      issue: $issue,
+      side: $side,
+      pr: ($pr | tonumber),
+      phase: $phase,
+      startedAt: (now | todateiso8601)
+    } |
+    .tasks[$issue].updated = (now | todateiso8601)
+  ' \
+    --arg issue "$issue" \
+    --arg side "$side" \
+    --arg pr "$pr" \
+    --arg phase "$phase"
+}
+
+clear_challenge_eval_running() {
+  local issue="$1"
+  state_mutate "$STATE_FILE" '
+    if .tasks[$issue]? then
+      .tasks[$issue] |= (del(.evalRunning) | .updated = (now | todateiso8601))
+    else
+      .
+    end
+  ' --arg issue "$issue"
+}
+
+mark_challenge_comparison_running() {
+  local pair_id="$1" primary_pr="$2" challenger_pr="$3"
+  state_mutate "$STATE_FILE" '
+    .tasks |= with_entries(
+      if (.value.challengePairId // "") == $pair then
+        .value.comparisonRunning = {
+          pairId: $pair,
+          primaryPr: ($primaryPr | tonumber),
+          challengerPr: ($challengerPr | tonumber),
+          startedAt: (now | todateiso8601)
+        } |
+        .value.updated = (now | todateiso8601)
+      else
+        .
+      end
+    )
+  ' \
+    --arg pair "$pair_id" \
+    --arg primaryPr "$primary_pr" \
+    --arg challengerPr "$challenger_pr"
+}
+
+clear_challenge_comparison_running() {
+  local pair_id="$1"
+  state_mutate "$STATE_FILE" '
+    .tasks |= with_entries(
+      if (.value.challengePairId // "") == $pair then
+        .value |= (del(.comparisonRunning) | .updated = (now | todateiso8601))
+      else
+        .
+      end
+    )
+  ' --arg pair "$pair_id"
+}
+
 
 get_task_state() {
   local issue="$1"
@@ -961,28 +1025,6 @@ smart_select_from_candidates() {
       echo "$candidates" | sed -n "${n}p" | cut -d'|' -f1-3
     done <<<"$(echo "$selected_numbers" | tr ' ' '\n')"
   fi
-}
-
-build_queue_plan_once() {
-  local backlog_json="$1"
-  local plan_input queue_plan
-
-  plan_input=$(jq -c '
-    map({
-      id: .identifier,
-      title: .title,
-      sharedSurface: ((.sharedSurface // []) | sort),
-      dependsOn: (
-        (.inverseRelations.nodes // [])
-        | map(select(.type == "blocks" and .issue.identifier != null) | .issue.identifier)
-        | sort
-      )
-    })
-  ' <<<"$backlog_json" 2>/dev/null) || return 1
-
-  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || return 1
-  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || return 1
-  echo "$queue_plan"
 }
 
 invoke_first_wave_helper() {
@@ -2369,11 +2411,14 @@ save_task_state() {
      '(.tasks[$issue].agent // "") as $old_agent |
       (.tasks[$issue].phase // "executing") as $old_phase |
       (.tasks[$issue].evalCompleted // false) as $old_eval |
+      (.tasks[$issue].evalFailed // false) as $old_eval_failed |
       (.tasks[$issue].challengeCompared // false) as $old_challenge_compared |
       (.tasks[$issue].challenge // false) as $old_challenge |
       (.tasks[$issue].challengePairId // "") as $old_challenge_pair |
       (.tasks[$issue].challengeRole // "") as $old_challenge_role |
       (.tasks[$issue].challengeModel // "") as $old_challenge_model |
+      (.tasks[$issue].evalRunning // null) as $old_eval_running |
+      (.tasks[$issue].comparisonRunning // null) as $old_comparison_running |
       (.tasks[$issue].linearIssueId // $issue) as $old_linear_issue |
       (.tasks[$issue].coderModel // "") as $old_coderModel |
       (.tasks[$issue].plannerModel // "") as $old_plannerModel |
@@ -2401,7 +2446,10 @@ save_task_state() {
         reviewMode: (if $reviewMode != "" then $reviewMode else $old_reviewMode end),
         phase: $old_phase,
         evalCompleted: $old_eval,
+        evalFailed: $old_eval_failed,
         challengeCompared: $old_challenge_compared,
+        evalRunning: $old_eval_running,
+        comparisonRunning: $old_comparison_running,
         updated: (now | todate)
       }' \
      --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
@@ -2479,7 +2527,10 @@ get_task_phase() {
 mark_eval_completed() {
   local issue="$1"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].evalCompleted = true | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].evalCompleted = true
+      | .tasks[$issue].evalFailed = false
+      | del(.tasks[$issue].evalRunning)
+      | .tasks[$issue].updated = (now | todateiso8601)' \
      --arg issue "$issue"; then
     log_warn "mark_eval_completed: failed to update $issue"
   fi
@@ -2488,7 +2539,9 @@ mark_eval_completed() {
 mark_eval_failed() {
   local issue="$1"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].evalFailed = true | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].evalFailed = true
+      | del(.tasks[$issue].evalRunning)
+      | .tasks[$issue].updated = (now | todateiso8601)' \
      --arg issue "$issue"; then
     log_warn "mark_eval_failed: failed to update $issue"
   fi
@@ -4495,7 +4548,8 @@ mark_challenge_compared() {
   if ! state_mutate "$STATE_FILE" '
     .tasks |= with_entries(
       if (.value.challengePairId // "") == $pair then
-        .value.challengeCompared = true
+        .value.challengeCompared = true |
+        .value |= (del(.comparisonRunning) | .updated = (now | todateiso8601))
       else
         .
       end
@@ -4737,6 +4791,12 @@ maybe_run_challenge_eval() {
   log_path="$job_dir/${job_id}.log"
   result_path="$job_dir/${job_id}.result.json"
 
+  log "status" "  📊 [mill] eval running: issue=$issue side=$side pr=#$pr phase=eval"
+  if ! mark_challenge_eval_running "$issue" "$side" "$pr" "eval" >/dev/null; then
+    log_warn "challenge eval launch skipped for $issue: failed to persist running state"
+    return 1
+  fi
+
   npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
     --issue "$linear_issue" --pr "$pr" --branch "$branch" \
     --worktree "${WORKTREE_ROOT}/${slug}" \
@@ -4846,10 +4906,14 @@ maybe_run_challenge_comparison() {
   challenger_code_depth=$(get_task_meta "$challenger_key" "codeDepth")
   challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
 
-  log "status" "  ⚖ Running challenge comparison for $pair_id"
+  log "status" "  ⚖ [mill] comparison running: pair=$pair_id primary_pr=#$primary_pr challenger_pr=#$challenger_pr"
   job_dir=$(challenge_job_dir)
   log_path="$job_dir/${job_id}.log"
   result_path="$job_dir/${job_id}.result.json"
+  if ! mark_challenge_comparison_running "$pair_id" "$primary_pr" "$challenger_pr" >/dev/null; then
+    log_warn "challenge comparison launch skipped for $pair_id: failed to persist running state"
+    return 1
+  fi
   npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
@@ -5525,13 +5589,17 @@ fetch_candidates() {
 fetch_queue_plan() {
   local now plan_input queue_plan
   now=$(date +%s)
+  [[ -n "${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}" ]] && : > "$FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE"
 
   if (( now - LAST_QUEUE_PLAN_FETCH < BACKLOG_CACHE_TTL )) && [[ -n "$QUEUE_PLAN_CACHE" ]]; then
     echo "$QUEUE_PLAN_CACHE"
     return 0
   fi
 
-  [[ -n "$BACKLOG_JSON_CACHE" ]] || return 1
+  [[ -n "$BACKLOG_JSON_CACHE" ]] || {
+    record_fetch_queue_plan_failure "cache_empty" ""
+    return 1
+  }
   queue_plan=$(build_queue_plan_once "$BACKLOG_JSON_CACHE") || return 1
 
   QUEUE_PLAN_CACHE="$queue_plan"
@@ -5539,9 +5607,39 @@ fetch_queue_plan() {
   echo "$QUEUE_PLAN_CACHE"
 }
 
+# fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
+record_fetch_queue_plan_failure() {
+  local step="$1" stderr_text="${2-}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  [[ -n "$diagnostics_file" ]] || return 0
+
+  local bounded
+  if [[ -n "$stderr_text" ]]; then
+    bounded="$(printf '%s' "$stderr_text" | sed -n '1,5p' | tr '\n' ' ' | head -c 512)"
+    [[ -n "$bounded" ]] || bounded="(no stderr captured)"
+  else
+    bounded="(no stderr captured)"
+  fi
+
+  printf 'step=%s stderr=%s\n' "$step" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+}
+
+log_fetch_queue_plan_failure() {
+  local diagnostics_file="$1"
+  [[ -s "$diagnostics_file" ]] || return 0
+
+  local details
+  details="$(cat "$diagnostics_file" 2>/dev/null || true)"
+  [[ -n "$details" ]] && log "debug" "[fetch_queue_plan] failed $details"
+}
+
 build_queue_plan_once() {
   local backlog_json="$1"
-  local plan_input queue_plan
+  local plan_input queue_plan tmp_stderr stderr_text
+
+  tmp_stderr="$(mktemp -t wavemill-fqp-stderr.XXXXXX)" || {
+    record_fetch_queue_plan_failure "diagnostics_setup_failed" "mktemp failed"
+    return 1
+  }
 
   plan_input=$(jq -c '
     map({
@@ -5554,10 +5652,30 @@ build_queue_plan_once() {
         | sort
       )
     })
-  ' <<<"$backlog_json" 2>/dev/null) || return 1
+  ' <<<"$backlog_json" 2>"$tmp_stderr") || {
+    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+    rm -f "$tmp_stderr"
+    record_fetch_queue_plan_failure "jq_massage_failed" "$stderr_text"
+    return 1
+  }
 
-  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || return 1
-  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || return 1
+  : > "$tmp_stderr"
+  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
+    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+    rm -f "$tmp_stderr"
+    record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+    return 1
+  }
+
+  : > "$tmp_stderr"
+  jq -e 'has("availableNow")' >/dev/null 2>"$tmp_stderr" <<<"$queue_plan" || {
+    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+    rm -f "$tmp_stderr"
+    record_fetch_queue_plan_failure "validation_failed" "$stderr_text"
+    return 1
+  }
+
+  rm -f "$tmp_stderr"
   echo "$queue_plan"
 }
 
@@ -8519,6 +8637,10 @@ while :; do
           fi
           echo "Next tasks:"
           queue_plan_json=""
+          queue_plan_diag_file=""
+          queue_plan_diag_previous="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+          queue_plan_diag_file="$(mktemp -t wavemill-fqp-diagnostics.XXXXXX 2>/dev/null || true)"
+          FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_file"
           GROUPED_DISPLAY=""
           GROUPED_SELECT_FROM=""
           if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
@@ -8531,7 +8653,10 @@ while :; do
           fi
           if [[ -z "$GROUPED_DISPLAY" ]]; then
             USING_GROUPED_VIEW=false
-            [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
+            if [[ -z "$queue_plan_json" ]]; then
+              log_warn "queue analysis unavailable, falling back to flat list"
+              [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
+            fi
             if [[ -n "$avail_unblocked" ]]; then
               echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
             else
@@ -8542,6 +8667,8 @@ while :; do
               echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
             fi
           fi
+          rm -f "$queue_plan_diag_file"
+          FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_previous"
           echo ""
           if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
             echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"

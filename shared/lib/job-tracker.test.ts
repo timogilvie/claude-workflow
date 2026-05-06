@@ -146,6 +146,9 @@ test('markJobSettled updates eval completion state', async () => {
         'HOK-1': {
           evalCompleted: false,
           evalFailed: false,
+          evalRunning: {
+            startedAt: new Date().toISOString(),
+          },
         },
       },
       jobs: {
@@ -159,6 +162,7 @@ test('markJobSettled updates eval completion state', async () => {
     await markJobSettled({ statePath, jobId: 'eval-HOK-1-primary-101' });
     const next = JSON.parse(readFileSync(statePath, 'utf-8'));
     assert.equal(next.tasks['HOK-1'].evalCompleted, true);
+    assert.equal('evalRunning' in next.tasks['HOK-1'], false);
     assert.equal(next.jobs['eval-HOK-1-primary-101'].settled, true);
   } finally {
     cleanup();
@@ -173,6 +177,9 @@ test('markJobSettled marks failed eval jobs as evalFailed', async () => {
         'HOK-1': {
           evalCompleted: false,
           evalFailed: false,
+          evalRunning: {
+            startedAt: new Date().toISOString(),
+          },
         },
       },
       jobs: {
@@ -188,7 +195,101 @@ test('markJobSettled marks failed eval jobs as evalFailed', async () => {
     const next = JSON.parse(readFileSync(statePath, 'utf-8'));
     assert.equal(next.tasks['HOK-1'].evalCompleted, false);
     assert.equal(next.tasks['HOK-1'].evalFailed, true);
+    assert.equal('evalRunning' in next.tasks['HOK-1'], false);
     assert.equal(next.jobs['eval-HOK-1-primary-101'].settled, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test('markJobSettled clears comparison running state on success', async () => {
+  const { statePath, cleanup } = makeTempState();
+  try {
+    writeFileSync(statePath, JSON.stringify({
+      tasks: {
+        'PAIR-1': {
+          challengePairId: 'PAIR-1',
+          challengeCompared: false,
+          comparisonRunning: {
+            startedAt: new Date().toISOString(),
+          },
+        },
+        'PAIR-1_c': {
+          challengePairId: 'PAIR-1',
+          challengeCompared: false,
+          comparisonRunning: {
+            startedAt: new Date().toISOString(),
+          },
+        },
+      },
+      jobs: {
+        'comparison-PAIR-1-101-102': {
+          ...makeJob({
+            id: 'comparison-PAIR-1-101-102',
+            kind: 'comparison',
+            issueId: undefined,
+            side: undefined,
+            pairId: 'PAIR-1',
+            prNumbers: [101, 102],
+          }),
+          status: 'succeeded',
+        },
+      },
+    }, null, 2));
+
+    await markJobSettled({ statePath, jobId: 'comparison-PAIR-1-101-102' });
+    const next = JSON.parse(readFileSync(statePath, 'utf-8'));
+    assert.equal(next.tasks['PAIR-1'].challengeCompared, true);
+    assert.equal(next.tasks['PAIR-1_c'].challengeCompared, true);
+    assert.equal('comparisonRunning' in next.tasks['PAIR-1'], false);
+    assert.equal('comparisonRunning' in next.tasks['PAIR-1_c'], false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('markJobSettled clears comparison running state on failure', async () => {
+  const { statePath, cleanup } = makeTempState();
+  try {
+    writeFileSync(statePath, JSON.stringify({
+      tasks: {
+        'PAIR-1': {
+          challengePairId: 'PAIR-1',
+          challengeCompared: false,
+          comparisonRunning: {
+            startedAt: new Date().toISOString(),
+          },
+        },
+        'PAIR-1_c': {
+          challengePairId: 'PAIR-1',
+          challengeCompared: false,
+          comparisonRunning: {
+            startedAt: new Date().toISOString(),
+          },
+        },
+      },
+      jobs: {
+        'comparison-PAIR-1-101-102': {
+          ...makeJob({
+            id: 'comparison-PAIR-1-101-102',
+            kind: 'comparison',
+            issueId: undefined,
+            side: undefined,
+            pairId: 'PAIR-1',
+            prNumbers: [101, 102],
+          }),
+          status: 'failed',
+          reason: 'job_failed',
+        },
+      },
+    }, null, 2));
+
+    await markJobSettled({ statePath, jobId: 'comparison-PAIR-1-101-102' });
+    const next = JSON.parse(readFileSync(statePath, 'utf-8'));
+    assert.equal(next.tasks['PAIR-1'].challengeCompared, false);
+    assert.equal(next.tasks['PAIR-1_c'].challengeCompared, false);
+    assert.equal('comparisonRunning' in next.tasks['PAIR-1'], false);
+    assert.equal('comparisonRunning' in next.tasks['PAIR-1_c'], false);
   } finally {
     cleanup();
   }

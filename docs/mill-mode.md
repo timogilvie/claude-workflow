@@ -213,6 +213,8 @@ Challenge mode adds a second PR for the same task and records a comparison resul
 Challenge post-PR evals and PR comparisons now run as monitored background jobs instead of blocking the main monitor loop.
 
 - Job state is persisted under `.wavemill/workflow-state.json` in `jobs`.
+- Mill also writes transient `evalRunning` and `comparisonRunning` markers onto the affected task rows before it launches the long-running eval or comparison command.
+- The control pane emits explicit `eval running` / `comparison running` status lines and the dashboard shows an elapsed running detail on the task row while that transient state is present.
 - Logs and structured result files live under `.wavemill/jobs/<session>/`.
 - Failed or timed-out jobs surface compact excerpts in the dashboard so the monitor can keep draining commands and launching other work.
 
