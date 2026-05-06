@@ -4118,6 +4118,34 @@ write_transient_ready_attention_file() {
   : > "$state_dir/.needs-attention-transient"
 }
 
+log_ready_failure_result() {
+  local issue="$1"
+  local result="${2-}"
+  local summary debug_file
+
+  summary="$(summarize_ready_result "$result")"
+  debug_file="$(ready_debug_log_file)"
+
+  log_error "  Ready checks failed for $issue - $summary"
+  if [[ -n "$result" ]]; then
+    log_error "  Full ready result: $debug_file"
+    log_debug_json "ready" "$result"
+  fi
+}
+
+log_ready_unparseable_result() {
+  local issue="$1"
+  local result="${2-}"
+  local debug_file
+
+  debug_file="$(ready_debug_log_file)"
+  log_error "  Ready checks produced unparseable output for $issue"
+  if [[ -n "$result" ]]; then
+    log_error "  Full ready result: $debug_file"
+    log_debug_json "ready" "$result"
+  fi
+}
+
 launch_ready_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local pr_number="$7"
@@ -4183,8 +4211,7 @@ launch_ready_phase() {
   ready_result_file="$state_dir/.ready-result.json"
 
   if [[ -z "$merge_status" ]]; then
-    log_error "  Ready checks produced unparseable output for $issue"
-    [[ -n "$result" ]] && log_error "$result"
+    log_ready_unparseable_result "$issue" "$result"
     write_ready_attention_file "$state_dir" "Ready stage produced invalid output for PR #$pr_number."
     return 1
   fi
@@ -4411,8 +4438,7 @@ launch_ready_phase() {
     "candidate-progress")
   write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" "Ready checks failed" "$failed_artifacts_json"
   write_ready_attention_file "$state_dir" "Ready checks failed for PR #$pr_number."
-  log_error "  Ready checks failed for $issue"
-  [[ -n "$result" ]] && log_error "$result"
+  log_ready_failure_result "$issue" "$result"
   return 1
 }
 
