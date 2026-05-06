@@ -25,8 +25,8 @@ command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq
 command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
 
 # Logging
-log() { echo "$(date '+%H:%M:%S') $*"; }
-log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
+log() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  $m"; }
+log_error() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  ERROR: $m" >&2; }
 
 # ============================================================================
 # MAIN WORKFLOW
