@@ -117,6 +117,8 @@ for fn in \
   write_ready_conflict_recheck_at \
   ready_conflict_pr_is_clean \
   ready_remediation_launch_head \
+  inject_depends_on_pr_block \
+  dispatch_queued_children_for_parent \
   monitor_issue_state
 do
   extract_function "$MILL_SCRIPT" "$fn" >> "$MONITOR_FUNC_FILE"

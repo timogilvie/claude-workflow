@@ -184,6 +184,15 @@ The four pipeline stages are:
 
 When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `integration` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
 
+### Dependent Task Auto-Dispatch
+
+When the monitor loop detects that a parent task has opened a PR, mill automatically re-checks queued children whose `depends_on` edge targets that parent issue.
+
+- Trigger: PR creation detection in the monitor loop, including resumed review transitions.
+- Base branch: the child worktree branches from the parent PR head ref, not from `main` or the global `mill.baseBranch`.
+- PR metadata: the child PR body is updated with a prepended `depends_on:` block that records the parent PR number, issue, branch, and URL.
+- Failure mode: if mill cannot resolve the parent PR branch, the child remains queued and gets `waiting_reason: parent_pr_branch_unresolvable: <detail>`. Mill does not silently fall back to `main`.
+
 ### Challenge-Mode Interaction
 
 Challenge mode adds a second PR for the same task and records a comparison result under `.wavemill/evals`. During tend selection, `tend-challenge-gate.ts` classifies each pair into one of four states:

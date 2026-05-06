@@ -4681,6 +4681,103 @@ find_pr_for_branch() {
   _with_timeout "$API_TIMEOUT" gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || echo ""
 }
 
+inject_depends_on_pr_block() {
+  local issue="${1:-}" pr_number="${2:-}" meta_json="${3:-}"
+  if [[ -z "$issue" || -z "$pr_number" || -z "$meta_json" ]]; then
+    echo "Usage: inject_depends_on_pr_block <issue> <pr_number> <meta_json>" >&2
+    return 1
+  fi
+
+  local current_body
+  if ! current_body=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr_number" --json body --jq '.body // ""' 2>/dev/null); then
+    log_warn "$issue: could not read PR #$pr_number body for depends_on metadata"
+    return 0
+  fi
+  if [[ "$current_body" == *"depends_on:"* ]]; then
+    return 0
+  fi
+
+  local depends_block
+  depends_block=$(jq -r '
+    "depends_on:\n" +
+    "  - pr: \"#" + (.number | tostring) + "\"\n" +
+    "    issue: \"" + .parent_issue + "\"\n" +
+    "    branch: \"" + .branch + "\"\n" +
+    "    url: \"" + .url + "\""
+  ' <<<"$meta_json" 2>/dev/null) || {
+    log_warn "$issue: could not build depends_on metadata block for PR #$pr_number"
+    return 0
+  }
+
+  local new_body="$depends_block"
+  if [[ -n "$current_body" ]]; then
+    new_body+=$'\n\n'"$current_body"
+  fi
+
+  if ! _with_timeout "$API_TIMEOUT" gh pr edit "$pr_number" --body "$new_body" >/dev/null 2>&1; then
+    log_warn "$issue: could not update PR #$pr_number with depends_on metadata"
+  fi
+}
+
+dispatch_queued_children_for_parent() {
+  local parent_issue="${1:-}" parent_pr_number="${2:-}"
+  if [[ -z "$parent_issue" || -z "$parent_pr_number" ]]; then
+    echo "Usage: dispatch_queued_children_for_parent <parent_issue> <pr_number>" >&2
+    return 1
+  fi
+
+  local children_json
+  children_json=$(find_queued_children_for_parent "$parent_issue") || return 1
+  [[ "$children_json" == "[]" ]] && return 0
+
+  local parent_branch="" resolved_pr_number="" parent_pr_url="" resolve_reason=""
+  local resolve_err
+  resolve_err=$(mktemp) || return 1
+  if IFS='|' read -r parent_branch resolved_pr_number parent_pr_url < <(resolve_parent_pr_branch "$parent_pr_number" 2>"$resolve_err"); then
+    :
+  else
+    resolve_reason=$(tr '\n' ' ' <"$resolve_err" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+  fi
+  rm -f "$resolve_err"
+
+  local child_issue child_slug child_title entry
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    child_issue=$(jq -r '.issue_id' <<<"$entry")
+    child_slug=$(jq -r '.slug // ""' <<<"$entry")
+    child_title=$(jq -r '.title // ""' <<<"$entry")
+
+    if [[ -z "$child_slug" ]]; then
+      child_slug="${child_issue,,}"
+    fi
+    if [[ -z "$child_title" ]]; then
+      child_title="$child_issue"
+    fi
+
+    if [[ -n "$parent_branch" ]]; then
+      record_depends_on_metadata "$child_issue" "$resolved_pr_number" "$parent_pr_url" "$parent_branch" "$parent_issue" || {
+        log_warn "$child_issue: failed to record depends_on metadata"
+        continue
+      }
+      queue_remove_task "$child_issue" || {
+        log_warn "$child_issue: failed to remove queued dependency entry"
+        continue
+      }
+
+      BRANCH_BY_ISSUE["$child_issue"]="task/${child_slug}"
+      SLUG_BY_ISSUE["$child_issue"]="$child_slug"
+
+      if ! launch_task "$child_issue" "$child_slug" "$child_title" 1 "$parent_branch"; then
+        log_warn "$child_issue: failed to launch from parent PR branch $parent_branch"
+      fi
+    else
+      local reason="parent_pr_branch_unresolvable: ${resolve_reason:-unknown error}"
+      queue_mark_waiting "$child_issue" "$reason" || log_warn "$child_issue: failed to mark queued dependency waiting"
+      log_warn "$child_issue -> queued waiting: $reason"
+    fi
+  done < <(jq -c '.[]' <<<"$children_json")
+}
+
 pr_state() {
   local pr="$1"
   _with_timeout "$API_TIMEOUT" gh pr view "$pr" --json state --jq '.state' 2>/dev/null || echo ""
@@ -5278,12 +5375,13 @@ filter_active_issues() {
 LAST_LAUNCHED_SLOTS=1
 
 launch_task() {
-  local issue="$1" slug="$2" title="$3" remaining_slots="${4:-1}"
+  local issue="$1" slug="$2" title="$3" remaining_slots="${4:-1}" override_base="${5:-}"
   local branch="task/${slug}"
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   local feature_dir="${wt_dir}/features/${slug}"
   local linear_issue="$issue"
   local challenge_model=""
+  local effective_base="${override_base:-$BASE_BRANCH}"
   LAST_LAUNCHED_SLOTS=1
 
   linear_issue=$(get_linear_issue_id "$issue")
@@ -5318,7 +5416,7 @@ launch_task() {
   packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
 
   # Refresh base branch on a TTL so repeated dynamic launches avoid redundant fetches.
-  wavemill_fetch_base_branch "$BASE_BRANCH" 2>/dev/null || true
+  wavemill_fetch_base_branch "$effective_base" 2>/dev/null || true
 
   # ── Migration detection for dynamically launched tasks ──────────────
   # Detection: 1) label match  2) raw description keywords
@@ -5382,8 +5480,8 @@ launch_task() {
       created_new=true
     fi
   else
-    log "info" "  Creating branch $branch from origin/$BASE_BRANCH"
-    if ! git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >>"$MILL_LOG_FILE" 2>&1; then
+    log "info" "  Creating branch $branch from origin/$effective_base"
+    if ! git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$effective_base" >>"$MILL_LOG_FILE" 2>&1; then
       log_error "$issue: worktree add failed (log: $MILL_LOG_FILE)"
       return 1
     fi
@@ -6613,7 +6711,14 @@ monitor_issue_state() {
         log "info" "$pr_details"
       fi
 
+      local depends_on_pr_meta
+      depends_on_pr_meta=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].dependsOnPr // empty')
+      if [[ -n "$depends_on_pr_meta" ]]; then
+        inject_depends_on_pr_block "$ISSUE" "$PR" "$depends_on_pr_meta"
+      fi
+
       write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
+      dispatch_queued_children_for_parent "$ISSUE" "$PR"
       set_task_phase "$ISSUE" "review"
 
       local title launch_rc
@@ -7199,7 +7304,13 @@ monitor_issue_state() {
           # and the controller can move into ready even if the stage file is still "running".
           if [[ "$review_status" == "running" ]]; then
             if [[ -n "$pr_number" ]]; then
+              local depends_on_pr_meta
+              depends_on_pr_meta=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].dependsOnPr // empty')
+              if [[ -n "$depends_on_pr_meta" ]]; then
+                inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
+              fi
               write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+              dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
               review_status="completed"
             else
               set_window_attention_state "$WIN" "clear"
@@ -7221,7 +7332,13 @@ monitor_issue_state() {
           # Review is no longer running - check if PR was created and transition to ready phase.
           if [[ -n "$pr_number" ]]; then
             # Mark review as completed with PR artifact (HOK-1177)
+            local depends_on_pr_meta
+            depends_on_pr_meta=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].dependsOnPr // empty')
+            if [[ -n "$depends_on_pr_meta" ]]; then
+              inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
+            fi
             write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+            dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
 
             # Transition to ready phase
             set_task_phase "$ISSUE" "ready"
@@ -7581,7 +7698,13 @@ monitor_issue_state() {
 
       review_status=$(read_stage_status "$FEATURE_DIR" "review")
       if [[ "$review_status" == "running" || -z "$review_status" || "$review_status" == "completed" ]]; then
+        local depends_on_pr_meta
+        depends_on_pr_meta=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].dependsOnPr // empty')
+        if [[ -n "$depends_on_pr_meta" ]]; then
+          inject_depends_on_pr_block "$ISSUE" "$PR" "$depends_on_pr_meta"
+        fi
         write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
+        dispatch_queued_children_for_parent "$ISSUE" "$PR"
         set_task_phase "$ISSUE" "ready"
         title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
         if [[ -z "$title" ]]; then

@@ -1523,8 +1523,9 @@ state_mutate() {
 
 queue_add_task() {
   local issue_id="${1:-}" blocker_issue_id="${2:-}" blocker_pr_number="${3:-}" desired_base_branch="${4:-}" linear_issue_url="${5:-}"
+  local slug="${6:-}" title="${7:-}"
   if [[ -z "$issue_id" || -z "$blocker_issue_id" || -z "$blocker_pr_number" || -z "$desired_base_branch" || -z "$linear_issue_url" ]]; then
-    echo "Usage: queue_add_task <issue_id> <blocker_issue_id> <blocker_pr_number> <desired_base_branch> <linear_url>" >&2
+    echo "Usage: queue_add_task <issue_id> <blocker_issue_id> <blocker_pr_number> <desired_base_branch> <linear_url> [slug] [title]" >&2
     return 1
   fi
 
@@ -1535,13 +1536,17 @@ queue_add_task() {
       blocker_pr_number: (if $blocker_pr_number == "null" then null else ($blocker_pr_number | tonumber) end),
       desired_base_branch: $desired_base_branch,
       linear_issue_url: $linear_issue_url,
+      slug: $slug,
+      title: $title,
       queued_at: (now | todate)
     }]' \
     --arg issue_id "$issue_id" \
     --arg blocker_issue_id "$blocker_issue_id" \
     --arg blocker_pr_number "$blocker_pr_number" \
     --arg desired_base_branch "$desired_base_branch" \
-    --arg linear_issue_url "$linear_issue_url"
+    --arg linear_issue_url "$linear_issue_url" \
+    --arg slug "$slug" \
+    --arg title "$title"
 }
 
 queue_remove_task() {
@@ -1562,4 +1567,82 @@ queue_list_tasks() {
     return 0
   }
   jq -r '.queued_tasks // []' "$STATE_FILE"
+}
+
+find_queued_children_for_parent() {
+  local parent_issue="${1:-}"
+  if [[ -z "$parent_issue" ]]; then
+    echo "Usage: find_queued_children_for_parent <parent_issue>" >&2
+    return 1
+  fi
+
+  [[ -f "$STATE_FILE" ]] || {
+    printf '[]\n'
+    return 0
+  }
+
+  jq -c --arg parent_issue "$parent_issue" \
+    '[.queued_tasks[]? | select(.blocker_issue_id == $parent_issue and ((.waiting_reason // "") == ""))]' \
+    "$STATE_FILE"
+}
+
+resolve_parent_pr_branch() {
+  local pr_number="${1:-}"
+  if [[ -z "$pr_number" ]]; then
+    echo "Usage: resolve_parent_pr_branch <pr_number>" >&2
+    return 1
+  fi
+
+  local pr_json
+  if ! pr_json=$(gh pr view "$pr_number" --json headRefName,url,number 2>&1); then
+    printf '%s\n' "$pr_json" >&2
+    return 1
+  fi
+
+  local branch url resolved_number
+  branch=$(printf '%s' "$pr_json" | jq -r '.headRefName // ""' 2>/dev/null || echo "")
+  url=$(printf '%s' "$pr_json" | jq -r '.url // ""' 2>/dev/null || echo "")
+  resolved_number=$(printf '%s' "$pr_json" | jq -r '.number // empty' 2>/dev/null || echo "")
+  if [[ -z "$branch" || "$branch" == "null" ]]; then
+    echo "parent PR #$pr_number is missing headRefName" >&2
+    return 1
+  fi
+
+  printf '%s|%s|%s\n' "$branch" "${resolved_number:-$pr_number}" "$url"
+}
+
+record_depends_on_metadata() {
+  local child_issue="${1:-}" pr_number="${2:-}" pr_url="${3:-}" pr_branch="${4:-}" parent_issue="${5:-}"
+  if [[ -z "$child_issue" || -z "$pr_number" || -z "$pr_url" || -z "$pr_branch" || -z "$parent_issue" ]]; then
+    echo "Usage: record_depends_on_metadata <child_issue> <pr_number> <pr_url> <pr_branch> <parent_issue>" >&2
+    return 1
+  fi
+
+  state_mutate "$STATE_FILE" \
+    '.tasks[$issue] = ((.tasks[$issue] // {}) + {
+      dependsOnPr: {
+        number: ($pr_number | tonumber),
+        url: $pr_url,
+        branch: $pr_branch,
+        parent_issue: $parent_issue
+      }
+    })' \
+    --arg issue "$child_issue" \
+    --arg pr_number "$pr_number" \
+    --arg pr_url "$pr_url" \
+    --arg pr_branch "$pr_branch" \
+    --arg parent_issue "$parent_issue"
+}
+
+queue_mark_waiting() {
+  local child_issue="${1:-}" reason="${2:-}"
+  if [[ -z "$child_issue" || -z "$reason" ]]; then
+    echo "Usage: queue_mark_waiting <child_issue> <reason>" >&2
+    return 1
+  fi
+
+  state_mutate "$STATE_FILE" \
+    '.queued_tasks = ((.queued_tasks // []) | map(if .issue_id == $issue then (.waiting_reason = $reason) else . end))' \
+    --arg issue "$child_issue" \
+    --arg reason "$reason"
 }

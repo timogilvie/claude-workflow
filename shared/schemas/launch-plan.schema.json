@@ -56,6 +56,24 @@
           "baseFromTask": {
             "type": ["string", "null"],
             "description": "Task ID to base branch from, or null (HOK-1532)"
+          },
+          "depends_on_pr": {
+            "type": "object",
+            "description": "Parent PR metadata for dependent task dispatch (HOK-1534)",
+            "properties": {
+              "number": {
+                "type": "integer"
+              },
+              "url": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              },
+              "parent_issue": {
+                "type": "string"
+              }
+            }
           }
         }
       }
