@@ -259,6 +259,11 @@ export function attachRouterPolicyMetadata(
   if (!record?.routingDecision) {
     return;
   }
+  // No-op when there is no provenance data to derive from — avoids
+  // overwriting a correctly-set decisionPolicyVersion with 'baseline'.
+  if (!routeProvenance && !record.routeProvenance) {
+    return;
+  }
 
   const routeMode = pickFirstNonEmptyString(
     record.routeProvenance?.routingMode,
