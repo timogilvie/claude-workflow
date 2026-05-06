@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 PASS=0
 FAIL=0
@@ -52,6 +53,8 @@ extract_function "$MILL_SCRIPT" "transient_mergeability_count" >> "$LAUNCH_FUNC_
 extract_function "$MILL_SCRIPT" "increment_transient_mergeability_count" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_transient_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "log_ready_failure_result" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "log_ready_unparseable_result" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "launch_ready_phase" >> "$LAUNCH_FUNC_FILE"
 
 if [[ ! -s "$LAUNCH_FUNC_FILE" ]]; then
@@ -64,11 +67,12 @@ run_launch_case() {
   local case_dir="$TEST_TMP/$test_case"
   mkdir -p "$case_dir"
 
-  CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" TEST_CASE="$test_case" bash -lc '
+  CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" TEST_CASE="$test_case" bash -lc '
     set -euo pipefail
+    source "$COMMON_SCRIPT"
     source "$LAUNCH_FUNC_FILE"
 
-    SESSION="ready-phase-test"
+    SESSION="ready-phase-test-$TEST_CASE"
     TOOLS_DIR="$CASE_DIR/tools"
     AGENT_CMD="codex"
     READY_TRANSIENT_MAX_ATTEMPTS=6
@@ -77,6 +81,9 @@ run_launch_case() {
     STATE_DIR="$CASE_DIR/feature/ready"
     WT_DIR="$CASE_DIR/worktree"
     mkdir -p "$STATE_DIR" "$WT_DIR"
+    DEBUG_FILE="$(ready_debug_log_file)"
+    rm -f "$DEBUG_FILE"
+    trap '\''rm -f "$DEBUG_FILE"'\'' EXIT
 
     case "$TEST_CASE" in
       conflict_persists_after_remediation)
@@ -261,8 +268,13 @@ run_launch_case() {
     [[ -f "$STATE_DIR/.needs-attention-transient" ]] && transient_attention="present"
     transient_count="$(cat "$STATE_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
 
-    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\n" \
-      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count"
+    debug_line_count=0
+    [[ -f "$DEBUG_FILE" ]] && debug_line_count=$(wc -l < "$DEBUG_FILE" | tr -d " ")
+    debug_payload=""
+    [[ -f "$DEBUG_FILE" ]] && debug_payload=$(cat "$DEBUG_FILE")
+
+    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\n" \
+      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count"
   ' 2>&1
 }
 
@@ -337,12 +349,18 @@ check_not_contains "remediation exhaustion skips json dump" "$output" "error_pay
 output="$(run_launch_case remediation_disabled)"
 check_contains "disabled remediation falls back to ready failure" "$output" "rc=1"
 check_contains "disabled remediation writes attention" "$output" "Ready checks failed for PR #304."
-check_contains "disabled remediation logs json for backwards compatibility" "$output" "\"prNumber\":304"
+check_contains "disabled remediation logs failing check summary" "$output" "Ready checks failed for HOK-1300 - 1 failed (ci-status: 1 check), 0 passed/skipped"
+check_contains "disabled remediation logs debug file pointer" "$output" "Full ready result: /tmp/wavemill-ready-phase-test-remediati"
+check_not_contains "disabled remediation omits raw json from error log" "$output" "error_payload=  {\"prNumber\":304"
+check_contains "disabled remediation writes debug record" "$output" "debug_lines=1"
+check_contains "disabled remediation debug record preserves payload" "$output" "\"prNumber\":304"
 
 output="$(run_launch_case non_ci_failure)"
 check_contains "non ci failure returns failure" "$output" "rc=1"
 check_contains "non ci failure does not launch agent" "$output" "launch_calls=0"
-check_contains "non ci failure keeps legacy json logging" "$output" "\"release-requirements\""
+check_contains "non ci failure logs failing check summary" "$output" "release-requirements"
+check_not_contains "non ci failure omits raw json from error log" "$output" "error_payload=  {\"prNumber\":304"
+check_contains "non ci failure writes debug record" "$output" "debug_lines=1"
 
 output="$(run_launch_case remediation_launch_failure)"
 check_contains "launch failure returns failure" "$output" "rc=1"
