@@ -8850,7 +8850,9 @@ while :; do
         fi
 
         REPLY=""
+        MONITOR_PHASE_C_REPLY_OFFSET=""
         if consume_next_command; then
+          MONITOR_PHASE_C_REPLY_OFFSET="${REPLY_OFFSET:-}"
           case "$REPLY" in
             enter) ;;
             select\ *) REPLY="${REPLY#select }" ;;
@@ -8979,6 +8981,9 @@ while :; do
           SELECT_SHOW_ALL=false
           USING_GROUPED_VIEW=false
           clear_task_list_display
+        fi
+        if [[ -n "$MONITOR_PHASE_C_REPLY_OFFSET" ]]; then
+          acknowledge_command_offset "$MONITOR_PHASE_C_REPLY_OFFSET"
         fi
         poll_sleep "$POLL_SECONDS"
       else
