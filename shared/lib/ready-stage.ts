@@ -238,7 +238,13 @@ const DEFAULT_SCHEMA_PATTERNS = [
 const MIGRATION_SCAN_IGNORED_DIRS = new Set([
   '.git',
   '.wavemill',
+  '__pycache__',
   'node_modules',
+]);
+
+const MIGRATION_CHAIN_IGNORED_FILES = new Set([
+  'env.py',
+  'script.py.mako',
 ]);
 
 function compileMigrationPatterns(
@@ -314,7 +320,11 @@ async function collectMigrationFiles(repoDir: string, migrationPatterns: RegExp[
       }
 
       const relativePath = path.relative(repoDir, entryPath).split(path.sep).join('/');
-      if (migrationPatterns.some(pattern => pattern.test(relativePath))) {
+      if (
+        relativePath.endsWith('.py') &&
+        !MIGRATION_CHAIN_IGNORED_FILES.has(entry.name) &&
+        migrationPatterns.some(pattern => pattern.test(relativePath))
+      ) {
         matchedFiles.push(relativePath);
       }
     }

@@ -309,6 +309,22 @@ describe('ready-stage', () => {
       assert.equal(result.name, 'migration-chain-integrity');
     });
 
+    it('ignores Alembic support files outside the versions directory', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/env.py': 'from alembic import context\n',
+        'migrations/script.py.mako': '${upgrades if upgrades else "pass"}\n',
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'pass');
+      assert.deepEqual(result.details?.migrationFiles, [
+        'migrations/versions/001_base.py',
+        'migrations/versions/002_next.py',
+      ]);
+    });
+
     it('fails on duplicate revision IDs', async () => {
       await writeRepoFiles(repoDir, {
         'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
