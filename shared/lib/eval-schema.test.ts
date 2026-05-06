@@ -958,6 +958,17 @@ test('Record with routing decision but no rationale validates', () => {
   assert.ok(!routing.decisionRationale);
 });
 
+test('Record with structured router metadata validates', () => {
+  const record = structuredClone(scenarios[6].record) as any;
+  record.routingDecision.routeMode = 'stage-aware';
+  record.routingDecision.routeArtifactSchemaVersion = '1.0';
+  record.routingDecision.policyResolverVersion = '1.0.0';
+  record.routingDecision.operatingModeDependency = 'survival';
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
 test('Record without routing decision validates (backward compat)', () => {
   const record = scenarios[0].record as unknown as Record<string, unknown>; // Scenario 1
   assert.ok(!('routingDecision' in record), 'Scenario 1 should not have routingDecision');
@@ -1440,8 +1451,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.21.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.21.0');
+test('Schema version constant is 1.22.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.22.0');
 });
 
 test('Legacy rows still validate without nonRewardReason', () => {

@@ -39,6 +39,11 @@ import { getManifest, getManifestRef } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import { getResource } from './resource-registry.ts';
 import {
+  POLICY_RESOLVER_VERSION,
+  ROUTE_ARTIFACT_SCHEMA_VERSION,
+  resolveRouterPolicyVersion,
+} from './route-artifact.ts';
+import {
   deriveNonRewardReasonFromIssues,
   validateEvalRecord,
 } from './eval-validator.ts';
@@ -225,6 +230,71 @@ export function attachRouteProvenance(
     return;
   }
   record.routeProvenance = toEvalRouteProvenance(routeProvenance);
+}
+
+function pickFirstNonEmptyString(...values: Array<unknown>): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function pickOperatingMode(
+  ...values: Array<unknown>
+): RoutingDecision['operatingModeDependency'] | undefined {
+  for (const value of values) {
+    if (value === 'normal' || value === 'constrained' || value === 'survival') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+export function attachRouterPolicyMetadata(
+  record: EvalRecord | null | undefined,
+  routeProvenance?: EvalRouteProvenance | null,
+): void {
+  if (!record?.routingDecision) {
+    return;
+  }
+
+  const routeMode = pickFirstNonEmptyString(
+    record.routeProvenance?.routingMode,
+    routeProvenance?.routingMode,
+    routeProvenance?.activeRoute?.routingMode,
+    routeProvenance?.expandedRoute?.routingMode,
+    routeProvenance?.bootstrapRoute?.routingMode,
+  );
+  const source = pickFirstNonEmptyString(
+    routeProvenance?.activeRoute?.source,
+    routeProvenance?.expandedRoute?.source,
+    routeProvenance?.bootstrapRoute?.source,
+  );
+  const operatingMode = pickOperatingMode(
+    record.routeProvenance?.routerMode,
+    routeProvenance?.routerMode,
+    routeProvenance?.activeRoute?.routerMode,
+    routeProvenance?.expandedRoute?.routerMode,
+    routeProvenance?.bootstrapRoute?.routerMode,
+  );
+
+  record.routingDecision.decisionPolicyVersion = resolveRouterPolicyVersion({
+    routingMode: routeMode,
+    source,
+    routerMode: operatingMode,
+  });
+
+  record.routingDecision.routeArtifactSchemaVersion = ROUTE_ARTIFACT_SCHEMA_VERSION;
+  record.routingDecision.policyResolverVersion = POLICY_RESOLVER_VERSION;
+
+  if (routeMode) {
+    record.routingDecision.routeMode = routeMode;
+  }
+  if (operatingMode) {
+    record.routingDecision.operatingModeDependency = operatingMode;
+  }
 }
 
 /**
@@ -773,6 +843,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachChallengePairId(record, metadata.challengePairId);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
+  attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
@@ -812,6 +883,7 @@ export function enrichTrainingMetadata(
   attachChallengePairId(record, metadata.challengePairId);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
+  attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);

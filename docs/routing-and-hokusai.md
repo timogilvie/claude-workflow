@@ -17,6 +17,30 @@ Routing considers:
 
 The goal is not to pick one best model globally. The goal is to pick the best workflow for this task.
 
+### Stable Routing Metadata
+
+Eval records now preserve router attribution as structured fields on `routingDecision`:
+
+- `decisionPolicyVersion`: the policy surface that actually made the decision
+- `routeMode`: the emitted route strategy, such as `heuristic`, `stage-aware`, `hokusai`, or `policy`
+- `routeArtifactSchemaVersion`: the route artifact shape version
+- `policyResolverVersion`: the policy-resolution helper version
+- `operatingModeDependency`: quota operating mode, separate from policy source
+
+Current stable `decisionPolicyVersion` identifiers are:
+
+- `baseline`
+- `heuristic`
+- `heuristic-fallback`
+- `stage-aware`
+- `hokusai`
+- `policy`
+- `expanded-route`
+
+`operatingModeDependency` is orthogonal to the policy source. For example, a route may be emitted by the stage-aware router while also recording `operatingModeDependency: "survival"`.
+
+These fields are additive. Older eval records may omit them and remain valid.
+
 ### CLI Transparency
 
 When routing deviates from the normal path, `wavemill mill` prints a single concise line explaining why. Examples:

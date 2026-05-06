@@ -14,6 +14,7 @@ import {
   attachDifficultyMetadata,
   attachFallbackEvent,
   attachRouteProvenance,
+  attachRouterPolicyMetadata,
   attachProviderMetadata,
   attachNonRewardReason,
   attachRubricEval,
@@ -322,14 +323,28 @@ describe('eval-record-builder', () => {
             codeDepth: 'deep',
             reviewer: 'codex',
             reviewMode: 'full',
+            source: 'expanded',
+            routingMode: 'stage-aware',
+            routerMode: 'normal',
           },
           routeChanged: false,
           decisionSource: 'bootstrap',
+          routingMode: 'stage-aware',
+          routerMode: 'normal',
         },
       });
 
       expect(baseRecord.workflowCost).toBe(1.25);
       expect(baseRecord.trainingEligible).toBe(true);
+      expect(baseRecord.routingDecision).toEqual({
+        candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+        chosen: 0,
+        decisionPolicyVersion: 'stage-aware',
+        routeArtifactSchemaVersion: '1.0',
+        policyResolverVersion: '1.0.0',
+        routeMode: 'stage-aware',
+        operatingModeDependency: 'normal',
+      });
       expect(baseRecord.enrichmentDiagnostics).toBeUndefined();
       expect(warn.mock.calls.length).toBe(0);
     });
@@ -1030,17 +1045,25 @@ describe('eval-record-builder', () => {
         codeDepth: 'deep',
         reviewer: 'claude-sonnet-4-6',
         reviewMode: 'static',
+        source: 'expanded' as const,
+        routerMode: 'survival' as const,
+        routingMode: 'stage-aware',
       },
       activeRoute: {
         coder: 'gpt-5.4',
         codeDepth: 'deep',
         reviewer: 'claude-sonnet-4-6',
         reviewMode: 'static',
+        source: 'expanded' as const,
+        routerMode: 'survival' as const,
+        routingMode: 'stage-aware',
       },
       routeChanged: true,
       expandedCacheHit: true,
       packetHash: 'a'.repeat(64),
       routeSource: 'cache' as const,
+      routerMode: 'survival' as const,
+      routingMode: 'stage-aware',
     };
 
     it('is a no-op when provenance is undefined', () => {
@@ -1058,6 +1081,26 @@ describe('eval-record-builder', () => {
     it('attaches route provenance through enrichEvalRecord', () => {
       enrichEvalRecord(baseRecord, { routeProvenance });
       expect(baseRecord.routeProvenance).toEqual(routeProvenance);
+    });
+
+    it('derives routingDecision policy metadata from route provenance', () => {
+      baseRecord.routingDecision = {
+        candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+        chosen: 0,
+        decisionPolicyVersion: 'baseline',
+      };
+
+      attachRouterPolicyMetadata(baseRecord, routeProvenance);
+
+      expect(baseRecord.routingDecision).toEqual({
+        candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+        chosen: 0,
+        decisionPolicyVersion: 'stage-aware',
+        routeArtifactSchemaVersion: '1.0',
+        policyResolverVersion: '1.0.0',
+        routeMode: 'stage-aware',
+        operatingModeDependency: 'survival',
+      });
     });
   });
 });

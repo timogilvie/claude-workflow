@@ -185,6 +185,23 @@ test('flattenRecord exports rubric fields when present', () => {
   assert.equal(row.rubric_determinative_boundary, 'functional_bug');
 });
 
+test('flattenRecord preserves structured routing metadata in JSON export', () => {
+  const row = flattenRecord(makeRecord({
+    routingDecision: {
+      candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+      chosen: 0,
+      decisionPolicyVersion: 'stage-aware',
+      routeMode: 'stage-aware',
+      routeArtifactSchemaVersion: '1.0',
+      policyResolverVersion: '1.0.0',
+      operatingModeDependency: 'survival',
+    },
+  }));
+
+  assert.match(row.routing_decision, /"routeMode":"stage-aware"/);
+  assert.match(row.routing_decision, /"policyResolverVersion":"1.0.0"/);
+});
+
 test('flattenRecord leaves rubric export fields blank when absent', () => {
   const row = flattenRecord(makeRecord());
 
