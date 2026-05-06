@@ -152,6 +152,17 @@ function toEvalRouteArtifact(route: EvalRouteArtifact): EvalRouteArtifact {
     codeDepth: route.codeDepth,
     reviewer: route.reviewer,
     reviewMode: route.reviewMode,
+    ...(route.planner ? { planner: route.planner } : {}),
+    ...(route.planDepth ? { planDepth: route.planDepth } : {}),
+    ...(route.artifactPath ? { artifactPath: route.artifactPath } : {}),
+    ...(route.artifactHash ? { artifactHash: route.artifactHash } : {}),
+    ...(route.inputHash ? { inputHash: route.inputHash } : {}),
+    ...(route.source ? { source: route.source } : {}),
+    ...(typeof route.cacheHit === 'boolean' ? { cacheHit: route.cacheHit } : {}),
+    ...(route.routeSource ? { routeSource: route.routeSource } : {}),
+    ...(route.routerMode ? { routerMode: route.routerMode } : {}),
+    ...(route.routingMode ? { routingMode: route.routingMode } : {}),
+    ...(route.expectedMetrics ? { expectedMetrics: route.expectedMetrics } : {}),
   };
 }
 
@@ -180,6 +191,18 @@ function toEvalRouteProvenance(routeProvenance: EvalRouteProvenance): EvalRouteP
       : {}),
     ...(routeProvenance.routeSource
       ? { routeSource: routeProvenance.routeSource }
+      : {}),
+    ...(routeProvenance.routerMode
+      ? { routerMode: routeProvenance.routerMode }
+      : {}),
+    ...(routeProvenance.routingMode
+      ? { routingMode: routeProvenance.routingMode }
+      : {}),
+    ...(routeProvenance.artifactPath
+      ? { artifactPath: routeProvenance.artifactPath }
+      : {}),
+    ...(routeProvenance.artifactHash
+      ? { artifactHash: routeProvenance.artifactHash }
       : {}),
   };
 }
