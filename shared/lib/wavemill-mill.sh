@@ -962,28 +962,6 @@ smart_select_from_candidates() {
   fi
 }
 
-build_queue_plan_once() {
-  local backlog_json="$1"
-  local plan_input queue_plan
-
-  plan_input=$(jq -c '
-    map({
-      id: .identifier,
-      title: .title,
-      sharedSurface: ((.sharedSurface // []) | sort),
-      dependsOn: (
-        (.inverseRelations.nodes // [])
-        | map(select(.type == "blocks" and .issue.identifier != null) | .issue.identifier)
-        | sort
-      )
-    })
-  ' <<<"$backlog_json" 2>/dev/null) || return 1
-
-  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || return 1
-  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || return 1
-  echo "$queue_plan"
-}
-
 invoke_first_wave_helper() {
   local queue_plan="$1" candidates="$2" max_parallel="${3:-$MAX_PARALLEL}"
   [[ -z "$queue_plan" ]] && return 1
@@ -5205,13 +5183,17 @@ fetch_candidates() {
 fetch_queue_plan() {
   local now plan_input queue_plan
   now=$(date +%s)
+  [[ -n "${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}" ]] && : > "$FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE"
 
   if (( now - LAST_QUEUE_PLAN_FETCH < BACKLOG_CACHE_TTL )) && [[ -n "$QUEUE_PLAN_CACHE" ]]; then
     echo "$QUEUE_PLAN_CACHE"
     return 0
   fi
 
-  [[ -n "$BACKLOG_JSON_CACHE" ]] || return 1
+  [[ -n "$BACKLOG_JSON_CACHE" ]] || {
+    record_fetch_queue_plan_failure "cache_empty" ""
+    return 1
+  }
   queue_plan=$(build_queue_plan_once "$BACKLOG_JSON_CACHE") || return 1
 
   QUEUE_PLAN_CACHE="$queue_plan"
@@ -5219,9 +5201,39 @@ fetch_queue_plan() {
   echo "$QUEUE_PLAN_CACHE"
 }
 
+# fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
+record_fetch_queue_plan_failure() {
+  local step="$1" stderr_text="${2-}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  [[ -n "$diagnostics_file" ]] || return 0
+
+  local bounded
+  if [[ -n "$stderr_text" ]]; then
+    bounded="$(printf '%s' "$stderr_text" | sed -n '1,5p' | tr '\n' ' ' | head -c 512)"
+    [[ -n "$bounded" ]] || bounded="(no stderr captured)"
+  else
+    bounded="(no stderr captured)"
+  fi
+
+  printf 'step=%s stderr=%s\n' "$step" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+}
+
+log_fetch_queue_plan_failure() {
+  local diagnostics_file="$1"
+  [[ -s "$diagnostics_file" ]] || return 0
+
+  local details
+  details="$(cat "$diagnostics_file" 2>/dev/null || true)"
+  [[ -n "$details" ]] && log "debug" "[fetch_queue_plan] failed $details"
+}
+
 build_queue_plan_once() {
   local backlog_json="$1"
-  local plan_input queue_plan
+  local plan_input queue_plan tmp_stderr stderr_text
+
+  tmp_stderr="$(mktemp -t wavemill-fqp-stderr.XXXXXX)" || {
+    record_fetch_queue_plan_failure "diagnostics_setup_failed" "mktemp failed"
+    return 1
+  }
 
   plan_input=$(jq -c '
     map({
@@ -5234,10 +5246,30 @@ build_queue_plan_once() {
         | sort
       )
     })
-  ' <<<"$backlog_json" 2>/dev/null) || return 1
+  ' <<<"$backlog_json" 2>"$tmp_stderr") || {
+    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+    rm -f "$tmp_stderr"
+    record_fetch_queue_plan_failure "jq_massage_failed" "$stderr_text"
+    return 1
+  }
 
-  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || return 1
-  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || return 1
+  : > "$tmp_stderr"
+  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
+    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+    rm -f "$tmp_stderr"
+    record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+    return 1
+  }
+
+  : > "$tmp_stderr"
+  jq -e 'has("availableNow")' >/dev/null 2>"$tmp_stderr" <<<"$queue_plan" || {
+    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+    rm -f "$tmp_stderr"
+    record_fetch_queue_plan_failure "validation_failed" "$stderr_text"
+    return 1
+  }
+
+  rm -f "$tmp_stderr"
   echo "$queue_plan"
 }
 
@@ -8183,6 +8215,10 @@ while :; do
           fi
           echo "Next tasks:"
           queue_plan_json=""
+          queue_plan_diag_file=""
+          queue_plan_diag_previous="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+          queue_plan_diag_file="$(mktemp -t wavemill-fqp-diagnostics.XXXXXX 2>/dev/null || true)"
+          FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_file"
           GROUPED_DISPLAY=""
           GROUPED_SELECT_FROM=""
           if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
@@ -8195,7 +8231,10 @@ while :; do
           fi
           if [[ -z "$GROUPED_DISPLAY" ]]; then
             USING_GROUPED_VIEW=false
-            [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
+            if [[ -z "$queue_plan_json" ]]; then
+              log_warn "queue analysis unavailable, falling back to flat list"
+              [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
+            fi
             if [[ -n "$avail_unblocked" ]]; then
               echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
             else
@@ -8206,6 +8245,8 @@ while :; do
               echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
             fi
           fi
+          rm -f "$queue_plan_diag_file"
+          FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_previous"
           echo ""
           if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
             echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
