@@ -169,6 +169,26 @@ get_ready_display_status() {
   jq -r '.status // empty' "$result_file" 2>/dev/null || true
 }
 
+get_ready_queue_state() {
+  local worktree="$1" slug="$2"
+  local feature_dir="$worktree/features/$slug"
+  local result_file="$feature_dir/.ready-result.json"
+  local status verdict queue_state
+
+  [[ -f "$result_file" ]] || return 0
+  queue_state=$(jq -r '.artifacts.queueState // empty' "$result_file" 2>/dev/null || true)
+  if [[ -n "$queue_state" ]]; then
+    printf '%s\n' "$queue_state"
+    return 0
+  fi
+
+  status=$(jq -r '.status // empty' "$result_file" 2>/dev/null || true)
+  verdict=$(jq -r '.artifacts.verdict // empty' "$result_file" 2>/dev/null || true)
+  if [[ "$status" == "completed" && ( "$verdict" == "pass" || "$verdict" == "warn" ) ]]; then
+    printf 'ready\n'
+  fi
+}
+
 is_ready_conflicted() {
   local worktree="$1" slug="$2"
   local feature_dir=""
@@ -442,7 +462,7 @@ render_section_header() {
 render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
-  local t st_str pr_str pr_info checks phase_str plan_status ready_status attention_detail reported ds pane watchdog_classification watchdog_detail
+    local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail reported ds pane watchdog_classification watchdog_detail
 
   t=$(elapsed "$worktree")
   reported=""
@@ -511,6 +531,7 @@ render_task_row() {
     ready)
       watchdog_classification=$(ready_watchdog_field "$issue" "classification")
       watchdog_detail=$(ready_watchdog_field "$issue" "detail")
+      ready_queue_state=$(get_ready_queue_state "$worktree" "$slug")
       if is_ready_conflicted "$worktree" "$slug"; then
         phase_str="${Y}⚠ ready${N}"
       else
@@ -519,10 +540,16 @@ render_task_row() {
           waiting-on-ci|waiting-on-eval-comparison) phase_str="${Y}🚦 ready${N}" ;;
           *)
             ready_status=$(get_ready_display_status "$worktree" "$slug")
-            case "$ready_status" in
-              failed|aborted) phase_str="${R}🚦 ready${N}" ;;
-              completed)      phase_str="${Y}🚦 ready${N}" ;;
-              *)              phase_str="${G}🚦 ready${N}" ;;
+            case "$ready_queue_state" in
+              ready-stale) phase_str="${Y}ready-stale${N}" ;;
+              merge-candidate) phase_str="${G}merge-candidate${N}" ;;
+              *)
+                case "$ready_status" in
+                  failed|aborted) phase_str="${R}🚦 ready${N}" ;;
+                  completed)      phase_str="${Y}🚦 ready${N}" ;;
+                  *)              phase_str="${G}🚦 ready${N}" ;;
+                esac
+                ;;
             esac
             ;;
         esac

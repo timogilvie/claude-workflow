@@ -396,6 +396,9 @@ harness_run_tick() {
     launch_review_phase() { return 0; }
     launch_ready_phase() { return 0; }
     ready_state_dir() { printf "%s\n" "$1/features/$2/ready"; }
+    ready_base_sha() { printf "\n"; }
+    ready_remediation_launch_head() { printf "\n"; }
+    ready_remediation_attempts() { printf "%s\n" "0"; }
     write_ready_attention_file() { :; }
     emit_execution_active_route() { :; }
     log_route_lifecycle() { :; }
@@ -409,6 +412,10 @@ harness_run_tick() {
     restore_review_task_window() { return 0; }
     _restore_inflight_task_window_if_missing() { _RESTORE_STATE="none"; return 0; }
     check_routing_complete() { return 1; }
+    merge_queue_enabled() { return 1; }
+    ready_queue_state() { printf "\n"; }
+    mark_ready_stale() { :; }
+    ready_candidate_selected() { return 1; }
     is_challenge_task() { return 1; }
     maybe_run_challenge_eval() { :; }
     maybe_run_challenge_comparison() { :; }
@@ -882,6 +889,70 @@ EOF
   check_eq "resume: phase config unchanged" "$phase_before" "$(cat "$repo/features/$slug/.phase-config.json")"
 }
 
+test_merge_queue_marks_non_candidate_stale_without_rerun() {
+  local slug="merge-queue-stale"
+  local issue="HOK-1580-STALE"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  mkdir -p "$repo/features/$slug/ready"
+  cat > "$repo/features/$slug/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "readyBaseSha": "sha-old"
+  }
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    PR_BY_ISSUE["$ISSUE"]="501"
+    get_main_head_sha() { printf "%s\n" "sha-new"; }
+    merge_queue_enabled() { return 0; }
+    ready_queue_state() { printf "%s\n" "ready"; }
+    mark_ready_stale() { printf "%s\n" "marked" > "$REPO_UNDER_TEST/.wavemill/marked"; }
+    launch_ready_phase() { printf "%s\n" "launched" > "$REPO_UNDER_TEST/.wavemill/launched"; return 0; }
+  ')"
+
+  check_file_exists "merge queue stale: non-candidate marked stale" "$repo/.wavemill/marked"
+  check_file_absent "merge queue stale: non-candidate did not rerun ready" "$repo/.wavemill/launched"
+  check_eq "merge queue stale: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_eq "merge queue stale: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+}
+
+test_merge_queue_disabled_keeps_legacy_rerun() {
+  local slug="merge-queue-disabled"
+  local issue="HOK-1580-DISABLED"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  mkdir -p "$repo/features/$slug/ready"
+  cat > "$repo/features/$slug/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "readyBaseSha": "sha-old"
+  }
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    PR_BY_ISSUE["$ISSUE"]="502"
+    get_main_head_sha() { printf "%s\n" "sha-new"; }
+    merge_queue_enabled() { return 1; }
+    launch_ready_phase() { printf "%s\n" "launched" > "$REPO_UNDER_TEST/.wavemill/launched"; return 0; }
+  ')"
+
+  check_file_exists "merge queue disabled: legacy rerun still launches" "$repo/.wavemill/launched"
+  check_eq "merge queue disabled: task remains active" "1" "$(kv_value "$tick" active_count)"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -897,6 +968,8 @@ test_missing_expansion_recovery_not_repeated
 test_invalid_expanded_route_blocks_lifecycle_handoff
 test_already_expanded_packet_skips_mandatory_expansion
 test_resume_uses_expanded_phase_config_over_stale_state
+test_merge_queue_marks_non_candidate_stale_without_rerun
+test_merge_queue_disabled_keeps_legacy_rerun
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then

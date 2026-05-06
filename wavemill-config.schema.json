@@ -754,6 +754,41 @@
             },
             "additionalProperties": false
         },
+        "mergeQueue": {
+            "type": "object",
+            "description": "Queue settings for stale-main refresh and final merge-candidate promotion in mill ready flow.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable merge-lane semantics for ready PRs."
+                },
+                "maxConcurrentCandidates": {
+                    "type": "integer",
+                    "default": 2,
+                    "minimum": 1,
+                    "description": "Maximum number of ready PRs that may actively refresh against the latest base at once."
+                },
+                "stuckTimeoutSeconds": {
+                    "type": "integer",
+                    "default": 900,
+                    "minimum": 60,
+                    "description": "Demote a merge candidate after this many seconds without progress."
+                },
+                "conflictGroupingEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Use changed-file overlap groups to avoid promoting conflicting candidates together."
+                },
+                "skipCooldownSeconds": {
+                    "type": "integer",
+                    "default": 60,
+                    "minimum": 0,
+                    "description": "Cooldown before a skipped candidate is eligible for immediate re-promotion."
+                }
+            },
+            "additionalProperties": false
+        },
         "monitor": {
             "type": "object",
             "description": "Legacy monitor-specific settings kept for backwards-compatible aliases.",

@@ -173,6 +173,8 @@ run_launch_case() {
       return 1
     }
     get_main_head_sha() { printf "%s\n" "main456"; }
+    merge_queue_enabled() { return 1; }
+    merge_queue_enrich_ready_artifacts() { printf "%s\n" "$2"; }
     write_stage_result() {
       printf -v WRITE_STAGE_CALLS "%s%s|%s|%s|%s|%s|%s|%s\n" \
         "$WRITE_STAGE_CALLS" "${1-}" "${2-}" "${3-}" "${4-}" "${5-}" "${6-}" "${7-}"

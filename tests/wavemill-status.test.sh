@@ -102,6 +102,8 @@ mkdir -p \
   "$WORKTREES_DIR/coding-task/features/coding-task" \
   "$WORKTREES_DIR/review-task/features/review-task" \
   "$WORKTREES_DIR/ready-task/features/ready-task" \
+  "$WORKTREES_DIR/ready-stale-task/features/ready-stale-task" \
+  "$WORKTREES_DIR/merge-candidate-task/features/merge-candidate-task" \
   "$WORKTREES_DIR/ready-conflict-task/features/ready-conflict-task" \
   "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task" \
   "$WORKTREES_DIR/ready-failed-task/features/ready-failed-task" \
@@ -616,7 +618,36 @@ fi
 cat > "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task/.ready-result.json" <<'EOF'
 {
   "stage": "ready",
-  "status": "completed"
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "queueState": "ready"
+  }
+}
+EOF
+
+cat > "$WORKTREES_DIR/ready-stale-task/features/ready-stale-task/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "queueState": "ready-stale"
+  }
+}
+EOF
+
+cat > "$WORKTREES_DIR/merge-candidate-task/features/merge-candidate-task/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "queueState": "merge-candidate"
+  }
 }
 EOF
 
@@ -690,6 +721,73 @@ if grep -q 'HOK-1304.*ready-failed-task.*🚦 ready.*● running.*#412 ✗' "$OU
   pass "shows ready attention detail for failed ready tasks"
 else
   fail "failed ready task detail or status is missing"
+fi
+
+STATE_FILE_READY_QUEUE="$TMP_DIR/state-ready-queue.txt"
+cat > "$STATE_FILE_READY_QUEUE" <<EOF
+{
+  "tasks": {
+    "HOK-1310": {
+      "slug": "ready-complete-task",
+      "branch": "task/ready-complete-task",
+      "worktree": "$WORKTREES_DIR/ready-complete-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    },
+    "HOK-1311": {
+      "slug": "ready-stale-task",
+      "branch": "task/ready-stale-task",
+      "worktree": "$WORKTREES_DIR/ready-stale-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    },
+    "HOK-1312": {
+      "slug": "merge-candidate-task",
+      "branch": "task/merge-candidate-task",
+      "worktree": "$WORKTREES_DIR/merge-candidate-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+BEHAVIOR_READY_QUEUE="$TMP_DIR/behavior-ready-queue.json"
+cat > "$BEHAVIOR_READY_QUEUE" <<'EOF'
+{
+  "pane": {
+    "HOK-1310-ready-complete-task": "15",
+    "HOK-1311-ready-stale-task": "16",
+    "HOK-1312-merge-candidate-task": "17"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {
+    "task/ready-complete-task": "421|OPEN",
+    "task/ready-stale-task": "422|OPEN",
+    "task/merge-candidate-task": "423|OPEN"
+  },
+  "checks": {
+    "task/ready-complete-task": "pass",
+    "task/ready-stale-task": "pass",
+    "task/merge-candidate-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_READY_QUEUE="$TMP_DIR/output-ready-queue.txt"
+run_render "$STATE_FILE_READY_QUEUE" "$WORKTREES_DIR" "$BEHAVIOR_READY_QUEUE" "$OUTPUT_READY_QUEUE"
+
+if grep -q 'HOK-1310.*🚦 ready' "$OUTPUT_READY_QUEUE" \
+  && grep -q 'HOK-1311.*ready-stale' "$OUTPUT_READY_QUEUE" \
+  && grep -q 'HOK-1312.*merge-candidate' "$OUTPUT_READY_QUEUE"; then
+  pass "renders ready queue states distinctly"
+else
+  fail "ready queue state labels are missing"
 fi
 
 STATE_FILE_READY_WATCHDOG="$TMP_DIR/state-ready-watchdog.json"

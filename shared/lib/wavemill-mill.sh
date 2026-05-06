@@ -87,6 +87,7 @@ TOOLS_DIR="${TOOLS_DIR:-$REPO_DIR/tools}"
 LIB_DIR="${LIB_DIR:-$REPO_DIR/shared/lib}"
 MONITOR_PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 export MONITOR_PR_CACHE
+MERGE_QUEUE_SELECTION_FILE="${STATE_DIR}/merge-queue-selection.json"
 EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
 # Persists queue plan for launch-plan JSON emission (set during task selection).
 LAUNCH_QUEUE_PLAN=""
@@ -3665,6 +3666,303 @@ ready_base_sha() {
   jq -r '.artifacts.readyBaseSha // empty' "$result_file" 2>/dev/null || echo ""
 }
 
+ready_queue_state() {
+  local state_dir="$1"
+  local result_file="$state_dir/.ready-result.json"
+  local status verdict queue_state
+
+  [[ -f "$result_file" ]] || { echo ""; return 0; }
+
+  queue_state=$(jq -r '.artifacts.queueState // empty' "$result_file" 2>/dev/null || echo "")
+  if [[ -n "$queue_state" ]]; then
+    printf '%s\n' "$queue_state"
+    return 0
+  fi
+
+  status=$(jq -r '.status // empty' "$result_file" 2>/dev/null || echo "")
+  verdict=$(jq -r '.artifacts.verdict // empty' "$result_file" 2>/dev/null || echo "")
+  if [[ "$status" == "completed" && ( "$verdict" == "pass" || "$verdict" == "warn" ) ]]; then
+    printf 'ready\n'
+  else
+    printf '\n'
+  fi
+}
+
+ready_queue_field() {
+  local state_dir="$1" field="$2"
+  local result_file="$state_dir/.ready-result.json"
+  [[ -f "$result_file" ]] || { echo ""; return 0; }
+  jq -r --arg field "$field" '.artifacts[$field] // empty' "$result_file" 2>/dev/null || echo ""
+}
+
+merge_queue_enabled() {
+  [[ "${MERGE_QUEUE_ENABLED:-true}" == "1" || "${MERGE_QUEUE_ENABLED:-true}" == "true" ]]
+}
+
+write_ready_queue_artifacts() {
+  local state_dir="$1" patch_json="$2"
+  local result_file="$state_dir/.ready-result.json"
+  local existing_artifacts merged_artifacts
+
+  [[ -f "$result_file" ]] || return 0
+  existing_artifacts=$(jq -c '.artifacts // {"type":"ready"}' "$result_file" 2>/dev/null || echo '{"type":"ready"}')
+  merged_artifacts=$(jq -cn \
+    --argjson existing "$existing_artifacts" \
+    --argjson patch "$patch_json" '
+      reduce ($patch | keys[]) as $key ($existing;
+        if $patch[$key] == null then
+          del(.[$key])
+        else
+          .[$key] = $patch[$key]
+        end
+      ) | .type = "ready"
+    ')
+
+  npx tsx "$TOOLS_DIR/stage-result-cli.ts" update "$state_dir" ready --artifacts "$merged_artifacts" >/dev/null 2>&1 || \
+    log_warn "merge queue: failed to update ready artifacts in $state_dir"
+}
+
+mark_ready_stale() {
+  local issue="$1" state_dir="$2" old_sha="$3" new_sha="$4"
+  local now patch_json
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  patch_json=$(jq -cn \
+    --arg old_sha "$old_sha" \
+    --arg new_sha "$new_sha" \
+    --arg now "$now" '
+      {
+        queueState: "ready-stale",
+        staleAt: $now,
+        staleBaseSha: $old_sha,
+        targetBaseSha: $new_sha,
+        candidatePromotedAt: null,
+        candidateLastProgressAt: null
+      }
+    ')
+  write_ready_queue_artifacts "$state_dir" "$patch_json"
+}
+
+promote_merge_candidate() {
+  local issue="$1" state_dir="$2" new_sha="$3"
+  local now existing_promoted_at patch_json
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  existing_promoted_at=$(ready_queue_field "$state_dir" "candidatePromotedAt")
+  [[ -z "$existing_promoted_at" ]] && existing_promoted_at="$now"
+  patch_json=$(jq -cn \
+    --arg new_sha "$new_sha" \
+    --arg now "$now" \
+    --arg promoted_at "$existing_promoted_at" '
+      {
+        queueState: "merge-candidate",
+        targetBaseSha: $new_sha,
+        candidatePromotedAt: $promoted_at,
+        candidateLastProgressAt: $now,
+        staleAt: null,
+        staleBaseSha: null,
+        candidateSkipReason: null
+      }
+    ')
+  write_ready_queue_artifacts "$state_dir" "$patch_json"
+}
+
+demote_merge_candidate() {
+  local issue="$1" state_dir="$2" reason="$3"
+  local now patch_json
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  patch_json=$(jq -cn \
+    --arg reason "$reason" \
+    --arg now "$now" '
+      {
+        queueState: "ready-stale",
+        candidateSkippedAt: $now,
+        candidateSkipReason: $reason,
+        candidatePromotedAt: null,
+        candidateLastProgressAt: null
+      }
+    ')
+  write_ready_queue_artifacts "$state_dir" "$patch_json"
+}
+
+ready_candidate_selected() {
+  local issue="$1"
+  [[ -f "$MERGE_QUEUE_SELECTION_FILE" ]] || return 1
+  jq -e --arg issue "$issue" '.selectedIssues // [] | index($issue) != null' "$MERGE_QUEUE_SELECTION_FILE" >/dev/null 2>&1
+}
+
+ready_changed_files_json() {
+  local state_dir="$1" wt_dir="$2" pr_number="$3"
+  local result_file="$state_dir/.ready-result.json"
+  local cached
+
+  cached=$(jq -c '.artifacts.changedFiles // empty' "$result_file" 2>/dev/null || echo "")
+  if [[ -n "$cached" && "$cached" != "null" ]]; then
+    printf '%s\n' "$cached"
+    return 0
+  fi
+
+  if cached=$(cd "$wt_dir" && gh pr view "$pr_number" --json files --jq '[.files[].path]' 2>/dev/null); then
+    [[ -n "$cached" ]] && printf '%s\n' "$cached" && return 0
+  fi
+
+  printf '[]\n'
+}
+
+merge_queue_enrich_ready_artifacts() {
+  local state_dir="$1" base_json="$2" mode="${3:-preserve}"
+  local queue_state promoted_at target_base now extra_json
+
+  if ! merge_queue_enabled; then
+    printf '%s\n' "$base_json"
+    return 0
+  fi
+
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  queue_state=$(ready_queue_state "$state_dir")
+  promoted_at=$(ready_queue_field "$state_dir" "candidatePromotedAt")
+  target_base=$(ready_queue_field "$state_dir" "targetBaseSha")
+
+  case "$mode" in
+    completed)
+      extra_json='{"queueState":"ready"}'
+      ;;
+    candidate-progress)
+      if [[ "$queue_state" == "merge-candidate" ]]; then
+        extra_json=$(jq -cn \
+          --arg target_base "$target_base" \
+          --arg promoted_at "${promoted_at:-$now}" \
+          --arg now "$now" '
+            {
+              queueState: "merge-candidate",
+              targetBaseSha: $target_base,
+              candidatePromotedAt: $promoted_at,
+              candidateLastProgressAt: $now
+            }
+          ')
+      else
+        extra_json='{}'
+      fi
+      ;;
+    *)
+      extra_json='{}'
+      ;;
+  esac
+
+  jq -cn --argjson base "$base_json" --argjson extra "$extra_json" '$base + $extra'
+}
+
+refresh_ready_merge_queue_tick() {
+  local now input_file output_file input_json output_json config_json
+  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir
+  local ready_prs='[]'
+
+  : > "$MERGE_QUEUE_SELECTION_FILE"
+  if ! merge_queue_enabled; then
+    printf '{"selectedIssues":[],"stuckIssues":[]}\n' > "$MERGE_QUEUE_SELECTION_FILE"
+    return 0
+  fi
+
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  for issue in "${!BRANCH_BY_ISSUE[@]}"; do
+    phase=$(get_task_phase "$issue")
+    [[ "$phase" == "ready" ]] || continue
+    slug="${SLUG_BY_ISSUE[$issue]}"
+    pr="${PR_BY_ISSUE[$issue]:-}"
+    [[ -n "$pr" ]] || continue
+    wt_dir="${WORKTREE_ROOT}/${slug}"
+    state_dir="$(ready_state_dir "$wt_dir" "$slug")"
+    [[ -f "$state_dir/.ready-result.json" ]] || continue
+
+    ready_status=$(read_stage_status "$state_dir" "ready")
+    ready_verdict=$(ready_stage_pending_verdict "$state_dir")
+    queue_state=$(ready_queue_state "$state_dir")
+    stored_base=$(ready_base_sha "$state_dir")
+    current_main=$(get_main_head_sha "$wt_dir" "$BASE_BRANCH")
+
+    if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
+      mark_ready_stale "$issue" "$state_dir" "$stored_base" "$current_main"
+      queue_state="ready-stale"
+    fi
+
+    if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) ]] || [[ "$queue_state" == "merge-candidate" || "$queue_state" == "ready-stale" ]]; then
+      ready_prs=$(jq -cn \
+        --argjson prs "$ready_prs" \
+        --arg issue "$issue" \
+        --arg slug "$slug" \
+        --arg branch "${BRANCH_BY_ISSUE[$issue]}" \
+        --argjson pr_number "$pr" \
+        --arg ready_base_sha "$stored_base" \
+        --arg queue_state "$queue_state" \
+        --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
+        --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
+        --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
+        --arg candidate_skipped_at "$(ready_queue_field "$state_dir" candidateSkippedAt)" \
+        --argjson changed_files "$(ready_changed_files_json "$state_dir" "$wt_dir" "$pr")" '
+          $prs + [{
+            issue: $issue,
+            slug: $slug,
+            prNumber: $pr_number,
+            branch: $branch,
+            readyBaseSha: $ready_base_sha,
+            queueState: (if $queue_state == "" then null else $queue_state end),
+            changedFiles: $changed_files,
+            readyAt: (if $ready_at == "" then null else $ready_at end),
+            unblocksCount: 0,
+            candidatePromotedAt: (if $candidate_promoted_at == "" then null else $candidate_promoted_at end),
+            candidateLastProgressAt: (if $candidate_last_progress_at == "" then null else $candidate_last_progress_at end),
+            candidateSkippedAt: (if $candidate_skipped_at == "" then null else $candidate_skipped_at end)
+          }]
+        ')
+    fi
+  done
+
+  config_json=$(jq -cn \
+    --arg enabled "${MERGE_QUEUE_ENABLED:-true}" \
+    --argjson max_concurrent "${MERGE_QUEUE_MAX_CONCURRENT:-2}" \
+    --argjson stuck_timeout "${MERGE_QUEUE_STUCK_TIMEOUT_SECONDS:-900}" \
+    --arg conflict_grouping "${MERGE_QUEUE_CONFLICT_GROUPING_ENABLED:-true}" \
+    --argjson skip_cooldown "${MERGE_QUEUE_SKIP_COOLDOWN_SECONDS:-60}" '
+      {
+        enabled: ($enabled == "true" or $enabled == "1"),
+        maxConcurrentCandidates: $max_concurrent,
+        stuckTimeoutSeconds: $stuck_timeout,
+        conflictGroupingEnabled: ($conflict_grouping == "true" or $conflict_grouping == "1"),
+        skipCooldownSeconds: $skip_cooldown
+      }
+    ')
+
+  input_file=$(mktemp) || return 0
+  output_file=$(mktemp) || { rm -f "$input_file"; return 0; }
+  jq -cn --arg now "$now" --argjson prs "$ready_prs" --argjson config "$config_json" '{readyPrs:$prs, now:$now, config:$config}' > "$input_file"
+  if ! npx tsx "$TOOLS_DIR/merge-queue-select.ts" --input "$input_file" > "$output_file" 2>/dev/null; then
+    rm -f "$input_file" "$output_file"
+    printf '{"selectedIssues":[],"stuckIssues":[]}\n' > "$MERGE_QUEUE_SELECTION_FILE"
+    return 0
+  fi
+  mv "$output_file" "$MERGE_QUEUE_SELECTION_FILE"
+  rm -f "$input_file"
+
+  jq -r '.stuckIssues[]?' "$MERGE_QUEUE_SELECTION_FILE" 2>/dev/null | while IFS= read -r issue; do
+    [[ -n "$issue" ]] || continue
+    slug="${SLUG_BY_ISSUE[$issue]}"
+    wt_dir="${WORKTREE_ROOT}/${slug}"
+    state_dir="$(ready_state_dir "$wt_dir" "$slug")"
+    demote_merge_candidate "$issue" "$state_dir" "stuck merge candidate"
+  done
+
+  jq -r '.selectedIssues[]?' "$MERGE_QUEUE_SELECTION_FILE" 2>/dev/null | while IFS= read -r issue; do
+    [[ -n "$issue" ]] || continue
+    slug="${SLUG_BY_ISSUE[$issue]}"
+    wt_dir="${WORKTREE_ROOT}/${slug}"
+    state_dir="$(ready_state_dir "$wt_dir" "$slug")"
+    current_main=$(get_main_head_sha "$wt_dir" "$BASE_BRANCH")
+    [[ -n "$current_main" ]] || continue
+    if [[ "$(ready_queue_state "$state_dir")" != "merge-candidate" ]]; then
+      promote_merge_candidate "$issue" "$state_dir" "$current_main"
+    fi
+  done
+}
+
 get_main_head_sha() {
   local wt_dir="$1" base_branch="$2"
   git -C "$wt_dir" ls-remote origin "refs/heads/${base_branch}" 2>/dev/null | awk '{print $1}' || echo ""
@@ -3848,9 +4146,13 @@ launch_ready_phase() {
 
     if [[ "$launch_rc" -eq 0 ]]; then
       launch_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
+      local conflict_artifacts_json
+      conflict_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+        "{\"type\":\"ready\",\"prNumber\":$pr_number,\"mergeConflict\":\"CONFLICTED\",\"launchHead\":\"$launch_head\"}" \
+        "candidate-progress")
       write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
         "Conflict remediation in progress for PR #$pr_number" \
-        "{\"type\":\"ready\",\"prNumber\":$pr_number,\"mergeConflict\":\"CONFLICTED\",\"launchHead\":\"$launch_head\"}"
+        "$conflict_artifacts_json"
       return 3
     fi
     if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
@@ -3883,6 +4185,7 @@ launch_ready_phase() {
           prNumber: $pr_number,
           transientMergeabilityAttempts: $attempts
         }')
+      pending_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$pending_artifacts_json" "candidate-progress")
       write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
         "pending GitHub mergeability - will retry (attempt ${transient_count}/${transient_limit})" \
         "$pending_artifacts_json"
@@ -3904,11 +4207,14 @@ launch_ready_phase() {
 
   if [[ "$ready_rc" -eq 0 ]]; then
     # Record ready stage result (HOK-1177)
-    local main_sha
+    local main_sha completed_artifacts_json
     main_sha=$(get_main_head_sha "$wt_dir" "$base_branch")
+    completed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"readyBaseSha\":\"${main_sha}\"}" \
+      "completed")
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
-      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"readyBaseSha\":\"${main_sha}\"}"
+      "$completed_artifacts_json"
     log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
     return 0
   fi
@@ -3929,6 +4235,7 @@ launch_ready_phase() {
         mergeConflict: $merge_status,
         prNumber: $pr_number
       } + (if $attempts > 0 then {remediationAttempts: $attempts, remediationFailures: ["ci-status"]} else {} end)')
+    pending_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$pending_artifacts_json" "candidate-progress")
     write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
       "CI checks pending for PR #$pr_number" \
       "$pending_artifacts_json"
@@ -3947,9 +4254,13 @@ launch_ready_phase() {
     fi
 
     if (( remediation_attempts >= remediation_max_attempts )); then
+      local exhausted_artifacts_json
+      exhausted_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+        "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}" \
+        "candidate-progress")
       write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
         "Ready remediation exhausted after ${remediation_attempts} attempt(s)" \
-        "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}"
+        "$exhausted_artifacts_json"
       write_ready_attention_file "$state_dir" "Remediation exhausted after ${remediation_attempts} attempt(s) for PR #$pr_number."
       log_error "  Ready remediation exhausted for $issue (failed checks: ci-status)"
       return 1
@@ -4006,6 +4317,7 @@ launch_ready_phase() {
           remediationLaunchHead: $launch_head,
           remediationFailures: ["ci-status"]
         }')
+      remediation_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$remediation_artifacts_json" "candidate-progress")
       write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$current_model" \
         "Ready remediation in progress for PR #$pr_number" \
         "$remediation_artifacts_json"
@@ -4018,15 +4330,23 @@ launch_ready_phase() {
       return 2
     fi
 
+    local remediation_failed_artifacts_json
+    remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}" \
+      "candidate-progress")
     write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
       "Could not launch ready remediation agent" \
-      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}"
+      "$remediation_failed_artifacts_json"
     write_ready_attention_file "$state_dir" "Could not launch remediation agent for PR #$pr_number."
     log_error "  Failed to launch ready remediation agent for $issue"
     return 1
   fi
 
-  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" "Ready checks failed"
+  local failed_artifacts_json
+  failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+    "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number}${ci_failed_checks_json:+,\"remediationFailures\":${ci_failed_checks_json}}}" \
+    "candidate-progress")
+  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" "Ready checks failed" "$failed_artifacts_json"
   write_ready_attention_file "$state_dir" "Ready checks failed for PR #$pr_number."
   log_error "  Ready checks failed for $issue"
   [[ -n "$result" ]] && log_error "$result"
@@ -7853,11 +8173,26 @@ monitor_issue_state() {
       fi
 
       # Re-run ready if main has advanced since the pass was recorded (HOK-1359)
-      local stored_base_sha current_main_sha
+      local stored_base_sha current_main_sha queue_state
       stored_base_sha=$(ready_base_sha "$ready_state_dir_path")
       current_main_sha=$(get_main_head_sha "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH")
+      queue_state=$(ready_queue_state "$ready_state_dir_path")
 
       if [[ -n "$current_main_sha" && "$stored_base_sha" != "$current_main_sha" ]]; then
+        if merge_queue_enabled; then
+          if [[ "$queue_state" != "merge-candidate" ]]; then
+            mark_ready_stale "$ISSUE" "$ready_state_dir_path" "$stored_base_sha" "$current_main_sha"
+            log "status" "⚠ $ISSUE → Ready marked stale; waiting for merge lane (PR #$PR)"
+            set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+          if ! ready_candidate_selected "$ISSUE"; then
+            set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+        fi
         log "status" "⚠ $ISSUE → Ready result stale (main advanced); re-running ready checks for PR #$PR"
         title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
         if [[ -z "$title" ]]; then
@@ -8104,6 +8439,7 @@ while :; do
   run_ready_watchdog_tick
   check_control_pane_health
   wavemill_pr_cache_refresh
+  refresh_ready_merge_queue_tick
   active_count=0
   active_challenger_count=0
 

@@ -99,6 +99,14 @@ In that phase, the monitor is responsible for:
 - surfacing manual release steps and merge-conflict remediation needs
 - detecting stale ready-stage local state with the ready watchdog
 
+Ready tasks now also move through a small merge-lane queue once many PRs reach ready together:
+
+- `ready`: the PR passed ready checks against its recorded base and is not known stale.
+- `ready-stale`: the PR passed before, but the base branch advanced. Mill records the staleness cheaply and does not immediately launch remediation.
+- `merge-candidate`: the PR has been promoted into the bounded merge lane and is allowed to refresh against the latest base, remediate conflicts, and attempt merge readiness again.
+
+When the base branch advances after one merge, mill marks the other completed ready tasks as `ready-stale` first. It only promotes a bounded candidate set back into active refresh, which prevents every ready PR from independently rerunning conflict remediation and ready checks on the same tick. Stuck candidates are demoted back to `ready-stale` so unrelated work can continue.
+
 The ready watchdog runs once per monitor tick for `phase=ready` tasks. After `ready.watchdog.thresholdMinutes` of no local progress, it compares controller state with GitHub truth and classifies the task as one of:
 
 - `stuck`
