@@ -14,6 +14,10 @@ strip_ansi() {
   perl -pe 's/\e\[[0-9;]*[A-Za-z]//g'
 }
 
+iso_at_offset() {
+  perl -MPOSIX=strftime -e 'my $offset = shift @ARGV; print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time() + $offset)), "\n"' -- "$1"
+}
+
 run_render() {
   local state_file="$1"
   local workspace_root="$2"
@@ -515,6 +519,81 @@ if grep -q '🛠 JOBS' "$OUTPUT_PHASES" \
   pass "renders tracked challenge jobs and failure excerpts"
 else
   fail "dashboard is missing tracked challenge jobs section"
+fi
+
+STATE_FILE_RUNNING="$TMP_DIR/state-running.json"
+eval_started_at="$(iso_at_offset -12)"
+comparison_started_at="$(iso_at_offset 300)"
+cat > "$STATE_FILE_RUNNING" <<EOF
+{
+  "tasks": {
+    "HOK-1563": {
+      "slug": "active-task",
+      "branch": "task/active-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked",
+      "evalRunning": {
+        "issue": "HOK-1563",
+        "side": "primary",
+        "pr": 101,
+        "phase": "eval",
+        "startedAt": "$eval_started_at"
+      }
+    },
+    "HOK-1563_c": {
+      "slug": "review-task",
+      "branch": "task/review-task",
+      "worktree": "$WORKTREES_DIR/review-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked",
+      "comparisonRunning": {
+        "pairId": "HOK-1563",
+        "primaryPr": 101,
+        "challengerPr": 102,
+        "startedAt": "$comparison_started_at"
+      }
+    }
+  }
+}
+EOF
+
+BEHAVIOR_RUNNING="$TMP_DIR/behavior-running.json"
+cat > "$BEHAVIOR_RUNNING" <<'EOF'
+{
+  "pane": {
+    "HOK-1563-active-task": "15",
+    "HOK-1563_c-review-task": "16"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {
+    "task/active-task": "101|OPEN",
+    "task/review-task": "102|OPEN"
+  },
+  "checks": {
+    "task/active-task": "pass",
+    "task/review-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_RUNNING="$TMP_DIR/output-running.txt"
+run_render "$STATE_FILE_RUNNING" "$WORKTREES_DIR" "$BEHAVIOR_RUNNING" "$OUTPUT_RUNNING"
+
+if grep -Eq 'eval running \([0-9]+s\): side=primary pr=#101 phase=eval' "$OUTPUT_RUNNING"; then
+  pass "renders eval running detail with seconds elapsed"
+else
+  fail "eval running detail is missing or malformed"
+fi
+
+if grep -q 'comparison running (0s): pair=HOK-1563 prs=#101/#102' "$OUTPUT_RUNNING"; then
+  pass "clamps future comparison startedAt to 0s"
+else
+  fail "future comparison startedAt did not clamp to 0s"
 fi
 
 STATE_FILE_READY="$TMP_DIR/state-ready.json"

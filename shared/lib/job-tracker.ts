@@ -166,8 +166,10 @@ export function settleJobSuccess<T extends WorkflowStateLike>(state: T, job: Mil
       ...tasks[job.issueId],
       evalCompleted: true,
       evalFailed: false,
+      evalRunning: undefined,
       updated: updatedAt,
     };
+    delete tasks[job.issueId].evalRunning;
   }
 
   if (job.kind === 'comparison' && job.pairId) {
@@ -176,8 +178,10 @@ export function settleJobSuccess<T extends WorkflowStateLike>(state: T, job: Mil
         tasks[taskId] = {
           ...task,
           challengeCompared: true,
+          comparisonRunning: undefined,
           updated: updatedAt,
         };
+        delete tasks[taskId].comparisonRunning;
       }
     }
   }
@@ -403,9 +407,27 @@ export async function markJobSettled({
           [existing.issueId]: {
             ...nextState.tasks[existing.issueId],
             evalFailed: true,
+            evalRunning: undefined,
             updated: now.toISOString(),
           },
         },
+      };
+      delete nextState.tasks?.[existing.issueId]?.evalRunning;
+    } else if (existing.kind === 'comparison' && existing.pairId && nextState.tasks) {
+      const tasks = { ...nextState.tasks };
+      for (const [taskId, task] of Object.entries(tasks)) {
+        if ((task.challengePairId as string | undefined) === existing.pairId) {
+          tasks[taskId] = {
+            ...task,
+            comparisonRunning: undefined,
+            updated: now.toISOString(),
+          };
+          delete tasks[taskId].comparisonRunning;
+        }
+      }
+      nextState = {
+        ...nextState,
+        tasks,
       };
     }
 

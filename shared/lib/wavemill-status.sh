@@ -372,6 +372,77 @@ format_job_elapsed() {
   fi
 }
 
+parse_iso_timestamp_epoch() {
+  local timestamp="$1"
+  local ts
+  ts="${timestamp%%.*}"
+  ts="${ts%Z}"
+  ts="${ts%+*}"
+  [[ -n "$ts" ]] || { echo 0; return; }
+  if date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" "+%s" >/dev/null 2>&1; then
+    date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" "+%s" 2>/dev/null || echo 0
+  else
+    date -d "${ts/T/ }" "+%s" 2>/dev/null || echo 0
+  fi
+}
+
+format_running_elapsed() {
+  local started_at="$1"
+  local start_epoch now elapsed
+  start_epoch=$(parse_iso_timestamp_epoch "$started_at")
+  now=$(date +%s)
+  if (( start_epoch <= 0 )); then
+    echo ""
+    return
+  fi
+  if (( now < start_epoch )); then
+    echo "0s"
+    return
+  fi
+  elapsed=$((now - start_epoch))
+  if (( elapsed < 60 )); then
+    printf "%ss" "$elapsed"
+  elif (( elapsed < 3600 )); then
+    printf "%dm%02ds" $((elapsed / 60)) $((elapsed % 60))
+  else
+    printf "%dh%02dm" $((elapsed / 3600)) $(((elapsed % 3600) / 60))
+  fi
+}
+
+task_running_detail() {
+  local issue="$1"
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+
+  local eval_side eval_pr eval_phase eval_started eval_elapsed
+  eval_side=$(jq -r --arg issue "$issue" '.tasks[$issue].evalRunning.side // empty' "$STATE_FILE" 2>/dev/null || true)
+  if [[ -n "$eval_side" ]]; then
+    eval_pr=$(jq -r --arg issue "$issue" '.tasks[$issue].evalRunning.pr // empty' "$STATE_FILE" 2>/dev/null || true)
+    eval_phase=$(jq -r --arg issue "$issue" '.tasks[$issue].evalRunning.phase // "eval"' "$STATE_FILE" 2>/dev/null || echo "eval")
+    eval_started=$(jq -r --arg issue "$issue" '.tasks[$issue].evalRunning.startedAt // empty' "$STATE_FILE" 2>/dev/null || true)
+    eval_elapsed=$(format_running_elapsed "$eval_started")
+    if [[ -n "$eval_elapsed" ]]; then
+      printf 'eval running (%s): side=%s pr=#%s phase=%s\n' "$eval_elapsed" "$eval_side" "$eval_pr" "$eval_phase"
+    else
+      printf 'eval running: side=%s pr=#%s phase=%s\n' "$eval_side" "$eval_pr" "$eval_phase"
+    fi
+    return 0
+  fi
+
+  local pair_id primary_pr challenger_pr comparison_started comparison_elapsed
+  pair_id=$(jq -r --arg issue "$issue" '.tasks[$issue].comparisonRunning.pairId // empty' "$STATE_FILE" 2>/dev/null || true)
+  if [[ -n "$pair_id" ]]; then
+    primary_pr=$(jq -r --arg issue "$issue" '.tasks[$issue].comparisonRunning.primaryPr // empty' "$STATE_FILE" 2>/dev/null || true)
+    challenger_pr=$(jq -r --arg issue "$issue" '.tasks[$issue].comparisonRunning.challengerPr // empty' "$STATE_FILE" 2>/dev/null || true)
+    comparison_started=$(jq -r --arg issue "$issue" '.tasks[$issue].comparisonRunning.startedAt // empty' "$STATE_FILE" 2>/dev/null || true)
+    comparison_elapsed=$(format_running_elapsed "$comparison_started")
+    if [[ -n "$comparison_elapsed" ]]; then
+      printf 'comparison running (%s): pair=%s prs=#%s/#%s\n' "$comparison_elapsed" "$pair_id" "$primary_pr" "$challenger_pr"
+    else
+      printf 'comparison running: pair=%s prs=#%s/#%s\n' "$pair_id" "$primary_pr" "$challenger_pr"
+    fi
+  fi
+}
+
 # Classify dashboard tasks into sections based on agent state.
 is_actionable_state() {
   local agent_state="$1"
@@ -442,7 +513,7 @@ render_section_header() {
 render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
-  local t st_str pr_str pr_info checks phase_str plan_status ready_status attention_detail reported ds pane watchdog_classification watchdog_detail
+  local t st_str pr_str pr_info checks phase_str plan_status ready_status attention_detail reported ds pane watchdog_classification watchdog_detail running_detail
 
   t=$(elapsed "$worktree")
   reported=""
@@ -547,6 +618,10 @@ render_task_row() {
   fi
   if [[ -z "$reported" && -n "$watchdog_detail" ]]; then
     reported="$watchdog_detail"
+  fi
+  if [[ -z "$reported" ]]; then
+    running_detail=$(task_running_detail "$issue")
+    [[ -n "$running_detail" ]] && reported="$running_detail"
   fi
   case "$reported" in
     working|waiting|done) reported="" ;;
