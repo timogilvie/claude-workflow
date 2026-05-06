@@ -14,6 +14,10 @@ strip_ansi() {
   perl -pe 's/\e\[[0-9;]*[A-Za-z]//g'
 }
 
+iso_at_offset() {
+  perl -MPOSIX=strftime -e 'my $offset = shift @ARGV; print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time() + $offset)), "\n"' -- "$1"
+}
+
 run_render() {
   local state_file="$1"
   local workspace_root="$2"
@@ -102,6 +106,8 @@ mkdir -p \
   "$WORKTREES_DIR/coding-task/features/coding-task" \
   "$WORKTREES_DIR/review-task/features/review-task" \
   "$WORKTREES_DIR/ready-task/features/ready-task" \
+  "$WORKTREES_DIR/ready-stale-task/features/ready-stale-task" \
+  "$WORKTREES_DIR/merge-candidate-task/features/merge-candidate-task" \
   "$WORKTREES_DIR/ready-conflict-task/features/ready-conflict-task" \
   "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task" \
   "$WORKTREES_DIR/ready-failed-task/features/ready-failed-task" \
@@ -517,6 +523,81 @@ else
   fail "dashboard is missing tracked challenge jobs section"
 fi
 
+STATE_FILE_RUNNING="$TMP_DIR/state-running.json"
+eval_started_at="$(iso_at_offset -12)"
+comparison_started_at="$(iso_at_offset 300)"
+cat > "$STATE_FILE_RUNNING" <<EOF
+{
+  "tasks": {
+    "HOK-1563": {
+      "slug": "active-task",
+      "branch": "task/active-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked",
+      "evalRunning": {
+        "issue": "HOK-1563",
+        "side": "primary",
+        "pr": 101,
+        "phase": "eval",
+        "startedAt": "$eval_started_at"
+      }
+    },
+    "HOK-1563_c": {
+      "slug": "review-task",
+      "branch": "task/review-task",
+      "worktree": "$WORKTREES_DIR/review-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked",
+      "comparisonRunning": {
+        "pairId": "HOK-1563",
+        "primaryPr": 101,
+        "challengerPr": 102,
+        "startedAt": "$comparison_started_at"
+      }
+    }
+  }
+}
+EOF
+
+BEHAVIOR_RUNNING="$TMP_DIR/behavior-running.json"
+cat > "$BEHAVIOR_RUNNING" <<'EOF'
+{
+  "pane": {
+    "HOK-1563-active-task": "15",
+    "HOK-1563_c-review-task": "16"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {
+    "task/active-task": "101|OPEN",
+    "task/review-task": "102|OPEN"
+  },
+  "checks": {
+    "task/active-task": "pass",
+    "task/review-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_RUNNING="$TMP_DIR/output-running.txt"
+run_render "$STATE_FILE_RUNNING" "$WORKTREES_DIR" "$BEHAVIOR_RUNNING" "$OUTPUT_RUNNING"
+
+if grep -Eq 'eval running \([0-9]+s\): side=primary pr=#101 phase=eval' "$OUTPUT_RUNNING"; then
+  pass "renders eval running detail with seconds elapsed"
+else
+  fail "eval running detail is missing or malformed"
+fi
+
+if grep -q 'comparison running (0s): pair=HOK-1563 prs=#101/#102' "$OUTPUT_RUNNING"; then
+  pass "clamps future comparison startedAt to 0s"
+else
+  fail "future comparison startedAt did not clamp to 0s"
+fi
+
 STATE_FILE_READY="$TMP_DIR/state-ready.json"
 cat > "$STATE_FILE_READY" <<EOF
 {
@@ -616,7 +697,36 @@ fi
 cat > "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task/.ready-result.json" <<'EOF'
 {
   "stage": "ready",
-  "status": "completed"
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "queueState": "ready"
+  }
+}
+EOF
+
+cat > "$WORKTREES_DIR/ready-stale-task/features/ready-stale-task/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "queueState": "ready-stale"
+  }
+}
+EOF
+
+cat > "$WORKTREES_DIR/merge-candidate-task/features/merge-candidate-task/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "queueState": "merge-candidate"
+  }
 }
 EOF
 
@@ -690,6 +800,73 @@ if grep -q 'HOK-1304.*ready-failed-task.*🚦 ready.*● running.*#412 ✗' "$OU
   pass "shows ready attention detail for failed ready tasks"
 else
   fail "failed ready task detail or status is missing"
+fi
+
+STATE_FILE_READY_QUEUE="$TMP_DIR/state-ready-queue.txt"
+cat > "$STATE_FILE_READY_QUEUE" <<EOF
+{
+  "tasks": {
+    "HOK-1310": {
+      "slug": "ready-complete-task",
+      "branch": "task/ready-complete-task",
+      "worktree": "$WORKTREES_DIR/ready-complete-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    },
+    "HOK-1311": {
+      "slug": "ready-stale-task",
+      "branch": "task/ready-stale-task",
+      "worktree": "$WORKTREES_DIR/ready-stale-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    },
+    "HOK-1312": {
+      "slug": "merge-candidate-task",
+      "branch": "task/merge-candidate-task",
+      "worktree": "$WORKTREES_DIR/merge-candidate-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+BEHAVIOR_READY_QUEUE="$TMP_DIR/behavior-ready-queue.json"
+cat > "$BEHAVIOR_READY_QUEUE" <<'EOF'
+{
+  "pane": {
+    "HOK-1310-ready-complete-task": "15",
+    "HOK-1311-ready-stale-task": "16",
+    "HOK-1312-merge-candidate-task": "17"
+  },
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {
+    "task/ready-complete-task": "421|OPEN",
+    "task/ready-stale-task": "422|OPEN",
+    "task/merge-candidate-task": "423|OPEN"
+  },
+  "checks": {
+    "task/ready-complete-task": "pass",
+    "task/ready-stale-task": "pass",
+    "task/merge-candidate-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_READY_QUEUE="$TMP_DIR/output-ready-queue.txt"
+run_render "$STATE_FILE_READY_QUEUE" "$WORKTREES_DIR" "$BEHAVIOR_READY_QUEUE" "$OUTPUT_READY_QUEUE"
+
+if grep -q 'HOK-1310.*🚦 ready' "$OUTPUT_READY_QUEUE" \
+  && grep -q 'HOK-1311.*ready-stale' "$OUTPUT_READY_QUEUE" \
+  && grep -q 'HOK-1312.*merge-candidate' "$OUTPUT_READY_QUEUE"; then
+  pass "renders ready queue states distinctly"
+else
+  fail "ready queue state labels are missing"
 fi
 
 STATE_FILE_READY_WATCHDOG="$TMP_DIR/state-ready-watchdog.json"
