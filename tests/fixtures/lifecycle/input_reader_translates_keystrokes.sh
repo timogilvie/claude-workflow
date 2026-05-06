@@ -12,7 +12,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cat <<'IN' | WAVEMILL_SESSION="$SESSION" "$READER" >/dev/null
+cat <<'IN' | WAVEMILL_INPUT_PENDING_SLEEP=0 WAVEMILL_SESSION="$SESSION" "$READER" >/dev/null
 1 3
 m
 more
