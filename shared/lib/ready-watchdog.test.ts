@@ -240,6 +240,67 @@ test('tick auto-recovers stale local state for clean green PRs', async () => {
   await rm(repoDir, { recursive: true, force: true });
 });
 
+test('tick ignores merged tasks still held in ready phase for review', async () => {
+  const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
+  const stateDir = path.join(repoDir, '.wavemill');
+  const worktree = path.join(repoDir, 'worktrees', 'ready-watchdog-task');
+  const featureDir = path.join(worktree, 'features', 'ready-watchdog-task');
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(featureDir, { recursive: true });
+
+  const stateFile = path.join(stateDir, 'workflow-state.json');
+  writeFileSync(stateFile, JSON.stringify({
+    tasks: {
+      'HOK-1579': {
+        slug: 'ready-watchdog-task',
+        branch: 'task/ready-watchdog-task',
+        worktree,
+        pr: 528,
+        phase: 'ready',
+        status: 'merged',
+        updated: '2026-05-05T12:00:00.000Z',
+      },
+    },
+    jobs: {},
+  }, null, 2));
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: '2026-05-05T12:00:00.000Z',
+    artifacts: {
+      type: 'ready',
+      verdict: 'pass',
+      prNumber: 528,
+    },
+  }, null, 2));
+
+  let queriedGitHub = false;
+  const result = await tickReadyWatchdog({
+    repoDir,
+    stateFile,
+    config: {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+    },
+    deps: {
+      fetchGitHubTruth: async () => {
+        queriedGitHub = true;
+        return makeTruth({ state: 'MERGED' });
+      },
+      getCurrentHead: async () => 'head',
+      now: () => new Date('2030-05-05T12:30:00.000Z'),
+    },
+  });
+
+  assert.equal(result.findings.length, 0);
+  assert.equal(queriedGitHub, false);
+
+  await rm(repoDir, { recursive: true, force: true });
+});
+
 test('tick surfaces a manual recovery command when auto-recover is disabled', async () => {
   const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
   const stateDir = path.join(repoDir, '.wavemill');
