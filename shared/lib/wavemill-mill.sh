@@ -4146,6 +4146,72 @@ log_ready_unparseable_result() {
   fi
 }
 
+ready_failure_is_actionable_for_remediation() {
+  local verdict="${1-}"
+  local failed_check_names="${2-}"
+  local ready_result="${3-}"
+  local actionable_names failed_check_name failed_check_name_lc
+  local IFS=','
+
+  [[ "$verdict" == "fail" ]] || return 1
+  [[ -n "$failed_check_names" ]] || return 1
+
+  actionable_names=",ci-status,test,tests,unit,unit-test,unit-tests,shell,shell-test,shell-tests,lint,typecheck,type-check,build,ci,"
+  for failed_check_name in $failed_check_names; do
+    failed_check_name_lc="${failed_check_name,,}"
+    if [[ "$actionable_names" == *",$failed_check_name_lc,"* ]]; then
+      return 0
+    fi
+  done
+
+  if printf '%s' "$ready_result" | jq -e '
+    ["test", "tests", "unit", "unit-tests", "shell", "shell-tests", "lint", "typecheck", "type-check", "build"] as $terms
+    | [
+        .checks[]?
+        | select(.status == "fail")
+        | (
+            (.name // "") + " "
+            + (.message // "") + " "
+            + ((.details.failedChecks // []) | map(.name // "") | join(" "))
+          )
+        | ascii_downcase
+      ] as $failed_text
+    | any($failed_text[]; . as $text | any($terms[]; . as $term | ($text | contains($term))))
+  ' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+ready_failed_check_summary() {
+  local ready_result="${1-}"
+
+  printf '%s' "$ready_result" | jq -r '
+    [
+      .checks[]?
+      | select(.status == "fail")
+      | if .name == "ci-status" then
+          "ci-status: " + (.message // "CI checks failing")
+          + (if ((.details.failedChecks // []) | length) > 0
+              then " (" + ((.details.failedChecks // []) | map(.name // "unknown") | join(", ")) + ")"
+              else ""
+            end)
+        else
+          (.name // "unknown") + ": " + (.message // "check failed")
+        end
+    ]
+    | join("; ")
+  ' 2>/dev/null
+}
+
+set_ready_pass_labels() {
+  local wt_dir="$1"
+  local pr_number="$2"
+
+  (cd "$wt_dir" && npx tsx "$TOOLS_DIR/set-pr-ready-label.ts" "$pr_number")
+}
+
 launch_ready_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local pr_number="$7"
@@ -4154,7 +4220,7 @@ launch_ready_phase() {
   local current_agent current_model prompt_file launch_rc launch_head checks_run checks_passed
   local remediation_attempts remediation_launch_head remediation_enabled remediation_max_attempts
   local remediation_agent failed_check_names failed_check_summary current_head ready_status
-  local remediation_artifacts_json ci_failed_checks_json ready_result_file ready_stderr_file
+  local remediation_artifacts_json failed_check_names_json ready_result_file ready_stderr_file
   local prior_ready_status prior_ready_verdict pending_log_level
 
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
@@ -4296,27 +4362,41 @@ launch_ready_phase() {
   clear_transient_mergeability_state "$state_dir"
 
   if [[ "$ready_rc" -eq 0 ]]; then
-    # Record ready stage result (HOK-1177)
-    local main_sha completed_artifacts_json
+    local main_sha completed_artifacts_json label_failed_artifacts_json
     main_sha=$(get_main_head_sha "$wt_dir" "$base_branch")
+    if ! set_ready_pass_labels "$wt_dir" "$pr_number" >/dev/null 2>&1; then
+      label_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+        "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"readyLabelsUpdated\":false,\"readyBaseSha\":\"${main_sha}\"}" \
+        "candidate-progress")
+      write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+        "Ready passed but failed to restore PR labels" \
+        "$label_failed_artifacts_json"
+      write_ready_attention_file "$state_dir" "Ready passed for PR #$pr_number, but updating wm:ready labels failed."
+      log_error "  Ready passed for $issue but failed to restore PR labels"
+      return 1
+    fi
+
     completed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"readyBaseSha\":\"${main_sha}\"}" \
+      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"readyLabelsUpdated\":true,\"readyBaseSha\":\"${main_sha}\"}" \
       "completed")
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
+    log "status" "  Restored ready labels for PR #$pr_number"
     log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
     return 0
   fi
 
   if [[ "$ready_rc" -eq 2 ]]; then
-    local pending_artifacts_json
+    local pending_artifacts_json prior_remediation_failures_json
+    prior_remediation_failures_json=$(jq -c '.artifacts.remediationFailures // []' "$ready_result_file" 2>/dev/null || echo '[]')
     pending_artifacts_json=$(jq -cn \
       --arg merge_status "${merge_status:-UNKNOWN}" \
       --argjson checks_run "${checks_run:-0}" \
       --argjson checks_passed "${checks_passed:-0}" \
       --argjson pr_number "${pr_number}" \
       --argjson attempts "${remediation_attempts:-0}" \
+      --argjson remediation_failures "$prior_remediation_failures_json" \
       '{
         type: "ready",
         verdict: "pending",
@@ -4324,7 +4404,11 @@ launch_ready_phase() {
         checksPassed: $checks_passed,
         mergeConflict: $merge_status,
         prNumber: $pr_number
-      } + (if $attempts > 0 then {remediationAttempts: $attempts, remediationFailures: ["ci-status"]} else {} end)')
+      } + (if $attempts > 0 then {remediationAttempts: $attempts} else {} end)
+        + (if $attempts > 0 and ($remediation_failures | length) > 0
+            then {remediationFailures: $remediation_failures}
+            else {}
+          end)')
     pending_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$pending_artifacts_json" "candidate-progress")
     write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
       "CI checks pending for PR #$pr_number" \
@@ -4334,11 +4418,12 @@ launch_ready_phase() {
   fi
 
   failed_check_names=$(printf '%s' "$result" | jq -r '[.checks[]? | select(.status == "fail") | .name] | join(",")' 2>/dev/null || echo "")
+  failed_check_names_json=$(printf '%s' "$result" | jq -c '[.checks[]? | select(.status == "fail") | .name]' 2>/dev/null || echo '[]')
   remediation_enabled=$(ready_remediation_enabled "$wt_dir")
   remediation_max_attempts=$(ready_remediation_max_attempts "$wt_dir")
   current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
 
-  if [[ "$verdict" == "fail" ]] && [[ "$remediation_enabled" == "true" ]] && [[ "$failed_check_names" == "ci-status" ]]; then
+  if [[ "$remediation_enabled" == "true" ]] && ready_failure_is_actionable_for_remediation "$verdict" "$failed_check_names" "$result"; then
     if [[ "$ready_status" == "running" ]] && [[ -n "$remediation_launch_head" ]] && [[ "$remediation_launch_head" == "$current_head" ]]; then
       return 5
     fi
@@ -4346,13 +4431,13 @@ launch_ready_phase() {
     if (( remediation_attempts >= remediation_max_attempts )); then
       local exhausted_artifacts_json
       exhausted_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-        "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}" \
+        "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":${failed_check_names_json}}" \
         "candidate-progress")
       write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
         "Ready remediation exhausted after ${remediation_attempts} attempt(s)" \
         "$exhausted_artifacts_json"
       write_ready_attention_file "$state_dir" "Remediation exhausted after ${remediation_attempts} attempt(s) for PR #$pr_number."
-      log_error "  Ready remediation exhausted for $issue (failed checks: ci-status)"
+      log_error "  Ready remediation exhausted for $issue (failed checks: ${failed_check_names})"
       return 1
     fi
 
@@ -4360,18 +4445,8 @@ launch_ready_phase() {
     [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
     [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
 
-    ci_failed_checks_json=$(printf '%s' "$result" | jq -c '
-      [.checks[]? | select(.name == "ci-status") | .details.failedChecks // [] | .[]]
-    ' 2>/dev/null || echo '[]')
-    failed_check_summary=$(printf '%s' "$result" | jq -r '
-      .checks[]?
-      | select(.name == "ci-status")
-      | "ci-status: " + (.message // "CI checks failing")
-        + (if ((.details.failedChecks // []) | length) > 0
-            then " (" + ((.details.failedChecks // []) | map(.name) | join(", ")) + ")"
-            else ""
-          end)
-    ' 2>/dev/null || echo "ci-status: CI checks failing")
+    failed_check_summary=$(ready_failed_check_summary "$result")
+    [[ -n "$failed_check_summary" ]] || failed_check_summary="${failed_check_names}: checks failing"
 
     prompt_file="/tmp/${SESSION}-${issue}-ready-remediation-prompt.txt"
     build_ready_remediation_prompt \
@@ -4396,6 +4471,7 @@ launch_ready_phase() {
         --argjson checks_run "${checks_run:-0}" \
         --argjson checks_passed "${checks_passed:-0}" \
         --argjson attempts "$(( remediation_attempts + 1 ))" \
+        --argjson remediation_failures "$failed_check_names_json" \
         '{
           type: "ready",
           verdict: "fail",
@@ -4405,7 +4481,7 @@ launch_ready_phase() {
           prNumber: $pr_number,
           remediationAttempts: $attempts,
           remediationLaunchHead: $launch_head,
-          remediationFailures: ["ci-status"]
+          remediationFailures: $remediation_failures
         }')
       remediation_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$remediation_artifacts_json" "candidate-progress")
       write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$current_model" \
@@ -4422,7 +4498,7 @@ launch_ready_phase() {
 
     local remediation_failed_artifacts_json
     remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}" \
+      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":${failed_check_names_json}}" \
       "candidate-progress")
     write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
       "Could not launch ready remediation agent" \
@@ -4434,7 +4510,7 @@ launch_ready_phase() {
 
   local failed_artifacts_json
   failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-    "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number}${ci_failed_checks_json:+,\"remediationFailures\":${ci_failed_checks_json}}}" \
+    "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number}${failed_check_names_json:+,\"remediationFailures\":${failed_check_names_json}}}" \
     "candidate-progress")
   write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" "Ready checks failed" "$failed_artifacts_json"
   write_ready_attention_file "$state_dir" "Ready checks failed for PR #$pr_number."
