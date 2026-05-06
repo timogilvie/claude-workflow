@@ -883,7 +883,7 @@ else
 fi
 
 MERGED_BLOCK=$(awk '
-  /log "status" "✓ \$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
+  /log "status" "\$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
   in_block { print }
   in_block && /elif \[\[ "\$pr_status" == "CLOSED" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
@@ -910,7 +910,7 @@ else
 fi
 
 EXTERNAL_BLOCK=$(awk '
-  /log "status" "✓ \$ISSUE → Completed externally \(cross-repo or manual\)"/ { in_block=1 }
+  /log "status" "\$ISSUE → Completed externally \(cross-repo or manual\)"/ { in_block=1 }
   in_block { print }
   in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")

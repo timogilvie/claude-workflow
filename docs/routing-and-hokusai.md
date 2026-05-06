@@ -17,6 +17,39 @@ Routing considers:
 
 The goal is not to pick one best model globally. The goal is to pick the best workflow for this task.
 
+### Stable Routing Metadata
+
+Eval records now preserve router attribution as structured fields on `routingDecision`:
+
+- `decisionPolicyVersion`: the policy surface that actually made the decision
+- `routeMode`: the emitted route strategy, such as `heuristic`, `stage-aware`, `hokusai`, or `policy`
+- `routeArtifactSchemaVersion`: the route artifact shape version
+- `policyResolverVersion`: the policy-resolution helper version
+- `operatingModeDependency`: quota operating mode, separate from policy source
+
+Current stable `decisionPolicyVersion` identifiers are:
+
+- `baseline`
+- `heuristic`
+- `heuristic-fallback`
+- `stage-aware`
+- `hokusai`
+- `policy`
+- `expanded-route`
+
+`operatingModeDependency` is orthogonal to the policy source. For example, a route may be emitted by the stage-aware router while also recording `operatingModeDependency: "survival"`.
+
+These fields are additive. Older eval records may omit them and remain valid.
+
+### Route Prediction Contract
+
+Eval records can also carry two small optional router-analysis blocks:
+
+- `routePrediction`: the router's falsifiable expectation for success, cost, confidence, risk, and a compact rationale/features summary
+- `routeCalibration`: the comparison between that prediction and actual workflow outcomes such as `workflowCost`, `outcomes.success`, duration, and intervention count
+
+These fields are additive and intentionally small. They are meant for calibration and feedback loops, not for full autonomous change manifests.
+
 ### CLI Transparency
 
 When routing deviates from the normal path, `wavemill mill` prints a single concise line explaining why. Examples:
@@ -77,6 +110,7 @@ Outbound Hokusai training submissions include a `schema_version` field:
 
 - `1.0` submissions contain route, constraint, and observed outcome fields.
 - `1.1` submissions also include a `rubric_signals` block when sanitized rubric features are available.
+- `1.2` submissions can additionally include optional `route_prediction` and `route_calibration` blocks when present on the eval record.
 
 The `rubric_signals` block carries the rubric version, criterion count, mean score, five normalized criterion scores, optional determinative boundary, and optional rubric provenance. These values come from the privacy-safe rubric projection on the task descriptor plus record-level rubric metadata.
 

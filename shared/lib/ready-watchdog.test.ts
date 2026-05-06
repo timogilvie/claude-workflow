@@ -240,6 +240,141 @@ test('tick auto-recovers stale local state for clean green PRs', async () => {
   await rm(repoDir, { recursive: true, force: true });
 });
 
+test('tick suppresses repeated needs-user when classification and detail are unchanged', async () => {
+  const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
+  const stateDir = path.join(repoDir, '.wavemill');
+  const worktree = path.join(repoDir, 'worktrees', 'ready-watchdog-task');
+  const featureDir = path.join(worktree, 'features', 'ready-watchdog-task');
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(featureDir, { recursive: true });
+
+  const stateFile = path.join(stateDir, 'workflow-state.json');
+  writeFileSync(stateFile, JSON.stringify({
+    tasks: {
+      'HOK-1581': {
+        slug: 'ready-watchdog-task',
+        branch: 'task/ready-watchdog-task',
+        worktree,
+        pr: 541,
+        phase: 'ready',
+        updated: '2026-05-05T12:00:00.000Z',
+      },
+    },
+    jobs: {},
+  }, null, 2));
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: null,
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pending', prNumber: 541 },
+  }, null, 2));
+
+  const tickOptions = {
+    repoDir,
+    stateFile,
+    config: {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: false,
+      timeoutSeconds: 30,
+    },
+    deps: {
+      fetchGitHubTruth: async () => makeTruth({ state: 'MERGED' }),
+      getCurrentHead: async () => 'head',
+      now: () => new Date('2030-05-05T12:30:00.000Z'),
+    },
+  };
+
+  const first = await tickReadyWatchdog(tickOptions);
+  assert.equal(first.findings.length, 1);
+  assert.equal(first.findings[0].classification, 'needs-user');
+
+  const second = await tickReadyWatchdog(tickOptions);
+  assert.equal(second.findings.length, 0, 'repeated needs-user should be suppressed on second tick');
+
+  await rm(repoDir, { recursive: true, force: true });
+});
+
+test('tick re-surfaces needs-user when detail changes', async () => {
+  const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
+  const stateDir = path.join(repoDir, '.wavemill');
+  const worktree = path.join(repoDir, 'worktrees', 'ready-watchdog-task');
+  const featureDir = path.join(worktree, 'features', 'ready-watchdog-task');
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(featureDir, { recursive: true });
+
+  const stateFile = path.join(stateDir, 'workflow-state.json');
+  writeFileSync(stateFile, JSON.stringify({
+    tasks: {
+      'HOK-1581': {
+        slug: 'ready-watchdog-task',
+        branch: 'task/ready-watchdog-task',
+        worktree,
+        pr: 541,
+        phase: 'ready',
+        updated: '2026-05-05T12:00:00.000Z',
+      },
+    },
+    jobs: {},
+  }, null, 2));
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: null,
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pending', prNumber: 541 },
+  }, null, 2));
+
+  // Seed prior state with an old needs-user entry for the same issue
+  const watchdogStatePath = path.join(stateDir, 'ready-watchdog-state.json');
+  writeFileSync(watchdogStatePath, JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-1581': {
+        issueId: 'HOK-1581',
+        slug: 'ready-watchdog-task',
+        prNumber: 541,
+        classification: 'needs-user',
+        displayLabel: 'needs user',
+        detail: 'PR #541 is merged, so ready cannot advance automatically.',
+        action: 'reported',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+      },
+    },
+  }, null, 2));
+
+  // Tick with different GitHub state (CLOSED instead of MERGED) → different detail string
+  const result = await tickReadyWatchdog({
+    repoDir,
+    stateFile,
+    config: {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: false,
+      timeoutSeconds: 30,
+    },
+    deps: {
+      fetchGitHubTruth: async () => makeTruth({ state: 'CLOSED' }),
+      getCurrentHead: async () => 'head',
+      now: () => new Date('2030-05-05T12:30:00.000Z'),
+    },
+  });
+
+  assert.equal(result.findings.length, 1, 'changed detail should re-surface the finding');
+  assert.match(result.findings[0].detail, /closed/i);
+
+  await rm(repoDir, { recursive: true, force: true });
+});
+
 test('tick ignores merged tasks still held in ready phase for review', async () => {
   const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
   const stateDir = path.join(repoDir, '.wavemill');

@@ -16,7 +16,7 @@ trap cleanup EXIT
 printf 'select 9\n' > "$CMD_FILE"
 printf '1\n' > "$OFFSET_FILE"
 
-printf '1 3\n' | WAVEMILL_SESSION="$SESSION" "$READER" >/dev/null
+printf '1 3\n' | WAVEMILL_INPUT_PENDING_SLEEP=0 WAVEMILL_SESSION="$SESSION" "$READER" >/dev/null
 printf 'm\nq\n' | WAVEMILL_SESSION="$SESSION" "$READER" >/dev/null
 
 expected="$(cat <<'OUT'

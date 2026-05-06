@@ -5,13 +5,17 @@ import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { clearConfigCache } from './config.ts';
 import {
+  buildRoutePrediction,
   buildRouteLifecycleProvenance,
   deriveRouteDecisionSource,
   formatRouteArtifactSignature,
+  POLICY_RESOLVER_VERSION,
+  ROUTE_ARTIFACT_SCHEMA_VERSION,
   buildRouteProvenance,
   hasValidPostExpansionRoute,
   readBothRouteArtifacts,
   readRouteLifecycleArtifacts,
+  resolveRouterPolicyVersion,
   resolveRouteDecisionBudget,
   routeChangedMaterially,
   stringifyRouteArtifact,
@@ -100,6 +104,24 @@ test('routedAt is iso-8601 utc by default', () => {
     routerMode: 'normal',
   });
   assert.match(item.routedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+});
+
+test('route artifact metadata constants are stable', () => {
+  assert.equal(ROUTE_ARTIFACT_SCHEMA_VERSION, '1.0');
+  assert.equal(POLICY_RESOLVER_VERSION, '1.0.0');
+});
+
+test('resolveRouterPolicyVersion maps live router modes and provenance', () => {
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'hokusai' }), 'hokusai');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'policy' }), 'policy');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'stage-aware' }), 'stage-aware');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'stage-aware-partial' }), 'stage-aware');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'heuristic-fallback' }), 'heuristic-fallback');
+  assert.equal(resolveRouterPolicyVersion({ source: 'heuristic-fallback' }), 'heuristic-fallback');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'heuristic' }), 'heuristic');
+  assert.equal(resolveRouterPolicyVersion({ source: 'expanded' }), 'expanded-route');
+  assert.equal(resolveRouterPolicyVersion({ inputKind: 'task-packet' }), 'expanded-route');
+  assert.equal(resolveRouterPolicyVersion({}), 'baseline');
 });
 
 test('heuristic fallback convention uses empty hash/path without input', () => {
@@ -193,6 +215,43 @@ test('validateExpandedRouteArtifact rejects malformed optional metadata', () => 
 
   assert.equal(result.valid, false);
   assert.deepEqual(result.invalid.sort(), ['cache_hit', 'packet_hash', 'route_source']);
+});
+
+test('buildRoutePrediction extracts compact prediction contract', () => {
+  const prediction = buildRoutePrediction(minimalDecision({
+    expectedCostPlan: 0.11,
+    expectedCostCode: 0.22,
+    expectedCostReview: 0.33,
+    reasoning: [
+      'High repo-surface risk.',
+      'Feature work benefits from balanced route.',
+    ],
+    signals: {
+      taskType: 'feature',
+      promptLength: 'medium',
+      complexityScore: 0.7,
+      fileTypes: ['ts'],
+      riskScore: 0.4,
+      taskDifficulty: 'medium',
+    },
+  }));
+
+  assert.deepEqual(prediction, {
+    expectedSuccess: 0.8,
+    expectedCostUsd: 0.66,
+    confidence: 0.7,
+    riskScore: 0.4,
+    taskType: 'feature',
+    taskDifficulty: 'medium',
+    topFeatures: [
+      'High repo-surface risk.',
+      'Feature work benefits from balanced route.',
+      'taskType=feature',
+      'taskDifficulty=medium',
+      'complexityScore=0.7',
+    ],
+    rationaleSummary: 'High repo-surface risk. Feature work benefits from balanced route.',
+  });
 });
 
 test('stringifyRouteArtifact returns strict JSON with trailing newline', () => {

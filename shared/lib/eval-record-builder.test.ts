@@ -9,11 +9,14 @@ import {
   attachEligibility,
   attachAgentType,
   attachBudgetMetadata,
+  attachRouteCalibration,
+  attachRoutePrediction,
   attachChallengeRouteContext,
   attachConstraints,
   attachDifficultyMetadata,
   attachFallbackEvent,
   attachRouteProvenance,
+  attachRouterPolicyMetadata,
   attachProviderMetadata,
   attachNonRewardReason,
   attachRubricEval,
@@ -21,6 +24,7 @@ import {
   attachTaskContextMetadata,
   attachRepoContextMetadata,
   attachWorkflowCostMetadata,
+  computeRouteCalibration,
   computeEligibility,
   enrichEvalRecord,
   enrichTrainingMetadata,
@@ -322,14 +326,28 @@ describe('eval-record-builder', () => {
             codeDepth: 'deep',
             reviewer: 'codex',
             reviewMode: 'full',
+            source: 'expanded',
+            routingMode: 'stage-aware',
+            routerMode: 'normal',
           },
           routeChanged: false,
           decisionSource: 'bootstrap',
+          routingMode: 'stage-aware',
+          routerMode: 'normal',
         },
       });
 
       expect(baseRecord.workflowCost).toBe(1.25);
       expect(baseRecord.trainingEligible).toBe(true);
+      expect(baseRecord.routingDecision).toEqual({
+        candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+        chosen: 0,
+        decisionPolicyVersion: 'stage-aware',
+        routeArtifactSchemaVersion: '1.0',
+        policyResolverVersion: '1.0.0',
+        routeMode: 'stage-aware',
+        operatingModeDependency: 'normal',
+      });
       expect(baseRecord.enrichmentDiagnostics).toBeUndefined();
       expect(warn.mock.calls.length).toBe(0);
     });
@@ -1030,17 +1048,25 @@ describe('eval-record-builder', () => {
         codeDepth: 'deep',
         reviewer: 'claude-sonnet-4-6',
         reviewMode: 'static',
+        source: 'expanded' as const,
+        routerMode: 'survival' as const,
+        routingMode: 'stage-aware',
       },
       activeRoute: {
         coder: 'gpt-5.4',
         codeDepth: 'deep',
         reviewer: 'claude-sonnet-4-6',
         reviewMode: 'static',
+        source: 'expanded' as const,
+        routerMode: 'survival' as const,
+        routingMode: 'stage-aware',
       },
       routeChanged: true,
       expandedCacheHit: true,
       packetHash: 'a'.repeat(64),
       routeSource: 'cache' as const,
+      routerMode: 'survival' as const,
+      routingMode: 'stage-aware',
     };
 
     it('is a no-op when provenance is undefined', () => {
@@ -1058,6 +1084,76 @@ describe('eval-record-builder', () => {
     it('attaches route provenance through enrichEvalRecord', () => {
       enrichEvalRecord(baseRecord, { routeProvenance });
       expect(baseRecord.routeProvenance).toEqual(routeProvenance);
+    });
+
+    it('derives routingDecision policy metadata from route provenance', () => {
+      baseRecord.routingDecision = {
+        candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+        chosen: 0,
+        decisionPolicyVersion: 'baseline',
+      };
+
+      attachRouterPolicyMetadata(baseRecord, routeProvenance);
+
+      expect(baseRecord.routingDecision).toEqual({
+        candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+        chosen: 0,
+        decisionPolicyVersion: 'stage-aware',
+        routeArtifactSchemaVersion: '1.0',
+        policyResolverVersion: '1.0.0',
+        routeMode: 'stage-aware',
+        operatingModeDependency: 'survival',
+      });
+    });
+  });
+
+  describe('route prediction and calibration', () => {
+    it('attaches route prediction and calibration helpers', () => {
+      attachRoutePrediction(baseRecord, {
+        expectedSuccess: 0.8,
+        expectedCostUsd: 4.25,
+        confidence: 0.7,
+        riskScore: 1.5,
+        taskType: 'feature',
+        taskDifficulty: 'medium',
+        topFeatures: ['risk', 'cost'],
+        rationaleSummary: 'balanced route',
+      });
+
+      const calibration = computeRouteCalibration({
+        workflowCost: 3.5,
+        outcomes: { success: true },
+        timeSeconds: 12,
+        interventionCount: 1,
+      } as EvalRecord, baseRecord.routePrediction);
+      attachRouteCalibration(baseRecord, calibration);
+
+      expect(baseRecord.routePrediction).toEqual({
+        expectedSuccess: 0.8,
+        expectedCostUsd: 4.25,
+        confidence: 0.7,
+        riskScore: 1.5,
+        taskType: 'feature',
+        taskDifficulty: 'medium',
+        topFeatures: ['risk', 'cost'],
+        rationaleSummary: 'balanced route',
+      });
+      expect(baseRecord.routeCalibration).toEqual({
+        predictedSuccess: 0.8,
+        actualSuccess: true,
+        predictedCostUsd: 4.25,
+        actualCostUsd: 3.5,
+        interventionCount: 1,
+        durationMs: 12000,
+        successDelta: 0.2,
+        costErrorUsd: 0.75,
+      });
+    });
+
+    it('leaves existing prediction unchanged on empty helper input', () => {
+      baseRecord.routePrediction = { expectedSuccess: 0.5 };
+      attachRoutePrediction(baseRecord, undefined);
+      expect(baseRecord.routePrediction).toEqual({ expectedSuccess: 0.5 });
     });
   });
 });

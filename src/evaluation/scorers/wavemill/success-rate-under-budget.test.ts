@@ -127,3 +127,31 @@ test('computes deterministic p50 and p95 timing values', () => {
   assert.equal(result.wavemill_router_diagnostics.timing_p50_ms, 100);
   assert.equal(result.wavemill_router_diagnostics.timing_p95_ms, 1000);
 });
+
+test('computes prediction calibration diagnostics when predictions are present', () => {
+  const result = scoreWavemillSuccessRateUnderBudget(
+    [
+      makeRecord({
+        completed_successfully: true,
+        predicted_success: 0.8,
+        predicted_cost_usd: 3,
+        cost_error_usd: 1,
+        success_delta: 0.2,
+      }),
+      makeRecord({
+        completed_successfully: false,
+        predicted_success: 0.3,
+        predicted_cost_usd: 1.5,
+        cost_error_usd: -0.5,
+        success_delta: -0.3,
+      }),
+    ],
+    { measurementPolicy: 'replay_exact_match' },
+  );
+
+  assert.equal(result.wavemill_router_diagnostics.prediction_coverage, 1);
+  assert.equal(result.wavemill_router_diagnostics.mean_cost_error_usd, 0.25);
+  assert.equal(result.wavemill_router_diagnostics.mean_absolute_cost_error_usd, 0.75);
+  assert.equal(result.wavemill_router_diagnostics.mean_success_delta, -0.05);
+  assert.equal(result.wavemill_router_diagnostics.success_brier_score, 0.065);
+});

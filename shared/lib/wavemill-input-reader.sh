@@ -42,4 +42,11 @@ while :; do
   shopt -u nocasematch
 
   printf '%s\n' "$event" >> "$cmd_file"
+
+  case "$event" in
+    select\ *|enter)
+      printf '\nPending...\n'
+      sleep "${WAVEMILL_INPUT_PENDING_SLEEP:-2}"
+      ;;
+  esac
 done

@@ -186,10 +186,11 @@ log() {
       ;;
   esac
   msg="$*"
+  msg="${msg#"${msg%%[![:space:]]*}"}"
 
   local ts formatted msg_num
   ts="$(date '+%H:%M:%S')"
-  formatted="$ts $msg"
+  formatted="$ts  $msg"
 
   if [[ "${DASHBOARD_LOG_TO_FILE:-true}" == "true" ]] && [[ -n "${MILL_LOG_FILE:-}" ]]; then
     printf '%s [%s] %s\n' "$ts" "$level" "$msg" >> "$MILL_LOG_FILE" 2>/dev/null || true
@@ -201,13 +202,17 @@ log() {
   fi
 }
 log_error() {
+  local m="$*"
+  m="${m#"${m%%[![:space:]]*}"}"
   local formatted
-  formatted="$(date '+%H:%M:%S') ERROR: $*"
+  formatted="$(date '+%H:%M:%S')  ERROR: $m"
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 log_warn() {
+  local m="$*"
+  m="${m#"${m%%[![:space:]]*}"}"
   local formatted
-  formatted="$(date '+%H:%M:%S') WARN: $*"
+  formatted="$(date '+%H:%M:%S')  WARN: $m"
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 
@@ -831,13 +836,13 @@ cleanup_completed_task() {
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
   execute tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
-  log "debug" "  ✓ Closed window: $win"
+  log "debug" "Closed window: $win"
 
   # Remove worktree
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   if [[ -d "$wt_dir" ]]; then
     execute git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-    log "debug" "  ✓ Removed worktree: $wt_dir"
+    log "debug" "Removed worktree: $wt_dir"
   fi
 
   # Delete branch after removing the worktree so Git can detach cleanly first.
@@ -846,7 +851,7 @@ cleanup_completed_task() {
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     if execute git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
-      log "debug" "  ✓ Deleted local branch: $task_branch"
+      log "debug" "Deleted local branch: $task_branch"
     else
       log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
     fi
@@ -861,9 +866,9 @@ cleanup_completed_task() {
 
   # Log completion with optional reason
   if [[ -n "$completion_reason" ]]; then
-    log "  ✓ Complete: $issue ($completion_reason)"
+    log "Complete: $issue ($completion_reason)"
   else
-    log "  ✓ Complete: $issue"
+    log "Complete: $issue"
   fi
 }
 
@@ -1633,7 +1638,7 @@ if (( ${#TASKS[@]} > 0 )); then
     ) &
   done
   wait
-  log "info" "  ✓ All issues fetched"
+  log "info" "All issues fetched"
 
 
   # ── Phase 2: Write task packets (no expansion — agent expands in-pane) ────
@@ -1646,9 +1651,9 @@ if (( ${#TASKS[@]} > 0 )); then
     current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
 
     if is_task_packet "$current_desc"; then
-      log "info" "  ✓ $ISSUE has task packet"
+      log "info" "$ISSUE has task packet"
     else
-      log "info" "  ✓ $ISSUE raw description saved (agent will expand)"
+      log "info" "$ISSUE raw description saved (agent will expand)"
     fi
     echo "$current_desc" > "$PACKET_FILE"
   done
@@ -1690,7 +1695,7 @@ for t in "${TASKS[@]}"; do
     NEXT_MIGRATION_NUM=$((NEXT_MIGRATION_NUM + 1))
   fi
 
-  log "status" "  ✓ $ISSUE ready"
+  log "status" "$ISSUE ready"
   LAUNCH_ARGS+=("$t")
 done
 
@@ -2009,10 +2014,11 @@ log() {
       ;;
   esac
   msg="$*"
+  msg="${msg#"${msg%%[![:space:]]*}"}"
 
   local ts formatted msg_num
   ts="$(date '+%H:%M:%S')"
-  formatted="$ts $msg"
+  formatted="$ts  $msg"
 
   if [[ "${DASHBOARD_LOG_TO_FILE:-true}" == "true" ]] && [[ -n "${MILL_LOG_FILE:-}" ]]; then
     printf '%s [%s] %s\n' "$ts" "$level" "$msg" >> "$MILL_LOG_FILE" 2>/dev/null || true
@@ -2024,13 +2030,17 @@ log() {
   fi
 }
 log_error() {
+  local m="$*"
+  m="${m#"${m%%[![:space:]]*}"}"
   local formatted
-  formatted="$(date '+%H:%M:%S') ERROR: $*"
+  formatted="$(date '+%H:%M:%S')  ERROR: $m"
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 log_warn() {
+  local m="$*"
+  m="${m#"${m%%[![:space:]]*}"}"
   local formatted
-  formatted="$(date '+%H:%M:%S') WARN: $*"
+  formatted="$(date '+%H:%M:%S')  WARN: $m"
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 
@@ -3471,7 +3481,7 @@ _restore_inflight_task_window_if_missing() {
     return 0
   fi
 
-  log "status" "✓ $issue → $phase phase relaunched in restored window"
+  log "status" "$issue → $phase phase relaunched in restored window"
   _RESTORE_STATE="restored"
   return 0
 }
@@ -3719,11 +3729,11 @@ EOF
       log "status" "  → Relaunching review agent for $issue (model: $reviewer_model, mode: $review_mode)"
       launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
       if [[ $? -eq 0 ]]; then
-        log "status" "✓ $issue → Review context restored and agent relaunched for PR #$pr"
+        log "status" "$issue → Review context restored and agent relaunched for PR #$pr"
       else
         log_warn "$issue → Failed to relaunch review agent"
         if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
-          log "status" "✓ $issue → Review context restored for PR #$pr (but agent launch failed)"
+          log "status" "$issue → Review context restored for PR #$pr (but agent launch failed)"
         fi
         return 1
       fi
@@ -3735,7 +3745,7 @@ EOF
   fi
 
   if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
-    log "status" "✓ $issue → Review context restored for PR #$pr"
+    log "status" "$issue → Review context restored for PR #$pr"
   fi
 
   return 0
@@ -4150,6 +4160,100 @@ write_transient_ready_attention_file() {
   : > "$state_dir/.needs-attention-transient"
 }
 
+log_ready_failure_result() {
+  local issue="$1"
+  local result="${2-}"
+  local summary debug_file
+
+  summary="$(summarize_ready_result "$result")"
+  debug_file="$(ready_debug_log_file)"
+
+  log_error "  Ready checks failed for $issue - $summary"
+  if [[ -n "$result" ]]; then
+    log_error "  Full ready result: $debug_file"
+    log_debug_json "ready" "$result"
+  fi
+}
+
+log_ready_unparseable_result() {
+  local issue="$1"
+  local result="${2-}"
+  local debug_file
+
+  debug_file="$(ready_debug_log_file)"
+  log_error "  Ready checks produced unparseable output for $issue"
+  if [[ -n "$result" ]]; then
+    log_error "  Full ready result: $debug_file"
+    log_debug_json "ready" "$result"
+  fi
+}
+
+ready_failure_is_actionable_for_remediation() {
+  local verdict="${1-}"
+  local failed_check_names="${2-}"
+  local ready_result="${3-}"
+  local actionable_names failed_check_name failed_check_name_lc
+  local IFS=','
+
+  [[ "$verdict" == "fail" ]] || return 1
+  [[ -n "$failed_check_names" ]] || return 1
+
+  actionable_names=",ci-status,test,tests,unit,unit-test,unit-tests,shell,shell-test,shell-tests,lint,typecheck,type-check,build,ci,"
+  for failed_check_name in $failed_check_names; do
+    failed_check_name_lc="${failed_check_name,,}"
+    if [[ "$actionable_names" == *",$failed_check_name_lc,"* ]]; then
+      return 0
+    fi
+  done
+
+  if printf '%s' "$ready_result" | jq -e '
+    ["test", "tests", "unit", "unit-tests", "shell", "shell-tests", "lint", "typecheck", "type-check", "build"] as $terms
+    | [
+        .checks[]?
+        | select(.status == "fail")
+        | (
+            (.name // "") + " "
+            + (.message // "") + " "
+            + ((.details.failedChecks // []) | map(.name // "") | join(" "))
+          )
+        | ascii_downcase
+      ] as $failed_text
+    | any($failed_text[]; . as $text | any($terms[]; . as $term | ($text | contains($term))))
+  ' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+ready_failed_check_summary() {
+  local ready_result="${1-}"
+
+  printf '%s' "$ready_result" | jq -r '
+    [
+      .checks[]?
+      | select(.status == "fail")
+      | if .name == "ci-status" then
+          "ci-status: " + (.message // "CI checks failing")
+          + (if ((.details.failedChecks // []) | length) > 0
+              then " (" + ((.details.failedChecks // []) | map(.name // "unknown") | join(", ")) + ")"
+              else ""
+            end)
+        else
+          (.name // "unknown") + ": " + (.message // "check failed")
+        end
+    ]
+    | join("; ")
+  ' 2>/dev/null
+}
+
+set_ready_pass_labels() {
+  local wt_dir="$1"
+  local pr_number="$2"
+
+  (cd "$wt_dir" && npx tsx "$TOOLS_DIR/set-pr-ready-label.ts" "$pr_number")
+}
+
 launch_ready_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local pr_number="$7"
@@ -4158,7 +4262,7 @@ launch_ready_phase() {
   local current_agent current_model prompt_file launch_rc launch_head checks_run checks_passed
   local remediation_attempts remediation_launch_head remediation_enabled remediation_max_attempts
   local remediation_agent failed_check_names failed_check_summary current_head ready_status
-  local remediation_artifacts_json ci_failed_checks_json ready_result_file ready_stderr_file
+  local remediation_artifacts_json failed_check_names_json ready_result_file ready_stderr_file
   local prior_ready_status prior_ready_verdict pending_log_level
 
   _ensure_window_exists "$SESSION" "$win" "$wt_dir"
@@ -4215,8 +4319,7 @@ launch_ready_phase() {
   ready_result_file="$state_dir/.ready-result.json"
 
   if [[ -z "$merge_status" ]]; then
-    log_error "  Ready checks produced unparseable output for $issue"
-    [[ -n "$result" ]] && log_error "$result"
+    log_ready_unparseable_result "$issue" "$result"
     write_ready_attention_file "$state_dir" "Ready stage produced invalid output for PR #$pr_number."
     return 1
   fi
@@ -4301,27 +4404,41 @@ launch_ready_phase() {
   clear_transient_mergeability_state "$state_dir"
 
   if [[ "$ready_rc" -eq 0 ]]; then
-    # Record ready stage result (HOK-1177)
-    local main_sha completed_artifacts_json
+    local main_sha completed_artifacts_json label_failed_artifacts_json
     main_sha=$(get_main_head_sha "$wt_dir" "$base_branch")
+    if ! set_ready_pass_labels "$wt_dir" "$pr_number" >/dev/null 2>&1; then
+      label_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+        "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"readyLabelsUpdated\":false,\"readyBaseSha\":\"${main_sha}\"}" \
+        "candidate-progress")
+      write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+        "Ready passed but failed to restore PR labels" \
+        "$label_failed_artifacts_json"
+      write_ready_attention_file "$state_dir" "Ready passed for PR #$pr_number, but updating wm:ready labels failed."
+      log_error "  Ready passed for $issue but failed to restore PR labels"
+      return 1
+    fi
+
     completed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"readyBaseSha\":\"${main_sha}\"}" \
+      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"readyLabelsUpdated\":true,\"readyBaseSha\":\"${main_sha}\"}" \
       "completed")
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
+    log "status" "  Restored ready labels for PR #$pr_number"
     log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
     return 0
   fi
 
   if [[ "$ready_rc" -eq 2 ]]; then
-    local pending_artifacts_json
+    local pending_artifacts_json prior_remediation_failures_json
+    prior_remediation_failures_json=$(jq -c '.artifacts.remediationFailures // []' "$ready_result_file" 2>/dev/null || echo '[]')
     pending_artifacts_json=$(jq -cn \
       --arg merge_status "${merge_status:-UNKNOWN}" \
       --argjson checks_run "${checks_run:-0}" \
       --argjson checks_passed "${checks_passed:-0}" \
       --argjson pr_number "${pr_number}" \
       --argjson attempts "${remediation_attempts:-0}" \
+      --argjson remediation_failures "$prior_remediation_failures_json" \
       '{
         type: "ready",
         verdict: "pending",
@@ -4329,7 +4446,11 @@ launch_ready_phase() {
         checksPassed: $checks_passed,
         mergeConflict: $merge_status,
         prNumber: $pr_number
-      } + (if $attempts > 0 then {remediationAttempts: $attempts, remediationFailures: ["ci-status"]} else {} end)')
+      } + (if $attempts > 0 then {remediationAttempts: $attempts} else {} end)
+        + (if $attempts > 0 and ($remediation_failures | length) > 0
+            then {remediationFailures: $remediation_failures}
+            else {}
+          end)')
     pending_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$pending_artifacts_json" "candidate-progress")
     write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
       "CI checks pending for PR #$pr_number" \
@@ -4339,11 +4460,12 @@ launch_ready_phase() {
   fi
 
   failed_check_names=$(printf '%s' "$result" | jq -r '[.checks[]? | select(.status == "fail") | .name] | join(",")' 2>/dev/null || echo "")
+  failed_check_names_json=$(printf '%s' "$result" | jq -c '[.checks[]? | select(.status == "fail") | .name]' 2>/dev/null || echo '[]')
   remediation_enabled=$(ready_remediation_enabled "$wt_dir")
   remediation_max_attempts=$(ready_remediation_max_attempts "$wt_dir")
   current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
 
-  if [[ "$verdict" == "fail" ]] && [[ "$remediation_enabled" == "true" ]] && [[ "$failed_check_names" == "ci-status" ]]; then
+  if [[ "$remediation_enabled" == "true" ]] && ready_failure_is_actionable_for_remediation "$verdict" "$failed_check_names" "$result"; then
     if [[ "$ready_status" == "running" ]] && [[ -n "$remediation_launch_head" ]] && [[ "$remediation_launch_head" == "$current_head" ]]; then
       return 5
     fi
@@ -4351,13 +4473,13 @@ launch_ready_phase() {
     if (( remediation_attempts >= remediation_max_attempts )); then
       local exhausted_artifacts_json
       exhausted_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-        "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}" \
+        "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":${failed_check_names_json}}" \
         "candidate-progress")
       write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
         "Ready remediation exhausted after ${remediation_attempts} attempt(s)" \
         "$exhausted_artifacts_json"
       write_ready_attention_file "$state_dir" "Remediation exhausted after ${remediation_attempts} attempt(s) for PR #$pr_number."
-      log_error "  Ready remediation exhausted for $issue (failed checks: ci-status)"
+      log_error "  Ready remediation exhausted for $issue (failed checks: ${failed_check_names})"
       return 1
     fi
 
@@ -4365,18 +4487,8 @@ launch_ready_phase() {
     [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
     [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
 
-    ci_failed_checks_json=$(printf '%s' "$result" | jq -c '
-      [.checks[]? | select(.name == "ci-status") | .details.failedChecks // [] | .[]]
-    ' 2>/dev/null || echo '[]')
-    failed_check_summary=$(printf '%s' "$result" | jq -r '
-      .checks[]?
-      | select(.name == "ci-status")
-      | "ci-status: " + (.message // "CI checks failing")
-        + (if ((.details.failedChecks // []) | length) > 0
-            then " (" + ((.details.failedChecks // []) | map(.name) | join(", ")) + ")"
-            else ""
-          end)
-    ' 2>/dev/null || echo "ci-status: CI checks failing")
+    failed_check_summary=$(ready_failed_check_summary "$result")
+    [[ -n "$failed_check_summary" ]] || failed_check_summary="${failed_check_names}: checks failing"
 
     prompt_file="/tmp/${SESSION}-${issue}-ready-remediation-prompt.txt"
     build_ready_remediation_prompt \
@@ -4401,6 +4513,7 @@ launch_ready_phase() {
         --argjson checks_run "${checks_run:-0}" \
         --argjson checks_passed "${checks_passed:-0}" \
         --argjson attempts "$(( remediation_attempts + 1 ))" \
+        --argjson remediation_failures "$failed_check_names_json" \
         '{
           type: "ready",
           verdict: "fail",
@@ -4410,7 +4523,7 @@ launch_ready_phase() {
           prNumber: $pr_number,
           remediationAttempts: $attempts,
           remediationLaunchHead: $launch_head,
-          remediationFailures: ["ci-status"]
+          remediationFailures: $remediation_failures
         }')
       remediation_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$remediation_artifacts_json" "candidate-progress")
       write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$current_model" \
@@ -4427,7 +4540,7 @@ launch_ready_phase() {
 
     local remediation_failed_artifacts_json
     remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":[\"ci-status\"]}" \
+      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":${failed_check_names_json}}" \
       "candidate-progress")
     write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
       "Could not launch ready remediation agent" \
@@ -4439,12 +4552,11 @@ launch_ready_phase() {
 
   local failed_artifacts_json
   failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-    "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number}${ci_failed_checks_json:+,\"remediationFailures\":${ci_failed_checks_json}}}" \
+    "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number}${failed_check_names_json:+,\"remediationFailures\":${failed_check_names_json}}}" \
     "candidate-progress")
   write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" "Ready checks failed" "$failed_artifacts_json"
   write_ready_attention_file "$state_dir" "Ready checks failed for PR #$pr_number."
-  log_error "  Ready checks failed for $issue"
-  [[ -n "$result" ]] && log_error "$result"
+  log_ready_failure_result "$issue" "$result"
   return 1
 }
 
@@ -4738,7 +4850,7 @@ handle_comparison_job_success() {
         if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
           gh pr close "$loser_pr" \
             --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
-          log "status" "  ✓ Closed losing PR #$loser_pr"
+          log "status" "Closed losing PR #$loser_pr"
         fi
         cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
       else
@@ -4771,7 +4883,7 @@ poll_challenge_jobs() {
     side=$(echo "$job_json" | jq -r '.side // empty')
 
     if [[ "$kind" == "eval" && "$status" == "succeeded" ]]; then
-      log "status" "  ✓ Challenge eval completed for $issue_id${side:+ ($side)}"
+      log "status" "Challenge eval completed for $issue_id${side:+ ($side)}"
       settle_tracked_job "$job_id"
       continue
     fi
@@ -5042,7 +5154,7 @@ archive_stage_artifacts() {
   local count
   count=$(find "$archive_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$count" -gt 0 ]]; then
-    log "debug" "  ✓ Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
+    log "debug" "Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
   fi
 }
 
@@ -5057,13 +5169,13 @@ cleanup_completed_task() {
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
   tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
-  log "debug" "  ✓ Closed window: $win"
+  log "debug" "Closed window: $win"
 
   # Remove worktree
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   if [[ -d "$wt_dir" ]]; then
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-    log "debug" "  ✓ Removed worktree: $wt_dir"
+    log "debug" "Removed worktree: $wt_dir"
   fi
 
   # Delete branch after removing the worktree so Git can detach cleanly first.
@@ -5072,7 +5184,7 @@ cleanup_completed_task() {
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     if git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
-      log "debug" "  ✓ Deleted local branch: $task_branch"
+      log "debug" "Deleted local branch: $task_branch"
     else
       log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
     fi
@@ -5086,9 +5198,9 @@ cleanup_completed_task() {
 
   # Log completion with optional reason
   if [[ -n "$completion_reason" ]]; then
-    log "  ✓ Complete: $issue ($completion_reason)"
+    log "Complete: $issue ($completion_reason)"
   else
-    log "  ✓ Complete: $issue"
+    log "Complete: $issue"
   fi
 }
 
@@ -5888,9 +6000,9 @@ launch_task() {
     :
   else
     if is_task_packet "$issue_desc"; then
-      log "info" "  ✓ $issue has task packet"
+      log "info" "$issue has task packet"
     else
-      log "info" "  ✓ $issue raw description saved (agent will expand)"
+      log "info" "$issue raw description saved (agent will expand)"
     fi
     echo "$issue_desc" > "$packet_file"
   fi
@@ -6312,7 +6424,7 @@ EOF
     if [[ "$saved_agent" != "$task_agent_cmd" ]]; then
       log_warn "  ⚠ Agent save mismatch: expected='$task_agent_cmd' but got='$saved_agent'"
     else
-      log "info" "  ✓ Agent set to: $task_agent_cmd"
+      log "info" "Agent set to: $task_agent_cmd"
     fi
   fi
 
@@ -6521,10 +6633,10 @@ Implement from the issue description plus direct codebase analysis."
     "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
     return 0
   fi
-  log "status" "  ✓ Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
+  log "status" "Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
 
-  log "status" "  ✓ $issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
-  [[ -n "$planner_model" ]] && log "info" "  ✓ Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
+  log "status" "$issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
+  [[ -n "$planner_model" ]] && log "info" "Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
 
   if [[ "$should_launch_challenger" == "true" ]]; then
     WAVEMILL_DISABLE_CHALLENGE=1 launch_task "$challenger_key" "$challenger_slug" "$challenger_title" 0
@@ -7156,7 +7268,7 @@ monitor_issue_state() {
       recovered_pr=$(find_pr_for_branch "$BRANCH")
       if [[ -n "$recovered_pr" ]]; then
         PR_BY_ISSUE["$ISSUE"]="$recovered_pr"
-        log "status" "✓ $ISSUE → Found PR #$recovered_pr for errored task (updating state)"
+        log "status" "$ISSUE → Found PR #$recovered_pr for errored task (updating state)"
         save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$recovered_pr" "" "$current_agent"
         set_task_phase "$ISSUE" "review"
       fi
@@ -7188,7 +7300,7 @@ monitor_issue_state() {
       fi
       # Fetch PR details for user-visible summary
       pr_details=$(_with_timeout "$API_TIMEOUT" gh pr view "$PR" --json title,url --jq '"  " + .title + "\n  " + .url' 2>/dev/null || echo "")
-      log "status" "✓ $ISSUE → PR #$PR (In Review)"
+      log "status" "$ISSUE → PR #$PR (In Review)"
       if [[ -n "$pr_details" ]]; then
         log "info" "$pr_details"
       fi
@@ -7245,12 +7357,12 @@ monitor_issue_state() {
         return 0
       fi
       set_window_attention_state "$WIN" "needs-user"
-      log "status" "✓ $ISSUE → Ready checks completed for PR #$PR"
+      log "status" "$ISSUE → Ready checks completed for PR #$PR"
       return 0
     else
       # No PR in current repo - check Linear issue state for cross-repo completion
       if should_update_linear_state "$ISSUE" && linear_is_completed "$(get_linear_issue_id "$ISSUE")"; then
-        log "status" "✓ $ISSUE → Completed externally (cross-repo or manual)"
+        log "status" "$ISSUE → Completed externally (cross-repo or manual)"
         set_window_attention_state "$WIN" "clear"
 
         # Post-completion eval (non-blocking: always exits 0)
@@ -7260,7 +7372,7 @@ monitor_issue_state() {
             log "info" "  📊 Running post-completion eval..."
             launch_background_post_merge_eval "$ISSUE" "" "$BRANCH" "$SLUG" "$ISSUE" "post-completion"
           else
-            log "debug" "  ✓ Eval already completed for $ISSUE"
+            log "debug" "Eval already completed for $ISSUE"
           fi
         fi
 
@@ -7368,7 +7480,7 @@ monitor_issue_state() {
                 return 0
               fi
               set_window_attention_state "$WIN" "clear"
-              log "status" "✓ $ISSUE → Routing complete, launching planning phase"
+              log "status" "$ISSUE → Routing complete, launching planning phase"
               active_count=$((active_count + 1))
               return 0
             else
@@ -7591,7 +7703,7 @@ monitor_issue_state() {
                 return 0
             fi
             set_window_attention_state "$WIN" "clear"
-            log "status" "✓ $ISSUE → Plan approved, launching coding phase"
+            log "status" "$ISSUE → Plan approved, launching coding phase"
             active_count=$((active_count + 1))
             return 0
           fi
@@ -7611,7 +7723,7 @@ monitor_issue_state() {
                 active_count=$((active_count + 1))
                 return 0
               fi
-              log "status" "✓ $ISSUE → Plan approved (via .plan-approved marker), marking as completed"
+              log "status" "$ISSUE → Plan approved (via .plan-approved marker), marking as completed"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
               # Next iteration will detect resolved_phase == "coding" and launch coding
               active_count=$((active_count + 1))
@@ -7623,7 +7735,7 @@ monitor_issue_state() {
           if [[ "$planning_status" == "running" ]]; then
             if [[ -f "$FEATURE_DIR/plan.md" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
-              log "status" "✓ $ISSUE → plan.md detected, marking planning as awaiting_user"
+              log "status" "$ISSUE → plan.md detected, marking planning as awaiting_user"
               write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
               set_window_attention_state "$WIN" "needs-user"
               active_count=$((active_count + 1))
@@ -7643,7 +7755,7 @@ monitor_issue_state() {
                 active_count=$((active_count + 1))
                 return 0
               fi
-              log "status" "✓ $ISSUE → User approved plan (via .plan-approved marker)"
+              log "status" "$ISSUE → User approved plan (via .plan-approved marker)"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
               # Now completed — next poll iteration will pick up and launch coding
               active_count=$((active_count + 1))
@@ -7734,7 +7846,7 @@ monitor_issue_state() {
               return 0
             fi
             set_window_attention_state "$WIN" "clear"
-            log "status" "✓ $ISSUE → Coding complete, launching review phase"
+            log "status" "$ISSUE → Coding complete, launching review phase"
             active_count=$((active_count + 1))
             return 0
           fi
@@ -7747,7 +7859,7 @@ monitor_issue_state() {
           if [[ "$coding_status" == "running" ]]; then
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
               validate_coding_phase_output "$BRANCH"
-              log "status" "✓ $ISSUE → .coding-complete detected, marking coding as completed"
+              log "status" "$ISSUE → .coding-complete detected, marking coding as completed"
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
@@ -7864,7 +7976,7 @@ monitor_issue_state() {
               return 0
             fi
             set_window_attention_state "$WIN" "needs-user"
-            log "✓ $ISSUE → Ready checks completed for PR #$pr_number"
+            log "$ISSUE → Ready checks completed for PR #$pr_number"
             return 0
           fi
           # No PR created or ready phase disabled - mark for attention
@@ -7955,7 +8067,7 @@ monitor_issue_state() {
                 return 0
               fi
 
-              log "✓ $ISSUE → Conflict remediation complete, ready checks rerun"
+              log "$ISSUE → Conflict remediation complete, ready checks rerun"
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
@@ -8029,7 +8141,7 @@ monitor_issue_state() {
         pr_number=$(find_pr_for_branch "$BRANCH")
         if [[ -n "$pr_number" ]]; then
           PR_BY_ISSUE["$ISSUE"]="$pr_number"
-          log "status" "✓ $ISSUE → Found PR #$pr_number (updating state)"
+          log "status" "$ISSUE → Found PR #$pr_number (updating state)"
           save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$pr_number" "" "$current_agent"
           set_task_phase "$ISSUE" "review"
           set_window_attention_state "$WIN" "needs-user"
@@ -8076,7 +8188,7 @@ monitor_issue_state() {
       rm -f "$merged_ready_dir/.needs-attention"
     fi
 
-    log "status" "✓ $ISSUE → PR #$PR MERGED"
+    log "status" "$ISSUE → PR #$PR MERGED"
     set_window_attention_state "$WIN" "clear"
 
     # Capture eval eligibility and agent before cleanup removes task state.
@@ -8096,7 +8208,7 @@ monitor_issue_state() {
         log "info" "  📊 Running post-merge eval..."
         launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
       elif [[ "$AUTO_EVAL" == "true" ]]; then
-        log "debug" "  ✓ Eval already completed for $ISSUE"
+        log "debug" "Eval already completed for $ISSUE"
       fi
       log "status" "  → Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")"
       if should_update_linear_state "$ISSUE"; then
@@ -8117,7 +8229,7 @@ monitor_issue_state() {
       log "info" "  📊 Eval queued in background"
       launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge" "$_eval_agent"
     elif [[ "$AUTO_EVAL" == "true" ]]; then
-      log "debug" "  ✓ Eval already completed for $ISSUE"
+      log "debug" "Eval already completed for $ISSUE"
     fi
     return 0
   elif [[ "$pr_status" == "CLOSED" ]]; then
@@ -8131,7 +8243,7 @@ monitor_issue_state() {
       # Challenge tasks should only move once the sibling outcome is definitive.
       if check_challenge_sibling_merged "$ISSUE"; then
         linear_status="Done"
-        log "status" "  ✓ Challenge sibling merged → marking Linear as Done"
+        log "status" "Challenge sibling merged → marking Linear as Done"
       fi
 
       if [[ "$linear_status" != "Done" && -n "$sibling_pr" ]]; then
@@ -8228,7 +8340,7 @@ monitor_issue_state() {
           return 0
         fi
         set_window_attention_state "$WIN" "needs-user"
-        log "status" "✓ $ISSUE → Ready checks completed for PR #$PR"
+        log "status" "$ISSUE → Ready checks completed for PR #$PR"
         return 0
       fi
 
@@ -8312,7 +8424,7 @@ monitor_issue_state() {
           return 0
         fi
 
-        log "status" "✓ $ISSUE → Conflict remediation complete, ready checks rerun"
+        log "status" "$ISSUE → Conflict remediation complete, ready checks rerun"
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
@@ -8380,7 +8492,7 @@ monitor_issue_state() {
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
-        log "status" "✓ $ISSUE → Ready re-check passed after main advanced (PR #$PR)"
+        log "status" "$ISSUE → Ready re-check passed after main advanced (PR #$PR)"
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -8428,7 +8540,7 @@ monitor_issue_state() {
         return 0
       fi
 
-      log "status" "✓ $ISSUE → Ready re-check passed for PR #$PR"
+      log "status" "$ISSUE → Ready re-check passed for PR #$PR"
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0
@@ -8477,7 +8589,7 @@ monitor_issue_state() {
         return 0
       fi
 
-      log "status" "✓ $ISSUE → Ready checks completed for PR #$PR"
+      log "status" "$ISSUE → Ready checks completed for PR #$PR"
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0

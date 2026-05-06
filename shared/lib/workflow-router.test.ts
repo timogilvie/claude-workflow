@@ -214,6 +214,7 @@ await test('routes documentation work to lighter review', () => {
     );
     assert.equal(decision.reviewRecommended, 'static');
     assert.equal(decision.planDepth, 'light');
+    assert.equal(decision.routingMode, 'heuristic');
   } finally {
     cleanup();
   }
