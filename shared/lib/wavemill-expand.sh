@@ -24,9 +24,9 @@ command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq
 command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
 
 # Logging
-log() { echo "$(date '+%H:%M:%S') $*"; }
-log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
-log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
+log() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  $m"; }
+log_error() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  ERROR: $m" >&2; }
+log_warn() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  WARN: $m" >&2; }
 
 canonicalize_issue_identifier() {
   local input="$1"
@@ -71,12 +71,12 @@ expand_selected_issues() {
     echo ""
     if expand_issue_with_tool "$issue" "$expanded_file"; then
       echo ""
-      log "  ✓ Expanded and updated in Linear"
+      log "Expanded and updated in Linear"
 
       header_file="${expanded_file%.md}-header.md"
       details_file="${expanded_file%.md}-details.md"
       if [[ -f "$header_file" ]] && [[ -f "$details_file" ]]; then
-        log "  ✓ Header and details files generated"
+        log "Header and details files generated"
       fi
 
       rm -f "$expanded_file" "$header_file" "$details_file"

@@ -20,9 +20,9 @@ load_config "$REPO_DIR"
 command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
 
 # Logging
-log() { echo "$(date '+%H:%M:%S') $*"; }
-log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
-log_warn() { echo "$(date '+%H:%M:%S') WARN: $*" >&2; }
+log() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  $m"; }
+log_error() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  ERROR: $m" >&2; }
+log_warn() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  WARN: $m" >&2; }
 
 # ============================================================================
 # SUBCOMMAND HANDLERS
@@ -55,7 +55,7 @@ cmd_init() {
   # Run context-init.ts
   if npx tsx "$TOOLS_DIR/context-init.ts" "${args[@]}" "$REPO_DIR"; then
     echo ""
-    log "✓ Subsystem documentation initialized"
+    log "Subsystem documentation initialized"
     return 0
   else
     local rc=$?
@@ -100,7 +100,7 @@ cmd_update() {
   # Run context-update.ts
   if npx tsx "$TOOLS_DIR/context-update.ts" "${args[@]}" "$REPO_DIR"; then
     echo ""
-    log "✓ Subsystem updated"
+    log "Subsystem updated"
     return 0
   else
     local rc=$?

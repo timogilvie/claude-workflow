@@ -23,8 +23,8 @@ command -v npx >/dev/null || { echo "Error: npx required (install: brew install 
 command -v gh >/dev/null || { echo "Error: gh CLI required (install: brew install gh)"; exit 1; }
 
 # Logging
-log() { echo "$(date '+%H:%M:%S') $*"; }
-log_error() { echo "$(date '+%H:%M:%S') ERROR: $*" >&2; }
+log() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  $m"; }
+log_error() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  ERROR: $m" >&2; }
 
 # Colors
 CYAN=$'\033[0;36m'
