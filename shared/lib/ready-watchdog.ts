@@ -532,6 +532,16 @@ async function writeAuditRecord(repoDir: string, record: ReadyWatchdogAuditRecor
   await appendFile(auditPath, `${JSON.stringify(record)}\n`, 'utf-8');
 }
 
+async function loadPriorWatchdogState(repoDir: string): Promise<ReadyWatchdogStateFile | null> {
+  const statePath = path.join(repoDir, '.wavemill', 'ready-watchdog-state.json');
+  try {
+    const content = await readFile(statePath, 'utf-8');
+    return JSON.parse(content) as ReadyWatchdogStateFile;
+  } catch {
+    return null;
+  }
+}
+
 async function writeStateFile(repoDir: string, findings: ReadyWatchdogStateEntry[], now: Date): Promise<void> {
   const statePath = path.join(repoDir, '.wavemill', 'ready-watchdog-state.json');
   await mutateJsonState<ReadyWatchdogStateFile>(
@@ -560,13 +570,15 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     ...getReadyWatchdogConfig(options.repoDir),
     ...(options.config ?? {}),
   };
-  const findings: ReadyWatchdogStateEntry[] = [];
+  const allFindings: ReadyWatchdogStateEntry[] = [];
+  const newFindings: ReadyWatchdogStateEntry[] = [];
 
   if (!config.enabled && !options.forceRecover) {
-    await writeStateFile(options.repoDir, findings, now);
-    return { updatedAt: now.toISOString(), findings };
+    await writeStateFile(options.repoDir, allFindings, now);
+    return { updatedAt: now.toISOString(), findings: newFindings };
   }
 
+  const priorState = await loadPriorWatchdogState(options.repoDir);
   const workflowState = await deps.readWorkflowState(options.stateFile);
   const tasks = workflowState.tasks ?? {};
   const jobs = normalizeJobs(workflowState);
@@ -632,24 +644,32 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       idleMinutes: snapshot.idleMinutes,
       lastProgressAt: snapshot.lastProgressAt,
     };
-    findings.push(entry);
+    allFindings.push(entry);
 
-    await writeAuditRecord(options.repoDir, {
-      timestamp: now.toISOString(),
-      taskId: issueId,
-      slug: snapshot.slug,
-      prNumber: snapshot.prNumber,
-      classification: classification.kind,
-      action,
-      detail: classification.detail,
-      recoveryCommand,
-      error: fetchError,
-    });
+    const prior = priorState?.tasks[issueId];
+    const isRepeat = prior
+      && prior.classification === entry.classification
+      && prior.detail === entry.detail;
+
+    if (!isRepeat) {
+      newFindings.push(entry);
+      await writeAuditRecord(options.repoDir, {
+        timestamp: now.toISOString(),
+        taskId: issueId,
+        slug: snapshot.slug,
+        prNumber: snapshot.prNumber,
+        classification: classification.kind,
+        action,
+        detail: classification.detail,
+        recoveryCommand,
+        error: fetchError,
+      });
+    }
   }
 
-  await writeStateFile(options.repoDir, findings, now);
+  await writeStateFile(options.repoDir, allFindings, now);
   return {
     updatedAt: now.toISOString(),
-    findings,
+    findings: newFindings,
   };
 }
