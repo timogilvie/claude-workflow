@@ -40,3 +40,13 @@ export function resolveEvalsDir(
     fromConfig: false,
   };
 }
+
+export function resolveRouteArtifactArchiveDir(
+  issueId: string | undefined,
+  repoDir?: string,
+): string | undefined {
+  if (!issueId) {
+    return undefined;
+  }
+  return resolve(resolveEvalsDir(undefined, repoDir).dir, 'artifacts', issueId);
+}

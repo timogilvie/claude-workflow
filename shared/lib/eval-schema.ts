@@ -67,6 +67,9 @@
  * - **1.20.0**: Added optional `enrichmentDiagnostics` field to `EvalRecord`
  *   (HOK-1495) so shared eval enrichment paths can surface missing metadata
  *   inputs instead of silently omitting them
+ * - **1.21.0**: Expanded optional `routeProvenance` artifact metadata
+ *   (HOK-1551) to preserve planner/planDepth, artifact identity, router mode,
+ *   and expected route metrics for replay/training joins
  *
  * @module eval-schema
  */
@@ -76,7 +79,7 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.20.0';
+export const SCHEMA_VERSION = '1.21.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -1110,6 +1113,17 @@ export interface EvalRouteArtifact {
   codeDepth: string;
   reviewer: string;
   reviewMode: string;
+  planner?: string;
+  planDepth?: string;
+  artifactPath?: string;
+  artifactHash?: string;
+  inputHash?: string;
+  source?: string;
+  cacheHit?: boolean;
+  routeSource?: 'batch' | 'single' | 'cache';
+  routerMode?: 'normal' | 'constrained' | 'survival';
+  routingMode?: string;
+  expectedMetrics?: Record<string, unknown>;
 }
 
 export interface EvalRouteProvenance {
@@ -1121,6 +1135,10 @@ export interface EvalRouteProvenance {
   expandedCacheHit?: boolean;
   packetHash?: string;
   routeSource?: 'batch' | 'single' | 'cache';
+  routerMode?: 'normal' | 'constrained' | 'survival';
+  routingMode?: string;
+  artifactPath?: string;
+  artifactHash?: string;
 }
 
 // ────────────────────────────────────────────────────────────────

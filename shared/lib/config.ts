@@ -43,7 +43,7 @@ export interface MillConfig {
 }
 
 export interface ExpansionHandshakeConfig {
-  policy?: 'block' | 'warn';
+  policy?: 'recover' | 'block' | 'warn';
 }
 
 export interface GitConfig {
@@ -152,6 +152,12 @@ export interface EvalConfig {
   interventionPenalties?: InterventionPenaltiesConfig;
   successThreshold?: number;
   mintEligibility?: MintEligibilityConfig;
+}
+
+export interface EvalContextUpdatesConfig {
+  enabled?: boolean;
+  timeoutSeconds?: number;
+  maxRetries?: number;
 }
 
 export interface DifficultyClassifierConfig {
@@ -320,12 +326,24 @@ export interface ReadyConfig {
   migrationDangerLabels?: Record<string, string>;
   migrationForbiddenPatterns?: string[];
   remediation?: ReadyRemediationConfig;
+  watchdog?: ReadyWatchdogConfig;
 }
 
 export interface ReadyRemediationConfig {
   enabled?: boolean;
   maxAttempts?: number;
   agentCmd?: string;
+}
+
+export interface ReadyWatchdogConfig {
+  enabled?: boolean;
+  thresholdMinutes?: number;
+  autoRecover?: boolean;
+  timeoutSeconds?: number;
+}
+
+export interface MonitorConfig {
+  readyWatchdog?: ReadyWatchdogConfig;
 }
 
 export interface RegistryConfig {
@@ -397,6 +415,7 @@ export interface WavemillConfig {
   dashboard?: DashboardConfig;
   taskSelection?: TaskSelectionConfig;
   eval?: EvalConfig;
+  evalContextUpdates?: EvalContextUpdatesConfig;
   autoEval?: boolean;
   hokusai?: HokusaiConfig;
   router?: RouterConfig;
@@ -409,6 +428,7 @@ export interface WavemillConfig {
   providers?: ProvidersConfig;
   integration?: Partial<IntegrationConfig>;
   ready?: ReadyConfig;
+  monitor?: MonitorConfig;
   permissions?: PermissionsConfig;
   modelRegistry?: ModelRegistryConfig;
   quota?: QuotaConfig;
@@ -802,6 +822,15 @@ export function getEvalConfig(repoDir?: string): EvalConfig {
   return loadWavemillConfig(repoDir).eval || {};
 }
 
+export function getEvalContextUpdatesConfig(repoDir?: string): Required<EvalContextUpdatesConfig> {
+  const config = loadWavemillConfig(repoDir).evalContextUpdates ?? {};
+  return {
+    enabled: config.enabled ?? true,
+    timeoutSeconds: config.timeoutSeconds ?? 60,
+    maxRetries: config.maxRetries ?? 0,
+  };
+}
+
 export function getMintEligibilityConfig(repoDir?: string): MintEligibilityConfig | undefined {
   return getEvalConfig(repoDir).mintEligibility;
 }
@@ -826,6 +855,24 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
       maxAttempts: config.ready?.remediation?.maxAttempts ?? 3,
       agentCmd: config.ready?.remediation?.agentCmd ?? '',
     },
+    watchdog: getReadyWatchdogConfig(repoDir),
+  };
+}
+
+export function getReadyWatchdogConfig(repoDir?: string): Required<ReadyWatchdogConfig> {
+  const config = loadWavemillConfig(repoDir);
+  const readyWatchdog = config.ready?.watchdog ?? {};
+  const legacyMonitorWatchdog = config.monitor?.readyWatchdog ?? {};
+  const merged = {
+    ...legacyMonitorWatchdog,
+    ...readyWatchdog,
+  };
+
+  return {
+    enabled: merged.enabled ?? true,
+    thresholdMinutes: merged.thresholdMinutes ?? 10,
+    autoRecover: merged.autoRecover ?? true,
+    timeoutSeconds: merged.timeoutSeconds ?? 30,
   };
 }
 
@@ -868,9 +915,9 @@ export function getMillConfig(repoDir?: string): MillConfig {
   return loadWavemillConfig(repoDir).mill || {};
 }
 
-export function getExpansionHandshakeConfig(repoDir?: string): { policy: 'block' | 'warn' } {
+export function getExpansionHandshakeConfig(repoDir?: string): { policy: 'recover' | 'block' | 'warn' } {
   const policy = loadWavemillConfig(repoDir).mill?.expansionHandshake?.policy;
-  return { policy: policy ?? 'block' };
+  return { policy: policy ?? 'recover' };
 }
 
 /**

@@ -33,11 +33,10 @@ else
   fail "expected two cleanup_completed_task definitions, found $cleanup_defs"
 fi
 
-if grep -Fq 'push origin --delete "$task_branch"' <<< "$HEREDOC_CONTENT" \
-  && grep -Fq 'Deleted remote branch: $task_branch' <<< "$HEREDOC_CONTENT"; then
-  pass "monitor cleanup deletes remote task branches"
+if ! grep -Fq 'push origin --delete "$task_branch"' <<< "$HEREDOC_CONTENT"; then
+  pass "monitor cleanup leaves remote branch deletion to tend"
 else
-  fail "monitor cleanup is missing remote branch deletion"
+  fail "monitor cleanup still deletes remote task branches"
 fi
 
 outer_cleanup=$(awk '
@@ -45,11 +44,10 @@ outer_cleanup=$(awk '
   in_fn { print }
   in_fn && /^}$/ { exit }
 ' "$MILL_SCRIPT")
-if grep -Fq 'push origin --delete "$task_branch"' <<< "$outer_cleanup" \
-  && grep -Fq 'Deleted remote branch: $task_branch' <<< "$outer_cleanup"; then
-  pass "outer cleanup deletes remote task branches"
+if ! grep -Fq 'push origin --delete "$task_branch"' <<< "$outer_cleanup"; then
+  pass "outer cleanup leaves remote branch deletion to tend"
 else
-  fail "outer cleanup is missing remote branch deletion"
+  fail "outer cleanup still deletes remote task branches"
 fi
 
 if grep -Fq 'Deleted local branch: $task_branch' <<< "$HEREDOC_CONTENT" \
@@ -59,11 +57,11 @@ else
   fail "cleanup logging still reports generic branch deletion"
 fi
 
-if grep -Fq 'Remote branch already deleted or push failed: $task_branch' <<< "$HEREDOC_CONTENT" \
-  && grep -Fq 'Remote branch already deleted or push failed: $task_branch' <<< "$outer_cleanup"; then
-  pass "cleanup tolerates already-deleted remote branches"
+if grep -Fq 'Local branch cleanup failed after worktree removal: $task_branch' <<< "$HEREDOC_CONTENT" \
+  && grep -Fq 'Local branch cleanup failed after worktree removal: $task_branch' <<< "$outer_cleanup"; then
+  pass "cleanup warns but continues when local branch deletion fails"
 else
-  fail "cleanup is missing remote deletion fallback logging"
+  fail "cleanup is missing local deletion fallback logging"
 fi
 
 if grep -Fq 'Refusing to delete protected branch: $task_branch' <<< "$HEREDOC_CONTENT" \

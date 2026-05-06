@@ -515,6 +515,21 @@ find_expanded_route_artifact() {
   return 1
 }
 
+get_expansion_handshake_policy() {
+  local repo_dir="$1"
+  local cfg_policy=""
+
+  cfg_policy=$(wavemill_load_config "$repo_dir" | jq -r '.mill.expansionHandshake.policy // "recover"' 2>/dev/null || echo "recover")
+  case "$cfg_policy" in
+    recover|block|warn)
+      printf '%s\n' "$cfg_policy"
+      ;;
+    *)
+      printf 'recover\n'
+      ;;
+  esac
+}
+
 validate_expanded_route_artifact() {
   local route_file="$1"
 
@@ -527,6 +542,39 @@ validate_expanded_route_artifact() {
     and (.reviewer | type == "string" and length > 0)
     and ((.reviewMode // .reviewRecommended // "") | type == "string" and length > 0)
   ' "$route_file" >/dev/null 2>&1
+}
+
+mill_expansion_handshake_reason() {
+  local feature_dir="$1"
+  local packet_file="$feature_dir/task-packet.md"
+  local route_file=""
+  local packet_content=""
+
+  if [[ -f "$packet_file" ]]; then
+    packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
+  fi
+
+  if is_task_packet "$packet_content"; then
+    printf 'already-expanded\n'
+    return 0
+  fi
+
+  route_file="$(find_expanded_route_artifact "$feature_dir" 2>/dev/null || true)"
+  if [[ -n "$route_file" ]]; then
+    if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
+      printf 'invalid-json\n'
+      return 0
+    fi
+    if validate_expanded_route_artifact "$route_file"; then
+      printf 'expanded-route-present\n'
+      return 0
+    fi
+    printf 'missing-required-field\n'
+    return 0
+  fi
+
+  printf 'missing\n'
+  return 0
 }
 
 route_lifecycle_route_id() {
@@ -796,47 +844,89 @@ apply_expanded_route_if_present() {
 # Returns 0 (pass or warn) or 1 (block).
 mill_check_expansion_handshake() {
   local feature_dir="$1" issue="$2" repo_dir="$3"
-  local packet_file="$feature_dir/task-packet.md"
-  local route_file="$feature_dir/.post-expansion-route.json"
-  local packet_content=""
+  local reason policy
 
-  if [[ -f "$packet_file" ]]; then
-    packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
-  fi
+  reason="$(mill_expansion_handshake_reason "$feature_dir")"
+  case "$reason" in
+    already-expanded|expanded-route-present)
+      log "info" "[expansion-handshake] PASS issue=$issue reason=$reason"
+      return 0
+      ;;
+  esac
 
-  if is_task_packet "$packet_content"; then
-    log "info" "[expansion-handshake] PASS issue=$issue reason=already-expanded"
-    return 0
-  fi
-
-  if [[ -f "$route_file" ]] && validate_expanded_route_artifact "$route_file"; then
-    log "info" "[expansion-handshake] PASS issue=$issue reason=expanded-route-present"
-    return 0
-  fi
-
-  local reason="missing"
-  if [[ -f "$route_file" ]]; then
-    if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
-      reason="invalid-json"
-    else
-      reason="missing-required-field"
-    fi
-  fi
-
-  local policy="block"
-  local cfg_policy
-  cfg_policy=$(wavemill_load_config "$repo_dir" | jq -r '.mill.expansionHandshake.policy // "block"' 2>/dev/null || echo "block")
-  if [[ "$cfg_policy" == "warn" ]]; then
-    policy="warn"
-  fi
+  policy="$(get_expansion_handshake_policy "$repo_dir")"
 
   if [[ "$policy" == "warn" ]]; then
     log "warn" "[expansion-handshake] WARN issue=$issue reason=$reason policy=warn"
     return 0
   fi
 
-  log "warn" "[expansion-handshake] BLOCKED issue=$issue reason=$reason recover=\"wavemill expand $issue\""
+  log "warn" "[expansion-handshake] BLOCKED issue=$issue reason=$reason policy=$policy recover=\"wavemill expand $issue\""
   return 1
+}
+
+expansion_recovery_state_file() {
+  local feature_dir="$1"
+  printf '%s/.expansion-recovery-state.json\n' "$feature_dir"
+}
+
+ensure_expansion_recovery_state_file() {
+  local feature_dir="$1"
+  local state_file
+  state_file="$(expansion_recovery_state_file "$feature_dir")"
+
+  if [[ -f "$state_file" ]]; then
+    return 0
+  fi
+
+  printf '{}\n' | write_json_artifact "$state_file"
+}
+
+expansion_recovery_already_attempted() {
+  local feature_dir="$1"
+  local state_file
+  state_file="$(expansion_recovery_state_file "$feature_dir")"
+
+  [[ -f "$state_file" ]] || return 1
+  jq -e '.attempted == true' "$state_file" >/dev/null 2>&1
+}
+
+expansion_recovery_mark_attempted() {
+  local feature_dir="$1" issue="$2" reason="$3"
+  local state_file
+  state_file="$(expansion_recovery_state_file "$feature_dir")"
+
+  ensure_expansion_recovery_state_file "$feature_dir" || return 1
+  state_mutate "$state_file" \
+    '.attempted = true
+     | .issue = $issue
+     | .reason = $reason
+     | .status = (.status // "pending")
+     | .attemptedAt = (.attemptedAt // (now | todateiso8601))
+     | .completedAt = (.completedAt // null)
+     | .exitCode = (.exitCode // null)
+     | .detail = (.detail // "")' \
+    --arg issue "$issue" \
+    --arg reason "$reason"
+}
+
+expansion_recovery_mark_result() {
+  local feature_dir="$1" issue="$2" status="$3" detail="${4:-}" exit_code="${5:-}"
+  local state_file
+  state_file="$(expansion_recovery_state_file "$feature_dir")"
+
+  ensure_expansion_recovery_state_file "$feature_dir" || return 1
+  state_mutate "$state_file" \
+    '.attempted = true
+     | .issue = $issue
+     | .status = $status
+     | .detail = $detail
+     | .completedAt = (now | todateiso8601)
+     | .exitCode = (if $exitCode == "" then null else ($exitCode | tonumber) end)' \
+    --arg issue "$issue" \
+    --arg status "$status" \
+    --arg detail "$detail" \
+    --arg exitCode "$exit_code"
 }
 
 wavemill_command_file_path() {
@@ -1433,8 +1523,9 @@ state_mutate() {
 
 queue_add_task() {
   local issue_id="${1:-}" blocker_issue_id="${2:-}" blocker_pr_number="${3:-}" desired_base_branch="${4:-}" linear_issue_url="${5:-}"
+  local slug="${6:-}" title="${7:-}"
   if [[ -z "$issue_id" || -z "$blocker_issue_id" || -z "$blocker_pr_number" || -z "$desired_base_branch" || -z "$linear_issue_url" ]]; then
-    echo "Usage: queue_add_task <issue_id> <blocker_issue_id> <blocker_pr_number> <desired_base_branch> <linear_url>" >&2
+    echo "Usage: queue_add_task <issue_id> <blocker_issue_id> <blocker_pr_number> <desired_base_branch> <linear_url> [slug] [title]" >&2
     return 1
   fi
 
@@ -1445,13 +1536,17 @@ queue_add_task() {
       blocker_pr_number: (if $blocker_pr_number == "null" then null else ($blocker_pr_number | tonumber) end),
       desired_base_branch: $desired_base_branch,
       linear_issue_url: $linear_issue_url,
+      slug: $slug,
+      title: $title,
       queued_at: (now | todate)
     }]' \
     --arg issue_id "$issue_id" \
     --arg blocker_issue_id "$blocker_issue_id" \
     --arg blocker_pr_number "$blocker_pr_number" \
     --arg desired_base_branch "$desired_base_branch" \
-    --arg linear_issue_url "$linear_issue_url"
+    --arg linear_issue_url "$linear_issue_url" \
+    --arg slug "$slug" \
+    --arg title "$title"
 }
 
 queue_remove_task() {
@@ -1472,4 +1567,82 @@ queue_list_tasks() {
     return 0
   }
   jq -r '.queued_tasks // []' "$STATE_FILE"
+}
+
+find_queued_children_for_parent() {
+  local parent_issue="${1:-}"
+  if [[ -z "$parent_issue" ]]; then
+    echo "Usage: find_queued_children_for_parent <parent_issue>" >&2
+    return 1
+  fi
+
+  [[ -f "$STATE_FILE" ]] || {
+    printf '[]\n'
+    return 0
+  }
+
+  jq -c --arg parent_issue "$parent_issue" \
+    '[.queued_tasks[]? | select(.blocker_issue_id == $parent_issue and ((.waiting_reason // "") == ""))]' \
+    "$STATE_FILE"
+}
+
+resolve_parent_pr_branch() {
+  local pr_number="${1:-}"
+  if [[ -z "$pr_number" ]]; then
+    echo "Usage: resolve_parent_pr_branch <pr_number>" >&2
+    return 1
+  fi
+
+  local pr_json
+  if ! pr_json=$(gh pr view "$pr_number" --json headRefName,url,number 2>&1); then
+    printf '%s\n' "$pr_json" >&2
+    return 1
+  fi
+
+  local branch url resolved_number
+  branch=$(printf '%s' "$pr_json" | jq -r '.headRefName // ""' 2>/dev/null || echo "")
+  url=$(printf '%s' "$pr_json" | jq -r '.url // ""' 2>/dev/null || echo "")
+  resolved_number=$(printf '%s' "$pr_json" | jq -r '.number // empty' 2>/dev/null || echo "")
+  if [[ -z "$branch" || "$branch" == "null" ]]; then
+    echo "parent PR #$pr_number is missing headRefName" >&2
+    return 1
+  fi
+
+  printf '%s|%s|%s\n' "$branch" "${resolved_number:-$pr_number}" "$url"
+}
+
+record_depends_on_metadata() {
+  local child_issue="${1:-}" pr_number="${2:-}" pr_url="${3:-}" pr_branch="${4:-}" parent_issue="${5:-}"
+  if [[ -z "$child_issue" || -z "$pr_number" || -z "$pr_url" || -z "$pr_branch" || -z "$parent_issue" ]]; then
+    echo "Usage: record_depends_on_metadata <child_issue> <pr_number> <pr_url> <pr_branch> <parent_issue>" >&2
+    return 1
+  fi
+
+  state_mutate "$STATE_FILE" \
+    '.tasks[$issue] = ((.tasks[$issue] // {}) + {
+      dependsOnPr: {
+        number: ($pr_number | tonumber),
+        url: $pr_url,
+        branch: $pr_branch,
+        parent_issue: $parent_issue
+      }
+    })' \
+    --arg issue "$child_issue" \
+    --arg pr_number "$pr_number" \
+    --arg pr_url "$pr_url" \
+    --arg pr_branch "$pr_branch" \
+    --arg parent_issue "$parent_issue"
+}
+
+queue_mark_waiting() {
+  local child_issue="${1:-}" reason="${2:-}"
+  if [[ -z "$child_issue" || -z "$reason" ]]; then
+    echo "Usage: queue_mark_waiting <child_issue> <reason>" >&2
+    return 1
+  fi
+
+  state_mutate "$STATE_FILE" \
+    '.queued_tasks = ((.queued_tasks // []) | map(if .issue_id == $issue then (.waiting_reason = $reason) else . end))' \
+    --arg issue "$child_issue" \
+    --arg reason "$reason"
 }

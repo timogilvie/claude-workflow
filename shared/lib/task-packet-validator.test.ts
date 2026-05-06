@@ -35,6 +35,27 @@ function testFileExistence() {
   assert(issues.length === 1, 'Should find 1 non-existent file');
   assert(issues[0].type === 'file-not-found', 'Issue type should be file-not-found');
   assert(issues[0].description.includes('nonexistent/file.ts'), 'Should mention the missing file');
+
+  const plannedPacket = `
+## Key Files
+- \`shared/lib/linear.ts\` - Existing file
+- \`new/feature.ts\` (new) - Planned file
+- helpers/new-util.ts (planned) - Planned helper
+- \`missing/unmarked.ts\` - Missing file without marker
+  `;
+
+  const plannedIssues = validateFileExistence(plannedPacket, process.cwd());
+  assert(plannedIssues.length === 1, 'Should only flag missing unmarked key files');
+  assert(plannedIssues[0].description.includes('missing/unmarked.ts'), 'Should flag unmarked missing path');
+
+  const traversalPacket = `
+## Key Files
+- \`../outside/repo.ts\` - Invalid traversal path
+  `;
+
+  const traversalIssues = validateFileExistence(traversalPacket, process.cwd());
+  assert(traversalIssues.length === 1, 'Should block out-of-repo paths');
+  assert(traversalIssues[0].description.includes('../outside/repo.ts'), 'Should mention out-of-repo path');
 }
 
 function testValidationSteps() {
@@ -68,6 +89,93 @@ curl -X POST http://localhost:3000/api/test -d '{"test": true}'
     console.log('Debug: Good packet validation issues:', JSON.stringify(goodIssues, null, 2));
   }
   assert(goodIssues.length === 0, 'Should pass with custom validation steps');
+
+  const numberedPacket = `
+## 6. Validation Steps
+\`\`\`bash
+pnpm lint
+pnpm test
+pnpm --filter wavemill test -- task-packet-validator
+\`\`\`
+  `;
+  const numberedIssues = validateValidationSteps(numberedPacket);
+  assert(numberedIssues.length === 0, 'Should accept numbered Validation Steps heading');
+
+  const missingSectionPacket = `
+## Functional Requirements
+- [ ] **[REQ-F1]** Example requirement
+  `;
+  const missingSectionIssues = validateValidationSteps(missingSectionPacket);
+  assert(missingSectionIssues.length === 1, 'Should fail when Validation Steps heading is missing');
+  assert(
+    missingSectionIssues[0].description === 'Validation Steps section is missing',
+    'Should use explicit missing section message'
+  );
+
+  const emptyValidationPacket = `
+## 6. Validation Steps
+  `;
+  const emptyValidationIssues = validateValidationSteps(emptyValidationPacket);
+  assert(emptyValidationIssues.length === 1, 'Should fail when Validation Steps content is empty');
+  assert(
+    emptyValidationIssues[0].type === 'boilerplate-validation',
+    'Empty Validation Steps should still be boilerplate-validation'
+  );
+}
+
+function testRegressionShapedPackets() {
+  console.log('\n=== Testing Regression-Shaped Packets ===');
+
+  const hok1554LikePacket = `
+## Key Files
+- \`apps/site/src/routes/new-page.tsx\` (planned) - New route
+- \`apps/site/src/components/nav/Menu.tsx\` (planned) - New menu component
+- \`tools/expand-issue.ts\` - Existing expander
+
+## 6. Validation Steps
+\`\`\`bash
+pnpm --filter site test -- menu
+pnpm --filter site lint
+\`\`\`
+  `;
+  const hok1554Issues = [
+    ...validateFileExistence(hok1554LikePacket, process.cwd()),
+    ...validateValidationSteps(hok1554LikePacket),
+  ];
+  assert(hok1554Issues.length === 0, 'HOK-1554-like packet should avoid template-only errors');
+
+  const hok1567LikePacket = `
+## Key Files
+- \`shared/lib/task-packet-validator.ts\` - Existing validator
+- \`tests/task-packet-utils.test.ts\` (new) - Planned test helper
+
+## 6. Validation Steps
+\`\`\`bash
+pnpm test
+pnpm --filter wavemill test -- task-packet-validator
+\`\`\`
+  `;
+  const hok1567FileIssues = validateFileExistence(hok1567LikePacket, process.cwd());
+  assert(hok1567FileIssues.length === 0, 'HOK-1567-like packet should allow explicit new test files');
+
+  const hok1261LikePacket = `
+## Key Files
+- \`shared/lib/task-packet-validator.ts\` - Existing file
+- \`apps/site/src/lib/generated.ts\` (planned) - Planned generated file
+- \`apps/site/src/lib/missing-unmarked.ts\` - Should fail
+
+## 6. Validation Steps
+\`\`\`bash
+pnpm --filter wavemill lint
+pnpm --filter wavemill test -- task-packet-validator
+\`\`\`
+  `;
+  const hok1261Issues = validateFileExistence(hok1261LikePacket, process.cwd());
+  assert(hok1261Issues.length === 1, 'HOK-1261-like packet should still flag unmarked missing files');
+  assert(
+    hok1261Issues[0].description.includes('apps/site/src/lib/missing-unmarked.ts'),
+    'Should specifically report unmarked missing file in mixed packet'
+  );
 }
 
 function testScopeBoundaries() {
@@ -191,6 +299,7 @@ async function main() {
   try {
     testFileExistence();
     testValidationSteps();
+    testRegressionShapedPackets();
     testScopeBoundaries();
     testAcceptanceCriteria();
     testReleaseReadiness();

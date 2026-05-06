@@ -11,7 +11,7 @@ HEREDOC_CONTENT=$(awk '
   found { print }
 ' "$MILL_SCRIPT")
 
-for required in read_command_offset write_command_offset drain_command_events consume_next_command wavemill_command_file_path wavemill_command_offset_path; do
+for required in read_command_offset write_command_offset drain_command_events consume_next_command wavemill_command_file_path acknowledge_command_offset monitor_defer_command; do
   if ! grep -q "^${required}()" <<< "$HEREDOC_CONTENT" && ! grep -q "${required}" <<< "$HEREDOC_CONTENT"; then
     echo "FAIL: monitor heredoc missing ${required}"
     exit 1

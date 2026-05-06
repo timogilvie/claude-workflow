@@ -1209,13 +1209,18 @@ describe('ready-stage', () => {
       const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () => {
         throw new Error('gh failed');
       });
+      const sleepMock = mock.method(readyStage.readyStageDeps, 'sleep', async () => undefined);
 
       try {
         const result = await checkMergeConflicts(42, '/tmp/test');
         assert.equal(result.status, 'ERROR');
+        assert.equal(result.attempts, 3);
         assert.match(result.error ?? '', /gh failed/);
+        assert.equal(execMock.mock.callCount(), 3);
+        assert.equal(sleepMock.mock.callCount(), 2);
       } finally {
         execMock.mock.restore();
+        sleepMock.mock.restore();
       }
     });
   });

@@ -97,8 +97,40 @@ In that phase, the monitor is responsible for:
 - recording whether the PR is ready, blocked, or warning-only
 - holding merge completion until required ready checks pass
 - surfacing manual release steps and merge-conflict remediation needs
+- detecting stale ready-stage local state with the ready watchdog
 
-The current implementation is scaffolded and returns a stub ready result, which keeps the workflow backwards-compatible while the full readiness engine is built out. For operator details, see [Ready Stage](ready-stage.md).
+The ready watchdog runs once per monitor tick for `phase=ready` tasks. After `ready.watchdog.thresholdMinutes` of no local progress, it compares controller state with GitHub truth and classifies the task as one of:
+
+- `stuck`
+- `waiting on CI`
+- `waiting on eval/comparison`
+- `needs user`
+
+When GitHub says the PR is open, mergeable, and green, the watchdog only performs local recovery. It never mutates the PR itself. Safe recovery is limited to clearing stale local ready markers and resetting the controller-owned ready result back to a pending rerun. If auto-recovery is disabled or unsafe, the watchdog prints an explicit `tools/ready-watchdog.ts --recover <ISSUE>` command instead.
+
+Configuration lives under `ready.watchdog`:
+
+```json
+{
+  "ready": {
+    "watchdog": {
+      "enabled": true,
+      "thresholdMinutes": 10,
+      "autoRecover": true,
+      "timeoutSeconds": 30
+    }
+  }
+}
+```
+
+`monitor.readyWatchdog` is also accepted as a backwards-compatible alias, but `ready.watchdog` is canonical.
+
+Runtime artifacts:
+
+- `.wavemill/ready-watchdog-state.json`: latest per-issue classification for the dashboard
+- `.wavemill/ready-watchdog.jsonl`: append-only audit trail of stale-task detections and recovery decisions
+
+For operator details, see [Ready Stage](ready-stage.md).
 
 ## Operator Controls
 
@@ -152,6 +184,15 @@ The four pipeline stages are:
 
 When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `integration` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
 
+### Dependent Task Auto-Dispatch
+
+When the monitor loop detects that a parent task has opened a PR, mill automatically re-checks queued children whose `depends_on` edge targets that parent issue.
+
+- Trigger: PR creation detection in the monitor loop, including resumed review transitions.
+- Base branch: the child worktree branches from the parent PR head ref, not from `main` or the global `mill.baseBranch`.
+- PR metadata: the child PR body is updated with a prepended `depends_on:` block that records the parent PR number, issue, branch, and URL.
+- Failure mode: if mill cannot resolve the parent PR branch, the child remains queued and gets `waiting_reason: parent_pr_branch_unresolvable: <detail>`. Mill does not silently fall back to `main`.
+
 ### Challenge-Mode Interaction
 
 Challenge mode adds a second PR for the same task and records a comparison result under `.wavemill/evals`. During tend selection, `tend-challenge-gate.ts` classifies each pair into one of four states:
@@ -160,6 +201,12 @@ Challenge mode adds a second PR for the same task and records a comparison resul
 - unresolved pair with no comparison yet
 - winner
 - loser
+
+Challenge post-PR evals and PR comparisons now run as monitored background jobs instead of blocking the main monitor loop.
+
+- Job state is persisted under `.wavemill/workflow-state.json` in `jobs`.
+- Logs and structured result files live under `.wavemill/jobs/<session>/`.
+- Failed or timed-out jobs surface compact excerpts in the dashboard so the monitor can keep draining commands and launching other work.
 
 If the pair is unresolved, tend blocks both sides from autonomous merge. If a winner is recorded and challenge auto-merge is enabled, the winner remains eligible, the loser is marked superseded, and tend closes the loser PR with a cleanup comment. If auto-merge is disabled for winners, the winning PR is still held for manual action.
 
@@ -225,6 +272,28 @@ This ensures that agent #5 knows what agents #1-4 built, leading to more consist
 - The "Recent Work" section is auto-updated (append-only)
 - Other sections (Architecture, Conventions) can be manually edited
 - Agents receive this context when expanding Linear issues
+
+### Post-Eval Update Controls
+
+The eval result is persisted before project-context and subsystem maintenance runs. Those follow-up updates are best-effort: failures or timeouts do not make the eval fail.
+
+Configure the optional post-eval update phase in `.wavemill-config.json`:
+
+```json
+{
+  "evalContextUpdates": {
+    "enabled": true,
+    "timeoutSeconds": 60,
+    "maxRetries": 0
+  }
+}
+```
+
+Skip the optional phase entirely with `WAVEMILL_SKIP_POST_EVAL_CONTEXT_UPDATES=1`.
+
+When operating mode is `constrained` or `survival`, wavemill skips these updates automatically to keep mill sessions bounded.
+
+Skipped or failed optional updates are appended to `.wavemill/evals/eval-context-update-warnings.jsonl`.
 
 ## Routing And Learning
 
@@ -319,32 +388,34 @@ state remains in place.
 Before coding starts, mill now checks for a mandatory expansion handshake:
 
 - Expanded packet input (`task-packet.md` has task-packet markers): pass.
-- Raw issue text input: requires a valid `features/<slug>/.post-expansion-route.json`.
+- Raw issue text input: first attempts to recover a missing expanded route artifact automatically.
 
-If the handshake fails, transition is blocked by default and logs one of:
+Default behavior (`policy: "recover"`):
+
+- If the expanded route artifact is missing, mill attempts recovery once by re-expanding the issue into the feature-local task packet, rerouting that packet, and promoting the recovered expanded route before coding starts.
+- If that recovery fails, mill records the failed attempt, logs a clear fallback warning, and continues coding with the existing bootstrap route.
+- If the artifact exists but is malformed or missing required execution fields, mill still blocks because that indicates corrupted routing state.
+
+If the handshake blocks, transition logs one of:
 
 - `[expansion-handshake] BLOCKED issue=<ISSUE> reason=missing`
 - `[expansion-handshake] BLOCKED issue=<ISSUE> reason=invalid-json`
 - `[expansion-handshake] BLOCKED issue=<ISSUE> reason=missing-required-field`
 
-Recovery:
-
-1. Run `wavemill expand <ISSUE>`.
-2. Re-approve planning (`touch features/<slug>/.plan-approved`).
-
-Optional bypass (warn-only):
+Strict and permissive overrides:
 
 ```json
 {
   "mill": {
     "expansionHandshake": {
-      "policy": "warn"
+      "policy": "block"
     }
   }
 }
 ```
 
-With `policy: "warn"`, mill logs `[expansion-handshake] WARN ...` and proceeds.
+- `policy: "block"` restores the original fail-closed behavior for missing artifacts.
+- `policy: "warn"` logs `[expansion-handshake] WARN ...` and proceeds immediately without recovery.
 
 ## See Also
 
