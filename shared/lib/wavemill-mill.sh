@@ -620,6 +620,70 @@ save_task_state() {
   fi
 }
 
+mark_challenge_eval_running() {
+  local issue="$1" side="$2" pr="$3" phase="${4:-eval}"
+  state_mutate "$STATE_FILE" '
+    .tasks[$issue].evalRunning = {
+      issue: $issue,
+      side: $side,
+      pr: ($pr | tonumber),
+      phase: $phase,
+      startedAt: (now | todateiso8601)
+    } |
+    .tasks[$issue].updated = (now | todateiso8601)
+  ' \
+    --arg issue "$issue" \
+    --arg side "$side" \
+    --arg pr "$pr" \
+    --arg phase "$phase"
+}
+
+clear_challenge_eval_running() {
+  local issue="$1"
+  state_mutate "$STATE_FILE" '
+    if .tasks[$issue]? then
+      .tasks[$issue] |= (del(.evalRunning) | .updated = (now | todateiso8601))
+    else
+      .
+    end
+  ' --arg issue "$issue"
+}
+
+mark_challenge_comparison_running() {
+  local pair_id="$1" primary_pr="$2" challenger_pr="$3"
+  state_mutate "$STATE_FILE" '
+    .tasks |= with_entries(
+      if (.value.challengePairId // "") == $pair then
+        .value.comparisonRunning = {
+          pairId: $pair,
+          primaryPr: ($primaryPr | tonumber),
+          challengerPr: ($challengerPr | tonumber),
+          startedAt: (now | todateiso8601)
+        } |
+        .value.updated = (now | todateiso8601)
+      else
+        .
+      end
+    )
+  ' \
+    --arg pair "$pair_id" \
+    --arg primaryPr "$primary_pr" \
+    --arg challengerPr "$challenger_pr"
+}
+
+clear_challenge_comparison_running() {
+  local pair_id="$1"
+  state_mutate "$STATE_FILE" '
+    .tasks |= with_entries(
+      if (.value.challengePairId // "") == $pair then
+        .value |= (del(.comparisonRunning) | .updated = (now | todateiso8601))
+      else
+        .
+      end
+    )
+  ' --arg pair "$pair_id"
+}
+
 
 get_task_state() {
   local issue="$1"
@@ -2346,11 +2410,14 @@ save_task_state() {
      '(.tasks[$issue].agent // "") as $old_agent |
       (.tasks[$issue].phase // "executing") as $old_phase |
       (.tasks[$issue].evalCompleted // false) as $old_eval |
+      (.tasks[$issue].evalFailed // false) as $old_eval_failed |
       (.tasks[$issue].challengeCompared // false) as $old_challenge_compared |
       (.tasks[$issue].challenge // false) as $old_challenge |
       (.tasks[$issue].challengePairId // "") as $old_challenge_pair |
       (.tasks[$issue].challengeRole // "") as $old_challenge_role |
       (.tasks[$issue].challengeModel // "") as $old_challenge_model |
+      (.tasks[$issue].evalRunning // null) as $old_eval_running |
+      (.tasks[$issue].comparisonRunning // null) as $old_comparison_running |
       (.tasks[$issue].linearIssueId // $issue) as $old_linear_issue |
       (.tasks[$issue].coderModel // "") as $old_coderModel |
       (.tasks[$issue].plannerModel // "") as $old_plannerModel |
@@ -2378,7 +2445,10 @@ save_task_state() {
         reviewMode: (if $reviewMode != "" then $reviewMode else $old_reviewMode end),
         phase: $old_phase,
         evalCompleted: $old_eval,
+        evalFailed: $old_eval_failed,
         challengeCompared: $old_challenge_compared,
+        evalRunning: $old_eval_running,
+        comparisonRunning: $old_comparison_running,
         updated: (now | todate)
       }' \
      --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
@@ -2456,7 +2526,10 @@ get_task_phase() {
 mark_eval_completed() {
   local issue="$1"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].evalCompleted = true | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].evalCompleted = true
+      | .tasks[$issue].evalFailed = false
+      | del(.tasks[$issue].evalRunning)
+      | .tasks[$issue].updated = (now | todateiso8601)' \
      --arg issue "$issue"; then
     log_warn "mark_eval_completed: failed to update $issue"
   fi
@@ -2465,7 +2538,9 @@ mark_eval_completed() {
 mark_eval_failed() {
   local issue="$1"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].evalFailed = true | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].evalFailed = true
+      | del(.tasks[$issue].evalRunning)
+      | .tasks[$issue].updated = (now | todateiso8601)' \
      --arg issue "$issue"; then
     log_warn "mark_eval_failed: failed to update $issue"
   fi
@@ -4153,7 +4228,8 @@ mark_challenge_compared() {
   if ! state_mutate "$STATE_FILE" '
     .tasks |= with_entries(
       if (.value.challengePairId // "") == $pair then
-        .value.challengeCompared = true
+        .value.challengeCompared = true |
+        .value |= (del(.comparisonRunning) | .updated = (now | todateiso8601))
       else
         .
       end
@@ -4395,6 +4471,12 @@ maybe_run_challenge_eval() {
   log_path="$job_dir/${job_id}.log"
   result_path="$job_dir/${job_id}.result.json"
 
+  log "status" "  📊 [mill] eval running: issue=$issue side=$side pr=#$pr phase=eval"
+  if ! mark_challenge_eval_running "$issue" "$side" "$pr" "eval" >/dev/null; then
+    log_warn "challenge eval launch skipped for $issue: failed to persist running state"
+    return 1
+  fi
+
   npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
     --issue "$linear_issue" --pr "$pr" --branch "$branch" \
     --worktree "${WORKTREE_ROOT}/${slug}" \
@@ -4504,10 +4586,14 @@ maybe_run_challenge_comparison() {
   challenger_code_depth=$(get_task_meta "$challenger_key" "codeDepth")
   challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
 
-  log "status" "  ⚖ Running challenge comparison for $pair_id"
+  log "status" "  ⚖ [mill] comparison running: pair=$pair_id primary_pr=#$primary_pr challenger_pr=#$challenger_pr"
   job_dir=$(challenge_job_dir)
   log_path="$job_dir/${job_id}.log"
   result_path="$job_dir/${job_id}.result.json"
+  if ! mark_challenge_comparison_running "$pair_id" "$primary_pr" "$challenger_pr" >/dev/null; then
+    log_warn "challenge comparison launch skipped for $pair_id: failed to persist running state"
+    return 1
+  fi
   npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
