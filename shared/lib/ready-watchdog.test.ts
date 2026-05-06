@@ -240,6 +240,139 @@ test('tick auto-recovers stale local state for clean green PRs', async () => {
   await rm(repoDir, { recursive: true, force: true });
 });
 
+test('tick deduplicates findings with unchanged classification and detail', async () => {
+  const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
+  const stateDir = path.join(repoDir, '.wavemill');
+  const worktree = path.join(repoDir, 'worktrees', 'ready-watchdog-task');
+  const featureDir = path.join(worktree, 'features', 'ready-watchdog-task');
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(featureDir, { recursive: true });
+
+  const stateFile = path.join(stateDir, 'workflow-state.json');
+  writeFileSync(stateFile, JSON.stringify({
+    tasks: {
+      'HOK-1579': {
+        slug: 'ready-watchdog-task',
+        branch: 'task/ready-watchdog-task',
+        worktree,
+        pr: 528,
+        phase: 'ready',
+        updated: '2026-05-05T12:00:00.000Z',
+      },
+    },
+    jobs: {},
+  }, null, 2));
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: null,
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: 'PR merged upstream',
+    artifacts: {
+      type: 'ready',
+      verdict: 'fail',
+      prNumber: 528,
+    },
+  }, null, 2));
+
+  const mergedTruth = (): GitHubPRTruth => ({
+    state: 'MERGED',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    checks: [],
+  });
+
+  const firstTick = await tickReadyWatchdog({
+    repoDir,
+    stateFile,
+    config: {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: false,
+      timeoutSeconds: 30,
+    },
+    deps: {
+      fetchGitHubTruth: async () => mergedTruth(),
+      getCurrentHead: async () => 'head',
+      now: () => new Date('2030-05-05T12:30:00.000Z'),
+    },
+  });
+
+  assert.equal(firstTick.findings.length, 1);
+  assert.equal(firstTick.findings[0].classification, 'needs-user');
+  assert.match(firstTick.findings[0].detail, /merged/);
+
+  const auditAfterFirst = readFileSync(path.join(stateDir, 'ready-watchdog.jsonl'), 'utf-8')
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(auditAfterFirst.length, 1);
+
+  const secondTick = await tickReadyWatchdog({
+    repoDir,
+    stateFile,
+    config: {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: false,
+      timeoutSeconds: 30,
+    },
+    deps: {
+      fetchGitHubTruth: async () => mergedTruth(),
+      getCurrentHead: async () => 'head',
+      now: () => new Date('2030-05-05T12:35:00.000Z'),
+    },
+  });
+
+  assert.equal(secondTick.findings.length, 0, 'repeat finding should be suppressed');
+
+  const watchdogStateAfterSecond = JSON.parse(
+    readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8'),
+  ) as { tasks: Record<string, { classification: string; detail: string }> };
+  assert.equal(watchdogStateAfterSecond.tasks['HOK-1579'].classification, 'needs-user');
+  assert.match(watchdogStateAfterSecond.tasks['HOK-1579'].detail, /merged/);
+
+  const auditAfterSecond = readFileSync(path.join(stateDir, 'ready-watchdog.jsonl'), 'utf-8')
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(auditAfterSecond.length, 1, 'no new audit record on repeat finding');
+
+  const closedTruth = (): GitHubPRTruth => ({
+    state: 'CLOSED',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    checks: [],
+  });
+
+  const thirdTick = await tickReadyWatchdog({
+    repoDir,
+    stateFile,
+    config: {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: false,
+      timeoutSeconds: 30,
+    },
+    deps: {
+      fetchGitHubTruth: async () => closedTruth(),
+      getCurrentHead: async () => 'head',
+      now: () => new Date('2030-05-05T12:40:00.000Z'),
+    },
+  });
+
+  assert.equal(thirdTick.findings.length, 1, 'detail change should re-emit the finding');
+  assert.equal(thirdTick.findings[0].classification, 'needs-user');
+  assert.match(thirdTick.findings[0].detail, /closed/);
+
+  const auditAfterThird = readFileSync(path.join(stateDir, 'ready-watchdog.jsonl'), 'utf-8')
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(auditAfterThird.length, 2, 'audit record written when detail changed');
+
+  await rm(repoDir, { recursive: true, force: true });
+});
+
 test('tick surfaces a manual recovery command when auto-recover is disabled', async () => {
   const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
   const stateDir = path.join(repoDir, '.wavemill');

@@ -560,11 +560,21 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     ...getReadyWatchdogConfig(options.repoDir),
     ...(options.config ?? {}),
   };
-  const findings: ReadyWatchdogStateEntry[] = [];
+  const allFindings: ReadyWatchdogStateEntry[] = [];
+  const newFindings: ReadyWatchdogStateEntry[] = [];
 
   if (!config.enabled && !options.forceRecover) {
-    await writeStateFile(options.repoDir, findings, now);
-    return { updatedAt: now.toISOString(), findings };
+    await writeStateFile(options.repoDir, allFindings, now);
+    return { updatedAt: now.toISOString(), findings: newFindings };
+  }
+
+  let prevStateTasks: Record<string, ReadyWatchdogStateEntry> = {};
+  try {
+    const prevStatePath = path.join(options.repoDir, '.wavemill', 'ready-watchdog-state.json');
+    const prevContent = readFileSync(prevStatePath, 'utf-8');
+    prevStateTasks = (JSON.parse(prevContent) as ReadyWatchdogStateFile).tasks ?? {};
+  } catch {
+    // No previous state — all findings are new.
   }
 
   const workflowState = await deps.readWorkflowState(options.stateFile);
@@ -632,7 +642,17 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       idleMinutes: snapshot.idleMinutes,
       lastProgressAt: snapshot.lastProgressAt,
     };
-    findings.push(entry);
+    allFindings.push(entry);
+
+    const prev = prevStateTasks[issueId];
+    const isRepeat = prev !== undefined
+      && prev.classification === entry.classification
+      && prev.detail === entry.detail;
+    if (isRepeat) {
+      continue;
+    }
+
+    newFindings.push(entry);
 
     await writeAuditRecord(options.repoDir, {
       timestamp: now.toISOString(),
@@ -647,9 +667,9 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     });
   }
 
-  await writeStateFile(options.repoDir, findings, now);
+  await writeStateFile(options.repoDir, allFindings, now);
   return {
     updatedAt: now.toISOString(),
-    findings,
+    findings: newFindings,
   };
 }
