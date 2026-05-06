@@ -277,8 +277,9 @@ test_fetch_queue_plan_logs_cache_empty() {
 }
 
 test_fetch_queue_plan_logs_jq_massage_failure() {
-  local debug_log
-  debug_log=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" bash -lc '
+  local tmp_root debug_log remaining
+  tmp_root=$(mktemp -d)
+  debug_log=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" TMPDIR="$tmp_root" bash -lc '
     set -euo pipefail
     # shellcheck source=/dev/null
     source "$FUNCTIONS_FILE"
@@ -297,9 +298,11 @@ test_fetch_queue_plan_logs_jq_massage_failure() {
       exit 2
     fi
   ' 2>&1) || true
+  remaining=$(find "$tmp_root" -maxdepth 1 -name 'wavemill-fetch-queue-plan.*' -print)
+  rm -rf "$tmp_root"
 
   check_contains "jq massage logs category" "$debug_log" "fetch_queue_plan: jq_massage"
-  check_contains "jq massage logs stderr" "$debug_log" "parse error"
+  check_eq "jq massage cleans tempdir" "" "$remaining"
 }
 
 test_fetch_queue_plan_logs_plan_queue_exec_failure_and_cleans_tempdir() {
