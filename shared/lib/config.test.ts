@@ -37,6 +37,7 @@ import {
   getProvidersConfig,
   getReadyConfig,
   getReadyWatchdogConfig,
+  getMergeQueueConfig,
   getModelRegistryConfig,
   getMintEligibilityConfig,
   getEvalContextUpdatesConfig,
@@ -1502,6 +1503,95 @@ test('getReadyConfig respects explicit remediation overrides', () => {
       enabled: false,
       maxAttempts: 5,
       agentCmd: 'claude',
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getMergeQueueConfig returns defaults when unset', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, '{}');
+
+    assert.deepEqual(getMergeQueueConfig(tmp), {
+      enabled: true,
+      maxConcurrentCandidates: 2,
+      stuckTimeoutSeconds: 900,
+      conflictGroupingEnabled: true,
+      skipCooldownSeconds: 60,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getMergeQueueConfig honors explicit overrides', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mergeQueue: {
+        enabled: false,
+        maxConcurrentCandidates: 3,
+        stuckTimeoutSeconds: 1200,
+        conflictGroupingEnabled: false,
+        skipCooldownSeconds: 0,
+      },
+    }));
+
+    assert.deepEqual(getMergeQueueConfig(tmp), {
+      enabled: false,
+      maxConcurrentCandidates: 3,
+      stuckTimeoutSeconds: 1200,
+      conflictGroupingEnabled: false,
+      skipCooldownSeconds: 0,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('mergeQueue schema rejects invalid maxConcurrentCandidates', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mergeQueue: {
+        maxConcurrentCandidates: 0,
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /Config validation failed/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('mergeQueue local overlay merges onto base config', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeFileSync(join(tmp, '.wavemill-config.json'), JSON.stringify({
+      mergeQueue: {
+        enabled: true,
+        maxConcurrentCandidates: 2,
+        stuckTimeoutSeconds: 900,
+      },
+    }));
+    writeFileSync(join(tmp, '.wavemill-config.local.json'), JSON.stringify({
+      mergeQueue: {
+        maxConcurrentCandidates: 4,
+      },
+    }));
+
+    assert.deepEqual(getMergeQueueConfig(tmp), {
+      enabled: true,
+      maxConcurrentCandidates: 4,
+      stuckTimeoutSeconds: 900,
+      conflictGroupingEnabled: true,
+      skipCooldownSeconds: 60,
     });
   } finally {
     cleanUp(tmp);

@@ -75,6 +75,17 @@ export interface ReadyArtifacts {
   remediationFailures?: string[];
   /** Main branch HEAD SHA at the time readiness passed; used to detect staleness. */
   readyBaseSha?: string;
+  queueState?: 'ready' | 'ready-stale' | 'merge-candidate';
+  staleAt?: string;
+  staleBaseSha?: string;
+  targetBaseSha?: string;
+  candidatePromotedAt?: string;
+  candidateLastProgressAt?: string;
+  candidateSkippedAt?: string;
+  candidateSkipReason?: string;
+  changedFiles?: string[];
+  unblocksCount?: number;
+  transientMergeabilityAttempts?: number;
 }
 
 /** Discriminated union of all stage artifact types. */

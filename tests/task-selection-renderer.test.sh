@@ -84,6 +84,10 @@ extract_monitor_heredoc > "$MONITOR_BODY"
 
 FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
 {
+  extract_function "$MONITOR_BODY" "record_fetch_queue_plan_failure"
+  echo
+  extract_function "$MONITOR_BODY" "log_fetch_queue_plan_failure"
+  echo
   extract_function "$MONITOR_BODY" "build_queue_plan_once"
   echo
   extract_function "$MONITOR_BODY" "invoke_first_wave_helper"
@@ -112,7 +116,7 @@ EOF
 )
 
 render_prompt_under_test() {
-  local available="$1" avail_unblocked avail_blocked avail_blocked_count queue_plan_json
+  local available="$1" avail_unblocked avail_blocked avail_blocked_count queue_plan_json queue_plan_diag_file queue_plan_diag_previous
   avail_unblocked=$(echo "$available" | awk -F'|' '$6 == 0 || $6 == ""')
   avail_blocked=$(echo "$available" | awk -F'|' '$6 > 0')
   avail_blocked_count=0
@@ -120,6 +124,10 @@ render_prompt_under_test() {
 
   echo "Next tasks:"
   queue_plan_json=""
+  queue_plan_diag_file=""
+  queue_plan_diag_previous="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  queue_plan_diag_file="$(mktemp -t wavemill-fqp-diagnostics.XXXXXX 2>/dev/null || true)"
+  FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_file"
   GROUPED_DISPLAY=""
   GROUPED_SELECT_FROM=""
   if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
@@ -132,7 +140,10 @@ render_prompt_under_test() {
   fi
   if [[ -z "$GROUPED_DISPLAY" ]]; then
     USING_GROUPED_VIEW=false
-    [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
+    if [[ -z "$queue_plan_json" ]]; then
+      log_warn "queue analysis unavailable, falling back to flat list"
+      [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
+    fi
     if [[ -n "$avail_unblocked" ]]; then
       echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
     else
@@ -143,7 +154,12 @@ render_prompt_under_test() {
       echo "  ($avail_blocked_count blocked task(s) hidden - enter 'm' to show all)"
     fi
   fi
+  rm -f "$queue_plan_diag_file"
+  FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_previous"
 }
+
+RENDER_PROMPT_FILE="$TEST_TMP/render-prompt-under-test.sh"
+declare -f render_prompt_under_test > "$RENDER_PROMPT_FILE"
 
 test_fetch_queue_plan_transforms_linear_backlog() {
   local output
@@ -302,12 +318,160 @@ test_fallback_when_queue_analysis_fails() {
   check_contains "fallback warns once" "$stderr" "queue analysis unavailable, falling back to flat list"
 }
 
+run_queue_plan_failure_case() {
+  local mode="$1" backlog_json="$2" verbosity="${3:-debug}"
+  local case_tmp bin_dir stdout stderr
+  case_tmp="$(mktemp -d "$TEST_TMP/fqp-case.XXXXXX")"
+  bin_dir="$case_tmp/bin"
+  mkdir -p "$bin_dir" "$case_tmp/tmp"
+
+  case "$mode" in
+    plan_queue_failed)
+      cat > "$bin_dir/npx" <<'EOF'
+#!/usr/bin/env bash
+echo "STUBBED ERROR" >&2
+exit 1
+EOF
+      ;;
+    validation_failed)
+      cat > "$bin_dir/npx" <<'EOF'
+#!/usr/bin/env bash
+printf '{"unexpected":"shape"}\n'
+EOF
+      ;;
+    *)
+      cat > "$bin_dir/npx" <<'EOF'
+#!/usr/bin/env bash
+echo "unexpected npx call" >&2
+exit 1
+EOF
+      ;;
+  esac
+  chmod +x "$bin_dir/npx"
+
+  stdout="$case_tmp/stdout.txt"
+  stderr="$case_tmp/stderr.txt"
+  FUNCTIONS_FILE="$FUNCTIONS_FILE" RENDER_PROMPT_FILE="$RENDER_PROMPT_FILE" CANDIDATES="$CANDIDATES" BACKLOG_FOR_CASE="$backlog_json" STUB_BIN_DIR="$bin_dir" TMPDIR="$case_tmp/tmp" DASHBOARD_VERBOSITY="$verbosity" bash -c '
+    set -euo pipefail
+    export PATH="$STUB_BIN_DIR:$PATH"
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    # shellcheck source=/dev/null
+    source "$RENDER_PROMPT_FILE"
+    BACKLOG_CACHE_TTL=60
+    BACKLOG_JSON_CACHE="$BACKLOG_FOR_CASE"
+    QUEUE_PLAN_CACHE=""
+    LAST_QUEUE_PLAN_FETCH=0
+    TOOLS_DIR="/unused"
+    _with_timeout() {
+      shift
+      "$@"
+    }
+    log_warn() { printf "WARN:%s\n" "$*" >&2; }
+    log() {
+      local level="$1"
+      shift
+      if [[ "$level" == "debug" && "${DASHBOARD_VERBOSITY:-info}" == "debug" ]]; then
+        printf "DEBUG:%s\n" "$*" >&2
+      fi
+    }
+    render_prompt_under_test "$CANDIDATES"
+  ' >"$stdout" 2>"$stderr"
+
+  printf '%s\n%s\n%s\n' "$stdout" "$stderr" "$case_tmp/tmp"
+}
+
+assert_no_queue_plan_temp_files() {
+  local name="$1" tmp_dir="$2"
+  local leftovers
+  leftovers="$(find "$tmp_dir" -maxdepth 1 \( -name 'wavemill-fqp-stderr.*' -o -name 'wavemill-fqp-diagnostics.*' \) -print)"
+  check_eq "$name" "" "$leftovers"
+}
+
+test_fetch_queue_plan_failure_diagnostics_cache_empty() {
+  local result stdout stderr tmp_dir stderr_text
+  result="$(run_queue_plan_failure_case "cache_empty" "")"
+  stdout="$(sed -n '1p' <<<"$result")"
+  stderr="$(sed -n '2p' <<<"$result")"
+  tmp_dir="$(sed -n '3p' <<<"$result")"
+  stderr_text="$(cat "$stderr")"
+
+  check_contains "cache-empty fallback still renders flat list" "$(cat "$stdout")" "1. HOK-10 - Foundation task (score: 98)"
+  check_contains "cache-empty warns once" "$stderr_text" "WARN:queue analysis unavailable, falling back to flat list"
+  check_contains "cache-empty debug names step" "$stderr_text" "step=cache_empty"
+  check_contains "cache-empty debug marks empty stderr" "$stderr_text" "(no stderr captured)"
+  check_eq "cache-empty warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
+  check_eq "cache-empty debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
+  assert_no_queue_plan_temp_files "cache-empty temp files cleaned" "$tmp_dir"
+}
+
+test_fetch_queue_plan_failure_diagnostics_jq_massage() {
+  local result stderr tmp_dir stderr_text
+  result="$(run_queue_plan_failure_case "jq_massage_failed" "{not-json")"
+  stderr="$(sed -n '2p' <<<"$result")"
+  tmp_dir="$(sed -n '3p' <<<"$result")"
+  stderr_text="$(cat "$stderr")"
+
+  check_contains "jq-massage debug names step" "$stderr_text" "step=jq_massage_failed"
+  check_contains "jq-massage debug includes jq stderr" "$stderr_text" "parse error"
+  check_eq "jq-massage warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
+  check_eq "jq-massage debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
+  assert_no_queue_plan_temp_files "jq-massage temp files cleaned" "$tmp_dir"
+}
+
+test_fetch_queue_plan_failure_diagnostics_plan_queue() {
+  local result stderr tmp_dir stderr_text
+  result="$(run_queue_plan_failure_case "plan_queue_failed" "$LINEAR_BACKLOG_JSON")"
+  stderr="$(sed -n '2p' <<<"$result")"
+  tmp_dir="$(sed -n '3p' <<<"$result")"
+  stderr_text="$(cat "$stderr")"
+
+  check_contains "plan-queue debug names step" "$stderr_text" "step=plan_queue_failed"
+  check_contains "plan-queue debug includes stderr" "$stderr_text" "STUBBED ERROR"
+  check_eq "plan-queue warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
+  check_eq "plan-queue debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
+  assert_no_queue_plan_temp_files "plan-queue temp files cleaned" "$tmp_dir"
+}
+
+test_fetch_queue_plan_failure_diagnostics_validation() {
+  local result stderr tmp_dir stderr_text
+  result="$(run_queue_plan_failure_case "validation_failed" "$LINEAR_BACKLOG_JSON")"
+  stderr="$(sed -n '2p' <<<"$result")"
+  tmp_dir="$(sed -n '3p' <<<"$result")"
+  stderr_text="$(cat "$stderr")"
+
+  check_contains "validation debug names step" "$stderr_text" "step=validation_failed"
+  check_contains "validation debug marks empty stderr" "$stderr_text" "(no stderr captured)"
+  check_eq "validation warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
+  check_eq "validation debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
+  assert_no_queue_plan_temp_files "validation temp files cleaned" "$tmp_dir"
+}
+
+test_fetch_queue_plan_warning_stays_quiet_without_debug() {
+  local result stderr tmp_dir stderr_text
+  result="$(run_queue_plan_failure_case "plan_queue_failed" "$LINEAR_BACKLOG_JSON" "info")"
+  stderr="$(sed -n '2p' <<<"$result")"
+  tmp_dir="$(sed -n '3p' <<<"$result")"
+  stderr_text="$(cat "$stderr")"
+
+  check_contains "non-debug fallback warns" "$stderr_text" "WARN:queue analysis unavailable, falling back to flat list"
+  check_not_contains "non-debug omits captured stderr" "$stderr_text" "STUBBED ERROR"
+  check_not_contains "non-debug omits diagnostic step" "$stderr_text" "step=plan_queue_failed"
+  check_eq "non-debug warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
+  assert_no_queue_plan_temp_files "non-debug temp files cleaned" "$tmp_dir"
+}
+
 echo "=== Task Selection Renderer ==="
 test_fetch_queue_plan_transforms_linear_backlog
 test_invoke_first_wave_helper_packs_priority_without_violating_dependencies
 test_grouped_render_with_fixture_output
 test_render_rejects_malformed_json
 test_fallback_when_queue_analysis_fails
+test_fetch_queue_plan_failure_diagnostics_cache_empty
+test_fetch_queue_plan_failure_diagnostics_jq_massage
+test_fetch_queue_plan_failure_diagnostics_plan_queue
+test_fetch_queue_plan_failure_diagnostics_validation
+test_fetch_queue_plan_warning_stays_quiet_without_debug
 
 echo
 echo "Passed: $PASS"
