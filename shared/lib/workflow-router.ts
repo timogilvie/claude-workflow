@@ -81,6 +81,7 @@ export interface WorkflowRouteDecision {
   budgetViolation?: BudgetViolation;
   resourceSelections?: RuntimeResourceSelection[];
   provenance?: RouteProvenance;
+  routingMode?: string;
 }
 
 export interface RouteWorkflowOptions {
@@ -1033,6 +1034,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       ...(taskDifficulty ? { taskDifficulty } : {}),
     },
     constraints: { maxCostUsd: effectiveBudget },
+    routingMode: 'heuristic',
     ...(budgetViolation ? { budgetViolation } : {}),
     ...(coderRecommendation.resourceSelections?.length
       ? { resourceSelections: coderRecommendation.resourceSelections }
@@ -1513,7 +1515,11 @@ export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?
     `Signals:  ${decision.reasoning[0]} ${decision.reasoning[1]}`,
   ];
 
-  if ('routingMode' in decision) {
+  if (
+    'routingMode' in decision
+    && typeof (decision as { neighborCount?: unknown }).neighborCount === 'number'
+    && Array.isArray((decision as { neighborSimilarityRange?: unknown }).neighborSimilarityRange)
+  ) {
     lines.push(
       `Router:   ${decision.routingMode}  neighbors=${decision.neighborCount}  similarity=${decision.neighborSimilarityRange[0].toFixed(2)}-${decision.neighborSimilarityRange[1].toFixed(2)}`
     );

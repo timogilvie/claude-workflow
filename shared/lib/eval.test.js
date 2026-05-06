@@ -2,6 +2,7 @@ import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluateTask } from './eval.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
+import { SCHEMA_VERSION } from './eval-schema.ts';
 
 function mockCallFn(responseText, usage = null, costUsd = undefined) {
   return mock.fn(() => Promise.resolve({ text: responseText, usage, costUsd }));
@@ -41,7 +42,7 @@ describe('evaluateTask', () => {
 
     // Core EvalRecord fields from eval-schema.ts
     assert.ok(result.id, 'should have a UUID id');
-    assert.equal(result.schemaVersion, '1.21.0');
+    assert.equal(result.schemaVersion, SCHEMA_VERSION);
     assert.equal(result.originalPrompt, 'Add a loading spinner');
     assert.ok(result.modelId);
     assert.ok(result.modelVersion);

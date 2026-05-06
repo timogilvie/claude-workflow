@@ -341,6 +341,60 @@ describe('eval-context-gatherer', () => {
       });
 
       expect(result.decisionPolicyVersion).toBe('baseline');
+      expect(result.routeArtifactSchemaVersion).toBe('1.0');
+      expect(result.policyResolverVersion).toBe('1.0.0');
+    });
+
+    it('maps stage-aware routing metadata into structured policy fields', () => {
+      const result = convertToRoutingDecision({
+        planner: 'model-a',
+        coder: 'model-b',
+        reviewer: 'model-c',
+        routingMode: 'stage-aware',
+        provenance: {
+          source: 'live',
+          inputKind: 'issue',
+          routerMode: 'normal',
+        },
+      });
+
+      expect(result.decisionPolicyVersion).toBe('stage-aware');
+      expect(result.routeMode).toBe('stage-aware');
+      expect(result.operatingModeDependency).toBe('normal');
+    });
+
+    it('maps hokusai routing metadata into structured policy fields', () => {
+      const result = convertToRoutingDecision({
+        planner: 'model-a',
+        coder: 'model-b',
+        reviewer: 'model-c',
+        routingMode: 'hokusai',
+        provenance: {
+          source: 'live',
+          inputKind: 'issue',
+          routerMode: 'normal',
+        },
+      });
+
+      expect(result.decisionPolicyVersion).toBe('hokusai');
+      expect(result.routeMode).toBe('hokusai');
+    });
+
+    it('preserves operating mode separately from policy source', () => {
+      const result = convertToRoutingDecision({
+        planner: 'model-a',
+        coder: 'model-b',
+        reviewer: 'model-c',
+        routingMode: 'stage-aware',
+        provenance: {
+          source: 'live',
+          inputKind: 'issue',
+          routerMode: 'survival',
+        },
+      });
+
+      expect(result.decisionPolicyVersion).toBe('stage-aware');
+      expect(result.operatingModeDependency).toBe('survival');
     });
 
     it('should include depth and mode in rationale', () => {
@@ -396,6 +450,36 @@ describe('eval-context-gatherer', () => {
       expect(result).not.toBeNull();
       expect(result!.candidates).toHaveLength(3);
       expect(result!.decisionPolicyVersion).toBe('baseline');
+      expect(result!.routeArtifactSchemaVersion).toBe('1.0');
+      expect(result!.policyResolverVersion).toBe('1.0.0');
+      fs.rmSync(tmpDir, { recursive: true });
+    });
+
+    it('should derive stage-aware routing metadata from the routing file', () => {
+      const tmpDir = makeTmpDir();
+      const featureDir = nodePath.join(tmpDir, 'features', 'my-feature');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.routing-complete'),
+        JSON.stringify({
+          planner: 'model-a',
+          coder: 'model-b',
+          reviewer: 'model-c',
+          routingMode: 'stage-aware',
+          provenance: {
+            source: 'live',
+            inputKind: 'issue',
+            routerMode: 'survival',
+          },
+        })
+      );
+
+      const result = fetchRoutingDecision(tmpDir, 'my-feature');
+
+      expect(result).not.toBeNull();
+      expect(result!.decisionPolicyVersion).toBe('stage-aware');
+      expect(result!.routeMode).toBe('stage-aware');
+      expect(result!.operatingModeDependency).toBe('survival');
       fs.rmSync(tmpDir, { recursive: true });
     });
 
@@ -554,6 +638,15 @@ describe('eval-context-gatherer', () => {
           planner: 'model-a',
           coder: 'model-b',
           reviewer: 'model-c',
+          expectedSuccess: 0.8,
+          expectedCost: 2.5,
+          confidence: 0.7,
+          reasoning: ['repo risk', 'balanced route'],
+          signals: {
+            taskType: 'feature',
+            riskScore: 0.4,
+            taskDifficulty: 'medium',
+          },
           codeDepth: 'deep',
           reviewMode: 'static+llm',
         }),
@@ -571,6 +664,18 @@ describe('eval-context-gatherer', () => {
           decisionPolicyVersion: 'baseline',
           decisionRationale:
             'Routing: planner=model-a, coder=model-b, reviewer=model-c; codeDepth=deep, reviewMode=static+llm',
+          routeArtifactSchemaVersion: '1.0',
+          policyResolverVersion: '1.0.0',
+        });
+        expect(result.routePrediction).toEqual({
+          expectedSuccess: 0.8,
+          expectedCostUsd: 2.5,
+          confidence: 0.7,
+          riskScore: 0.4,
+          taskType: 'feature',
+          taskDifficulty: 'medium',
+          topFeatures: ['repo risk', 'balanced route', 'taskType=feature', 'taskDifficulty=medium', 'riskScore=0.4'],
+          rationaleSummary: 'repo risk balanced route',
         });
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
@@ -588,6 +693,7 @@ describe('eval-context-gatherer', () => {
       try {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
         expect(result.routingDecision).toBeUndefined();
+        expect(result.routePrediction).toBeUndefined();
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }

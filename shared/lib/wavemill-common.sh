@@ -258,6 +258,126 @@ wavemill_config_annotation() {
   printf ' (%s=%s)' "$path" "$value"
 }
 
+ready_debug_log_file() {
+  local session="${SESSION:-${WAVEMILL_SESSION:-wavemill}}"
+  local sanitized="${session//[^[:alnum:]._-]/-}"
+
+  if [[ -z "$sanitized" ]]; then
+    sanitized="wavemill"
+  fi
+
+  if (( ${#sanitized} > 40 )); then
+    local session_hash
+    session_hash="$(printf '%s' "$sanitized" | cksum | awk '{print $1}')"
+    sanitized="${sanitized:0:28}-${session_hash}"
+  fi
+
+  printf '/tmp/wavemill-%s-ready-debug.jsonl\n' "$sanitized"
+}
+
+summarize_ready_result() {
+  local payload="${1-}"
+  local summary max_len=72 total_count failed_count other_count
+  local failed_json item name detail
+  local failed_parts=()
+
+  if [[ -z "$payload" ]] || ! command -v jq >/dev/null 2>&1; then
+    printf '%s\n' "(summary unavailable)"
+    return 0
+  fi
+
+  total_count="$(printf '%s' "$payload" | jq -r '.checks | if type == "array" then length else 0 end' 2>/dev/null || printf '0')"
+  failed_json="$(printf '%s' "$payload" | jq -c '[.checks[]? | select(.status == "fail")]' 2>/dev/null || printf '[]')"
+  failed_count="$(printf '%s' "$failed_json" | jq -r 'length' 2>/dev/null || printf '0')"
+
+  if [[ ! "$total_count" =~ ^[0-9]+$ ]] || [[ ! "$failed_count" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "(summary unavailable)"
+    return 0
+  fi
+
+  other_count=$(( total_count - failed_count ))
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    name="$(printf '%s' "$item" | jq -r '.name // "unknown-check"' 2>/dev/null || printf 'unknown-check')"
+    detail="$(printf '%s' "$item" | jq -r '
+      (.details // null) as $details
+      | if ($details | type) == "object" and (($details.failedChecks? | type) == "array") then
+          ($details.failedChecks | length) as $count | ($count | tostring) + " check" + (if $count == 1 then "" else "s" end)
+        elif ($details | type) == "array" then
+          ($details | length) as $count | ($count | tostring) + " file" + (if $count == 1 then "" else "s" end)
+        elif ($details | type) == "object" and (($details.files? | type) == "array") then
+          ($details.files | length) as $count | ($count | tostring) + " file" + (if $count == 1 then "" else "s" end)
+        elif ($details | type) == "object" and (($details.paths? | type) == "array") then
+          ($details.paths | length) as $count | ($count | tostring) + " file" + (if $count == 1 then "" else "s" end)
+        elif ($details | type) == "object" and ($details | length) > 0 then
+          ($details | length) as $count | ($count | tostring) + " detail" + (if $count == 1 then "" else "s" end)
+        else
+          ""
+        end
+    ' 2>/dev/null || printf '')"
+    if [[ -n "$detail" ]]; then
+      failed_parts+=("$name: $detail")
+    else
+      failed_parts+=("$name")
+    fi
+  done < <(printf '%s' "$failed_json" | jq -c '.[]' 2>/dev/null)
+
+  if (( failed_count == 0 )); then
+    summary="0 failed, $other_count passed/skipped"
+  else
+    local failed_preview preview_limit
+    preview_limit=$failed_count
+    if (( preview_limit > 2 )); then
+      preview_limit=2
+    fi
+    failed_preview="$(printf '%s, ' "${failed_parts[@]:0:preview_limit}")"
+    failed_preview="${failed_preview%, }"
+    summary="$failed_count failed ($failed_preview"
+    if (( failed_count > 2 )); then
+      summary+=", +$(( failed_count - 2 )) more"
+    fi
+    summary+="), $other_count passed/skipped"
+  fi
+
+  if [[ -z "$summary" ]]; then
+    summary="(summary unavailable)"
+  elif (( ${#summary} > max_len )); then
+    summary="${summary:0:$(( max_len - 3 ))}..."
+  fi
+
+  printf '%s\n' "$summary"
+}
+
+log_debug_json() {
+  local category="${1:-debug}"
+  local payload="${2-}"
+  local target ts record
+
+  [[ -n "$payload" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  target="$(ready_debug_log_file)"
+  ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  mkdir -p "$(dirname "$target")" 2>/dev/null || true
+
+  if record="$(
+    printf '%s' "$payload" | jq -c --arg ts "$ts" --arg category "$category" \
+      '{ts: $ts, category: $category, payload: .}' 2>/dev/null
+  )"; then
+    printf '%s\n' "$record" >> "$target" 2>/dev/null || true
+    return 0
+  fi
+
+  if record="$(
+    jq -cn --arg ts "$ts" --arg category "$category" --arg raw "$payload" \
+      '{ts: $ts, category: $category, raw: $raw, error: "non_json"}' 2>/dev/null
+  )"; then
+    printf '%s\n' "$record" >> "$target" 2>/dev/null || true
+  fi
+
+  return 0
+}
+
 wavemill_fetch_base_branch() {
   local base_branch="${1:-}"
   shift || true

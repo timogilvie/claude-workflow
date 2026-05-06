@@ -495,6 +495,23 @@
         "decisionRationale": {
           "type": "string",
           "description": "Optional rationale or top features used for the decision."
+        },
+        "routeMode": {
+          "type": "string",
+          "description": "Route strategy used to produce the underlying workflow route."
+        },
+        "routeArtifactSchemaVersion": {
+          "type": "string",
+          "description": "Stable version identifier for route artifact structure."
+        },
+        "policyResolverVersion": {
+          "type": "string",
+          "description": "Stable version identifier for policy resolution logic."
+        },
+        "operatingModeDependency": {
+          "type": "string",
+          "enum": ["normal", "constrained", "survival"],
+          "description": "Whether quota operating mode constrained the route independently of policy source."
         }
       },
       "required": ["candidates", "chosen", "decisionPolicyVersion"],
@@ -1425,6 +1442,12 @@
       },
       "additionalProperties": false
     },
+    "routePrediction": {
+      "$ref": "#/$defs/RoutePrediction"
+    },
+    "routeCalibration": {
+      "$ref": "#/$defs/RouteCalibration"
+    },
     "workflow_success_rate_under_budget": {
       "type": "number",
       "minimum": 0,
@@ -1486,6 +1509,38 @@
       "required": ["coder", "codeDepth", "reviewer", "reviewMode"],
       "additionalProperties": false
     },
+    "RoutePrediction": {
+      "type": "object",
+      "properties": {
+        "expectedSuccess": { "type": "number", "minimum": 0, "maximum": 1 },
+        "expectedCostUsd": { "type": "number", "minimum": 0 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "riskScore": { "type": "number", "minimum": 0 },
+        "taskType": { "type": "string" },
+        "taskDifficulty": { "type": "string" },
+        "topFeatures": {
+          "type": "array",
+          "items": { "type": "string" },
+          "maxItems": 5
+        },
+        "rationaleSummary": { "type": "string", "maxLength": 280 }
+      },
+      "additionalProperties": false
+    },
+    "RouteCalibration": {
+      "type": "object",
+      "properties": {
+        "costErrorUsd": { "type": "number" },
+        "successDelta": { "type": "number" },
+        "predictedSuccess": { "type": "number", "minimum": 0, "maximum": 1 },
+        "actualSuccess": { "type": "boolean" },
+        "predictedCostUsd": { "type": "number", "minimum": 0 },
+        "actualCostUsd": { "type": "number", "minimum": 0 },
+        "interventionCount": { "type": "integer", "minimum": 0 },
+        "durationMs": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
     "WavemillRouterDiagnostics": {
       "type": "object",
       "properties": {
@@ -1500,7 +1555,12 @@
         "intervention_count": { "type": "integer", "minimum": 0 },
         "total_records": { "type": "integer", "minimum": 0 },
         "scoreable_records": { "type": "integer", "minimum": 0 },
-        "invalid_route_records": { "type": "integer", "minimum": 0 }
+        "invalid_route_records": { "type": "integer", "minimum": 0 },
+        "prediction_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mean_cost_error_usd": { "type": "number" },
+        "mean_absolute_cost_error_usd": { "type": "number", "minimum": 0 },
+        "mean_success_delta": { "type": "number" },
+        "success_brier_score": { "type": "number", "minimum": 0 }
       },
       "required": [
         "scoreable_coverage",

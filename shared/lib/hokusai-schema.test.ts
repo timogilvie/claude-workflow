@@ -572,6 +572,11 @@ describe('hokusai-schema', () => {
             { agentType: 'codex', modelId: 'gpt-5.4' },
           ],
           chosen: { agentType: 'codex', modelId: 'gpt-5.4' },
+          decisionPolicyVersion: 'stage-aware',
+          routeMode: 'stage-aware',
+          routeArtifactSchemaVersion: '1.0',
+          policyResolverVersion: '1.0.0',
+          operatingModeDependency: 'survival',
         },
       })));
 
@@ -843,7 +848,7 @@ describe('hokusai-schema', () => {
 
       assert.equal(result.valid, false);
       assert.deepEqual(result.errors, [
-        'schema_version must be "1.0" or "1.1"',
+        'schema_version must be "1.0", "1.1", or "1.2"',
       ]);
     });
 

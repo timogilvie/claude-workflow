@@ -18,6 +18,8 @@ import type {
   EvalChallengeRouteContext,
   EvalRouteArtifact,
   EvalRouteProvenance,
+  RouteCalibration,
+  RoutePrediction,
   EvalRecord,
   EligibilityErrorCode,
   PlanCritique,
@@ -38,6 +40,11 @@ import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } fro
 import { getManifest, getManifestRef } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import { getResource } from './resource-registry.ts';
+import {
+  POLICY_RESOLVER_VERSION,
+  ROUTE_ARTIFACT_SCHEMA_VERSION,
+  resolveRouterPolicyVersion,
+} from './route-artifact.ts';
 import {
   deriveNonRewardReasonFromIssues,
   validateEvalRecord,
@@ -63,6 +70,8 @@ export interface EvalRecordMetadata {
   challengeRouteContext?: ChallengeRouteContext | null;
   /** General route provenance for all evals */
   routeProvenance?: EvalRouteProvenance | null;
+  /** Compact router prediction metadata for calibration. */
+  routePrediction?: RoutePrediction | null;
   /** Difficulty analysis results */
   difficulty?: DifficultyAnalysis | null;
   /** Task context analysis results */
@@ -227,6 +236,76 @@ export function attachRouteProvenance(
   record.routeProvenance = toEvalRouteProvenance(routeProvenance);
 }
 
+function pickFirstNonEmptyString(...values: Array<unknown>): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function pickOperatingMode(
+  ...values: Array<unknown>
+): RoutingDecision['operatingModeDependency'] | undefined {
+  for (const value of values) {
+    if (value === 'normal' || value === 'constrained' || value === 'survival') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+export function attachRouterPolicyMetadata(
+  record: EvalRecord | null | undefined,
+  routeProvenance?: EvalRouteProvenance | null,
+): void {
+  if (!record?.routingDecision) {
+    return;
+  }
+  // No-op when there is no provenance data to derive from — avoids
+  // overwriting a correctly-set decisionPolicyVersion with 'baseline'.
+  if (!routeProvenance && !record.routeProvenance) {
+    return;
+  }
+
+  const routeMode = pickFirstNonEmptyString(
+    record.routeProvenance?.routingMode,
+    routeProvenance?.routingMode,
+    routeProvenance?.activeRoute?.routingMode,
+    routeProvenance?.expandedRoute?.routingMode,
+    routeProvenance?.bootstrapRoute?.routingMode,
+  );
+  const source = pickFirstNonEmptyString(
+    routeProvenance?.activeRoute?.source,
+    routeProvenance?.expandedRoute?.source,
+    routeProvenance?.bootstrapRoute?.source,
+  );
+  const operatingMode = pickOperatingMode(
+    record.routeProvenance?.routerMode,
+    routeProvenance?.routerMode,
+    routeProvenance?.activeRoute?.routerMode,
+    routeProvenance?.expandedRoute?.routerMode,
+    routeProvenance?.bootstrapRoute?.routerMode,
+  );
+
+  record.routingDecision.decisionPolicyVersion = resolveRouterPolicyVersion({
+    routingMode: routeMode,
+    source,
+    routerMode: operatingMode,
+  });
+
+  record.routingDecision.routeArtifactSchemaVersion = ROUTE_ARTIFACT_SCHEMA_VERSION;
+  record.routingDecision.policyResolverVersion = POLICY_RESOLVER_VERSION;
+
+  if (routeMode) {
+    record.routingDecision.routeMode = routeMode;
+  }
+  if (operatingMode) {
+    record.routingDecision.operatingModeDependency = operatingMode;
+  }
+}
+
 /**
  * Attach difficulty analysis metadata to eval record.
  * Only mutates record if difficultyData is non-null.
@@ -299,6 +378,140 @@ export function attachWorkflowCostMetadata(
   }
 }
 
+export function attachRoutePrediction(
+  record: EvalRecord,
+  prediction: RoutePrediction | null | undefined,
+): void {
+  if (!prediction) {
+    return;
+  }
+
+  const normalized: RoutePrediction = {};
+
+  if (isFiniteNumber(prediction.expectedSuccess)) {
+    normalized.expectedSuccess = prediction.expectedSuccess;
+  }
+  if (isFiniteNonNegativeBudget(prediction.expectedCostUsd)) {
+    normalized.expectedCostUsd = prediction.expectedCostUsd;
+  }
+  if (isFiniteNumber(prediction.confidence)) {
+    normalized.confidence = prediction.confidence;
+  }
+  if (isFiniteNonNegativeBudget(prediction.riskScore)) {
+    normalized.riskScore = prediction.riskScore;
+  }
+  if (isNonEmptyString(prediction.taskType)) {
+    normalized.taskType = prediction.taskType;
+  }
+  if (isNonEmptyString(prediction.taskDifficulty)) {
+    normalized.taskDifficulty = prediction.taskDifficulty;
+  }
+  if (Array.isArray(prediction.topFeatures)) {
+    const topFeatures = prediction.topFeatures
+      .filter((entry): entry is string => isNonEmptyString(entry))
+      .slice(0, 5);
+    if (topFeatures.length > 0) {
+      normalized.topFeatures = topFeatures;
+    }
+  }
+  if (isNonEmptyString(prediction.rationaleSummary)) {
+    normalized.rationaleSummary = prediction.rationaleSummary;
+  }
+
+  if (hasObjectValues(normalized as Record<string, unknown>)) {
+    record.routePrediction = normalized;
+  }
+}
+
+export function attachRouteCalibration(
+  record: EvalRecord,
+  calibration: RouteCalibration | null | undefined,
+): void {
+  if (!calibration) {
+    return;
+  }
+
+  const normalized: RouteCalibration = {};
+
+  if (isFiniteNumber(calibration.costErrorUsd)) {
+    normalized.costErrorUsd = roundMetric(calibration.costErrorUsd);
+  }
+  if (isFiniteNumber(calibration.successDelta)) {
+    normalized.successDelta = roundMetric(calibration.successDelta);
+  }
+  if (isFiniteNumber(calibration.predictedSuccess)) {
+    normalized.predictedSuccess = calibration.predictedSuccess;
+  }
+  if (typeof calibration.actualSuccess === 'boolean') {
+    normalized.actualSuccess = calibration.actualSuccess;
+  }
+  if (isFiniteNonNegativeBudget(calibration.predictedCostUsd)) {
+    normalized.predictedCostUsd = calibration.predictedCostUsd;
+  }
+  if (isFiniteNonNegativeBudget(calibration.actualCostUsd)) {
+    normalized.actualCostUsd = calibration.actualCostUsd;
+  }
+  if (
+    typeof calibration.interventionCount === 'number'
+    && Number.isInteger(calibration.interventionCount)
+    && calibration.interventionCount >= 0
+  ) {
+    normalized.interventionCount = calibration.interventionCount;
+  }
+  if (isFiniteNonNegativeBudget(calibration.durationMs)) {
+    normalized.durationMs = calibration.durationMs;
+  }
+
+  if (hasObjectValues(normalized as Record<string, unknown>)) {
+    record.routeCalibration = normalized;
+  }
+}
+
+export function computeRouteCalibration(
+  recordOrActuals: Pick<EvalRecord, 'workflowCost' | 'outcomes' | 'timeSeconds' | 'interventionCount'>,
+  prediction: RoutePrediction | null | undefined,
+): RouteCalibration | undefined {
+  if (!prediction) {
+    return undefined;
+  }
+
+  const actualSuccess = typeof recordOrActuals.outcomes?.success === 'boolean'
+    ? recordOrActuals.outcomes.success
+    : undefined;
+  const actualCostUsd = isFiniteNonNegativeBudget(recordOrActuals.workflowCost)
+    ? recordOrActuals.workflowCost
+    : undefined;
+  const durationMs = isFiniteNonNegativeBudget(recordOrActuals.timeSeconds)
+    ? roundMetric(recordOrActuals.timeSeconds * 1000)
+    : undefined;
+  const interventionCount = Number.isInteger(recordOrActuals.interventionCount)
+    && recordOrActuals.interventionCount >= 0
+    ? recordOrActuals.interventionCount
+    : undefined;
+
+  const calibration: RouteCalibration = {
+    ...(isFiniteNumber(prediction.expectedSuccess)
+      ? { predictedSuccess: prediction.expectedSuccess }
+      : {}),
+    ...(typeof actualSuccess === 'boolean' ? { actualSuccess } : {}),
+    ...(isFiniteNonNegativeBudget(prediction.expectedCostUsd)
+      ? { predictedCostUsd: prediction.expectedCostUsd }
+      : {}),
+    ...(typeof actualCostUsd === 'number' ? { actualCostUsd } : {}),
+    ...(typeof interventionCount === 'number' ? { interventionCount } : {}),
+    ...(typeof durationMs === 'number' ? { durationMs } : {}),
+  };
+
+  if (isFiniteNumber(prediction.expectedSuccess) && typeof actualSuccess === 'boolean') {
+    calibration.successDelta = roundMetric((actualSuccess ? 1 : 0) - prediction.expectedSuccess);
+  }
+  if (isFiniteNonNegativeBudget(prediction.expectedCostUsd) && typeof actualCostUsd === 'number') {
+    calibration.costErrorUsd = roundMetric(prediction.expectedCostUsd - actualCostUsd);
+  }
+
+  return hasObjectValues(calibration as Record<string, unknown>) ? calibration : undefined;
+}
+
 const TRAINING_METADATA_DIAGNOSTIC_CHECKS = [
   { field: 'workflowCost', isPresent: (record: EvalRecord) => typeof record.workflowCost === 'number' && Number.isFinite(record.workflowCost) },
   { field: 'taskDescriptor', isPresent: (record: EvalRecord) => record.taskDescriptor != null },
@@ -350,6 +563,18 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isFiniteNonNegativeBudget(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function roundMetric(value: number): number {
+  return Number(value.toFixed(6));
+}
+
+function hasObjectValues(value: Record<string, unknown>): boolean {
+  return Object.keys(value).length > 0;
 }
 
 function hasBudgetSnapshot(record: EvalRecord): boolean {
@@ -773,10 +998,13 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachChallengePairId(record, metadata.challengePairId);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
+  attachRouterPolicyMetadata(record, metadata.routeProvenance);
+  attachRoutePrediction(record, metadata.routePrediction);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
+  attachRouteCalibration(record, computeRouteCalibration(record, record.routePrediction));
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
   attachFallbackEvent(record, metadata.fallbackEvent || null);
   attachConstraints(record, metadata.constraints || null);
@@ -812,10 +1040,13 @@ export function enrichTrainingMetadata(
   attachChallengePairId(record, metadata.challengePairId);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
+  attachRouterPolicyMetadata(record, metadata.routeProvenance);
+  attachRoutePrediction(record, metadata.routePrediction);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
+  attachRouteCalibration(record, computeRouteCalibration(record, record.routePrediction));
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
   attachFallbackEvent(record, metadata.fallbackEvent || null);
   attachConstraints(record, metadata.constraints || null);

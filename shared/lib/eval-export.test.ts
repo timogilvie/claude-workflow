@@ -185,6 +185,39 @@ test('flattenRecord exports rubric fields when present', () => {
   assert.equal(row.rubric_determinative_boundary, 'functional_bug');
 });
 
+test('flattenRecord preserves structured routing metadata in JSON export', () => {
+  const row = flattenRecord(makeRecord({
+    routingDecision: {
+      candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
+      chosen: 0,
+      decisionPolicyVersion: 'stage-aware',
+      routeMode: 'stage-aware',
+      routeArtifactSchemaVersion: '1.0',
+      policyResolverVersion: '1.0.0',
+      operatingModeDependency: 'survival',
+    },
+  }));
+
+  assert.match(row.routing_decision, /"routeMode":"stage-aware"/);
+  assert.match(row.routing_decision, /"policyResolverVersion":"1.0.0"/);
+});
+
+test('flattenRecord exports route prediction and calibration JSON when present', () => {
+  const row = flattenRecord(makeRecord({
+    routePrediction: {
+      expectedSuccess: 0.8,
+      expectedCostUsd: 3.25,
+    },
+    routeCalibration: {
+      costErrorUsd: 0.5,
+      successDelta: 0.2,
+    },
+  }));
+
+  assert.match(row.route_prediction, /"expectedSuccess":0.8/);
+  assert.match(row.route_calibration, /"costErrorUsd":0.5/);
+});
+
 test('flattenRecord leaves rubric export fields blank when absent', () => {
   const row = flattenRecord(makeRecord());
 
@@ -287,7 +320,7 @@ test('toCsv column count matches header count', () => {
   const lines = csv.trim().split('\n');
   const headerCols = lines[0].split(',').length;
 
-  assert.equal(headerCols, 37);
+  assert.equal(headerCols, 39);
 });
 
 // ────────────────────────────────────────────────────────────────

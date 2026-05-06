@@ -12,6 +12,8 @@ import type {
   EvalRecord,
   EligibilityErrorCode,
   RepoContext,
+  RouteCalibration,
+  RoutePrediction,
   RoutingCandidate,
   RoutingDecision,
   TaskDescriptor,
@@ -179,6 +181,8 @@ export interface HokusaiSubmission {
   route_taken: HokusaiSubmissionRoutes;
   observed_outcomes: HokusaiSubmissionOutcomes;
   rubric_signals?: HokusaiSubmissionRubricSignals;
+  route_prediction?: RoutePrediction;
+  route_calibration?: RouteCalibration;
 }
 
 export type HokusaiSubmissionResult =
@@ -545,6 +549,14 @@ function extractRubricSignals(record: EvalRecord): HokusaiSubmissionRubricSignal
   };
 }
 
+function extractRoutePrediction(record: EvalRecord): RoutePrediction | undefined {
+  return record.routePrediction;
+}
+
+function extractRouteCalibration(record: EvalRecord): RouteCalibration | undefined {
+  return record.routeCalibration;
+}
+
 /**
  * Converts an eval result into the Hokusai training/submission schema.
  *
@@ -587,11 +599,18 @@ export function toHokusaiSubmission(
   }
 
   const rubricSignals = extractRubricSignals(record);
+  const routePrediction = extractRoutePrediction(record);
+  const routeCalibration = extractRouteCalibration(record);
+  const schemaVersion = routePrediction || routeCalibration
+    ? '1.2'
+    : rubricSignals
+      ? '1.1'
+      : '1.0';
 
   return {
     ok: true,
     submission: {
-      schema_version: rubricSignals ? '1.1' : '1.0',
+      schema_version: schemaVersion,
       run_id: record.id,
       task_id: record.issueId,
       constraints: {
@@ -608,6 +627,8 @@ export function toHokusaiSubmission(
         intervention_count: record.interventionCount ?? 0,
       },
       ...(rubricSignals && { rubric_signals: rubricSignals }),
+      ...(routePrediction && { route_prediction: routePrediction }),
+      ...(routeCalibration && { route_calibration: routeCalibration }),
     },
   };
 }
@@ -632,8 +653,9 @@ export function validateHokusaiSubmission(
     submission.schema_version !== undefined
     && submission.schema_version !== '1.0'
     && submission.schema_version !== '1.1'
+    && submission.schema_version !== '1.2'
   ) {
-    errors.push('schema_version must be "1.0" or "1.1"');
+    errors.push('schema_version must be "1.0", "1.1", or "1.2"');
   }
 
   if (!isNonEmptyString(submission.run_id)) {
@@ -733,6 +755,69 @@ export function validateHokusaiSubmission(
       if (!isBoundedFiniteNumber(criteriaScores?.[key])) {
         errors.push(`rubric_signals.criteria_scores.${key} must be a number between 0 and 1`);
       }
+    }
+  }
+
+  if (submission.route_prediction) {
+    if (
+      submission.route_prediction.expectedSuccess !== undefined
+      && !isBoundedFiniteNumber(submission.route_prediction.expectedSuccess)
+    ) {
+      errors.push('route_prediction.expectedSuccess must be a number between 0 and 1');
+    }
+    if (
+      submission.route_prediction.expectedCostUsd !== undefined
+      && !isNonNegativeFiniteNumber(submission.route_prediction.expectedCostUsd)
+    ) {
+      errors.push('route_prediction.expectedCostUsd must be a non-negative number');
+    }
+    if (
+      submission.route_prediction.confidence !== undefined
+      && !isBoundedFiniteNumber(submission.route_prediction.confidence)
+    ) {
+      errors.push('route_prediction.confidence must be a number between 0 and 1');
+    }
+    if (
+      submission.route_prediction.riskScore !== undefined
+      && !isNonNegativeFiniteNumber(submission.route_prediction.riskScore)
+    ) {
+      errors.push('route_prediction.riskScore must be a non-negative number');
+    }
+  }
+
+  if (submission.route_calibration) {
+    if (
+      submission.route_calibration.predictedSuccess !== undefined
+      && !isBoundedFiniteNumber(submission.route_calibration.predictedSuccess)
+    ) {
+      errors.push('route_calibration.predictedSuccess must be a number between 0 and 1');
+    }
+    if (
+      submission.route_calibration.predictedCostUsd !== undefined
+      && !isNonNegativeFiniteNumber(submission.route_calibration.predictedCostUsd)
+    ) {
+      errors.push('route_calibration.predictedCostUsd must be a non-negative number');
+    }
+    if (
+      submission.route_calibration.actualCostUsd !== undefined
+      && !isNonNegativeFiniteNumber(submission.route_calibration.actualCostUsd)
+    ) {
+      errors.push('route_calibration.actualCostUsd must be a non-negative number');
+    }
+    if (
+      submission.route_calibration.durationMs !== undefined
+      && !isNonNegativeFiniteNumber(submission.route_calibration.durationMs)
+    ) {
+      errors.push('route_calibration.durationMs must be a non-negative number');
+    }
+    if (
+      submission.route_calibration.interventionCount !== undefined
+      && (
+        !Number.isInteger(submission.route_calibration.interventionCount)
+        || submission.route_calibration.interventionCount < 0
+      )
+    ) {
+      errors.push('route_calibration.interventionCount must be a non-negative integer');
     }
   }
 

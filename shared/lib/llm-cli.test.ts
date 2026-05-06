@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
 import { readEvalRecords } from './eval-persistence.ts';
+import { SCHEMA_VERSION } from './eval-schema.ts';
 import { callLLM, LLMQuotaError, parseJsonFromLLM } from './llm-cli.ts';
 import { markExhausted, readQuotaSnapshot } from './quota-state.ts';
 
@@ -292,7 +293,7 @@ describe('quota fallback', () => {
 
     const records = readFallbackRecords();
     assert.equal(records.length, 1);
-    assert.equal(records[0].schemaVersion, '1.21.0');
+    assert.equal(records[0].schemaVersion, SCHEMA_VERSION);
     assert.equal(records[0].modelId, 'model-b');
     assert.equal(records[0].score, 1);
     assert.equal(records[0].fallbackEvent?.preferred_model, 'model-a');

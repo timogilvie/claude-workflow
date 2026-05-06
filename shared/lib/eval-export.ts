@@ -63,6 +63,8 @@ export interface ExportRow {
 
   // Routing decision (HOK-775)
   routing_decision: string;
+  route_prediction: string;
+  route_calibration: string;
   resource_variants: string;
   router_resource_variant: string;
   planner_prompt_variant: string;
@@ -104,6 +106,8 @@ const COLUMNS: (keyof ExportRow)[] = [
   'lines_added',
   'lines_removed',
   'routing_decision',
+  'route_prediction',
+  'route_calibration',
   'resource_variants',
   'router_resource_variant',
   'planner_prompt_variant',
@@ -204,6 +208,12 @@ export function flattenRecord(
 
     routing_decision: record.routingDecision
       ? JSON.stringify(record.routingDecision)
+      : '',
+    route_prediction: record.routePrediction
+      ? JSON.stringify(record.routePrediction)
+      : '',
+    route_calibration: record.routeCalibration
+      ? JSON.stringify(record.routeCalibration)
       : '',
     resource_variants: resourceVariants.all,
     router_resource_variant: resourceVariants.router,
