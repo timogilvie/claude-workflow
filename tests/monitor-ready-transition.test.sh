@@ -270,6 +270,7 @@ JSON
     is_challenge_task() { return 1; }
     maybe_run_challenge_eval() { :; }
     maybe_run_challenge_comparison() { :; }
+    dispatch_queued_children_for_parent() { :; }
     find_pr_for_branch() { printf "%s\n" "${FOUND_PR:-$PR}"; }
     get_task_phase() { printf "%s\n" "$CURRENT_PHASE"; }
     pr_state() { printf "%s\n" "$PR_STATUS"; }
