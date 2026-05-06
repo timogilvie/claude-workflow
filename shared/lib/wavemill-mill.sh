@@ -6898,6 +6898,10 @@ consume_next_command() {
   if (( ${#COMMAND_QUEUE[@]} == 0 )); then
     return 1
   fi
+  if (( ${#COMMAND_QUEUE_OFFSETS[@]} == 0 )); then
+    COMMAND_QUEUE=()
+    return 1
+  fi
   REPLY="${COMMAND_QUEUE[0]}"
   REPLY_OFFSET="${COMMAND_QUEUE_OFFSETS[0]}"
   if (( ${#COMMAND_QUEUE[@]} == 1 )); then
@@ -8702,7 +8706,7 @@ while :; do
         fi
         ;;
       *)
-        COMMAND_QUEUE=("$REPLY" "${COMMAND_QUEUE[@]+"${COMMAND_QUEUE[@]}"}")
+        requeue_consumed_command_front
         break
         ;;
     esac
