@@ -52,8 +52,34 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
   const integrationBranch = config.integrationBranch;
   const promotionBranch = config.promotionBranch;
 
-  const integrationTip = resolveBranchTip(integrationBranch, options.repoDir, shellRunner);
-  resolveBranchTip(promotionBranch, options.repoDir, shellRunner);
+  let integrationTip = resolveBranchTip(integrationBranch, options.repoDir, shellRunner);
+  const promotionTip = resolveBranchTip(promotionBranch, options.repoDir, shellRunner);
+  const promotionTipIsIntegrated = isAncestor(promotionTip, integrationTip, options.repoDir, shellRunner);
+  const promotionTree = resolveCommitTree(promotionTip, options.repoDir, shellRunner);
+  const matchingPromotionTreeCommit = promotionTipIsIntegrated
+    ? null
+    : findIntegrationCommitWithTree(
+      integrationBranch,
+      promotionTree,
+      options.repoDir,
+      shellRunner,
+    );
+  const comparisonBase =
+    matchingPromotionTreeCommit && matchingPromotionTreeCommit !== integrationTip
+      ? matchingPromotionTreeCommit
+      : promotionBranch;
+
+  integrationTip = reconcileSquashMergedPromotion({
+    integrationBranch,
+    promotionBranch,
+    integrationTip,
+    promotionTip,
+    promotionTree,
+    matchingPromotionTreeCommit,
+    repoDir: options.repoDir,
+    shellRunner,
+    dryRun: options.dryRun,
+  });
 
   if (isAlreadyPromoted(integrationTip, promotionBranch, options.repoDir, shellRunner)) {
     return { status: 'noop' };
@@ -66,8 +92,13 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
     health = { state: 'unhealthy', reason: `health-check-error: ${errorMessage(error)}` };
   }
 
-  const recentPrs = listRecentMergedWavemillPrs(integrationBranch, options.repoDir, shellRunner);
-  const recentCommits = listRecentIntegrationCommits(promotionBranch, integrationBranch, options.repoDir, shellRunner);
+  const recentCommits = listRecentIntegrationCommits(comparisonBase, integrationBranch, options.repoDir, shellRunner);
+  const recentPrs = listRecentMergedWavemillPrs(
+    integrationBranch,
+    extractPrNumbers(recentCommits),
+    options.repoDir,
+    shellRunner,
+  );
   const currentPr = findExistingPromotionPr(integrationBranch, promotionBranch, options.repoDir, shellRunner);
   const nextBody = updatePromotionSection(
     currentPr?.body ?? '',
@@ -82,14 +113,11 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
 
   const status: PromotionResult['status'] = currentPr ? 'updated' : 'opened';
   if (!options.dryRun) {
-    const bodyFile = writeBodyToTempFile(nextBody, shellRunner, options.repoDir);
-    try {
-      if (currentPr) {
-        shellRunner(
-          `gh pr edit ${currentPr.number} --body-file ${escapeShellArg(bodyFile)}`,
-          { encoding: 'utf-8', cwd: options.repoDir },
-        );
-      } else {
+    if (currentPr) {
+      updatePromotionPrBody(currentPr.number, nextBody, shellRunner, options.repoDir);
+    } else {
+      const bodyFile = writeBodyToTempFile(nextBody, shellRunner, options.repoDir);
+      try {
         const title = `chore: promote ${integrationBranch} to ${promotionBranch}`;
         shellRunner(
           [
@@ -107,9 +135,9 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
           ].join(' '),
           { encoding: 'utf-8', cwd: options.repoDir },
         );
+      } finally {
+        shellRunner(`rm -f ${escapeShellArg(bodyFile)}`, { encoding: 'utf-8', cwd: options.repoDir });
       }
-    } finally {
-      shellRunner(`rm -f ${escapeShellArg(bodyFile)}`, { encoding: 'utf-8', cwd: options.repoDir });
     }
   }
 
@@ -157,11 +185,143 @@ function isAlreadyPromoted(
   }
 }
 
+function isAncestor(
+  ancestor: string,
+  descendant: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): boolean {
+  try {
+    shellRunner(
+      `git merge-base --is-ancestor ${escapeShellArg(ancestor)} ${escapeShellArg(descendant)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function reconcileSquashMergedPromotion(input: {
+  integrationBranch: string;
+  promotionBranch: string;
+  integrationTip: string;
+  promotionTip: string;
+  promotionTree: string;
+  matchingPromotionTreeCommit: string | null;
+  repoDir: string;
+  shellRunner: ShellRunner;
+  dryRun?: boolean;
+}): string {
+  const integrationTree = resolveCommitTree(input.integrationTip, input.repoDir, input.shellRunner);
+  const matchingIntegrationCommit = input.matchingPromotionTreeCommit;
+
+  if (!matchingIntegrationCommit) {
+    return input.integrationTip;
+  }
+
+  const branchRef = `refs/heads/${input.integrationBranch}`;
+  if (integrationTree === input.promotionTree) {
+    if (input.dryRun) {
+      return input.integrationTip;
+    }
+    input.shellRunner(
+      `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(input.promotionTip)} ${escapeShellArg(input.integrationTip)}`,
+      { encoding: 'utf-8', cwd: input.repoDir },
+    );
+    pushBranchRef(branchRef, input.integrationTip, input.repoDir, input.shellRunner);
+    return input.promotionTip;
+  }
+
+  if (matchingIntegrationCommit === input.integrationTip) {
+    return input.integrationTip;
+  }
+
+  if (input.dryRun) {
+    return input.integrationTip;
+  }
+
+  const message = `chore: reconcile ${input.integrationBranch} after squash promotion`;
+  const reconciledTip = String(input.shellRunner(
+    [
+      'git',
+      'commit-tree',
+      escapeShellArg(`${input.integrationTip}^{tree}`),
+      '-p',
+      escapeShellArg(input.promotionTip),
+      '-m',
+      escapeShellArg(message),
+    ].join(' '),
+    { encoding: 'utf-8', cwd: input.repoDir },
+  )).trim();
+
+  input.shellRunner(
+    `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(reconciledTip)} ${escapeShellArg(input.integrationTip)}`,
+    { encoding: 'utf-8', cwd: input.repoDir },
+  );
+  pushBranchRef(branchRef, input.integrationTip, input.repoDir, input.shellRunner);
+  return reconciledTip;
+}
+
+function resolveCommitTree(
+  commitish: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): string {
+  return String(shellRunner(
+    `git rev-parse ${escapeShellArg(`${commitish}^{tree}`)}`,
+    { encoding: 'utf-8', cwd: repoDir },
+  )).trim();
+}
+
+function findIntegrationCommitWithTree(
+  integrationBranch: string,
+  tree: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): string | null {
+  const output = String(shellRunner(
+    `git log --format='%H %T' ${escapeShellArg(integrationBranch)}`,
+    { encoding: 'utf-8', cwd: repoDir },
+  )).trim();
+
+  for (const line of output.split(/\r?\n/)) {
+    const [commit, commitTree] = line.trim().split(/\s+/, 2);
+    if (commit && commitTree === tree) {
+      return commit;
+    }
+  }
+  return null;
+}
+
+function pushBranchRef(
+  branchRef: string,
+  expectedRemoteTip: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): void {
+  shellRunner(
+    [
+      'git',
+      'push',
+      `--force-with-lease=${escapeShellArg(`${branchRef}:${expectedRemoteTip}`)}`,
+      'origin',
+      escapeShellArg(`${branchRef}:${branchRef}`),
+    ].join(' '),
+    { encoding: 'utf-8', cwd: repoDir },
+  );
+}
+
 function listRecentMergedWavemillPrs(
   integrationBranch: string,
+  allowedPrNumbers: Set<number>,
   repoDir: string,
   shellRunner: ShellRunner,
 ): MergedPrSummary[] {
+  if (allowedPrNumbers.size === 0) {
+    return [];
+  }
+
   try {
     const output = shellRunner(
       [
@@ -183,29 +343,42 @@ function listRecentMergedWavemillPrs(
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return (parsed as MergedPrSummary[]).filter((pr) =>
-      Array.isArray(pr.labels) && pr.labels.some((label) => label.name === WM_LABELS.wavemill)
-    );
+    return (parsed as MergedPrSummary[]).filter((pr) => {
+      if (allowedPrNumbers.size > 0 && !allowedPrNumbers.has(pr.number)) {
+        return false;
+      }
+      return Array.isArray(pr.labels) && pr.labels.some((label) => label.name === WM_LABELS.wavemill);
+    });
   } catch {
     return [];
   }
 }
 
 function listRecentIntegrationCommits(
-  promotionBranch: string,
+  comparisonBase: string,
   integrationBranch: string,
   repoDir: string,
   shellRunner: ShellRunner,
 ): string[] {
   try {
     const output = String(shellRunner(
-      `git log --no-merges --oneline -n ${RECENT_COMMIT_LIMIT} ${escapeShellArg(`${promotionBranch}..${integrationBranch}`)}`,
+      `git log --first-parent --oneline -n ${RECENT_COMMIT_LIMIT} ${escapeShellArg(`${comparisonBase}..${integrationBranch}`)}`,
       { encoding: 'utf-8', cwd: repoDir },
     )).trim();
     return output ? output.split(/\r?\n/) : [];
   } catch {
     return [];
   }
+}
+
+function extractPrNumbers(commits: string[]): Set<number> {
+  const numbers = new Set<number>();
+  for (const commit of commits) {
+    for (const match of commit.matchAll(/(?:#|pull request #)(\d+)/gi)) {
+      numbers.add(Number(match[1]));
+    }
+  }
+  return numbers;
 }
 
 function findExistingPromotionPr(
@@ -322,6 +495,27 @@ function writeBodyToTempFile(
   const output = String(shellRunner('mktemp', { encoding: 'utf-8', cwd: repoDir })).trim();
   writeFileSync(output, body);
   return output;
+}
+
+function updatePromotionPrBody(
+  prNumber: number,
+  body: string,
+  shellRunner: ShellRunner,
+  repoDir: string,
+): void {
+  const repo = String(shellRunner(
+    'gh repo view --json nameWithOwner --jq .nameWithOwner',
+    { encoding: 'utf-8', cwd: repoDir },
+  )).trim();
+  const bodyJsonFile = writeBodyToTempFile(JSON.stringify({ body }), shellRunner, repoDir);
+  try {
+    shellRunner(
+      `gh api --method PATCH ${escapeShellArg(`repos/${repo}/pulls/${prNumber}`)} --input ${escapeShellArg(bodyJsonFile)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+  } finally {
+    shellRunner(`rm -f ${escapeShellArg(bodyJsonFile)}`, { encoding: 'utf-8', cwd: repoDir });
+  }
 }
 
 function escapeRegExp(value: string): string {
