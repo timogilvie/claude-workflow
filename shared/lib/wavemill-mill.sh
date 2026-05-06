@@ -4396,9 +4396,11 @@ poll_challenge_jobs() {
 
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
-  local eval_completed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid
+  local eval_completed eval_failed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
+  eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
+  [[ "$eval_failed" == "true" ]] && return 0
 
   pair_id=$(get_task_meta "$issue" "challengePairId")
   solution_model=$(get_task_meta "$issue" "challengeModel")

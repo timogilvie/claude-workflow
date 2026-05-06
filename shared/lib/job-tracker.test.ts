@@ -164,3 +164,32 @@ test('markJobSettled updates eval completion state', async () => {
     cleanup();
   }
 });
+
+test('markJobSettled marks failed eval jobs as evalFailed', async () => {
+  const { statePath, cleanup } = makeTempState();
+  try {
+    writeFileSync(statePath, JSON.stringify({
+      tasks: {
+        'HOK-1': {
+          evalCompleted: false,
+          evalFailed: false,
+        },
+      },
+      jobs: {
+        'eval-HOK-1-primary-101': {
+          ...makeJob(),
+          status: 'failed',
+          reason: 'job_failed',
+        },
+      },
+    }, null, 2));
+
+    await markJobSettled({ statePath, jobId: 'eval-HOK-1-primary-101' });
+    const next = JSON.parse(readFileSync(statePath, 'utf-8'));
+    assert.equal(next.tasks['HOK-1'].evalCompleted, false);
+    assert.equal(next.tasks['HOK-1'].evalFailed, true);
+    assert.equal(next.jobs['eval-HOK-1-primary-101'].settled, true);
+  } finally {
+    cleanup();
+  }
+});

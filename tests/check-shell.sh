@@ -477,6 +477,11 @@ else
   else
     fail "challenge eval still looks synchronous or untracked"
   fi
+  if grep -q 'evalFailed // false' <<< "$CHALLENGE_EVAL_BLOCK"; then
+    pass "challenge eval launch skips tasks already marked evalFailed"
+  else
+    fail "challenge eval launch may relaunch failed eval jobs"
+  fi
 
   CHALLENGE_COMPARE_BLOCK=$(awk '
     /^maybe_run_challenge_comparison\(\) \{/ { in_fn=1 }
