@@ -3,6 +3,7 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'nod
 import { dirname, join, relative, resolve } from 'node:path';
 import { getMaxCostUsd } from './config.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
+import type { RoutePrediction } from './eval-schema.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
 export const ROUTE_ARTIFACT_SCHEMA_VERSION = '1.0';
@@ -355,10 +356,114 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readNonNegativeNumber(value: unknown): number | undefined {
+  const numeric = readFiniteNumber(value);
+  return typeof numeric === 'number' && numeric >= 0 ? numeric : undefined;
+}
+
+function readProbability(value: unknown): number | undefined {
+  const numeric = readFiniteNumber(value);
+  return typeof numeric === 'number' && numeric >= 0 && numeric <= 1 ? numeric : undefined;
+}
+
+function pushFeature(features: string[], value: unknown): void {
+  if (typeof value !== 'string') {
+    return;
+  }
+  const normalized = value.trim();
+  if (!normalized || features.includes(normalized)) {
+    return;
+  }
+  features.push(normalized);
+}
+
+function summarizeRationale(reasoning: string[]): string | undefined {
+  const summary = reasoning
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  if (!summary) {
+    return undefined;
+  }
+  return summary.length <= 280 ? summary : `${summary.slice(0, 277).trimEnd()}...`;
+}
+
+export function buildRoutePrediction(
+  decisionOrArtifact: Partial<WorkflowRouteDecision> | Record<string, unknown> | null | undefined,
+): RoutePrediction | undefined {
+  if (!decisionOrArtifact || typeof decisionOrArtifact !== 'object' || Array.isArray(decisionOrArtifact)) {
+    return undefined;
+  }
+
+  const artifact = decisionOrArtifact as Record<string, unknown>;
+  const signals = artifact.signals && typeof artifact.signals === 'object' && !Array.isArray(artifact.signals)
+    ? artifact.signals as Record<string, unknown>
+    : undefined;
+  const reasoning = Array.isArray(artifact.reasoning)
+    ? artifact.reasoning.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : [];
+  const expectedCostUsd = readNonNegativeNumber(artifact.expectedCost)
+    ?? (() => {
+      const stageCosts = [
+        readNonNegativeNumber(artifact.expectedCostPlan),
+        readNonNegativeNumber(artifact.expectedCostCode),
+        readNonNegativeNumber(artifact.expectedCostReview),
+      ];
+      return stageCosts.every((value) => typeof value === 'number')
+        ? Number((stageCosts[0]! + stageCosts[1]! + stageCosts[2]!).toFixed(6))
+        : undefined;
+    })();
+
+  const features: string[] = [];
+  for (const entry of reasoning) {
+    pushFeature(features, entry);
+    if (features.length >= 5) {
+      break;
+    }
+  }
+  if (features.length < 5 && signals) {
+    pushFeature(features, readString(signals.taskType) ? `taskType=${String(signals.taskType)}` : undefined);
+    pushFeature(features, readString(signals.taskDifficulty) ? `taskDifficulty=${String(signals.taskDifficulty)}` : undefined);
+    const complexityScore = readNonNegativeNumber(signals.complexityScore);
+    if (typeof complexityScore === 'number') {
+      pushFeature(features, `complexityScore=${complexityScore}`);
+    }
+    const riskScore = readNonNegativeNumber(signals.riskScore);
+    if (typeof riskScore === 'number') {
+      pushFeature(features, `riskScore=${riskScore}`);
+    }
+  }
+
+  const prediction: RoutePrediction = {
+    ...(readProbability(artifact.expectedSuccess) != null
+      ? { expectedSuccess: readProbability(artifact.expectedSuccess) }
+      : {}),
+    ...(typeof expectedCostUsd === 'number' ? { expectedCostUsd } : {}),
+    ...(readProbability(artifact.confidence) != null
+      ? { confidence: readProbability(artifact.confidence) }
+      : {}),
+    ...(readNonNegativeNumber(signals?.riskScore) != null
+      ? { riskScore: readNonNegativeNumber(signals?.riskScore) }
+      : {}),
+    ...(readString(signals?.taskType) ? { taskType: readString(signals?.taskType) } : {}),
+    ...(readString(signals?.taskDifficulty) ? { taskDifficulty: readString(signals?.taskDifficulty) } : {}),
+    ...(features.length > 0 ? { topFeatures: features.slice(0, 5) } : {}),
+    ...(summarizeRationale(reasoning) ? { rationaleSummary: summarizeRationale(reasoning) } : {}),
+  };
+
+  return Object.keys(prediction).length > 0 ? prediction : undefined;
+}
+
 function readExpectedMetrics(artifact: Record<string, unknown>): Record<string, unknown> | undefined {
   const metrics: Record<string, unknown> = {};
   const keys = [
     'expectedSuccess',
+    'expectedCost',
     'confidence',
     'expectedCostPlan',
     'expectedCostCode',
@@ -367,6 +472,8 @@ function readExpectedMetrics(artifact: Record<string, unknown>): Record<string, 
     'neighborSimilarityRange',
     'maxCostUsd',
     'challengeRecommendation',
+    'signals',
+    'reasoning',
   ] as const;
   for (const key of keys) {
     if (typeof artifact[key] !== 'undefined') {

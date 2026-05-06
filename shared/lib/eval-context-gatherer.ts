@@ -18,10 +18,11 @@ import path from 'node:path';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadMetrics } from './review-metrics.ts';
-import type { RoutingDecision, RoutingCandidate } from './eval-schema.ts';
+import type { RoutePrediction, RoutingDecision, RoutingCandidate } from './eval-schema.ts';
 import {
   POLICY_RESOLVER_VERSION,
   ROUTE_ARTIFACT_SCHEMA_VERSION,
+  buildRoutePrediction,
   resolveRouterPolicyVersion,
 } from './route-artifact.ts';
 
@@ -322,6 +323,19 @@ export interface RoutingCompleteData {
     maxCostUsd?: number;
   };
   maxCostUsd?: number | null;
+  expectedSuccess?: number;
+  expectedCostPlan?: number;
+  expectedCostCode?: number;
+  expectedCostReview?: number;
+  expectedCost?: number;
+  confidence?: number;
+  reasoning?: string[];
+  signals?: {
+    taskType?: string;
+    complexityScore?: number;
+    riskScore?: number;
+    taskDifficulty?: string;
+  };
 }
 
 /**
@@ -777,6 +791,7 @@ export function gatherStageArtifacts(
   planContent?: string;
   selfReviewSummary?: string;
   routingDecision?: RoutingDecision;
+  routePrediction?: RoutePrediction;
   executionModel?: string;
 } {
   // Derive feature slug
@@ -788,6 +803,7 @@ export function gatherStageArtifacts(
       planContent: loadFromArchive(repoDir, issueId, 'plan.md'),
       selfReviewSummary: undefined,
       routingDecision: undefined,
+      routePrediction: buildRoutePrediction(loadRoutingCompleteRawFromArchive(repoDir, issueId) ?? undefined),
       executionModel: undefined,
     };
   }
@@ -798,15 +814,19 @@ export function gatherStageArtifacts(
   const planContent = loadPlan(repoDir, slug, worktreePath)
     ?? loadFromArchive(repoDir, issueId, 'plan.md');
   const selfReviewSummary = loadSelfReviewSummary(repoDir, branch, worktreePath);
-  const routingDecision = fetchRoutingDecision(repoDir, slug, worktreePath)
-    ?? loadRoutingDecisionFromArchive(repoDir, issueId)
+  const routingCompleteRaw = fetchRoutingCompleteRaw(repoDir, slug, worktreePath)
+    ?? loadRoutingCompleteRawFromArchive(repoDir, issueId)
     ?? undefined;
+  const routingDecision = routingCompleteRaw
+    ? convertToRoutingDecision(routingCompleteRaw)
+    : undefined;
 
   return {
     taskPacket,
     planContent,
     selfReviewSummary,
     routingDecision,
+    routePrediction: buildRoutePrediction(routingCompleteRaw),
     executionModel: loadStageExecutionModel(repoDir, slug, worktreePath),
   };
 }

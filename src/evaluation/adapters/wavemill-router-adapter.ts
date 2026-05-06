@@ -3,11 +3,14 @@ import { basename, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   getScoreBand,
+  SCHEMA_VERSION,
   type EvalRecord,
+  type RoutePrediction,
   type WavemillRouterMeasurementPolicy,
 } from '../../../shared/lib/eval-schema.ts';
 import { isEvalSuccess } from '../../../shared/lib/eval-success-policy.ts';
 import { appendEvalRecord, readEvalRecords } from '../../../shared/lib/eval-persistence.ts';
+import { buildRoutePrediction } from '../../../shared/lib/route-artifact.ts';
 import { routeBatch, type RouteBatchOptions } from '../../../shared/lib/route-batch.ts';
 import { meetsMintEligibility, type MintEligibilityEvaluation } from '../../../shared/lib/eval-aggregator.ts';
 import { getMintEligibilityConfig } from '../../../shared/lib/config.ts';
@@ -33,6 +36,7 @@ interface ParsedRouteArtifact {
     operatingMode?: RouteBatchOptions['operatingMode'];
     routeMode?: RouteBatchOptions['mode'];
   };
+  routePrediction?: RoutePrediction;
   error?: string;
 }
 
@@ -43,6 +47,7 @@ interface ArtifactGroup {
   prompt?: string;
   routeValid: boolean;
   routeDecision?: ParsedRouteArtifact['routeDecision'];
+  routePrediction?: RoutePrediction;
 }
 
 export interface WavemillRouterEvalInputRecord extends WavemillRouterScoreRecord {
@@ -236,6 +241,7 @@ function parseRouteArtifact(routePath: string): ParsedRouteArtifact {
       routeSource: source,
       routePriority: priority,
       routePath,
+      routePrediction: buildRoutePrediction(data),
       error: 'missing required planner/coder/reviewer strings',
     };
   }
@@ -256,6 +262,7 @@ function parseRouteArtifact(routePath: string): ParsedRouteArtifact {
       operatingMode: parseOperatingMode(provenance?.routerMode),
       routeMode: parseRouteMode(data.routingMode),
     },
+    routePrediction: buildRoutePrediction(data),
   };
 }
 
@@ -297,6 +304,7 @@ function groupArtifacts(artifacts: ParsedRouteArtifact[]): {
         prompt: artifact.prompt,
         routeValid: true,
         routeDecision: artifact.routeDecision,
+        routePrediction: artifact.routePrediction,
       });
       continue;
     }
@@ -305,6 +313,7 @@ function groupArtifacts(artifacts: ParsedRouteArtifact[]): {
     if (artifact.routePriority < existingPriority) {
       existing.routePath = artifact.routePath;
       existing.routeDecision = artifact.routeDecision;
+      existing.routePrediction = artifact.routePrediction;
       existing.routeValid = true;
     }
     if (!existing.prompt && artifact.prompt) {
@@ -385,6 +394,13 @@ function chooseEvalRecord(
   return undefined;
 }
 
+function predictionForRecord(
+  evalRecord: EvalRecord | undefined,
+  artifact: ArtifactGroup,
+): RoutePrediction | undefined {
+  return evalRecord?.routePrediction ?? artifact.routePrediction;
+}
+
 async function rerouteArtifact(
   artifact: ArtifactGroup,
   repoDir: string,
@@ -429,7 +445,7 @@ function buildHemRecord(
 
   return {
     id: randomUUID(),
-    schemaVersion: '1.15.0',
+    schemaVersion: SCHEMA_VERSION,
     originalPrompt: `Wavemill router eval (${policy})`,
     modelId: score.wavemill_router_scoring.scorer_id,
     modelVersion: 'v1',
@@ -502,6 +518,7 @@ export async function runWavemillRouterEval(
     }
 
     const evalRecord = chooseEvalRecord(artifact, evalByIssueAndHash, evalByIssue);
+    const prediction = predictionForRecord(evalRecord, artifact);
     if (evalRecord) {
       matchedEvalIds.add(evalRecord.id);
     }
@@ -524,6 +541,10 @@ export async function runWavemillRouterEval(
         typeof evalRecord?.interventionCount === 'number'
           ? Math.max(0, evalRecord.interventionCount)
           : evalRecord?.interventions?.length,
+      predicted_success: evalRecord?.routeCalibration?.predictedSuccess ?? prediction?.expectedSuccess,
+      predicted_cost_usd: evalRecord?.routeCalibration?.predictedCostUsd ?? prediction?.expectedCostUsd,
+      cost_error_usd: evalRecord?.routeCalibration?.costErrorUsd,
+      success_delta: evalRecord?.routeCalibration?.successDelta,
     });
   }
 
@@ -551,6 +572,10 @@ export async function runWavemillRouterEval(
         typeof evalRecord.interventionCount === 'number'
           ? Math.max(0, evalRecord.interventionCount)
           : evalRecord.interventions?.length,
+      predicted_success: evalRecord.routeCalibration?.predictedSuccess ?? evalRecord.routePrediction?.expectedSuccess,
+      predicted_cost_usd: evalRecord.routeCalibration?.predictedCostUsd ?? evalRecord.routePrediction?.expectedCostUsd,
+      cost_error_usd: evalRecord.routeCalibration?.costErrorUsd,
+      success_delta: evalRecord.routeCalibration?.successDelta,
     });
   }
 
