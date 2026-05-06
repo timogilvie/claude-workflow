@@ -46,7 +46,7 @@ import {
 } from './route-artifact.ts';
 import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, formatRepoContextDisplay, formatInterventionDisplay } from './eval-summary-printer.ts';
 import { errorMessage } from './error-utils.ts';
-import type { EvalRecord, EvalRouteProvenance, InterventionRecord, RoutingDecision, TaskContext, RepoContext, Outcomes } from './eval-schema.ts';
+import type { EvalRecord, EvalRouteProvenance, InterventionRecord, RoutePrediction, RoutingDecision, TaskContext, RepoContext, Outcomes } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome } from './workflow-cost.ts';
@@ -236,6 +236,7 @@ interface PostCompletionEnrichmentInput {
   costOutcome: WorkflowCostOutcome | null;
   interventionRecords: InterventionRecord[];
   routingDecision?: RoutingDecision;
+  routePrediction?: RoutePrediction | null;
 }
 
 function resolveRouteArtifactDirs(
@@ -356,7 +357,7 @@ export function enrichPostCompletionRecord(
       input.branchName,
       input.worktreePath,
     ),
-    routePrediction: input.stageArtifacts.routePrediction,
+    routePrediction: input.routePrediction,
     challengeRouteContext: input.challengePairId
       ? deriveChallengeRouteContext(input.repoDir, input.issueId, input.branchName, input.worktreePath)
       : null,
@@ -591,6 +592,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       costOutcome,
       interventionRecords: interventionData.records,
       routingDecision: stageArtifacts.routingDecision,
+      routePrediction: stageArtifacts.routePrediction,
     });
 
     // 7. Persist
