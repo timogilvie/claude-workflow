@@ -128,6 +128,7 @@ interface WorkflowTaskRecord extends Record<string, unknown> {
   worktree?: string;
   pr?: string | number;
   phase?: string;
+  status?: string;
   updated?: string;
   agent?: string;
   model?: string;
@@ -574,6 +575,9 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   for (const [issueId, rawTask] of Object.entries(tasks)) {
     const task = rawTask as WorkflowTaskRecord;
     if (task.phase !== 'ready') {
+      continue;
+    }
+    if (task.status === 'merged' || task.status === 'completed-external') {
       continue;
     }
     if (options.issueFilter && issueId !== options.issueFilter) {
