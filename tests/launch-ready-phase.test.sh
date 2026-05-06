@@ -55,6 +55,9 @@ extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$LAUNCH
 extract_function "$MILL_SCRIPT" "write_transient_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "log_ready_failure_result" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "log_ready_unparseable_result" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_failure_is_actionable_for_remediation" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_failed_check_summary" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "set_ready_pass_labels" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "launch_ready_phase" >> "$LAUNCH_FUNC_FILE"
 
 if [[ ! -s "$LAUNCH_FUNC_FILE" ]]; then
@@ -111,6 +114,9 @@ run_launch_case() {
     LOG_WARN_OUTPUT=""
     LAUNCH_AGENT_CALLS=0
     READY_PROMPT_CALLS=0
+    READY_PROMPT_SUMMARY=""
+    READY_LABEL_COUNT_FILE="$CASE_DIR/ready-label-calls"
+    printf "%s\n" "0" > "$READY_LABEL_COUNT_FILE"
 
     _ensure_window_exists() { :; }
     ready_state_dir() { printf "%s\n" "$STATE_DIR"; }
@@ -162,6 +168,7 @@ run_launch_case() {
     build_conflict_resolution_prompt() { :; }
     build_ready_remediation_prompt() {
       READY_PROMPT_CALLS=$((READY_PROMPT_CALLS + 1))
+      READY_PROMPT_SUMMARY="${8-}"
       printf "prompt\n"
     }
     _launch_agent_in_pane() {
@@ -196,12 +203,24 @@ run_launch_case() {
         return 1
       fi
 
+      if [[ "${2:-}" == "$TOOLS_DIR/set-pr-ready-label.ts" ]]; then
+        printf "%s\n" "$(( $(cat "$READY_LABEL_COUNT_FILE") + 1 ))" > "$READY_LABEL_COUNT_FILE"
+        case "$TEST_CASE" in
+          ready_label_failure) return 1 ;;
+          *) printf "Restored ready labels for PR #%s\n" "${3:-304}"; return 0 ;;
+        esac
+      fi
+
       case "$TEST_CASE" in
         pending|pending_re_check)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pending\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pending\",\"message\":\"2 CI check(s) still running\",\"details\":{\"pendingChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"QUEUED\"},{\"name\":\"Check Lifecycle Paths\",\"state\":\"QUEUED\"}],\"totalChecks\":2}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"CI checks still in progress - will retry\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 2
           ;;
         pass_after_remediation)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"attempts\":1}}"
+          return 0
+          ;;
+        ready_label_failure)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"attempts\":1}}"
           return 0
           ;;
@@ -228,6 +247,18 @@ run_launch_case() {
           ;;
         remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
+          return 1
+          ;;
+        actionable_named_failure)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"lint\",\"status\":\"fail\",\"message\":\"eslint failed\",\"details\":{}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"Lint failed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
+          return 1
+          ;;
+        actionable_compound_failure)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}},{\"name\":\"tests\",\"status\":\"fail\",\"message\":\"unit tests failed\",\"details\":{}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"Multiple checks failed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
+          return 1
+          ;;
+        actionable_message_failure)
+          printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-suite\",\"status\":\"fail\",\"message\":\"Shell and Unit Tests failed\",\"details\":{}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"CI suite failed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 1
           ;;
         conflict_persists_after_remediation)
@@ -267,6 +298,7 @@ run_launch_case() {
     transient_attention="absent"
     [[ -f "$STATE_DIR/.needs-attention-transient" ]] && transient_attention="present"
     transient_count="$(cat "$STATE_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
+    ready_label_calls="$(cat "$READY_LABEL_COUNT_FILE" 2>/dev/null || echo "0")"
 
     debug_line_count=0
     [[ -f "$DEBUG_FILE" ]] && debug_line_count=$(wc -l < "$DEBUG_FILE" | tr -d " ")
@@ -275,6 +307,8 @@ run_launch_case() {
 
     printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\n" \
       "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count"
+    printf "ready_label_calls=%s\n" "$ready_label_calls"
+    printf "prompt_summary=%s\n" "$READY_PROMPT_SUMMARY"
   ' 2>&1
 }
 
@@ -330,10 +364,28 @@ check_contains "first remediation launch returns rc 5" "$output" "rc=5"
 check_contains "first remediation launch writes running stage result" "$output" "|ready|running|"
 check_contains "first remediation launch records attempt 1" "$output" "\"remediationAttempts\":1"
 check_contains "first remediation launch records current head" "$output" "\"remediationLaunchHead\":\"abc123\""
+check_contains "first remediation launch records ci-status failure name" "$output" "\"remediationFailures\":[\"ci-status\"]"
 check_contains "first remediation launch clears attention" "$output" "attention_count=0"
 check_contains "first remediation launch invokes agent once" "$output" "launch_calls=1"
 check_contains "first remediation launch builds prompt once" "$output" "prompt_calls=1"
 check_contains "first remediation launch emits no errors" "$output" "error_count=0"
+
+output="$(run_launch_case actionable_named_failure)"
+check_contains "actionable named failure returns rc 5" "$output" "rc=5"
+check_contains "actionable named failure launches remediation" "$output" "launch_calls=1"
+check_contains "actionable named failure records failure name" "$output" "\"remediationFailures\":[\"lint\"]"
+check_contains "actionable named failure summarizes direct check" "$output" "prompt_summary=lint: eslint failed"
+
+output="$(run_launch_case actionable_compound_failure)"
+check_contains "compound actionable failure returns rc 5" "$output" "rc=5"
+check_contains "compound actionable failure launches once" "$output" "launch_calls=1"
+check_contains "compound actionable failure records both failures" "$output" "\"remediationFailures\":[\"ci-status\",\"tests\"]"
+check_contains "compound actionable failure summarizes both checks" "$output" "prompt_summary=ci-status: 1 CI check(s) failing (Shell and Unit Tests); tests: unit tests failed"
+
+output="$(run_launch_case actionable_message_failure)"
+check_contains "message-based actionable failure returns rc 5" "$output" "rc=5"
+check_contains "message-based actionable failure launches remediation" "$output" "launch_calls=1"
+check_contains "message-based actionable failure records direct name" "$output" "\"remediationFailures\":[\"ci-suite\"]"
 
 output="$(run_launch_case second_remediation_launch)"
 check_contains "second remediation launch returns rc 5" "$output" "rc=5"
@@ -384,11 +436,22 @@ check_contains "persistent conflict logs one terse error" "$output" "Merge confl
 output="$(run_launch_case pass_after_remediation)"
 check_contains "pass after remediation returns success" "$output" "rc=0"
 check_contains "pass after remediation writes completed stage" "$output" "|ready|completed|"
+check_contains "pass after remediation restores ready labels once" "$output" "ready_label_calls=1"
+check_contains "pass after remediation records ready label update" "$output" "\"readyLabelsUpdated\":true"
 check_not_contains "pass after remediation clears remediation artifacts" "$output" "\"remediationAttempts\":"
 check_contains "pass after remediation clears conflict marker" "$output" "conflict_detected=absent"
 check_contains "pass after remediation clears attention head" "$output" "conflict_attention_head="
 check_contains "pass after remediation clears reported marker" "$output" "conflict_attention_reported=absent"
 check_contains "pass after remediation clears needs attention" "$output" "needs_attention=absent"
+
+output="$(run_launch_case ready_label_failure)"
+check_contains "ready label failure returns failure" "$output" "rc=1"
+check_contains "ready label failure writes failed stage" "$output" "|ready|failed|"
+check_contains "ready label failure attempts label restore once" "$output" "ready_label_calls=1"
+check_contains "ready label failure keeps attention" "$output" "needs_attention=present"
+check_contains "ready label failure writes operator message" "$output" "Ready passed for PR #304, but updating wm:ready labels failed."
+check_contains "ready label failure records label update failure" "$output" "\"readyLabelsUpdated\":false"
+check_contains "ready label failure logs terse error" "$output" "Ready passed for HOK-1300 but failed to restore PR labels"
 
 output="$(run_launch_case clean_after_unknown)"
 check_contains "clean after unknown returns success" "$output" "rc=0"
