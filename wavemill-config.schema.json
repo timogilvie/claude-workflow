@@ -117,11 +117,12 @@
                         "policy": {
                             "type": "string",
                             "enum": [
+                                "recover",
                                 "block",
                                 "warn"
                             ],
-                            "default": "block",
-                            "description": "block (default): halt transition. warn: proceed with a warning log line."
+                            "default": "recover",
+                            "description": "recover (default): attempt one missing-artifact recovery, then fall back to the bootstrap route if recovery fails. block: halt transition. warn: proceed with a warning log line and skip recovery."
                         }
                     },
                     "additionalProperties": false
@@ -383,6 +384,29 @@
                     "additionalProperties": false
                 }
             }
+        },
+        "evalContextUpdates": {
+            "type": "object",
+            "description": "Best-effort post-eval project context and subsystem update settings.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Whether to run post-eval project context and subsystem updates after the eval record is persisted."
+                },
+                "timeoutSeconds": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 600,
+                    "description": "Per-attempt timeout budget in seconds for best-effort post-eval context updates."
+                },
+                "maxRetries": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3,
+                    "description": "Maximum number of retries for best-effort post-eval context updates after the first attempt fails."
+                }
+            },
+            "additionalProperties": false
         },
         "autoEval": {
             "type": "boolean",
@@ -694,6 +718,67 @@
                             "type": "string",
                             "default": "",
                             "description": "Optional agent command override for ready remediation launches."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "watchdog": {
+                    "type": "object",
+                    "description": "Ready-stage stale-state watchdog settings.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Enable the ready watchdog during mill monitor ticks."
+                        },
+                        "thresholdMinutes": {
+                            "type": "integer",
+                            "default": 10,
+                            "minimum": 1,
+                            "description": "Minutes without ready-stage progress before a task is classified as stale."
+                        },
+                        "autoRecover": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Allow safe local ready-state recovery when GitHub truth is clean and green."
+                        },
+                        "timeoutSeconds": {
+                            "type": "integer",
+                            "default": 30,
+                            "minimum": 1,
+                            "description": "Maximum watchdog subprocess runtime per monitor tick."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "monitor": {
+            "type": "object",
+            "description": "Legacy monitor-specific settings kept for backwards-compatible aliases.",
+            "properties": {
+                "readyWatchdog": {
+                    "type": "object",
+                    "description": "Alias for ready.watchdog.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "thresholdMinutes": {
+                            "type": "integer",
+                            "default": 10,
+                            "minimum": 1
+                        },
+                        "autoRecover": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "timeoutSeconds": {
+                            "type": "integer",
+                            "default": 30,
+                            "minimum": 1
                         }
                     },
                     "additionalProperties": false

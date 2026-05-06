@@ -36,8 +36,10 @@ import {
   getHokusaiSubmissionConfig,
   getProvidersConfig,
   getReadyConfig,
+  getReadyWatchdogConfig,
   getModelRegistryConfig,
   getMintEligibilityConfig,
+  getEvalContextUpdatesConfig,
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
 } from './config.ts';
@@ -229,6 +231,137 @@ test('valid config passes validation', () => {
     assert.deepEqual(config.router?.availableModels?.planner, ['claude-sonnet-4-5-20250929']);
     assert.deepEqual(config.router?.availableModels?.coder, ['gpt-5.4']);
     assert.equal(config.resources?.runtimeSelection?.defaultVariant, 'optimized');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('evalContextUpdates accessor returns defaults when absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.deepEqual(getEvalContextUpdatesConfig(tmp), {
+      enabled: true,
+      timeoutSeconds: 60,
+      maxRetries: 0,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready watchdog defaults are returned when config is absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    assert.deepEqual(getReadyWatchdogConfig(tmp), {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('evalContextUpdates accessor returns explicit config values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      evalContextUpdates: {
+        enabled: false,
+        timeoutSeconds: 90,
+        maxRetries: 2,
+      },
+    }));
+
+    assert.deepEqual(getEvalContextUpdatesConfig(tmp), {
+      enabled: false,
+      timeoutSeconds: 90,
+      maxRetries: 2,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready watchdog supports canonical and legacy alias config', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      monitor: {
+        readyWatchdog: {
+          thresholdMinutes: 20,
+          autoRecover: false,
+        },
+      },
+      ready: {
+        watchdog: {
+          enabled: false,
+          timeoutSeconds: 45,
+        },
+      },
+    }));
+
+    assert.deepEqual(getReadyWatchdogConfig(tmp), {
+      enabled: false,
+      thresholdMinutes: 20,
+      autoRecover: false,
+      timeoutSeconds: 45,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid evalContextUpdates values fail validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      evalContextUpdates: {
+        enabled: 'yes',
+        timeoutSeconds: 4,
+        maxRetries: 4,
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready watchdog schema rejects thresholdMinutes below 1', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        watchdog: {
+          thresholdMinutes: 0,
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/i);
+    }
   } finally {
     cleanUp(tmp);
   }
@@ -967,23 +1100,40 @@ test('getMillConfig returns mill section', () => {
   }
 });
 
-test('getExpansionHandshakeConfig defaults to block when section absent', () => {
+test('getExpansionHandshakeConfig defaults to recover when section absent', () => {
   const tmp = makeTempRepo();
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({ mill: { maxParallel: 5 } }));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'block' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
   } finally {
     cleanUp(tmp);
   }
 });
 
-test('getExpansionHandshakeConfig defaults to block when mill absent', () => {
+test('getExpansionHandshakeConfig defaults to recover when mill absent', () => {
   const tmp = makeTempRepo();
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({}));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'block' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getExpansionHandshakeConfig returns recover when configured', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: {
+        expansionHandshake: {
+          policy: 'recover',
+        },
+      },
+    }));
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
   } finally {
     cleanUp(tmp);
   }

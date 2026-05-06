@@ -839,7 +839,9 @@ describe('executeMerge', () => {
       assert.ok(hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
       assert.ok(hasCall(options.calls, /git push --force-with-lease/));
       assert.ok(hasCall(options.calls, /gh pr checks 42 --json name,state,bucket 2>&1 \|\| true/));
-      assert.ok(hasCall(options.calls, /gh pr merge 42 --squash --delete-branch/));
+      assert.ok(hasCall(options.calls, /gh pr merge 42 --squash/));
+      assert.ok(!hasCall(options.calls, /gh pr merge 42 --squash --delete-branch/));
+      assert.ok(hasCall(options.calls, /git push origin --delete 'task\/merge-me'/));
       assert.ok(hasCall(options.calls, /git worktree remove --force/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
     } finally {
@@ -1044,6 +1046,67 @@ describe('executeMerge', () => {
       assert.ok(hasCall(options.calls, /gh pr merge 42/));
       assert.ok(hasCall(options.calls, /gh pr comment 42 --body/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('treats remote branch deletion failure as a merged PR, not a blocked PR', async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes("git push origin --delete 'task/merge-me'")) {
+          throw new Error('remote branch already deleted');
+        }
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+        return '';
+      },
+    });
+
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.ok(hasCall(options.calls, /gh pr merge 42 --squash/));
+      assert.ok(hasCall(options.calls, /git push origin --delete 'task\/merge-me'/));
+      assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+      assert.ok(!options.labels.includes('blocked:42'));
+      assert.ok(warnings.some((warning) => warning.includes('post-merge remote branch cleanup failed')));
+    } finally {
+      console.warn = originalWarn;
+      options.cleanup();
+    }
+  });
+
+  it('skips branch cleanup commands when deleteBranchAfterMerge is disabled', async () => {
+    const options = buildMergeTestOptions();
+    writeFileSync(
+      join(options.repoDir, '.wavemill-config.json'),
+      JSON.stringify({
+        integration: {
+          integrationBranch: 'auto/integration',
+          mergeMethod: 'squash',
+          deleteBranchAfterMerge: false,
+        },
+      }),
+    );
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.ok(hasCall(options.calls, /gh pr merge 42 --squash/));
+      assert.ok(!hasCall(options.calls, /--delete-branch/));
+      assert.ok(!hasCall(options.calls, /git push origin --delete/));
     } finally {
       options.cleanup();
     }

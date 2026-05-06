@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { getMaxCostUsd } from './config.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
@@ -159,6 +159,13 @@ export interface RouteArtifactSnapshot extends NormalizedExpandedRouteArtifact {
   cache_hit?: boolean;
   route_source?: 'batch' | 'single' | 'cache';
   packet_hash?: string;
+  artifactPath?: string;
+  artifactHash?: string;
+  inputHash?: string;
+  source?: RouteSource;
+  routerMode?: RouteProvenance['routerMode'];
+  routingMode?: string;
+  expectedMetrics?: Record<string, unknown>;
 }
 
 export interface RouteArtifactView {
@@ -166,6 +173,17 @@ export interface RouteArtifactView {
   codeDepth: string;
   reviewer: string;
   reviewMode: string;
+  planner?: string;
+  planDepth?: string;
+  artifactPath?: string;
+  artifactHash?: string;
+  inputHash?: string;
+  source?: RouteSource;
+  cacheHit?: boolean;
+  routeSource?: 'batch' | 'single' | 'cache';
+  routerMode?: RouteProvenance['routerMode'];
+  routingMode?: string;
+  expectedMetrics?: Record<string, unknown>;
 }
 
 export interface RouteLifecycleArtifacts {
@@ -183,6 +201,10 @@ export interface RouteLifecycleProvenance {
   expandedCacheHit?: boolean;
   packetHash?: string;
   routeSource?: 'batch' | 'single' | 'cache';
+  routerMode?: RouteProvenance['routerMode'];
+  routingMode?: string;
+  artifactPath?: string;
+  artifactHash?: string;
 }
 
 export type ExpandedRouteValidation = {
@@ -285,7 +307,38 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
-function parseBootstrapRouteArtifact(value: unknown): RouteArtifactSnapshot | null {
+function readExpectedMetrics(artifact: Record<string, unknown>): Record<string, unknown> | undefined {
+  const metrics: Record<string, unknown> = {};
+  const keys = [
+    'expectedSuccess',
+    'confidence',
+    'expectedCostPlan',
+    'expectedCostCode',
+    'expectedCostReview',
+    'neighborCount',
+    'neighborSimilarityRange',
+    'maxCostUsd',
+    'challengeRecommendation',
+  ] as const;
+  for (const key of keys) {
+    if (typeof artifact[key] !== 'undefined') {
+      metrics[key] = artifact[key];
+    }
+  }
+  return Object.keys(metrics).length > 0 ? metrics : undefined;
+}
+
+function resolveArtifactPath(filePath: string): string {
+  const cwd = resolve(process.cwd());
+  const absolute = resolve(filePath);
+  const rel = relative(cwd, absolute);
+  return rel.startsWith('..') ? absolute : rel;
+}
+
+function parseBootstrapRouteArtifact(
+  value: unknown,
+  metadata?: { artifactPath?: string; artifactHash?: string },
+): RouteArtifactSnapshot | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
   }
@@ -312,22 +365,37 @@ function parseBootstrapRouteArtifact(value: unknown): RouteArtifactSnapshot | nu
       ? artifact.route_source
       : undefined,
     packet_hash: typeof artifact.packet_hash === 'string' ? artifact.packet_hash : undefined,
+    artifactPath: metadata?.artifactPath,
+    artifactHash: metadata?.artifactHash,
+    inputHash: readString((artifact.provenance as Record<string, unknown> | undefined)?.inputHash),
+    source: readString((artifact.provenance as Record<string, unknown> | undefined)?.source) as RouteSource | undefined,
+    routerMode: readString((artifact.provenance as Record<string, unknown> | undefined)?.routerMode) as RouteProvenance['routerMode'] | undefined,
+    routingMode: readString(artifact.routingMode),
+    expectedMetrics: readExpectedMetrics(artifact),
   };
 }
 
-function loadJson(filePath: string): unknown | null {
+function loadJson(filePath: string): { value: unknown; artifactPath: string; artifactHash: string } | null {
   if (!existsSync(filePath)) {
     return null;
   }
 
   try {
-    return JSON.parse(readFileSync(filePath, 'utf-8'));
+    const raw = readFileSync(filePath);
+    return {
+      value: JSON.parse(raw.toString('utf-8')),
+      artifactPath: resolveArtifactPath(filePath),
+      artifactHash: createHash('sha256').update(raw).digest('hex'),
+    };
   } catch {
     return null;
   }
 }
 
-function parseExpandedRouteArtifact(value: unknown): RouteArtifactSnapshot | null {
+function parseExpandedRouteArtifact(
+  value: unknown,
+  metadata?: { artifactPath?: string; artifactHash?: string },
+): RouteArtifactSnapshot | null {
   if (value === null) {
     return null;
   }
@@ -347,15 +415,24 @@ function parseExpandedRouteArtifact(value: unknown): RouteArtifactSnapshot | nul
       ? artifact.route_source
       : undefined,
     packet_hash: typeof artifact.packet_hash === 'string' ? artifact.packet_hash : undefined,
+    artifactPath: metadata?.artifactPath,
+    artifactHash: metadata?.artifactHash,
+    inputHash: readString((artifact.provenance as Record<string, unknown> | undefined)?.inputHash),
+    source: readString((artifact.provenance as Record<string, unknown> | undefined)?.source) as RouteSource | undefined,
+    routerMode: readString((artifact.provenance as Record<string, unknown> | undefined)?.routerMode) as RouteProvenance['routerMode'] | undefined,
+    routingMode: readString(artifact.routingMode),
+    expectedMetrics: readExpectedMetrics(artifact),
   };
 }
 
 function loadBootstrapRouteArtifact(filePath: string): RouteArtifactSnapshot | null {
-  return parseBootstrapRouteArtifact(loadJson(filePath));
+  const payload = loadJson(filePath);
+  return payload ? parseBootstrapRouteArtifact(payload.value, payload) : null;
 }
 
 function loadExpandedRouteArtifact(filePath: string): RouteArtifactSnapshot | null {
-  return parseExpandedRouteArtifact(loadJson(filePath));
+  const payload = loadJson(filePath);
+  return payload ? parseExpandedRouteArtifact(payload.value, payload) : null;
 }
 
 export function readBothRouteArtifacts(featureDir: string): {
@@ -383,17 +460,17 @@ export function readRouteLifecycleArtifacts(
   archiveDir?: string,
 ): RouteLifecycleArtifacts {
   const bootstrap = firstSnapshot([
-    () => featureDir ? loadBootstrapRouteArtifact(join(featureDir, '.initial-route.json')) : null,
     () => archiveDir ? loadBootstrapRouteArtifact(join(archiveDir, 'initial-route.json')) : null,
+    () => featureDir ? loadBootstrapRouteArtifact(join(featureDir, '.initial-route.json')) : null,
   ]);
   const expanded = firstSnapshot([
+    () => archiveDir ? loadExpandedRouteArtifact(join(archiveDir, 'post-expansion-route.json')) : null,
     () => featureDir ? loadExpandedRouteArtifact(join(featureDir, '.post-expansion-route.json')) : null,
     () => featureDir ? loadExpandedRouteArtifact(join(featureDir, '.expanded-route.json')) : null,
-    () => archiveDir ? loadExpandedRouteArtifact(join(archiveDir, 'post-expansion-route.json')) : null,
   ]);
   const active = firstSnapshot([
-    () => featureDir ? loadBootstrapRouteArtifact(join(featureDir, '.routing-complete')) : null,
     () => archiveDir ? loadBootstrapRouteArtifact(join(archiveDir, 'routing-complete.json')) : null,
+    () => featureDir ? loadBootstrapRouteArtifact(join(featureDir, '.routing-complete')) : null,
   ]);
 
   return { bootstrap, expanded, active };
@@ -405,6 +482,17 @@ export function toRouteArtifactView(route: RouteArtifactSnapshot): RouteArtifact
     codeDepth: route.codeDepth,
     reviewer: route.reviewer,
     reviewMode: route.reviewMode,
+    ...(route.planner ? { planner: route.planner } : {}),
+    ...(route.planDepth ? { planDepth: route.planDepth } : {}),
+    ...(route.artifactPath ? { artifactPath: route.artifactPath } : {}),
+    ...(route.artifactHash ? { artifactHash: route.artifactHash } : {}),
+    ...(route.inputHash ? { inputHash: route.inputHash } : {}),
+    ...(route.source ? { source: route.source } : {}),
+    ...(typeof route.cache_hit === 'boolean' ? { cacheHit: route.cache_hit } : {}),
+    ...(route.route_source ? { routeSource: route.route_source } : {}),
+    ...(route.routerMode ? { routerMode: route.routerMode } : {}),
+    ...(route.routingMode ? { routingMode: route.routingMode } : {}),
+    ...(route.expectedMetrics ? { expectedMetrics: route.expectedMetrics } : {}),
   };
 }
 
@@ -512,6 +600,10 @@ export function buildRouteLifecycleProvenance(
     ...(typeof metadataCarrier?.cache_hit === 'boolean' ? { expandedCacheHit: metadataCarrier.cache_hit } : {}),
     ...(metadataCarrier?.packet_hash ? { packetHash: metadataCarrier.packet_hash } : {}),
     ...(metadataCarrier?.route_source ? { routeSource: metadataCarrier.route_source } : {}),
+    ...(metadataCarrier?.routerMode ? { routerMode: metadataCarrier.routerMode } : {}),
+    ...(metadataCarrier?.routingMode ? { routingMode: metadataCarrier.routingMode } : {}),
+    ...(metadataCarrier?.artifactPath ? { artifactPath: metadataCarrier.artifactPath } : {}),
+    ...(metadataCarrier?.artifactHash ? { artifactHash: metadataCarrier.artifactHash } : {}),
   };
 }
 

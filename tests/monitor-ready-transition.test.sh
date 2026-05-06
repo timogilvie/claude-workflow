@@ -42,6 +42,7 @@ extract_function "$MILL_SCRIPT" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC
 extract_function "$MILL_SCRIPT" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_remediation_launch_head" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_conflict_attention_head" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then
@@ -209,6 +210,9 @@ JSON
         PR_STATUS="MERGED"
         VALIDATE_MERGED="true"
         printf "%s\n" "{\"status\":\"completed\",\"artifacts\":{\"verdict\":\"pass\"}}" > "$READY_DIR/.ready-result.json"
+        printf "%s\n" "stale transient attention" > "$READY_DIR/.needs-attention"
+        : > "$READY_DIR/.needs-attention-transient"
+        printf "%s\n" "4" > "$READY_DIR/.transient-mergeability-count"
         ;;
       discovered_pr_from_coding)
         unset "PR_BY_ISSUE[$ISSUE]"
@@ -274,6 +278,7 @@ JSON
     is_challenge_task() { return 1; }
     maybe_run_challenge_eval() { :; }
     maybe_run_challenge_comparison() { :; }
+    dispatch_queued_children_for_parent() { :; }
     find_pr_for_branch() { printf "%s\n" "${FOUND_PR:-$PR}"; }
     get_task_phase() { printf "%s\n" "$CURRENT_PHASE"; }
     pr_state() { printf "%s\n" "$PR_STATUS"; }
@@ -342,7 +347,12 @@ JSON
     if printf "%s" "$SAVE_TASK_STATE_CALLS" | grep -q " merged "; then
       save_task_state_status="merged"
     fi
-    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\nbypass_warn_count=%s\nsave_task_state_status=%s\n" \
+    needs_attention="absent"
+    [[ -f "$READY_DIR/.needs-attention" ]] && needs_attention="present"
+    transient_attention="absent"
+    [[ -f "$READY_DIR/.needs-attention-transient" ]] && transient_attention="present"
+    transient_count="$(cat "$READY_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
+    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\nbypass_warn_count=%s\nsave_task_state_status=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\n" \
       "$CURRENT_PHASE" \
       "$ATTENTION_STATE" \
       "$READY_LAUNCH_COUNT" \
@@ -353,7 +363,10 @@ JSON
       "${READY_LAUNCH_ARGS:-}" \
       "$WRITE_READY_ATTENTION_CALLS" \
       "$bypass_warn_count" \
-      "$save_task_state_status"
+      "$save_task_state_status" \
+      "$needs_attention" \
+      "$transient_attention" \
+      "$transient_count"
   '
 }
 
@@ -437,6 +450,9 @@ check_contains "merged-before-ready does not persist merged task status on repea
 
 merged_after_ready_output="$(run_monitor_case merged_after_ready)"
 check_contains "merged PR after ready pass can clean up" "$merged_after_ready_output" "cleanup_count=1"
+check_contains "merged PR after ready pass clears stale attention" "$merged_after_ready_output" "needs_attention=absent"
+check_contains "merged PR after ready pass clears transient marker" "$merged_after_ready_output" "transient_attention=absent"
+check_contains "merged PR after ready pass clears transient counter" "$merged_after_ready_output" "transient_count="
 
 discovered_pr_from_coding_output="$(run_monitor_case discovered_pr_from_coding)"
 check_contains "newly discovered PR moves stale coding phase to ready" "$discovered_pr_from_coding_output" "phase=ready"

@@ -3,6 +3,7 @@
 import { createStatusRenderer } from '../shared/lib/tend-status-renderer.ts';
 import { executeMerge, formatStatusLine, selectNextCandidate } from '../shared/lib/tend-controller.ts';
 import { runPromotion } from '../shared/lib/promotion-controller.ts';
+import { acquireTendLock } from '../shared/lib/tend-singleton.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 
 const TEND_LOOP_INTERVAL_MS = 60_000;
@@ -67,6 +68,15 @@ runTool({
     if (args.loop) {
       let lastMergedPR: number | null = null;
       const renderer = createStatusRenderer(process.stdout as NodeJS.WriteStream);
+      const lock = acquireTendLock({
+        repoDir,
+        session: process.env.WAVEMILL_SESSION,
+      });
+
+      if (lock.outcome === 'skipped') {
+        renderer.finalize();
+        return;
+      }
 
       const handleSignal = (signal: NodeJS.Signals) => {
         renderer.finalize();
@@ -75,41 +85,45 @@ runTool({
       process.once('SIGINT', () => handleSignal('SIGINT'));
       process.once('SIGTERM', () => handleSignal('SIGTERM'));
 
-      while (true) {
-        const decision = await selectNextCandidate({ repoDir });
-        if (decision.nextPR === null) {
-          renderer.write(formatStatusLine(decision, { action: 'idle', lastPR: lastMergedPR }));
+      try {
+        while (true) {
+          const decision = await selectNextCandidate({ repoDir });
+          if (decision.nextPR === null) {
+            renderer.write(formatStatusLine(decision, { action: 'idle', lastPR: lastMergedPR }));
+            await sleep(TEND_LOOP_INTERVAL_MS);
+            continue;
+          }
+
+          const candidate = decision.eligible.find((item) => item.number === decision.nextPR);
+          if (!candidate) {
+            throw new Error(`tend: selected PR #${decision.nextPR} was not found in eligible candidates`);
+          }
+
+          renderer.write(formatStatusLine(decision, {
+            action: `merging-#${candidate.number}`,
+            lastPR: lastMergedPR,
+          }));
+
+          const result = await executeMerge(candidate, { repoDir });
+          if (result.status === 'merged') {
+            lastMergedPR = result.prNumber;
+          }
+
+          renderer.write(formatStatusLine(decision, {
+            action: statusActionForResult(result.status, result.prNumber),
+            lastPR: lastMergedPR,
+          }));
+
+          if (result.haltLoop) {
+            renderer.finalize();
+            process.exitCode = 1;
+            break;
+          }
+
           await sleep(TEND_LOOP_INTERVAL_MS);
-          continue;
         }
-
-        const candidate = decision.eligible.find((item) => item.number === decision.nextPR);
-        if (!candidate) {
-          throw new Error(`tend: selected PR #${decision.nextPR} was not found in eligible candidates`);
-        }
-
-        renderer.write(formatStatusLine(decision, {
-          action: `merging-#${candidate.number}`,
-          lastPR: lastMergedPR,
-        }));
-
-        const result = await executeMerge(candidate, { repoDir });
-        if (result.status === 'merged') {
-          lastMergedPR = result.prNumber;
-        }
-
-        renderer.write(formatStatusLine(decision, {
-          action: statusActionForResult(result.status, result.prNumber),
-          lastPR: lastMergedPR,
-        }));
-
-        if (result.haltLoop) {
-          renderer.finalize();
-          process.exitCode = 1;
-          break;
-        }
-
-        await sleep(TEND_LOOP_INTERVAL_MS);
+      } finally {
+        lock.release();
       }
       return;
     }

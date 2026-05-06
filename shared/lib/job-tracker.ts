@@ -1,0 +1,434 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
+import { mutateJsonState } from './state-mutex.ts';
+import { errorMessage } from './error-utils.ts';
+
+export type MillJobKind = 'eval' | 'comparison';
+export type MillJobStatus = 'running' | 'succeeded' | 'failed' | 'timeout';
+
+export interface MillJob {
+  id: string;
+  kind: MillJobKind;
+  issueId?: string;
+  side?: string;
+  pairId?: string;
+  prNumbers: number[];
+  pid: number;
+  startedAt: string;
+  timeoutSeconds: number;
+  logPath: string;
+  resultPath: string;
+  status: MillJobStatus;
+  exitCode: number | null;
+  finishedAt: string | null;
+  reason: string | null;
+  excerpt: string | null;
+  settled: boolean;
+}
+
+export interface JobResultFile {
+  ok: boolean;
+  exitCode: number;
+  persisted?: boolean;
+  reason?: string;
+  error?: string;
+  comparison?: {
+    winner?: 'primary' | 'challenger';
+    winnerModel?: string;
+    rationale?: string;
+    primaryModel?: string;
+    challengerModel?: string;
+    primaryPrUrl?: string;
+    challengerPrUrl?: string;
+    primaryEvalScore?: number;
+    challengerEvalScore?: number;
+    dimensions?: Record<string, unknown>;
+  };
+}
+
+export interface WorkflowStateLike {
+  tasks?: Record<string, Record<string, unknown>>;
+  jobs?: Record<string, MillJob> | MillJob[];
+  updated?: string;
+  [key: string]: unknown;
+}
+
+export interface LaunchJobOptions {
+  statePath: string;
+  job: MillJob;
+}
+
+export interface PollJobsOptions {
+  statePath: string;
+  now?: Date;
+  timeoutGraceMs?: number;
+}
+
+export interface PollJobsResult {
+  changed: MillJob[];
+  unsettled: MillJob[];
+  jobs: Record<string, MillJob>;
+}
+
+export interface MarkJobSettledOptions {
+  statePath: string;
+  jobId: string;
+  now?: Date;
+}
+
+export function buildJobId(job: Pick<MillJob, 'kind' | 'issueId' | 'side' | 'pairId' | 'prNumbers'>): string {
+  const sanitize = (value: string | undefined): string =>
+    (value || 'unknown').replace(/[^A-Za-z0-9._-]+/g, '-');
+
+  if (job.kind === 'eval') {
+    return `eval-${sanitize(job.issueId)}-${sanitize(job.side)}-${job.prNumbers[0] ?? 'na'}`;
+  }
+
+  const prPart = [...job.prNumbers].sort((a, b) => a - b).join('-');
+  return `comparison-${sanitize(job.pairId)}-${prPart || 'na'}`;
+}
+
+export function normalizeJobs(state: WorkflowStateLike): Record<string, MillJob> {
+  const rawJobs = state.jobs;
+  if (!rawJobs) {
+    return {};
+  }
+
+  if (Array.isArray(rawJobs)) {
+    return rawJobs.reduce<Record<string, MillJob>>((acc, job) => {
+      if (job?.id) {
+        acc[job.id] = job;
+      }
+      return acc;
+    }, {});
+  }
+
+  return { ...rawJobs };
+}
+
+export function extractLogExcerpt(logPath: string, maxLines = 8, maxCharsPerLine = 160): string | null {
+  if (!existsSync(logPath)) {
+    return null;
+  }
+
+  const lines = readFileSync(logPath, 'utf-8')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return lines
+    .slice(-maxLines)
+    .map((line) => (line.length > maxCharsPerLine ? `${line.slice(0, maxCharsPerLine - 3)}...` : line))
+    .join('\n');
+}
+
+export function isActiveStatus(status: MillJobStatus): boolean {
+  return status === 'running';
+}
+
+export function classifyJobCompletion(
+  job: MillJob,
+  result: JobResultFile | null,
+): Pick<MillJob, 'status' | 'exitCode' | 'reason'> {
+  if (!result) {
+    return {
+      status: 'failed',
+      exitCode: null,
+      reason: 'no_result_file',
+    };
+  }
+
+  if (result.ok || result.persisted) {
+    return {
+      status: 'succeeded',
+      exitCode: result.exitCode ?? 0,
+      reason: result.ok ? null : (result.reason || 'persisted_eval_record'),
+    };
+  }
+
+  return {
+    status: 'failed',
+    exitCode: result.exitCode ?? null,
+    reason: result.reason || result.error || 'job_failed',
+  };
+}
+
+export function settleJobSuccess<T extends WorkflowStateLike>(state: T, job: MillJob, now = new Date()): T {
+  const tasks = { ...(state.tasks || {}) };
+  const updatedAt = now.toISOString();
+
+  if (job.kind === 'eval' && job.issueId && tasks[job.issueId]) {
+    tasks[job.issueId] = {
+      ...tasks[job.issueId],
+      evalCompleted: true,
+      evalFailed: false,
+      updated: updatedAt,
+    };
+  }
+
+  if (job.kind === 'comparison' && job.pairId) {
+    for (const [taskId, task] of Object.entries(tasks)) {
+      if ((task.challengePairId as string | undefined) === job.pairId) {
+        tasks[taskId] = {
+          ...task,
+          challengeCompared: true,
+          updated: updatedAt,
+        };
+      }
+    }
+  }
+
+  return {
+    ...state,
+    tasks,
+  };
+}
+
+export function writeJobResultFile(path: string, result: JobResultFile): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(result, null, 2)}\n`, 'utf-8');
+}
+
+function readWorkflowState(statePath: string): WorkflowStateLike {
+  if (!existsSync(statePath)) {
+    return {};
+  }
+  return JSON.parse(readFileSync(statePath, 'utf-8')) as WorkflowStateLike;
+}
+
+function readResultFile(path: string): JobResultFile | null {
+  if (!existsSync(path)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8')) as JobResultFile;
+  } catch (error) {
+    return {
+      ok: false,
+      exitCode: 1,
+      reason: 'invalid_result_file',
+      error: errorMessage(error),
+    };
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'EPERM';
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function terminateProcess(pid: number, graceMs: number): Promise<void> {
+  if (!isProcessAlive(pid)) {
+    return;
+  }
+
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return;
+  }
+
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleep(100);
+  }
+
+  if (!isProcessAlive(pid)) {
+    return;
+  }
+
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // Ignore already-dead processes.
+  }
+}
+
+export async function launchJob({ statePath, job }: LaunchJobOptions): Promise<MillJob> {
+  let storedJob = job;
+
+  await mutateJsonState<WorkflowStateLike>(statePath, (current) => {
+    const jobs = normalizeJobs(current);
+    const existing = jobs[job.id];
+
+    if (existing && isActiveStatus(existing.status)) {
+      storedJob = existing;
+      return {
+        ...current,
+        jobs,
+      };
+    }
+
+    jobs[job.id] = job;
+    storedJob = jobs[job.id];
+    return {
+      ...current,
+      jobs,
+      updated: new Date().toISOString(),
+    };
+  });
+
+  return storedJob;
+}
+
+export async function pollJobs({
+  statePath,
+  now = new Date(),
+  timeoutGraceMs = 1_500,
+}: PollJobsOptions): Promise<PollJobsResult> {
+  const state = readWorkflowState(statePath);
+  const jobs = normalizeJobs(state);
+  const updates = new Map<string, Partial<MillJob>>();
+  const changedIds = new Set<string>();
+
+  for (const job of Object.values(jobs)) {
+    if (!isActiveStatus(job.status)) {
+      continue;
+    }
+
+    const startedAtMs = Date.parse(job.startedAt);
+    const elapsedMs = Number.isFinite(startedAtMs) ? now.getTime() - startedAtMs : 0;
+
+    if (elapsedMs > job.timeoutSeconds * 1000) {
+      await terminateProcess(job.pid, timeoutGraceMs);
+      updates.set(job.id, {
+        status: 'timeout',
+        exitCode: null,
+        finishedAt: now.toISOString(),
+        reason: 'timed_out',
+        excerpt: extractLogExcerpt(job.logPath),
+        settled: false,
+      });
+      changedIds.add(job.id);
+      continue;
+    }
+
+    if (isProcessAlive(job.pid)) {
+      continue;
+    }
+
+    const result = readResultFile(job.resultPath);
+    const completion = classifyJobCompletion(job, result);
+    updates.set(job.id, {
+      ...completion,
+      finishedAt: now.toISOString(),
+      excerpt: completion.status === 'succeeded' ? null : extractLogExcerpt(job.logPath),
+      settled: false,
+    });
+    changedIds.add(job.id);
+  }
+
+  let nextState = state;
+  if (updates.size > 0) {
+    nextState = await mutateJsonState<WorkflowStateLike>(statePath, (current) => {
+      const nextJobs = normalizeJobs(current);
+      for (const [jobId, patch] of updates.entries()) {
+        const existing = nextJobs[jobId];
+        if (!existing) {
+          continue;
+        }
+        nextJobs[jobId] = {
+          ...existing,
+          ...patch,
+        };
+      }
+      return {
+        ...current,
+        jobs: nextJobs,
+        updated: now.toISOString(),
+      };
+    });
+  }
+
+  const normalized = normalizeJobs(nextState);
+  return {
+    changed: [...changedIds].map((jobId) => normalized[jobId]).filter(Boolean),
+    unsettled: Object.values(normalized).filter((job) => job.status !== 'running' && !job.settled),
+    jobs: normalized,
+  };
+}
+
+export async function markJobSettled({
+  statePath,
+  jobId,
+  now = new Date(),
+}: MarkJobSettledOptions): Promise<MillJob | null> {
+  let updatedJob: MillJob | null = null;
+
+  await mutateJsonState<WorkflowStateLike>(statePath, (current) => {
+    const jobs = normalizeJobs(current);
+    const existing = jobs[jobId];
+    if (!existing) {
+      updatedJob = null;
+      return {
+        ...current,
+        jobs,
+      };
+    }
+
+    let nextState: WorkflowStateLike = {
+      ...current,
+      jobs,
+      updated: now.toISOString(),
+    };
+
+    if (existing.status === 'succeeded') {
+      nextState = settleJobSuccess(nextState, existing, now);
+    } else if (existing.kind === 'eval' && existing.issueId && nextState.tasks?.[existing.issueId]) {
+      nextState = {
+        ...nextState,
+        tasks: {
+          ...nextState.tasks,
+          [existing.issueId]: {
+            ...nextState.tasks[existing.issueId],
+            evalFailed: true,
+            updated: now.toISOString(),
+          },
+        },
+      };
+    }
+
+    const nextJobs = normalizeJobs(nextState);
+    nextJobs[jobId] = {
+      ...existing,
+      settled: true,
+    };
+    updatedJob = nextJobs[jobId];
+
+    return {
+      ...nextState,
+      jobs: nextJobs,
+      updated: now.toISOString(),
+    };
+  });
+
+  return updatedJob;
+}
+
+export function formatJobSummary(job: MillJob): string {
+  const target = job.kind === 'eval'
+    ? `${job.issueId || 'unknown'}:${job.side || 'unknown'}`
+    : `${job.pairId || 'unknown'}:${job.prNumbers.join('/')}`;
+  return `${job.kind} ${target} ${job.status} ${basename(job.logPath)}`;
+}

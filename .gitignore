@@ -55,6 +55,7 @@ epics/*/
 .wavemill/logs/
 .wavemill/registry/
 .wavemill/state/
+.wavemill/locks/
 .wavemill/workflow-state.json.bak-*
 prompt-registry.jsonl
 

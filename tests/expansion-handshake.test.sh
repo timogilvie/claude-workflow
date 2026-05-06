@@ -35,6 +35,11 @@ run_gate() {
   mill_check_expansion_handshake "$feature_dir" "$issue" "$repo_dir"
 }
 
+run_reason() {
+  local feature_dir="$1"
+  mill_expansion_handshake_reason "$feature_dir"
+}
+
 echo "=== Expansion Handshake Gate ==="
 
 {
@@ -45,10 +50,31 @@ echo "=== Expansion Handshake Gate ==="
   output="$(run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
   status=$?
   set -e
-  if [[ "$status" -eq 1 ]] && grep -q '\[expansion-handshake\] BLOCKED' <<< "$output"; then
-    pass "REQ-F1 raw + missing route blocks by default"
+  if [[ "$(run_reason "$feature_dir")" == "missing" ]] \
+    && [[ "$status" -eq 1 ]] \
+    && grep -q 'policy=recover' <<< "$output"; then
+    pass "REQ-F1 raw + missing route reports recoverable missing state"
   else
-    fail "REQ-F1 raw + missing route should block"
+    fail "REQ-F1 raw + missing route should report recoverable missing state"
+  fi
+  rm -rf "$root"
+}
+
+{
+  mapfile -t fixture < <(new_fixture "expansion-handshake-block")
+  root="${fixture[0]}"; feature_dir="${fixture[1]}"
+  printf 'basic issue text\n' > "$feature_dir/task-packet.md"
+  cat > "$root/.wavemill-config.json" <<'EOF'
+{"mill":{"expansionHandshake":{"policy":"block"}}}
+EOF
+  set +e
+  output="$(run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -eq 1 ]] && grep -q '\[expansion-handshake\] BLOCKED' <<< "$output"; then
+    pass "REQ-F2 block policy preserves strict handoff"
+  else
+    fail "REQ-F2 block policy should preserve strict handoff"
   fi
   rm -rf "$root"
 }
@@ -65,9 +91,9 @@ EOF
   status=$?
   set -e
   if [[ "$status" -eq 0 ]] && grep -q '\[expansion-handshake\] WARN' <<< "$output"; then
-    pass "REQ-F2 warn policy allows transition with warning"
+    pass "REQ-F3 warn policy allows transition with warning"
   else
-    fail "REQ-F2 warn policy should allow transition"
+    fail "REQ-F3 warn policy should allow transition"
   fi
   rm -rf "$root"
 }
@@ -84,9 +110,9 @@ EOF
   status=$?
   set -e
   if [[ "$status" -eq 0 ]] && grep -q 'reason=already-expanded' <<< "$output"; then
-    pass "REQ-F3 expanded packet bypasses route requirement"
+    pass "REQ-F4 expanded packet bypasses route requirement"
   else
-    fail "REQ-F3 expanded packet should pass"
+    fail "REQ-F4 expanded packet should pass"
   fi
   rm -rf "$root"
 }
@@ -103,27 +129,28 @@ EOF
   status=$?
   set -e
   if [[ "$status" -eq 0 ]] && grep -q 'reason=expanded-route-present' <<< "$output"; then
-    pass "REQ-F4 valid post-expansion route passes"
+    pass "REQ-F5 valid post-expansion route passes"
   else
-    fail "REQ-F4 valid route should pass"
+    fail "REQ-F5 valid route should pass"
   fi
   rm -rf "$root"
 }
 
 {
-  mapfile -t fixture < <(new_fixture "expansion-handshake-resume")
+  mapfile -t fixture < <(new_fixture "expansion-handshake-legacy-route")
   root="${fixture[0]}"; feature_dir="${fixture[1]}"
   printf 'raw description\n' > "$feature_dir/task-packet.md"
+  cat > "$feature_dir/.expanded-route.json" <<'EOF'
+{"coder":"gpt-5.4","codeDepth":"medium","reviewer":"claude-sonnet-4-6","reviewMode":"llm"}
+EOF
   set +e
-  run_gate "$feature_dir" "HOK-1513" "$root" >/dev/null 2>&1
-  status1=$?
-  run_gate "$feature_dir" "HOK-1513" "$root" >/dev/null 2>&1
-  status2=$?
+  output="$(run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
+  status=$?
   set -e
-  if [[ "$status1" -eq 1 && "$status2" -eq 1 ]]; then
-    pass "REQ-F5 re-evaluates from disk on every attempt"
+  if [[ "$status" -eq 0 ]] && grep -q 'reason=expanded-route-present' <<< "$output"; then
+    pass "REQ-F6 legacy expanded route artifact still satisfies handshake"
   else
-    fail "REQ-F5 expected repeated evaluations to stay blocked"
+    fail "REQ-F6 legacy expanded route artifact should satisfy handshake"
   fi
   rm -rf "$root"
 }

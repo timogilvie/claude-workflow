@@ -108,7 +108,17 @@ for fn in \
   ready_stage_allows_merge \
   ready_stage_warn_bypass_once \
   ready_stage_pending_verdict \
+  ready_conflict_launch_head \
+  ready_conflict_attention_head \
+  clear_ready_conflict_attention \
+  clear_ready_conflict_markers \
+  ready_conflict_recheck_interval_seconds \
+  ready_conflict_recheck_due \
+  write_ready_conflict_recheck_at \
+  ready_conflict_pr_is_clean \
   ready_remediation_launch_head \
+  inject_depends_on_pr_block \
+  dispatch_queued_children_for_parent \
   monitor_issue_state
 do
   extract_function "$MILL_SCRIPT" "$fn" >> "$MONITOR_FUNC_FILE"
@@ -191,6 +201,9 @@ run_lifecycle_scenario() {
       SET_PHASE_CALLS=""
       READY_LAUNCH_COUNT=0
       READY_LAUNCH_ARGS=""
+      GH_PR_VIEW_CALLS=0
+      GH_PR_VIEW_MERGEABLE=""
+      GH_PR_VIEW_MERGE_STATE=""
       MAIN_SHA_RETURN=""
       CODING_LAUNCH_COUNT=0
       REVIEW_LAUNCH_COUNT=0
@@ -279,7 +292,18 @@ run_lifecycle_scenario() {
     save_task_state() { printf -v SAVE_TASK_CALLS "%s%s\n" "$SAVE_TASK_CALLS" "$*"; }
     save_migration_reservation() { printf -v SAVE_MIGRATION_CALLS "%s%s|%s\n" "$SAVE_MIGRATION_CALLS" "$1" "$2"; }
     _with_timeout() { shift; "$@"; }
-    gh() { return 1; }
+    gh() {
+      if [[ "${1:-}" == "pr" && "${2:-}" == "view" ]]; then
+        GH_PR_VIEW_CALLS=$((GH_PR_VIEW_CALLS + 1))
+        if [[ -n "${GH_PR_VIEW_MERGEABLE:-}" || -n "${GH_PR_VIEW_MERGE_STATE:-}" ]]; then
+          printf '{"mergeable":"%s","mergeStateStatus":"%s"}\n' \
+            "${GH_PR_VIEW_MERGEABLE:-}" \
+            "${GH_PR_VIEW_MERGE_STATE:-}"
+          return 0
+        fi
+      fi
+      return 1
+    }
     find_pr_for_branch() { printf "%s\n" "${FOUND_PR:-$PR}"; }
     get_task_phase() { printf "%s\n" "$CURRENT_PHASE"; }
     pr_state() {
@@ -347,7 +371,6 @@ JSON
     }
     validate_pr_merge() { [[ "$VALIDATE_MERGED" == "true" ]]; }
     ready_state_dir() { printf "%s\n" "$1/features/$2/ready"; }
-    ready_conflict_launch_head() { printf "\n"; }
     ready_remediation_launch_head() { printf "\n"; }
     write_ready_attention_file() {
       printf -v READY_ATTENTION_CALLS "%s%s|%s\n" "$READY_ATTENTION_CALLS" "$1" "$2"
@@ -390,7 +413,7 @@ JSON
     linear_summary=$(printf "%s" "$LINEAR_CALLS" | tr "\n" ";")
     eval_summary=$(printf "%s" "$POST_MERGE_EVAL_CALLS" | tr "\n" ";")
     migration_summary=$(printf "%s" "$SAVE_MIGRATION_CALLS" | tr "\n" ";")
-    printf "scenario=%s\nscenario_dir=%s\nwt_dir=%s\nfeature_dir=%s\nphase=%s\nattention=%s\nactive_count=%s\nstage_calls=%s\nphase_calls=%s\ncoding_launches=%s\nreview_launches=%s\nready_launches=%s\ncleanup_count=%s\ncleanup_calls=%s\nlinear_calls=%s\npost_merge_eval_calls=%s\nsave_migration_calls=%s\nlogs=%s\n" \
+    printf "scenario=%s\nscenario_dir=%s\nwt_dir=%s\nfeature_dir=%s\nphase=%s\nattention=%s\nactive_count=%s\nstage_calls=%s\nphase_calls=%s\ncoding_launches=%s\nreview_launches=%s\nready_launches=%s\ngh_pr_view_calls=%s\ncleanup_count=%s\ncleanup_calls=%s\nlinear_calls=%s\npost_merge_eval_calls=%s\nsave_migration_calls=%s\nlogs=%s\n" \
       "$SCENARIO_NAME" \
       "$SCENARIO_DIR" \
       "$WT_DIR" \
@@ -403,6 +426,7 @@ JSON
       "$CODING_LAUNCH_COUNT" \
       "$REVIEW_LAUNCH_COUNT" \
       "$READY_LAUNCH_COUNT" \
+      "$GH_PR_VIEW_CALLS" \
       "$CLEANUP_COUNT" \
       "$cleanup_summary" \
       "$linear_summary" \

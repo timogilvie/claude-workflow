@@ -8,6 +8,7 @@
  */
 
 import { errorMessage } from '../shared/lib/error-utils.ts';
+import { writeJobResultFile } from '../shared/lib/job-tracker.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { runPostCompletionEval } from '../shared/lib/post-completion-hook.ts';
 
@@ -25,6 +26,7 @@ runTool({
     'solution-model': { type: 'string', description: 'Model that produced the solution being evaluated' },
     'challenge-pair': { type: 'string', description: 'Shared challenge pair identifier' },
     'repo-dir': { type: 'string', description: 'Repository directory (default: current directory)' },
+    'result-file': { type: 'string', description: 'Optional path for structured job results' },
     debug: { type: 'boolean', description: 'Enable detailed cost computation diagnostics' },
   },
   examples: [
@@ -34,7 +36,8 @@ runTool({
   additionalHelp: `Notes:
   - Reads autoEval from .wavemill-config.json; skips eval if disabled
   - Exits non-zero when eval persistence fails or no record is written
-  - Results are appended to .wavemill/eval-store.jsonl
+  - Results are appended to .wavemill/evals/evals.jsonl
+  - When --result-file is provided, writes structured success/failure metadata
   - Use --debug to troubleshoot "no session data found" issues`,
   async run({ args }) {
     // Enable debug mode if requested
@@ -86,15 +89,36 @@ runTool({
       console.error('[DEBUG_COST] ========================================');
     }
 
+    const resultFile = args['result-file'] as string | undefined;
+    let persisted = false;
+    let exitCode = 0;
+    let failureMessage = '';
+
     try {
-      const persisted = await runPostCompletionEval(context);
+      persisted = await runPostCompletionEval(context);
       if (!persisted) {
-        process.exit(1);
+        exitCode = 1;
+        failureMessage = 'eval_not_persisted';
       }
     } catch (err) {
       const message = errorMessage(err);
       console.warn(`Post-completion eval hook: unexpected error — ${message}`);
-      process.exit(1);
+      exitCode = 1;
+      failureMessage = message;
+    } finally {
+      if (resultFile) {
+        writeJobResultFile(resultFile, {
+          ok: persisted,
+          persisted,
+          exitCode,
+          reason: persisted ? undefined : 'eval_not_persisted',
+          error: failureMessage || undefined,
+        });
+      }
+    }
+
+    if (exitCode !== 0) {
+      process.exit(exitCode);
     }
   },
 });

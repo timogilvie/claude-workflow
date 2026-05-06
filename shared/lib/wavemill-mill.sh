@@ -780,12 +780,10 @@ cleanup_completed_task() {
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-    execute git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-    log "debug" "  ✓ Deleted local branch: $task_branch"
-    if execute git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
-      log "debug" "  ✓ Deleted remote branch: $task_branch"
+    if execute git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "  ✓ Deleted local branch: $task_branch"
     else
-      log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
+      log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
     fi
   fi
 
@@ -2705,6 +2703,73 @@ clear_ready_conflict_attention() {
   rm -f "$feature_dir/.conflict-attention-head" "$feature_dir/.conflict-attention-reported"
 }
 
+clear_ready_conflict_markers() {
+  local feature_dir="$1"
+  rm -f "$feature_dir/.conflict-detected" "$feature_dir/.needs-attention" "$feature_dir/.conflict-recheck-at"
+  clear_ready_conflict_attention "$feature_dir"
+}
+
+ready_conflict_recheck_interval_seconds() {
+  local configured="${WAVEMILL_READY_CONFLICT_RECHECK_SECONDS:-}"
+  if [[ "$configured" =~ ^[0-9]+$ ]] && (( configured >= 10 )); then
+    printf '%s\n' "$configured"
+  else
+    printf '60\n'
+  fi
+}
+
+ready_conflict_recheck_due() {
+  local feature_dir="$1"
+  local recheck_file="$feature_dir/.conflict-recheck-at"
+  local last_recheck interval now
+  if [[ ! -f "$recheck_file" ]]; then
+    return 0
+  fi
+
+  last_recheck="$(cat "$recheck_file" 2>/dev/null || echo "")"
+  if [[ ! "$last_recheck" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  interval="$(ready_conflict_recheck_interval_seconds)"
+  now="$(date +%s)"
+  (( now - last_recheck >= interval ))
+}
+
+write_ready_conflict_recheck_at() {
+  local feature_dir="$1"
+  local recheck_file="$feature_dir/.conflict-recheck-at"
+  local tmp_file
+  mkdir -p "$feature_dir"
+  tmp_file="$(mktemp "$feature_dir/.conflict-recheck-at.tmp.XXXXXX")"
+  printf '%s\n' "$(date +%s)" > "$tmp_file"
+  mv "$tmp_file" "$recheck_file"
+}
+
+ready_conflict_pr_is_clean() {
+  local feature_dir="$1" pr_number="$2" issue="$3"
+  local pr_json mergeable merge_state
+
+  if pr_json=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr_number" --json mergeable,mergeStateStatus 2>/dev/null); then
+    write_ready_conflict_recheck_at "$feature_dir"
+  else
+    write_ready_conflict_recheck_at "$feature_dir"
+    log "debug" "ready conflict recheck for $issue PR #$pr_number failed"
+    return 1
+  fi
+
+  mergeable="$(printf '%s' "$pr_json" | jq -r '.mergeable // ""' 2>/dev/null || echo "")"
+  merge_state="$(printf '%s' "$pr_json" | jq -r '.mergeStateStatus // ""' 2>/dev/null || echo "")"
+
+  if [[ "$mergeable" == "MERGEABLE" && "$merge_state" == "CLEAN" ]]; then
+    log "status" "ready conflict recheck for $issue PR #$pr_number: MERGEABLE/CLEAN (clearing stale markers)"
+    return 0
+  fi
+
+  log "debug" "ready conflict recheck for $issue PR #$pr_number: ${mergeable:-empty}/${merge_state:-empty}"
+  return 1
+}
+
 ready_remediation_attempts() {
   local feature_dir="$1"
   local result_file="$feature_dir/.ready-result.json"
@@ -2745,6 +2810,61 @@ ready_remediation_config_json() {
     '
     ({ready:{remediation:{enabled:true,maxAttempts:3,agentCmd:""}}} * $user * $repo * $local).ready.remediation
     ' 2>/dev/null || echo '{"enabled":true,"maxAttempts":3,"agentCmd":""}'
+}
+
+ready_watchdog_config_json() {
+  local wt_dir="$1"
+  local user_config="$HOME/.wavemill/config.json"
+  local repo_config="$wt_dir/.wavemill-config.json"
+  local local_config="$wt_dir/.wavemill-config.local.json"
+  local user_json='{}'
+  local repo_json='{}'
+  local local_json='{}'
+
+  [[ -f "$user_config" ]] && user_json=$(cat "$user_config" 2>/dev/null || echo '{}')
+  [[ -f "$repo_config" ]] && repo_json=$(cat "$repo_config" 2>/dev/null || echo '{}')
+  [[ -f "$local_config" ]] && local_json=$(cat "$local_config" 2>/dev/null || echo '{}')
+
+  jq -n -c \
+    --argjson user "$user_json" \
+    --argjson repo "$repo_json" \
+    --argjson local "$local_json" \
+    '
+    ({ready:{watchdog:{enabled:true,thresholdMinutes:10,autoRecover:true,timeoutSeconds:30}}} * $user * $repo * $local) as $merged
+    | (($merged.monitor.readyWatchdog // {}) + ($merged.ready.watchdog // {}))
+    ' 2>/dev/null || echo '{"enabled":true,"thresholdMinutes":10,"autoRecover":true,"timeoutSeconds":30}'
+}
+
+run_ready_watchdog_tick() {
+  local watchdog_json watchdog_enabled watchdog_timeout
+  watchdog_json=$(ready_watchdog_config_json "$REPO_DIR")
+  watchdog_enabled=$(printf '%s' "$watchdog_json" | jq -r '.enabled // true' 2>/dev/null || echo "true")
+  [[ "$watchdog_enabled" == "true" ]] || return 0
+
+  watchdog_timeout=$(printf '%s' "$watchdog_json" | jq -r '.timeoutSeconds // 30' 2>/dev/null || echo "30")
+  [[ "$watchdog_timeout" =~ ^[0-9]+$ ]] || watchdog_timeout=30
+
+  local watchdog_output
+  if ! watchdog_output=$(_with_timeout "$watchdog_timeout" \
+    npx tsx "$TOOLS_DIR/ready-watchdog.ts" \
+      --once \
+      --repo-dir "$REPO_DIR" \
+      --state-file "$STATE_FILE" \
+      --json 2>/dev/null); then
+    log_warn "ready watchdog tick failed"
+    return 0
+  fi
+
+  while IFS= read -r finding; do
+    [[ -n "$finding" ]] || continue
+    local issue label detail action
+    issue=$(printf '%s' "$finding" | jq -r '.issueId // empty' 2>/dev/null || echo "")
+    label=$(printf '%s' "$finding" | jq -r '.displayLabel // empty' 2>/dev/null || echo "")
+    detail=$(printf '%s' "$finding" | jq -r '.detail // empty' 2>/dev/null || echo "")
+    action=$(printf '%s' "$finding" | jq -r '.action // empty' 2>/dev/null || echo "")
+    [[ -n "$issue" && -n "$label" && -n "$detail" ]] || continue
+    log "status" "ready watchdog: $issue $label ($action) - $detail"
+  done < <(printf '%s' "$watchdog_output" | jq -c '.findings[]?' 2>/dev/null)
 }
 
 ready_remediation_enabled() {
@@ -3587,10 +3707,54 @@ ready_stage_pending_verdict() {
   jq -r '.artifacts.verdict // empty' "$result_file" 2>/dev/null || echo ""
 }
 
+READY_TRANSIENT_MAX_ATTEMPTS=6
+
 write_ready_attention_file() {
   local state_dir="$1" message="$2"
   mkdir -p "$state_dir"
   printf '%s\n' "$message" > "$state_dir/.needs-attention"
+}
+
+transient_mergeability_count() {
+  local state_dir="$1"
+  local count_file="$state_dir/.transient-mergeability-count"
+
+  if [[ ! -f "$count_file" ]]; then
+    echo "0"
+    return 0
+  fi
+
+  local count
+  count=$(cat "$count_file" 2>/dev/null || echo "0")
+  if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+    echo "0"
+    return 0
+  fi
+
+  echo "$count"
+}
+
+increment_transient_mergeability_count() {
+  local state_dir="$1"
+  local count
+  count=$(transient_mergeability_count "$state_dir")
+  count=$((count + 1))
+  mkdir -p "$state_dir"
+  printf '%s\n' "$count" > "$state_dir/.transient-mergeability-count"
+  echo "$count"
+}
+
+clear_transient_mergeability_state() {
+  local state_dir="$1"
+  rm -f \
+    "$state_dir/.transient-mergeability-count" \
+    "$state_dir/.needs-attention-transient"
+}
+
+write_transient_ready_attention_file() {
+  local state_dir="$1" message="$2"
+  write_ready_attention_file "$state_dir" "$message"
+  : > "$state_dir/.needs-attention-transient"
 }
 
 launch_ready_phase() {
@@ -3699,14 +3863,44 @@ launch_ready_phase() {
   fi
 
   if [[ "$merge_status" == "UNKNOWN" || "$merge_status" == "ERROR" ]]; then
-    write_ready_attention_file "$state_dir" "Ready stage reported merge status $merge_status for PR #$pr_number."
-    log_error "  Ready merge status for $issue is $merge_status"
-    [[ -n "$result" ]] && log_error "$result"
+    local transient_count transient_limit pending_artifacts_json
+    transient_limit="${READY_TRANSIENT_MAX_ATTEMPTS:-6}"
+    transient_count=$(increment_transient_mergeability_count "$state_dir")
+
+    if (( transient_count <= transient_limit )); then
+      pending_artifacts_json=$(jq -cn \
+        --arg merge_status "${merge_status:-UNKNOWN}" \
+        --argjson checks_run "${checks_run:-0}" \
+        --argjson checks_passed "${checks_passed:-0}" \
+        --argjson pr_number "${pr_number}" \
+        --argjson attempts "$transient_count" \
+        '{
+          type: "ready",
+          verdict: "pending",
+          checksRun: $checks_run,
+          checksPassed: $checks_passed,
+          mergeConflict: $merge_status,
+          prNumber: $pr_number,
+          transientMergeabilityAttempts: $attempts
+        }')
+      write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
+        "pending GitHub mergeability - will retry (attempt ${transient_count}/${transient_limit})" \
+        "$pending_artifacts_json"
+      rm -f "$state_dir/.needs-attention" "$state_dir/.needs-attention-transient"
+      log "info" "  Merge status for $issue is $merge_status - will retry (attempt ${transient_count}/${transient_limit})"
+      return 4
+    fi
+
+    write_transient_ready_attention_file "$state_dir" \
+      "Merge status $merge_status persisted after $transient_count checks for PR #$pr_number."
+    log_error "  Merge status $merge_status persisted for $issue after $transient_count attempts"
     return 1
   fi
 
-  rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention"
+  rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention" \
+    "$state_dir/.conflict-recheck-at" "$state_dir/.needs-attention-transient"
   clear_ready_conflict_attention "$state_dir"
+  clear_transient_mergeability_state "$state_dir"
 
   if [[ "$ready_rc" -eq 0 ]]; then
     # Record ready stage result (HOK-1177)
@@ -3990,43 +4184,253 @@ mark_challenge_compared() {
   fi
 }
 
+sanitize_job_token() {
+  printf '%s' "${1:-unknown}" | sed 's/[^A-Za-z0-9._-]/-/g'
+}
+
+challenge_job_dir() {
+  local dir="$REPO_DIR/.wavemill/jobs/$SESSION"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
+}
+
+build_eval_job_id() {
+  local issue="$1" side="$2" pr="$3"
+  printf 'eval-%s-%s-%s\n' \
+    "$(sanitize_job_token "$issue")" \
+    "$(sanitize_job_token "$side")" \
+    "$pr"
+}
+
+build_comparison_job_id() {
+  local pair_id="$1" primary_pr="$2" challenger_pr="$3"
+  printf 'comparison-%s-%s-%s\n' \
+    "$(sanitize_job_token "$pair_id")" \
+    "$primary_pr" \
+    "$challenger_pr"
+}
+
+read_job_state_value() {
+  local job_id="$1" default="$2" expr="$3"
+  read_state_value "$default" --arg id "$job_id" "$expr"
+}
+
+launch_tracked_job() {
+  local kind="$1" job_id="$2" issue_id="$3" side="$4" pair_id="$5" pr_numbers="$6" pid="$7" timeout_seconds="$8" log_path="$9" result_path="${10}"
+  local args=(
+    launch
+    --state-file "$STATE_FILE" \
+    --kind "$kind" \
+    --job-id "$job_id" \
+    --pr-numbers "$pr_numbers" \
+    --pid "$pid" \
+    --timeout-seconds "$timeout_seconds" \
+    --log-path "$log_path" \
+    --result-path "$result_path"
+  )
+  [[ -n "$issue_id" ]] && args+=(--issue-id "$issue_id")
+  [[ -n "$side" ]] && args+=(--side "$side")
+  [[ -n "$pair_id" ]] && args+=(--pair-id "$pair_id")
+  npx tsx "$TOOLS_DIR/job-tracker.ts" "${args[@]}" >/dev/null
+}
+
+settle_tracked_job() {
+  local job_id="$1"
+  npx tsx "$TOOLS_DIR/job-tracker.ts" mark-settled \
+    --state-file "$STATE_FILE" \
+    --job-id "$job_id" \
+    >/dev/null
+}
+
+render_challenge_comparison_summary() {
+  local pair_id="$1" primary_pr="$2" challenger_pr="$3" primary_model="$4" challenger_model="$5" result_path="$6"
+  [[ -r "$result_path" ]] || return 0
+
+  local compare_json winner winner_model rationale
+  local comp_p comp_c cor_p cor_c qual_p qual_c impact_p impact_c auto_p auto_c
+  local primary_eval_score challenger_eval_score
+  compare_json=$(jq -c '.comparison // {}' "$result_path" 2>/dev/null || echo "{}")
+  winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
+  winner_model=$(echo "$compare_json" | jq -r '.winnerModel // empty' 2>/dev/null)
+  rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
+  primary_eval_score=$(echo "$compare_json" | jq -r '.primaryEvalScore // "—"' 2>/dev/null)
+  challenger_eval_score=$(echo "$compare_json" | jq -r '.challengerEvalScore // "—"' 2>/dev/null)
+  comp_p=$(echo "$compare_json" | jq -r '.dimensions.completeness.primary // "—"' 2>/dev/null)
+  comp_c=$(echo "$compare_json" | jq -r '.dimensions.completeness.challenger // "—"' 2>/dev/null)
+  cor_p=$(echo "$compare_json" | jq -r '.dimensions.correctness.primary // "—"' 2>/dev/null)
+  cor_c=$(echo "$compare_json" | jq -r '.dimensions.correctness.challenger // "—"' 2>/dev/null)
+  qual_p=$(echo "$compare_json" | jq -r '.dimensions.code_quality.primary // .dimensions.codeQuality.primary // "—"' 2>/dev/null)
+  qual_c=$(echo "$compare_json" | jq -r '.dimensions.code_quality.challenger // .dimensions.codeQuality.challenger // "—"' 2>/dev/null)
+  impact_p=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.primary // .dimensions.scopeDiscipline.primary // "—"' 2>/dev/null)
+  impact_c=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.challenger // .dimensions.scopeDiscipline.challenger // "—"' 2>/dev/null)
+  auto_p=$(echo "$compare_json" | jq -r '.dimensions.autonomy.primary // "—"' 2>/dev/null)
+  auto_c=$(echo "$compare_json" | jq -r '.dimensions.autonomy.challenger // "—"' 2>/dev/null)
+
+  local disp_primary disp_challenger disp_winner
+  disp_primary=$(echo "$primary_model" | sed 's/-[0-9]\{8\}$//')
+  disp_challenger=$(echo "$challenger_model" | sed 's/-[0-9]\{8\}$//')
+  disp_winner=$(echo "$winner_model" | sed 's/-[0-9]\{8\}$//')
+
+  log "status" ""
+  log "status" "  ┌────────────────────────────────────────────────────────────┐"
+  log "status" "  │  ⚖  Challenge Comparison: $pair_id"
+  log "status" "  ├────────────────────────────────────────────────────────────┤"
+  log "status" "  │                    Primary            Challenger           │"
+  log "status" "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
+  log "status" "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
+  log "status" "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
+  log "status" "  ├────────────────────────────────────────────────────────────┤"
+  log "status" "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
+  log "status" "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
+  log "status" "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
+  log "status" "  │  Intervention    $(printf '%-20s' "$impact_p") $(printf '%-19s' "$impact_c")│"
+  log "status" "  │  Autonomy        $(printf '%-20s' "$auto_p") $(printf '%-19s' "$auto_c")│"
+  log "status" "  ├────────────────────────────────────────────────────────────┤"
+  if [[ "$winner" == "primary" ]]; then
+    log "status" "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
+  else
+    log "status" "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
+  fi
+  log "status" "  │                                                            │"
+  echo "$rationale" | fold -s -w 56 | while IFS= read -r rline; do
+    log "status" "  │  $(printf '%-58s' "$rline")│"
+  done
+  log "status" "  └────────────────────────────────────────────────────────────┘"
+  log "status" ""
+}
+
+handle_comparison_job_success() {
+  local pair_id="$1" primary_key="$2" challenger_key="$3" primary_pr="$4" challenger_pr="$5" result_path="$6"
+  local primary_model challenger_model loser_key loser_slug loser_pr winner
+  primary_model=$(get_task_meta "$primary_key" "challengeModel")
+  challenger_model=$(get_task_meta "$challenger_key" "challengeModel")
+  render_challenge_comparison_summary "$pair_id" "$primary_pr" "$challenger_pr" "$primary_model" "$challenger_model" "$result_path"
+
+  winner=$(jq -r '.comparison.winner // empty' "$result_path" 2>/dev/null || echo "")
+  if [[ "$winner" == "primary" ]]; then
+    loser_key="$challenger_key"
+  elif [[ "$winner" == "challenger" ]]; then
+    loser_key="$primary_key"
+  fi
+
+  if [[ -n "${loser_key:-}" ]]; then
+    loser_slug=$(get_task_meta "$loser_key" "slug")
+    loser_pr=$(get_task_meta "$loser_key" "pr")
+    if [[ -n "$loser_slug" ]]; then
+      if [[ "${CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
+        log "status" "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
+        if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
+          gh pr close "$loser_pr" \
+            --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
+          log "status" "  ✓ Closed losing PR #$loser_pr"
+        fi
+        cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
+      else
+        log "status" "  ⚖ Both PRs remain open for manual review (autoMergeWinner=false)"
+      fi
+    fi
+  fi
+}
+
+poll_challenge_jobs() {
+  local poll_json
+  if ! poll_json=$(npx tsx "$TOOLS_DIR/job-tracker.ts" poll --state-file "$STATE_FILE" 2>/dev/null); then
+    log_warn "challenge job poll failed"
+    return 0
+  fi
+
+  while IFS= read -r job_json; do
+    [[ -z "$job_json" ]] && continue
+    local job_id kind status issue_id pair_id excerpt reason log_path result_path side
+    local primary_pr challenger_pr primary_key challenger_key
+    job_id=$(echo "$job_json" | jq -r '.id')
+    kind=$(echo "$job_json" | jq -r '.kind')
+    status=$(echo "$job_json" | jq -r '.status')
+    issue_id=$(echo "$job_json" | jq -r '.issueId // empty')
+    pair_id=$(echo "$job_json" | jq -r '.pairId // empty')
+    excerpt=$(echo "$job_json" | jq -r '.excerpt // empty')
+    reason=$(echo "$job_json" | jq -r '.reason // empty')
+    log_path=$(echo "$job_json" | jq -r '.logPath // empty')
+    result_path=$(echo "$job_json" | jq -r '.resultPath // empty')
+    side=$(echo "$job_json" | jq -r '.side // empty')
+
+    if [[ "$kind" == "eval" && "$status" == "succeeded" ]]; then
+      log "status" "  ✓ Challenge eval completed for $issue_id${side:+ ($side)}"
+      settle_tracked_job "$job_id"
+      continue
+    fi
+
+    if [[ "$kind" == "comparison" && "$status" == "succeeded" ]]; then
+      primary_pr=$(echo "$job_json" | jq -r '.prNumbers[0] // empty')
+      challenger_pr=$(echo "$job_json" | jq -r '.prNumbers[1] // empty')
+      primary_key="$pair_id"
+      challenger_key="${pair_id}_c"
+      handle_comparison_job_success "$pair_id" "$primary_key" "$challenger_key" "$primary_pr" "$challenger_pr" "$result_path"
+      settle_tracked_job "$job_id"
+      continue
+    fi
+
+    if [[ "$kind" == "eval" && "$reason" == "no_result_file" && -n "$issue_id" ]]; then
+      local pr_num
+      pr_num=$(echo "$job_json" | jq -r '.prNumbers[0] // empty')
+      if [[ -n "$pr_num" ]] && eval_record_exists_for_issue_pr "$issue_id" "$pr_num"; then
+        log_warn "challenge eval for $issue_id had no result file but eval record was persisted; marking completed"
+        mark_eval_completed "$issue_id"
+        settle_tracked_job "$job_id"
+        continue
+      fi
+    fi
+    if [[ "$kind" == "eval" ]]; then
+      log_warn "challenge eval failed for $issue_id (${reason:-$status}); log: $log_path"
+    else
+      log_warn "challenge comparison failed for $pair_id (${reason:-$status}); log: $log_path"
+    fi
+    if [[ -n "$excerpt" ]]; then
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && log_warn "  $line"
+      done <<<"$excerpt"
+    fi
+    settle_tracked_job "$job_id"
+  done < <(echo "$poll_json" | jq -c '.unsettled[]?')
+}
+
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
-  local eval_completed pair_id solution_model linear_issue eval_agent rc
+  local eval_completed eval_failed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
+  eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
+  [[ "$eval_failed" == "true" ]] && return 0
 
   pair_id=$(get_task_meta "$issue" "challengePairId")
   solution_model=$(get_task_meta "$issue" "challengeModel")
   linear_issue=$(get_linear_issue_id "$issue")
   eval_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
+  side=$(get_task_meta "$issue" "challengeRole")
+  [[ -z "$side" ]] && side="primary"
+  job_id=$(build_eval_job_id "$issue" "$side" "$pr")
+  job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
+  [[ -n "$job_status" ]] && return 0
 
-  local eval_log="/tmp/${SESSION}-eval-${issue}.log"
-  if _with_timeout 420 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+  job_dir=$(challenge_job_dir)
+  log_path="$job_dir/${job_id}.log"
+  result_path="$job_dir/${job_id}.result.json"
+
+  npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
     --issue "$linear_issue" --pr "$pr" --branch "$branch" \
     --worktree "${WORKTREE_ROOT}/${slug}" \
     --workflow-type mill --repo-dir "$REPO_DIR" \
     --agent "$eval_agent" \
     --solution-model "$solution_model" \
     --challenge-pair "$pair_id" \
+    --result-file "$result_path" \
     --debug \
-    >"$eval_log" 2>&1; then
-    rc=0
-  else
-    rc=$?
-  fi
-  while IFS= read -r line; do log "debug" "  [challenge-eval] $line"; done < "$eval_log"
-  rm -f "$eval_log"
-  if [[ "$rc" -eq 0 ]]; then
-    mark_eval_completed "$issue"
-  elif eval_record_exists_for_issue_pr "$linear_issue" "$pr"; then
-    log_warn "challenge eval for $issue exited $rc but a persisted eval record exists; marking evalCompleted=true"
-    mark_eval_completed "$issue"
-  else
-    log_warn "challenge eval failed for $issue (exit $rc); setting evalFailed=true"
-    mark_eval_failed "$issue"
-  fi
+    >"$log_path" 2>&1 &
+  pid=$!
+
+  launch_tracked_job "eval" "$job_id" "$issue" "$side" "$pair_id" "$pr" "$pid" "420" "$log_path" "$result_path"
+  log "status" "  📊 Challenge eval running in background for $issue (pid $pid)"
 }
 
 launch_background_post_merge_eval() {
@@ -4085,7 +4489,10 @@ launch_background_post_merge_eval() {
 
 maybe_run_challenge_comparison() {
   local issue="$1"
-  local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model compare_log
+  local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model
+  local primary_planner primary_reviewer primary_plan_depth primary_code_depth primary_review_mode
+  local challenger_planner challenger_reviewer challenger_plan_depth challenger_code_depth challenger_review_mode
+  local job_id job_status job_dir log_path result_path pid
   pair_id=$(get_task_meta "$issue" "challengePairId")
   [[ -z "$pair_id" ]] && return 0
   primary_key="$pair_id"
@@ -4098,6 +4505,9 @@ maybe_run_challenge_comparison() {
   primary_eval=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
   challenger_eval=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
   [[ -z "$primary_pr" || -z "$challenger_pr" || "$primary_eval" != "true" || "$challenger_eval" != "true" ]] && return 0
+  job_id=$(build_comparison_job_id "$pair_id" "$primary_pr" "$challenger_pr")
+  job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
+  [[ -n "$job_status" ]] && return 0
 
   linear_issue=$(get_linear_issue_id "$primary_key")
   primary_model=$(get_task_meta "$primary_key" "challengeModel")
@@ -4116,22 +4526,11 @@ maybe_run_challenge_comparison() {
   challenger_code_depth=$(get_task_meta "$challenger_key" "codeDepth")
   challenger_review_mode=$(get_task_meta "$challenger_key" "reviewMode")
 
-  compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
-  if ! _with_timeout 60 npx tsx "$TOOLS_DIR/compare-prs.ts" \
-    --issue "$linear_issue" --pair-id "$pair_id" \
-    --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
-    --primary-model "$primary_model" --challenger-model "$challenger_model" \
-    --repo-dir "$REPO_DIR" --check-only >"$compare_log" 2>&1; then
-    log_warn "challenge comparison skipped for $pair_id: evalCompleted=true but eval records are missing"
-    while IFS= read -r line; do log "debug" "  [challenge-compare] $line"; done < "$compare_log"
-    rm -f "$compare_log"
-    return 0
-  fi
-  rm -f "$compare_log"
-
   log "status" "  ⚖ Running challenge comparison for $pair_id"
-  compare_log="/tmp/${SESSION}-compare-${pair_id}.log"
-  if _with_timeout 240 npx tsx "$TOOLS_DIR/compare-prs.ts" \
+  job_dir=$(challenge_job_dir)
+  log_path="$job_dir/${job_id}.log"
+  result_path="$job_dir/${job_id}.result.json"
+  npx tsx "$TOOLS_DIR/compare-prs.ts" \
     --issue "$linear_issue" --pair-id "$pair_id" \
     --primary-pr "$primary_pr" --challenger-pr "$challenger_pr" \
     --primary-model "$primary_model" --challenger-model "$challenger_model" \
@@ -4139,94 +4538,13 @@ maybe_run_challenge_comparison() {
     --primary-plan-depth "$primary_plan_depth" --primary-code-depth "$primary_code_depth" --primary-review-mode "$primary_review_mode" \
     --challenger-planner "$challenger_planner" --challenger-reviewer "$challenger_reviewer" \
     --challenger-plan-depth "$challenger_plan_depth" --challenger-code-depth "$challenger_code_depth" --challenger-review-mode "$challenger_review_mode" \
-    --repo-dir "$REPO_DIR" --comment >"$compare_log" 2>&1; then
-    mark_challenge_compared "$pair_id"
+    --repo-dir "$REPO_DIR" --comment \
+    --result-file "$result_path" \
+    >"$log_path" 2>&1 &
+  pid=$!
 
-    # Read comparison result from challenge records
-    local compare_json winner winner_model rationale
-    local comp_p comp_c cor_p cor_c qual_p qual_c impact_p impact_c auto_p auto_c
-    local primary_eval_score challenger_eval_score
-    compare_json=$(tail -1 "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" 2>/dev/null)
-    winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
-    winner_model=$(echo "$compare_json" | jq -r '.winnerModel // empty' 2>/dev/null)
-    rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
-    primary_eval_score=$(echo "$compare_json" | jq -r '.primaryEvalScore // "—"' 2>/dev/null)
-    challenger_eval_score=$(echo "$compare_json" | jq -r '.challengerEvalScore // "—"' 2>/dev/null)
-    comp_p=$(echo "$compare_json" | jq -r '.dimensions.completeness.primary // "—"' 2>/dev/null)
-    comp_c=$(echo "$compare_json" | jq -r '.dimensions.completeness.challenger // "—"' 2>/dev/null)
-    cor_p=$(echo "$compare_json" | jq -r '.dimensions.correctness.primary // "—"' 2>/dev/null)
-    cor_c=$(echo "$compare_json" | jq -r '.dimensions.correctness.challenger // "—"' 2>/dev/null)
-    qual_p=$(echo "$compare_json" | jq -r '.dimensions.code_quality.primary // .dimensions.codeQuality.primary // "—"' 2>/dev/null)
-    qual_c=$(echo "$compare_json" | jq -r '.dimensions.code_quality.challenger // .dimensions.codeQuality.challenger // "—"' 2>/dev/null)
-    impact_p=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.primary // .dimensions.scopeDiscipline.primary // "—"' 2>/dev/null)
-    impact_c=$(echo "$compare_json" | jq -r '.dimensions.intervention_impact.challenger // .dimensions.scopeDiscipline.challenger // "—"' 2>/dev/null)
-    auto_p=$(echo "$compare_json" | jq -r '.dimensions.autonomy.primary // "—"' 2>/dev/null)
-    auto_c=$(echo "$compare_json" | jq -r '.dimensions.autonomy.challenger // "—"' 2>/dev/null)
-
-    # Shorten model names for display (strip date suffix)
-    local disp_primary disp_challenger disp_winner
-    disp_primary=$(echo "$primary_model" | sed 's/-[0-9]\{8\}$//')
-    disp_challenger=$(echo "$challenger_model" | sed 's/-[0-9]\{8\}$//')
-    disp_winner=$(echo "$winner_model" | sed 's/-[0-9]\{8\}$//')
-
-    # Display formatted comparison summary
-    log "status" ""
-    log "status" "  ┌────────────────────────────────────────────────────────────┐"
-    log "status" "  │  ⚖  Challenge Comparison: $pair_id"
-    log "status" "  ├────────────────────────────────────────────────────────────┤"
-    log "status" "  │                    Primary            Challenger           │"
-    log "status" "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
-    log "status" "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
-    log "status" "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
-    log "status" "  ├────────────────────────────────────────────────────────────┤"
-    log "status" "  │  Completeness    $(printf '%-20s' "$comp_p") $(printf '%-19s' "$comp_c")│"
-    log "status" "  │  Correctness     $(printf '%-20s' "$cor_p") $(printf '%-19s' "$cor_c")│"
-    log "status" "  │  Code Quality    $(printf '%-20s' "$qual_p") $(printf '%-19s' "$qual_c")│"
-    log "status" "  │  Intervention    $(printf '%-20s' "$impact_p") $(printf '%-19s' "$impact_c")│"
-    log "status" "  │  Autonomy        $(printf '%-20s' "$auto_p") $(printf '%-19s' "$auto_c")│"
-    log "status" "  ├────────────────────────────────────────────────────────────┤"
-    if [[ "$winner" == "primary" ]]; then
-      log "status" "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
-    else
-      log "status" "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
-    fi
-    log "status" "  │                                                            │"
-    # Word-wrap rationale to ~56 chars per line
-    echo "$rationale" | fold -s -w 56 | while IFS= read -r rline; do
-      log "status" "  │  $(printf '%-58s' "$rline")│"
-    done
-    log "status" "  └────────────────────────────────────────────────────────────┘"
-    log "status" ""
-
-    # Determine loser for cleanup
-    local loser_key loser_slug loser_pr
-    if [[ "$winner" == "primary" ]]; then
-      loser_key="$challenger_key"
-    elif [[ "$winner" == "challenger" ]]; then
-      loser_key="$primary_key"
-    fi
-    if [[ -n "${loser_key:-}" ]]; then
-      loser_slug=$(get_task_meta "$loser_key" "slug")
-      loser_pr=$(get_task_meta "$loser_key" "pr")
-      if [[ -n "$loser_slug" ]]; then
-        if [[ "${CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
-          log "status" "  ⚖ Auto-merge enabled: cleaning up losing side: $loser_key"
-          # Close PR if not already closed/merged
-          if [[ -n "$loser_pr" ]] && [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
-            gh pr close "$loser_pr" \
-              --comment "Closing: lost challenge comparison to ${winner} side." 2>/dev/null || true
-            log "status" "  ✓ Closed losing PR #$loser_pr"
-          fi
-          cleanup_completed_task "$loser_key" "$loser_slug" "challenge loser"
-        else
-          log "status" "  ⚖ Both PRs remain open for manual review (autoMergeWinner=false)"
-        fi
-      fi
-    fi
-  else
-    while IFS= read -r line; do log_warn "  [challenge-compare] $line"; done < "$compare_log"
-  fi
-  rm -f "$compare_log"
+  launch_tracked_job "comparison" "$job_id" "" "" "$pair_id" "${primary_pr},${challenger_pr}" "$pid" "240" "$log_path" "$result_path"
+  log "status" "  ⚖ Challenge comparison running in background for $pair_id (pid $pid)"
 }
 
 # Archive stage artifacts from worktree before cleanup.
@@ -4327,12 +4645,10 @@ cleanup_completed_task() {
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
   elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-    git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-    log "debug" "  ✓ Deleted local branch: $task_branch"
-    if git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
-      log "debug" "  ✓ Deleted remote branch: $task_branch"
+    if git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "  ✓ Deleted local branch: $task_branch"
     else
-      log "debug" "  ℹ Remote branch already deleted or push failed: $task_branch"
+      log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
     fi
   fi
 
@@ -4365,6 +4681,103 @@ find_pr_for_branch() {
     return
   fi
   _with_timeout "$API_TIMEOUT" gh pr list --head "$branch" --state all --json number --jq '.[0].number // empty' 2>/dev/null || echo ""
+}
+
+inject_depends_on_pr_block() {
+  local issue="${1:-}" pr_number="${2:-}" meta_json="${3:-}"
+  if [[ -z "$issue" || -z "$pr_number" || -z "$meta_json" ]]; then
+    echo "Usage: inject_depends_on_pr_block <issue> <pr_number> <meta_json>" >&2
+    return 1
+  fi
+
+  local current_body
+  if ! current_body=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr_number" --json body --jq '.body // ""' 2>/dev/null); then
+    log_warn "$issue: could not read PR #$pr_number body for depends_on metadata"
+    return 0
+  fi
+  if [[ "$current_body" == *"depends_on:"* ]]; then
+    return 0
+  fi
+
+  local depends_block
+  depends_block=$(jq -r '
+    "depends_on:\n" +
+    "  - pr: \"#" + (.number | tostring) + "\"\n" +
+    "    issue: \"" + .parent_issue + "\"\n" +
+    "    branch: \"" + .branch + "\"\n" +
+    "    url: \"" + .url + "\""
+  ' <<<"$meta_json" 2>/dev/null) || {
+    log_warn "$issue: could not build depends_on metadata block for PR #$pr_number"
+    return 0
+  }
+
+  local new_body="$depends_block"
+  if [[ -n "$current_body" ]]; then
+    new_body+=$'\n\n'"$current_body"
+  fi
+
+  if ! _with_timeout "$API_TIMEOUT" gh pr edit "$pr_number" --body "$new_body" >/dev/null 2>&1; then
+    log_warn "$issue: could not update PR #$pr_number with depends_on metadata"
+  fi
+}
+
+dispatch_queued_children_for_parent() {
+  local parent_issue="${1:-}" parent_pr_number="${2:-}"
+  if [[ -z "$parent_issue" || -z "$parent_pr_number" ]]; then
+    echo "Usage: dispatch_queued_children_for_parent <parent_issue> <pr_number>" >&2
+    return 1
+  fi
+
+  local children_json
+  children_json=$(find_queued_children_for_parent "$parent_issue") || return 1
+  [[ "$children_json" == "[]" ]] && return 0
+
+  local parent_branch="" resolved_pr_number="" parent_pr_url="" resolve_reason=""
+  local resolve_err
+  resolve_err=$(mktemp) || return 1
+  if IFS='|' read -r parent_branch resolved_pr_number parent_pr_url < <(resolve_parent_pr_branch "$parent_pr_number" 2>"$resolve_err"); then
+    :
+  else
+    resolve_reason=$(tr '\n' ' ' <"$resolve_err" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+  fi
+  rm -f "$resolve_err"
+
+  local child_issue child_slug child_title entry
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    child_issue=$(jq -r '.issue_id' <<<"$entry")
+    child_slug=$(jq -r '.slug // ""' <<<"$entry")
+    child_title=$(jq -r '.title // ""' <<<"$entry")
+
+    if [[ -z "$child_slug" ]]; then
+      child_slug="${child_issue,,}"
+    fi
+    if [[ -z "$child_title" ]]; then
+      child_title="$child_issue"
+    fi
+
+    if [[ -n "$parent_branch" ]]; then
+      record_depends_on_metadata "$child_issue" "$resolved_pr_number" "$parent_pr_url" "$parent_branch" "$parent_issue" || {
+        log_warn "$child_issue: failed to record depends_on metadata"
+        continue
+      }
+      queue_remove_task "$child_issue" || {
+        log_warn "$child_issue: failed to remove queued dependency entry"
+        continue
+      }
+
+      BRANCH_BY_ISSUE["$child_issue"]="task/${child_slug}"
+      SLUG_BY_ISSUE["$child_issue"]="$child_slug"
+
+      if ! launch_task "$child_issue" "$child_slug" "$child_title" 1 "$parent_branch"; then
+        log_warn "$child_issue: failed to launch from parent PR branch $parent_branch"
+      fi
+    else
+      local reason="parent_pr_branch_unresolvable: ${resolve_reason:-unknown error}"
+      queue_mark_waiting "$child_issue" "$reason" || log_warn "$child_issue: failed to mark queued dependency waiting"
+      log_warn "$child_issue -> queued waiting: $reason"
+    fi
+  done < <(jq -c '.[]' <<<"$children_json")
 }
 
 pr_state() {
@@ -4664,6 +5077,85 @@ reroute_expanded_packets_for_coding_handoff() {
   return 0
 }
 
+recover_missing_expansion_artifact() {
+  local issue="$1" slug="$2" feature_dir="$3"
+  local expand_tool="$TOOLS_DIR/expand-issue.ts"
+  local packet_file="$feature_dir/task-packet.md"
+  local route_file="$feature_dir/.post-expansion-route.json"
+  local recovery_log_dir="$REPO_DIR/.wavemill/logs"
+  local recovery_log_file="$recovery_log_dir/expansion-recovery-${issue}.log"
+  local packet_content="" detail="" rc=0
+
+  if expansion_recovery_already_attempted "$feature_dir"; then
+    log "warn" "[expansion-handshake] RECOVERY_SKIPPED_ALREADY_ATTEMPTED issue=$issue"
+    return 1
+  fi
+
+  if ! expansion_recovery_mark_attempted "$feature_dir" "$issue" "missing"; then
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=failed-to-record-attempt"
+    return 1
+  fi
+
+  mkdir -p "$recovery_log_dir"
+
+  if [[ ! -f "$expand_tool" ]]; then
+    detail="expand-tool-missing"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "127" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail"
+    return 1
+  fi
+
+  if _with_timeout "$API_TIMEOUT" npx tsx "$expand_tool" "$issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
+    :
+  else
+    rc=$?
+    detail="expand-issue-exited-non-zero"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "$rc" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail exit=$rc log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  packet_content="$(cat "$packet_file" 2>/dev/null || echo "")"
+  if [[ ! -s "$packet_file" ]] || ! is_task_packet "$packet_content"; then
+    detail="expanded-task-packet-missing-or-invalid"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
+    detail="expanded-reroute-${REROUTE_EXPANDED_LAST_REASON:-failed}"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  if [[ ! -f "$route_file" ]]; then
+    detail="expanded-route-artifact-missing-after-reroute"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  if ! jq -e '.' "$route_file" >/dev/null 2>&1; then
+    detail="expanded-route-invalid-json-after-reroute"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  if ! validate_expanded_route_artifact "$route_file"; then
+    detail="expanded-route-missing-required-field-after-reroute"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "1" || true
+    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail log=\"$recovery_log_file\""
+    return 1
+  fi
+
+  expansion_recovery_mark_result "$feature_dir" "$issue" "succeeded" "expanded-route-recovered" "0" || true
+  log "info" "[expansion-handshake] RECOVERY_OK issue=$issue log=\"$recovery_log_file\""
+  return 0
+}
+
 
 # ============================================================================
 # BACKLOG FETCHING & CANDIDATE SCORING
@@ -4885,12 +5377,13 @@ filter_active_issues() {
 LAST_LAUNCHED_SLOTS=1
 
 launch_task() {
-  local issue="$1" slug="$2" title="$3" remaining_slots="${4:-1}"
+  local issue="$1" slug="$2" title="$3" remaining_slots="${4:-1}" override_base="${5:-}"
   local branch="task/${slug}"
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   local feature_dir="${wt_dir}/features/${slug}"
   local linear_issue="$issue"
   local challenge_model=""
+  local effective_base="${override_base:-$BASE_BRANCH}"
   LAST_LAUNCHED_SLOTS=1
 
   linear_issue=$(get_linear_issue_id "$issue")
@@ -4925,7 +5418,7 @@ launch_task() {
   packet_content=$(cat "$packet_file" 2>/dev/null || echo "")
 
   # Refresh base branch on a TTL so repeated dynamic launches avoid redundant fetches.
-  wavemill_fetch_base_branch "$BASE_BRANCH" 2>/dev/null || true
+  wavemill_fetch_base_branch "$effective_base" 2>/dev/null || true
 
   # ── Migration detection for dynamically launched tasks ──────────────
   # Detection: 1) label match  2) raw description keywords
@@ -4989,8 +5482,8 @@ launch_task() {
       created_new=true
     fi
   else
-    log "info" "  Creating branch $branch from origin/$BASE_BRANCH"
-    if ! git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >>"$MILL_LOG_FILE" 2>&1; then
+    log "info" "  Creating branch $branch from origin/$effective_base"
+    if ! git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$effective_base" >>"$MILL_LOG_FILE" 2>&1; then
       log_error "$issue: worktree add failed (log: $MILL_LOG_FILE)"
       return 1
     fi
@@ -5620,8 +6113,8 @@ USING_GROUPED_VIEW=false
 GROUPED_SELECT_FROM=""
 GROUPED_DISPLAY=""
 declare -a COMMAND_QUEUE=()
+declare -a COMMAND_QUEUE_OFFSETS=()
 COMMAND_FILE="$(wavemill_command_file_path "$SESSION")"
-COMMAND_OFFSET_FILE="$(wavemill_command_offset_path "$SESSION")"
 COMMAND_OFFSET_WARNED=false
 
 clear_task_list_display() {
@@ -5632,68 +6125,181 @@ clear_task_list_display() {
   fi
 }
 
-read_command_offset() {
-  local line_count offset_raw
-  line_count=0
+monitor_command_timestamp() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+read_command_file_line_count() {
+  local line_count=0
   [[ -f "$COMMAND_FILE" ]] && line_count=$(wc -l < "$COMMAND_FILE" 2>/dev/null | tr -d ' ')
   [[ "$line_count" =~ ^[0-9]+$ ]] || line_count=0
+  printf '%s\n' "$line_count"
+}
 
-  # Persist any init-at-EOF decision: returning $line_count without writing it
-  # back leaves drain_command_events permanently stuck at "line_count <= offset"
-  # because every subsequent read recomputes the same EOF position.
-  if [[ ! -f "$COMMAND_OFFSET_FILE" ]]; then
+read_command_offset() {
+  local line_count offset_raw
+  line_count=$(read_command_file_line_count)
+
+  if [[ ! -r "$STATE_FILE" || ! -s "$STATE_FILE" ]]; then
+    printf '%s\n' "0"
+    return 0
+  fi
+
+  offset_raw=$(jq -r '.monitorCommandOffset // empty' "$STATE_FILE" 2>/dev/null || echo "")
+  if [[ -z "$offset_raw" || "$offset_raw" == "null" ]]; then
     if (( line_count > 0 )); then
       [[ "$COMMAND_OFFSET_WARNED" == "false" ]] && log_warn "Command offset missing (init at EOF)."
       COMMAND_OFFSET_WARNED=true
       write_command_offset "$line_count" || true
-      echo "$line_count"
+      printf '%s\n' "$line_count"
       return 0
     fi
     write_command_offset "0" || true
-    echo "0"
+    printf '%s\n' "0"
     return 0
   fi
 
-  offset_raw="$(cat "$COMMAND_OFFSET_FILE" 2>/dev/null || echo "0")"
   if ! [[ "$offset_raw" =~ ^[0-9]+$ ]]; then
     [[ "$COMMAND_OFFSET_WARNED" == "false" ]] && log_warn "Command offset invalid (init at EOF)."
     COMMAND_OFFSET_WARNED=true
     write_command_offset "$line_count" || true
-    echo "$line_count"
+    printf '%s\n' "$line_count"
     return 0
   fi
   if (( offset_raw > line_count )); then
     write_command_offset "$line_count" || true
-    echo "$line_count"
+    printf '%s\n' "$line_count"
     return 0
   fi
-  echo "$offset_raw"
+  printf '%s\n' "$offset_raw"
 }
 
 write_command_offset() {
-  local new_offset="$1" tmp
-  tmp="$(mktemp "/tmp/wavemill-${SESSION}-commands.offset.XXXXXX")" || return 1
-  printf '%s\n' "$new_offset" > "$tmp"
-  mv "$tmp" "$COMMAND_OFFSET_FILE"
+  local new_offset="$1"
+  [[ "$new_offset" =~ ^[0-9]+$ ]] || return 1
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 1
+  state_mutate "$STATE_FILE" \
+    '.monitorCommandOffset = $offset | .updated = (now | todate)' \
+    --argjson offset "$new_offset" >/dev/null
+}
+
+highest_pending_command_offset() {
+  local highest=0 offset
+  for offset in "${COMMAND_QUEUE_OFFSETS[@]:-}"; do
+    [[ "$offset" =~ ^[0-9]+$ ]] || continue
+    if (( offset > highest )); then
+      highest=$offset
+    fi
+  done
+  printf '%s\n' "$highest"
+}
+
+queue_command_event() {
+  local offset="$1" event="$2"
+  COMMAND_QUEUE+=("$event")
+  COMMAND_QUEUE_OFFSETS+=("$offset")
+}
+
+requeue_consumed_command_front() {
+  if [[ -n "${REPLY:-}" && -n "${REPLY_OFFSET:-}" ]]; then
+    COMMAND_QUEUE=("$REPLY" "${COMMAND_QUEUE[@]}")
+    COMMAND_QUEUE_OFFSETS=("$REPLY_OFFSET" "${COMMAND_QUEUE_OFFSETS[@]}")
+  fi
+}
+
+acknowledge_command_offset() {
+  local offset="$1" current
+  [[ "$offset" =~ ^[0-9]+$ ]] || return 1
+  current="$(read_command_offset)"
+  [[ "$current" =~ ^[0-9]+$ ]] || current=0
+  if (( offset > current )); then
+    write_command_offset "$offset" || true
+  fi
+}
+
+monitor_list_deferred_commands() {
+  if [[ ! -r "$STATE_FILE" || ! -s "$STATE_FILE" ]]; then
+    printf '[]\n'
+    return 0
+  fi
+  jq -c '.monitorDeferredCommands // []' "$STATE_FILE" 2>/dev/null || printf '[]\n'
+}
+
+monitor_remove_deferred_command() {
+  local event="$1"
+  [[ -n "$event" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.monitorDeferredCommands = ((.monitorDeferredCommands // []) | map(select(.event != $event))) | .updated = (now | todate)' \
+    --arg event "$event" >/dev/null || true
+}
+
+monitor_defer_command() {
+  local event="$1" reason="$2"
+  local kind args_json now_ts
+
+  case "$event" in
+    select\ *)
+      kind="select"
+      args_json=$(printf '%s\n' "${event#select }" | tr ' ' '\n' | sed '/^$/d' | jq -Rsc 'split("\n") | map(select(length > 0))')
+      ;;
+    enter)
+      kind="enter"
+      args_json='[]'
+      ;;
+    more)
+      kind="more"
+      args_json='[]'
+      ;;
+    *)
+      kind="unknown"
+      args_json='[]'
+      ;;
+  esac
+
+  now_ts="$(monitor_command_timestamp)"
+  state_mutate "$STATE_FILE" '
+    .monitorDeferredCommands = (
+      (.monitorDeferredCommands // []) as $existing
+      | ($existing | map(select(.event == $event)) | .[0]) as $prior
+      | ($existing | map(select(.event != $event))) + [{
+          event: $event,
+          kind: $kind,
+          args: $args,
+          reason: $reason,
+          queued_at: ($prior.queued_at // $now),
+          last_checked_at: $now
+        }]
+    )
+    | .updated = (now | todate)
+  ' \
+    --arg event "$event" \
+    --arg kind "$kind" \
+    --arg reason "$reason" \
+    --arg now "$now_ts" \
+    --argjson args "$args_json" >/dev/null || true
 }
 
 drain_command_events() {
-  local line_count offset start new_lines final_offset
+  local line_count offset highest_pending start new_lines current_offset
   [[ -f "$COMMAND_FILE" ]] || return 0
-  line_count=$(wc -l < "$COMMAND_FILE" 2>/dev/null | tr -d ' ')
-  [[ "$line_count" =~ ^[0-9]+$ ]] || line_count=0
+  line_count=$(read_command_file_line_count)
   offset="$(read_command_offset)"
   [[ "$offset" =~ ^[0-9]+$ ]] || offset=0
+  highest_pending="$(highest_pending_command_offset)"
+  [[ "$highest_pending" =~ ^[0-9]+$ ]] || highest_pending=0
+  if (( highest_pending > offset )); then
+    offset=$highest_pending
+  fi
   (( line_count <= offset )) && return 0
 
   start=$((offset + 1))
   new_lines="$(sed -n "${start},${line_count}p" "$COMMAND_FILE" 2>/dev/null || true)"
+  current_offset=$start
   while IFS= read -r evt; do
     [[ -z "$evt" ]] && continue
-    COMMAND_QUEUE+=("$evt")
+    queue_command_event "$current_offset" "$evt"
+    current_offset=$((current_offset + 1))
   done <<< "$new_lines"
-  final_offset=$line_count
-  write_command_offset "$final_offset" || true
 }
 
 consume_next_command() {
@@ -5701,12 +6307,293 @@ consume_next_command() {
     return 1
   fi
   REPLY="${COMMAND_QUEUE[0]}"
+  REPLY_OFFSET="${COMMAND_QUEUE_OFFSETS[0]}"
   if (( ${#COMMAND_QUEUE[@]} == 1 )); then
     COMMAND_QUEUE=()
+    COMMAND_QUEUE_OFFSETS=()
   else
     COMMAND_QUEUE=("${COMMAND_QUEUE[@]:1}")
+    COMMAND_QUEUE_OFFSETS=("${COMMAND_QUEUE_OFFSETS[@]:1}")
   fi
   return 0
+}
+
+invalidate_backlog_prompt_state() {
+  LAST_BACKLOG_FETCH=0
+  LAST_DISPLAY=""
+  LAST_WAITING_MSG=""
+  SELECT_SHOW_ALL=false
+  USING_GROUPED_VIEW=false
+  clear_task_list_display
+}
+
+launch_selected_task_lines() {
+  local selected_lines="$1" free_slots="$2"
+  local launched=0 local_line sel_issue sel_slug sel_title
+  LAST_COMMAND_LAUNCHED_SLOTS=0
+
+  [[ -n "$selected_lines" ]] || return 0
+
+  if (( $(grep -c . <<<"$selected_lines") > 1 )); then
+    if batch_route_selected_tasks "$selected_lines"; then
+      log "info" "Prepared batch routing for $(grep -c . <<<"$selected_lines") selected tasks"
+    else
+      log_warn "Batch routing failed for selected tasks; falling back to per-task routing"
+    fi
+  fi
+
+  while IFS= read -r local_line; do
+    [[ -z "$local_line" ]] && continue
+    (( launched >= free_slots )) && break
+    IFS='|' read -r sel_issue sel_slug sel_title _rest <<<"$local_line"
+    launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+    launched=$((launched + LAST_LAUNCHED_SLOTS))
+  done <<<"$selected_lines"
+
+  LAST_COMMAND_LAUNCHED_SLOTS=$launched
+  if (( launched > 0 )); then
+    invalidate_backlog_prompt_state
+  fi
+}
+
+handle_enter_command() {
+  local event="$1" free_slots="$2" queue_plan_json="$3" avail_unblocked="$4" avail_blocked="$5"
+  local wave_result wave_ids deferred_ids wave_selected_lines wid wline
+
+  MONITOR_COMMAND_STATUS="noop"
+  MONITOR_COMMAND_DEFER_EVENT=""
+  MONITOR_COMMAND_DEFER_REASON=""
+
+  if (( free_slots <= 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    MONITOR_COMMAND_DEFER_REASON="no_slots_available"
+    return 0
+  fi
+
+  if [[ "${ENTER_LAUNCHES_WAVE:-true}" != "true" ]]; then
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  if [[ -z "$queue_plan_json" ]]; then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    if [[ -n "$avail_blocked" ]]; then
+      MONITOR_COMMAND_DEFER_REASON="dependency_blocked"
+    else
+      MONITOR_COMMAND_DEFER_REASON="no_launchable_candidates"
+    fi
+    return 0
+  fi
+
+  wave_result=$(invoke_first_wave_helper "$queue_plan_json" "$avail_unblocked" "$free_slots" 2>/dev/null) || wave_result=""
+  if [[ -z "$wave_result" ]]; then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    if [[ -n "$avail_blocked" ]]; then
+      MONITOR_COMMAND_DEFER_REASON="dependency_blocked"
+    else
+      MONITOR_COMMAND_DEFER_REASON="no_launchable_candidates"
+    fi
+    return 0
+  fi
+
+  wave_ids=$(jq -r '.wave[]?' <<<"$wave_result" 2>/dev/null) || wave_ids=""
+  deferred_ids=$(jq -r '.deferred[]?' <<<"$wave_result" 2>/dev/null) || deferred_ids=""
+  if [[ -z "$wave_ids" ]]; then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    if [[ -n "$deferred_ids" || -n "$avail_blocked" ]]; then
+      MONITOR_COMMAND_DEFER_REASON="dependency_blocked"
+    else
+      MONITOR_COMMAND_DEFER_REASON="no_launchable_candidates"
+    fi
+    return 0
+  fi
+
+  wave_selected_lines=""
+  while IFS= read -r wid; do
+    [[ -z "$wid" ]] && continue
+    wline=$(grep -m1 "^${wid}|" <<<"$avail_unblocked" 2>/dev/null || echo "")
+    [[ -n "$wline" ]] && wave_selected_lines+="${wline}"$'\n'
+  done <<<"$wave_ids"
+
+  if [[ -z "$wave_selected_lines" ]]; then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    MONITOR_COMMAND_DEFER_REASON="selection_not_currently_visible"
+    return 0
+  fi
+
+  [[ -n "$deferred_ids" ]] && log "debug" "[wave-launch] deferred=$(tr '\n' ',' <<<"$deferred_ids" | sed 's/,$//')"
+  launch_selected_task_lines "$wave_selected_lines" "$free_slots"
+  if (( LAST_COMMAND_LAUNCHED_SLOTS > 0 )); then
+    MONITOR_COMMAND_STATUS="launched"
+  else
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    MONITOR_COMMAND_DEFER_REASON="no_launchable_candidates"
+  fi
+}
+
+handle_select_command() {
+  local event="$1" free_slots="$2" select_from="$3"
+  local numbers_str selected_lines remaining_numbers unresolved_numbers blocked_numbers
+  local n local_line sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked
+  local launch_budget=0 launchable_count=0
+
+  MONITOR_COMMAND_STATUS="noop"
+  MONITOR_COMMAND_DEFER_EVENT=""
+  MONITOR_COMMAND_DEFER_REASON=""
+
+  numbers_str="${event#select }"
+  if [[ -z "$numbers_str" ]]; then
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  if (( free_slots <= 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    MONITOR_COMMAND_DEFER_REASON="no_slots_available"
+    return 0
+  fi
+
+  selected_lines=""
+  remaining_numbers=()
+  unresolved_numbers=()
+  blocked_numbers=()
+  launch_budget=$free_slots
+
+  for n in $numbers_str; do
+    if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n == 0 )); then
+      log_warn "Invalid selection: $n (must be a number)"
+      continue
+    fi
+    local_line=$(sed -n "${n}p" <<<"$select_from")
+    if [[ -z "$local_line" ]]; then
+      unresolved_numbers+=("$n")
+      continue
+    fi
+    IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
+    if [[ "${_sel_blocked:-0}" =~ ^[0-9]+$ ]] && (( _sel_blocked > 0 )); then
+      blocked_numbers+=("$n")
+      continue
+    fi
+    if (( launchable_count >= launch_budget )); then
+      remaining_numbers+=("$n")
+      continue
+    fi
+    selected_lines+="${local_line}"$'\n'
+    launchable_count=$((launchable_count + 1))
+  done
+
+  if [[ -n "$selected_lines" ]]; then
+    launch_selected_task_lines "$selected_lines" "$free_slots"
+  fi
+
+  if (( ${#remaining_numbers[@]} > 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="select ${remaining_numbers[*]}"
+    MONITOR_COMMAND_DEFER_REASON="no_slots_available"
+    return 0
+  fi
+
+  if (( ${#blocked_numbers[@]} > 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="select ${blocked_numbers[*]}"
+    MONITOR_COMMAND_DEFER_REASON="dependency_blocked"
+    return 0
+  fi
+
+  if (( ${#unresolved_numbers[@]} > 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="select ${unresolved_numbers[*]}"
+    MONITOR_COMMAND_DEFER_REASON="selection_not_currently_visible"
+    return 0
+  fi
+
+  if (( LAST_COMMAND_LAUNCHED_SLOTS > 0 )); then
+    MONITOR_COMMAND_STATUS="launched"
+  else
+    MONITOR_COMMAND_STATUS="invalid"
+  fi
+}
+
+execute_or_defer_monitor_command() {
+  local source="$1" event="$2" event_offset="$3" free_slots="$4" queue_plan_json="$5" avail_unblocked="$6" avail_blocked="$7" select_from="$8"
+
+  MONITOR_COMMAND_STATUS="noop"
+  MONITOR_COMMAND_DEFER_EVENT=""
+  MONITOR_COMMAND_DEFER_REASON=""
+
+  case "$event" in
+    more)
+      if [[ "$USING_GROUPED_VIEW" != "true" ]]; then
+        SELECT_SHOW_ALL=true
+      fi
+      MONITOR_COMMAND_STATUS="handled"
+      ;;
+    unknown\ *)
+      log_warn "Unknown input: ${event#unknown }"
+      MONITOR_COMMAND_STATUS="invalid"
+      ;;
+    enter)
+      handle_enter_command "$event" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked"
+      ;;
+    select\ *)
+      handle_select_command "$event" "$free_slots" "$select_from"
+      ;;
+    *)
+      MONITOR_COMMAND_STATUS="invalid"
+      ;;
+  esac
+
+  if [[ "$MONITOR_COMMAND_STATUS" == "deferred" && -n "$MONITOR_COMMAND_DEFER_EVENT" ]]; then
+    monitor_defer_command "$MONITOR_COMMAND_DEFER_EVENT" "$MONITOR_COMMAND_DEFER_REASON"
+  fi
+
+  if [[ "$source" == "deferred" ]]; then
+    if [[ "$MONITOR_COMMAND_STATUS" != "deferred" || "$MONITOR_COMMAND_DEFER_EVENT" != "$event" ]]; then
+      monitor_remove_deferred_command "$event"
+    fi
+  elif [[ "$MONITOR_COMMAND_STATUS" != "noop" && "$MONITOR_COMMAND_STATUS" != "pending" ]]; then
+    acknowledge_command_offset "$event_offset"
+  fi
+}
+
+process_new_monitor_commands() {
+  local free_slots="$1" queue_plan_json="$2" avail_unblocked="$3" avail_blocked="$4" select_from="$5"
+  while consume_next_command; do
+    if [[ "$REPLY" == "quit" ]]; then
+      requeue_consumed_command_front
+      break
+    fi
+    execute_or_defer_monitor_command "new" "$REPLY" "$REPLY_OFFSET" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked" "$select_from"
+    if (( LAST_COMMAND_LAUNCHED_SLOTS > 0 )); then
+      free_slots=$((free_slots - LAST_COMMAND_LAUNCHED_SLOTS))
+      (( free_slots < 0 )) && free_slots=0
+    fi
+  done
+  REMAINING_FREE_SLOTS="$free_slots"
+}
+
+process_deferred_monitor_commands() {
+  local free_slots="$1" queue_plan_json="$2" avail_unblocked="$3" avail_blocked="$4" select_from="$5"
+  local deferred_json event
+
+  deferred_json="$(monitor_list_deferred_commands)"
+  while IFS= read -r event; do
+    [[ -z "$event" ]] && continue
+    execute_or_defer_monitor_command "deferred" "$event" "" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked" "$select_from"
+    if (( LAST_COMMAND_LAUNCHED_SLOTS > 0 )); then
+      free_slots=$((free_slots - LAST_COMMAND_LAUNCHED_SLOTS))
+      (( free_slots < 0 )) && free_slots=0
+    fi
+  done < <(jq -r '.[].event // empty' <<<"$deferred_json" 2>/dev/null)
+
+  REMAINING_FREE_SLOTS="$free_slots"
 }
 
 poll_sleep() {
@@ -5755,6 +6642,9 @@ monitor_issue_state() {
         merged_before_ready=true
         ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
         write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
+      else
+        clear_transient_mergeability_state "$merged_ready_dir"
+        rm -f "$merged_ready_dir/.needs-attention"
       fi
     fi
 
@@ -5823,7 +6713,14 @@ monitor_issue_state() {
         log "info" "$pr_details"
       fi
 
+      local depends_on_pr_meta
+      depends_on_pr_meta=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].dependsOnPr // empty')
+      if [[ -n "$depends_on_pr_meta" ]]; then
+        inject_depends_on_pr_block "$ISSUE" "$PR" "$depends_on_pr_meta"
+      fi
+
       write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
+      dispatch_queued_children_for_parent "$ISSUE" "$PR"
       set_task_phase "$ISSUE" "review"
 
       local title launch_rc
@@ -6094,10 +6991,35 @@ monitor_issue_state() {
             fi
             emit_execution_active_route "$FEATURE_DIR" "$ISSUE"
 
-            if ! mill_check_expansion_handshake "$FEATURE_DIR" "$ISSUE" "$REPO_DIR"; then
+            local handshake_reason handshake_policy handshake_block_note
+            handshake_reason="$(mill_expansion_handshake_reason "$FEATURE_DIR")"
+            handshake_policy="$(get_expansion_handshake_policy "$REPO_DIR")"
+
+            if [[ "$handshake_reason" == "missing" && "$handshake_policy" == "recover" ]]; then
+              if recover_missing_expansion_artifact "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
+                if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
+                  expansion_recovery_mark_result "$FEATURE_DIR" "$ISSUE" "failed" "expanded-route-promotion-failed" "1" || true
+                  log_warn "$ISSUE → recovered expanded route was invalid during promotion; using bootstrap execution route for coding"
+                  handshake_reason="recovery-fallback-bootstrap"
+                else
+                  handshake_reason="$(mill_expansion_handshake_reason "$FEATURE_DIR")"
+                fi
+                emit_execution_active_route "$FEATURE_DIR" "$ISSUE"
+              else
+                log_warn "$ISSUE → expansion recovery failed; RECOVERY_FALLBACK_BOOTSTRAP"
+                emit_execution_active_route "$FEATURE_DIR" "$ISSUE"
+                handshake_reason="recovery-fallback-bootstrap"
+              fi
+            fi
+
+            if [[ "$handshake_reason" != "recovery-fallback-bootstrap" ]] && ! mill_check_expansion_handshake "$FEATURE_DIR" "$ISSUE" "$REPO_DIR"; then
               rm -f "$FEATURE_DIR/.plan-approved"
-              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" \
-                "Expansion handshake blocked: raw input requires wavemill expand $ISSUE"
+              if [[ "$handshake_reason" == "missing" ]]; then
+                handshake_block_note="Expansion handshake blocked: raw input requires wavemill expand $ISSUE"
+              else
+                handshake_block_note="Expansion handshake blocked: invalid expanded routing artifact ($handshake_reason)"
+              fi
+              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "$handshake_block_note"
               set_window_attention_state "$WIN" "needs-user"
               active_count=$((active_count + 1))
               return 0
@@ -6384,7 +7306,13 @@ monitor_issue_state() {
           # and the controller can move into ready even if the stage file is still "running".
           if [[ "$review_status" == "running" ]]; then
             if [[ -n "$pr_number" ]]; then
+              local depends_on_pr_meta
+              depends_on_pr_meta=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].dependsOnPr // empty')
+              if [[ -n "$depends_on_pr_meta" ]]; then
+                inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
+              fi
               write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+              dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
               review_status="completed"
             else
               set_window_attention_state "$WIN" "clear"
@@ -6406,7 +7334,13 @@ monitor_issue_state() {
           # Review is no longer running - check if PR was created and transition to ready phase.
           if [[ -n "$pr_number" ]]; then
             # Mark review as completed with PR artifact (HOK-1177)
+            local depends_on_pr_meta
+            depends_on_pr_meta=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].dependsOnPr // empty')
+            if [[ -n "$depends_on_pr_meta" ]]; then
+              inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
+            fi
             write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+            dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
 
             # Transition to ready phase
             set_task_phase "$ISSUE" "ready"
@@ -6485,11 +7419,6 @@ monitor_issue_state() {
               return 0
             fi
 
-            if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
-              set_window_attention_state "$WIN" "needs-user"
-              return 0
-            fi
-
             if [[ "$ready_status" != "running" || -z "$launch_head" || "$launch_head" != "$current_head" ]]; then
               local pr_number
               pr_number=$(find_pr_for_branch "$BRANCH")
@@ -6497,6 +7426,15 @@ monitor_issue_state() {
                 write_ready_attention_file "$ready_state_dir_path" "Unable to find open PR for branch $BRANCH after conflict remediation."
                 set_window_attention_state "$WIN" "needs-user"
                 return 0
+              fi
+
+              if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
+                if ready_conflict_recheck_due "$ready_state_dir_path" && ready_conflict_pr_is_clean "$ready_state_dir_path" "$pr_number" "$ISSUE"; then
+                  clear_ready_conflict_markers "$ready_state_dir_path"
+                else
+                  set_window_attention_state "$WIN" "needs-user"
+                  return 0
+                fi
               fi
 
               title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -6653,6 +7591,9 @@ monitor_issue_state() {
       merged_before_ready=true
       ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
       write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
+    else
+      clear_transient_mergeability_state "$merged_ready_dir"
+      rm -f "$merged_ready_dir/.needs-attention"
     fi
 
     log "status" "✓ $ISSUE → PR #$PR MERGED"
@@ -6759,7 +7700,13 @@ monitor_issue_state() {
 
       review_status=$(read_stage_status "$FEATURE_DIR" "review")
       if [[ "$review_status" == "running" || -z "$review_status" || "$review_status" == "completed" ]]; then
+        local depends_on_pr_meta
+        depends_on_pr_meta=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].dependsOnPr // empty')
+        if [[ -n "$depends_on_pr_meta" ]]; then
+          inject_depends_on_pr_block "$ISSUE" "$PR" "$depends_on_pr_meta"
+        fi
         write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
+        dispatch_queued_children_for_parent "$ISSUE" "$PR"
         set_task_phase "$ISSUE" "ready"
         title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
         if [[ -z "$title" ]]; then
@@ -6837,12 +7784,16 @@ monitor_issue_state() {
         return 0
       fi
 
-      if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
-        set_window_attention_state "$WIN" "needs-user"
-        return 0
-      fi
-
       if [[ "$ready_status" != "running" || -z "$launch_head" || "$launch_head" != "$current_head" ]]; then
+        if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
+          if ready_conflict_recheck_due "$ready_state_dir_path" && ready_conflict_pr_is_clean "$ready_state_dir_path" "$PR" "$ISSUE"; then
+            clear_ready_conflict_markers "$ready_state_dir_path"
+          else
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+        fi
+
         title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
         if [[ -z "$title" ]]; then
           issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
@@ -7149,6 +8100,8 @@ while :; do
         ;;
     esac
   done
+  poll_challenge_jobs
+  run_ready_watchdog_tick
   check_control_pane_health
   wavemill_pr_cache_refresh
   active_count=0

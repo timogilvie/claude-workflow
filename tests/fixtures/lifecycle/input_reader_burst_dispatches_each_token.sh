@@ -10,10 +10,10 @@ SESSION="input-reader-burst-$$"
 source "$COMMON_SCRIPT"
 
 COMMAND_FILE="$(wavemill_command_file_path "$SESSION")"
-COMMAND_OFFSET_FILE="$(wavemill_command_offset_path "$SESSION")"
+STATE_FILE="$(mktemp "/tmp/wavemill-${SESSION}-state.XXXXXX.json")"
 
 cleanup() {
-  rm -f "$COMMAND_FILE" "$COMMAND_OFFSET_FILE"
+  rm -f "$COMMAND_FILE" "$STATE_FILE"
 }
 trap cleanup EXIT
 
@@ -24,22 +24,29 @@ HEREDOC_CONTENT=$(awk '
 ' "$MILL_SCRIPT")
 
 COMMAND_QUEUE=()
+COMMAND_QUEUE_OFFSETS=()
 COMMAND_OFFSET_WARNED=false
 POLL_SECONDS=10
 REPLY=""
+REPLY_OFFSET=""
+cat > "$STATE_FILE" <<'EOF'
+{
+  "monitorCommandOffset": 0,
+  "monitorDeferredCommands": []
+}
+EOF
 
 log_warn() {
   :
 }
 
 eval "$(awk '
-  /^read_command_offset\(\) \{/ { capture=1 }
+  /^monitor_command_timestamp\(\) \{/ { capture=1 }
   capture { print }
   /^monitor_issue_state\(\) \{/ { exit }
 ' <<< "$HEREDOC_CONTENT" | sed '$d')"
 
 printf 'select 1\nenter\nmore\nquit\n' > "$COMMAND_FILE"
-printf '0\n' > "$COMMAND_OFFSET_FILE"
 
 drain_command_events
 
@@ -97,8 +104,9 @@ if consume_next_command; then
   exit 1
 fi
 
-if [[ "$(cat "$COMMAND_OFFSET_FILE")" != "4" ]]; then
-  echo "FAIL: expected offset file to advance to 4"
+acknowledge_command_offset 4
+if [[ "$(jq -r '.monitorCommandOffset' "$STATE_FILE")" != "4" ]]; then
+  echo "FAIL: expected durable command offset to advance to 4"
   exit 1
 fi
 

@@ -324,13 +324,25 @@ export async function executeMerge(
 
         try {
           const mergeFlag = `--${integrationConfig.mergeMethod}`;
-          const deleteBranchFlag = integrationConfig.deleteBranchAfterMerge ? ' --delete-branch' : '';
           deps.shellRunner(
-            `gh pr merge ${candidate.number} ${mergeFlag}${deleteBranchFlag}`,
+            `gh pr merge ${candidate.number} ${mergeFlag}`,
             { encoding: 'utf-8', cwd: options.repoDir },
           );
         } catch (error) {
           return block('merge', outputFromError(error));
+        }
+
+        if (integrationConfig.deleteBranchAfterMerge) {
+          try {
+            deps.shellRunner(
+              `git push origin --delete ${escapeShellArg(candidate.headBranch)}`,
+              { encoding: 'utf-8', cwd: options.repoDir },
+            );
+          } catch (error) {
+            console.warn(
+              `tend: post-merge remote branch cleanup failed for PR #${candidate.number} (${candidate.headBranch}): ${errorMessage(error)}`,
+            );
+          }
         }
 
         deps.releaseMerged(candidate.number);

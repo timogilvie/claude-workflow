@@ -26,6 +26,7 @@ import {
   fetchRoutingCompleteRawWithArchive,
 } from './eval-context-gatherer.ts';
 import { buildRouteLifecycleProvenance, readRouteLifecycleArtifacts } from './route-artifact.ts';
+import { resolveRouteArtifactArchiveDir } from './evals-paths.ts';
 import {
   detectAllInterventions,
   toInterventionMeta,
@@ -136,9 +137,7 @@ function deriveRouteProvenance(
   const featureDir = slug && worktreePath
     ? path.join(worktreePath, 'features', slug)
     : undefined;
-  const archiveDir = issueId
-    ? path.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId)
-    : undefined;
+  const archiveDir = resolveRouteArtifactArchiveDir(issueId, repoDir);
 
   return buildRouteLifecycleProvenance(
     readRouteLifecycleArtifacts(featureDir, archiveDir),
