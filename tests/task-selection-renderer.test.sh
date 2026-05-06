@@ -84,6 +84,8 @@ extract_monitor_heredoc > "$MONITOR_BODY"
 
 FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
 {
+  extract_function "$MONITOR_BODY" "queue_plan_debug_failure"
+  echo
   extract_function "$MONITOR_BODY" "build_queue_plan_once"
   echo
   extract_function "$MONITOR_BODY" "invoke_first_wave_helper"
@@ -151,6 +153,7 @@ test_fetch_queue_plan_transforms_linear_backlog() {
     set -euo pipefail
     # shellcheck source=/dev/null
     source "$FUNCTIONS_FILE"
+    log() { :; }
     BACKLOG_CACHE_TTL=60
     BACKLOG_JSON_CACHE="$LINEAR_BACKLOG_JSON"
     QUEUE_PLAN_CACHE=""
@@ -178,6 +181,7 @@ test_invoke_first_wave_helper_packs_priority_without_violating_dependencies() {
     set -euo pipefail
     # shellcheck source=/dev/null
     source "$FUNCTIONS_FILE"
+    log() { :; }
     BACKLOG_CACHE_TTL=60
     BACKLOG_JSON_CACHE="$LINEAR_BACKLOG_JSON"
     QUEUE_PLAN_CACHE=""
@@ -206,6 +210,7 @@ test_grouped_render_with_fixture_output() {
     set -euo pipefail
     # shellcheck source=/dev/null
     source "$FUNCTIONS_FILE"
+    log() { :; }
     GROUPED_DISPLAY=""
     GROUPED_SELECT_FROM=""
     render_grouped_task_list "$QUEUE_PLAN" "$CANDIDATES"
@@ -236,12 +241,136 @@ test_render_rejects_malformed_json() {
     set -euo pipefail
     # shellcheck source=/dev/null
     source "$FUNCTIONS_FILE"
+    log() { :; }
     render_grouped_task_list "{not-json}" "$CANDIDATES" >/dev/null
   '; then
     fail "malformed queue plan returns failure"
   else
     pass "malformed queue plan returns failure"
   fi
+}
+
+test_fetch_queue_plan_logs_cache_empty() {
+  local debug_log
+  debug_log=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    log() {
+      local level="$1"
+      shift
+      [[ "$level" == "debug" ]] && printf "%s\n" "$*" >&2
+    }
+
+    BACKLOG_CACHE_TTL=60
+    BACKLOG_JSON_CACHE=""
+    QUEUE_PLAN_CACHE=""
+    LAST_QUEUE_PLAN_FETCH=0
+
+    if fetch_queue_plan >/dev/null; then
+      exit 2
+    fi
+  ' 2>&1) || true
+
+  check_contains "cache empty logs category" "$debug_log" "fetch_queue_plan: cache_empty"
+  check_contains "cache empty logs reason" "$debug_log" "BACKLOG_JSON_CACHE is empty"
+}
+
+test_fetch_queue_plan_logs_jq_massage_failure() {
+  local debug_log
+  debug_log=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    log() {
+      local level="$1"
+      shift
+      [[ "$level" == "debug" ]] && printf "%s\n" "$*" >&2
+    }
+
+    BACKLOG_CACHE_TTL=60
+    BACKLOG_JSON_CACHE="{not-json}"
+    QUEUE_PLAN_CACHE=""
+    LAST_QUEUE_PLAN_FETCH=0
+
+    if fetch_queue_plan >/dev/null; then
+      exit 2
+    fi
+  ' 2>&1) || true
+
+  check_contains "jq massage logs category" "$debug_log" "fetch_queue_plan: jq_massage"
+  check_contains "jq massage logs stderr" "$debug_log" "parse error"
+}
+
+test_fetch_queue_plan_logs_plan_queue_exec_failure_and_cleans_tempdir() {
+  local tmp_root debug_log remaining
+  tmp_root=$(mktemp -d)
+  debug_log=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" TMPDIR="$tmp_root" LINEAR_BACKLOG_JSON="$LINEAR_BACKLOG_JSON" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    log() {
+      local level="$1"
+      shift
+      [[ "$level" == "debug" ]] && printf "%s\n" "$*" >&2
+    }
+    _with_timeout() {
+      shift
+      printf "planner exploded\nsecond line\n" >&2
+      return 1
+    }
+
+    BACKLOG_CACHE_TTL=60
+    BACKLOG_JSON_CACHE="$LINEAR_BACKLOG_JSON"
+    QUEUE_PLAN_CACHE=""
+    LAST_QUEUE_PLAN_FETCH=0
+    TOOLS_DIR=/nonexistent
+
+    if fetch_queue_plan >/dev/null; then
+      exit 2
+    fi
+  ' 2>&1) || true
+  remaining=$(find "$tmp_root" -maxdepth 1 -name 'wavemill-fetch-queue-plan.*' -print)
+  rm -rf "$tmp_root"
+
+  check_contains "plan queue exec logs category" "$debug_log" "fetch_queue_plan: plan_queue_exec"
+  check_contains "plan queue exec logs stderr" "$debug_log" "planner exploded | second line"
+  check_eq "plan queue exec cleans tempdir" "" "$remaining"
+}
+
+test_fetch_queue_plan_logs_validation_failure_and_cleans_tempdir() {
+  local tmp_root debug_log remaining
+  tmp_root=$(mktemp -d)
+  debug_log=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" TMPDIR="$tmp_root" LINEAR_BACKLOG_JSON="$LINEAR_BACKLOG_JSON" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    log() {
+      local level="$1"
+      shift
+      [[ "$level" == "debug" ]] && printf "%s\n" "$*" >&2
+    }
+    _with_timeout() {
+      shift
+      printf "%s\n" "{\"queued\":[]}"
+    }
+
+    BACKLOG_CACHE_TTL=60
+    BACKLOG_JSON_CACHE="$LINEAR_BACKLOG_JSON"
+    QUEUE_PLAN_CACHE=""
+    LAST_QUEUE_PLAN_FETCH=0
+    TOOLS_DIR=/nonexistent
+
+    if fetch_queue_plan >/dev/null; then
+      exit 2
+    fi
+  ' 2>&1) || true
+  remaining=$(find "$tmp_root" -maxdepth 1 -name 'wavemill-fetch-queue-plan.*' -print)
+  rm -rf "$tmp_root"
+
+  check_contains "validation logs category" "$debug_log" "fetch_queue_plan: validation"
+  check_contains "validation logs stderr" "$debug_log" "stderr=<empty>"
+  check_eq "validation cleans tempdir" "" "$remaining"
 }
 
 test_fallback_when_queue_analysis_fails() {
@@ -307,6 +436,10 @@ test_fetch_queue_plan_transforms_linear_backlog
 test_invoke_first_wave_helper_packs_priority_without_violating_dependencies
 test_grouped_render_with_fixture_output
 test_render_rejects_malformed_json
+test_fetch_queue_plan_logs_cache_empty
+test_fetch_queue_plan_logs_jq_massage_failure
+test_fetch_queue_plan_logs_plan_queue_exec_failure_and_cleans_tempdir
+test_fetch_queue_plan_logs_validation_failure_and_cleans_tempdir
 test_fallback_when_queue_analysis_fails
 
 echo

@@ -962,9 +962,76 @@ smart_select_from_candidates() {
   fi
 }
 
+queue_plan_debug_failure() {
+  local category="$1" summary="$2" stderr_file="${3:-}"
+  local stderr_snippet=""
+
+  if [[ -n "$stderr_file" ]]; then
+    if [[ -r "$stderr_file" ]]; then
+      stderr_snippet=$(LC_ALL=C head -c 4096 "$stderr_file" 2>/dev/null || true)
+      stderr_snippet=${stderr_snippet//$'\r'/ }
+      stderr_snippet=${stderr_snippet//$'\n'/ | }
+      stderr_snippet=$(printf '%s' "$stderr_snippet" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')
+      if [[ -n "$stderr_snippet" ]]; then
+        summary+=" stderr=$stderr_snippet"
+      else
+        summary+=" stderr=<empty>"
+      fi
+    else
+      summary+=" stderr capture unavailable"
+    fi
+  fi
+
+  log "debug" "fetch_queue_plan: $category $summary"
+}
+
 build_queue_plan_once() {
   local backlog_json="$1"
-  local plan_input queue_plan
+  local plan_input queue_plan tmp_dir="" capture_unavailable=""
+  local jq_stderr="" plan_stderr="" validation_stderr=""
+
+  if tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/wavemill-fetch-queue-plan.XXXXXX" 2>/dev/null); then
+    jq_stderr="$tmp_dir/jq-massage.stderr"
+    plan_stderr="$tmp_dir/plan-queue.stderr"
+    validation_stderr="$tmp_dir/validation.stderr"
+  else
+    capture_unavailable=" stderr capture unavailable"
+  fi
+
+  if [[ -n "$tmp_dir" ]]; then
+    plan_input=$(jq -c '
+      map({
+        id: .identifier,
+        title: .title,
+        sharedSurface: ((.sharedSurface // []) | sort),
+        dependsOn: (
+          (.inverseRelations.nodes // [])
+          | map(select(.type == "blocks" and .issue.identifier != null) | .issue.identifier)
+          | sort
+        )
+      })
+    ' <<<"$backlog_json" 2>"$jq_stderr") || {
+      queue_plan_debug_failure "jq_massage" "failed to normalize backlog JSON" "$jq_stderr"
+      rm -rf "$tmp_dir"
+      return 1
+    }
+
+    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$plan_stderr") || {
+      queue_plan_debug_failure "plan_queue_exec" "plan-queue.ts exited non-zero" "$plan_stderr"
+      rm -rf "$tmp_dir"
+      return 1
+    }
+
+    jq -e 'has("availableNow")' >/dev/null 2>"$validation_stderr" <<<"$queue_plan" || {
+      queue_plan_debug_failure "validation" "queue plan JSON missing required fields" "$validation_stderr"
+      rm -rf "$tmp_dir"
+      return 1
+    }
+
+    rm -rf "$tmp_dir"
+    echo "$queue_plan"
+    return 0
+  fi
 
   plan_input=$(jq -c '
     map({
@@ -977,10 +1044,21 @@ build_queue_plan_once() {
         | sort
       )
     })
-  ' <<<"$backlog_json" 2>/dev/null) || return 1
+  ' <<<"$backlog_json" 2>/dev/null) || {
+    queue_plan_debug_failure "jq_massage" "failed to normalize backlog JSON$capture_unavailable"
+    return 1
+  }
 
-  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || return 1
-  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || return 1
+  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || {
+    queue_plan_debug_failure "plan_queue_exec" "plan-queue.ts exited non-zero$capture_unavailable"
+    return 1
+  }
+
+  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || {
+    queue_plan_debug_failure "validation" "queue plan JSON missing required fields$capture_unavailable"
+    return 1
+  }
+
   echo "$queue_plan"
 }
 
@@ -5211,7 +5289,10 @@ fetch_queue_plan() {
     return 0
   fi
 
-  [[ -n "$BACKLOG_JSON_CACHE" ]] || return 1
+  if [[ -z "$BACKLOG_JSON_CACHE" ]]; then
+    queue_plan_debug_failure "cache_empty" "BACKLOG_JSON_CACHE is empty"
+    return 1
+  fi
   queue_plan=$(build_queue_plan_once "$BACKLOG_JSON_CACHE") || return 1
 
   QUEUE_PLAN_CACHE="$queue_plan"
@@ -5219,9 +5300,76 @@ fetch_queue_plan() {
   echo "$QUEUE_PLAN_CACHE"
 }
 
+queue_plan_debug_failure() {
+  local category="$1" summary="$2" stderr_file="${3:-}"
+  local stderr_snippet=""
+
+  if [[ -n "$stderr_file" ]]; then
+    if [[ -r "$stderr_file" ]]; then
+      stderr_snippet=$(LC_ALL=C head -c 4096 "$stderr_file" 2>/dev/null || true)
+      stderr_snippet=${stderr_snippet//$'\r'/ }
+      stderr_snippet=${stderr_snippet//$'\n'/ | }
+      stderr_snippet=$(printf '%s' "$stderr_snippet" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')
+      if [[ -n "$stderr_snippet" ]]; then
+        summary+=" stderr=$stderr_snippet"
+      else
+        summary+=" stderr=<empty>"
+      fi
+    else
+      summary+=" stderr capture unavailable"
+    fi
+  fi
+
+  log "debug" "fetch_queue_plan: $category $summary"
+}
+
 build_queue_plan_once() {
   local backlog_json="$1"
-  local plan_input queue_plan
+  local plan_input queue_plan tmp_dir="" capture_unavailable=""
+  local jq_stderr="" plan_stderr="" validation_stderr=""
+
+  if tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/wavemill-fetch-queue-plan.XXXXXX" 2>/dev/null); then
+    jq_stderr="$tmp_dir/jq-massage.stderr"
+    plan_stderr="$tmp_dir/plan-queue.stderr"
+    validation_stderr="$tmp_dir/validation.stderr"
+  else
+    capture_unavailable=" stderr capture unavailable"
+  fi
+
+  if [[ -n "$tmp_dir" ]]; then
+    plan_input=$(jq -c '
+      map({
+        id: .identifier,
+        title: .title,
+        sharedSurface: ((.sharedSurface // []) | sort),
+        dependsOn: (
+          (.inverseRelations.nodes // [])
+          | map(select(.type == "blocks" and .issue.identifier != null) | .issue.identifier)
+          | sort
+        )
+      })
+    ' <<<"$backlog_json" 2>"$jq_stderr") || {
+      queue_plan_debug_failure "jq_massage" "failed to normalize backlog JSON" "$jq_stderr"
+      rm -rf "$tmp_dir"
+      return 1
+    }
+
+    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$plan_stderr") || {
+      queue_plan_debug_failure "plan_queue_exec" "plan-queue.ts exited non-zero" "$plan_stderr"
+      rm -rf "$tmp_dir"
+      return 1
+    }
+
+    jq -e 'has("availableNow")' >/dev/null 2>"$validation_stderr" <<<"$queue_plan" || {
+      queue_plan_debug_failure "validation" "queue plan JSON missing required fields" "$validation_stderr"
+      rm -rf "$tmp_dir"
+      return 1
+    }
+
+    rm -rf "$tmp_dir"
+    echo "$queue_plan"
+    return 0
+  fi
 
   plan_input=$(jq -c '
     map({
@@ -5234,10 +5382,21 @@ build_queue_plan_once() {
         | sort
       )
     })
-  ' <<<"$backlog_json" 2>/dev/null) || return 1
+  ' <<<"$backlog_json" 2>/dev/null) || {
+    queue_plan_debug_failure "jq_massage" "failed to normalize backlog JSON$capture_unavailable"
+    return 1
+  }
 
-  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || return 1
-  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || return 1
+  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>/dev/null) || {
+    queue_plan_debug_failure "plan_queue_exec" "plan-queue.ts exited non-zero$capture_unavailable"
+    return 1
+  }
+
+  jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan" || {
+    queue_plan_debug_failure "validation" "queue plan JSON missing required fields$capture_unavailable"
+    return 1
+  }
+
   echo "$queue_plan"
 }
 
