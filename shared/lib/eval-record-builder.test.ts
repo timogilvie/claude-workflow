@@ -9,6 +9,8 @@ import {
   attachEligibility,
   attachAgentType,
   attachBudgetMetadata,
+  attachRouteCalibration,
+  attachRoutePrediction,
   attachChallengeRouteContext,
   attachConstraints,
   attachDifficultyMetadata,
@@ -22,6 +24,7 @@ import {
   attachTaskContextMetadata,
   attachRepoContextMetadata,
   attachWorkflowCostMetadata,
+  computeRouteCalibration,
   computeEligibility,
   enrichEvalRecord,
   enrichTrainingMetadata,
@@ -1101,6 +1104,56 @@ describe('eval-record-builder', () => {
         routeMode: 'stage-aware',
         operatingModeDependency: 'survival',
       });
+    });
+  });
+
+  describe('route prediction and calibration', () => {
+    it('attaches route prediction and calibration helpers', () => {
+      attachRoutePrediction(baseRecord, {
+        expectedSuccess: 0.8,
+        expectedCostUsd: 4.25,
+        confidence: 0.7,
+        riskScore: 1.5,
+        taskType: 'feature',
+        taskDifficulty: 'medium',
+        topFeatures: ['risk', 'cost'],
+        rationaleSummary: 'balanced route',
+      });
+
+      const calibration = computeRouteCalibration({
+        workflowCost: 3.5,
+        outcomes: { success: true },
+        timeSeconds: 12,
+        interventionCount: 1,
+      } as EvalRecord, baseRecord.routePrediction);
+      attachRouteCalibration(baseRecord, calibration);
+
+      expect(baseRecord.routePrediction).toEqual({
+        expectedSuccess: 0.8,
+        expectedCostUsd: 4.25,
+        confidence: 0.7,
+        riskScore: 1.5,
+        taskType: 'feature',
+        taskDifficulty: 'medium',
+        topFeatures: ['risk', 'cost'],
+        rationaleSummary: 'balanced route',
+      });
+      expect(baseRecord.routeCalibration).toEqual({
+        predictedSuccess: 0.8,
+        actualSuccess: true,
+        predictedCostUsd: 4.25,
+        actualCostUsd: 3.5,
+        interventionCount: 1,
+        durationMs: 12000,
+        successDelta: 0.2,
+        costErrorUsd: 0.75,
+      });
+    });
+
+    it('leaves existing prediction unchanged on empty helper input', () => {
+      baseRecord.routePrediction = { expectedSuccess: 0.5 };
+      attachRoutePrediction(baseRecord, undefined);
+      expect(baseRecord.routePrediction).toEqual({ expectedSuccess: 0.5 });
     });
   });
 });

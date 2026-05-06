@@ -16,6 +16,10 @@ export interface WavemillRouterScoreRecord {
   max_cost_usd?: number;
   timing_ms?: number;
   intervention_count?: number;
+  predicted_success?: number;
+  predicted_cost_usd?: number;
+  cost_error_usd?: number;
+  success_delta?: number;
 }
 
 export interface WavemillRouterScoreResult {
@@ -74,6 +78,11 @@ export function scoreWavemillSuccessRateUnderBudget(
   let interventionRecordCount = 0;
   let totalCostUsd = 0;
   const timings: number[] = [];
+  let predictionRecordCount = 0;
+  let totalCostErrorUsd = 0;
+  let totalAbsoluteCostErrorUsd = 0;
+  let totalSuccessDelta = 0;
+  let totalBrierScore = 0;
 
   for (const record of scoreableRecords) {
     const actualCost = record.actual_cost_usd as number;
@@ -100,6 +109,27 @@ export function scoreWavemillSuccessRateUnderBudget(
     if (isFiniteNonNegativeNumber(record.timing_ms)) {
       timings.push(record.timing_ms);
     }
+
+    const hasPredictedSuccess = typeof record.predicted_success === 'number'
+      && Number.isFinite(record.predicted_success)
+      && record.predicted_success >= 0
+      && record.predicted_success <= 1;
+    const hasPredictedCost = isFiniteNonNegativeNumber(record.predicted_cost_usd);
+
+    if (hasPredictedSuccess || hasPredictedCost) {
+      predictionRecordCount += 1;
+    }
+    if (typeof record.cost_error_usd === 'number' && Number.isFinite(record.cost_error_usd)) {
+      totalCostErrorUsd += record.cost_error_usd;
+      totalAbsoluteCostErrorUsd += Math.abs(record.cost_error_usd);
+    }
+    if (typeof record.success_delta === 'number' && Number.isFinite(record.success_delta)) {
+      totalSuccessDelta += record.success_delta;
+    }
+    if (hasPredictedSuccess) {
+      const actual = completedSuccessfully ? 1 : 0;
+      totalBrierScore += (actual - record.predicted_success) ** 2;
+    }
   }
 
   timings.sort((a, b) => a - b);
@@ -122,6 +152,15 @@ export function scoreWavemillSuccessRateUnderBudget(
       total_records: totalRecords,
       scoreable_records: scoreableRecords.length,
       invalid_route_records: invalidRouteRecords,
+      ...(scoreableRecords.length > 0
+        ? {
+            prediction_coverage: rate(predictionRecordCount, scoreableRecords.length),
+            mean_cost_error_usd: roundMetric(totalCostErrorUsd / Math.max(predictionRecordCount, 1)),
+            mean_absolute_cost_error_usd: roundMetric(totalAbsoluteCostErrorUsd / Math.max(predictionRecordCount, 1)),
+            mean_success_delta: roundMetric(totalSuccessDelta / Math.max(predictionRecordCount, 1)),
+            success_brier_score: roundMetric(totalBrierScore / Math.max(predictionRecordCount, 1)),
+          }
+        : {}),
     },
     wavemill_router_scoring: {
       scorer_id: WAVEMILL_SUCCESS_RATE_UNDER_BUDGET_SCORER_ID,

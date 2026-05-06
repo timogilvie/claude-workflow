@@ -73,6 +73,9 @@
  * - **1.22.0**: Added optional machine-readable router policy/schema metadata
  *   on `routingDecision` (HOK-1552) so evals can attribute live router paths
  *   without inferring from free text
+ * - **1.23.0**: Added optional `routePrediction` and `routeCalibration`
+ *   fields plus router calibration diagnostics (HOK-1553) so eval artifacts
+ *   can compare router expectations to actual workflow outcomes
  *
  * @module eval-schema
  */
@@ -82,7 +85,7 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.22.0';
+export const SCHEMA_VERSION = '1.23.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -1099,6 +1102,11 @@ export interface WavemillRouterDiagnostics {
   total_records: number;
   scoreable_records: number;
   invalid_route_records: number;
+  prediction_coverage?: number;
+  mean_cost_error_usd?: number;
+  mean_absolute_cost_error_usd?: number;
+  mean_success_delta?: number;
+  success_brier_score?: number;
 }
 
 export interface WavemillRouterScoringMetadata {
@@ -1154,6 +1162,28 @@ export interface EvalRouteProvenance {
   routingMode?: string;
   artifactPath?: string;
   artifactHash?: string;
+}
+
+export interface RoutePrediction {
+  expectedSuccess?: number;
+  expectedCostUsd?: number;
+  confidence?: number;
+  riskScore?: number;
+  taskType?: string;
+  taskDifficulty?: string;
+  topFeatures?: string[];
+  rationaleSummary?: string;
+}
+
+export interface RouteCalibration {
+  costErrorUsd?: number;
+  successDelta?: number;
+  predictedSuccess?: number;
+  actualSuccess?: boolean;
+  predictedCostUsd?: number;
+  actualCostUsd?: number;
+  interventionCount?: number;
+  durationMs?: number;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1407,6 +1437,12 @@ export interface EvalRecord {
    * @since 1.18.0
    */
   routeProvenance?: EvalRouteProvenance;
+
+  /** Compact, falsifiable router prediction metadata for this route decision. */
+  routePrediction?: RoutePrediction;
+
+  /** Comparison of router predictions against actual workflow outcomes. */
+  routeCalibration?: RouteCalibration;
 
   /**
    * Cross-model fallback telemetry for quota-aware training attribution.

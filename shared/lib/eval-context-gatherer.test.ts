@@ -638,6 +638,15 @@ describe('eval-context-gatherer', () => {
           planner: 'model-a',
           coder: 'model-b',
           reviewer: 'model-c',
+          expectedSuccess: 0.8,
+          expectedCost: 2.5,
+          confidence: 0.7,
+          reasoning: ['repo risk', 'balanced route'],
+          signals: {
+            taskType: 'feature',
+            riskScore: 0.4,
+            taskDifficulty: 'medium',
+          },
           codeDepth: 'deep',
           reviewMode: 'static+llm',
         }),
@@ -658,6 +667,16 @@ describe('eval-context-gatherer', () => {
           routeArtifactSchemaVersion: '1.0',
           policyResolverVersion: '1.0.0',
         });
+        expect(result.routePrediction).toEqual({
+          expectedSuccess: 0.8,
+          expectedCostUsd: 2.5,
+          confidence: 0.7,
+          riskScore: 0.4,
+          taskType: 'feature',
+          taskDifficulty: 'medium',
+          topFeatures: ['repo risk', 'balanced route', 'taskType=feature', 'taskDifficulty=medium', 'riskScore=0.4'],
+          rationaleSummary: 'repo risk balanced route',
+        });
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
@@ -674,6 +693,7 @@ describe('eval-context-gatherer', () => {
       try {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
         expect(result.routingDecision).toBeUndefined();
+        expect(result.routePrediction).toBeUndefined();
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
