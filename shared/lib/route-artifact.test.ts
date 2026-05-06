@@ -8,10 +8,13 @@ import {
   buildRouteLifecycleProvenance,
   deriveRouteDecisionSource,
   formatRouteArtifactSignature,
+  POLICY_RESOLVER_VERSION,
+  ROUTE_ARTIFACT_SCHEMA_VERSION,
   buildRouteProvenance,
   hasValidPostExpansionRoute,
   readBothRouteArtifacts,
   readRouteLifecycleArtifacts,
+  resolveRouterPolicyVersion,
   resolveRouteDecisionBudget,
   routeChangedMaterially,
   stringifyRouteArtifact,
@@ -100,6 +103,24 @@ test('routedAt is iso-8601 utc by default', () => {
     routerMode: 'normal',
   });
   assert.match(item.routedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+});
+
+test('route artifact metadata constants are stable', () => {
+  assert.equal(ROUTE_ARTIFACT_SCHEMA_VERSION, '1.0');
+  assert.equal(POLICY_RESOLVER_VERSION, '1.0.0');
+});
+
+test('resolveRouterPolicyVersion maps live router modes and provenance', () => {
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'hokusai' }), 'hokusai');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'policy' }), 'policy');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'stage-aware' }), 'stage-aware');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'stage-aware-partial' }), 'stage-aware');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'heuristic-fallback' }), 'heuristic-fallback');
+  assert.equal(resolveRouterPolicyVersion({ source: 'heuristic-fallback' }), 'heuristic-fallback');
+  assert.equal(resolveRouterPolicyVersion({ routingMode: 'heuristic' }), 'heuristic');
+  assert.equal(resolveRouterPolicyVersion({ source: 'expanded' }), 'expanded-route');
+  assert.equal(resolveRouterPolicyVersion({ inputKind: 'task-packet' }), 'expanded-route');
+  assert.equal(resolveRouterPolicyVersion({}), 'baseline');
 });
 
 test('heuristic fallback convention uses empty hash/path without input', () => {

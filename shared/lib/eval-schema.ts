@@ -70,6 +70,9 @@
  * - **1.21.0**: Expanded optional `routeProvenance` artifact metadata
  *   (HOK-1551) to preserve planner/planDepth, artifact identity, router mode,
  *   and expected route metrics for replay/training joins
+ * - **1.22.0**: Added optional machine-readable router policy/schema metadata
+ *   on `routingDecision` (HOK-1552) so evals can attribute live router paths
+ *   without inferring from free text
  *
  * @module eval-schema
  */
@@ -79,7 +82,7 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.21.0';
+export const SCHEMA_VERSION = '1.22.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -345,6 +348,18 @@ export interface RoutingDecision {
    * Can be free text or structured (e.g., JSON of feature weights).
    */
   decisionRationale?: string;
+
+  /** Route strategy used to produce the underlying workflow route. */
+  routeMode?: string;
+
+  /** Stable version identifier for route artifact structure. */
+  routeArtifactSchemaVersion?: string;
+
+  /** Stable version identifier for policy resolution logic. */
+  policyResolverVersion?: string;
+
+  /** Whether quota operating mode constrained the route independent of policy source. */
+  operatingModeDependency?: 'normal' | 'constrained' | 'survival';
 
   /** Runtime-governed resource selections used while making the routing decision. */
   resourceSelections?: RuntimeResourceSelection[];

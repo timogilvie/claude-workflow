@@ -5,6 +5,9 @@ import { getMaxCostUsd } from './config.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
+export const ROUTE_ARTIFACT_SCHEMA_VERSION = '1.0';
+export const POLICY_RESOLVER_VERSION = '1.0.0';
+
 export type RouteSource =
   | 'bootstrap'
   | 'expanded'
@@ -14,6 +17,15 @@ export type RouteSource =
   | 'heuristic-fallback';
 
 export type RouteInputKind = 'issue' | 'task-packet' | 'cache' | 'heuristic';
+
+export type RouterPolicyVersion =
+  | 'baseline'
+  | 'heuristic'
+  | 'stage-aware'
+  | 'hokusai'
+  | 'policy'
+  | 'expanded-route'
+  | 'heuristic-fallback';
 
 export interface RouteProvenance {
   source: RouteSource;
@@ -29,6 +41,42 @@ export interface RouteDecisionWithProvenance extends WorkflowRouteDecision {
   cache_hit?: boolean;
   route_source?: 'batch' | 'single' | 'cache';
   packet_hash?: string;
+}
+
+export interface RouterPolicyMetadataInput {
+  routingMode?: string;
+  source?: string;
+  inputKind?: string;
+  routerMode?: RouteProvenance['routerMode'];
+}
+
+export function resolveRouterPolicyVersion(
+  metadata: RouterPolicyMetadataInput | null | undefined,
+): RouterPolicyVersion {
+  const routingMode = metadata?.routingMode?.trim();
+  const source = metadata?.source?.trim();
+  const inputKind = metadata?.inputKind?.trim();
+
+  if (routingMode === 'hokusai') {
+    return 'hokusai';
+  }
+  if (routingMode === 'policy') {
+    return 'policy';
+  }
+  if (routingMode === 'stage-aware' || routingMode === 'stage-aware-partial') {
+    return 'stage-aware';
+  }
+  if (routingMode === 'heuristic-fallback' || source === 'heuristic-fallback') {
+    return 'heuristic-fallback';
+  }
+  if (routingMode === 'heuristic') {
+    return 'heuristic';
+  }
+  if (source === 'expanded' || inputKind === 'task-packet') {
+    return 'expanded-route';
+  }
+
+  return 'baseline';
 }
 
 function isFiniteNonNegativeBudget(value: unknown): value is number {
