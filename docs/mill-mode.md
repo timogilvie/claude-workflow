@@ -99,6 +99,14 @@ In that phase, the monitor is responsible for:
 - surfacing manual release steps and merge-conflict remediation needs
 - detecting stale ready-stage local state with the ready watchdog
 
+Ready tasks now also move through a small merge-lane queue once many PRs reach ready together:
+
+- `ready`: the PR passed ready checks against its recorded base and is not known stale.
+- `ready-stale`: the PR passed before, but the base branch advanced. Mill records the staleness cheaply and does not immediately launch remediation.
+- `merge-candidate`: the PR has been promoted into the bounded merge lane and is allowed to refresh against the latest base, remediate conflicts, and attempt merge readiness again.
+
+When the base branch advances after one merge, mill marks the other completed ready tasks as `ready-stale` first. It only promotes a bounded candidate set back into active refresh, which prevents every ready PR from independently rerunning conflict remediation and ready checks on the same tick. Stuck candidates are demoted back to `ready-stale` so unrelated work can continue.
+
 The ready watchdog runs once per monitor tick for `phase=ready` tasks. After `ready.watchdog.thresholdMinutes` of no local progress, it compares controller state with GitHub truth and classifies the task as one of:
 
 - `stuck`
@@ -205,6 +213,8 @@ Challenge mode adds a second PR for the same task and records a comparison resul
 Challenge post-PR evals and PR comparisons now run as monitored background jobs instead of blocking the main monitor loop.
 
 - Job state is persisted under `.wavemill/workflow-state.json` in `jobs`.
+- Mill also writes transient `evalRunning` and `comparisonRunning` markers onto the affected task rows before it launches the long-running eval or comparison command.
+- The control pane emits explicit `eval running` / `comparison running` status lines and the dashboard shows an elapsed running detail on the task row while that transient state is present.
 - Logs and structured result files live under `.wavemill/jobs/<session>/`.
 - Failed or timed-out jobs surface compact excerpts in the dashboard so the monitor can keep draining commands and launching other work.
 

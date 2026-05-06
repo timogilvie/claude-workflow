@@ -164,7 +164,7 @@ else
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
       | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling|tostring)$' \
-      | grep -vE '^(bad|internal|marking|rate|service|timed|too|using|wavemill)$' \
+      | grep -vE '^(bad|internal|marking|rate|reduce|service|timed|too|using|wavemill|waiting)$' \
       | grep -vE '^(a|already|available|blocked_by_count|break|coding|cp|debug|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
 
     # Check which called names look like they could be custom functions

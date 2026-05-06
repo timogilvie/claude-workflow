@@ -342,6 +342,14 @@ export interface ReadyWatchdogConfig {
   timeoutSeconds?: number;
 }
 
+export interface MergeQueueConfig {
+  enabled?: boolean;
+  maxConcurrentCandidates?: number;
+  stuckTimeoutSeconds?: number;
+  conflictGroupingEnabled?: boolean;
+  skipCooldownSeconds?: number;
+}
+
 export interface MonitorConfig {
   readyWatchdog?: ReadyWatchdogConfig;
 }
@@ -428,6 +436,7 @@ export interface WavemillConfig {
   providers?: ProvidersConfig;
   integration?: Partial<IntegrationConfig>;
   ready?: ReadyConfig;
+  mergeQueue?: MergeQueueConfig;
   monitor?: MonitorConfig;
   permissions?: PermissionsConfig;
   modelRegistry?: ModelRegistryConfig;
@@ -873,6 +882,17 @@ export function getReadyWatchdogConfig(repoDir?: string): Required<ReadyWatchdog
     thresholdMinutes: merged.thresholdMinutes ?? 10,
     autoRecover: merged.autoRecover ?? true,
     timeoutSeconds: merged.timeoutSeconds ?? 30,
+  };
+}
+
+export function getMergeQueueConfig(repoDir?: string): Required<MergeQueueConfig> {
+  const config = loadWavemillConfig(repoDir).mergeQueue ?? {};
+  return {
+    enabled: config.enabled ?? true,
+    maxConcurrentCandidates: config.maxConcurrentCandidates ?? 2,
+    stuckTimeoutSeconds: config.stuckTimeoutSeconds ?? 900,
+    conflictGroupingEnabled: config.conflictGroupingEnabled ?? true,
+    skipCooldownSeconds: config.skipCooldownSeconds ?? 60,
   };
 }
 

@@ -330,6 +330,10 @@ JSON
       return 1
     }
     get_main_head_sha() { printf "%s\n" "$MAIN_SHA_RETURN"; }
+    merge_queue_enabled() { return 1; }
+    ready_queue_state() { printf "%s\n" "ready"; }
+    mark_ready_stale() { :; }
+    ready_candidate_selected() { return 1; }
     should_cleanup_closed_pr() { [[ "$CLEANUP_CLOSED_PR" == "true" ]]; }
     get_challenge_sibling_pr() { :; }
     check_challenge_sibling_merged() { return 1; }
