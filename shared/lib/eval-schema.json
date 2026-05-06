@@ -495,6 +495,23 @@
         "decisionRationale": {
           "type": "string",
           "description": "Optional rationale or top features used for the decision."
+        },
+        "routeMode": {
+          "type": "string",
+          "description": "Route strategy used to produce the underlying workflow route."
+        },
+        "routeArtifactSchemaVersion": {
+          "type": "string",
+          "description": "Stable version identifier for route artifact structure."
+        },
+        "policyResolverVersion": {
+          "type": "string",
+          "description": "Stable version identifier for policy resolution logic."
+        },
+        "operatingModeDependency": {
+          "type": "string",
+          "enum": ["normal", "constrained", "survival"],
+          "description": "Whether quota operating mode constrained the route independently of policy source."
         }
       },
       "required": ["candidates", "chosen", "decisionPolicyVersion"],

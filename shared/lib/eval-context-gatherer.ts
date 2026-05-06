@@ -19,6 +19,11 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadMetrics } from './review-metrics.ts';
 import type { RoutingDecision, RoutingCandidate } from './eval-schema.ts';
+import {
+  POLICY_RESOLVER_VERSION,
+  ROUTE_ARTIFACT_SCHEMA_VERSION,
+  resolveRouterPolicyVersion,
+} from './route-artifact.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -304,6 +309,15 @@ export interface RoutingCompleteData {
   planDepth?: string;
   codeDepth?: string;
   reviewMode?: string;
+  routingMode?: string;
+  provenance?: {
+    routerMode?: 'normal' | 'constrained' | 'survival';
+    source?: string;
+    inputKind?: string;
+  };
+  route_source?: 'batch' | 'single' | 'cache';
+  cache_hit?: boolean;
+  packet_hash?: string;
   constraints?: {
     maxCostUsd?: number;
   };
@@ -341,11 +355,24 @@ export function convertToRoutingDecision(data: RoutingCompleteData): RoutingDeci
     ? `Routing: planner=${data.planner}, coder=${data.coder}, reviewer=${data.reviewer}; ${parts.join(', ')}`
     : `Routing: planner=${data.planner}, coder=${data.coder}, reviewer=${data.reviewer}`;
 
+  const decisionPolicyVersion = resolveRouterPolicyVersion({
+    routingMode: data.routingMode,
+    source: data.provenance?.source,
+    inputKind: data.provenance?.inputKind,
+    routerMode: data.provenance?.routerMode,
+  });
+
   return {
     candidates,
     chosen,
-    decisionPolicyVersion: 'baseline',
+    decisionPolicyVersion,
     decisionRationale,
+    ...(data.routingMode ? { routeMode: data.routingMode } : {}),
+    routeArtifactSchemaVersion: ROUTE_ARTIFACT_SCHEMA_VERSION,
+    policyResolverVersion: POLICY_RESOLVER_VERSION,
+    ...(data.provenance?.routerMode
+      ? { operatingModeDependency: data.provenance.routerMode }
+      : {}),
   };
 }
 

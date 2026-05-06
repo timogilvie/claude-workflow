@@ -572,6 +572,11 @@ describe('hokusai-schema', () => {
             { agentType: 'codex', modelId: 'gpt-5.4' },
           ],
           chosen: { agentType: 'codex', modelId: 'gpt-5.4' },
+          decisionPolicyVersion: 'stage-aware',
+          routeMode: 'stage-aware',
+          routeArtifactSchemaVersion: '1.0',
+          policyResolverVersion: '1.0.0',
+          operatingModeDependency: 'survival',
         },
       })));
 
