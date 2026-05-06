@@ -2703,6 +2703,73 @@ clear_ready_conflict_attention() {
   rm -f "$feature_dir/.conflict-attention-head" "$feature_dir/.conflict-attention-reported"
 }
 
+clear_ready_conflict_markers() {
+  local feature_dir="$1"
+  rm -f "$feature_dir/.conflict-detected" "$feature_dir/.needs-attention" "$feature_dir/.conflict-recheck-at"
+  clear_ready_conflict_attention "$feature_dir"
+}
+
+ready_conflict_recheck_interval_seconds() {
+  local configured="${WAVEMILL_READY_CONFLICT_RECHECK_SECONDS:-}"
+  if [[ "$configured" =~ ^[0-9]+$ ]] && (( configured >= 10 )); then
+    printf '%s\n' "$configured"
+  else
+    printf '60\n'
+  fi
+}
+
+ready_conflict_recheck_due() {
+  local feature_dir="$1"
+  local recheck_file="$feature_dir/.conflict-recheck-at"
+  local last_recheck interval now
+  if [[ ! -f "$recheck_file" ]]; then
+    return 0
+  fi
+
+  last_recheck="$(cat "$recheck_file" 2>/dev/null || echo "")"
+  if [[ ! "$last_recheck" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  interval="$(ready_conflict_recheck_interval_seconds)"
+  now="$(date +%s)"
+  (( now - last_recheck >= interval ))
+}
+
+write_ready_conflict_recheck_at() {
+  local feature_dir="$1"
+  local recheck_file="$feature_dir/.conflict-recheck-at"
+  local tmp_file
+  mkdir -p "$feature_dir"
+  tmp_file="$(mktemp "$feature_dir/.conflict-recheck-at.tmp.XXXXXX")"
+  printf '%s\n' "$(date +%s)" > "$tmp_file"
+  mv "$tmp_file" "$recheck_file"
+}
+
+ready_conflict_pr_is_clean() {
+  local feature_dir="$1" pr_number="$2" issue="$3"
+  local pr_json mergeable merge_state
+
+  if pr_json=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr_number" --json mergeable,mergeStateStatus 2>/dev/null); then
+    write_ready_conflict_recheck_at "$feature_dir"
+  else
+    write_ready_conflict_recheck_at "$feature_dir"
+    log "debug" "ready conflict recheck for $issue PR #$pr_number failed"
+    return 1
+  fi
+
+  mergeable="$(printf '%s' "$pr_json" | jq -r '.mergeable // ""' 2>/dev/null || echo "")"
+  merge_state="$(printf '%s' "$pr_json" | jq -r '.mergeStateStatus // ""' 2>/dev/null || echo "")"
+
+  if [[ "$mergeable" == "MERGEABLE" && "$merge_state" == "CLEAN" ]]; then
+    log "status" "ready conflict recheck for $issue PR #$pr_number: MERGEABLE/CLEAN (clearing stale markers)"
+    return 0
+  fi
+
+  log "debug" "ready conflict recheck for $issue PR #$pr_number: ${mergeable:-empty}/${merge_state:-empty}"
+  return 1
+}
+
 ready_remediation_attempts() {
   local feature_dir="$1"
   local result_file="$feature_dir/.ready-result.json"
@@ -3830,9 +3897,10 @@ launch_ready_phase() {
     return 1
   fi
 
-  rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention" "$state_dir/.needs-attention-transient"
-  clear_transient_mergeability_state "$state_dir"
+  rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention" \
+    "$state_dir/.conflict-recheck-at" "$state_dir/.needs-attention-transient"
   clear_ready_conflict_attention "$state_dir"
+  clear_transient_mergeability_state "$state_dir"
 
   if [[ "$ready_rc" -eq 0 ]]; then
     # Record ready stage result (HOK-1177)
@@ -7232,11 +7300,6 @@ monitor_issue_state() {
               return 0
             fi
 
-            if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
-              set_window_attention_state "$WIN" "needs-user"
-              return 0
-            fi
-
             if [[ "$ready_status" != "running" || -z "$launch_head" || "$launch_head" != "$current_head" ]]; then
               local pr_number
               pr_number=$(find_pr_for_branch "$BRANCH")
@@ -7244,6 +7307,15 @@ monitor_issue_state() {
                 write_ready_attention_file "$ready_state_dir_path" "Unable to find open PR for branch $BRANCH after conflict remediation."
                 set_window_attention_state "$WIN" "needs-user"
                 return 0
+              fi
+
+              if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
+                if ready_conflict_recheck_due "$ready_state_dir_path" && ready_conflict_pr_is_clean "$ready_state_dir_path" "$pr_number" "$ISSUE"; then
+                  clear_ready_conflict_markers "$ready_state_dir_path"
+                else
+                  set_window_attention_state "$WIN" "needs-user"
+                  return 0
+                fi
               fi
 
               title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -7587,12 +7659,16 @@ monitor_issue_state() {
         return 0
       fi
 
-      if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
-        set_window_attention_state "$WIN" "needs-user"
-        return 0
-      fi
-
       if [[ "$ready_status" != "running" || -z "$launch_head" || "$launch_head" != "$current_head" ]]; then
+        if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
+          if ready_conflict_recheck_due "$ready_state_dir_path" && ready_conflict_pr_is_clean "$ready_state_dir_path" "$PR" "$ISSUE"; then
+            clear_ready_conflict_markers "$ready_state_dir_path"
+          else
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+        fi
+
         title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
         if [[ -z "$title" ]]; then
           issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
