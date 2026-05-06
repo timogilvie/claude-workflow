@@ -848,7 +848,7 @@ describe('hokusai-schema', () => {
 
       assert.equal(result.valid, false);
       assert.deepEqual(result.errors, [
-        'schema_version must be "1.0" or "1.1"',
+        'schema_version must be "1.0", "1.1", or "1.2"',
       ]);
     });
 

@@ -356,6 +356,7 @@ export function enrichPostCompletionRecord(
       input.branchName,
       input.worktreePath,
     ),
+    routePrediction: input.stageArtifacts.routePrediction,
     challengeRouteContext: input.challengePairId
       ? deriveChallengeRouteContext(input.repoDir, input.issueId, input.branchName, input.worktreePath)
       : null,

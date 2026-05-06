@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { clearConfigCache } from './config.ts';
 import {
+  buildRoutePrediction,
   buildRouteLifecycleProvenance,
   deriveRouteDecisionSource,
   formatRouteArtifactSignature,
@@ -214,6 +215,43 @@ test('validateExpandedRouteArtifact rejects malformed optional metadata', () => 
 
   assert.equal(result.valid, false);
   assert.deepEqual(result.invalid.sort(), ['cache_hit', 'packet_hash', 'route_source']);
+});
+
+test('buildRoutePrediction extracts compact prediction contract', () => {
+  const prediction = buildRoutePrediction(minimalDecision({
+    expectedCostPlan: 0.11,
+    expectedCostCode: 0.22,
+    expectedCostReview: 0.33,
+    reasoning: [
+      'High repo-surface risk.',
+      'Feature work benefits from balanced route.',
+    ],
+    signals: {
+      taskType: 'feature',
+      promptLength: 'medium',
+      complexityScore: 0.7,
+      fileTypes: ['ts'],
+      riskScore: 0.4,
+      taskDifficulty: 'medium',
+    },
+  }));
+
+  assert.deepEqual(prediction, {
+    expectedSuccess: 0.8,
+    expectedCostUsd: 0.66,
+    confidence: 0.7,
+    riskScore: 0.4,
+    taskType: 'feature',
+    taskDifficulty: 'medium',
+    topFeatures: [
+      'High repo-surface risk.',
+      'Feature work benefits from balanced route.',
+      'taskType=feature',
+      'taskDifficulty=medium',
+      'complexityScore=0.7',
+    ],
+    rationaleSummary: 'High repo-surface risk. Feature work benefits from balanced route.',
+  });
 });
 
 test('stringifyRouteArtifact returns strict JSON with trailing newline', () => {
