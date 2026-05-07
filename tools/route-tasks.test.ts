@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -181,6 +181,38 @@ describe('route-tasks CLI', () => {
       assert.match(artifact.packet_hash, /^[a-f0-9]{64}$/);
       assert.ok(typeof artifact.cache_hit === 'boolean');
       assert.match(artifact.route_source, /batch|single/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('suppresses expanded reroute success diagnostics by default and restores with verbose mode', () => {
+    const repoDir = makeRepo();
+    try {
+      const featureA = join(repoDir, 'features', 'v');
+      mkdirSync(featureA, { recursive: true });
+      const packetA = join(featureA, 'task-packet.md');
+      const inputFile = join(repoDir, 'expanded-route-verbosity-input.jsonl');
+      writeFileSync(packetA, 'Route this expanded packet\n');
+      writeFileSync(inputFile, `${JSON.stringify({ issueId: 'HOK-202', featureDir: featureA, packetFile: packetA })}\n`);
+
+      const quiet = spawnSync('npx', ['tsx', routeTasksTool, '--expanded-jsonl', inputFile, '--repo-dir', repoDir], {
+        encoding: 'utf-8',
+        cwd: resolve(__dirname, '..'),
+        env: { ...process.env },
+      });
+      assert.equal(quiet.status, 0);
+      assert.equal(quiet.stderr.includes('route.lifecycle:'), false);
+      assert.equal(quiet.stderr.includes('route_source='), false);
+
+      const verbose = spawnSync('npx', ['tsx', routeTasksTool, '--expanded-jsonl', inputFile, '--repo-dir', repoDir], {
+        encoding: 'utf-8',
+        cwd: resolve(__dirname, '..'),
+        env: { ...process.env, WAVEMILL_ROUTER_LOG_VERBOSE: '1' },
+      });
+      assert.equal(verbose.status, 0);
+      assert.equal(verbose.stderr.includes('route.lifecycle:'), true);
+      assert.equal(verbose.stderr.includes('route_source='), true);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

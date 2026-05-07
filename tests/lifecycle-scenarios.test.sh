@@ -238,7 +238,21 @@ run_lifecycle_scenario() {
       git -C "$WT_DIR" commit -q -m "Initial commit"
     }
 
+    wavemill_task_log_message() {
+      local task_id="${1:-}"
+      shift || true
+      local msg="$*"
+      msg="${msg#"${msg%%[![:space:]]*}"}"
+      if [[ -z "$task_id" ]]; then
+        printf "%s\n" "$msg"
+      elif [[ "$msg" == "$task_id"* || "$msg" == "[$task_id]"* ]]; then
+        printf "%s\n" "$msg"
+      else
+        printf "[%s]  %s\n" "$task_id" "$msg"
+      fi
+    }
     log() { printf -v LOG_OUTPUT "%s%s\n" "$LOG_OUTPUT" "$*"; }
+    log_task() { local level="$1" task_id="$2"; shift 2; log "$level" "$(wavemill_task_log_message "$task_id" "$*")"; }
     log_warn() { printf -v LOG_OUTPUT "%sWARN:%s\n" "$LOG_OUTPUT" "$*"; }
     log_error() { printf -v LOG_OUTPUT "%sERROR:%s\n" "$LOG_OUTPUT" "$*"; }
 

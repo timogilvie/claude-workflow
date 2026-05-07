@@ -11,6 +11,7 @@ import {
   type ExpandedRouteTask,
 } from '../shared/lib/route-batch.ts';
 import type { RouteInputKind, RouteSource } from '../shared/lib/route-artifact.ts';
+import { routerLogVerboseEnabled } from '../shared/lib/router-log.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 
 interface RouteBatchTaskInput {
@@ -204,19 +205,21 @@ runTool({
 
         mkdirSync(dirname(resolve(result.outputFile)), { recursive: true });
         writeFileSync(result.outputFile, `${JSON.stringify(result.decision, null, 2)}\n`, 'utf-8');
-        const routeSignature = formatRouteSignature(result.decision);
-        if (result.cache_hit) {
+        if (routerLogVerboseEnabled()) {
+          const routeSignature = formatRouteSignature(result.decision);
+          if (result.cache_hit) {
+            console.error(
+              `[router] route.lifecycle: event=expansion_cache_hit issue=${result.input.issueId} route="${routeSignature}" packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
+            );
+          } else {
+            console.error(
+              `[router] route.lifecycle: event=expanded_assigned issue=${result.input.issueId} route="${routeSignature}" source=${result.route_source || 'single'} packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
+            );
+          }
           console.error(
-            `[router] route.lifecycle: event=expansion_cache_hit issue=${result.input.issueId} route="${routeSignature}" packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
-          );
-        } else {
-          console.error(
-            `[router] route.lifecycle: event=expanded_assigned issue=${result.input.issueId} route="${routeSignature}" source=${result.route_source || 'single'} packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
+            `[router] route_source=${result.route_source} packet_hash=${(result.packet_hash || '').slice(0, 12)} issue=${result.input.issueId}`,
           );
         }
-        console.error(
-          `[router] route_source=${result.route_source} packet_hash=${(result.packet_hash || '').slice(0, 12)} issue=${result.input.issueId}`,
-        );
         console.log(JSON.stringify({
           issueId: result.input.issueId,
           outputFile: result.outputFile,
