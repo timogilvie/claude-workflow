@@ -258,6 +258,57 @@ wavemill_config_annotation() {
   printf ' (%s=%s)' "$path" "$value"
 }
 
+# Format a task-scoped log message body by optionally prepending [ISSUE].
+#
+# Usage: wavemill_format_task_log_message <message> [issue_id]
+#
+# Resolution order:
+#   1. Explicit issue_id argument (non-empty)
+#   2. $WAVEMILL_ISSUE environment variable (non-empty after trimming)
+#   3. No prefix — message returned unchanged
+#
+# Deduplication (same issue only):
+#   - Leading "[$issue] " bracket token is stripped before re-prepending.
+#   - Any occurrence of "$issue → " in the message is replaced with "→ ",
+#     removing the duplicate arrow-form token.
+#   - Leading bare "$issue " is stripped.
+#   A *different* task ID embedded in the message is preserved as-is.
+#
+# All operations are O(1) shell string manipulation — no subprocesses.
+wavemill_format_task_log_message() {
+  local msg issue
+  msg="$1"
+  issue="${2:-${WAVEMILL_ISSUE:-}}"
+
+  # Trim leading whitespace from message
+  msg="${msg#"${msg%%[![:space:]]*}"}"
+
+  # Trim leading/trailing whitespace from issue
+  issue="${issue#"${issue%%[![:space:]]*}"}"
+  issue="${issue%"${issue##*[![:space:]]}"}"
+
+  # No issue → return message unchanged
+  if [[ -z "$issue" ]]; then
+    printf '%s' "$msg"
+    return 0
+  fi
+
+  # Deduplicate bracket prefix: "[$issue] ..." → strip, then re-prepend below
+  if [[ "$msg" == "[$issue] "* ]]; then
+    msg="${msg#"[$issue] "}"
+  fi
+
+  # Deduplicate arrow token: replace "$issue → " with "→ " wherever it appears
+  msg="${msg//"$issue → "/"→ "}"
+
+  # Deduplicate bare leading token: "$issue <rest>" at the start of the message
+  if [[ "$msg" == "$issue "* ]]; then
+    msg="${msg#"$issue "}"
+  fi
+
+  printf '[%s] %s' "$issue" "$msg"
+}
+
 ready_debug_log_file() {
   local session="${SESSION:-${WAVEMILL_SESSION:-wavemill}}"
   local sanitized="${session//[^[:alnum:]._-]/-}"

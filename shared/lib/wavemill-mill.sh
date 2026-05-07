@@ -178,6 +178,7 @@ append_status_log() {
 
 log() {
   local level="info"
+  local issue_override=""
   local msg
   case "${1:-}" in
     error|status|info|debug)
@@ -185,8 +186,11 @@ log() {
       shift
       ;;
   esac
-  msg="$*"
-  msg="${msg#"${msg%%[![:space:]]*}"}"
+  if [[ "${1:-}" == "--issue" ]]; then
+    issue_override="${2:-}"
+    shift 2
+  fi
+  msg=$(wavemill_format_task_log_message "$*" "$issue_override")
 
   local ts formatted msg_num
   ts="$(date '+%H:%M:%S')"
@@ -1240,7 +1244,7 @@ cleanup_stale_tasks() {
     # resume PR/state reconciliation after crashes.
 
     if [[ "$should_clean" == "true" ]]; then
-      log "debug" "  Pruning $issue ($reason)"
+      log "debug" --issue "$issue" "Pruning ($reason)"
       if [[ "$full_clean" == "true" ]]; then
         # Clean up worktree + branch for completed tasks
         if [[ -d "$worktree" ]]; then
@@ -1628,10 +1632,10 @@ if (( ${#TASKS[@]} > 0 )); then
       fi
 
       if [[ -n "$backlog_record" ]] && issue_payload_is_complete "$backlog_record"; then
-        log "debug" "  $ISSUE: reuse-backlog (skipping re-fetch)"
+        log "debug" --issue "$ISSUE" "reuse-backlog (skipping re-fetch)"
         printf '%s\n' "$backlog_record" > "/tmp/${SESSION}-${ISSUE}-issue.json"
       else
-        log "debug" "  $ISSUE: refetch"
+        log "debug" --issue "$ISSUE" "refetch"
         json=$(linear_get_issue "$ISSUE" 2>/dev/null || echo "{}")
         printf '%s\n' "$json" > "/tmp/${SESSION}-${ISSUE}-issue.json"
       fi
@@ -1651,9 +1655,9 @@ if (( ${#TASKS[@]} > 0 )); then
     current_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
 
     if is_task_packet "$current_desc"; then
-      log "info" "$ISSUE has task packet"
+      log "info" --issue "$ISSUE" "has task packet"
     else
-      log "info" "$ISSUE raw description saved (agent will expand)"
+      log "info" --issue "$ISSUE" "raw description saved (agent will expand)"
     fi
     echo "$current_desc" > "$PACKET_FILE"
   done
@@ -1678,7 +1682,7 @@ for t in "${TASKS[@]}"; do
     is_migration=true
   elif echo "$current_desc" | grep -qi "alembic\|migration.*file\|database.*migration\|schema.*migration"; then
     log "debug" "  → Migration detected (raw description keyword match), assigning number: $NEXT_MIGRATION_NUM"
-    log "debug" "    Tip: Add 'migration' label to $ISSUE for more reliable detection"
+    log "debug" --issue "$ISSUE" "Tip: Add 'migration' label for more reliable detection"
     is_migration=true
   fi
 
@@ -1695,7 +1699,7 @@ for t in "${TASKS[@]}"; do
     NEXT_MIGRATION_NUM=$((NEXT_MIGRATION_NUM + 1))
   fi
 
-  log "status" "$ISSUE ready"
+  log "status" --issue "$ISSUE" "ready"
   LAUNCH_ARGS+=("$t")
 done
 
@@ -1760,7 +1764,7 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
               ROUTING_MODE=$(echo "$ROUTE_JSON" | jq -r '.routingMode // "unknown"' 2>/dev/null)
               NEIGHBOR_COUNT=$(echo "$ROUTE_JSON" | jq -r '.neighborCount // 0' 2>/dev/null)
 
-              log "info" "  $ISSUE: planner=$PLANNER ($PLAN_DEPTH), coder=$CODER ($CODE_DEPTH), reviewer=$REVIEWER ($REVIEW_MODE)"
+              log "info" --issue "$ISSUE" "planner=$PLANNER ($PLAN_DEPTH), coder=$CODER ($CODE_DEPTH), reviewer=$REVIEWER ($REVIEW_MODE)"
               log "info" "          routing=$ROUTING_MODE, neighbors=$NEIGHBOR_COUNT"
 
               echo "$ROUTE_JSON" > "/tmp/${SESSION}-${ISSUE}-route.json"
@@ -1813,7 +1817,7 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
             ROUTING_MODE=$(echo "$ROUTE_JSON" | jq -r '.routingMode // "unknown"' 2>/dev/null)
             NEIGHBOR_COUNT=$(echo "$ROUTE_JSON" | jq -r '.neighborCount // 0' 2>/dev/null)
 
-            log "info" "  $ISSUE: planner=$PLANNER ($PLAN_DEPTH), coder=$CODER ($CODE_DEPTH), reviewer=$REVIEWER ($REVIEW_MODE)"
+            log "info" --issue "$ISSUE" "planner=$PLANNER ($PLAN_DEPTH), coder=$CODER ($CODE_DEPTH), reviewer=$REVIEWER ($REVIEW_MODE)"
             log "info" "          routing=$ROUTING_MODE, neighbors=$NEIGHBOR_COUNT"
 
             echo "$ROUTE_JSON" > "/tmp/${SESSION}-${ISSUE}-route.json"
@@ -1835,7 +1839,7 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
                 reasoning: $reasoning
               }' > "/tmp/${SESSION}-${ISSUE}-model-suggestion.json"
           else
-            log "info" "  $ISSUE: Router returned no result, using defaults"
+            log "info" --issue "$ISSUE" "Router returned no result, using defaults"
           fi
         fi
       done
@@ -1852,7 +1856,7 @@ slots_used=0
 for t in "${TASKS[@]}"; do
   IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
   if (( slots_used >= STARTUP_SLOT_LIMIT )); then
-    log "status" "  $ISSUE: Deferring launch (no remaining slots after challenge allocation)"
+    log "status" --issue "$ISSUE" "Deferring launch (no remaining slots after challenge allocation)"
     continue
   fi
   rec_model=""
@@ -1889,7 +1893,7 @@ for t in "${TASKS[@]}"; do
   challenge_reason=""
   if [[ -n "${FORCE_MODEL:-}" ]]; then
     challenge_reason="forced_model"
-    log "debug" "  $ISSUE: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
+    log "debug" --issue "$ISSUE" "Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
   else
     _rs=$((STARTUP_SLOT_LIMIT - slots_used))
     (( _rs < 2 )) && _rs=2
@@ -1946,10 +1950,10 @@ for t in "${TASKS[@]}"; do
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
     FINAL_LAUNCH_ARGS+=("$challenger_key|$challenger_slug|$TITLE")
     slots_used=$((slots_used + 1))  # Challenger is free overhead
-    log "status" "  $ISSUE: Challenge selected (${primary_model} vs ${challenger_model}) [challenger is extra pane]"
+    log "status" --issue "$ISSUE" "Challenge selected (${primary_model} vs ${challenger_model}) [challenger is extra pane]"
   else
     if [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
-      log "debug" "  $ISSUE: Challenge skipped ($challenge_reason), launching single-model run"
+      log "debug" --issue "$ISSUE" "Challenge skipped ($challenge_reason), launching single-model run"
     fi
     TASK_LINEAR_ISSUE_BY_ISSUE["$ISSUE"]="$ISSUE"
     TASK_CHALLENGE_BY_ISSUE["$ISSUE"]="false"
@@ -2006,6 +2010,7 @@ append_status_log() {
 
 log() {
   local level="info"
+  local issue_override=""
   local msg
   case "${1:-}" in
     error|status|info|debug)
@@ -2013,8 +2018,11 @@ log() {
       shift
       ;;
   esac
-  msg="$*"
-  msg="${msg#"${msg%%[![:space:]]*}"}"
+  if [[ "${1:-}" == "--issue" ]]; then
+    issue_override="${2:-}"
+    shift 2
+  fi
+  msg=$(wavemill_format_task_log_message "$*" "$issue_override")
 
   local ts formatted msg_num
   ts="$(date '+%H:%M:%S')"
@@ -2304,7 +2312,7 @@ handle_agent_error_recovery() {
     if [[ -f "$retry_file" ]] && [[ "$hook_state" == "working" || "$hook_state" == "waiting" || "$hook_state" == "idle" ]]; then
       last_retry_ts="$(get_retry_timestamp "$SESSION" "$issue")"
       if (( hook_ts >= last_retry_ts )); then
-        log "info" "Agent recovered for $issue, resetting retry count"
+        log "info" --issue "$issue" "Agent recovered, resetting retry count"
         reset_retry_count "$SESSION" "$issue"
       fi
     fi
@@ -2333,11 +2341,11 @@ handle_agent_error_recovery() {
   fi
 
   next_retry=$((retry_count + 1))
-  log "info" "Retrying $issue after transient error (attempt $next_retry/$max_retries, backoff ${backoff_delay}s): $error_detail"
+  log "info" --issue "$issue" "Retrying after transient error (attempt $next_retry/$max_retries, backoff ${backoff_delay}s): $error_detail"
   increment_retry_count "$SESSION" "$issue"
 
   if agent_resume_after_error "$SESSION" "$issue" "$agent_cmd"; then
-    log "debug" "  Resume command sent to $issue"
+    log "debug" --issue "$issue" "Resume command sent"
   else
     log_error "  Failed to resume $issue after transient error"
   fi
@@ -2860,7 +2868,7 @@ ready_conflict_pr_is_clean() {
     write_ready_conflict_recheck_at "$feature_dir"
   else
     write_ready_conflict_recheck_at "$feature_dir"
-    log "debug" "ready conflict recheck for $issue PR #$pr_number failed"
+    log "debug" --issue "$issue" "ready conflict recheck PR #$pr_number failed"
     return 1
   fi
 
@@ -2868,11 +2876,11 @@ ready_conflict_pr_is_clean() {
   merge_state="$(printf '%s' "$pr_json" | jq -r '.mergeStateStatus // ""' 2>/dev/null || echo "")"
 
   if [[ "$mergeable" == "MERGEABLE" && "$merge_state" == "CLEAN" ]]; then
-    log "status" "ready conflict recheck for $issue PR #$pr_number: MERGEABLE/CLEAN (clearing stale markers)"
+    log "status" --issue "$issue" "ready conflict recheck PR #$pr_number: MERGEABLE/CLEAN (clearing stale markers)"
     return 0
   fi
 
-  log "debug" "ready conflict recheck for $issue PR #$pr_number: ${mergeable:-empty}/${merge_state:-empty}"
+  log "debug" --issue "$issue" "ready conflict recheck PR #$pr_number: ${mergeable:-empty}/${merge_state:-empty}"
   return 1
 }
 
@@ -2969,7 +2977,7 @@ run_ready_watchdog_tick() {
     detail=$(printf '%s' "$finding" | jq -r '.detail // empty' 2>/dev/null || echo "")
     action=$(printf '%s' "$finding" | jq -r '.action // empty' 2>/dev/null || echo "")
     [[ -n "$issue" && -n "$label" && -n "$detail" ]] || continue
-    log "status" "ready watchdog: $issue $label ($action) - $detail"
+    log "status" --issue "$issue" "ready watchdog: $label ($action) - $detail"
   done < <(printf '%s' "$watchdog_output" | jq -c '.findings[]?' 2>/dev/null)
 }
 
@@ -3186,7 +3194,7 @@ handle_phase_launch_result() {
   local launch_rc="$5" win="$6" agent="${7:-}" model="${8:-}"
 
   if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$feature_dir"; then
-    log "status" "⛔ $issue → Workflow aborted during ${launched_phase} launch"
+    log "status" --issue "$issue" "⛔ → Workflow aborted during ${launched_phase} launch"
     write_stage_result "$feature_dir" "$launched_phase" "aborted" "$agent" "$model"
     set_task_phase "$issue" "aborted"
     set_window_attention_state "$win" "needs-user"
@@ -3197,7 +3205,7 @@ handle_phase_launch_result() {
     clear_stage_result "$feature_dir" "$launched_phase"
     set_task_phase "$issue" "$retry_phase"
     set_window_attention_state "$win" "needs-user"
-    log "warn" "⚠ $issue → ${launched_phase^} phase launch failed (rc=$launch_rc), reverting to $retry_phase for retry"
+    log "warn" --issue "$issue" "⚠ → ${launched_phase^} phase launch failed (rc=$launch_rc), reverting to $retry_phase for retry"
     return 1
   fi
 
@@ -3417,7 +3425,7 @@ _restore_inflight_task_window_if_missing() {
     return 0
   fi
 
-  log "status" "⚡ $issue → tmux window missing after resume, relaunching $phase phase"
+  log "status" --issue "$issue" "⚡ → tmux window missing after resume, relaunching $phase phase"
 
   local title issue_json
   title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')
@@ -3481,7 +3489,7 @@ _restore_inflight_task_window_if_missing() {
     return 0
   fi
 
-  log "status" "$issue → $phase phase relaunched in restored window"
+  log "status" --issue "$issue" "→ $phase phase relaunched in restored window"
   _RESTORE_STATE="restored"
   return 0
 }
@@ -3547,7 +3555,7 @@ $issue_desc
   build_planning_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" "$operating_mode" > "$prompt_file"
 
-  log "status" "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth, mode: $operating_mode)"
+  log "status" --issue "$issue" "Launching planning phase (model: $planner_model, depth: $plan_depth, mode: $operating_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
@@ -3576,7 +3584,7 @@ $issue_desc
   build_coding_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" "$operating_mode" > "$prompt_file"
 
-  log "status" "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth, mode: $operating_mode)"
+  log "status" --issue "$issue" "Launching coding phase (model: $coder_model, depth: $code_depth, mode: $operating_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
@@ -3605,7 +3613,7 @@ $issue_desc
   build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" "$operating_mode" > "$prompt_file"
 
-  log "status" "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode, operating mode: $operating_mode)"
+  log "status" --issue "$issue" "Launching review phase (model: $reviewer_model, mode: $review_mode, operating mode: $operating_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
@@ -3638,7 +3646,7 @@ restore_review_task_window() {
       return 1
     fi
 
-    log "status" "⚡ $issue → Recreating worktree for review task"
+    log "status" --issue "$issue" "⚡ → Recreating worktree for review task"
     local resolved_path
     resolved_path="$(ensure_worktree "$branch" "$wt_dir" "$REPO_DIR" 2>/dev/null)" || {
       log_warn "$issue → Failed to recreate worktree for review task"
@@ -3708,7 +3716,7 @@ EOF
   fi
 
   if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
-    log "status" "⚡ $issue → Restoring review window (PR #$pr)"
+    log "status" --issue "$issue" "⚡ → Restoring review window (PR #$pr)"
     tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" 2>/dev/null || return 1
     tmux set-option -t "$SESSION:$win" remain-on-exit on 2>/dev/null || true
     restored_window="true"
@@ -3726,14 +3734,14 @@ EOF
       reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
 
       # Launch review phase agent
-      log "status" "  → Relaunching review agent for $issue (model: $reviewer_model, mode: $review_mode)"
+      log "status" --issue "$issue" "→ Relaunching review agent (model: $reviewer_model, mode: $review_mode)"
       launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
       if [[ $? -eq 0 ]]; then
-        log "status" "$issue → Review context restored and agent relaunched for PR #$pr"
+        log "status" --issue "$issue" "→ Review context restored and agent relaunched for PR #$pr"
       else
         log_warn "$issue → Failed to relaunch review agent"
         if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
-          log "status" "$issue → Review context restored for PR #$pr (but agent launch failed)"
+          log "status" --issue "$issue" "→ Review context restored for PR #$pr (but agent launch failed)"
         fi
         return 1
       fi
@@ -3745,7 +3753,7 @@ EOF
   fi
 
   if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
-    log "status" "$issue → Review context restored for PR #$pr"
+    log "status" --issue "$issue" "→ Review context restored for PR #$pr"
   fi
 
   return 0
@@ -4097,7 +4105,7 @@ ready_stage_warn_bypass_once() {
     return 1
   fi
 
-  log "status" "⛔ $issue → PR #$pr was merged before ready checks passed"
+  log "status" --issue "$issue" "⛔ → PR #$pr was merged before ready checks passed"
   : > "$sentinel"
   return 0
 }
@@ -4279,7 +4287,7 @@ launch_ready_phase() {
     pending_log_level="info"
   fi
 
-  log "$pending_log_level" "  Launching ready phase for $issue (PR #$pr_number)"
+  log "$pending_log_level" --issue "$issue" "Launching ready phase (PR #$pr_number)"
 
   ready_stderr_file=$(mktemp) || {
     log_warn "  Failed to capture ready stderr for $issue (mktemp failed)"
@@ -4335,7 +4343,7 @@ launch_ready_phase() {
     fi
     touch "$state_dir/.conflict-detected"
     rm -f "$state_dir/.needs-attention"
-    log "status" "  ⚠ Merge conflict detected for $issue (PR #$pr_number)"
+    log "status" --issue "$issue" "⚠ Merge conflict detected (PR #$pr_number)"
 
     prompt_file="/tmp/${SESSION}-${issue}-conflict-prompt.txt"
     build_conflict_resolution_prompt "$pr_number" "$branch" "$wt_dir" "$status_file" "$base_branch" > "$prompt_file"
@@ -4388,7 +4396,7 @@ launch_ready_phase() {
         "pending GitHub mergeability - will retry (attempt ${transient_count}/${transient_limit})" \
         "$pending_artifacts_json"
       rm -f "$state_dir/.needs-attention" "$state_dir/.needs-attention-transient"
-      log "info" "  Merge status for $issue is $merge_status - will retry (attempt ${transient_count}/${transient_limit})"
+      log "info" --issue "$issue" "Merge status is $merge_status - will retry (attempt ${transient_count}/${transient_limit})"
       return 4
     fi
 
@@ -4425,7 +4433,7 @@ launch_ready_phase() {
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
     log "status" "  Restored ready labels for PR #$pr_number"
-    log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
+    log "status" --issue "$issue" "Ready checks completed (verdict: ${verdict:-unknown})"
     return 0
   fi
 
@@ -4455,7 +4463,7 @@ launch_ready_phase() {
     write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
       "CI checks pending for PR #$pr_number" \
       "$pending_artifacts_json"
-    log "$pending_log_level" "  CI checks pending for $issue (PR #$pr_number) - will retry"
+    log "$pending_log_level" --issue "$issue" "CI checks pending (PR #$pr_number) - will retry"
     return 4
   fi
 
@@ -4530,7 +4538,7 @@ launch_ready_phase() {
         "Ready remediation in progress for PR #$pr_number" \
         "$remediation_artifacts_json"
       rm -f "$state_dir/.needs-attention"
-      log "status" "⚙ $issue → Launched ready remediation (attempt $(( remediation_attempts + 1 ))/$remediation_max_attempts) for PR #$pr_number"
+      log "status" --issue "$issue" "⚙ → Launched ready remediation (attempt $(( remediation_attempts + 1 ))/$remediation_max_attempts) for PR #$pr_number"
       return 5
     fi
 
@@ -4883,7 +4891,7 @@ poll_challenge_jobs() {
     side=$(echo "$job_json" | jq -r '.side // empty')
 
     if [[ "$kind" == "eval" && "$status" == "succeeded" ]]; then
-      log "status" "Challenge eval completed for $issue_id${side:+ ($side)}"
+      log "status" --issue "$issue_id" "Challenge eval completed${side:+ ($side)}"
       settle_tracked_job "$job_id"
       continue
     fi
@@ -4945,7 +4953,7 @@ maybe_run_challenge_eval() {
   log_path="$job_dir/${job_id}.log"
   result_path="$job_dir/${job_id}.result.json"
 
-  log "status" "  📊 [mill] eval running: issue=$issue side=$side pr=#$pr phase=eval"
+  log "status" --issue "$issue" "📊 [mill] eval running: side=$side pr=#$pr phase=eval"
   if ! mark_challenge_eval_running "$issue" "$side" "$pr" "eval" >/dev/null; then
     log_warn "challenge eval launch skipped for $issue: failed to persist running state"
     return 1
@@ -4964,7 +4972,7 @@ maybe_run_challenge_eval() {
   pid=$!
 
   launch_tracked_job "eval" "$job_id" "$issue" "$side" "$pair_id" "$pr" "$pid" "420" "$log_path" "$result_path"
-  log "status" "  📊 Challenge eval running in background for $issue (pid $pid)"
+  log "status" --issue "$issue" "📊 Challenge eval running in background (pid $pid)"
 }
 
 launch_background_post_merge_eval() {
@@ -5154,7 +5162,7 @@ archive_stage_artifacts() {
   local count
   count=$(find "$archive_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$count" -gt 0 ]]; then
-    log "debug" "Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
+    log "debug" --issue "$issue" "Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
   fi
 }
 
@@ -5690,7 +5698,7 @@ recover_missing_expansion_artifact() {
   fi
 
   expansion_recovery_mark_result "$feature_dir" "$issue" "succeeded" "expanded-route-recovered" "0" || true
-  log "info" "[expansion-handshake] RECOVERY_OK issue=$issue log=\"$recovery_log_file\""
+  log "info" --issue "$issue" "[expansion-handshake] RECOVERY_OK log=\"$recovery_log_file\""
   return 0
 }
 
@@ -5981,7 +5989,7 @@ launch_task() {
   linear_issue=$(get_linear_issue_id "$issue")
   challenge_model=$(get_task_meta "$issue" "challengeModel")
 
-  log "status" "Launching $issue: $title"
+  log "status" --issue "$issue" "Launching: $title"
 
   # Fetch issue details
   local issue_json
@@ -6000,9 +6008,9 @@ launch_task() {
     :
   else
     if is_task_packet "$issue_desc"; then
-      log "info" "$issue has task packet"
+      log "info" --issue "$issue" "has task packet"
     else
-      log "info" "$issue raw description saved (agent will expand)"
+      log "info" --issue "$issue" "raw description saved (agent will expand)"
     fi
     echo "$issue_desc" > "$packet_file"
   fi
@@ -6354,7 +6362,7 @@ EOF
     challenge_reason=""
     if [[ -n "${FORCE_MODEL:-}" ]]; then
       challenge_reason="forced_model"
-      log "debug" "  $issue: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
+      log "debug" --issue "$issue" "Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
     else
       local _dyn_rs=$remaining_slots
       (( _dyn_rs < 2 )) && _dyn_rs=2
@@ -6607,7 +6615,7 @@ Implement from the issue description plus direct codebase analysis."
   # Always stamp source='bootstrap' regardless of what the batch router recorded,
   # so .initial-route.json remains unambiguous bootstrap evidence.
   if [[ -f "$feature_dir/.initial-route.json" ]]; then
-    log "info" "  Keeping existing .initial-route.json for $issue"
+    log "info" --issue "$issue" "Keeping existing .initial-route.json"
   else
     jq '.provenance.source = "bootstrap"' "$routing_file" \
       | write_json_artifact "$feature_dir/.initial-route.json"
@@ -6635,8 +6643,8 @@ Implement from the issue description plus direct codebase analysis."
   fi
   log "status" "Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
 
-  log "status" "$issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
-  [[ -n "$planner_model" ]] && log "info" "Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
+  log "status" --issue "$issue" "launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
+  [[ -n "$planner_model" ]] && log "info" --issue "$issue" "Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
 
   if [[ "$should_launch_challenger" == "true" ]]; then
     WAVEMILL_DISABLE_CHALLENGE=1 launch_task "$challenger_key" "$challenger_slug" "$challenger_title" 0
@@ -7268,7 +7276,7 @@ monitor_issue_state() {
       recovered_pr=$(find_pr_for_branch "$BRANCH")
       if [[ -n "$recovered_pr" ]]; then
         PR_BY_ISSUE["$ISSUE"]="$recovered_pr"
-        log "status" "$ISSUE → Found PR #$recovered_pr for errored task (updating state)"
+        log "status" --issue "$ISSUE" "→ Found PR #$recovered_pr for errored task (updating state)"
         save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$recovered_pr" "" "$current_agent"
         set_task_phase "$ISSUE" "review"
       fi
@@ -7300,7 +7308,7 @@ monitor_issue_state() {
       fi
       # Fetch PR details for user-visible summary
       pr_details=$(_with_timeout "$API_TIMEOUT" gh pr view "$PR" --json title,url --jq '"  " + .title + "\n  " + .url' 2>/dev/null || echo "")
-      log "status" "$ISSUE → PR #$PR (In Review)"
+      log "status" --issue "$ISSUE" "→ PR #$PR (In Review)"
       if [[ -n "$pr_details" ]]; then
         log "info" "$pr_details"
       fi
@@ -7329,20 +7337,20 @@ monitor_issue_state() {
         launch_rc=$?
       fi
       if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-        log "status" "⛔ $ISSUE → Workflow aborted during ready launch"
+        log "status" --issue "$ISSUE" "⛔ → Workflow aborted during ready launch"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
       if [[ "$launch_rc" -eq 3 ]]; then
         set_window_attention_state "$WIN" "clear"
-        log "status" "⚠ $ISSUE → Ready detected conflicts, launching remediation"
+        log "status" --issue "$ISSUE" "⚠ → Ready detected conflicts, launching remediation"
         active_count=$((active_count + 1))
         return 0
       fi
       if [[ "$launch_rc" -eq 5 ]]; then
         set_window_attention_state "$WIN" "clear"
-        log "status" "⚙ $ISSUE → Ready remediation launched (PR #$PR)"
+        log "status" --issue "$ISSUE" "⚙ → Ready remediation launched (PR #$PR)"
         active_count=$((active_count + 1))
         return 0
       fi
@@ -7352,17 +7360,17 @@ monitor_issue_state() {
         return 0
       fi
       if [[ "$launch_rc" -ne 0 ]]; then
-        log "status" "⚠ $ISSUE → Ready checks failed (PR #$PR)"
+        log "status" --issue "$ISSUE" "⚠ → Ready checks failed (PR #$PR)"
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
       set_window_attention_state "$WIN" "needs-user"
-      log "status" "$ISSUE → Ready checks completed for PR #$PR"
+      log "status" --issue "$ISSUE" "→ Ready checks completed for PR #$PR"
       return 0
     else
       # No PR in current repo - check Linear issue state for cross-repo completion
       if should_update_linear_state "$ISSUE" && linear_is_completed "$(get_linear_issue_id "$ISSUE")"; then
-        log "status" "$ISSUE → Completed externally (cross-repo or manual)"
+        log "status" --issue "$ISSUE" "→ Completed externally (cross-repo or manual)"
         set_window_attention_state "$WIN" "clear"
 
         # Post-completion eval (non-blocking: always exits 0)
@@ -7372,7 +7380,7 @@ monitor_issue_state() {
             log "info" "  📊 Running post-completion eval..."
             launch_background_post_merge_eval "$ISSUE" "" "$BRANCH" "$SLUG" "$ISSUE" "post-completion"
           else
-            log "debug" "Eval already completed for $ISSUE"
+            log "debug" --issue "$ISSUE" "Eval already completed"
           fi
         fi
 
@@ -7406,7 +7414,7 @@ monitor_issue_state() {
       case "$current_phase" in
         routing)
           if check_stage_aborted "$FEATURE_DIR"; then
-            log "status" "⛔ $ISSUE → Workflow aborted by user during routing phase"
+            log "status" --issue "$ISSUE" "⛔ → Workflow aborted by user during routing phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -7480,7 +7488,7 @@ monitor_issue_state() {
                 return 0
               fi
               set_window_attention_state "$WIN" "clear"
-              log "status" "$ISSUE → Routing complete, launching planning phase"
+              log "status" --issue "$ISSUE" "→ Routing complete, launching planning phase"
               active_count=$((active_count + 1))
               return 0
             else
@@ -7503,7 +7511,7 @@ monitor_issue_state() {
 
           if [[ "$resolved_phase" == "aborted" ]]; then
             unset "$approval_wait_var" 2>/dev/null || true
-            log "status" "⛔ $ISSUE → Workflow aborted by user during planning phase"
+            log "status" --issue "$ISSUE" "⛔ → Workflow aborted by user during planning phase"
             write_stage_result "$FEATURE_DIR" "planning" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -7545,7 +7553,7 @@ monitor_issue_state() {
               fi
               echo "$next_num" > "$mig_num_file"
               save_migration_reservation "$ISSUE" "$next_num"
-              log "debug" "  → Late migration detected for $ISSUE, assigned number: $next_num"
+              log "debug" --issue "$ISSUE" "→ Late migration detected, assigned number: $next_num"
             else
               echo "$existing_reservation" > "$mig_num_file"
             fi
@@ -7668,9 +7676,9 @@ monitor_issue_state() {
                     fi
                   fi
 
-                  log "status" "  $ISSUE: Challenge participants refreshed (expanded route): ${new_primary:-$challenge_coder} vs ${new_challenger_model:-unknown}"
+                  log "status" --issue "$ISSUE" "Challenge participants refreshed (expanded route): ${new_primary:-$challenge_coder} vs ${new_challenger_model:-unknown}"
                 elif [[ "$refreshed_source" == "preserved" ]]; then
-                  log "debug" "  $ISSUE: Challenge participants preserved after expanded routing"
+                  log "debug" --issue "$ISSUE" "Challenge participants preserved after expanded routing"
                 fi
               fi
               # For challenge tasks, the challenge model MUST override the routed coder
@@ -7703,7 +7711,7 @@ monitor_issue_state() {
                 return 0
             fi
             set_window_attention_state "$WIN" "clear"
-            log "status" "$ISSUE → Plan approved, launching coding phase"
+            log "status" --issue "$ISSUE" "→ Plan approved, launching coding phase"
             active_count=$((active_count + 1))
             return 0
           fi
@@ -7723,7 +7731,7 @@ monitor_issue_state() {
                 active_count=$((active_count + 1))
                 return 0
               fi
-              log "status" "$ISSUE → Plan approved (via .plan-approved marker), marking as completed"
+              log "status" --issue "$ISSUE" "→ Plan approved (via .plan-approved marker), marking as completed"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
               # Next iteration will detect resolved_phase == "coding" and launch coding
               active_count=$((active_count + 1))
@@ -7735,7 +7743,7 @@ monitor_issue_state() {
           if [[ "$planning_status" == "running" ]]; then
             if [[ -f "$FEATURE_DIR/plan.md" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
-              log "status" "$ISSUE → plan.md detected, marking planning as awaiting_user"
+              log "status" --issue "$ISSUE" "→ plan.md detected, marking planning as awaiting_user"
               write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
               set_window_attention_state "$WIN" "needs-user"
               active_count=$((active_count + 1))
@@ -7755,7 +7763,7 @@ monitor_issue_state() {
                 active_count=$((active_count + 1))
                 return 0
               fi
-              log "status" "$ISSUE → User approved plan (via .plan-approved marker)"
+              log "status" --issue "$ISSUE" "→ User approved plan (via .plan-approved marker)"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
               # Now completed — next poll iteration will pick up and launch coding
               active_count=$((active_count + 1))
@@ -7767,7 +7775,7 @@ monitor_issue_state() {
             # If the pane is idle or dead without the marker, log once and wait for user.
             if [[ -f "$FEATURE_DIR/plan.md" ]] && _pane_is_dead_or_idle "$SESSION:$WIN"; then
               if [[ "${!approval_wait_var:-}" != "true" ]]; then
-                log "status" "⏳ $ISSUE → Plan ready — awaiting user approval (touch .plan-approved to continue)"
+                log "status" --issue "$ISSUE" "⏳ → Plan ready — awaiting user approval (touch .plan-approved to continue)"
                 printf -v "$approval_wait_var" '%s' "true"
               fi
             fi
@@ -7790,7 +7798,7 @@ monitor_issue_state() {
 
         coding)
           if [[ "$resolved_phase" == "aborted" ]]; then
-            log "status" "⛔ $ISSUE → Workflow aborted by user during coding phase"
+            log "status" --issue "$ISSUE" "⛔ → Workflow aborted by user during coding phase"
             write_stage_result "$FEATURE_DIR" "coding" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -7846,7 +7854,7 @@ monitor_issue_state() {
               return 0
             fi
             set_window_attention_state "$WIN" "clear"
-            log "status" "$ISSUE → Coding complete, launching review phase"
+            log "status" --issue "$ISSUE" "→ Coding complete, launching review phase"
             active_count=$((active_count + 1))
             return 0
           fi
@@ -7859,13 +7867,13 @@ monitor_issue_state() {
           if [[ "$coding_status" == "running" ]]; then
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
               validate_coding_phase_output "$BRANCH"
-              log "status" "$ISSUE → .coding-complete detected, marking coding as completed"
+              log "status" --issue "$ISSUE" "→ .coding-complete detected, marking coding as completed"
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
               return 0
             fi
-            log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"
+            log "debug" --issue "$ISSUE" "→ Coding still running: waiting for .coding-complete"
           fi
 
           # Stage still running
@@ -7882,7 +7890,7 @@ monitor_issue_state() {
 
         review)
           if [[ "$resolved_phase" == "aborted" ]]; then
-            log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
+            log "status" --issue "$ISSUE" "⛔ → Workflow aborted by user during review phase"
             write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -7947,20 +7955,20 @@ monitor_issue_state() {
               local launch_rc=$?
             fi
             if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-              log "⛔ $ISSUE → Workflow aborted during ready launch"
+              log "status" --issue "$ISSUE" "⛔ → Workflow aborted during ready launch"
               set_task_phase "$ISSUE" "aborted"
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
             if [[ "$launch_rc" -eq 3 ]]; then
               set_window_attention_state "$WIN" "clear"
-              log "status" "⚠ $ISSUE → Ready detected conflicts, launching remediation"
+              log "status" --issue "$ISSUE" "⚠ → Ready detected conflicts, launching remediation"
               active_count=$((active_count + 1))
               return 0
             fi
             if [[ "$launch_rc" -eq 5 ]]; then
               set_window_attention_state "$WIN" "clear"
-              log "status" "⚙ $ISSUE → Ready remediation launched (PR #$pr_number)"
+              log "status" --issue "$ISSUE" "⚙ → Ready remediation launched (PR #$pr_number)"
               active_count=$((active_count + 1))
               return 0
             fi
@@ -7971,12 +7979,12 @@ monitor_issue_state() {
             fi
             if [[ "$launch_rc" -ne 0 ]]; then
               # Ready checks failed - mark for user attention
-              log "⚠ $ISSUE → Ready checks failed (PR #$pr_number)"
+              log "status" --issue "$ISSUE" "⚠ → Ready checks failed (PR #$pr_number)"
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
             set_window_attention_state "$WIN" "needs-user"
-            log "$ISSUE → Ready checks completed for PR #$pr_number"
+            log "status" --issue "$ISSUE" "→ Ready checks completed for PR #$pr_number"
             return 0
           fi
           # No PR created or ready phase disabled - mark for attention
@@ -7988,7 +7996,7 @@ monitor_issue_state() {
           # ready-phase monitoring runs in the PR lifecycle section below,
           # because ready always has a known PR.
           if [[ "$resolved_phase" == "aborted" ]]; then
-            log "⛔ $ISSUE → Workflow aborted by user during ready phase"
+            log "status" --issue "$ISSUE" "⛔ → Workflow aborted by user during ready phase"
             write_stage_result "$FEATURE_DIR" "ready" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -8041,7 +8049,7 @@ monitor_issue_state() {
                 local launch_rc=$?
               fi
               if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-                log "⛔ $ISSUE → Workflow aborted during conflict remediation"
+                log "status" --issue "$ISSUE" "⛔ → Workflow aborted during conflict remediation"
                 set_task_phase "$ISSUE" "aborted"
                 set_window_attention_state "$WIN" "needs-user"
                 return 0
@@ -8062,12 +8070,12 @@ monitor_issue_state() {
                 return 0
               fi
               if [[ "$launch_rc" -ne 0 ]]; then
-                log "⚠ $ISSUE → Conflict remediation still needs attention"
+                log "status" --issue "$ISSUE" "⚠ → Conflict remediation still needs attention"
                 set_window_attention_state "$WIN" "needs-user"
                 return 0
               fi
 
-              log "$ISSUE → Conflict remediation complete, ready checks rerun"
+              log "status" --issue "$ISSUE" "→ Conflict remediation complete, ready checks rerun"
               set_window_attention_state "$WIN" "needs-user"
               return 0
             fi
@@ -8109,7 +8117,7 @@ monitor_issue_state() {
       fi
 
       if check_stage_aborted "$FEATURE_DIR"; then
-        log "status" "⛔ $ISSUE → Workflow aborted (controller state)"
+        log "status" --issue "$ISSUE" "⛔ → Workflow aborted (controller state)"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
@@ -8125,7 +8133,7 @@ monitor_issue_state() {
       # handle gracefully). Flag for attention instead of cleaning up
       # immediately — the worktree and branch still have value.
       if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qF "$WIN"; then
-        log "status" "⚠ $ISSUE → Window disappeared during $current_phase phase, recreating..."
+        log "status" --issue "$ISSUE" "⚠ → Window disappeared during $current_phase phase, recreating..."
         tmux new-window -d -t "$SESSION" -n "$WIN" -c "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true
         tmux set-option -t "$SESSION:$WIN" remain-on-exit on 2>/dev/null || true
         sleep 1
@@ -8141,7 +8149,7 @@ monitor_issue_state() {
         pr_number=$(find_pr_for_branch "$BRANCH")
         if [[ -n "$pr_number" ]]; then
           PR_BY_ISSUE["$ISSUE"]="$pr_number"
-          log "status" "$ISSUE → Found PR #$pr_number (updating state)"
+          log "status" --issue "$ISSUE" "→ Found PR #$pr_number (updating state)"
           save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$pr_number" "" "$current_agent"
           set_task_phase "$ISSUE" "review"
           set_window_attention_state "$WIN" "needs-user"
@@ -8164,7 +8172,7 @@ monitor_issue_state() {
       fi
 
       set_window_attention_state "$WIN" "needs-user"
-      log "status" "⛔ $ISSUE → Task requires attention: No PR created (worktree preserved)"
+      log "status" --issue "$ISSUE" "⛔ → Task requires attention: No PR created (worktree preserved)"
       active_count=$((active_count + 1))
       return 0
     fi
@@ -8188,7 +8196,7 @@ monitor_issue_state() {
       rm -f "$merged_ready_dir/.needs-attention"
     fi
 
-    log "status" "$ISSUE → PR #$PR MERGED"
+    log "status" --issue "$ISSUE" "→ PR #$PR MERGED"
     set_window_attention_state "$WIN" "clear"
 
     # Capture eval eligibility and agent before cleanup removes task state.
@@ -8205,10 +8213,10 @@ monitor_issue_state() {
 
     if [[ "$REQUIRE_CONFIRM" == "true" && "$merged_before_ready" != "true" ]]; then
       if [[ "$_eval_needed" == "true" ]]; then
-        log "info" "  📊 Running post-merge eval..."
+        log "info" --issue "$ISSUE" "📊 Running post-merge eval..."
         launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
       elif [[ "$AUTO_EVAL" == "true" ]]; then
-        log "debug" "Eval already completed for $ISSUE"
+        log "debug" --issue "$ISSUE" "Eval already completed"
       fi
       log "status" "  → Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")"
       if should_update_linear_state "$ISSUE"; then
@@ -8226,10 +8234,10 @@ monitor_issue_state() {
     fi
     cleanup_completed_task "$ISSUE" "$SLUG"
     if [[ "$_eval_needed" == "true" ]]; then
-      log "info" "  📊 Eval queued in background"
+      log "info" --issue "$ISSUE" "📊 Eval queued in background"
       launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge" "$_eval_agent"
     elif [[ "$AUTO_EVAL" == "true" ]]; then
-      log "debug" "Eval already completed for $ISSUE"
+      log "debug" --issue "$ISSUE" "Eval already completed"
     fi
     return 0
   elif [[ "$pr_status" == "CLOSED" ]]; then
@@ -8283,7 +8291,7 @@ monitor_issue_state() {
     if [[ "$pr_status" == "OPEN" ]]; then
       resolved_phase=$(resolve_phase "$FEATURE_DIR")
       if [[ "$resolved_phase" == "aborted" ]]; then
-        log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
+        log "status" --issue "$ISSUE" "⛔ → Workflow aborted by user during review phase"
         write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
@@ -8312,20 +8320,20 @@ monitor_issue_state() {
           launch_rc=$?
         fi
         if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-          log "status" "⛔ $ISSUE → Workflow aborted during ready launch"
+          log "status" --issue "$ISSUE" "⛔ → Workflow aborted during ready launch"
           set_task_phase "$ISSUE" "aborted"
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
         if [[ "$launch_rc" -eq 3 ]]; then
           set_window_attention_state "$WIN" "clear"
-          log "status" "⚠ $ISSUE → Ready detected conflicts, launching remediation"
+          log "status" --issue "$ISSUE" "⚠ → Ready detected conflicts, launching remediation"
           active_count=$((active_count + 1))
           return 0
         fi
         if [[ "$launch_rc" -eq 5 ]]; then
           set_window_attention_state "$WIN" "clear"
-          log "status" "⚙ $ISSUE → Ready remediation launched (PR #$PR)"
+          log "status" --issue "$ISSUE" "⚙ → Ready remediation launched (PR #$PR)"
           active_count=$((active_count + 1))
           return 0
         fi
@@ -8335,12 +8343,12 @@ monitor_issue_state() {
           return 0
         fi
         if [[ "$launch_rc" -ne 0 ]]; then
-          log "status" "⚠ $ISSUE → Ready checks failed (PR #$PR)"
+          log "status" --issue "$ISSUE" "⚠ → Ready checks failed (PR #$PR)"
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
         set_window_attention_state "$WIN" "needs-user"
-        log "status" "$ISSUE → Ready checks completed for PR #$PR"
+        log "status" --issue "$ISSUE" "→ Ready checks completed for PR #$PR"
         return 0
       fi
 
@@ -8355,7 +8363,7 @@ monitor_issue_state() {
     local launch_head current_head title launch_rc
     resolved_phase=$(resolve_phase "$FEATURE_DIR")
     if [[ "$resolved_phase" == "aborted" ]]; then
-      log "status" "⛔ $ISSUE → Workflow aborted by user during ready phase"
+      log "status" --issue "$ISSUE" "⛔ → Workflow aborted by user during ready phase"
       write_stage_result "$FEATURE_DIR" "ready" "aborted" "$current_agent"
       set_task_phase "$ISSUE" "aborted"
       set_window_attention_state "$WIN" "needs-user"
@@ -8398,7 +8406,7 @@ monitor_issue_state() {
           launch_rc=$?
         fi
         if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-          log "status" "⛔ $ISSUE → Workflow aborted during conflict remediation"
+          log "status" --issue "$ISSUE" "⛔ → Workflow aborted during conflict remediation"
           set_task_phase "$ISSUE" "aborted"
           set_window_attention_state "$WIN" "needs-user"
           return 0
@@ -8419,12 +8427,12 @@ monitor_issue_state() {
           return 0
         fi
         if [[ "$launch_rc" -ne 0 ]]; then
-          log "status" "⚠ $ISSUE → Conflict remediation still needs attention"
+          log "status" --issue "$ISSUE" "⚠ → Conflict remediation still needs attention"
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
 
-        log "status" "$ISSUE → Conflict remediation complete, ready checks rerun"
+        log "status" --issue "$ISSUE" "→ Conflict remediation complete, ready checks rerun"
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
@@ -8454,7 +8462,7 @@ monitor_issue_state() {
         if merge_queue_enabled; then
           if [[ "$queue_state" != "merge-candidate" ]]; then
             mark_ready_stale "$ISSUE" "$ready_state_dir_path" "$stored_base_sha" "$current_main_sha"
-            log "status" "⚠ $ISSUE → Ready marked stale; waiting for merge lane (PR #$PR)"
+            log "status" --issue "$ISSUE" "⚠ → Ready marked stale; waiting for merge lane (PR #$PR)"
             set_window_attention_state "$WIN" "clear"
             active_count=$((active_count + 1))
             return 0
@@ -8465,7 +8473,7 @@ monitor_issue_state() {
             return 0
           fi
         fi
-        log "status" "⚠ $ISSUE → Ready result stale (main advanced); re-running ready checks for PR #$PR"
+        log "status" --issue "$ISSUE" "⚠ → Ready result stale (main advanced); re-running ready checks for PR #$PR"
         title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
         if [[ -z "$title" ]]; then
           issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
@@ -8477,7 +8485,7 @@ monitor_issue_state() {
           launch_rc=$?
         fi
         if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-          log "status" "⛔ $ISSUE → Workflow aborted during stale-ready re-check"
+          log "status" --issue "$ISSUE" "⛔ → Workflow aborted during stale-ready re-check"
           set_task_phase "$ISSUE" "aborted"
           set_window_attention_state "$WIN" "needs-user"
           return 0
@@ -8488,11 +8496,11 @@ monitor_issue_state() {
           return 0
         fi
         if [[ "$launch_rc" -ne 0 ]]; then
-          log "status" "⚠ $ISSUE → Ready re-check failed after main advanced (PR #$PR)"
+          log "status" --issue "$ISSUE" "⚠ → Ready re-check failed after main advanced (PR #$PR)"
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
-        log "status" "$ISSUE → Ready re-check passed after main advanced (PR #$PR)"
+        log "status" --issue "$ISSUE" "→ Ready re-check passed after main advanced (PR #$PR)"
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -8511,7 +8519,7 @@ monitor_issue_state() {
 
     ready_verdict=$(ready_stage_pending_verdict "$ready_state_dir_path")
     if [[ "$ready_status" == "failed" ]]; then
-      log "status" "↻ $ISSUE → Re-running failed ready checks for PR #$PR"
+      log "status" --issue "$ISSUE" "↻ → Re-running failed ready checks for PR #$PR"
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
       if [[ -z "$title" ]]; then
         issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
@@ -8524,7 +8532,7 @@ monitor_issue_state() {
         launch_rc=$?
       fi
       if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-        log "status" "⛔ $ISSUE → Workflow aborted during failed-ready re-check"
+        log "status" --issue "$ISSUE" "⛔ → Workflow aborted during failed-ready re-check"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
@@ -8535,12 +8543,12 @@ monitor_issue_state() {
         return 0
       fi
       if [[ "$launch_rc" -ne 0 ]]; then
-        log "status" "⚠ $ISSUE → Ready re-check still failed (PR #$PR)"
+        log "status" --issue "$ISSUE" "⚠ → Ready re-check still failed (PR #$PR)"
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
 
-      log "status" "$ISSUE → Ready re-check passed for PR #$PR"
+      log "status" --issue "$ISSUE" "→ Ready re-check passed for PR #$PR"
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0
@@ -8563,7 +8571,7 @@ monitor_issue_state() {
         launch_rc=$?
       fi
       if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-        log "status" "⛔ $ISSUE → Workflow aborted during ready re-check"
+        log "status" --issue "$ISSUE" "⛔ → Workflow aborted during ready re-check"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
@@ -8584,12 +8592,12 @@ monitor_issue_state() {
         return 0
       fi
       if [[ "$launch_rc" -ne 0 ]]; then
-        log "status" "⚠ $ISSUE → Ready checks failed (PR #$PR)"
+        log "status" --issue "$ISSUE" "⚠ → Ready checks failed (PR #$PR)"
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
 
-      log "status" "$ISSUE → Ready checks completed for PR #$PR"
+      log "status" --issue "$ISSUE" "→ Ready checks completed for PR #$PR"
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0

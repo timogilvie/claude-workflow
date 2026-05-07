@@ -31,6 +31,7 @@ for f in \
   "$REPO_DIR"/tests/dashboard-refresh.test.sh \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
+  "$REPO_DIR"/tests/log-prefix-task-id.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -208,6 +209,7 @@ else
     # These are the critical functions that caused PRs 48 and 52
     CRITICAL_FUNCTIONS=(
       log log_error log_warn
+      wavemill_format_task_log_message
       save_task_state remove_task_state set_task_phase get_task_phase
       save_migration_reservation
       find_pr_for_branch check_pr_exists pr_state validate_pr_merge
@@ -883,7 +885,7 @@ else
 fi
 
 MERGED_BLOCK=$(awk '
-  /log "status" "\$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
+  /log "status" --issue "\$ISSUE" "→ PR #\$PR MERGED"/ { in_block=1 }
   in_block { print }
   in_block && /elif \[\[ "\$pr_status" == "CLOSED" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
@@ -910,7 +912,7 @@ else
 fi
 
 EXTERNAL_BLOCK=$(awk '
-  /log "status" "\$ISSUE → Completed externally \(cross-repo or manual\)"/ { in_block=1 }
+  /log "status" --issue "\$ISSUE" "→ Completed externally \(cross-repo or manual\)"/ { in_block=1 }
   in_block { print }
   in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
 ' "$LIB_DIR/wavemill-mill.sh")
@@ -1642,7 +1644,7 @@ else
   else
     LOG_TEST_DIR=$(mktemp -d)
     LOG_TEST_SCRIPT="$LOG_TEST_DIR/log-functions.sh"
-    printf '%s\n' "$LOG_FUNCTION_BLOCK" > "$LOG_TEST_SCRIPT"
+    printf 'source "%s/wavemill-common.sh"\n%s\n' "$LIB_DIR" "$LOG_FUNCTION_BLOCK" > "$LOG_TEST_SCRIPT"
 
     SINGLE_OUTPUT=$(bash -lc '
       source "'"$LOG_TEST_SCRIPT"'"
@@ -2792,6 +2794,21 @@ if grep -qE '^render_monitor_command_queue_section\(\) \{' "$STATUS_SCRIPT" 2>/d
 else
   fail "wavemill-status.sh is missing render_monitor_command_queue_section"
 fi
+
+# ============================================================================
+# TEST: Log prefix task ID (HOK-1592)
+# ============================================================================
+echo ""
+echo "=== Log Prefix Task ID ==="
+
+log_prefix_output="$(bash "$REPO_DIR/tests/log-prefix-task-id.test.sh" 2>&1)" || log_prefix_status=$?
+log_prefix_status="${log_prefix_status:-0}"
+if [[ "$log_prefix_status" -eq 0 ]]; then
+  pass "log prefix task ID formatter and mill integration"
+else
+  fail "log prefix task ID tests: $log_prefix_output"
+fi
+unset log_prefix_status
 
 # ============================================================================
 # RESULTS

@@ -24,7 +24,7 @@ command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq
 command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
 
 # Logging
-log() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  $m"; }
+log() { local m; m=$(wavemill_format_task_log_message "$*"); echo "$(date '+%H:%M:%S')  $m"; }
 log_error() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  ERROR: $m" >&2; }
 log_warn() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  WARN: $m" >&2; }
 

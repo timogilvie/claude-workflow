@@ -23,7 +23,7 @@ command -v npx >/dev/null || { echo "Error: npx required (install: brew install 
 command -v gh >/dev/null || { echo "Error: gh CLI required (install: brew install gh)"; exit 1; }
 
 # Logging
-log() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  $m"; }
+log() { local m; m=$(wavemill_format_task_log_message "$*"); echo "$(date '+%H:%M:%S')  $m"; }
 log_error() { local m="$*"; m="${m#"${m%%[![:space:]]*}"}"; echo "$(date '+%H:%M:%S')  ERROR: $m" >&2; }
 
 # Colors
