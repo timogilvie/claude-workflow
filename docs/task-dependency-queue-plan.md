@@ -39,7 +39,7 @@ See `docs/mill-mode.md` § "Dependency-Aware Task Queues" for operator-facing gu
 
 ## Subsystem Specification
 
-See `.wavemill/context/dependency-queue.md` for the machine-readable subsystem spec.
+The machine-readable subsystem spec lives at `.wavemill/context/dependency-queue.md`. This path is gitignored by design — it is a runtime-generated artifact created by `npx tsx tools/init-project-context.ts` (or auto-initialized by `wavemill init`). The spec is present locally after initialization but is not committed to the repository.
 
 ## Rollout Closure
 

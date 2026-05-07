@@ -7,6 +7,7 @@ set -euo pipefail
 #   1. Read-only analysis produces queue metadata (REQ-F2)
 #   3. First-wave launch holds queued children (REQ-F4)
 #   4. Parent PR triggers child launch (REQ-F5) — via existing fixture
+#   5. PR dependency metadata blocks tend merge (REQ-F6) — via existing fixture
 #   8b. Missing parent branch fails clearly (REQ-F9b) — via existing fixture
 #   8a. Queue disabled falls back cleanly (REQ-F9a)
 #
@@ -43,6 +44,7 @@ echo "=== Dependency-Aware Task Queue (End-to-End) ==="
 run_fixture "read-only analysis produces queue metadata"  "$FIXTURE_DIR/queue_readonly_analysis.sh"
 run_fixture "first-wave launch holds queued children"     "$FIXTURE_DIR/queue_first_wave_launch.sh"
 run_fixture "parent PR triggers child launch"             "$FIXTURE_DIR/parent_pr_triggers_child_launch.sh"
+run_fixture "PR dependency metadata blocks tend merge"    "$FIXTURE_DIR/tend_blocked_by_dependency.sh"
 run_fixture "missing parent branch fails clearly"         "$FIXTURE_DIR/parent_branch_missing_fails_clearly.sh"
 run_fixture "queue disabled falls back cleanly"           "$FIXTURE_DIR/queue_fallback_disabled.sh"
 

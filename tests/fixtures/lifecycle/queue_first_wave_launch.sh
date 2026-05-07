@@ -26,7 +26,6 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 STATE_FILE="$TMP_DIR/state.json"
-LOG_FILE="$TMP_DIR/launch.log"
 PLAN_FILE="$REPO_DIR/tests/fixtures/startup/launch-plan-with-queue.json"
 FUNCTION_FILE="$TMP_DIR/seed-functions.sh"
 
