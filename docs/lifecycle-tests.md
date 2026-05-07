@@ -35,7 +35,13 @@ Current categories:
 - Phase and prompt handoff instructions: `tools/prompts/**`
 - Top-level launcher: `wavemill`
 - Lifecycle test definitions: `tests/run-lifecycle-tests.sh`, `tests/planning-validation.test.sh`, `tests/startup-handoff.test.sh`, `tests/stage-state.test.sh`, `tests/stage-state.test.ts`, `tests/monitor-ready-transition.test.sh`, `tests/error-recovery.test.sh`, `tests/control-layout.test.sh`, `tests/wavemill-status.test.sh`
+- Dependency-aware task queue: `tests/lifecycle-harness.test.sh`, `tests/lifecycle-scenarios.test.sh`, `tests/wavemill-dependent-launch.test.sh`, `tests/wavemill-queued-tasks-state.test.sh`, `tests/wavemill-launch-plan-queue-metadata.test.sh`, `tests/fixtures/lifecycle/**`
 - Stage result CLI: `tools/stage-result-cli.ts`
+
+CI-specific lifecycle categories currently include:
+
+- Dependency-queue lifecycle: `tests/wavemill-dependent-launch.test.sh`, `tests/wavemill-queued-tasks-state.test.sh`, `tests/wavemill-launch-plan-queue-metadata.test.sh`
+- Lifecycle scenario fixtures: `tests/lifecycle-scenarios.test.sh`, `tests/lifecycle-harness.test.sh`, `tests/fixtures/lifecycle/**`
 
 The ready-stage lifecycle coverage also includes automatic remediation transitions. When a fixable ready failure launches remediation, lifecycle tests should verify that the monitor keeps the task active, clears operator attention, and avoids repeated relaunch while the remediation head is still in flight.
 
