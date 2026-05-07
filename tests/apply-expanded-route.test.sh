@@ -11,6 +11,8 @@ log() {
   local level="${1:-}" message="${2:-}"
   if [[ "$level" == "warn" ]]; then
     printf '%s\n' "$message" >&2
+  else
+    printf '%s\n' "$message"
   fi
 }
 
@@ -152,6 +154,35 @@ EOF
     fi
   else
     fail "valid post-expansion route should apply successfully"
+  fi
+  rm -rf "$root"
+}
+
+{
+  mapfile -t fixture < <(new_fixture "expanded-route-summary")
+  root="${fixture[0]}"
+  wt_dir="${fixture[1]}"
+  state_file="${fixture[2]}"
+  feature_dir="$wt_dir/features/test-slug"
+  cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "claude-sonnet-4-6",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6",
+  "planDepth": "deep",
+  "codeDepth": "medium",
+  "reviewMode": "llm"
+}
+EOF
+  set +e
+  output="$(run_apply "$feature_dir" "$state_file" 2>&1)"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 ]] && grep -q '\[HOK-1512\] \[router\] planner=claude-sonnet-4-6' <<< "$output"; then
+    pass "default mode emits concise single-line route summary"
+  else
+    fail "default mode should emit concise route summary"
   fi
   rm -rf "$root"
 }

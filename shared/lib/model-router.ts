@@ -20,6 +20,7 @@ import { loadWavemillConfig } from './config.ts';
 import { aggregateEvals } from './eval-aggregator.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
+import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 import {
   configuredDeepSeekModelIds,
   DEFAULT_MODEL_REGISTRY,
@@ -437,41 +438,47 @@ function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
   );
   console.error(`Router: Loaded ${perRepo.length} records from per-repo file`);
 
-  // Try loading aggregated cross-repo data
-  // Use worktree-aware resolution for aggregated data path
-  let aggregatedPath = resolveFromMainRepo('.wavemill/evals/aggregated-evals.jsonl', repoDir);
-
-  // Check if config overrides the aggregated path
+  // Try loading aggregated cross-repo data:
+  // 1. Per-repo aggregated path (worktree-aware, optionally config-overridden)
+  // 2. Global wavemill installation aggregated path
+  let perRepoAggregatedPath = resolveFromMainRepo('.wavemill/evals/aggregated-evals.jsonl', repoDir);
   const config = loadWavemillConfig(repoDir);
   if (config.eval?.aggregation?.outputPath) {
-    aggregatedPath = resolveFromMainRepo(config.eval.aggregation.outputPath, repoDir);
+    perRepoAggregatedPath = resolveFromMainRepo(config.eval.aggregation.outputPath, repoDir);
   }
+  const globalAggregatedPath = resolveGlobalAggregatedEvalsPath();
+  const candidatePaths = [...new Set([perRepoAggregatedPath, globalAggregatedPath])];
 
-  if (!existsSync(aggregatedPath)) {
-    console.error(`Router: Aggregated file not found at ${aggregatedPath}`);
-    return perRepo;
-  }
+  const seen = new Set(perRepo.map((r) => r.id));
+  const merged = [...perRepo];
+  let foundAggregatedSource = false;
 
-  try {
-    const seen = new Set(perRepo.map((r) => r.id));
-    const merged = [...perRepo];
-    let aggregatedCount = 0;
-    for (const record of readJsonlFile<EvalRecord>(aggregatedPath)) {
-      if (!seen.has(record.id)) {
-        seen.add(record.id);
-        merged.push(record);
-        aggregatedCount++;
-      }
+  for (const candidatePath of candidatePaths) {
+    if (!existsSync(candidatePath)) {
+      console.error(`Router: Aggregated file not found at ${candidatePath}`);
+      continue;
     }
-    console.error(
-      `Router: Loaded ${aggregatedCount} additional records from aggregated file ` +
-      `(${merged.length} total after merge)`
-    );
-    return merged;
-  } catch (error) {
-    console.error(`Router: Failed to read aggregated file: ${errorMessage(error)}`);
-    return perRepo;
+
+    foundAggregatedSource = true;
+    try {
+      let aggregatedCount = 0;
+      for (const record of readJsonlFile<EvalRecord>(candidatePath)) {
+        if (!seen.has(record.id)) {
+          seen.add(record.id);
+          merged.push(record);
+          aggregatedCount++;
+        }
+      }
+      console.error(
+        `Router: Loaded ${aggregatedCount} additional records from aggregated file ` +
+        `${candidatePath} (${merged.length} total after merge)`
+      );
+    } catch (error) {
+      console.error(`Router: Failed to read aggregated file ${candidatePath}: ${errorMessage(error)}`);
+    }
   }
+
+  return foundAggregatedSource ? merged : perRepo;
 }
 
 /**

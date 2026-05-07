@@ -40,6 +40,9 @@ npm-debug.log*
 features/*/
 bugs/*/
 epics/*/
+reviews/*
+competitive-reviews/
+weekly-competitive-review-prompt.md
 !features/.gitkeep
 !bugs/.gitkeep
 !epics/.gitkeep

@@ -143,7 +143,12 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
 
   const promotionPr = currentPr ?? findExistingPromotionPr(integrationBranch, promotionBranch, options.repoDir, shellRunner);
   const checkSummary = promotionPr
-    ? formatCheckSummary(await waitForChecks(promotionPr.number, options.repoDir, shellRunner, 0))
+    ? formatCheckSummary(await waitForChecks(
+      promotionPr.number,
+      options.repoDir,
+      shellRunner,
+      { timeoutMs: 0, requiredChecks: config.requiredChecks },
+    ))
     : undefined;
 
   return {

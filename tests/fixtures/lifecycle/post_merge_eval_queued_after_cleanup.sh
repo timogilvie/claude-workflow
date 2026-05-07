@@ -28,6 +28,6 @@ assert_post_merge_eval_queued_after_cleanup() {
   check_contains "post-merge eval queued with correct args" "$output" \
     "HOK-1294 888 task/post_merge_eval_queued_after_cleanup post_merge_eval_queued_after_cleanup HOK-1294 post-merge"
   check_contains "cleanup runs before eval" "$output" "cleanup_count=1"
-  check_contains "eval-queued message appears in logs" "$output" "Eval queued in background"
+  check_contains "eval-queued message appears in logs" "$output" "[HOK-1294]  📊 Eval queued in background"
   check_contains "linear marked done" "$output" "HOK-1294|Done"
 }

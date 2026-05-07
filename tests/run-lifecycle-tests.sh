@@ -37,10 +37,15 @@ echo "=== Wavemill Lifecycle Integration Tests ==="
 
 run_lifecycle_test "planning validation regressions" bash tests/planning-validation.test.sh
 run_lifecycle_test "startup handoff" bash tests/startup-handoff.test.sh
+run_lifecycle_test "lifecycle harness" bash tests/lifecycle-harness.test.sh
+run_lifecycle_test "lifecycle scenarios" bash tests/lifecycle-scenarios.test.sh
 run_lifecycle_test "stage state shell helpers" bash tests/stage-state.test.sh
 run_lifecycle_test "stage state TypeScript helpers" node --test tests/stage-state.test.ts
 run_lifecycle_test "monitor ready transition" bash tests/monitor-ready-transition.test.sh
 run_lifecycle_test "error recovery" bash tests/error-recovery.test.sh
+run_lifecycle_test "dependent task launch" bash tests/wavemill-dependent-launch.test.sh
+run_lifecycle_test "queued tasks state" bash tests/wavemill-queued-tasks-state.test.sh
+run_lifecycle_test "launch plan queue metadata" bash tests/wavemill-launch-plan-queue-metadata.test.sh
 
 # Skip control layout test in CI - tmux session creation fails in containerized environments
 if [[ -z "${CI:-}" ]]; then
