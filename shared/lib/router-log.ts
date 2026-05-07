@@ -22,6 +22,11 @@ function currentVerbosityNum(): number {
   return levelNum(configuredLevel);
 }
 
+export function routerLogVerboseEnabled(): boolean {
+  const raw = (process.env.WAVEMILL_ROUTER_LOG_VERBOSE || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
 export function routerLog(message: string, level: LogLevel = 'info'): void {
   if (levelNum(level) > currentVerbosityNum()) {
     return;

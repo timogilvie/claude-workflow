@@ -6,6 +6,25 @@
 # LAYERED CONFIGURATION LOADING
 # ============================================================================
 
+# Format a task-scoped status/info/debug message so the task id appears first
+# in the log pane. WARN/ERROR formatting is handled by separate helpers.
+wavemill_task_log_message() {
+  local task_id="${1:-}"
+  shift || true
+  local msg="$*"
+  msg="${msg#"${msg%%[![:space:]]*}"}"
+
+  if [[ -z "$task_id" ]]; then
+    printf '%s\n' "$msg"
+    return 0
+  fi
+
+  case "$msg" in
+    "$task_id"*|"[$task_id]"*) printf '%s\n' "$msg" ;;
+    *) printf '[%s]  %s\n' "$task_id" "$msg" ;;
+  esac
+}
+
 # Hardcoded defaults (ultimate fallbacks)
 _WAVEMILL_DEFAULTS='{
   "linear": { "project": "" },
@@ -780,9 +799,78 @@ route_lifecycle_route_id() {
   ' "$route_file" 2>/dev/null
 }
 
+router_log_verbose_enabled() {
+  local raw="${WAVEMILL_ROUTER_LOG_VERBOSE:-}"
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+route_summary_signature() {
+  local route_file="$1"
+  [[ -n "$route_file" && -f "$route_file" ]] || return 1
+
+  jq -r '
+    [
+      (if ((.planner // "") | length) > 0 then "planner=\(.planner)" else empty end),
+      (if ((.planDepth // "") | length) > 0 then "planDepth=\(.planDepth)" else empty end),
+      (if ((.coder // "") | length) > 0 then "coder=\(.coder)" else empty end),
+      (if ((.codeDepth // "") | length) > 0 then "codeDepth=\(.codeDepth)" else empty end),
+      (if ((.reviewer // "") | length) > 0 then "reviewer=\(.reviewer)" else empty end),
+      (if ((.reviewMode // .reviewRecommended // "") | length) > 0 then "reviewMode=\(.reviewMode // .reviewRecommended)" else empty end)
+    ] | join(", ")
+  ' "$route_file" 2>/dev/null
+}
+
+route_summary_mode_tag() {
+  local route_file="$1"
+  [[ -n "$route_file" && -f "$route_file" ]] || return 1
+
+  local mode
+  mode="$(jq -r '.provenance.routerMode // .routerMode // .routingMode // empty' "$route_file" 2>/dev/null || true)"
+  case "$mode" in
+    constrained|survival)
+      printf '[mode=%s] ' "$mode"
+      ;;
+    *)
+      printf ''
+      ;;
+  esac
+}
+
+log_router_route_summary() {
+  local issue="$1" route_file="$2"
+  [[ -n "$issue" && -n "$route_file" && -f "$route_file" ]] || return 0
+
+  local signature mode_tag key
+  signature="$(route_summary_signature "$route_file" 2>/dev/null || true)"
+  [[ -n "$signature" ]] || return 0
+  mode_tag="$(route_summary_mode_tag "$route_file" 2>/dev/null || true)"
+  key="${issue}|${mode_tag}${signature}"
+  if [[ "${_WAVEMILL_LAST_ROUTE_SUMMARY_KEY:-}" == "$key" ]]; then
+    return 0
+  fi
+  _WAVEMILL_LAST_ROUTE_SUMMARY_KEY="$key"
+  log "info" "[$issue] [router] ${mode_tag}${signature}"
+}
+
 log_route_lifecycle() {
   local event="$1"
   shift || true
+
+  if ! router_log_verbose_enabled; then
+    case "$event" in
+      bootstrap_assigned|expanded_assigned|expansion_cache_hit|execution_active)
+        return 0
+        ;;
+    esac
+  fi
 
   local line="route.lifecycle: event=${event}"
   local token
@@ -831,6 +919,7 @@ emit_execution_active_route() {
     fi
   fi
 
+  log_router_route_summary "$issue" "$routing_file"
   log_route_lifecycle "execution_active" \
     "issue=$issue" \
     "route=\"$active_route\"" \
@@ -1030,6 +1119,8 @@ apply_expanded_route_if_present() {
       "source=$source"
   fi
 
+  log_router_route_summary "$issue" "$routing_file"
+
   return 0
 }
 
@@ -1043,7 +1134,9 @@ mill_check_expansion_handshake() {
   reason="$(mill_expansion_handshake_reason "$feature_dir")"
   case "$reason" in
     already-expanded|expanded-route-present)
-      log "info" "[expansion-handshake] PASS issue=$issue reason=$reason"
+      if router_log_verbose_enabled; then
+        log "info" "[expansion-handshake] PASS issue=$issue reason=$reason"
+      fi
       return 0
       ;;
   esac
