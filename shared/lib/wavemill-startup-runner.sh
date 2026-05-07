@@ -87,6 +87,12 @@ startup_log() {
   [[ -n "${STATUS_LOG_FILE:-}" ]] && printf '%s\n' "$line" >> "$STATUS_LOG_FILE" 2>/dev/null || true
 }
 
+startup_task_log() {
+  local issue="$1"
+  shift
+  startup_log "$(wavemill_task_log_message "$issue" "$*")"
+}
+
 startup_step() {
   local message="$1"
   startup_log "  $message"
@@ -529,10 +535,10 @@ startup_run_task_phases() {
 
   if [[ "${WAVEMILL_NO_PROGRESS:-0}" == "1" ]]; then
     startup_log ""
-    startup_log "── Task ${ordinal}/${total}: $issue ($slug) ──"
-    startup_log "[${ordinal}/${total}] launching $issue"
+    startup_task_log "$issue" "── Task ${ordinal}/${total}: $issue ($slug) ──"
+    startup_task_log "$issue" "[${ordinal}/${total}] launching $issue"
   else
-    startup_log "── Task $issue ($slug) ──"
+    startup_task_log "$issue" "── Task $issue ($slug) ──"
     progress_update "$startup_id" route done
     progress_update "$startup_id" worktree running
   fi
@@ -732,7 +738,7 @@ $details_context"
     startup_step "[7/7] Setting Linear → In Progress... [DRY-RUN skip]"
     [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" linear done
     printf '%s\n' "$issue" >> "$LAUNCHED_ISSUES_FILE"
-    startup_log "✓ $issue validated in dry-run (${coder_model:-$planner_model}, phase: $persisted_phase)"
+    startup_task_log "$issue" "✓ $issue validated in dry-run (${coder_model:-$planner_model}, phase: $persisted_phase)"
     STARTUP_TASK_LOG_FILE=""
     return 0
   fi
@@ -774,7 +780,7 @@ $details_context"
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" linear done
 
   printf '%s\n' "$issue" >> "$LAUNCHED_ISSUES_FILE"
-  startup_log "✓ $issue launched (${coder_model:-$planner_model}, phase: $persisted_phase)"
+  startup_task_log "$issue" "✓ $issue launched (${coder_model:-$planner_model}, phase: $persisted_phase)"
   STARTUP_TASK_LOG_FILE=""
   return 0
 }

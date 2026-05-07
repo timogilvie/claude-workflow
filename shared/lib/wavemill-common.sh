@@ -6,6 +6,25 @@
 # LAYERED CONFIGURATION LOADING
 # ============================================================================
 
+# Format a task-scoped status/info/debug message so the task id appears first
+# in the log pane. WARN/ERROR formatting is handled by separate helpers.
+wavemill_task_log_message() {
+  local task_id="${1:-}"
+  shift || true
+  local msg="$*"
+  msg="${msg#"${msg%%[![:space:]]*}"}"
+
+  if [[ -z "$task_id" ]]; then
+    printf '%s\n' "$msg"
+    return 0
+  fi
+
+  case "$msg" in
+    "$task_id"*|"[$task_id]"*) printf '%s\n' "$msg" ;;
+    *) printf '[%s]  %s\n' "$task_id" "$msg" ;;
+  esac
+}
+
 # Hardcoded defaults (ultimate fallbacks)
 _WAVEMILL_DEFAULTS='{
   "linear": { "project": "" },
