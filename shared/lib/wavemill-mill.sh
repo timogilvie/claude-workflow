@@ -6917,6 +6917,10 @@ consume_next_command() {
   if (( ${#COMMAND_QUEUE[@]} == 0 )); then
     return 1
   fi
+  if (( ${#COMMAND_QUEUE_OFFSETS[@]} == 0 )); then
+    COMMAND_QUEUE=()
+    return 1
+  fi
   REPLY="${COMMAND_QUEUE[0]}"
   REPLY_OFFSET="${COMMAND_QUEUE_OFFSETS[0]}"
   if (( ${#COMMAND_QUEUE[@]} == 1 )); then
@@ -8721,7 +8725,7 @@ while :; do
         fi
         ;;
       *)
-        COMMAND_QUEUE=("$REPLY" "${COMMAND_QUEUE[@]+"${COMMAND_QUEUE[@]}"}")
+        requeue_consumed_command_front
         break
         ;;
     esac
@@ -8872,7 +8876,9 @@ while :; do
         fi
 
         REPLY=""
+        MONITOR_PHASE_C_REPLY_OFFSET=""
         if consume_next_command; then
+          MONITOR_PHASE_C_REPLY_OFFSET="${REPLY_OFFSET:-}"
           case "$REPLY" in
             enter) ;;
             select\ *) REPLY="${REPLY#select }" ;;
@@ -9006,6 +9012,9 @@ while :; do
           SELECT_SHOW_ALL=false
           USING_GROUPED_VIEW=false
           clear_task_list_display
+        fi
+        if [[ -n "$MONITOR_PHASE_C_REPLY_OFFSET" ]]; then
+          acknowledge_command_offset "$MONITOR_PHASE_C_REPLY_OFFSET"
         fi
         poll_sleep "$POLL_SECONDS"
       else

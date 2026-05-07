@@ -2796,6 +2796,13 @@ if [[ -n "$HEREDOC_CONTENT" ]]; then
   else
     fail "maybe_run_challenge_comparison may block the monitor loop (missing background job tracking)"
   fi
+
+  if grep -Fq 'MONITOR_PHASE_C_REPLY_OFFSET="${REPLY_OFFSET:-}"' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq 'acknowledge_command_offset "$MONITOR_PHASE_C_REPLY_OFFSET"' <<< "$HEREDOC_CONTENT"; then
+    pass "phase-c command consumption acknowledges durable command offsets"
+  else
+    fail "phase-c command consumption may replay selected tasks"
+  fi
 else
   skip "HOK-1565 command draining guards (HEREDOC_CONTENT not available)"
 fi
