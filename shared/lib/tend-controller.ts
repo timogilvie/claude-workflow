@@ -308,7 +308,12 @@ export async function executeMerge(
           return block('rebase', outputFromError(error));
         }
 
-        const checks = await waitForChecks(candidate.number, options.repoDir, deps.shellRunner);
+        const checks = await waitForChecks(
+          candidate.number,
+          options.repoDir,
+          deps.shellRunner,
+          { requiredChecks: integrationConfig.requiredChecks },
+        );
         if (checks.outcome !== 'pass') {
           return block('checks', checks.summary);
         }
@@ -523,8 +528,10 @@ export async function waitForChecks(
   prNumber: number,
   repoDir: string,
   shellRunner: MergeExecutionDeps['shellRunner'],
-  timeoutMs = 30 * 60 * 1000,
+  options: { timeoutMs?: number; requiredChecks?: string[] } = {},
 ): Promise<CheckWaitResult> {
+  const timeoutMs = options.timeoutMs ?? 30 * 60 * 1000;
+  const requiredChecks = options.requiredChecks ?? [];
   const deadline = Date.now() + timeoutMs;
 
   while (true) {
@@ -535,14 +542,16 @@ export async function waitForChecks(
       return { outcome: 'fail', summary: summarizeChecks(checks) };
     }
 
-    if (checks.length > 0 && checks.every((check) => isPassingCheck(check))) {
-      return { outcome: 'pass', summary: summarizeChecks(checks) };
+    const missingRequired = findMissingRequiredChecks(checks, requiredChecks);
+
+    if (checks.length > 0 && missingRequired.length === 0 && checks.every((check) => isPassingCheck(check))) {
+      return { outcome: 'pass', summary: summarizeChecks(checks, requiredChecks) };
     }
 
     if (Date.now() >= deadline) {
       return {
         outcome: 'timeout',
-        summary: summarizeChecks(checks),
+        summary: summarizeChecks(checks, requiredChecks),
       };
     }
 
@@ -695,13 +704,27 @@ function isPassingCheck(check: PrCheckRun): boolean {
   return PASSING_CHECK_CONCLUSIONS.has(conclusion) || PASSING_CHECK_BUCKETS.has(bucket);
 }
 
-function summarizeChecks(checks: PrCheckRun[]): string {
-  if (checks.length === 0) {
-    return 'No PR checks reported.';
+function findMissingRequiredChecks(checks: PrCheckRun[], requiredChecks: string[]): string[] {
+  if (requiredChecks.length === 0) {
+    return [];
   }
-  return checks
+  const reported = new Set(checks.map((check) => check.name).filter(Boolean));
+  return requiredChecks.filter((name) => !reported.has(name));
+}
+
+function summarizeChecks(checks: PrCheckRun[], requiredChecks: string[] = []): string {
+  const missingRequired = findMissingRequiredChecks(checks, requiredChecks);
+  if (checks.length === 0) {
+    return missingRequired.length > 0
+      ? `No PR checks reported.\nMissing required checks: ${missingRequired.join(', ')}`
+      : 'No PR checks reported.';
+  }
+  const summary = checks
     .map((check) => `${check.name || 'check'}: ${check.conclusion || check.bucket || check.state || 'pending'}`)
     .join('\n');
+  return missingRequired.length > 0
+    ? `${summary}\nMissing required checks: ${missingRequired.join(', ')}`
+    : summary;
 }
 
 function sleep(ms: number): Promise<void> {
