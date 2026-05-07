@@ -56,3 +56,4 @@ All scenarios are implemented and tested as of 2026-05-07.
 | 7 | Partial refresh | ✅ | Prior PRs (cited) |
 | 8a | Fallback: queue disabled | ✅ | This PR |
 | 8b | Fallback: parent branch missing | ✅ | Prior PRs (cited) |
+| Subsystem spec | `.wavemill/context/dependency-queue.md` | ✅ (gitignored) | This PR (runtime artifact — not committed; see Subsystem Specification above) |

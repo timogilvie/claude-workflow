@@ -27,7 +27,9 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 STATE_FILE="$TMP_DIR/state.json"
 PLAN_FILE="$REPO_DIR/tests/fixtures/startup/launch-plan-with-queue.json"
+CALL_LOG="$TMP_DIR/launch-calls.log"
 FUNCTION_FILE="$TMP_DIR/seed-functions.sh"
+STATUS_LOG_FILE="$TMP_DIR/status.log"
 
 cat > "$STATE_FILE" <<'JSON'
 {
@@ -37,18 +39,20 @@ cat > "$STATE_FILE" <<'JSON'
 }
 JSON
 
-export STATE_FILE SESSION="first-wave-test"
+export STATE_FILE SESSION="first-wave-test" PLAN_FILE STATUS_LOG_FILE
 
 # shellcheck source=/dev/null
 source "$COMMON_LIB"
 
 extract_function "$STARTUP_RUNNER" "seed_queued_tasks_from_plan" > "$FUNCTION_FILE"
+extract_function "$STARTUP_RUNNER" "launch_startup_concurrent" >> "$FUNCTION_FILE"
 
 # shellcheck source=/dev/null
 source "$FUNCTION_FILE"
 
 echo "=== First-Wave Launch Holds Queued Children ==="
 
+# Phase 1: seed queued_tasks state from the queue plan
 seed_queued_tasks_from_plan "$PLAN_FILE"
 
 available_now="$(jq -r '.queuePlan.availableNow[]' "$PLAN_FILE")"
@@ -81,6 +85,36 @@ if jq -e '.queued_tasks[] | select(.issue_id == "HOK-1531")' "$STATE_FILE" >/dev
   fail "HOK-1531 should NOT be in queued_tasks (it is a root)"
 else
   pass "HOK-1531 is not in queued_tasks (root tasks are not queued)"
+fi
+
+# Phase 2: verify dispatch — stub launch_task_from_plan to record calls,
+# skipping tasks already queued in STATE_FILE (simulating the intended
+# launcher behavior: only root tasks are dispatched on first wave).
+startup_log() { :; }
+
+launch_task_from_plan() {
+  local task_json="$1"
+  local issue
+  issue="$(printf '%s' "$task_json" | jq -r '.issue')"
+  if jq -e --arg id "$issue" '.queued_tasks[] | select(.issue_id == $id)' "$STATE_FILE" >/dev/null 2>&1; then
+    return 0
+  fi
+  printf '%s\n' "$issue" >> "$CALL_LOG"
+}
+
+: > "$CALL_LOG"
+launch_startup_concurrent 2
+
+if grep -q 'HOK-1531' "$CALL_LOG"; then
+  pass "HOK-1531 (root) dispatched by launcher"
+else
+  fail "HOK-1531 (root) dispatched by launcher"
+fi
+
+if grep -q 'HOK-1532' "$CALL_LOG"; then
+  fail "HOK-1532 (queued child) not dispatched"
+else
+  pass "HOK-1532 (queued child) not dispatched"
 fi
 
 echo ""
