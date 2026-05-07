@@ -30,6 +30,7 @@ for f in \
   "$REPO_DIR"/shared/hooks/*.sh \
   "$REPO_DIR"/tests/dashboard-refresh.test.sh \
   "$REPO_DIR"/tests/state-mutex.test.sh \
+  "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
@@ -100,6 +101,18 @@ else
   fail "dependent task launch lifecycle: $dependent_launch_output"
 fi
 unset dependent_launch_status
+
+echo ""
+echo "=== Task Log Prefix ==="
+
+task_log_prefix_output="$(bash "$REPO_DIR/tests/task-id-log-prefix.test.sh" 2>&1)" || task_log_prefix_status=$?
+task_log_prefix_status="${task_log_prefix_status:-0}"
+if [[ "$task_log_prefix_status" -eq 0 ]]; then
+  pass "task id log prefix formatter behavior"
+else
+  fail "task id log prefix formatter behavior: $task_log_prefix_output"
+fi
+unset task_log_prefix_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check

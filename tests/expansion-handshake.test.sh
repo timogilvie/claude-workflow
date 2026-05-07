@@ -109,10 +109,10 @@ EOF
   output="$(run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
   status=$?
   set -e
-  if [[ "$status" -eq 0 ]] && grep -q 'reason=already-expanded' <<< "$output"; then
-    pass "REQ-F4 expanded packet bypasses route requirement"
+  if [[ "$status" -eq 0 ]] && ! grep -q 'reason=already-expanded' <<< "$output"; then
+    pass "REQ-F4 expanded packet bypasses route requirement quietly by default"
   else
-    fail "REQ-F4 expanded packet should pass"
+    fail "REQ-F4 expanded packet should pass quietly by default"
   fi
   rm -rf "$root"
 }
@@ -128,10 +128,10 @@ EOF
   output="$(run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
   status=$?
   set -e
-  if [[ "$status" -eq 0 ]] && grep -q 'reason=expanded-route-present' <<< "$output"; then
-    pass "REQ-F5 valid post-expansion route passes"
+  if [[ "$status" -eq 0 ]] && ! grep -q 'reason=expanded-route-present' <<< "$output"; then
+    pass "REQ-F5 valid post-expansion route passes quietly by default"
   else
-    fail "REQ-F5 valid route should pass"
+    fail "REQ-F5 valid route should pass quietly by default"
   fi
   rm -rf "$root"
 }
@@ -147,10 +147,26 @@ EOF
   output="$(run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
   status=$?
   set -e
-  if [[ "$status" -eq 0 ]] && grep -q 'reason=expanded-route-present' <<< "$output"; then
-    pass "REQ-F6 legacy expanded route artifact still satisfies handshake"
+  if [[ "$status" -eq 0 ]] && ! grep -q 'reason=expanded-route-present' <<< "$output"; then
+    pass "REQ-F6 legacy expanded route artifact passes quietly by default"
   else
-    fail "REQ-F6 legacy expanded route artifact should satisfy handshake"
+    fail "REQ-F6 legacy expanded route artifact should pass quietly by default"
+  fi
+  rm -rf "$root"
+}
+
+{
+  mapfile -t fixture < <(new_fixture "expansion-handshake-verbose")
+  root="${fixture[0]}"; feature_dir="${fixture[1]}"
+  printf '## 1. Objective\nAlready expanded\n' > "$feature_dir/task-packet.md"
+  set +e
+  output="$(WAVEMILL_ROUTER_LOG_VERBOSE=1 run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]] && grep -q '\[expansion-handshake\] PASS' <<< "$output"; then
+    pass "verbose mode restores PASS handshake logs"
+  else
+    fail "verbose mode should restore PASS handshake logs"
   fi
   rm -rf "$root"
 }

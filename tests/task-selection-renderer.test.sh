@@ -84,6 +84,12 @@ extract_monitor_heredoc > "$MONITOR_BODY"
 
 FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
 {
+  extract_function "$MONITOR_BODY" "refresh_backlog_cache"
+  echo
+  extract_function "$MONITOR_BODY" "print_cached_candidates"
+  echo
+  extract_function "$MONITOR_BODY" "fetch_candidates"
+  echo
   extract_function "$MONITOR_BODY" "record_fetch_queue_plan_failure"
   echo
   extract_function "$MONITOR_BODY" "log_fetch_queue_plan_failure"
@@ -186,6 +192,62 @@ test_fetch_queue_plan_transforms_linear_backlog() {
   check_contains "fetch_queue_plan preserves shared-surface clusters" "$output" '"avoidRunningTogether"'
   check_contains "fetch_queue_plan preserves shared-surface ids" "$output" '"HOK-13"'
   check_contains "fetch_queue_plan triages unknown dependency" "$output" '"to": "HOK-14"'
+}
+
+test_backlog_refresh_persists_cache_in_parent_shell() {
+  local output
+  output=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" REPO_DIR="$REPO_DIR" LINEAR_BACKLOG_JSON="$LINEAR_BACKLOG_JSON" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    BACKLOG_CACHE_TTL=60
+    BACKLOG_CACHE=""
+    BACKLOG_JSON_CACHE=""
+    QUEUE_PLAN_CACHE="stale-plan"
+    LAST_BACKLOG_FETCH=0
+    LAST_QUEUE_PLAN_FETCH=42
+    PROJECT_NAME="hok"
+    TOOLS_DIR="$REPO_DIR/tools"
+    score_and_rank_issues() {
+      cat <<'"'"'EOF'"'"'
+HOK-10|foundation-task|Foundation task|core|98|false|0
+HOK-11|depends-on-foundation|Depends on foundation|core|95|false|1
+EOF
+    }
+    _with_timeout() {
+      shift
+      if [[ "${1-}" == "npx" && "${2-}" == "tsx" && "${3-}" == *"list-backlog-json.ts" ]]; then
+        printf "%s\n" "$LINEAR_BACKLOG_JSON"
+      else
+        "$@"
+      fi
+    }
+
+    candidates_subshell="$(fetch_candidates)"
+    if [[ -n "${BACKLOG_JSON_CACHE:-}" ]]; then
+      echo "legacy_cache=present"
+    else
+      echo "legacy_cache=missing"
+    fi
+
+    refresh_backlog_cache
+    candidates_parent="$(print_cached_candidates)"
+    queue_plan_json="$(fetch_queue_plan)"
+
+    [[ -n "$BACKLOG_JSON_CACHE" ]] && echo "parent_cache=present"
+    [[ -z "$QUEUE_PLAN_CACHE" ]] || echo "queue_cache_rebuilt=yes"
+    [[ -n "$candidates_subshell" ]] && echo "legacy_candidates=present"
+    [[ -n "$candidates_parent" ]] && echo "parent_candidates=present"
+    [[ -n "$queue_plan_json" ]] && echo "queue_plan=present"
+    [[ "$queue_plan_json" == *'"'"'"availableNow"'"'"'* ]] && echo "queue_plan_shape=ok"
+  ')
+
+  check_contains "legacy command substitution keeps candidate output" "$output" "legacy_candidates=present"
+  check_contains "legacy command substitution does not persist cache" "$output" "legacy_cache=missing"
+  check_contains "parent refresh persists backlog cache" "$output" "parent_cache=present"
+  check_contains "parent cached candidates available" "$output" "parent_candidates=present"
+  check_contains "queue plan builds after parent refresh" "$output" "queue_plan=present"
+  check_contains "queue plan has expected shape" "$output" "queue_plan_shape=ok"
 }
 
 test_invoke_first_wave_helper_packs_priority_without_violating_dependencies() {
@@ -463,6 +525,7 @@ test_fetch_queue_plan_warning_stays_quiet_without_debug() {
 
 echo "=== Task Selection Renderer ==="
 test_fetch_queue_plan_transforms_linear_backlog
+test_backlog_refresh_persists_cache_in_parent_shell
 test_invoke_first_wave_helper_packs_priority_without_violating_dependencies
 test_grouped_render_with_fixture_output
 test_render_rejects_malformed_json

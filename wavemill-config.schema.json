@@ -1357,6 +1357,15 @@
                     "default": true,
                     "description": "Halt integration promotion when CI checks are failing on the integration branch."
                 },
+                "requiredChecks": {
+                    "type": "array",
+                    "default": [],
+                    "description": "Named PR checks that must be reported and passing before Wavemill merges a task PR or reports a promotion PR as green.",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
                 "highRiskPolicy": {
                     "type": "string",
                     "enum": [
