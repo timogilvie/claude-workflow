@@ -5706,14 +5706,13 @@ LAST_BACKLOG_FETCH=0
 LAST_QUEUE_PLAN_FETCH=0
 BACKLOG_CACHE_TTL=60  # seconds between backlog refreshes
 
-fetch_candidates() {
+refresh_backlog_cache() {
   local now
   now=$(date +%s)
 
   # Use cache if fresh enough
   if (( now - LAST_BACKLOG_FETCH < BACKLOG_CACHE_TTL )) && [[ -n "$BACKLOG_CACHE" ]]; then
-    echo "$BACKLOG_CACHE"
-    return
+    return 0
   fi
 
   local backlog_json
@@ -5725,7 +5724,7 @@ fetch_candidates() {
     QUEUE_PLAN_CACHE=""
     LAST_QUEUE_PLAN_FETCH=0
     LAST_BACKLOG_FETCH=$now
-    return
+    return 0
   fi
 
   BACKLOG_JSON_CACHE="$backlog_json"
@@ -5737,7 +5736,17 @@ fetch_candidates() {
   # identifier|slug|title|area|score|blocked_by_count
   BACKLOG_CACHE=$(score_and_rank_issues "$backlog_json" 30 | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}')
   LAST_BACKLOG_FETCH=$now
+  return 0
+}
+
+print_cached_candidates() {
   echo "$BACKLOG_CACHE"
+}
+
+# NOTE: cache mutation must run in the parent shell, not in $(...) subshells.
+fetch_candidates() {
+  refresh_backlog_cache || return
+  print_cached_candidates
 }
 
 fetch_queue_plan() {
@@ -8764,7 +8773,8 @@ while :; do
   update_free_slots_state "$free_slots"
 
   if (( free_slots > 0 )); then
-    candidates=$(fetch_candidates)
+    refresh_backlog_cache
+    candidates=$(print_cached_candidates)
 
     if [[ -n "$candidates" ]]; then
       available=$(filter_active_issues "$candidates")
@@ -8798,6 +8808,10 @@ while :; do
           GROUPED_DISPLAY=""
           GROUPED_SELECT_FROM=""
           if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
+            if [[ -n "$queue_plan_json" ]]; then
+              QUEUE_PLAN_CACHE="$queue_plan_json"
+              LAST_QUEUE_PLAN_FETCH=$(date +%s)
+            fi
             render_grouped_task_list "$queue_plan_json" "$available"
             if [[ -n "$GROUPED_DISPLAY" ]]; then
               echo "$GROUPED_DISPLAY"
@@ -8821,6 +8835,8 @@ while :; do
               echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
             fi
           fi
+          queue_fp="${queue_plan_json:0:50}"
+          display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}"
           rm -f "$queue_plan_diag_file"
           FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_previous"
           echo ""
@@ -8891,8 +8907,13 @@ while :; do
         elif [[ "$REPLY" =~ ^unknown\  ]]; then
           log_warn "Unknown input: ${REPLY#unknown }"
         elif [[ "$REPLY" == "enter" ]]; then
-          if [[ "${ENTER_LAUNCHES_WAVE:-true}" == "true" ]] && [[ -n "$QUEUE_PLAN_CACHE" ]]; then
-            wave_result=$(invoke_first_wave_helper "$QUEUE_PLAN_CACHE" "$avail_unblocked" "$free_slots" 2>/dev/null) || wave_result=""
+          if [[ "${ENTER_LAUNCHES_WAVE:-true}" == "true" ]]; then
+            wave_plan_json="${queue_plan_json:-$QUEUE_PLAN_CACHE}"
+            if [[ -n "$wave_plan_json" ]]; then
+              wave_result=$(invoke_first_wave_helper "$wave_plan_json" "$avail_unblocked" "$free_slots" 2>/dev/null) || wave_result=""
+            else
+              wave_result=""
+            fi
             if [[ -n "$wave_result" ]]; then
               wave_ids=$(jq -r '.wave[]?' <<<"$wave_result" 2>/dev/null) || wave_ids=""
               deferred_ids=$(jq -r '.deferred[]?' <<<"$wave_result" 2>/dev/null) || deferred_ids=""
