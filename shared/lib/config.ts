@@ -276,6 +276,7 @@ export interface IntegrationConfig {
   mergeMethod: 'merge' | 'squash' | 'rebase';
   deleteBranchAfterMerge: boolean;
   haltOnRed: boolean;
+  requiredChecks: string[];
   highRiskPolicy: 'block' | 'manual' | 'allow';
   useMillSession: boolean;
   readyPolicy?: IntegrationReadyPolicyConfig;
@@ -454,6 +455,7 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
   mergeMethod: 'squash',
   deleteBranchAfterMerge: true,
   haltOnRed: true,
+  requiredChecks: [],
   highRiskPolicy: 'manual',
   useMillSession: true,
 };

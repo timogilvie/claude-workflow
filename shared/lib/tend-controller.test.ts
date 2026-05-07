@@ -9,6 +9,7 @@ import {
   executeMerge,
   formatStatusLine,
   selectNextCandidate,
+  waitForChecks,
   type GhPrListEntry,
   type IntegrationHealth,
   type MergeExecutionDeps,
@@ -938,6 +939,27 @@ describe('executeMerge', () => {
     } finally {
       options.cleanup();
     }
+  });
+
+  it('keeps checks pending when configured required checks have not appeared', async () => {
+    const calls: string[] = [];
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        calls.push(cmd);
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'SUCCESS', bucket: 'pass' }]);
+      },
+      {
+        timeoutMs: 0,
+        requiredChecks: ['Shell and Unit Tests', 'Lifecycle Integration Tests'],
+      },
+    );
+
+    assert.equal(result.outcome, 'timeout');
+    assert.match(result.summary, /Shell and Unit Tests: pass/);
+    assert.match(result.summary, /Missing required checks: Lifecycle Integration Tests/);
+    assert.ok(calls.some((cmd) => cmd.includes('gh pr checks 42 --json name,state,bucket')));
   });
 
   it('blocks and comments when rebase fails', async () => {

@@ -99,8 +99,8 @@ else
   pass "empty queue does not render header"
 fi
 
-if rg -n "queue_(add_task|remove_task)\(\)" "$COMMON_LIB" >/dev/null \
-  && [[ "$(rg -n "state_mutate " "$COMMON_LIB" | wc -l | tr -d ' ')" -ge 2 ]]; then
+if grep -En "queue_(add_task|remove_task)\(\)" "$COMMON_LIB" >/dev/null \
+  && [[ "$(grep -En "state_mutate " "$COMMON_LIB" | wc -l | tr -d ' ')" -ge 2 ]]; then
   pass "queue mutation helpers use state_mutate"
 else
   fail "queue mutation helpers use state_mutate"

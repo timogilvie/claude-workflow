@@ -181,6 +181,21 @@
     "enabled": true,
     "cleanupAfterMerge": false
   },
+  "integration": {
+    "enabled": false,
+    "integrationBranch": "auto/integration",
+    "promotionBranch": "main",
+    "mergeMethod": "squash",
+    "deleteBranchAfterMerge": true,
+    "haltOnRed": true,
+    "requiredChecks": [
+      "Shell and Unit Tests",
+      "Check Lifecycle Paths",
+      "Lifecycle Integration Tests"
+    ],
+    "highRiskPolicy": "manual",
+    "useMillSession": true
+  },
   "ui": {
     "visualVerification": true,
     "designStandards": true,
