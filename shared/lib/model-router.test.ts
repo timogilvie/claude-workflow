@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { aggregateEvalHistory, resolveAgent } from './model-router.ts';
+import { aggregateEvalHistory, recommendModel, resolveAgent } from './model-router.ts';
 
 describe('model-router resolveAgent', () => {
   it('routes known DeepSeek models to claude', () => {
@@ -56,5 +59,74 @@ describe('model-router resolveAgent', () => {
     ], 'bugfix');
 
     assert.equal(stats[0]?.successRate, 0.5);
+  });
+
+  it('loads global aggregated evals when per-repo aggregated file is missing', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-global-fallback-'));
+    const globalAggregatedPath = join(repoDir, 'global-aggregated.jsonl');
+    const previousOverride = process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
+    const previousCwd = process.cwd();
+
+    try {
+      mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+      writeFileSync(join(repoDir, '.wavemill', 'evals', 'evals.jsonl'), '', 'utf-8');
+      writeFileSync(
+        globalAggregatedPath,
+        [
+          JSON.stringify({
+            id: 'global-1',
+            schemaVersion: '1.15.0',
+            originalPrompt: 'Fix router bug',
+            modelId: 'gpt-5.4',
+            modelVersion: 'gpt-5.4',
+            score: 0.95,
+            scoreBand: 'Strong',
+            timeSeconds: 20,
+            timestamp: '2026-05-01T00:00:00.000Z',
+            interventionRequired: false,
+            interventionCount: 0,
+            interventionDetails: [],
+            rationale: 'strong',
+          }),
+          JSON.stringify({
+            id: 'global-2',
+            schemaVersion: '1.15.0',
+            originalPrompt: 'Fix router bug',
+            modelId: 'claude-sonnet-4-6',
+            modelVersion: 'claude-sonnet-4-6',
+            score: 0.85,
+            scoreBand: 'Strong',
+            timeSeconds: 18,
+            timestamp: '2026-05-01T00:01:00.000Z',
+            interventionRequired: false,
+            interventionCount: 0,
+            interventionDetails: [],
+            rationale: 'solid',
+          }),
+        ].join('\n') + '\n',
+        'utf-8',
+      );
+
+      process.env.WAVEMILL_AGGREGATED_EVALS_PATH = globalAggregatedPath;
+      process.chdir(repoDir);
+      const recommendation = recommendModel('Fix a routing bug', {
+        mode: 'heuristic',
+        repoDir,
+        minRecords: 2,
+        minModels: 2,
+      });
+
+      assert.equal(recommendation.insufficientData, false);
+      assert.equal(recommendation.recommendedModel, 'gpt-5.4');
+      assert.equal(recommendation.candidates.length, 2);
+    } finally {
+      if (previousOverride === undefined) {
+        delete process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
+      } else {
+        process.env.WAVEMILL_AGGREGATED_EVALS_PATH = previousOverride;
+      }
+      process.chdir(previousCwd);
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 });

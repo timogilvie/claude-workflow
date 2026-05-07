@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
-import { resolveEvalsDir } from './evals-paths.ts';
+import {
+  resolveEvalsDir,
+  resolveGlobalAggregatedEvalsPath,
+  resolveWavemillInstallDir,
+} from './evals-paths.ts';
 
 let repoDir: string;
 let worktreeDir: string;
@@ -46,6 +50,8 @@ describe('evals-paths', () => {
 
   afterEach(() => {
     clearConfigCache();
+    delete process.env.WAVEMILL_DIR;
+    delete process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
 
     if (existsSync(tempRoot)) {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -87,5 +93,22 @@ describe('evals-paths', () => {
       dir: resolve(explicitDir),
       fromConfig: false,
     });
+  });
+
+  it('resolves global aggregated evals path from wavemill install by default', () => {
+    const expected = join(resolveWavemillInstallDir(), '.wavemill', 'evals', 'aggregated-evals.jsonl');
+    assert.equal(resolveGlobalAggregatedEvalsPath(), expected);
+  });
+
+  it('respects WAVEMILL_AGGREGATED_EVALS_PATH override', () => {
+    const overridePath = join(tempRoot, 'custom', 'aggregated.jsonl');
+    process.env.WAVEMILL_AGGREGATED_EVALS_PATH = overridePath;
+    assert.equal(resolveGlobalAggregatedEvalsPath(), overridePath);
+  });
+
+  it('respects WAVEMILL_DIR override for wavemill install resolution', () => {
+    const overrideDir = join(tempRoot, 'wavemill-install');
+    process.env.WAVEMILL_DIR = overrideDir;
+    assert.equal(resolveWavemillInstallDir(), overrideDir);
   });
 });
