@@ -207,5 +207,13 @@ process_new_monitor_commands 0 "" "" "" ""
 assert_eq "later commands after the durable offset are not skipped" "3" "$(jq -r '.monitorCommandOffset' "$STATE_FILE")"
 assert_eq "deferred command list keeps distinct queued selections" "3" "$(jq -r '(.monitorDeferredCommands // []) | length' "$STATE_FILE")"
 
+COMMAND_QUEUE=("select 4")
+COMMAND_QUEUE_OFFSETS=()
+if consume_next_command; then
+  echo "FAIL: consumed malformed command queue without an offset"
+  exit 1
+fi
+assert_eq "malformed command queue is cleared without set -u crash" "0" "${#COMMAND_QUEUE[@]}"
+
 rm -f "$COMMAND_FILE"
 echo "PASS: monitor drains and persists commands independently of long-running lifecycle work"
