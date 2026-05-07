@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import { fallbackLog, policyAdjustmentLog, roleForTaskType, routerLog } from './router-log.ts';
+import { fallbackLog, policyAdjustmentLog, roleForTaskType, routerLog, routerLogVerboseEnabled } from './router-log.ts';
 
 function captureStderr(fn: () => void): string {
   let output = '';
@@ -21,6 +21,7 @@ function captureStderr(fn: () => void): string {
 afterEach(() => {
   delete process.env.DASHBOARD_VERBOSITY;
   delete process.env.WAVEMILL_LOG_LEVEL;
+  delete process.env.WAVEMILL_ROUTER_LOG_VERBOSE;
 });
 
 describe('router-log', () => {
@@ -120,5 +121,29 @@ describe('router-log', () => {
       output,
       '[classifier] model-a unavailable (quota); no remaining fallback candidates after: model-a\n',
     );
+  });
+
+  it('treats 1/true/yes/on as verbose router logging enabled', () => {
+    process.env.WAVEMILL_ROUTER_LOG_VERBOSE = '1';
+    assert.equal(routerLogVerboseEnabled(), true);
+    process.env.WAVEMILL_ROUTER_LOG_VERBOSE = 'true';
+    assert.equal(routerLogVerboseEnabled(), true);
+    process.env.WAVEMILL_ROUTER_LOG_VERBOSE = 'yes';
+    assert.equal(routerLogVerboseEnabled(), true);
+    process.env.WAVEMILL_ROUTER_LOG_VERBOSE = 'on';
+    assert.equal(routerLogVerboseEnabled(), true);
+  });
+
+  it('treats unset/0/false/no/off as verbose router logging disabled', () => {
+    delete process.env.WAVEMILL_ROUTER_LOG_VERBOSE;
+    assert.equal(routerLogVerboseEnabled(), false);
+    process.env.WAVEMILL_ROUTER_LOG_VERBOSE = '0';
+    assert.equal(routerLogVerboseEnabled(), false);
+    process.env.WAVEMILL_ROUTER_LOG_VERBOSE = 'false';
+    assert.equal(routerLogVerboseEnabled(), false);
+    process.env.WAVEMILL_ROUTER_LOG_VERBOSE = 'no';
+    assert.equal(routerLogVerboseEnabled(), false);
+    process.env.WAVEMILL_ROUTER_LOG_VERBOSE = 'off';
+    assert.equal(routerLogVerboseEnabled(), false);
   });
 });
