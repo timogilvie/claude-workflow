@@ -18,6 +18,7 @@ import type { WorkflowRouteDecision, PlanDepth, CodeDepth, ReviewMode } from './
 import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
+import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 
 export interface StageAwareConstraints {
   modelsAvailable?: string[];
@@ -259,6 +260,11 @@ function getHistoricalSources(repoDir: string, options: StageAwareOptions): Hist
     },
     {
       path: resolveFromMainRepo(options.aggregatedEvalsPath || DEFAULT_AGGREGATED_EVALS_PATH, repoDir),
+      kind: 'aggregated',
+      priority: 1,
+    },
+    {
+      path: resolveGlobalAggregatedEvalsPath(),
       kind: 'aggregated',
       priority: 1,
     },

@@ -14,6 +14,7 @@ import { loadRouterConfig } from './model-router.ts';
 import { loadStageAwareEvalRecords } from './stage-aware-router.ts';
 import { routeWorkflow, routeWorkflowStageAware, summarizeWorkflowRoute, type WorkflowRouteDecision } from './workflow-router.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
+import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 
 const DEFAULT_SAMPLE_PROMPT = 'Fix a workflow routing failure, add diagnostics, and cover the edge cases with tests.';
 const MILL_ROUTE_TOOL = 'tools/route-task.ts';
@@ -165,6 +166,7 @@ export async function checkRoutingHealth(
     readSource('local', resolve(resolvedRepoDir, LOCAL_EVALS_PATH)),
     readSource('backfilled', resolveFromMainRepo(BACKFILLED_EVALS_PATH, resolvedRepoDir)),
     readSource('aggregated', resolveFromMainRepo(AGGREGATED_EVALS_PATH, resolvedRepoDir)),
+    readSource('aggregated', resolveGlobalAggregatedEvalsPath()),
   ];
 
   const mergedRecords = loadStageAwareEvalRecords({ repoDir: resolvedRepoDir });

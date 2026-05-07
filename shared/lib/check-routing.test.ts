@@ -48,10 +48,22 @@ function makeRepo(opts: { records?: string[]; config?: Record<string, unknown> }
     },
     ...opts.config,
   }));
+  const previousGlobalAggregatedPath = process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
+  process.env.WAVEMILL_AGGREGATED_EVALS_PATH = join(
+    repoDir,
+    '.wavemill',
+    'evals',
+    'aggregated-evals.jsonl',
+  );
   clearConfigCache(repoDir);
   return {
     repoDir,
     cleanup: () => {
+      if (previousGlobalAggregatedPath === undefined) {
+        delete process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
+      } else {
+        process.env.WAVEMILL_AGGREGATED_EVALS_PATH = previousGlobalAggregatedPath;
+      }
       clearConfigCache(repoDir);
       rmSync(repoDir, { recursive: true, force: true });
     },
@@ -158,4 +170,3 @@ if (failed > 0) {
 }
 
 console.log(`\n--- check-routing Tests: ${passed} passed, ${failed} failed ---`);
-
