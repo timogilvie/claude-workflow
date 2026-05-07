@@ -201,6 +201,32 @@ When the monitor loop detects that a parent task has opened a PR, mill automatic
 - PR metadata: the child PR body is updated with a prepended `depends_on:` block that records the parent PR number, issue, branch, and URL.
 - Failure mode: if mill cannot resolve the parent PR branch, the child remains queued and gets `waiting_reason: parent_pr_branch_unresolvable: <detail>`. Mill does not silently fall back to `main`.
 
+## Dependency-Aware Task Queue
+
+The dependency-aware queue extends startup planning and monitor dispatch into an eight-stage flow that keeps blocked work visible without launching it too early.
+
+| Stage | What happens | Source files | Observable signals |
+| --- | --- | --- | --- |
+| 1. Analysis | Backlog dependencies are classified in read-only mode. | `shared/lib/task-dependency-planner.ts`, `shared/lib/dependency-classifier.ts` | Dependency-plan logs and planner/cache tests pass. |
+| 2. Selection | Startup emits `queuePlan` metadata with `availableNow` and queued children. | `shared/lib/wavemill-startup-runner.sh` | Dry-run launch plan contains queue metadata. |
+| 3. First wave | Mill launches only the first available dependency-safe wave. | `shared/lib/wavemill-startup-runner.sh` | `.wavemill/workflow-state.json` gains `queued_tasks`. |
+| 4. Parent PR dispatch | Monitor detects a parent PR and dispatches queued children from the parent PR branch. | `shared/lib/wavemill-mill.sh` | Status log shows child launch after parent PR detection. |
+| 5. PR metadata | Child PR gets a `depends_on:` block for the parent PR. | `shared/lib/wavemill-mill.sh` | Child PR body includes issue, branch, PR number, and URL. |
+| 6. Cache reuse | Existing dependency plans are reused when backlog inputs match. | `shared/lib/task-dependency-plan-cache.ts` | Cache-hit logs avoid rebuilding the full plan. |
+| 7. Partial refresh | Only changed backlog edges are recomputed and merged into cache. | `shared/lib/task-dependency-plan-cache.ts` | Partial refresh tests update only changed nodes. |
+| 8. Fallback | Mill falls back safely when dep-queue data is missing or unusable. | `shared/lib/wavemill-startup-runner.sh`, `shared/lib/wavemill-mill.sh` | Missing queue metadata downgrades cleanly; unresolved parent branch leaves child queued. |
+
+See [Task Dependency Queue Plan](task-dependency-queue-plan.md) for the implementation map and test references.
+
+### Diagnosing Dep-Queue Stalls
+
+1. Parent branch missing
+   Check `.wavemill/workflow-state.json` for `queued_tasks[].waiting_reason` starting with `parent_pr_branch_unresolvable:`. The parent PR may exist without a fetchable head branch, or the branch lookup may be failing. Confirm the parent PR still exists and that its head ref can be resolved locally.
+2. Cache corrupt or unreadable
+   Look for log lines beginning with `[task-dep-cache] dropping unreadable cache`. Delete `.wavemill/cache/task-dependency-plans/*.json` and rerun mill to force a full dependency-plan rebuild.
+3. Child stays queued indefinitely
+   Inspect `queued_tasks[].blocker_pr_number`. If it is `null`, the parent PR has not been created yet. If it is set, verify the monitor reached `dispatch_queued_children_for_parent` and that the child was not left behind by a branch-resolution failure.
+
 ### Challenge-Mode Interaction
 
 Challenge mode adds a second PR for the same task and records a comparison result under `.wavemill/evals`. During tend selection, `tend-challenge-gate.ts` classifies each pair into one of four states:
