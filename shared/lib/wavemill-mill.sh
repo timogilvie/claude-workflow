@@ -3205,7 +3205,7 @@ handle_phase_launch_result() {
     clear_stage_result "$feature_dir" "$launched_phase"
     set_task_phase "$issue" "$retry_phase"
     set_window_attention_state "$win" "needs-user"
-    log "warn" --issue "$issue" "⚠ → ${launched_phase^} phase launch failed (rc=$launch_rc), reverting to $retry_phase for retry"
+    log "status" --issue "$issue" "⚠ → ${launched_phase^} phase launch failed (rc=$launch_rc), reverting to $retry_phase for retry"
     return 1
   fi
 
