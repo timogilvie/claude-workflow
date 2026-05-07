@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 import { loadWavemillConfig } from './config.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 
@@ -49,4 +50,32 @@ export function resolveRouteArtifactArchiveDir(
     return undefined;
   }
   return resolve(resolveEvalsDir(undefined, repoDir).dir, 'artifacts', issueId);
+}
+
+/**
+ * Resolve the wavemill installation directory by navigating up from this
+ * file's location (shared/lib/ -> shared/ -> <wavemill-root>).
+ *
+ * `WAVEMILL_DIR` can override this location for tests.
+ */
+export function resolveWavemillInstallDir(): string {
+  if (process.env.WAVEMILL_DIR) {
+    return process.env.WAVEMILL_DIR;
+  }
+  const thisFile = fileURLToPath(import.meta.url);
+  return resolve(dirname(thisFile), '../..');
+}
+
+/**
+ * Resolve the global aggregated evals path.
+ *
+ * Resolution order:
+ * 1. `WAVEMILL_AGGREGATED_EVALS_PATH` env override (test hook)
+ * 2. <wavemill-install>/.wavemill/evals/aggregated-evals.jsonl
+ */
+export function resolveGlobalAggregatedEvalsPath(): string {
+  if (process.env.WAVEMILL_AGGREGATED_EVALS_PATH) {
+    return process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
+  }
+  return join(resolveWavemillInstallDir(), '.wavemill', 'evals', 'aggregated-evals.jsonl');
 }
