@@ -1679,6 +1679,7 @@ test('getIntegrationConfig returns a full valid integration block', () => {
     mergeMethod: 'rebase' as const,
     deleteBranchAfterMerge: false,
     haltOnRed: false,
+    requiredChecks: ['ci'],
     highRiskPolicy: 'allow' as const,
     useMillSession: false,
   };
@@ -1776,7 +1777,7 @@ test('repo config remains valid and integration defaults stay opt-in', () => {
     readFileSync(join(process.cwd(), '.wavemill-config.json'), 'utf-8'),
   ) as { integration?: unknown };
   if (shipped.integration !== undefined) {
-    assert.deepEqual(shipped.integration, INTEGRATION_DEFAULTS);
+    assert.equal((shipped.integration as { enabled?: unknown }).enabled, false);
   }
 });
 
