@@ -729,9 +729,52 @@ route_lifecycle_route_id() {
   ' "$route_file" 2>/dev/null
 }
 
+route_lifecycle_summary() {
+  local route_file="$1"
+  [[ -n "$route_file" && -f "$route_file" ]] || return 1
+
+  jq -r '
+    [
+      (if (.planner // "") != "" then "planner=\(.planner)" else empty end),
+      (if (.planDepth // "") != "" then "planDepth=\(.planDepth)" else empty end),
+      (if (.coder // "") != "" then "coder=\(.coder)" else empty end),
+      (if (.codeDepth // "") != "" then "codeDepth=\(.codeDepth)" else empty end),
+      (if (.reviewer // "") != "" then "reviewer=\(.reviewer)" else empty end),
+      (if (.reviewMode // .reviewRecommended // "") != "" then "reviewMode=\(.reviewMode // .reviewRecommended)" else empty end)
+    ] | join(",")
+  ' "$route_file" 2>/dev/null
+}
+
+router_verbose_logs_enabled() {
+  [[ "${DASHBOARD_VERBOSITY:-info}" == "debug" ]] || [[ "${WAVEMILL_LOG_LEVEL:-}" == "debug" ]]
+}
+
+log_route_decision_summary() {
+  local issue="$1" route_file="$2"
+  local route_summary
+
+  [[ -n "$issue" && -n "$route_file" ]] || return 0
+  [[ -f "$route_file" ]] || return 0
+
+  route_summary="$(route_lifecycle_summary "$route_file" 2>/dev/null || true)"
+  [[ -n "$route_summary" ]] || return 0
+
+  log "info" "[$issue] [router]: $route_summary"
+}
+
 log_route_lifecycle() {
   local event="$1"
   shift || true
+
+  # If not debug mode and this is a success/diagnostic event, demote to debug
+  if ! router_verbose_logs_enabled; then
+    case "$event" in
+      expansion_cache_hit|expanded_assigned|expansion_skipped)
+        # Skip logging these success events in non-debug mode
+        return 0
+        ;;
+    esac
+  fi
 
   local line="route.lifecycle: event=${event}"
   local token
@@ -785,6 +828,12 @@ emit_execution_active_route() {
     "route=\"$active_route\"" \
     "route_changed=$route_changed" \
     "source=$source"
+
+  # Only emit a visible summary if no expanded route was applied
+  # (expanded route path already emitted summary from apply_expanded_route_if_present)
+  if [[ -z "$expanded_file" ]]; then
+    log_route_decision_summary "$issue" "$routing_file"
+  fi
 }
 
 ensure_phase_config_state_file() {
@@ -979,6 +1028,9 @@ apply_expanded_route_if_present() {
       "source=$source"
   fi
 
+  # Emit concise route decision summary for the final active route
+  log_route_decision_summary "$issue" "$routing_file"
+
   return 0
 }
 
@@ -992,7 +1044,10 @@ mill_check_expansion_handshake() {
   reason="$(mill_expansion_handshake_reason "$feature_dir")"
   case "$reason" in
     already-expanded|expanded-route-present)
-      log "info" "[expansion-handshake] PASS issue=$issue reason=$reason"
+      # Log success at debug level only (no-op cases don't need user visibility)
+      if router_verbose_logs_enabled; then
+        log "info" "[expansion-handshake] PASS issue=$issue reason=$reason"
+      fi
       return 0
       ;;
   esac

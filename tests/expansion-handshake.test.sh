@@ -109,8 +109,8 @@ EOF
   output="$(run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
   status=$?
   set -e
-  if [[ "$status" -eq 0 ]] && grep -q 'reason=already-expanded' <<< "$output"; then
-    pass "REQ-F4 expanded packet bypasses route requirement"
+  if [[ "$status" -eq 0 ]] && ! grep -q 'BLOCKED' <<< "$output"; then
+    pass "REQ-F4 expanded packet should pass"
   else
     fail "REQ-F4 expanded packet should pass"
   fi
@@ -128,7 +128,7 @@ EOF
   output="$(run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
   status=$?
   set -e
-  if [[ "$status" -eq 0 ]] && grep -q 'reason=expanded-route-present' <<< "$output"; then
+  if [[ "$status" -eq 0 ]] && ! grep -q 'BLOCKED' <<< "$output"; then
     pass "REQ-F5 valid post-expansion route passes"
   else
     fail "REQ-F5 valid route should pass"
@@ -147,7 +147,7 @@ EOF
   output="$(run_gate "$feature_dir" "HOK-1513" "$root" 2>&1)"
   status=$?
   set -e
-  if [[ "$status" -eq 0 ]] && grep -q 'reason=expanded-route-present' <<< "$output"; then
+  if [[ "$status" -eq 0 ]] && ! grep -q 'BLOCKED' <<< "$output"; then
     pass "REQ-F6 legacy expanded route artifact still satisfies handshake"
   else
     fail "REQ-F6 legacy expanded route artifact should satisfy handshake"

@@ -31,8 +31,33 @@ interface ExpandedRouteTaskInput {
   outputFile?: string;
 }
 
+function isVerboseLoggingEnabled(): boolean {
+  return process.env.WAVEMILL_LOG_LEVEL === 'debug' || process.env.DASHBOARD_VERBOSITY === 'debug';
+}
+
 function formatRouteSignature(decision: { coder?: string; codeDepth?: string; reviewer?: string; reviewMode?: string; reviewRecommended?: string }): string {
   return `coder=${decision.coder || ''},codeDepth=${decision.codeDepth || ''},reviewer=${decision.reviewer || ''},reviewMode=${decision.reviewMode || decision.reviewRecommended || ''}`;
+}
+
+function formatRouteSummary(decision: {
+  planner?: string;
+  planDepth?: string;
+  coder?: string;
+  codeDepth?: string;
+  reviewer?: string;
+  reviewMode?: string;
+  reviewRecommended?: string;
+}): string {
+  const parts: string[] = [];
+  if (decision.planner) parts.push(`planner=${decision.planner}`);
+  if (decision.planDepth) parts.push(`planDepth=${decision.planDepth}`);
+  if (decision.coder) parts.push(`coder=${decision.coder}`);
+  if (decision.codeDepth) parts.push(`codeDepth=${decision.codeDepth}`);
+  if (decision.reviewer) parts.push(`reviewer=${decision.reviewer}`);
+  if (decision.reviewMode || decision.reviewRecommended) {
+    parts.push(`reviewMode=${decision.reviewMode || decision.reviewRecommended}`);
+  }
+  return parts.join(',');
 }
 
 async function readStdin(): Promise<string> {
@@ -204,19 +229,28 @@ runTool({
 
         mkdirSync(dirname(resolve(result.outputFile)), { recursive: true });
         writeFileSync(result.outputFile, `${JSON.stringify(result.decision, null, 2)}\n`, 'utf-8');
-        const routeSignature = formatRouteSignature(result.decision);
-        if (result.cache_hit) {
+
+        // Emit concise route summary (always visible)
+        const routeSummary = formatRouteSummary(result.decision);
+        console.error(`[${result.input.issueId}] [router]: ${routeSummary}`);
+
+        // Emit verbose diagnostics only in debug mode
+        if (isVerboseLoggingEnabled()) {
+          const routeSignature = formatRouteSignature(result.decision);
+          if (result.cache_hit) {
+            console.error(
+              `[router] route.lifecycle: event=expansion_cache_hit issue=${result.input.issueId} route="${routeSignature}" packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
+            );
+          } else {
+            console.error(
+              `[router] route.lifecycle: event=expanded_assigned issue=${result.input.issueId} route="${routeSignature}" source=${result.route_source || 'single'} packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
+            );
+          }
           console.error(
-            `[router] route.lifecycle: event=expansion_cache_hit issue=${result.input.issueId} route="${routeSignature}" packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
-          );
-        } else {
-          console.error(
-            `[router] route.lifecycle: event=expanded_assigned issue=${result.input.issueId} route="${routeSignature}" source=${result.route_source || 'single'} packet_hash=${(result.packet_hash || '').slice(0, 12)}`,
+            `[router] route_source=${result.route_source} packet_hash=${(result.packet_hash || '').slice(0, 12)} issue=${result.input.issueId}`,
           );
         }
-        console.error(
-          `[router] route_source=${result.route_source} packet_hash=${(result.packet_hash || '').slice(0, 12)} issue=${result.input.issueId}`,
-        );
+
         console.log(JSON.stringify({
           issueId: result.input.issueId,
           outputFile: result.outputFile,
