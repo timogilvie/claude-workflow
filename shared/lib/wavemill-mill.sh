@@ -201,6 +201,11 @@ log() {
     append_status_log "$formatted" || echo "$formatted"
   fi
 }
+log_task() {
+  local level="$1" task_id="$2"
+  shift 2
+  log "$level" "$(wavemill_task_log_message "$task_id" "$*")"
+}
 log_error() {
   local m="$*"
   m="${m#"${m%%[![:space:]]*}"}"
@@ -2029,6 +2034,11 @@ log() {
     append_status_log "$formatted" || echo "$formatted"
   fi
 }
+log_task() {
+  local level="$1" task_id="$2"
+  shift 2
+  log "$level" "$(wavemill_task_log_message "$task_id" "$*")"
+}
 log_error() {
   local m="$*"
   m="${m#"${m%%[![:space:]]*}"}"
@@ -3186,7 +3196,7 @@ handle_phase_launch_result() {
   local launch_rc="$5" win="$6" agent="${7:-}" model="${8:-}"
 
   if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$feature_dir"; then
-    log "status" "⛔ $issue → Workflow aborted during ${launched_phase} launch"
+    log_task "status" "$issue" "⛔ $issue → Workflow aborted during ${launched_phase} launch"
     write_stage_result "$feature_dir" "$launched_phase" "aborted" "$agent" "$model"
     set_task_phase "$issue" "aborted"
     set_window_attention_state "$win" "needs-user"
@@ -3547,7 +3557,7 @@ $issue_desc
   build_planning_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" "$operating_mode" > "$prompt_file"
 
-  log "status" "  Launching planning phase for $issue (model: $planner_model, depth: $plan_depth, mode: $operating_mode)"
+  log_task "status" "$issue" "Launching planning phase for $issue (model: $planner_model, depth: $plan_depth, mode: $operating_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
@@ -3576,7 +3586,7 @@ $issue_desc
   build_coding_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" "$operating_mode" > "$prompt_file"
 
-  log "status" "  Launching coding phase for $issue (model: $coder_model, depth: $code_depth, mode: $operating_mode)"
+  log_task "status" "$issue" "Launching coding phase for $issue (model: $coder_model, depth: $code_depth, mode: $operating_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
@@ -3605,7 +3615,7 @@ $issue_desc
   build_review_prompt "$title" "$issue" "$wt_dir" "$branch" "$base_branch" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" "$operating_mode" > "$prompt_file"
 
-  log "status" "  Launching review phase for $issue (model: $reviewer_model, mode: $review_mode, operating mode: $operating_mode)"
+  log_task "status" "$issue" "Launching review phase for $issue (model: $reviewer_model, mode: $review_mode, operating mode: $operating_mode)"
   _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
@@ -7338,7 +7348,7 @@ monitor_issue_state() {
         launch_rc=$?
       fi
       if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-        log "status" "⛔ $ISSUE → Workflow aborted during ready launch"
+        log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during ready launch"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
@@ -7378,7 +7388,7 @@ monitor_issue_state() {
         if [[ "$AUTO_EVAL" == "true" ]]; then
           eval_completed=$(read_state_value "false" --arg i "$ISSUE" '.tasks[$i].evalCompleted // false')
           if [[ "$eval_completed" == "false" ]]; then
-            log "info" "  📊 Running post-completion eval..."
+            log_task "info" "$ISSUE" "📊 Running post-completion eval..."
             launch_background_post_merge_eval "$ISSUE" "" "$BRANCH" "$SLUG" "$ISSUE" "post-completion"
           else
             log "debug" "Eval already completed for $ISSUE"
@@ -7415,7 +7425,7 @@ monitor_issue_state() {
       case "$current_phase" in
         routing)
           if check_stage_aborted "$FEATURE_DIR"; then
-            log "status" "⛔ $ISSUE → Workflow aborted by user during routing phase"
+            log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during routing phase"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -7512,7 +7522,7 @@ monitor_issue_state() {
 
           if [[ "$resolved_phase" == "aborted" ]]; then
             unset "$approval_wait_var" 2>/dev/null || true
-            log "status" "⛔ $ISSUE → Workflow aborted by user during planning phase"
+            log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during planning phase"
             write_stage_result "$FEATURE_DIR" "planning" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -7799,7 +7809,7 @@ monitor_issue_state() {
 
         coding)
           if [[ "$resolved_phase" == "aborted" ]]; then
-            log "status" "⛔ $ISSUE → Workflow aborted by user during coding phase"
+            log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during coding phase"
             write_stage_result "$FEATURE_DIR" "coding" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -7891,7 +7901,7 @@ monitor_issue_state() {
 
         review)
           if [[ "$resolved_phase" == "aborted" ]]; then
-            log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
+            log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during review phase"
             write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -7956,7 +7966,7 @@ monitor_issue_state() {
               local launch_rc=$?
             fi
             if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-              log "⛔ $ISSUE → Workflow aborted during ready launch"
+              log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during ready launch"
               set_task_phase "$ISSUE" "aborted"
               set_window_attention_state "$WIN" "needs-user"
               return 0
@@ -7997,7 +8007,7 @@ monitor_issue_state() {
           # ready-phase monitoring runs in the PR lifecycle section below,
           # because ready always has a known PR.
           if [[ "$resolved_phase" == "aborted" ]]; then
-            log "⛔ $ISSUE → Workflow aborted by user during ready phase"
+            log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during ready phase"
             write_stage_result "$FEATURE_DIR" "ready" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -8050,7 +8060,7 @@ monitor_issue_state() {
                 local launch_rc=$?
               fi
               if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-                log "⛔ $ISSUE → Workflow aborted during conflict remediation"
+                log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during conflict remediation"
                 set_task_phase "$ISSUE" "aborted"
                 set_window_attention_state "$WIN" "needs-user"
                 return 0
@@ -8118,7 +8128,7 @@ monitor_issue_state() {
       fi
 
       if check_stage_aborted "$FEATURE_DIR"; then
-        log "status" "⛔ $ISSUE → Workflow aborted (controller state)"
+        log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted (controller state)"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
@@ -8214,7 +8224,7 @@ monitor_issue_state() {
 
     if [[ "$REQUIRE_CONFIRM" == "true" && "$merged_before_ready" != "true" ]]; then
       if [[ "$_eval_needed" == "true" ]]; then
-        log "info" "  📊 Running post-merge eval..."
+        log_task "info" "$ISSUE" "📊 Running post-merge eval..."
         launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge"
       elif [[ "$AUTO_EVAL" == "true" ]]; then
         log "debug" "Eval already completed for $ISSUE"
@@ -8235,7 +8245,7 @@ monitor_issue_state() {
     fi
     cleanup_completed_task "$ISSUE" "$SLUG"
     if [[ "$_eval_needed" == "true" ]]; then
-      log "info" "  📊 Eval queued in background"
+      log_task "info" "$ISSUE" "📊 Eval queued in background"
       launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge" "$_eval_agent"
     elif [[ "$AUTO_EVAL" == "true" ]]; then
       log "debug" "Eval already completed for $ISSUE"
@@ -8292,7 +8302,7 @@ monitor_issue_state() {
     if [[ "$pr_status" == "OPEN" ]]; then
       resolved_phase=$(resolve_phase "$FEATURE_DIR")
       if [[ "$resolved_phase" == "aborted" ]]; then
-        log "status" "⛔ $ISSUE → Workflow aborted by user during review phase"
+        log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during review phase"
         write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
@@ -8321,7 +8331,7 @@ monitor_issue_state() {
           launch_rc=$?
         fi
         if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-          log "status" "⛔ $ISSUE → Workflow aborted during ready launch"
+          log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during ready launch"
           set_task_phase "$ISSUE" "aborted"
           set_window_attention_state "$WIN" "needs-user"
           return 0
@@ -8364,7 +8374,7 @@ monitor_issue_state() {
     local launch_head current_head title launch_rc
     resolved_phase=$(resolve_phase "$FEATURE_DIR")
     if [[ "$resolved_phase" == "aborted" ]]; then
-      log "status" "⛔ $ISSUE → Workflow aborted by user during ready phase"
+      log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during ready phase"
       write_stage_result "$FEATURE_DIR" "ready" "aborted" "$current_agent"
       set_task_phase "$ISSUE" "aborted"
       set_window_attention_state "$WIN" "needs-user"
@@ -8407,7 +8417,7 @@ monitor_issue_state() {
           launch_rc=$?
         fi
         if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-          log "status" "⛔ $ISSUE → Workflow aborted during conflict remediation"
+          log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during conflict remediation"
           set_task_phase "$ISSUE" "aborted"
           set_window_attention_state "$WIN" "needs-user"
           return 0
@@ -8486,7 +8496,7 @@ monitor_issue_state() {
           launch_rc=$?
         fi
         if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-          log "status" "⛔ $ISSUE → Workflow aborted during stale-ready re-check"
+          log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during stale-ready re-check"
           set_task_phase "$ISSUE" "aborted"
           set_window_attention_state "$WIN" "needs-user"
           return 0
@@ -8533,7 +8543,7 @@ monitor_issue_state() {
         launch_rc=$?
       fi
       if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-        log "status" "⛔ $ISSUE → Workflow aborted during failed-ready re-check"
+        log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during failed-ready re-check"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
@@ -8572,7 +8582,7 @@ monitor_issue_state() {
         launch_rc=$?
       fi
       if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
-        log "status" "⛔ $ISSUE → Workflow aborted during ready re-check"
+        log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during ready re-check"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
