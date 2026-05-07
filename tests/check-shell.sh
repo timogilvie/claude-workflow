@@ -40,6 +40,10 @@ for f in \
   "$REPO_DIR"/tests/fixtures/lifecycle/monitor_consumes_command_file.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/parent_pr_triggers_child_launch.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/parent_branch_missing_fails_clearly.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/queue_readonly_analysis.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/queue_first_wave_launch.sh \
+  "$REPO_DIR"/tests/fixtures/lifecycle/queue_fallback_disabled.sh \
+  "$REPO_DIR"/tests/queue-end-to-end.test.sh \
   "$REPO_DIR/wavemill" \
 ; do
   if [[ ! -f "$f" ]]; then
@@ -100,6 +104,18 @@ else
   fail "dependent task launch lifecycle: $dependent_launch_output"
 fi
 unset dependent_launch_status
+
+echo ""
+echo "=== Queue End-to-End ==="
+
+queue_e2e_output="$(bash "$REPO_DIR/tests/queue-end-to-end.test.sh" 2>&1)" || queue_e2e_status=$?
+queue_e2e_status="${queue_e2e_status:-0}"
+if [[ "$queue_e2e_status" -eq 0 ]]; then
+  pass "dependency-aware queue end-to-end lifecycle"
+else
+  fail "dependency-aware queue end-to-end lifecycle: $queue_e2e_output"
+fi
+unset queue_e2e_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check

@@ -201,6 +201,23 @@ When the monitor loop detects that a parent task has opened a PR, mill automatic
 - PR metadata: the child PR body is updated with a prepended `depends_on:` block that records the parent PR number, issue, branch, and URL.
 - Failure mode: if mill cannot resolve the parent PR branch, the child remains queued and gets `waiting_reason: parent_pr_branch_unresolvable: <detail>`. Mill does not silently fall back to `main`.
 
+### Dependency-Aware Task Queues
+
+When a mill session includes tasks with `dependsOn` edges (derived from Linear "blocks" relations), the startup runner partitions work into waves. Root tasks — those with no unresolved dependencies — launch immediately as the first wave. Child tasks that depend on a root are held in the `queued_tasks` array in the session state file and are not launched until their parent's PR is observed by the monitor loop.
+
+The queue plan is computed during task selection and stored in the launch plan under `queuePlan`. This object contains two key fields: `availableNow` (task IDs eligible for immediate launch) and `queuedAfterDependencies` (child tasks with their ancestor chains). The `--dry-run` flag produces this metadata without creating worktrees or launching agents, which is useful for validating dependency graphs before committing to a session.
+
+Child tasks branch from the parent PR's head ref rather than from `main` or the global `mill.baseBranch`. This ensures the child's worktree includes the parent's changes. When the child PR is created, its body receives a `depends_on:` metadata block recording the parent PR number, issue identifier, branch name, and URL.
+
+**Disabling the queue.** If the launch plan contains no `queuePlan` field (or if it is empty), all tasks launch immediately regardless of dependency edges. This is the natural fallback when the dependency planner is not invoked — for example, when selecting a single task or when dependency analysis is skipped.
+
+**Troubleshooting**
+
+- **Queue disabled (no `queuePlan` in launch plan):** All tasks launch in parallel. Check the launch plan JSON to confirm whether `queuePlan.availableNow` is present. If missing, dependency analysis was not performed during task selection.
+- **Parent branch missing:** The child remains queued and receives `waiting_reason: parent_pr_branch_unresolvable: <detail>` in its `queued_tasks` entry. Inspect `jq '.queued_tasks[] | select(.waiting_reason)' "$STATE_FILE"` to see blocked children and their reasons.
+- **Cache corrupt or stale:** The plan cache at `$STATE_DIR/plan-cache.json` uses fingerprint-based invalidation. If the cache produces unexpected results, delete it safely with `rm "$STATE_DIR/plan-cache.json"` — the next session recomputes the plan from scratch.
+- **Inspecting queue state:** Use `jq '.queued_tasks' "$STATE_FILE"` to list all pending children. Each entry includes `issue_id`, `blocker_issue_id`, `blocker_pr_number` (null until parent PR is detected), `desired_base_branch`, and `queued_at` timestamp.
+
 ### Challenge-Mode Interaction
 
 Challenge mode adds a second PR for the same task and records a comparison result under `.wavemill/evals`. During tend selection, `tend-challenge-gate.ts` classifies each pair into one of four states:
