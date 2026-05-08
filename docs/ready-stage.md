@@ -25,22 +25,29 @@ Responsibilities of each phase:
 - `ready`: judge merge-readiness, release-readiness, and operator follow-up steps
 - `merge`: complete the PR only after the ready gate is satisfied
 
-The target check categories for the ready stage are:
+By default, the ready stage runs only universal checks (`ci-status` and `merge-conflict`). Domain-specific checks such as migration safety, forbidden DDL, and release requirements are opt-in through the `ready` configuration section. This conservative default ensures that unconfigured repositories get safe, non-blocking behavior while repositories with migration workflows can enable the checks they need.
 
-- CI status
-- required approvals
-- merge conflicts
-- branch freshness
-- release and manual-step requirements
-- migration safety checks for risky Alembic DDL
-- migration reversibility
+Available check categories:
+
+| Check | Kind | Description |
+|-------|------|-------------|
+| `ci-status` | universal | GitHub CI status checks |
+| `merge-conflict` | universal | GitHub mergeability state |
+| `schema-migrations` | migration | Migration file presence detection |
+| `migration-chain-integrity` | migration | Alembic revision chain validation |
+| `forbidden-ddl` | migration | Dangerous DDL pattern detection |
+| `migration-reversibility` | migration | Downgrade function validation |
+| `deploy-paths` | domain | Deployment path checks |
+| `release-requirements` | domain | Release step requirements |
+
+Migration-family checks require `migrationKind` and `migrationPatterns` to be configured. Without these, migration checks return `skip` rather than `fail`.
 
 Current implementation details:
 
 - mergeability comes from `gh pr view --json mergeable,mergeStateStatus`
 - GitHub `UNKNOWN` mergeability is retried up to 3 times with 5-second delays
-- merge conflict state is surfaced in a dedicated `mergeConflict` field
-- the readiness verdict still reflects the configured `checks` array
+- merge conflict state is surfaced both as a `merge-conflict` check and in a dedicated `mergeConflict` field
+- the readiness verdict reflects the configured `checks` array and `requiredChecks` controls blocking behavior
 
 ## CLI Usage
 
@@ -487,17 +494,57 @@ Integration with `checkCIStatus` is automatic. This workflow appears like any ot
 
 The ready stage always runs for mill-managed repositories. The `ready` config section controls which checks run and which checks are required; it does not disable the ready phase itself.
 
-Configuration cases:
+### Default Policy
 
-- `ready` missing from `.wavemill-config.json`: all available ready checks can run
-- `ready.checks`: restricts the set of checks to run
-- `ready.requiredChecks`: marks a subset of checks as merge-blocking
-- `ready.migrationPatterns`: overrides the regex patterns used to discover migration files for migration-related checks (including `migration-reversibility`)
+When `ready` is missing from `.wavemill-config.json` or `ready.checks` is absent/empty, only universal checks run:
+
+- `ci-status` — GitHub CI status
+- `merge-conflict` — GitHub mergeability state
+
+This conservative default means unconfigured repositories never run migration or domain-specific checks. To enable those checks, add them explicitly to `ready.checks`.
+
+### Required Checks and Verdict Aggregation
+
+`ready.requiredChecks` determines which checks are merge-blocking:
+
+- A **required** check that fails produces an overall verdict of `fail`.
+- A **required** check that is pending produces an overall verdict of `pending`.
+- A **non-required** check that fails produces an overall verdict of `warn` (not `fail`).
+- A check that returns `skip` never blocks, even if it appears in `requiredChecks`.
+
+When `requiredChecks` is absent, it defaults to the same list as `checks`.
+
+### Migration Kind
+
+`ready.migrationKind` gates migration-family checks by framework:
+
+| Value | Meaning |
+|-------|---------|
+| `alembic` | Python Alembic migrations — enables all migration checks |
+| `sql` | Raw SQL migrations — enables `schema-migrations` and `forbidden-ddl` |
+| `none` | No migrations — all migration checks return `skip` |
+| _(absent)_ | Migration checks return `skip` with "migration kind not configured" |
+
+Migration checks also require `ready.migrationPatterns` to identify migration files. If patterns are absent when a migration check runs, the check returns `skip`.
+
+### Check Name Aliases
+
+The canonical check name for merge conflicts is `merge-conflict` (singular). The alias `merge-conflicts` (plural) is accepted in configuration and resolved to the canonical name.
+
+### Configuration Cases
+
+- `ready` missing: runs universal defaults (`ci-status`, `merge-conflict`), all required
+- `ready.checks` configured: runs exactly the listed checks
+- `ready.requiredChecks` configured: only listed checks can produce `fail` verdict
+- `ready.migrationKind` configured: gates which migration checks can execute
+- `ready.migrationPatterns` configured: identifies migration files for migration checks
 
 Workflow expectations:
 
 - the ready contract remains stable even as checks are added
 - existing review and merge workflows continue after the ready gate reports `pass` or `warn`
+
+### Forbidden DDL Check
 
 `forbidden-ddl` inspects changed migration files with Python AST parsing and evaluates these rules inside `upgrade()`:
 
@@ -513,23 +560,7 @@ Analyzer scope:
 - `op.execute(...)` only warns on literal SQL strings containing `UPDATE`, `INSERT`, or `DELETE`
 - string literals that merely mention dangerous operations do not trigger findings
 
-Minimal explicit configuration:
-
-```json
-{
-  "ready": {
-    "checks": [],
-    "requiredChecks": [],
-    "migrationPatterns": ["migrations/", "alembic/versions/"],
-    "migrationDangerLabels": {
-      "drop_column": "migration:destructive",
-      "drop_table": "migration:destructive",
-      "alter_column_type": "migration:long-running"
-    },
-    "migrationForbiddenPatterns": []
-  }
-}
-```
+Requires `migrationKind` of `alembic` or `sql`. Returns `skip` when migration kind is absent or `none`.
 
 ## Failure Paths And Recovery
 
@@ -637,51 +668,80 @@ Recovery:
 
 Ready-stage settings live in `.wavemill-config.json` under `ready`.
 
-### Schema
-
-```json
-{
-  "ready": {
-    "checks": [],
-    "requiredChecks": []
-  }
-}
-```
-
 ### Options
 
 | Setting | Type | Default | Meaning |
 |---------|------|---------|---------|
-| `ready.checks` | `string[]` | `[]` | Checks to run. Empty means all available checks. |
-| `ready.requiredChecks` | `string[]` | `[]` | Subset of checks that must pass for merge approval. |
+| `ready.checks` | `string[]` | `['ci-status', 'merge-conflict']` | Checks to run. When absent or empty, defaults to universal checks. |
+| `ready.requiredChecks` | `string[]` | _(same as checks)_ | Subset of checks that must pass for merge approval. Non-required failures become warnings. |
+| `ready.migrationKind` | `string` | _(absent)_ | Migration framework: `alembic`, `sql`, or `none`. Required for migration checks. |
+| `ready.migrationPatterns` | `string[]` | _(absent)_ | Path prefixes identifying migration files. Required when migration checks are enabled. |
 
-### Minimal Configuration
+### Minimal Configuration (Conservative Default)
+
+No `ready` section needed — universal checks run automatically:
+
+```json
+{}
+```
+
+Equivalent explicit form:
 
 ```json
 {
   "ready": {
-    "checks": [],
-    "requiredChecks": []
+    "checks": ["ci-status", "merge-conflict"],
+    "requiredChecks": ["ci-status", "merge-conflict"]
   }
 }
 ```
 
-### Explicit Full Configuration
+### Alembic Migration Policy
 
 ```json
 {
   "ready": {
-    "checks": ["ci-status", "approvals", "merge-conflicts", "manual-steps"],
-    "requiredChecks": ["ci-status", "approvals", "merge-conflicts"]
+    "checks": [
+      "ci-status",
+      "merge-conflict",
+      "schema-migrations",
+      "migration-chain-integrity",
+      "forbidden-ddl",
+      "migration-reversibility"
+    ],
+    "requiredChecks": ["ci-status", "merge-conflict", "migration-chain-integrity"],
+    "migrationKind": "alembic",
+    "migrationPatterns": ["alembic/versions/"]
   }
 }
 ```
+
+### SQL Migration Policy
+
+```json
+{
+  "ready": {
+    "checks": [
+      "ci-status",
+      "merge-conflict",
+      "schema-migrations",
+      "forbidden-ddl"
+    ],
+    "requiredChecks": ["ci-status", "merge-conflict"],
+    "migrationKind": "sql",
+    "migrationPatterns": ["migrations/"]
+  }
+}
+```
+
+Note: `migration-chain-integrity` and `migration-reversibility` are Alembic-only and return `skip` for SQL repos.
 
 Guidance:
 
-- use `checks` to narrow which checks are evaluated
+- use `checks` to control which checks are evaluated
 - use `requiredChecks` to distinguish blockers from advisory checks
 - keep `requiredChecks` aligned with branch-protection and release policy
+- configure `migrationKind` and `migrationPatterns` before enabling migration checks
 
 ## Operator Policy Summary
 

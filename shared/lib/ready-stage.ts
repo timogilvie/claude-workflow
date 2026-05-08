@@ -17,7 +17,7 @@
 
 import { execShellCommand, escapeShellArg } from './shell-utils.ts';
 import { extractReleaseReadiness, type ReleaseReadiness } from './task-packet-utils.ts';
-import { DEFAULT_READY_MIGRATION_PATTERNS, getReadyConfig } from './config.ts';
+import { DEFAULT_READY_MIGRATION_PATTERNS, DEFAULT_READY_CHECKS, getReadyConfig, type ReadyMigrationKind } from './config.ts';
 import {
   classifyDowngradeBody,
   extractOperationCalls,
@@ -247,6 +247,44 @@ const MIGRATION_CHAIN_IGNORED_FILES = new Set([
   'env.py',
   'script.py.mako',
 ]);
+
+function unsupportedMigrationKindCheck(
+  checkName: string,
+  expectedKinds: ReadyMigrationKind[],
+  actualKind: ReadyMigrationKind | undefined,
+): ReadyCheck | null {
+  if (actualKind === undefined) {
+    return {
+      name: checkName,
+      status: 'skip',
+      message: `${checkName} requires ready.migrationKind to be configured`,
+      details: { expectedKinds },
+    };
+  }
+  if (!expectedKinds.includes(actualKind)) {
+    return {
+      name: checkName,
+      status: 'skip',
+      message: `${checkName} unsupported for ${actualKind} migrations`,
+      details: { expectedKinds, actualKind },
+    };
+  }
+  return null;
+}
+
+function missingMigrationPatternsCheck(
+  checkName: string,
+  migrationPatterns: string[] | undefined,
+): ReadyCheck | null {
+  if (!migrationPatterns || migrationPatterns.length === 0) {
+    return {
+      name: checkName,
+      status: 'skip',
+      message: `${checkName} requires ready.migrationPatterns to be configured`,
+    };
+  }
+  return null;
+}
 
 function compileMigrationPatterns(
   patternSources: string[]
@@ -602,7 +640,11 @@ function loadDeployConfig(repoDir: string): Record<string, unknown> {
  * @internal Exported for testing purposes
  */
 export function checkSchemaMigrations(changedFiles: string[], repoDir: string): ReadyCheck {
-  // Check if any schema files changed
+  const config = getReadyConfig(repoDir);
+
+  const patternsCheck = missingMigrationPatternsCheck('schema-migrations', config.migrationPatterns);
+  if (patternsCheck) return patternsCheck;
+
   const schemaFilesChanged = changedFiles.filter(file =>
     DEFAULT_SCHEMA_PATTERNS.some(pattern => pattern.test(file))
   );
@@ -616,9 +658,8 @@ export function checkSchemaMigrations(changedFiles: string[], repoDir: string): 
     };
   }
 
-  // Check if any migration files changed
   const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
-    getReadyConfig(repoDir).migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    config.migrationPatterns!,
     'schema-migrations'
   );
   if (!Array.isArray(migrationPatternsOrCheck)) {
@@ -638,7 +679,6 @@ export function checkSchemaMigrations(changedFiles: string[], repoDir: string): 
     };
   }
 
-  // Both schema and migration files changed - pass
   return {
     name: 'schema-migrations',
     status: 'pass',
@@ -706,12 +746,13 @@ function checkReleaseRequirements(
   const { releaseReadiness } = taskPacket;
   const { changedFiles } = prContext;
 
-  // Define schema and migration file patterns (same as checkSchemaMigrations)
   const schemaFilesChanged = changedFiles.filter(file =>
     DEFAULT_SCHEMA_PATTERNS.some(pattern => pattern.test(file))
   );
+  const readyConfig = getReadyConfig(repoDir);
+  const patternSources = readyConfig.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS];
   const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
-    getReadyConfig(repoDir).migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    patternSources,
     'release-requirements'
   );
   if (!Array.isArray(migrationPatternsOrCheck)) {
@@ -787,10 +828,21 @@ function checkReleaseRequirements(
 
 export async function checkMigrationChainIntegrity(
   repoDir: string,
-  migrationPatternSources: string[] = [...DEFAULT_READY_MIGRATION_PATTERNS]
+  migrationPatternSources?: string[],
+  migrationKind?: ReadyMigrationKind,
 ): Promise<ReadyCheck> {
+  const kindCheck = unsupportedMigrationKindCheck(
+    'migration-chain-integrity', ['alembic'], migrationKind,
+  );
+  if (kindCheck) return kindCheck;
+
+  const patternsCheck = missingMigrationPatternsCheck(
+    'migration-chain-integrity', migrationPatternSources,
+  );
+  if (patternsCheck) return patternsCheck;
+
   const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
-    migrationPatternSources,
+    migrationPatternSources!,
     'migration-chain-integrity'
   );
   if (!Array.isArray(migrationPatternsOrCheck)) {
@@ -951,8 +1003,17 @@ function summarizeForbiddenDDLFinding(finding: ForbiddenDDLFinding): string {
 
 export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyCheck {
   const config = getReadyConfig(repoDir);
+
+  const kindCheck = unsupportedMigrationKindCheck(
+    'forbidden-ddl', ['alembic', 'sql'], config.migrationKind,
+  );
+  if (kindCheck) return kindCheck;
+
+  const patternsCheck = missingMigrationPatternsCheck('forbidden-ddl', config.migrationPatterns);
+  if (patternsCheck) return patternsCheck;
+
   const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
-    config.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    config.migrationPatterns!,
     'forbidden-ddl'
   );
   if (!Array.isArray(migrationPatternsOrCheck)) {
@@ -1199,10 +1260,21 @@ export async function checkMigrationReversibility(
   changedFiles: string[],
   repoDir: string,
   labels: string[],
-  migrationPatternSources: string[] = [...DEFAULT_READY_MIGRATION_PATTERNS]
+  migrationPatternSources?: string[],
+  migrationKind?: ReadyMigrationKind,
 ): Promise<ReadyCheck> {
+  const kindCheck = unsupportedMigrationKindCheck(
+    'migration-reversibility', ['alembic'], migrationKind,
+  );
+  if (kindCheck) return kindCheck;
+
+  const patternsCheck = missingMigrationPatternsCheck(
+    'migration-reversibility', migrationPatternSources,
+  );
+  if (patternsCheck) return patternsCheck;
+
   const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
-    migrationPatternSources,
+    migrationPatternSources!,
     'migration-reversibility'
   );
   if (!Array.isArray(migrationPatternsOrCheck)) {
@@ -1544,11 +1616,25 @@ export async function checkMergeConflicts(
 }
 
 // ────────────────────────────────────────────────────────────────
+// Check Name Aliases
+// ────────────────────────────────────────────────────────────────
+
+const CHECK_NAME_ALIASES: Record<string, string> = {
+  'merge-conflicts': 'merge-conflict',
+};
+
+function resolveCheckName(name: string): string {
+  return CHECK_NAME_ALIASES[name] ?? name;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Verdict Computation
 // ────────────────────────────────────────────────────────────────
 
 /**
  * Compute overall verdict from check results.
+ *
+ * @deprecated Use computeVerdictWithRequired for policy-aware aggregation.
  *
  * Conservative approach:
  * - Any 'fail' → verdict is 'fail'
@@ -1561,12 +1647,10 @@ export async function checkMergeConflicts(
  * @internal Exported for testing purposes
  */
 export function computeVerdict(checks: ReadyCheck[]): 'pass' | 'fail' | 'warn' | 'pending' {
-  // Empty checks array means nothing failed
   if (checks.length === 0) {
     return 'pass';
   }
 
-  // Any failure blocks merge
   const hasFail = checks.some(check => check.status === 'fail');
   if (hasFail) {
     return 'fail';
@@ -1577,13 +1661,62 @@ export function computeVerdict(checks: ReadyCheck[]): 'pass' | 'fail' | 'warn' |
     return 'pending';
   }
 
-  // No failures, but warnings present
   const hasWarn = checks.some(check => check.status === 'warn');
   if (hasWarn) {
     return 'warn';
   }
 
-  // All checks passed or skipped
+  return 'pass';
+}
+
+/**
+ * Compute overall verdict with required-check semantics.
+ *
+ * - Required check `fail` → verdict `fail`
+ * - Required check `pending` → verdict `pending`
+ * - Non-required `fail` or any `warn` → verdict `warn`
+ * - `skip` never blocks, even for required checks
+ * - Otherwise → verdict `pass`
+ */
+export function computeVerdictWithRequired(
+  checks: ReadyCheck[],
+  requiredChecks: string[],
+): 'pass' | 'fail' | 'warn' | 'pending' {
+  if (checks.length === 0) {
+    return 'pass';
+  }
+
+  const requiredSet = new Set(requiredChecks.map(resolveCheckName));
+  let hasRequiredFail = false;
+  let hasRequiredPending = false;
+  let hasNonRequiredFail = false;
+  let hasWarn = false;
+
+  for (const check of checks) {
+    if (check.status === 'skip' || check.status === 'pass') {
+      continue;
+    }
+
+    const isRequired = requiredSet.has(resolveCheckName(check.name));
+
+    if (check.status === 'fail') {
+      if (isRequired) {
+        hasRequiredFail = true;
+      } else {
+        hasNonRequiredFail = true;
+      }
+    } else if (check.status === 'pending') {
+      if (isRequired) {
+        hasRequiredPending = true;
+      }
+    } else if (check.status === 'warn') {
+      hasWarn = true;
+    }
+  }
+
+  if (hasRequiredFail) return 'fail';
+  if (hasRequiredPending) return 'pending';
+  if (hasNonRequiredFail || hasWarn) return 'warn';
   return 'pass';
 }
 
@@ -1591,16 +1724,67 @@ export function computeVerdict(checks: ReadyCheck[]): 'pass' | 'fail' | 'warn' |
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
 
+type CheckRunner = (ctx: {
+  prContext: PRContext;
+  repoDir: string;
+  config: ReturnType<typeof getReadyConfig>;
+  taskPacket: TaskPacketContext | null;
+  deployConfig: Record<string, unknown>;
+  mergeConflict: MergeConflictResult;
+}) => ReadyCheck | Promise<ReadyCheck>;
+
+const CHECK_REGISTRY: Record<string, CheckRunner> = {
+  'ci-status': ({ prContext, repoDir }) =>
+    checkCIStatus(prContext.prNumber, repoDir),
+
+  'merge-conflict': ({ mergeConflict }) => ({
+    name: 'merge-conflict',
+    status: mergeConflict.status === 'CLEAN'
+      ? 'pass'
+      : mergeConflict.status === 'CONFLICTED'
+        ? 'fail'
+        : mergeConflict.status === 'UNKNOWN'
+          ? 'pending'
+          : 'warn',
+    message: mergeConflict.message,
+    details: {
+      mergeable: mergeConflict.mergeable ?? null,
+      mergeStateStatus: mergeConflict.mergeStateStatus ?? null,
+      attempts: mergeConflict.attempts,
+    },
+  }),
+
+  'schema-migrations': ({ prContext, repoDir }) =>
+    checkSchemaMigrations(prContext.changedFiles, repoDir),
+
+  'migration-chain-integrity': ({ repoDir, config }) =>
+    checkMigrationChainIntegrity(repoDir, config.migrationPatterns, config.migrationKind),
+
+  'forbidden-ddl': ({ prContext, repoDir }) =>
+    checkForbiddenDDL(prContext, repoDir),
+
+  'migration-reversibility': ({ prContext, repoDir, config }) =>
+    checkMigrationReversibility(
+      prContext.changedFiles,
+      repoDir,
+      prContext.labels,
+      config.migrationPatterns,
+      config.migrationKind,
+    ),
+
+  'deploy-paths': ({ prContext, deployConfig }) =>
+    checkDeployPaths(prContext.changedFiles, deployConfig),
+
+  'release-requirements': ({ taskPacket, prContext, repoDir }) =>
+    checkReleaseRequirements(taskPacket, prContext, repoDir),
+};
+
 /**
  * Run the ready stage for a PR.
  *
- * Gathers context, runs all configured checks, and produces a merge-readiness verdict.
- *
- * @param options - Options for running the ready stage
- * @param options.prNumber - PR number to check
- * @param options.repoDir - Repository directory
- * @returns Result of all ready checks
- * @throws Error if gh CLI not available or PR not found
+ * Executes only checks listed in `ready.checks` (defaults to universal
+ * checks when unconfigured). Uses `ready.requiredChecks` to determine
+ * which failures block the merge verdict.
  */
 export async function runReadyStage(options: {
   prNumber: number;
@@ -1608,42 +1792,36 @@ export async function runReadyStage(options: {
 }): Promise<ReadyResult> {
   const { prNumber, repoDir } = options;
 
-  // Load ready config
   const config = getReadyConfig(repoDir);
 
-  // 1. Gather context
   const prContext = await gatherPRContext(prNumber, repoDir);
   const taskPacket = await findTaskPacket(repoDir, prNumber);
   const deployConfig = loadDeployConfig(repoDir);
   const mergeConflict = await checkMergeConflicts(prNumber, repoDir);
 
-  // 2. Run all checks
-  const allChecks: ReadyCheck[] = [
-    checkSchemaMigrations(prContext.changedFiles, repoDir),
-    await checkMigrationChainIntegrity(repoDir, config.migrationPatterns),
-    checkForbiddenDDL(prContext, repoDir),
-    await checkMigrationReversibility(
-      prContext.changedFiles,
-      repoDir,
-      prContext.labels,
-      config.migrationPatterns
-    ),
-    checkDeployPaths(prContext.changedFiles, deployConfig),
-    checkReleaseRequirements(taskPacket, prContext, repoDir),
-    checkCIStatus(prNumber, repoDir),
-  ];
+  const checksToRun = (config.checks && config.checks.length > 0)
+    ? config.checks.map(resolveCheckName)
+    : [...DEFAULT_READY_CHECKS];
 
-  // 3. Filter checks based on config
-  let checks = allChecks;
-  if (config.checks && config.checks.length > 0) {
-    // Only include checks specified in config
-    checks = allChecks.filter(check => config.checks!.includes(check.name));
+  const ctx = { prContext, repoDir, config, taskPacket, deployConfig, mergeConflict };
+
+  const checks: ReadyCheck[] = [];
+  for (const checkName of checksToRun) {
+    const runner = CHECK_REGISTRY[checkName];
+    if (!runner) {
+      checks.push({
+        name: checkName,
+        status: 'warn',
+        message: `Unknown check '${checkName}' — not registered in the ready-stage engine`,
+      });
+      continue;
+    }
+    checks.push(await runner(ctx));
   }
 
-  // 4. Compute verdict
-  const verdict = computeVerdict(checks);
+  const requiredChecks = config.requiredChecks ?? checksToRun;
+  const verdict = computeVerdictWithRequired(checks, requiredChecks);
 
-  // 5. Generate summary
   let summary: string;
   if (verdict === 'pass') {
     summary = 'All checks passed - safe to merge';
@@ -1655,7 +1833,6 @@ export async function runReadyStage(options: {
     summary = 'One or more checks failed - not safe to merge';
   }
 
-  // 6. Return result
   return {
     prNumber,
     branch: prContext.branch,

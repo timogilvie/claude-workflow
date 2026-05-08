@@ -13,6 +13,7 @@ import {
   checkMigrationReversibility,
   checkDeployPaths,
   computeVerdict,
+  computeVerdictWithRequired,
   checkLegacyMarkers,
   controllerCheckReadiness,
   MIGRATION_IRREVERSIBLE_LABEL,
@@ -239,15 +240,41 @@ describe('ready-stage', () => {
   });
 
   describe('checkSchemaMigrations', () => {
+    let repoDir: string;
+
+    beforeEach(async () => {
+      repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'schema-migrations-'));
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            checks: ['schema-migrations'],
+            migrationPatterns: ['migrations/', 'alembic/versions/'],
+          },
+        }),
+      });
+    });
+
+    afterEach(async () => {
+      const { clearConfigCache } = await import('./config.ts');
+      clearConfigCache(repoDir);
+      await fs.rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('returns skip when migration patterns are not configured', () => {
+      const result = checkSchemaMigrations(['prisma/schema.prisma'], '/tmp/test');
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /migrationPatterns/);
+    });
+
     it('returns skip when no schema files changed', () => {
-      const result = checkSchemaMigrations(['src/app.ts', 'README.md'], '/tmp/test');
+      const result = checkSchemaMigrations(['src/app.ts', 'README.md'], repoDir);
       assert.equal(result.status, 'skip');
       assert.equal(result.name, 'schema-migrations');
       assert.match(result.message, /No schema changes/);
     });
 
     it('returns fail when schema changed without migration', () => {
-      const result = checkSchemaMigrations(['prisma/schema.prisma', 'src/app.ts'], '/tmp/test');
+      const result = checkSchemaMigrations(['prisma/schema.prisma', 'src/app.ts'], repoDir);
       assert.equal(result.status, 'fail');
       assert.equal(result.name, 'schema-migrations');
       assert.match(result.message, /without migration/);
@@ -257,7 +284,7 @@ describe('ready-stage', () => {
     it('returns pass when both schema and migration changed', () => {
       const result = checkSchemaMigrations(
         ['prisma/schema.prisma', 'prisma/migrations/001_init.sql', 'src/app.ts'],
-        '/tmp/test'
+        repoDir
       );
       assert.equal(result.status, 'pass');
       assert.equal(result.name, 'schema-migrations');
@@ -265,14 +292,14 @@ describe('ready-stage', () => {
     });
 
     it('detects Django models.py as schema file', () => {
-      const result = checkSchemaMigrations(['app/models.py'], '/tmp/test');
+      const result = checkSchemaMigrations(['app/models.py'], repoDir);
       assert.equal(result.status, 'fail');
     });
 
     it('detects alembic migrations', () => {
       const result = checkSchemaMigrations(
         ['app/models.py', 'alembic/versions/001_init.py'],
-        '/tmp/test'
+        repoDir
       );
       assert.equal(result.status, 'pass');
     });
@@ -304,7 +331,7 @@ describe('ready-stage', () => {
         'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
       });
 
-      const result = await checkMigrationChainIntegrity(repoDir);
+      const result = await checkMigrationChainIntegrity(repoDir, ['migrations/'], 'alembic');
       assert.equal(result.status, 'pass');
       assert.equal(result.name, 'migration-chain-integrity');
     });
@@ -317,7 +344,7 @@ describe('ready-stage', () => {
         'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
       });
 
-      const result = await checkMigrationChainIntegrity(repoDir);
+      const result = await checkMigrationChainIntegrity(repoDir, ['migrations/'], 'alembic');
       assert.equal(result.status, 'pass');
       assert.deepEqual(result.details?.migrationFiles, [
         'migrations/versions/001_base.py',
@@ -331,7 +358,7 @@ describe('ready-stage', () => {
         'shared/db/migrations/004_add_user_org_to_leads.py': 'print("apply migration")\n',
       });
 
-      const result = await checkMigrationChainIntegrity(repoDir);
+      const result = await checkMigrationChainIntegrity(repoDir, ['migrations/'], 'alembic');
       assert.equal(result.status, 'skip');
       assert.match(result.message, /No Alembic revision files/);
       const skipped = result.details?.skippedFiles as Array<Record<string, unknown>>;
@@ -344,7 +371,7 @@ describe('ready-stage', () => {
         'migrations/versions/001_duplicate.py': 'revision = "001"\ndown_revision = None\n',
       });
 
-      const result = await checkMigrationChainIntegrity(repoDir);
+      const result = await checkMigrationChainIntegrity(repoDir, ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       assert.match(result.message, /Duplicate migration revision IDs/);
       assert.ok(Array.isArray(result.details?.duplicateRevisions));
@@ -355,7 +382,7 @@ describe('ready-stage', () => {
         'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
       });
 
-      const result = await checkMigrationChainIntegrity(repoDir);
+      const result = await checkMigrationChainIntegrity(repoDir, ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       assert.match(result.message, /unresolved down_revision/);
     });
@@ -367,7 +394,7 @@ describe('ready-stage', () => {
         'migrations/versions/002_b.py': 'revision = "002_b"\ndown_revision = "001"\n',
       });
 
-      const result = await checkMigrationChainIntegrity(repoDir);
+      const result = await checkMigrationChainIntegrity(repoDir, ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       assert.match(result.message, /exactly one head/);
       assert.equal((result.details?.heads as unknown[])?.length, 2);
@@ -380,7 +407,7 @@ describe('ready-stage', () => {
         'migrations/versions/003_c.py': 'revision = "003"\ndown_revision = "002"\n',
       });
 
-      const result = await checkMigrationChainIntegrity(repoDir);
+      const result = await checkMigrationChainIntegrity(repoDir, ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       assert.match(result.message, /contains a cycle/);
       assert.ok(result.details?.cycle);
@@ -391,7 +418,7 @@ describe('ready-stage', () => {
         'src/app.ts': 'export const ok = true;\n',
       });
 
-      const result = await checkMigrationChainIntegrity(repoDir);
+      const result = await checkMigrationChainIntegrity(repoDir, ['migrations/'], 'alembic');
       assert.equal(result.status, 'skip');
       assert.match(result.message, /No migration files/);
     });
@@ -400,6 +427,7 @@ describe('ready-stage', () => {
       await writeRepoFiles(repoDir, {
         '.wavemill-config.json': JSON.stringify({
           ready: {
+            migrationKind: 'alembic',
             migrationPatterns: ['db/revisions/'],
             checks: ['migration-chain-integrity'],
           },
@@ -458,13 +486,23 @@ describe('ready-stage', () => {
 
     beforeEach(async () => {
       repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forbidden-ddl-'));
+      const { clearConfigCache } = await import('./config.ts');
+      clearConfigCache(repoDir);
       const analyzer = await fs.readFile(path.join(process.cwd(), 'shared/lib/forbidden-ddl-analyzer.py'), 'utf-8');
       await writeRepoFiles(repoDir, {
         'shared/lib/forbidden-ddl-analyzer.py': analyzer,
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            migrationKind: 'alembic',
+            migrationPatterns: ['alembic/versions/', 'migrations/'],
+          },
+        }),
       });
     });
 
     afterEach(async () => {
+      const { clearConfigCache } = await import('./config.ts');
+      clearConfigCache(repoDir);
       await fs.rm(repoDir, { recursive: true, force: true });
     });
 
@@ -614,10 +652,14 @@ describe('ready-stage', () => {
     });
 
     it('honors custom migration danger labels', async () => {
+      const { clearConfigCache } = await import('./config.ts');
+      clearConfigCache(repoDir);
       await writeFixture('drop_table.py');
       await writeRepoFiles(repoDir, {
         '.wavemill-config.json': JSON.stringify({
           ready: {
+            migrationKind: 'alembic',
+            migrationPatterns: ['alembic/versions/', 'migrations/'],
             migrationDangerLabels: {
               drop_table: 'db-risk-approved',
             },
@@ -666,7 +708,9 @@ describe('ready-stage', () => {
       const result = await checkMigrationReversibility(
         ['src/app.ts', 'README.md'],
         repoDir,
-        []
+        [],
+        ['migrations/'],
+        'alembic',
       );
       assert.equal(result.status, 'skip');
       assert.equal(result.name, 'migration-reversibility');
@@ -677,7 +721,7 @@ describe('ready-stage', () => {
         'migrations/versions',
         'empty_pass_downgrade.py'
       );
-      const result = await checkMigrationReversibility([file], repoDir, []);
+      const result = await checkMigrationReversibility([file], repoDir, [], ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       assert.match(result.message, /executable downgrade/);
       const failures = result.details?.failures as Array<Record<string, unknown>>;
@@ -690,7 +734,7 @@ describe('ready-stage', () => {
         'migrations/versions',
         'docstring_only_downgrade.py'
       );
-      const result = await checkMigrationReversibility([file], repoDir, []);
+      const result = await checkMigrationReversibility([file], repoDir, [], ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       const failures = result.details?.failures as Array<Record<string, unknown>>;
       assert.equal(failures[0].reason, 'empty-docstring');
@@ -701,7 +745,7 @@ describe('ready-stage', () => {
         'migrations/versions',
         'docstring_pass_downgrade.py'
       );
-      const result = await checkMigrationReversibility([file], repoDir, []);
+      const result = await checkMigrationReversibility([file], repoDir, [], ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       const failures = result.details?.failures as Array<Record<string, unknown>>;
       assert.equal(failures[0].reason, 'empty-pass');
@@ -712,7 +756,7 @@ describe('ready-stage', () => {
         'migrations/versions',
         'not_implemented_bare_downgrade.py'
       );
-      const result = await checkMigrationReversibility([file], repoDir, []);
+      const result = await checkMigrationReversibility([file], repoDir, [], ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       const failures = result.details?.failures as Array<Record<string, unknown>>;
       assert.equal(failures[0].reason, 'not-implemented');
@@ -723,7 +767,7 @@ describe('ready-stage', () => {
         'migrations/versions',
         'not_implemented_called_downgrade.py'
       );
-      const result = await checkMigrationReversibility([file], repoDir, []);
+      const result = await checkMigrationReversibility([file], repoDir, [], ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       const failures = result.details?.failures as Array<Record<string, unknown>>;
       assert.equal(failures[0].reason, 'not-implemented');
@@ -734,7 +778,7 @@ describe('ready-stage', () => {
         'migrations/versions',
         'missing_downgrade.py'
       );
-      const result = await checkMigrationReversibility([file], repoDir, []);
+      const result = await checkMigrationReversibility([file], repoDir, [], ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       const failures = result.details?.failures as Array<Record<string, unknown>>;
       assert.equal(failures[0].reason, 'missing-downgrade');
@@ -745,43 +789,33 @@ describe('ready-stage', () => {
         'migrations/versions',
         'non_trivial_downgrade.py'
       );
-      const result = await checkMigrationReversibility([file], repoDir, []);
+      const result = await checkMigrationReversibility([file], repoDir, [], ['migrations/'], 'alembic');
       assert.equal(result.status, 'pass');
       assert.match(result.message, /non-trivial downgrade/);
     });
 
-    it('passes SQL migrations with a matching rollback file', async () => {
-      await writeRepoFiles(repoDir, {
-        'migrations/028_add_tables.sql': 'CREATE TABLE contacts (id uuid PRIMARY KEY);\n',
-        'migrations/028_add_tables_rollback.sql': 'DROP TABLE contacts;\n',
-      });
-
+    it('skips SQL migrations when migrationKind is sql (unsupported)', async () => {
       const result = await checkMigrationReversibility(
-        ['migrations/028_add_tables.sql', 'migrations/028_add_tables_rollback.sql'],
+        ['migrations/028_add_tables.sql'],
         repoDir,
-        []
+        [],
+        ['migrations/'],
+        'sql',
       );
-      assert.equal(result.status, 'pass');
-      assert.match(result.message, /matching SQL rollback/);
-      assert.deepEqual(result.details?.rollbackFiles, [
-        'migrations/028_add_tables_rollback.sql',
-      ]);
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /unsupported for sql/);
     });
 
-    it('fails SQL migrations without a matching rollback file', async () => {
-      await writeRepoFiles(repoDir, {
-        'migrations/029_add_tables.sql': 'CREATE TABLE contacts (id uuid PRIMARY KEY);\n',
-      });
-
+    it('skips when migrationKind is not configured', async () => {
       const result = await checkMigrationReversibility(
-        ['migrations/029_add_tables.sql'],
+        ['migrations/028_add_tables.sql'],
         repoDir,
-        []
+        [],
+        ['migrations/'],
+        undefined,
       );
-      assert.equal(result.status, 'fail');
-      const failures = result.details?.failures as Array<Record<string, unknown>>;
-      assert.equal(failures[0].reason, 'missing-downgrade');
-      assert.match(String(failures[0].message), /rollback/);
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /migrationKind/);
     });
 
     it('migration:irreversible label converts a hard failure into pass with overrides recorded', async () => {
@@ -792,7 +826,9 @@ describe('ready-stage', () => {
       const result = await checkMigrationReversibility(
         [file],
         repoDir,
-        [MIGRATION_IRREVERSIBLE_LABEL]
+        [MIGRATION_IRREVERSIBLE_LABEL],
+        ['migrations/'],
+        'alembic',
       );
       assert.equal(result.status, 'pass');
       assert.match(result.message, /overridden/);
@@ -810,7 +846,9 @@ describe('ready-stage', () => {
       const result = await checkMigrationReversibility(
         [file],
         repoDir,
-        ['Migration:Irreversible']
+        ['Migration:Irreversible'],
+        ['migrations/'],
+        'alembic',
       );
       assert.equal(result.status, 'pass');
       assert.equal(result.details?.overrideApplied, true);
@@ -821,7 +859,7 @@ describe('ready-stage', () => {
         'migrations/versions',
         'destructive_upgrade.py'
       );
-      const result = await checkMigrationReversibility([file], repoDir, []);
+      const result = await checkMigrationReversibility([file], repoDir, [], ['migrations/'], 'alembic');
       assert.equal(result.status, 'pass');
       const warnings = result.details?.warnings as Array<Record<string, unknown>>;
       assert.ok(Array.isArray(warnings) && warnings.length === 1);
@@ -834,7 +872,7 @@ describe('ready-stage', () => {
         'migrations/versions',
         'malformed_syntax.py'
       );
-      const result = await checkMigrationReversibility([file], repoDir, []);
+      const result = await checkMigrationReversibility([file], repoDir, [], ['migrations/'], 'alembic');
       assert.equal(result.status, 'fail');
       const failures = result.details?.failures as Array<Record<string, unknown>>;
       assert.equal(failures[0].reason, 'parse-error');
@@ -846,14 +884,17 @@ describe('ready-stage', () => {
         'empty_pass_downgrade.py'
       );
 
-      const skipped = await checkMigrationReversibility([file], repoDir, []);
-      assert.equal(skipped.status, 'skip', 'default patterns should skip db/revisions');
+      const skipped = await checkMigrationReversibility(
+        [file], repoDir, [], ['migrations/'], 'alembic',
+      );
+      assert.equal(skipped.status, 'skip', 'migrations/ pattern should skip db/revisions');
 
       const result = await checkMigrationReversibility(
         [file],
         repoDir,
         [],
-        ['db/revisions/']
+        ['db/revisions/'],
+        'alembic',
       );
       assert.equal(result.status, 'fail');
     });
@@ -869,7 +910,9 @@ describe('ready-stage', () => {
         'not_implemented_bare_downgrade.py',
         '002_b.py'
       );
-      const result = await checkMigrationReversibility([fileA, fileB], repoDir, []);
+      const result = await checkMigrationReversibility(
+        [fileA, fileB], repoDir, [], ['migrations/'], 'alembic',
+      );
       assert.equal(result.status, 'fail');
       const failures = result.details?.failures as Array<Record<string, unknown>>;
       assert.equal(failures.length, 2);
@@ -942,7 +985,11 @@ describe('ready-stage', () => {
       const fixtureContent = await fs.readFile(fixtureSrc, 'utf-8');
       await writeRepoFiles(repoDir, {
         '.wavemill-config.json': JSON.stringify({
-          ready: { checks: ['migration-reversibility'] },
+          ready: {
+            checks: ['migration-reversibility'],
+            migrationKind: 'alembic',
+            migrationPatterns: ['migrations/'],
+          },
         }),
         'migrations/versions/001_pass.py': fixtureContent,
       });
@@ -991,7 +1038,11 @@ describe('ready-stage', () => {
       const fixtureContent = await fs.readFile(fixtureSrc, 'utf-8');
       await writeRepoFiles(repoDir, {
         '.wavemill-config.json': JSON.stringify({
-          ready: { checks: ['migration-reversibility'] },
+          ready: {
+            checks: ['migration-reversibility'],
+            migrationKind: 'alembic',
+            migrationPatterns: ['migrations/'],
+          },
         }),
         'migrations/versions/001_pass.py': fixtureContent,
       });
@@ -1722,6 +1773,8 @@ describe('ready-stage', () => {
           ready: {
             checks: ['migration-reversibility'],
             requiredChecks: ['migration-reversibility'],
+            migrationKind: 'alembic',
+            migrationPatterns: ['alembic/versions/'],
           },
         }),
         'alembic/versions/001_bad.py': await loadMigrationFixture('downgrade_pass.py'),
@@ -1758,6 +1811,234 @@ describe('ready-stage', () => {
         const result = await runReadyStage({ prNumber: 42, repoDir });
         assert.deepEqual(result.checks.map(check => check.name), ['migration-reversibility']);
         assert.equal(result.checks[0]?.status, 'fail');
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('computeVerdictWithRequired', () => {
+    it('returns pass when all checks pass', () => {
+      const checks: ReadyCheck[] = [
+        { name: 'ci-status', status: 'pass', message: 'ok' },
+        { name: 'merge-conflict', status: 'pass', message: 'ok' },
+      ];
+      assert.equal(computeVerdictWithRequired(checks, ['ci-status', 'merge-conflict']), 'pass');
+    });
+
+    it('returns fail when a required check fails', () => {
+      const checks: ReadyCheck[] = [
+        { name: 'ci-status', status: 'fail', message: 'failing' },
+        { name: 'merge-conflict', status: 'pass', message: 'ok' },
+      ];
+      assert.equal(computeVerdictWithRequired(checks, ['ci-status']), 'fail');
+    });
+
+    it('returns warn when a non-required check fails', () => {
+      const checks: ReadyCheck[] = [
+        { name: 'ci-status', status: 'pass', message: 'ok' },
+        { name: 'forbidden-ddl', status: 'fail', message: 'dangerous DDL' },
+      ];
+      assert.equal(computeVerdictWithRequired(checks, ['ci-status']), 'warn');
+    });
+
+    it('returns pending when a required check is pending', () => {
+      const checks: ReadyCheck[] = [
+        { name: 'ci-status', status: 'pending', message: 'running' },
+        { name: 'merge-conflict', status: 'pass', message: 'ok' },
+      ];
+      assert.equal(computeVerdictWithRequired(checks, ['ci-status']), 'pending');
+    });
+
+    it('skip never blocks even for required checks', () => {
+      const checks: ReadyCheck[] = [
+        { name: 'ci-status', status: 'pass', message: 'ok' },
+        { name: 'migration-reversibility', status: 'skip', message: 'not configured' },
+      ];
+      assert.equal(computeVerdictWithRequired(checks, ['ci-status', 'migration-reversibility']), 'pass');
+    });
+
+    it('resolves check name aliases in requiredChecks', () => {
+      const checks: ReadyCheck[] = [
+        { name: 'merge-conflict', status: 'fail', message: 'conflicted' },
+      ];
+      assert.equal(computeVerdictWithRequired(checks, ['merge-conflicts']), 'fail');
+    });
+
+    it('returns pass for empty checks array', () => {
+      assert.equal(computeVerdictWithRequired([], ['ci-status']), 'pass');
+    });
+  });
+
+  describe('default policy behavior', () => {
+    it('runs only universal checks when no config is present', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-default-'));
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+          }
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [
+              { path: 'alembic/versions/001_add.py' },
+              { path: 'src/app.ts' },
+            ],
+            labels: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) return '';
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'CI', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        const checkNames = result.checks.map(c => c.name);
+        assert.deepEqual(checkNames, ['ci-status', 'merge-conflict']);
+        assert.ok(!checkNames.includes('schema-migrations'));
+        assert.ok(!checkNames.includes('migration-chain-integrity'));
+        assert.ok(!checkNames.includes('forbidden-ddl'));
+        assert.ok(!checkNames.includes('migration-reversibility'));
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('warns for unknown check names in config', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-unknown-'));
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: { checks: ['ci-status', 'nonexistent-check'] },
+        }),
+      });
+      const { clearConfigCache } = await import('./config.ts');
+      clearConfigCache(repoDir);
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+          }
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [],
+            labels: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) return '';
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'CI', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        const unknownCheck = result.checks.find(c => c.name === 'nonexistent-check');
+        assert.ok(unknownCheck);
+        assert.equal(unknownCheck.status, 'warn');
+        assert.match(unknownCheck.message, /unknown check/i);
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('migration kind gating', () => {
+    it('migration-chain-integrity skips when migrationKind is absent', async () => {
+      const result = await checkMigrationChainIntegrity('/tmp/no-config', undefined, undefined);
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /migrationKind/i);
+    });
+
+    it('migration-chain-integrity skips for sql migrationKind', async () => {
+      const result = await checkMigrationChainIntegrity('/tmp/no-config', ['migrations/'], 'sql');
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /unsupported|not supported/i);
+    });
+
+    it('migration-reversibility skips when migrationKind is absent', async () => {
+      const result = await checkMigrationReversibility(
+        ['alembic/versions/001.py'], '/tmp/no-config', [], undefined, undefined,
+      );
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /migrationKind/i);
+    });
+
+    it('migration-reversibility skips for sql migrationKind', async () => {
+      const result = await checkMigrationReversibility(
+        ['migrations/001.sql'], '/tmp/no-config', [], ['migrations/'], 'sql',
+      );
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /unsupported|not supported/i);
+    });
+
+    it('forbidden-ddl skips when migrationKind is absent', () => {
+      const repoDir = '/tmp/no-ddl-config';
+      const prContext = makePrContext(['alembic/versions/001.py']);
+      const result = checkForbiddenDDL(prContext, repoDir);
+      assert.equal(result.status, 'skip');
+    });
+  });
+
+  describe('required-check aggregation in runReadyStage', () => {
+    it('non-required failing check produces warn verdict, not fail', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-required-'));
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            checks: ['ci-status', 'merge-conflict', 'migration-chain-integrity'],
+            requiredChecks: ['ci-status', 'merge-conflict'],
+            migrationKind: 'alembic',
+            migrationPatterns: ['alembic/versions/'],
+          },
+        }),
+        'alembic/versions/001_init.py': 'revision = "001"\ndown_revision = None\n',
+        'alembic/versions/002_broken.py': 'revision = "002"\ndown_revision = "999"\n',
+      });
+      const { clearConfigCache } = await import('./config.ts');
+      clearConfigCache(repoDir);
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+          }
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [{ path: 'alembic/versions/002_broken.py' }],
+            labels: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) return '';
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'CI', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        const chainCheck = result.checks.find(c => c.name === 'migration-chain-integrity');
+        assert.ok(chainCheck);
+        assert.equal(chainCheck.status, 'fail');
+        assert.equal(result.verdict, 'warn');
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });

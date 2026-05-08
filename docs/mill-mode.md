@@ -91,6 +91,8 @@ By default, `wavemill mill` inserts a merge-readiness phase after PR creation an
 review -> ready -> merge
 ```
 
+By default, only universal checks (`ci-status` and `merge-conflict`) run. Domain-specific checks like migration safety and forbidden DDL are opt-in through `ready.checks` in `.wavemill-config.json`. See [Ready Stage](ready-stage.md) for configuration examples.
+
 In that phase, the monitor is responsible for:
 
 - running the same shared contract exposed by `wavemill ready <pr>`

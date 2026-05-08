@@ -127,6 +127,10 @@
     "comparisonModel": "claude-opus-4-7",
     "autoMergeWinner": false
   },
+  "ready": {
+    "checks": ["ci-status", "merge-conflict"],
+    "requiredChecks": ["ci-status", "merge-conflict"]
+  },
   "review": {
     "maxIterations": 3,
     "enabled": true,

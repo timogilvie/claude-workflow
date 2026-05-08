@@ -320,9 +320,14 @@ export interface QuotaConfig {
   thresholds?: QuotaThresholdsConfig;
 }
 
+export type ReadyMigrationKind = 'alembic' | 'sql' | 'none';
+
+export const DEFAULT_READY_CHECKS = ['ci-status', 'merge-conflict'] as const;
+
 export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
+  migrationKind?: ReadyMigrationKind;
   migrationPatterns?: string[];
   migrationDangerLabels?: Record<string, string>;
   migrationForbiddenPatterns?: string[];
@@ -848,14 +853,19 @@ export function getMintEligibilityConfig(repoDir?: string): MintEligibilityConfi
 
 /**
  * Get the ready stage config section.
- * Returns defaults if not configured.
+ *
+ * Default policy is conservative: only universal checks (`ci-status`,
+ * `merge-conflict`) run when no `ready` section is configured.
+ * Domain-specific checks (migration, DDL, release) must be opted-in.
  */
 export function getReadyConfig(repoDir?: string): ReadyConfig {
   const config = loadWavemillConfig(repoDir);
+  const checks = config.ready?.checks ?? [...DEFAULT_READY_CHECKS];
   return {
-    checks: config.ready?.checks ?? [],
-    requiredChecks: config.ready?.requiredChecks ?? [],
-    migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    checks,
+    requiredChecks: config.ready?.requiredChecks ?? [...checks],
+    migrationKind: config.ready?.migrationKind,
+    migrationPatterns: config.ready?.migrationPatterns,
     migrationDangerLabels: {
       ...DEFAULT_READY_MIGRATION_DANGER_LABELS,
       ...(config.ready?.migrationDangerLabels ?? {}),

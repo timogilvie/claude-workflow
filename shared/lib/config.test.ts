@@ -1410,16 +1410,17 @@ test('getPermissionsConfig returns permissions section', () => {
   }
 });
 
-test('getReadyConfig returns empty check lists by default', () => {
+test('getReadyConfig returns universal defaults when unconfigured', () => {
   const tmp = makeTempRepo();
   try {
     clearConfigCache();
     writeConfig(tmp, '{}');
 
     const readyConfig = getReadyConfig(tmp);
-    assert.deepEqual(readyConfig.checks, []);
-    assert.deepEqual(readyConfig.requiredChecks, []);
-    assert.deepEqual(readyConfig.migrationPatterns, ['migrations/', 'alembic/versions/']);
+    assert.deepEqual(readyConfig.checks, ['ci-status', 'merge-conflict']);
+    assert.deepEqual(readyConfig.requiredChecks, ['ci-status', 'merge-conflict']);
+    assert.equal(readyConfig.migrationKind, undefined);
+    assert.equal(readyConfig.migrationPatterns, undefined);
     assert.deepEqual(readyConfig.migrationDangerLabels, {
       drop_column: 'migration:destructive',
       drop_table: 'migration:destructive',

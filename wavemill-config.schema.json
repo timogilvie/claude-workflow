@@ -650,34 +650,45 @@
         },
         "ready": {
             "type": "object",
-            "description": "Settings for the ready stage (merge-readiness checks)",
+            "description": "Readiness policy for the ready stage (merge-readiness checks). When absent, only universal checks (ci-status, merge-conflict) run. Domain-specific checks must be opted-in explicitly.",
             "properties": {
                 "checks": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     },
-                    "default": [],
-                    "description": "List of check names to run (empty = all available checks)"
+                    "description": "List of check names to run. When absent or empty, defaults to universal checks: ['ci-status', 'merge-conflict']. Explicitly configure to opt-in to domain-specific checks like schema-migrations, migration-chain-integrity, forbidden-ddl, migration-reversibility, deploy-paths, or release-requirements.",
+                    "examples": [
+                        ["ci-status", "merge-conflict"],
+                        ["ci-status", "merge-conflict", "schema-migrations", "migration-chain-integrity", "forbidden-ddl", "migration-reversibility"]
+                    ]
                 },
                 "requiredChecks": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     },
-                    "default": [],
-                    "description": "Checks that must pass for merge approval (subset of checks)"
+                    "description": "Checks that must pass for merge approval. When absent, defaults to the same list as checks. Non-required checks that fail produce a warning verdict instead of a blocking failure.",
+                    "examples": [
+                        ["ci-status", "merge-conflict"],
+                        ["ci-status", "merge-conflict", "schema-migrations", "migration-chain-integrity"]
+                    ]
+                },
+                "migrationKind": {
+                    "type": "string",
+                    "enum": ["alembic", "sql", "none"],
+                    "description": "Migration framework used by this repository. Controls which migration checks are applicable. 'alembic' enables Python AST-based chain integrity, reversibility, and forbidden-DDL checks. 'sql' enables SQL-aware checks. 'none' disables migration analysis. When absent, migration-family checks that require a specific kind return skip."
                 },
                 "migrationPatterns": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     },
-                    "default": [
-                        "migrations/",
-                        "alembic/versions/"
-                    ],
-                    "description": "Regex patterns used to identify migration files across the repository."
+                    "description": "Regex patterns used to identify migration files across the repository. Required when migration-family checks are enabled. When absent and migration checks are configured, those checks return skip with a 'migration patterns not configured' message.",
+                    "examples": [
+                        ["alembic/versions/.*\\.py$"],
+                        ["migrations/.*\\.sql$"]
+                    ]
                 },
                 "migrationDangerLabels": {
                     "type": "object",
