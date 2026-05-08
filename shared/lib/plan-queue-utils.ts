@@ -100,18 +100,48 @@ export function clusterSharedSurface(edges: DependencyEdge[]): string[][] {
 }
 
 export function buildQueuePlan(edges: DependencyEdge[], result: PlanResult): QueuePlan {
-  const triagedTaskIds = new Set(
-    result.triage.filter((record) => record.reason !== 'duplicate').flatMap((record) => [record.edge.from, record.edge.to]),
-  );
-  const queues = result.queues.filter((queue) => !triagedTaskIds.has(queue.taskId));
-  const nonTriagedEdges = edges.filter((edge) => !triagedTaskIds.has(edge.from) && !triagedTaskIds.has(edge.to));
+  const normalizeId = (id: string) => id.trim().toUpperCase();
+  const knownTaskIds = new Set(result.queues.map((queue) => normalizeId(queue.taskId)));
+  const externalBlockersByTask = new Map<string, Set<string>>();
+
+  const displayableTriage = result.triage.filter((record) => {
+    if (record.reason === 'duplicate') {
+      return false;
+    }
+    if (
+      record.reason === 'unknown_endpoint' &&
+      record.edge.type === 'depends_on' &&
+      knownTaskIds.has(normalizeId(record.edge.to)) &&
+      !knownTaskIds.has(normalizeId(record.edge.from))
+    ) {
+      const taskId = normalizeId(record.edge.to);
+      if (!externalBlockersByTask.has(taskId)) {
+        externalBlockersByTask.set(taskId, new Set<string>());
+      }
+      externalBlockersByTask.get(taskId)?.add(record.edge.from);
+      return false;
+    }
+    return true;
+  });
+
+  const triagedTaskIds = new Set(displayableTriage.flatMap((record) => [record.edge.from, record.edge.to]).map(normalizeId));
+  const queues = result.queues.filter((queue) => !triagedTaskIds.has(normalizeId(queue.taskId)));
+  const availableNow = queues
+    .filter((queue) => queue.ancestors.length === 0 && !externalBlockersByTask.has(normalizeId(queue.taskId)))
+    .map((queue) => queue.taskId);
+  const queuedAfterDependencies = queues
+    .map((queue) => {
+      const hiddenBlockers = externalBlockersByTask.get(normalizeId(queue.taskId)) ?? new Set<string>();
+      const ancestors = [...new Set([...queue.ancestors, ...hiddenBlockers])];
+      return { taskId: queue.taskId, ancestors };
+    })
+    .filter((queue) => queue.ancestors.length > 0);
+  const nonTriagedEdges = edges.filter((edge) => !triagedTaskIds.has(normalizeId(edge.from)) && !triagedTaskIds.has(normalizeId(edge.to)));
   return {
-    availableNow: queues.filter((queue) => queue.ancestors.length === 0).map((queue) => queue.taskId),
-    queuedAfterDependencies: queues
-      .filter((queue) => queue.ancestors.length > 0)
-      .map((queue) => ({ taskId: queue.taskId, ancestors: queue.ancestors })),
+    availableNow,
+    queuedAfterDependencies,
     avoidRunningTogether: clusterSharedSurface(nonTriagedEdges),
-    needsTriage: result.triage,
+    needsTriage: displayableTriage,
   };
 }
 
