@@ -770,6 +770,21 @@ render_monitor_command_queue_section() {
   done
 }
 
+render_project_context_suggestion() {
+  [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
+  local size_kb threshold_kb
+
+  if ! jq -e '.project_context_suggestion != null' "$STATE_FILE" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  size_kb=$(jq -r '(.project_context_suggestion.sizeBytes / 1024) | floor' "$STATE_FILE" 2>/dev/null) || return 0
+  threshold_kb=$(jq -r '(.project_context_suggestion.thresholdBytes / 1024) | floor' "$STATE_FILE" 2>/dev/null) || return 0
+
+  printf "${EL}\n${Y}⚠ project-context.md is %sKB (>%sKB) - run 'wavemill context compact' to compact${N}${EL}\n" \
+    "$size_kb" "$threshold_kb" >> "$FRAME"
+}
+
 # Clear saved scrollback lines without blanking the visible pane. This keeps
 # tmux history from accumulating stale dashboards while avoiding a full-screen
 # flash on every refresh.
@@ -844,6 +859,7 @@ render_dashboard() {
   render_jobs_section
   render_queued_section
   render_monitor_command_queue_section
+  render_project_context_suggestion
 
   printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
 }

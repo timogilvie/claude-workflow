@@ -72,6 +72,11 @@ export interface TaskSelectionConfig {
   enterLaunchesWave?: boolean;
 }
 
+export interface ProjectContextConfig {
+  compactionThresholdKb?: number;
+  recentWorkKeep?: number;
+}
+
 export interface JudgeConfig {
   model?: string;
   provider?: 'anthropic';
@@ -424,6 +429,7 @@ export interface WavemillConfig {
   plan?: PlanConfig;
   dashboard?: DashboardConfig;
   taskSelection?: TaskSelectionConfig;
+  projectContext?: ProjectContextConfig;
   eval?: EvalConfig;
   evalContextUpdates?: EvalContextUpdatesConfig;
   autoEval?: boolean;
@@ -1024,6 +1030,14 @@ export function getDashboardConfig(repoDir?: string): DashboardConfig {
 
 export function getTaskSelectionConfig(repoDir?: string): TaskSelectionConfig {
   return loadWavemillConfig(repoDir).taskSelection || {};
+}
+
+export function getProjectContextConfig(repoDir?: string): Required<ProjectContextConfig> {
+  const config = loadWavemillConfig(repoDir).projectContext || {};
+  return {
+    compactionThresholdKb: config.compactionThresholdKb ?? 100,
+    recentWorkKeep: config.recentWorkKeep ?? 25,
+  };
 }
 
 /**

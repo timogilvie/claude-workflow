@@ -31,6 +31,7 @@ import {
   getUiConfig,
   getPermissionsConfig,
   getDashboardConfig,
+  getProjectContextConfig,
   getDeepSeekProviderConfig,
   getDeepSeekLauncherConfig,
   getHokusaiSubmissionConfig,
@@ -1237,6 +1238,41 @@ test('getDashboardConfig returns dashboard section', () => {
     const dashboardConfig = getDashboardConfig(tmp);
     assert.equal(dashboardConfig.verbosity, 'debug');
     assert.equal(dashboardConfig.logToFile, false);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getProjectContextConfig returns defaults when section missing', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ mill: { maxParallel: 5 } }));
+
+    assert.deepEqual(getProjectContextConfig(tmp), {
+      compactionThresholdKb: 100,
+      recentWorkKeep: 25,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getProjectContextConfig returns explicit overrides', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      projectContext: {
+        compactionThresholdKb: 180,
+        recentWorkKeep: 40,
+      },
+    }));
+
+    assert.deepEqual(getProjectContextConfig(tmp), {
+      compactionThresholdKb: 180,
+      recentWorkKeep: 40,
+    });
   } finally {
     cleanUp(tmp);
   }

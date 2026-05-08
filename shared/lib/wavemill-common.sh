@@ -52,6 +52,10 @@ _WAVEMILL_DEFAULTS='{
   "plan": {
     "maxDisplay": 9
   },
+  "projectContext": {
+    "compactionThresholdKb": 100,
+    "recentWorkKeep": 25
+  },
   "dashboard": {
     "verbosity": "info",
     "logToFile": true
@@ -134,6 +138,8 @@ load_config() {
       "_CFG_MAX_SELECT=\($c.expand.maxSelect)",
       "_CFG_MAX_DISPLAY=\($c.expand.maxDisplay)",
       "_CFG_PLAN_MAX_DISPLAY=\($c.plan.maxDisplay)",
+      "_CFG_PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB=\($c.projectContext.compactionThresholdKb // 100)",
+      "_CFG_PROJECT_CONTEXT_RECENT_WORK_KEEP=\($c.projectContext.recentWorkKeep // 25)",
       "_CFG_PLAN_RESEARCH=\($c.plan.research // false)",
       "_CFG_PLAN_MODEL=\($c.plan.model // "claude-opus-4-7" | @sh)",
       "_CFG_DASHBOARD_VERBOSITY=\($c.dashboard.verbosity // "info" | @sh)",
@@ -205,6 +211,8 @@ load_config() {
   MAX_SELECT="${MAX_SELECT:-$_CFG_MAX_SELECT}"
   MAX_DISPLAY="${MAX_DISPLAY:-$_CFG_MAX_DISPLAY}"
   PLAN_MAX_DISPLAY="${PLAN_MAX_DISPLAY:-$_CFG_PLAN_MAX_DISPLAY}"
+  PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB="${PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB:-$_CFG_PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB}"
+  PROJECT_CONTEXT_RECENT_WORK_KEEP="${PROJECT_CONTEXT_RECENT_WORK_KEEP:-$_CFG_PROJECT_CONTEXT_RECENT_WORK_KEEP}"
   PLAN_RESEARCH="${PLAN_RESEARCH:-$_CFG_PLAN_RESEARCH}"
   PLAN_MODEL="${PLAN_MODEL:-$_CFG_PLAN_MODEL}"
   DASHBOARD_VERBOSITY="${DASHBOARD_VERBOSITY:-$_CFG_DASHBOARD_VERBOSITY}"
@@ -244,6 +252,7 @@ load_config() {
   export GIT_FETCH_TTL_SECONDS
   export AGENT_CMD REQUIRE_CONFIRM PLANNING_MODE MAX_RETRIES RETRY_DELAY
   export PROJECT_NAME MAX_SELECT MAX_DISPLAY PLAN_MAX_DISPLAY PLAN_RESEARCH PLAN_MODEL
+  export PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB PROJECT_CONTEXT_RECENT_WORK_KEEP
   export DASHBOARD_VERBOSITY DASHBOARD_LOG_TO_FILE
   export ENTER_LAUNCHES_WAVE
   export CHALLENGE_ENABLED CHALLENGE_RATE CHALLENGE_MODELS_JSON
@@ -258,6 +267,7 @@ load_config() {
   unset _CFG_BASE_BRANCH _CFG_WORKTREE_ROOT _CFG_AGENT_CMD _CFG_REQUIRE_CONFIRM
   unset _CFG_PLANNING_MODE _CFG_MAX_RETRIES _CFG_RETRY_DELAY _CFG_MAX_SELECT _CFG_MAX_DISPLAY
   unset _CFG_PLAN_MAX_DISPLAY _CFG_PLAN_RESEARCH _CFG_PLAN_MODEL
+  unset _CFG_PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB _CFG_PROJECT_CONTEXT_RECENT_WORK_KEEP
   unset _CFG_DASHBOARD_VERBOSITY _CFG_DASHBOARD_LOG_TO_FILE _CFG_ENTER_LAUNCHES_WAVE
   unset _CFG_CHALLENGE_ENABLED _CFG_CHALLENGE_RATE _CFG_CHALLENGE_MODELS
   unset _CFG_CHALLENGE_COMPARISON_MODEL _CFG_CHALLENGE_AUTO_MERGE
@@ -1755,6 +1765,48 @@ state_mutate() {
   fi
 
   return "$mutate_status"
+}
+
+get_file_size_bytes() {
+  local path="$1"
+  if stat -f%z "$path" 2>/dev/null; then
+    return 0
+  fi
+  if stat -c%s "$path" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+project_context_suggestion_set() {
+  local size_bytes="$1"
+  local threshold_bytes="$2"
+  local mtime=""
+
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  [[ -n "${REPO_DIR:-}" ]] || return 1
+
+  local context_file="$REPO_DIR/.wavemill/project-context.md"
+  if mtime=$(date -r "$context_file" -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null); then
+    :
+  else
+    mtime=""
+  fi
+
+  state_mutate "$STATE_FILE" '
+    .project_context_suggestion = {
+      sizeBytes: ($sizeBytes | tonumber),
+      thresholdBytes: ($thresholdBytes | tonumber),
+      mtime: $mtime,
+      suggestedAction: "wavemill context compact",
+      recordedAt: (now | todateiso8601)
+    }
+  ' --arg sizeBytes "$size_bytes" --arg thresholdBytes "$threshold_bytes" --arg mtime "$mtime" >/dev/null
+}
+
+project_context_suggestion_clear() {
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 0
+  state_mutate "$STATE_FILE" 'del(.project_context_suggestion)' >/dev/null
 }
 
 queue_add_task() {

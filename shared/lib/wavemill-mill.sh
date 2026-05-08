@@ -1444,8 +1444,34 @@ check_subsystem_drift() {
   printf '%s\n' "$drift_output"
 }
 
+PROJECT_CONTEXT_OVERSIZED=""
+check_project_context_size() {
+  local context_file="$REPO_DIR/.wavemill/project-context.md"
+  local threshold_kb="${PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB:-100}"
+  local threshold_bytes=$(( threshold_kb * 1024 ))
 
-if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
+  PROJECT_CONTEXT_OVERSIZED=""
+  if [[ ! -f "$context_file" ]]; then
+    project_context_suggestion_clear 2>/dev/null || true
+    return 0
+  fi
+
+  local size_bytes
+  size_bytes="$(get_file_size_bytes "$context_file" 2>/dev/null)" || return 0
+
+  if (( size_bytes > threshold_bytes )); then
+    PROJECT_CONTEXT_OVERSIZED=$(( size_bytes / 1024 ))
+    project_context_suggestion_set "$size_bytes" "$threshold_bytes" 2>/dev/null || true
+    log "info" "  project-context.md is ${PROJECT_CONTEXT_OVERSIZED}KB (>${threshold_kb}KB threshold; suggesting compaction)$(wavemill_config_annotation "projectContext.compactionThresholdKb" "$threshold_kb")"
+  else
+    project_context_suggestion_clear 2>/dev/null || true
+  fi
+}
+
+
+check_project_context_size
+
+if [[ "" != "true" ]]; then
   # Split candidates into unblocked and blocked
   # pick_candidates() outputs 6 fields (has_detailed_plan is stripped), so field 6 is blocked_by_count
   UNBLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 == 0 || $6 == ""')
@@ -1470,6 +1496,11 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
     if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
       echo ""
       echo "  Warning: Subsystem docs stale ($DRIFT_SUBSYSTEMS) - press d to refresh"
+    fi
+
+    if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+      echo ""
+      echo "  ⚠ project-context.md is ${PROJECT_CONTEXT_OVERSIZED}KB (>${PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB:-100}KB) - press 'c' to compact"
     fi
 
     echo ""
@@ -1505,18 +1536,30 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
     fi
     if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
       if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, q to quit, or Enter to launch recommended wave:"
+        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, c to compact context, q to quit, or Enter to launch recommended wave:"
       else
-        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, q to quit, or Enter to launch recommended wave:"
+        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, c to compact context, q to quit, or Enter to launch recommended wave:"
       fi
     else
       if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-        echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to launch recommended wave:"
+        echo "Enter numbers to run (e.g. 1 3 5), m for more, c to compact context, q to quit, or Enter to launch recommended wave:"
       else
-        echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to launch recommended wave:"
+        echo "Enter numbers to run (e.g. 1 3 5), c to compact context, q to quit, or Enter to launch recommended wave:"
       fi
     fi
     read -r SELECTED
+
+    if [[ "$SELECTED" =~ ^[cC](ompact)?$ ]] && [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+      echo ""
+      log "info" "Compacting project-context.md..."
+      if npx tsx "$TOOLS_DIR/compact-project-context.ts" "$REPO_DIR"; then
+        PROJECT_CONTEXT_OVERSIZED=""
+        project_context_suggestion_clear 2>/dev/null || true
+        echo ""
+        log "info" "Compaction complete. Re-displaying task list..."
+      fi
+      continue
+    fi
 
     if [[ "$SELECTED" =~ ^[dD](ocs)?$ ]]; then
       echo ""
