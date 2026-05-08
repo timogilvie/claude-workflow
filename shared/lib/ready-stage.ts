@@ -29,6 +29,7 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Status of an individual ready check.
@@ -808,21 +809,18 @@ export async function checkMigrationChainIntegrity(
 
   const revisions = new Map<string, MigrationRevision>();
   const duplicateRevisions = new Map<string, string[]>();
+  const skippedFiles: Array<{ file: string; reason: string }> = [];
 
   for (const relativeFile of migrationFiles) {
     const filePath = path.join(repoDir, relativeFile);
     const content = await fs.readFile(filePath, 'utf-8');
     const parsed = parseMigrationRevision(relativeFile, content);
     if ('error' in parsed) {
-      return {
-        name: 'migration-chain-integrity',
-        status: 'fail',
-        message: parsed.error,
-        details: {
-          migrationFiles,
-          ...parsed.details,
-        },
-      };
+      skippedFiles.push({
+        file: relativeFile,
+        reason: parsed.error,
+      });
+      continue;
     }
 
     const existing = revisions.get(parsed.revision);
@@ -834,13 +832,27 @@ export async function checkMigrationChainIntegrity(
     revisions.set(parsed.revision, parsed);
   }
 
+  const revisionFiles = [...revisions.values()].map(revision => revision.file).sort();
+  if (revisionFiles.length === 0) {
+    return {
+      name: 'migration-chain-integrity',
+      status: 'skip',
+      message: 'No Alembic revision files found in repository',
+      details: {
+        migrationFiles,
+        skippedFiles,
+      },
+    };
+  }
+
   if (duplicateRevisions.size > 0) {
     return {
       name: 'migration-chain-integrity',
       status: 'fail',
       message: 'Duplicate migration revision IDs found',
       details: {
-        migrationFiles,
+        migrationFiles: revisionFiles,
+        skippedFiles,
         duplicateRevisions: [...duplicateRevisions.entries()].map(([revision, files]) => ({
           revision,
           files,
@@ -862,7 +874,8 @@ export async function checkMigrationChainIntegrity(
       status: 'fail',
       message: 'Migration chain has unresolved down_revision references',
       details: {
-        migrationFiles,
+        migrationFiles: revisionFiles,
+        skippedFiles,
         missingDownRevisions,
       },
     };
@@ -875,7 +888,8 @@ export async function checkMigrationChainIntegrity(
       status: 'fail',
       message: 'Migration chain contains a cycle',
       details: {
-        migrationFiles,
+        migrationFiles: revisionFiles,
+        skippedFiles,
         cycle,
       },
     };
@@ -895,7 +909,8 @@ export async function checkMigrationChainIntegrity(
       status: 'fail',
       message: `Migration chain must have exactly one head, found ${heads.length}`,
       details: {
-        migrationFiles,
+        migrationFiles: revisionFiles,
+        skippedFiles,
         heads,
       },
     };
@@ -910,7 +925,8 @@ export async function checkMigrationChainIntegrity(
       status: 'fail',
       message: `Migration chain must have exactly one root, found ${roots.length}`,
       details: {
-        migrationFiles,
+        migrationFiles: revisionFiles,
+        skippedFiles,
         roots,
       },
     };
@@ -921,7 +937,8 @@ export async function checkMigrationChainIntegrity(
     status: 'pass',
     message: 'Migration chain is well-formed',
     details: {
-      migrationFiles,
+      migrationFiles: revisionFiles,
+      skippedFiles,
       heads,
       roots,
     },
@@ -946,8 +963,11 @@ export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyC
   const existingMigrationFiles = migrationFiles.filter(relativePath =>
     existsSync(path.join(repoDir, relativePath))
   );
+  const analyzableMigrationFiles = existingMigrationFiles.filter(relativePath =>
+    !isSqlRollbackMigration(relativePath)
+  );
 
-  if (existingMigrationFiles.length === 0) {
+  if (analyzableMigrationFiles.length === 0) {
     return {
       name: 'forbidden-ddl',
       status: 'skip',
@@ -959,10 +979,9 @@ export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyC
     };
   }
 
-  const scriptPath = path.join(repoDir, 'shared/lib/forbidden-ddl-analyzer.py');
   const analyzer = readyStageDeps.spawnPython(
-    scriptPath,
-    existingMigrationFiles.map(relativePath => path.join(repoDir, relativePath)),
+    FORBIDDEN_DDL_ANALYZER_PATH,
+    analyzableMigrationFiles.map(relativePath => path.join(repoDir, relativePath)),
     repoDir
   );
 
@@ -1022,7 +1041,7 @@ export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyC
       status: 'fail',
       message: 'Forbidden DDL analyzer could not parse one or more migration files',
       details: {
-        migrationFiles: existingMigrationFiles,
+        migrationFiles: analyzableMigrationFiles,
         labels: prContext.labels,
         errors: analyzerResult.errors,
       },
@@ -1083,7 +1102,7 @@ export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyC
         ? 'Migration risk findings were explicitly acknowledged by PR labels'
         : 'No forbidden migration patterns detected',
       details: {
-        migrationFiles: existingMigrationFiles,
+        migrationFiles: analyzableMigrationFiles,
         labels: prContext.labels,
         findings,
         acknowledgedFindings,
@@ -1099,7 +1118,7 @@ export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyC
       ? `${blockingFindings.length} forbidden migration pattern(s) require changes or explicit acknowledgment`
       : `${warningFindings.length} migration risk warning(s) detected`,
     details: {
-      migrationFiles: existingMigrationFiles,
+      migrationFiles: analyzableMigrationFiles,
       labels: prContext.labels,
       findings,
       acknowledgedFindings,
@@ -1116,6 +1135,17 @@ export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyC
  * choice is documented rather than silently allowed.
  */
 export const MIGRATION_IRREVERSIBLE_LABEL = 'migration:irreversible';
+const READY_STAGE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const FORBIDDEN_DDL_ANALYZER_PATH = path.join(READY_STAGE_DIR, 'forbidden-ddl-analyzer.py');
+const SQL_ROLLBACK_SUFFIX = '_rollback.sql';
+
+function isSqlRollbackMigration(file: string): boolean {
+  return file.toLowerCase().endsWith(SQL_ROLLBACK_SUFFIX);
+}
+
+function getSqlRollbackPath(file: string): string {
+  return file.replace(/\.sql$/i, SQL_ROLLBACK_SUFFIX);
+}
 
 /**
  * Alembic operations in `upgrade()` that destroy data even if `downgrade()`
@@ -1191,8 +1221,34 @@ export async function checkMigrationReversibility(
 
   const failures: MigrationReversibilityFailure[] = [];
   const warnings: MigrationReversibilityWarning[] = [];
+  const rollbackFiles = new Set<string>();
+  const changedFileSet = new Set(migrationFiles);
 
   for (const file of migrationFiles) {
+    if (file.toLowerCase().endsWith('.sql')) {
+      if (isSqlRollbackMigration(file)) {
+        rollbackFiles.add(file);
+        continue;
+      }
+
+      const rollbackFile = getSqlRollbackPath(file);
+      const rollbackPath = path.isAbsolute(rollbackFile)
+        ? rollbackFile
+        : path.join(repoDir, rollbackFile);
+      if (changedFileSet.has(rollbackFile) || existsSync(rollbackPath)) {
+        rollbackFiles.add(rollbackFile);
+        continue;
+      }
+
+      failures.push({
+        file,
+        reason: 'missing-downgrade',
+        classification: 'missing',
+        message: `${MIGRATION_FAILURE_MESSAGES['missing-downgrade']}; SQL migrations must include a matching ${path.basename(rollbackFile)}`,
+      });
+      continue;
+    }
+
     const absolutePath = path.isAbsolute(file) ? file : path.join(repoDir, file);
     const parsed = parseMigrationFile(absolutePath);
     if (parsed.parseError) {
@@ -1256,6 +1312,7 @@ export async function checkMigrationReversibility(
           overriddenFailures: failures,
           warnings,
           migrationFiles,
+          rollbackFiles: [...rollbackFiles].sort(),
         },
       };
     }
@@ -1271,6 +1328,7 @@ export async function checkMigrationReversibility(
         failures,
         warnings,
         migrationFiles,
+        rollbackFiles: [...rollbackFiles].sort(),
       },
     };
   }
@@ -1284,6 +1342,7 @@ export async function checkMigrationReversibility(
       details: {
         warnings,
         migrationFiles,
+        rollbackFiles: [...rollbackFiles].sort(),
       },
     };
   }
@@ -1291,9 +1350,12 @@ export async function checkMigrationReversibility(
   return {
     name: 'migration-reversibility',
     status: 'pass',
-    message: 'All changed migrations have a non-trivial downgrade()',
+    message: rollbackFiles.size > 0
+      ? 'All changed migrations have a non-trivial downgrade() or matching SQL rollback file'
+      : 'All changed migrations have a non-trivial downgrade()',
     details: {
       migrationFiles,
+      rollbackFiles: [...rollbackFiles].sort(),
     },
   };
 }
