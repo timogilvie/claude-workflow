@@ -1691,9 +1691,11 @@ export function computeVerdict(
   if (requiredChecks.some(check => check.status === 'fail')) return 'fail';
   if (requiredChecks.some(check => check.status === 'pending')) return 'pending';
 
+  // 'skip' on optional checks means "not applicable" — it is not a warning condition.
+  // Only treat optional fail/pending/warn as noteworthy.
   const hasWarnings = requiredChecks.some(check => check.status === 'warn' || check.status === 'skip')
     || optionalChecks.some(
-      check => check.status === 'warn' || check.status === 'skip' || check.status === 'fail' || check.status === 'pending'
+      check => check.status === 'warn' || check.status === 'fail' || check.status === 'pending'
     );
   if (hasWarnings) {
     return 'warn';
@@ -1762,8 +1764,9 @@ export async function runReadyStage(options: {
   const deployConfig = policy.checks.includes('deploy-paths')
     ? loadDeployConfig(repoDir)
     : {};
-  const mergeConflict = await checkMergeConflicts(prNumber, repoDir);
+  let mergeConflict: MergeConflictResult | undefined;
   if (policy.checks.includes('merge-conflict')) {
+    mergeConflict = await checkMergeConflicts(prNumber, repoDir);
     checks.push({
       name: 'merge-conflict',
       status:

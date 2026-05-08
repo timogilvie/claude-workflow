@@ -600,6 +600,11 @@ function canonicalizeReadyCheckName(name: string): string {
   return name === 'merge-conflicts' ? 'merge-conflict' : name;
 }
 
+// These are the universal checks always included by resolveReadyPolicy when no explicit
+// ready.checks are configured. Keeping them here (rather than importing from ready-stage.ts)
+// avoids a circular dependency since ready-stage.ts imports from config.ts.
+const UNIVERSAL_CHECK_NAMES = ['pr-exists', 'merge-conflict', 'ci-status'];
+
 function validateReadyPolicySubset(config: unknown): void {
   if (typeof config !== 'object' || config === null) {
     return;
@@ -610,11 +615,14 @@ function validateReadyPolicySubset(config: unknown): void {
     return;
   }
 
+  // Effective check set = explicitly configured checks + universal defaults (always present at runtime).
   const configuredChecks = Array.isArray(ready.checks) ? ready.checks : [];
-  const configuredCheckSet = new Set(configuredChecks.map(canonicalizeReadyCheckName));
+  const effectiveCheckSet = new Set(
+    [...configuredChecks, ...UNIVERSAL_CHECK_NAMES].map(canonicalizeReadyCheckName)
+  );
   for (const requiredCheck of ready.requiredChecks) {
     const canonicalRequired = canonicalizeReadyCheckName(requiredCheck);
-    if (!configuredCheckSet.has(canonicalRequired)) {
+    if (!effectiveCheckSet.has(canonicalRequired)) {
       throw new Error(
         `Config validation failed:\n` +
         `  /ready/requiredChecks: "${requiredCheck}" must also be present in ready.checks\n\n` +
