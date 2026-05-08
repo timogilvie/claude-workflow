@@ -323,6 +323,7 @@ export interface QuotaConfig {
 export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
+  migrationKind?: 'alembic' | 'sql' | 'none';
   migrationPatterns?: string[];
   migrationDangerLabels?: Record<string, string>;
   migrationForbiddenPatterns?: string[];
@@ -591,6 +592,36 @@ function validateConfig(config: unknown): asserts config is WavemillConfig {
       `Check .wavemill-config.json against wavemill-config.schema.json`
     );
   }
+
+  validateReadyPolicySubset(config);
+}
+
+function canonicalizeReadyCheckName(name: string): string {
+  return name === 'merge-conflicts' ? 'merge-conflict' : name;
+}
+
+function validateReadyPolicySubset(config: unknown): void {
+  if (typeof config !== 'object' || config === null) {
+    return;
+  }
+
+  const ready = (config as WavemillConfig).ready;
+  if (!ready || !Array.isArray(ready.requiredChecks) || ready.requiredChecks.length === 0) {
+    return;
+  }
+
+  const configuredChecks = Array.isArray(ready.checks) ? ready.checks : [];
+  const configuredCheckSet = new Set(configuredChecks.map(canonicalizeReadyCheckName));
+  for (const requiredCheck of ready.requiredChecks) {
+    const canonicalRequired = canonicalizeReadyCheckName(requiredCheck);
+    if (!configuredCheckSet.has(canonicalRequired)) {
+      throw new Error(
+        `Config validation failed:\n` +
+        `  /ready/requiredChecks: "${requiredCheck}" must also be present in ready.checks\n\n` +
+        `Check .wavemill-config.json against wavemill-config.schema.json`
+      );
+    }
+  }
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -855,6 +886,7 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
   return {
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
+    migrationKind: config.ready?.migrationKind,
     migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
     migrationDangerLabels: {
       ...DEFAULT_READY_MIGRATION_DANGER_LABELS,

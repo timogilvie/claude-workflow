@@ -443,6 +443,12 @@ describe('ready-stage', () => {
         execMock.mock.restore();
       }
     });
+
+    it('skips for sql migration kind', async () => {
+      const result = await checkMigrationChainIntegrity(repoDir, ['migrations/.*\\.sql$'], 'sql');
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /unsupported.*sql/i);
+    });
   });
 
   describe('checkForbiddenDDL', () => {
@@ -1095,6 +1101,15 @@ describe('ready-stage', () => {
       const result = computeVerdict(checks);
       assert.equal(result, 'fail');
     });
+
+    it('uses required checks for blocking decisions', () => {
+      const checks: ReadyCheck[] = [
+        { name: 'ci-status', status: 'pass', message: 'ok' },
+        { name: 'forbidden-ddl', status: 'fail', message: 'optional fail' },
+      ];
+      const result = computeVerdict(checks, ['ci-status']);
+      assert.equal(result, 'warn');
+    });
   });
 
   describe('checkCIStatus', () => {
@@ -1505,6 +1520,40 @@ describe('ready-stage', () => {
   });
 
   describe('runReadyStage - integration', () => {
+    it('defaults to universal checks when ready config is missing', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-defaults-'));
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+          }
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [{ path: 'src/app.ts' }],
+          });
+        }
+        if (cmd.includes('gh pr diff')) return '';
+        if (cmd.includes('gh pr checks')) return JSON.stringify([]);
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        const names = result.checks.map(check => check.name);
+        assert.ok(names.includes('pr-exists'));
+        assert.ok(names.includes('merge-conflict'));
+        assert.ok(names.includes('ci-status'));
+        assert.ok(!names.includes('schema-migrations'));
+        assert.ok(!names.includes('forbidden-ddl'));
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
     it('suppresses gh stderr while gathering PR context CI metadata', async () => {
       const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
       await fs.writeFile(
@@ -1610,7 +1659,7 @@ describe('ready-stage', () => {
         assert.equal(typeof result.timestamp, 'string');
         assert.equal(typeof result.summary, 'string');
         assert.equal(result.branch, 'feature-branch');
-        assert.equal(result.verdict, 'warn');
+        assert.equal(result.verdict, 'fail');
         assert.equal(result.mergeConflict?.status, 'CONFLICTED');
       } finally {
         execMock.mock.restore();
