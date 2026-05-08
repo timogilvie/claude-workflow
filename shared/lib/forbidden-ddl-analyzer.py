@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import ast
 import json
 import re
@@ -8,6 +10,13 @@ from pathlib import Path
 
 
 DML_PATTERN = re.compile(r"\b(UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
+SQL_DML_STATEMENT_PATTERN = re.compile(r"^\s*(UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
+SQL_DROP_TABLE_PATTERN = re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE)
+SQL_DROP_COLUMN_PATTERN = re.compile(r"\bDROP\s+COLUMN\b", re.IGNORECASE)
+SQL_ALTER_COLUMN_TYPE_PATTERN = re.compile(
+    r"\bALTER\s+(?:COLUMN\s+)?[A-Za-z_][\w\"]*\s+TYPE\b",
+    re.IGNORECASE,
+)
 
 
 def literal_false(node: ast.AST) -> bool:
@@ -137,6 +146,13 @@ def analyze_file(filename: str) -> tuple[list[dict[str, object]], list[dict[str,
     except OSError as error:
         return [], [{"file": str(file_path), "message": str(error)}]
 
+    if file_path.suffix.lower() == ".sql":
+        findings = [
+            {"file": str(file_path), **finding}
+            for finding in analyze_sql(source)
+        ]
+        return findings, []
+
     try:
         tree = ast.parse(source, filename=str(file_path))
     except SyntaxError as error:
@@ -150,6 +166,41 @@ def analyze_file(filename: str) -> tuple[list[dict[str, object]], list[dict[str,
         for finding in analyze_upgrade(tree)
     ]
     return findings, []
+
+
+def analyze_sql(source: str) -> list[dict[str, object]]:
+    findings: list[dict[str, object]] = []
+
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        if SQL_DROP_TABLE_PATTERN.search(stripped):
+            findings.append({
+                "line": line_number,
+                "rule": "drop_table",
+                "detail": stripped,
+            })
+        if SQL_DROP_COLUMN_PATTERN.search(stripped):
+            findings.append({
+                "line": line_number,
+                "rule": "drop_column",
+                "detail": stripped,
+            })
+        if SQL_ALTER_COLUMN_TYPE_PATTERN.search(stripped):
+            findings.append({
+                "line": line_number,
+                "rule": "alter_column_type",
+                "detail": stripped,
+            })
+        if SQL_DML_STATEMENT_PATTERN.search(stripped):
+            findings.append({
+                "line": line_number,
+                "rule": "execute_dml",
+                "detail": stripped,
+            })
+
+    return findings
 
 
 def main(argv: list[str]) -> int:
