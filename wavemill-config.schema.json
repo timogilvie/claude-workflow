@@ -214,6 +214,27 @@
             },
             "additionalProperties": false
         },
+        "projectContext": {
+            "type": "object",
+            "description": "Settings for project-context compaction suggestions and behavior.",
+            "properties": {
+                "compactionThresholdKb": {
+                    "type": "integer",
+                    "default": 100,
+                    "minimum": 10,
+                    "maximum": 10000,
+                    "description": "Size threshold in KB for surfacing project-context compaction suggestions."
+                },
+                "recentWorkKeep": {
+                    "type": "integer",
+                    "default": 25,
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "Number of most-recent Recent Work entries to keep during compaction."
+                }
+            },
+            "additionalProperties": false
+        },
         "eval": {
             "type": "object",
             "description": "Settings for the 'wavemill eval' command.",

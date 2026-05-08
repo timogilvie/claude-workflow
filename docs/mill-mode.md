@@ -146,6 +146,35 @@ For operator details, see [Ready Stage](ready-stage.md).
 - `touch ~/.wavemill/.stop-loop` stop after current cycle
 - `Ctrl+C` interrupt and reset in-progress tasks
 
+### Project Context Size Warning
+
+When `.wavemill/project-context.md` exceeds `100KB`, `wavemill mill` displays:
+
+```text
+⚠ project-context.md is 142KB (>100KB) - press 'c' to compact
+```
+
+To compact:
+
+```bash
+wavemill context compact
+# or
+npx tsx tools/compact-project-context.ts
+```
+
+This archives the original to `.wavemill/project-context-archive-YYYYMM.md` and rebuilds the file with only the most recent `25` `Recent Work` entries.
+
+Configuration (`.wavemill-config.json`):
+
+```json
+{
+  "projectContext": {
+    "compactionThresholdKb": 100,
+    "recentWorkKeep": 25
+  }
+}
+```
+
 ## Control Layout And Input
 
 - Mill keeps the same three visible control panes:
