@@ -658,7 +658,7 @@
                         "type": "string"
                     },
                     "default": [],
-                    "description": "List of check names to run (empty = all available checks)"
+                    "description": "List of check names to run (missing or empty uses conservative universal defaults: pr-exists, merge-conflict, ci-status)"
                 },
                 "requiredChecks": {
                     "type": "array",
@@ -666,7 +666,16 @@
                         "type": "string"
                     },
                     "default": [],
-                    "description": "Checks that must pass for merge approval (subset of checks)"
+                    "description": "Checks that must pass for merge approval (subset of checks). Required checks that skip are non-blocking warnings."
+                },
+                "migrationKind": {
+                    "type": "string",
+                    "enum": [
+                        "alembic",
+                        "sql",
+                        "none"
+                    ],
+                    "description": "Declares migration format for migration-specific checks. Missing means migration-specific checks should skip unless explicitly supported."
                 },
                 "migrationPatterns": {
                     "type": "array",
