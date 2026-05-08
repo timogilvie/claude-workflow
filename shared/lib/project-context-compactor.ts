@@ -90,7 +90,7 @@ export async function compactProjectContext(options: CompactProjectContextOption
   const originalSizeBytes = originalStat.size;
   const thresholdBytes = thresholdKb * 1024;
 
-  if (originalSizeBytes <= thresholdBytes && !dryRun) {
+  if (originalSizeBytes <= thresholdBytes) {
     return {
       originalSizeBytes,
       newSizeBytes: originalSizeBytes,

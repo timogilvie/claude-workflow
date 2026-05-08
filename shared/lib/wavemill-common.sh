@@ -1787,7 +1787,10 @@ project_context_suggestion_set() {
   [[ -n "${REPO_DIR:-}" ]] || return 1
 
   local context_file="$REPO_DIR/.wavemill/project-context.md"
-  if mtime=$(date -r "$context_file" -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null); then
+  local epoch
+  if epoch=$(stat -c '%Y' "$context_file" 2>/dev/null) && mtime=$(date -u -d "@$epoch" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null); then
+    :
+  elif mtime=$(date -r "$context_file" -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null); then
     :
   else
     mtime=""

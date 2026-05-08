@@ -1471,7 +1471,7 @@ check_project_context_size() {
 
 check_project_context_size
 
-if [[ "" != "true" ]]; then
+if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
   # Split candidates into unblocked and blocked
   # pick_candidates() outputs 6 fields (has_detailed_plan is stripped), so field 6 is blocked_by_count
   UNBLOCKED=$(echo "$CANDIDATES" | awk -F'|' '$6 == 0 || $6 == ""')
@@ -1536,15 +1536,31 @@ if [[ "" != "true" ]]; then
     fi
     if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
       if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, c to compact context, q to quit, or Enter to launch recommended wave:"
+        if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+          echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, c to compact context, q to quit, or Enter to launch recommended wave:"
+        else
+          echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, q to quit, or Enter to launch recommended wave:"
+        fi
       else
-        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, c to compact context, q to quit, or Enter to launch recommended wave:"
+        if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+          echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, c to compact context, q to quit, or Enter to launch recommended wave:"
+        else
+          echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, q to quit, or Enter to launch recommended wave:"
+        fi
       fi
     else
       if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-        echo "Enter numbers to run (e.g. 1 3 5), m for more, c to compact context, q to quit, or Enter to launch recommended wave:"
+        if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+          echo "Enter numbers to run (e.g. 1 3 5), m for more, c to compact context, q to quit, or Enter to launch recommended wave:"
+        else
+          echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to launch recommended wave:"
+        fi
       else
-        echo "Enter numbers to run (e.g. 1 3 5), c to compact context, q to quit, or Enter to launch recommended wave:"
+        if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+          echo "Enter numbers to run (e.g. 1 3 5), c to compact context, q to quit, or Enter to launch recommended wave:"
+        else
+          echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to launch recommended wave:"
+        fi
       fi
     fi
     read -r SELECTED
