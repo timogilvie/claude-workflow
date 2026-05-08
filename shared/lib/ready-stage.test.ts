@@ -325,6 +325,19 @@ describe('ready-stage', () => {
       ]);
     });
 
+    it('ignores non-Alembic Python helpers that match broad migration patterns', async () => {
+      await writeRepoFiles(repoDir, {
+        'shared/db/migrations/apply_ttl_migration.py': 'def apply():\n    pass\n',
+        'shared/db/migrations/004_add_user_org_to_leads.py': 'print("apply migration")\n',
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /No Alembic revision files/);
+      const skipped = result.details?.skippedFiles as Array<Record<string, unknown>>;
+      assert.equal(skipped.length, 2);
+    });
+
     it('fails on duplicate revision IDs', async () => {
       await writeRepoFiles(repoDir, {
         'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
@@ -574,6 +587,32 @@ describe('ready-stage', () => {
       assert.equal(result.status, 'pass');
     });
 
+    it('uses Wavemill analyzer when the target repo does not contain one', async () => {
+      await fs.rm(path.join(repoDir, 'shared/lib/forbidden-ddl-analyzer.py'), { force: true });
+      await writeRepoFiles(repoDir, {
+        'migrations/001_create_table.sql': 'CREATE TABLE contacts (id uuid PRIMARY KEY);\n',
+      });
+
+      const result = checkForbiddenDDL(
+        makePrContext(['migrations/001_create_table.sql']),
+        repoDir
+      );
+      assert.equal(result.status, 'pass');
+    });
+
+    it('detects destructive SQL migrations', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/002_drop_table.sql': 'DROP TABLE contacts;\n',
+      });
+
+      const result = checkForbiddenDDL(
+        makePrContext(['migrations/002_drop_table.sql']),
+        repoDir
+      );
+      assert.equal(result.status, 'fail');
+      assert.match(result.message, /forbidden migration pattern/);
+    });
+
     it('honors custom migration danger labels', async () => {
       await writeFixture('drop_table.py');
       await writeRepoFiles(repoDir, {
@@ -709,6 +748,40 @@ describe('ready-stage', () => {
       const result = await checkMigrationReversibility([file], repoDir, []);
       assert.equal(result.status, 'pass');
       assert.match(result.message, /non-trivial downgrade/);
+    });
+
+    it('passes SQL migrations with a matching rollback file', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/028_add_tables.sql': 'CREATE TABLE contacts (id uuid PRIMARY KEY);\n',
+        'migrations/028_add_tables_rollback.sql': 'DROP TABLE contacts;\n',
+      });
+
+      const result = await checkMigrationReversibility(
+        ['migrations/028_add_tables.sql', 'migrations/028_add_tables_rollback.sql'],
+        repoDir,
+        []
+      );
+      assert.equal(result.status, 'pass');
+      assert.match(result.message, /matching SQL rollback/);
+      assert.deepEqual(result.details?.rollbackFiles, [
+        'migrations/028_add_tables_rollback.sql',
+      ]);
+    });
+
+    it('fails SQL migrations without a matching rollback file', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/029_add_tables.sql': 'CREATE TABLE contacts (id uuid PRIMARY KEY);\n',
+      });
+
+      const result = await checkMigrationReversibility(
+        ['migrations/029_add_tables.sql'],
+        repoDir,
+        []
+      );
+      assert.equal(result.status, 'fail');
+      const failures = result.details?.failures as Array<Record<string, unknown>>;
+      assert.equal(failures[0].reason, 'missing-downgrade');
+      assert.match(String(failures[0].message), /rollback/);
     });
 
     it('migration:irreversible label converts a hard failure into pass with overrides recorded', async () => {
