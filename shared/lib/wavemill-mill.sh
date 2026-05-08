@@ -5874,26 +5874,34 @@ invoke_first_wave_helper() {
 
 render_grouped_task_list() {
   local queue_plan="$1" available="$2"
-  local counter=0 output="" select_lines="" section_body="" line rec group_index task_id blockers triage_id
+  local counter=0 output="" select_lines="" section_body="" line rec group_index task_id blockers triage_id task_key
   declare -A id_to_record=()
+  declare -A rendered_ids=()
 
   jq -e . >/dev/null 2>&1 <<<"$queue_plan" || return 1
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     task_id=${line%%|*}
-    [[ -n "$task_id" ]] && id_to_record["$task_id"]="$line"
+    if [[ -n "$task_id" ]]; then
+      id_to_record["$task_id"]="$line"
+      task_key="$(printf '%s' "$task_id" | tr '[:lower:]' '[:upper:]')"
+      id_to_record["$task_key"]="$line"
+    fi
   done <<<"$available"
 
   section_body=""
   while IFS= read -r task_id; do
     [[ -n "$task_id" ]] || continue
-    rec="${id_to_record[$task_id]:-}"
+    task_key="$(printf '%s' "$task_id" | tr '[:lower:]' '[:upper:]')"
+    [[ -n "${rendered_ids[$task_key]:-}" ]] && continue
+    rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
     counter=$((counter + 1))
-    section_body+=$(printf '  %s. %s - %s\n' "$counter" "$task_id" "$title")
+    section_body+="$(printf '  %s. %s - %s' "$counter" "$task_id" "$title")"$'\n'
     select_lines+="${rec}"$'\n'
+    rendered_ids["$task_key"]=1
   done < <(jq -r '.availableNow[]?' <<<"$queue_plan" 2>/dev/null)
   if [[ -n "$section_body" ]]; then
     output+="Available Now - Parallel Wave 1"$'\n'
@@ -5903,12 +5911,15 @@ render_grouped_task_list() {
   section_body=""
   while IFS=$'\t' read -r task_id blockers; do
     [[ -n "$task_id" ]] || continue
-    rec="${id_to_record[$task_id]:-}"
+    task_key="$(printf '%s' "$task_id" | tr '[:lower:]' '[:upper:]')"
+    [[ -n "${rendered_ids[$task_key]:-}" ]] && continue
+    rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
     counter=$((counter + 1))
-    section_body+=$(printf '  %s. %s - %s (blocked by: %s)\n' "$counter" "$task_id" "$title" "$blockers")
+    section_body+="$(printf '  %s. %s - %s (blocked by: %s)' "$counter" "$task_id" "$title" "$blockers")"$'\n'
     select_lines+="${rec}"$'\n'
+    rendered_ids["$task_key"]=1
   done < <(jq -r '.queuedAfterDependencies[]? | [.taskId, (.ancestors | join(", "))] | @tsv' <<<"$queue_plan" 2>/dev/null)
   if [[ -n "$section_body" ]]; then
     [[ -n "$output" ]] && output+=$'\n'
@@ -5924,15 +5935,19 @@ render_grouped_task_list() {
     local cluster_body=""
     while IFS= read -r task_id; do
       [[ -n "$task_id" ]] || continue
-      rec="${id_to_record[$task_id]:-}"
+      task_key="$(printf '%s' "$task_id" | tr '[:lower:]' '[:upper:]')"
+      [[ -n "${rendered_ids[$task_key]:-}" ]] && continue
+      rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
       [[ -n "$rec" ]] || continue
       IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
       counter=$((counter + 1))
-      cluster_body+=$(printf '    %s. %s - %s\n' "$counter" "$task_id" "$title")
+      cluster_body+="$(printf '    %s. %s - %s' "$counter" "$task_id" "$title")"$'\n'
       select_lines+="${rec}"$'\n'
+      rendered_ids["$task_key"]=1
     done < <(jq -r '.[]' <<<"$blockers" 2>/dev/null)
     if [[ -n "$cluster_body" ]]; then
-      section_body+=$(printf '  [conflict cluster %s]\n%s' "$group_index" "$cluster_body")
+      section_body+="$(printf '  [conflict cluster %s]' "$group_index")"$'\n'
+      section_body+="$cluster_body"
     fi
   done < <(jq -c '.avoidRunningTogether[]?' <<<"$queue_plan" 2>/dev/null)
   if [[ -n "$section_body" ]]; then
@@ -5944,12 +5959,15 @@ render_grouped_task_list() {
   section_body=""
   while IFS= read -r triage_id; do
     [[ -n "$triage_id" ]] || continue
-    rec="${id_to_record[$triage_id]:-}"
+    task_key="$(printf '%s' "$triage_id" | tr '[:lower:]' '[:upper:]')"
+    [[ -n "${rendered_ids[$task_key]:-}" ]] && continue
+    rec="${id_to_record[$triage_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
     counter=$((counter + 1))
-    section_body+=$(printf '  %s. %s - %s [triage]\n' "$counter" "$task_id" "$title")
+    section_body+="$(printf '  %s. %s - %s [triage]' "$counter" "$task_id" "$title")"$'\n'
     select_lines+="${rec}"$'\n'
+    rendered_ids["$task_key"]=1
   done < <(jq -r '.needsTriage[]? | .edge.to' <<<"$queue_plan" 2>/dev/null)
   if [[ -n "$section_body" ]]; then
     [[ -n "$output" ]] && output+=$'\n'
