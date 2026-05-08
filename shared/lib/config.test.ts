@@ -1484,6 +1484,57 @@ test('getReadyConfig honors explicit migration patterns', () => {
   }
 });
 
+test('getReadyConfig returns migrationKind when configured', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        migrationKind: 'sql',
+      }
+    }));
+
+    const readyConfig = getReadyConfig(tmp);
+    assert.equal(readyConfig.migrationKind, 'sql');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready.requiredChecks must be a subset of ready.checks', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        checks: ['ci-status'],
+        requiredChecks: ['forbidden-ddl'],
+      }
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /ready\/requiredChecks/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready.requiredChecks accepts merge-conflicts alias when checks uses merge-conflict', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        checks: ['merge-conflict', 'ci-status'],
+        requiredChecks: ['merge-conflicts'],
+      }
+    }));
+
+    assert.doesNotThrow(() => loadWavemillConfig(tmp));
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('getReadyConfig respects explicit remediation overrides', () => {
   const tmp = makeTempRepo();
   try {

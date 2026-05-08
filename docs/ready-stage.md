@@ -489,10 +489,12 @@ The ready stage always runs for mill-managed repositories. The `ready` config se
 
 Configuration cases:
 
-- `ready` missing from `.wavemill-config.json`: all available ready checks can run
-- `ready.checks`: restricts the set of checks to run
-- `ready.requiredChecks`: marks a subset of checks as merge-blocking
+- `ready` missing from `.wavemill-config.json`: only universal checks run (`pr-exists`, `merge-conflict`, `ci-status`)
+- `ready.checks` missing or `[]`: same conservative universal defaults
+- `ready.checks`: explicit allowlist of checks to run
+- `ready.requiredChecks`: subset of `ready.checks` that is merge-blocking
 - `ready.migrationPatterns`: overrides the regex patterns used to discover migration files for migration-related checks (including `migration-reversibility`)
+- `ready.migrationKind`: declares migration format (`alembic`, `sql`, `none`) for migration-specific checks
 
 Workflow expectations:
 
@@ -518,15 +520,8 @@ Minimal explicit configuration:
 ```json
 {
   "ready": {
-    "checks": [],
-    "requiredChecks": [],
-    "migrationPatterns": ["migrations/", "alembic/versions/"],
-    "migrationDangerLabels": {
-      "drop_column": "migration:destructive",
-      "drop_table": "migration:destructive",
-      "alter_column_type": "migration:long-running"
-    },
-    "migrationForbiddenPatterns": []
+    "checks": ["pr-exists", "merge-conflict", "ci-status"],
+    "requiredChecks": ["pr-exists", "merge-conflict", "ci-status"]
   }
 }
 ```
@@ -652,16 +647,17 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
 
 | Setting | Type | Default | Meaning |
 |---------|------|---------|---------|
-| `ready.checks` | `string[]` | `[]` | Checks to run. Empty means all available checks. |
-| `ready.requiredChecks` | `string[]` | `[]` | Subset of checks that must pass for merge approval. |
+| `ready.checks` | `string[]` | `[]` | Checks to run. Missing/empty uses universal defaults (`pr-exists`, `merge-conflict`, `ci-status`). |
+| `ready.requiredChecks` | `string[]` | `[]` | Subset of `ready.checks` that must pass. Required `skip` is non-blocking and reported as warning. |
+| `ready.migrationKind` | `"alembic" \| "sql" \| "none"` | unset | Migration format hint for migration-specific checks; unsupported kinds are skipped instead of failed parsing. |
 
 ### Minimal Configuration
 
 ```json
 {
   "ready": {
-    "checks": [],
-    "requiredChecks": []
+    "checks": ["pr-exists", "merge-conflict", "ci-status"],
+    "requiredChecks": ["pr-exists", "merge-conflict", "ci-status"]
   }
 }
 ```
@@ -671,8 +667,24 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
 ```json
 {
   "ready": {
-    "checks": ["ci-status", "approvals", "merge-conflicts", "manual-steps"],
-    "requiredChecks": ["ci-status", "approvals", "merge-conflicts"]
+    "checks": [
+      "pr-exists",
+      "merge-conflict",
+      "ci-status",
+      "schema-migrations",
+      "migration-chain-integrity",
+      "forbidden-ddl",
+      "migration-reversibility"
+    ],
+    "requiredChecks": [
+      "pr-exists",
+      "merge-conflict",
+      "ci-status",
+      "schema-migrations",
+      "migration-chain-integrity"
+    ],
+    "migrationKind": "alembic",
+    "migrationPatterns": ["alembic/versions/.*\\.py$"]
   }
 }
 ```
@@ -691,6 +703,6 @@ Use the ready stage as the final pre-merge decision point.
 - Ready passing is the merge gate.
 - Failures block merge.
 - Warnings require deliberate operator handling.
-- Missing ready configuration keeps existing workflows compatible.
+- Missing ready configuration keeps onboarding conservative and non-opinionated.
 
 The ready contract, monitor behavior, and operator policy should stay stable as additional checks are added.
