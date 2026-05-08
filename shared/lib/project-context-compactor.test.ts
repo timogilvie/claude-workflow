@@ -107,4 +107,49 @@ describe('compactProjectContext', () => {
       cleanup(repo);
     }
   });
+
+  it('skips when file is under threshold in dry-run mode', async () => {
+    const repo = makeRepo();
+    try {
+      writeContext(repo, '# Context\n\n## Recent Work\n\n### 2026-05-01\n\nA');
+      const result = await compactProjectContext({ repoDir: repo, thresholdKb: 999, keepRecent: 1, dryRun: true });
+      assert.equal(result.skipped, true);
+      assert.equal(result.dryRun, true);
+    } finally {
+      cleanup(repo);
+    }
+  });
+
+  it('preserves entry bodies when compacting heading-format entries', async () => {
+    const repo = makeRepo();
+    try {
+      const content = [
+        '# Context',
+        '',
+        '## Recent Work',
+        '',
+        '### 2026-05-01',
+        '',
+        'Body of first entry with multiple lines.',
+        '',
+        '### 2026-05-02',
+        '',
+        'Body of second entry.',
+        '',
+        '### 2026-05-03',
+        '',
+        'Body of third entry.',
+      ].join('\n');
+      writeContext(repo, content);
+
+      await compactProjectContext({ repoDir: repo, thresholdKb: 0, keepRecent: 2 });
+      const updated = readFileSync(join(repo, '.wavemill', 'project-context.md'), 'utf-8');
+
+      assert.ok(updated.includes('Body of second entry.'), 'second entry body preserved');
+      assert.ok(updated.includes('Body of third entry.'), 'third entry body preserved');
+      assert.ok(!updated.includes('Body of first entry'), 'first entry body removed');
+    } finally {
+      cleanup(repo);
+    }
+  });
 });

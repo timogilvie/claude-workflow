@@ -28,7 +28,9 @@ function parseRecentEntries(content: string): string[] {
     return [];
   }
 
-  const entryRegex = /(^###\s+\d{4}-\d{2}-\d{2}.*$[\s\S]*?)(?=^###\s+\d{4}-\d{2}-\d{2}.*$|\n---\s*\n|$)/gm;
+  // (?![\s\S]) matches only at end-of-string; plain $ with /m would match end-of-line,
+  // causing the lazy quantifier to stop after the heading line and silently drop entry bodies.
+  const entryRegex = /(^###\s+\d{4}-\d{2}-\d{2}.*$[\s\S]*?)(?=^###\s+\d{4}-\d{2}-\d{2}.*$|\n---\s*\n|(?![\s\S]))/gm;
   const headingMatches = Array.from(normalized.matchAll(entryRegex)).map((match) => match[1].trim());
   if (headingMatches.length > 0) {
     return headingMatches;
