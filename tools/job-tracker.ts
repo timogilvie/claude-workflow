@@ -64,6 +64,7 @@ async function main(): Promise<void> {
         prNumbers,
       }),
       kind,
+      session: flags.session,
       issueId: flags['issue-id'],
       side: flags.side,
       pairId: flags['pair-id'],

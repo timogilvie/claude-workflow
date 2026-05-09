@@ -1767,6 +1767,31 @@ state_mutate() {
   return "$mutate_status"
 }
 
+cleanup_background_jobs_startup() {
+  # Keep only jobs created by the current session; older or pre-session jobs
+  # are stale once a new session starts.
+  [[ -n "${SESSION:-}" ]] || return 0
+  [[ -r "${STATE_FILE:-}" && -s "${STATE_FILE:-}" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.jobs = ((.jobs // {}) | with_entries(select(.value.session? == $session)))' \
+    --arg session "${SESSION:-}"
+}
+
+cleanup_background_jobs_shutdown() {
+  # Drop completed+settled current-session jobs on exit so the next session
+  # starts from a clean slate. Running or unsettled jobs are preserved so
+  # detached background processes (eval, comparison) can still be reaped.
+  [[ -n "${SESSION:-}" ]] || return 0
+  [[ -r "${STATE_FILE:-}" && -s "${STATE_FILE:-}" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.jobs = ((.jobs // {}) | with_entries(select(
+      .value.session? != $session
+      or .value.status? == "running"
+      or (.value.settled? != true)
+    )))' \
+    --arg session "${SESSION:-}"
+}
+
 get_file_size_bytes() {
   local path="$1"
   if stat -f%z "$path" 2>/dev/null; then

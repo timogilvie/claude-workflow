@@ -866,6 +866,7 @@ main() {
   local -a linear_batch_ids=()
 
   ensure_state_file
+  cleanup_background_jobs_startup
   seed_queued_tasks_from_plan "$PLAN_FILE"
   : > "$STATUS_LOG_FILE"
   : > "$LAUNCHED_ISSUES_FILE"
