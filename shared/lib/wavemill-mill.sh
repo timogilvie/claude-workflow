@@ -8456,7 +8456,8 @@ monitor_issue_state() {
     fi
   elif [[ "$current_phase" == "ready" ]]; then
     local resolved_phase ready_state_dir_path ready_status ready_verdict
-    local launch_head current_head title launch_rc
+    local launch_head current_head title launch_rc _conflict_cleared
+    _conflict_cleared=false
     resolved_phase=$(resolve_phase "$FEATURE_DIR")
     if [[ "$resolved_phase" == "aborted" ]]; then
       log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during ready phase"
@@ -8484,6 +8485,7 @@ monitor_issue_state() {
         if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
           if ready_conflict_recheck_due "$ready_state_dir_path" && ready_conflict_pr_is_clean "$ready_state_dir_path" "$PR" "$ISSUE"; then
             clear_ready_conflict_markers "$ready_state_dir_path"
+            _conflict_cleared=true
           else
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -8529,7 +8531,11 @@ monitor_issue_state() {
         fi
 
         log "status" "$ISSUE → Conflict remediation complete, ready checks rerun"
-        set_window_attention_state "$WIN" "needs-user"
+        if [[ "$_conflict_cleared" == "true" ]]; then
+          set_window_attention_state "$WIN" "clear"
+        else
+          set_window_attention_state "$WIN" "needs-user"
+        fi
         return 0
       fi
     fi
