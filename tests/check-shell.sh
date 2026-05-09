@@ -975,22 +975,22 @@ else
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
-  && grep -q 'split-window -t "\$SESSION:control.0" -h -f -p 50' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'respawn-pane -k -t "\$SESSION:control.1" .*\$status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'respawn-pane -k -t "\$SESSION:control.2" .*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
-  pass "startup runner builds task, dashboard, and log control panes"
+  && grep -q 'split-window -t "\$SESSION:\$WAVEMILL_WINDOW_MILL.0" -h -f -p 50' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'split-window -t "\$SESSION:\$WAVEMILL_WINDOW_MILL.0" -v -p 65' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\$SESSION:\$WAVEMILL_WINDOW_MILL.1" .*\$status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\$SESSION:\$WAVEMILL_WINDOW_MILL.2" .*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  pass "startup runner builds task, dashboard, and log mill panes"
 else
-  fail "startup runner is missing the 3-pane control layout wiring"
+  fail "startup runner is missing the 3-pane mill layout wiring"
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
   && grep -q 'WAVEMILL_SESSION=' "$LIB_DIR/wavemill-startup-runner.sh" \
   && grep -q 'wavemill-input-reader.sh' "$LIB_DIR/wavemill-startup-runner.sh" \
   && grep -q '</dev/null &' "$LIB_DIR/wavemill-startup-runner.sh"; then
-  pass "control.0 launches monitor non-interactively plus input reader"
+  pass "mill.0 launches monitor non-interactively plus input reader"
 else
-  fail "control.0 does not launch the monitor/input-reader wrapper"
+  fail "mill.0 does not launch the monitor/input-reader wrapper"
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \

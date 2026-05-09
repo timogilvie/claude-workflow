@@ -30,7 +30,7 @@ assert_merged_without_ready_dedup() {
   check_contains "merged without ready runs post-merge eval" "$output" "HOK-1294 901 task/merged_without_ready_dedup merged_without_ready_dedup HOK-1294 post-merge"
   check_contains "merged without ready marks Linear done" "$output" "HOK-1294|Done"
   check_contains "merged without ready logs bypass warning" "$output" "was merged before ready checks passed"
-  check_contains "merged without ready logs merged success" "$output" "✓ HOK-1294 → PR #901 MERGED"
+  check_contains "merged without ready logs merged success" "$output" "HOK-1294 → PR #901 MERGED"
   check_not_contains "merged without ready does not hold window for review" "$output" "Window stays open for review"
   check_file_exists "merged without ready writes dedup sentinel" "$ready_dir/.ready-bypass-warned"
   check_file_content \

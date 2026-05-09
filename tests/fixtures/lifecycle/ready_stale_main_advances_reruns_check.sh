@@ -12,6 +12,7 @@ setup_ready_stale_main_advances_reruns_check() {
   REQUIRE_CONFIRM="false"
   READY_LAUNCH_RC=0
   MAIN_SHA_RETURN="new-main-sha"
+  MERGE_QUEUE_ENABLED="false"
 
   write_stage_result "$FEATURE_DIR" "review" "completed" "$CURRENT_AGENT"
   local ready_dir

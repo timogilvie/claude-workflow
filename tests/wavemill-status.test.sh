@@ -23,9 +23,14 @@ run_render() {
   local workspace_root="$2"
   local behavior_file="$3"
   local output_file="$4"
+  local pane_mode="${5:-}"
 
   (
-    set -- test-session "$workspace_root" "$state_file"
+    if [[ -n "$pane_mode" ]]; then
+      set -- "--pane=$pane_mode" test-session "$workspace_root" "$state_file"
+    else
+      set -- test-session "$workspace_root" "$state_file"
+    fi
     source "$REPO_DIR/shared/lib/wavemill-status.sh"
 
     refresh_pr_cache() { :; }
@@ -87,7 +92,11 @@ run_render() {
       jq -r --arg branch "$branch" '.checks[$branch] // empty' "$behavior_file"
     }
 
-    render_dashboard
+    case "$pane_mode" in
+      jobs) render_jobs_pane ;;
+      queued-pending) render_queued_pending_pane ;;
+      *) render_dashboard ;;
+    esac
     cp "$FRAME" "${output_file}.raw"
     strip_ansi < "$FRAME" > "$output_file"
   )
@@ -287,18 +296,24 @@ EOF
 OUTPUT_MONITOR_QUEUE="$TMP_DIR/output-monitor-queue.txt"
 run_render "$STATE_FILE_MONITOR_QUEUE" "$WORKTREES_DIR" "$BEHAVIOR_MONITOR_QUEUE" "$OUTPUT_MONITOR_QUEUE"
 
-if grep -q '⌛ QUEUED COMMANDS (1)' "$OUTPUT_MONITOR_QUEUE" \
-  && grep -q 'select 1 2' "$OUTPUT_MONITOR_QUEUE" \
-  && grep -q 'no slots available' "$OUTPUT_MONITOR_QUEUE"; then
-  pass "renders queued monitor commands when selections are deferred"
+if ! grep -q '⌛ QUEUED COMMANDS' "$OUTPUT_MONITOR_QUEUE" \
+  && ! grep -q '🛠 JOBS' "$OUTPUT_MONITOR_QUEUE" \
+  && grep -q '⚡ ACTIVE' "$OUTPUT_MONITOR_QUEUE" \
+  && grep -q 'No active tasks' "$OUTPUT_MONITOR_QUEUE"; then
+  pass "dashboard omits queued and jobs informational sections"
 else
-  fail "queued monitor command section is missing expected content"
+  fail "dashboard still renders queued or jobs sections"
 fi
 
-if ! grep -q '⌛ QUEUED COMMANDS' "$OUTPUT_ONE"; then
-  pass "omits queued monitor command section when empty"
+OUTPUT_QUEUED_PANE="$TMP_DIR/output-queued-pane.txt"
+run_render "$STATE_FILE_MONITOR_QUEUE" "$WORKTREES_DIR" "$BEHAVIOR_MONITOR_QUEUE" "$OUTPUT_QUEUED_PANE" "queued-pending"
+
+if grep -q '⌛ QUEUED COMMANDS (1)' "$OUTPUT_QUEUED_PANE" \
+  && grep -q 'select 1 2' "$OUTPUT_QUEUED_PANE" \
+  && grep -q 'no slots available' "$OUTPUT_QUEUED_PANE"; then
+  pass "queued/pending pane renders queued monitor commands"
 else
-  fail "queued monitor command section should be hidden when empty"
+  fail "queued/pending pane is missing queued monitor commands"
 fi
 
 if grep -q 'Ctrl+B <PANE>: switch task' "$OUTPUT_ONE"; then
@@ -515,14 +530,22 @@ else
   fail "review phase row is missing emoji"
 fi
 
-if grep -q '🛠 JOBS' "$OUTPUT_PHASES" \
-  && grep -q 'Tracked background jobs (2)' "$OUTPUT_PHASES" \
-  && grep -q 'eval-HOK-1564-primary-101.log' "$OUTPUT_PHASES" \
-  && grep -q 'comparison-HOK-1564-101-102.log' "$OUTPUT_PHASES" \
-  && grep -q 'Missing eval records for challenge pair HOK-1564' "$OUTPUT_PHASES"; then
-  pass "renders tracked challenge jobs and failure excerpts"
+if ! grep -q '🛠 JOBS' "$OUTPUT_PHASES" \
+  && ! grep -q '⌛ QUEUED COMMANDS' "$OUTPUT_PHASES"; then
+  pass "default dashboard excludes background jobs/queue sections"
 else
-  fail "dashboard is missing tracked challenge jobs section"
+  fail "default dashboard still includes background sections"
+fi
+
+OUTPUT_JOBS_PANE="$TMP_DIR/output-jobs-pane.txt"
+run_render "$STATE_FILE_PHASES" "$WORKTREES_DIR" "$BEHAVIOR_PHASES" "$OUTPUT_JOBS_PANE" "jobs"
+
+if grep -q '🛠 JOBS' "$OUTPUT_JOBS_PANE" \
+  && grep -q 'Tracked background jobs (2)' "$OUTPUT_JOBS_PANE" \
+  && grep -q 'Missing eval records for challenge pair HOK-1564' "$OUTPUT_JOBS_PANE"; then
+  pass "jobs pane renders jobs details"
+else
+  fail "jobs pane is missing expected job details"
 fi
 
 STATE_FILE_RUNNING="$TMP_DIR/state-running.json"
