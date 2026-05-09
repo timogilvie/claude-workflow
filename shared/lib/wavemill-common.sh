@@ -2,6 +2,10 @@
 # Wavemill Common Library
 # Shared functions used across wavemill-mill.sh and wavemill-expand.sh
 
+# Default tmux window names for mill mode surfaces.
+WAVEMILL_WINDOW_MILL="${WAVEMILL_WINDOW_MILL:-mill}"
+WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
+
 # ============================================================================
 # LAYERED CONFIGURATION LOADING
 # ============================================================================

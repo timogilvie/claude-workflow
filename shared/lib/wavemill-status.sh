@@ -1,7 +1,7 @@
 #!/opt/homebrew/bin/bash
 # Wavemill Status Dashboard - Real-time task status for tmux control panel
 #
-# Usage: wavemill-status.sh <session> <worktree_root> [state_file]
+# Usage: wavemill-status.sh [--pane=jobs|--pane=queued-pending] <session> <worktree_root> [state_file]
 #
 # Displays a compact per-task summary refreshing every 2 seconds by default
 # (override with WAVEMILL_DASHBOARD_REFRESH_SECONDS=1..10):
@@ -11,9 +11,30 @@
 
 set -euo pipefail
 
-SESSION="${1:?Usage: wavemill-status.sh <session> <worktree_root> [state_file]}"
-WORKTREE_ROOT="${2:?Usage: wavemill-status.sh <session> <worktree_root> [state_file]}"
+PANE_MODE=""
+if [[ "${1:-}" == --pane=* ]]; then
+  PANE_MODE="${1#--pane=}"
+  shift
+fi
+
+if [[ "$#" -lt 2 ]]; then
+  echo "Usage: wavemill-status.sh [--pane=jobs|--pane=queued-pending] <session> <worktree_root> [state_file]" >&2
+  exit 1
+fi
+
+SESSION="$1"
+WORKTREE_ROOT="$2"
 STATE_FILE="${3:-}"
+
+if [[ -n "$PANE_MODE" ]]; then
+  case "$PANE_MODE" in
+    jobs|queued-pending) ;;
+    *)
+      echo "wavemill-status.sh: unsupported pane mode '$PANE_MODE'" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 # Signal-driven refresh uses USR1 for fast updates and polling as fallback.
 WAVEMILL_REDRAW=0
@@ -364,6 +385,26 @@ truncate_detail() {
   else
     echo "$detail"
   fi
+}
+
+truncate_cell() {
+  local text="${1:-}" max_len="${2:-0}"
+  if (( max_len <= 0 )); then
+    printf ''
+    return 0
+  fi
+
+  if (( ${#text} <= max_len )); then
+    printf '%s' "$text"
+    return 0
+  fi
+
+  if (( max_len <= 3 )); then
+    printf '%.*s' "$max_len" "$text"
+    return 0
+  fi
+
+  printf '%.*s...' "$((max_len - 3))" "$text"
 }
 
 format_job_elapsed() {
@@ -738,12 +779,15 @@ render_jobs_section() {
       *) status_str="${R}${job_status}${N}" ;;
     esac
 
-    printf "%-10s  %-18s  %6s  %b  %s${EL}\n" "$label" "$target" "$elapsed" "$status_str" "$(basename "$log_path")" >> "$FRAME"
+    label="$(truncate_cell "$label" 8)"
+    target="$(truncate_cell "$target" 12)"
+    elapsed="$(truncate_cell "$elapsed" 5)"
+    printf "%-8s %-12s %5s %b${EL}\n" "$label" "$target" "$elapsed" "$status_str" >> "$FRAME"
     if [[ "$job_status" == "failed" || "$job_status" == "timeout" ]]; then
       detail="$excerpt"
       [[ -z "$detail" ]] && detail="$log_path"
       detail=$(truncate_detail "$detail")
-      printf "${D}%10s  %18s  %6s  └─ %s${N}${EL}\n" "" "" "" "$detail" >> "$FRAME"
+      printf "${D}%8s %12s %5s └─ %s${N}${EL}\n" "" "" "" "$detail" >> "$FRAME"
     fi
   done <<<"$jobs"
 }
@@ -856,9 +900,6 @@ render_dashboard() {
 
   render_inbox_section
   render_active_section
-  render_jobs_section
-  render_queued_section
-  render_monitor_command_queue_section
   render_project_context_suggestion
 
   printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
@@ -893,11 +934,46 @@ run_dashboard() {
   done
 }
 
+render_jobs_pane() {
+  : > "$FRAME"
+  printf "${B}Wavemill Jobs${N}  ${D}%s${N}${EL}\n" "$(date '+%H:%M:%S')" >> "$FRAME"
+  render_jobs_section
+  printf "${EL}\n${D}Refreshes every ${REFRESH}s${N}${EL}\n" >> "$FRAME"
+}
+
+render_queued_pending_pane() {
+  : > "$FRAME"
+  printf "${B}Wavemill Pending + Queue${N}  ${D}%s${N}${EL}\n" "$(date '+%H:%M:%S')" >> "$FRAME"
+  render_queued_section
+  render_monitor_command_queue_section
+  printf "${EL}\n${D}Refreshes every ${REFRESH}s${N}${EL}\n" >> "$FRAME"
+}
+
+run_pane_loop() {
+  local render_fn="$1"
+  set +e
+  while true; do
+    trap '' USR1
+    clear_dashboard_scrollback
+    "$render_fn"
+    redraw_dashboard_frame "$FRAME"
+    trap 'WAVEMILL_REDRAW=1' USR1
+    WAVEMILL_REDRAW=0
+    sleep "$REFRESH" &
+    SLEEP_PID=$!
+    wait "$SLEEP_PID" 2>/dev/null || true
+  done
+}
+
 # ── Main render loop ─────────────────────────────────────────────────────
 
 FRAME=$(mktemp)
 trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT INT TERM
 
 if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
-  run_dashboard
+  case "$PANE_MODE" in
+    jobs) run_pane_loop render_jobs_pane ;;
+    queued-pending) run_pane_loop render_queued_pending_pane ;;
+    *) run_dashboard ;;
+  esac
 fi

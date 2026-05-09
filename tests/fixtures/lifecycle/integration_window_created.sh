@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guard against being sourced by lifecycle-scenarios.test.sh
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
+
 if ! command -v tmux >/dev/null 2>&1; then
   echo "SKIP: tmux unavailable"
+  exit 0
+fi
+
+# tmux split-window -p requires an interactive terminal; skip in CI
+if [[ -n "${CI:-}" ]]; then
+  echo "SKIP: tmux layout test not available in CI"
   exit 0
 fi
 
@@ -31,8 +40,10 @@ FAKE_BIN="$TMP_DIR/bin"
 REPO_UNDER_TEST="$TMP_DIR/repo"
 TOOLS_DIR="$TMP_DIR/tools"
 STATUS_LOG_FILE="$TMP_DIR/status.log"
+STATE_FILE="$TMP_DIR/workflow-state.json"
 mkdir -p "$FAKE_BIN" "$REPO_UNDER_TEST" "$TOOLS_DIR"
-export REPO_DIR="$REPO_UNDER_TEST" TOOLS_DIR STATUS_LOG_FILE PATH="$FAKE_BIN:$PATH"
+printf '{"tasks":{}}' > "$STATE_FILE"
+export REPO_DIR="$REPO_UNDER_TEST" TOOLS_DIR STATUS_LOG_FILE STATE_FILE PATH="$FAKE_BIN:$PATH"
 
 cat > "$FAKE_BIN/npx" <<'EOF'
 #!/usr/bin/env bash
@@ -57,16 +68,16 @@ startup_log() {
 source "$(dirname "$RUNNER")/wavemill-common.sh"
 eval "$(extract_spawn_function)"
 
-tmux new-session -d -s "$SESSION" -n control -c "$REPO_UNDER_TEST" 'sleep 300'
+tmux new-session -d -s "$SESSION" -n mill -x 220 -y 50 -c "$REPO_UNDER_TEST" 'sleep 300'
 spawn_integration_window
 
 for _ in {1..20}; do
-  if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx 'integration'; then
-    echo "PASS: integration window created"
+  if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx 'backstage'; then
+    echo "PASS: backstage window created"
     exit 0
   fi
   sleep 0.1
 done
 
-echo "FAIL: integration window was not created"
+echo "FAIL: backstage window was not created"
 exit 1
