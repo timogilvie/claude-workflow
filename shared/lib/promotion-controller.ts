@@ -234,7 +234,15 @@ function reconcileSquashMergedPromotion(input: {
       `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(input.promotionTip)} ${escapeShellArg(input.integrationTip)}`,
       { encoding: 'utf-8', cwd: input.repoDir },
     );
-    pushBranchRef(branchRef, input.integrationTip, input.repoDir, input.shellRunner);
+    pushBranchRefWithLocalRollback({
+      branchRef,
+      localTipBeforePush: input.promotionTip,
+      restoreTip: input.integrationTip,
+      expectedRemoteTip: input.integrationTip,
+      repoDir: input.repoDir,
+      shellRunner: input.shellRunner,
+      integrationBranch: input.integrationBranch,
+    });
     return input.promotionTip;
   }
 
@@ -264,7 +272,15 @@ function reconcileSquashMergedPromotion(input: {
     `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(reconciledTip)} ${escapeShellArg(input.integrationTip)}`,
     { encoding: 'utf-8', cwd: input.repoDir },
   );
-  pushBranchRef(branchRef, input.integrationTip, input.repoDir, input.shellRunner);
+  pushBranchRefWithLocalRollback({
+    branchRef,
+    localTipBeforePush: reconciledTip,
+    restoreTip: input.integrationTip,
+    expectedRemoteTip: input.integrationTip,
+    repoDir: input.repoDir,
+    shellRunner: input.shellRunner,
+    integrationBranch: input.integrationBranch,
+  });
   return reconciledTip;
 }
 
@@ -315,6 +331,65 @@ function pushBranchRef(
     ].join(' '),
     { encoding: 'utf-8', cwd: repoDir },
   );
+}
+
+function pushBranchRefWithLocalRollback(input: {
+  branchRef: string;
+  localTipBeforePush: string;
+  restoreTip: string;
+  expectedRemoteTip: string;
+  repoDir: string;
+  shellRunner: ShellRunner;
+  integrationBranch: string;
+}): void {
+  try {
+    pushBranchRef(input.branchRef, input.expectedRemoteTip, input.repoDir, input.shellRunner);
+  } catch (error) {
+    try {
+      input.shellRunner(
+        `git update-ref ${escapeShellArg(input.branchRef)} ${escapeShellArg(input.restoreTip)} ${escapeShellArg(input.localTipBeforePush)}`,
+        { encoding: 'utf-8', cwd: input.repoDir },
+      );
+    } catch (rollbackError) {
+      throw new Error(formatProtectedBranchPushFailure(input.integrationBranch, error, rollbackError));
+    }
+    throw new Error(formatProtectedBranchPushFailure(input.integrationBranch, error));
+  }
+}
+
+function formatProtectedBranchPushFailure(
+  integrationBranch: string,
+  pushError: unknown,
+  rollbackError?: unknown,
+): string {
+  const message = errorMessage(pushError);
+  const likelyProtectedBranch =
+    message.includes('GH006') ||
+    message.includes('Protected branch update failed') ||
+    message.includes('Cannot force-push');
+  const rollbackNote = rollbackError
+    ? `\n\nAlso failed to restore the local branch ref: ${errorMessage(rollbackError)}`
+    : '\n\nThe local branch ref was restored to its pre-promote tip.';
+
+  if (!likelyProtectedBranch) {
+    return `promote: failed to push reconciled integration branch: ${message}${rollbackNote}`;
+  }
+
+  return [
+    `promote: GitHub rejected the required reconciliation push to protected branch \`${integrationBranch}\`.`,
+    '',
+    'Why: the promotion branch appears to already contain an earlier squash-merged snapshot, so Wavemill tried to rewrite the integration branch onto the current promotion branch before opening/updating the promotion PR. GitHub branch protection blocked that force push.',
+    '',
+    'What to do: allow Wavemill/automation to force-push this integration branch, or have an admin temporarily unprotect/reset the integration branch before running `wavemill promote` again.',
+    '',
+    'Cleanup if your checkout still looks diverged and you have no local commits to keep:',
+    `  git fetch origin ${integrationBranch}`,
+    `  git switch ${integrationBranch}`,
+    `  git reset --hard origin/${integrationBranch}`,
+    rollbackNote.trimStart(),
+    '',
+    `Original push error: ${message}`,
+  ].join('\n');
 }
 
 function listRecentMergedWavemillPrs(
