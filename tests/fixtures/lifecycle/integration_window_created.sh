@@ -59,7 +59,7 @@ startup_log() {
 source "$(dirname "$RUNNER")/wavemill-common.sh"
 eval "$(extract_spawn_function)"
 
-tmux new-session -d -s "$SESSION" -n mill -c "$REPO_UNDER_TEST" 'sleep 300'
+tmux new-session -d -s "$SESSION" -n mill -x 220 -y 50 -c "$REPO_UNDER_TEST" 'sleep 300'
 spawn_integration_window
 
 for _ in {1..20}; do
