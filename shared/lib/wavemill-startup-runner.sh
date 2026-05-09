@@ -336,6 +336,7 @@ write_monitor_env() {
     write_shell_assignment "STATUS_LOG_FILE" "$STATUS_LOG_FILE"
     write_shell_assignment "TASKS_FILE" "$tasks_file"
     write_shell_assignment "CHALLENGE_AUTO_MERGE" "${CHALLENGE_AUTO_MERGE:-false}"
+    write_shell_assignment "WAVEMILL_WINDOW_MILL" "$WAVEMILL_WINDOW_MILL"
   } > "$MONITOR_ENV"
 }
 
