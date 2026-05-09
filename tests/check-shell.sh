@@ -33,6 +33,7 @@ for f in \
   "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
   "$REPO_DIR"/tests/project-context-suggestion.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
+  "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -126,6 +127,18 @@ else
   fail "project context suggestion lifecycle: $project_context_suggestion_output"
 fi
 unset project_context_suggestion_status
+
+echo ""
+echo "=== Background Jobs Cleanup ==="
+
+background_jobs_cleanup_output="$(bash "$REPO_DIR/tests/wavemill-background-jobs-cleanup.test.sh" 2>&1)" || background_jobs_cleanup_status=$?
+background_jobs_cleanup_status="${background_jobs_cleanup_status:-0}"
+if [[ "$background_jobs_cleanup_status" -eq 0 ]]; then
+  pass "background jobs cleanup lifecycle"
+else
+  fail "background jobs cleanup lifecycle: $background_jobs_cleanup_output"
+fi
+unset background_jobs_cleanup_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check

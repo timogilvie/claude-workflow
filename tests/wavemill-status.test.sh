@@ -428,6 +428,7 @@ cat > "$STATE_FILE_PHASES" <<EOF
     "eval-HOK-1564-primary-101": {
       "id": "eval-HOK-1564-primary-101",
       "kind": "eval",
+      "session": "test-session",
       "issueId": "HOK-1564",
       "side": "primary",
       "pairId": "HOK-1564",
@@ -447,6 +448,7 @@ cat > "$STATE_FILE_PHASES" <<EOF
     "comparison-HOK-1564-101-102": {
       "id": "comparison-HOK-1564-101-102",
       "kind": "comparison",
+      "session": "test-session",
       "pairId": "HOK-1564",
       "prNumbers": [101, 102],
       "pid": 124,

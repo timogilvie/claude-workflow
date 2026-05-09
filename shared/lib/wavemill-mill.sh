@@ -601,6 +601,7 @@ init_state_ledger() {
   if [[ ! -f "$STATE_FILE" ]]; then
     echo '{"session":"'$SESSION'","started":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","tasks":{}}' > "$STATE_FILE"
   fi
+  cleanup_background_jobs_startup
 }
 
 
@@ -1139,6 +1140,8 @@ cleanup_on_exit() {
       [[ -n "$issue" ]] && ISSUES_IN_PROGRESS+=("$issue")
     done < <(sort -u "$launched_issue_file" 2>/dev/null || true)
   fi
+
+  cleanup_background_jobs_shutdown 2>/dev/null || true
 
   if [[ ${#ISSUES_IN_PROGRESS[@]} -gt 0 ]]; then
     log_warn "Interrupted - resetting Linear state for unfinished tasks..."
@@ -4828,6 +4831,7 @@ launch_tracked_job() {
   [[ -n "$issue_id" ]] && args+=(--issue-id "$issue_id")
   [[ -n "$side" ]] && args+=(--side "$side")
   [[ -n "$pair_id" ]] && args+=(--pair-id "$pair_id")
+  [[ -n "${SESSION:-}" ]] && args+=(--session "$SESSION")
   npx tsx "$TOOLS_DIR/job-tracker.ts" "${args[@]}" >/dev/null
 }
 
