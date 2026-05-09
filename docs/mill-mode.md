@@ -178,9 +178,9 @@ Configuration (`.wavemill-config.json`):
 ## Control Layout And Input
 
 - Mill keeps the same three visible control panes:
-- `control.0` monitor + command input (`1 3`, `m`, `q`)
-- `control.1` dashboard
-- `control.2` status log
+- `mill.0` monitor + command input (`1 3`, `m`, `q`)
+- `mill.1` dashboard
+- `mill.2` status log
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
 
 ## When to Prefer Mill Mode
@@ -219,7 +219,7 @@ The four pipeline stages are:
 - `tend`: runs the integration queue, rebases the selected PR onto `auto/integration`, waits for PR checks, reruns ready-policy enforcement, and merges one candidate at a time.
 - `promote`: opens or refreshes the `auto/integration -> main` promotion PR and reports whether that release PR is green.
 
-When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `integration` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
+When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `backstage` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
 
 ### Dependent Task Auto-Dispatch
 

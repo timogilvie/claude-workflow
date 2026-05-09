@@ -37,8 +37,10 @@ FAKE_BIN="$TMP_DIR/bin"
 REPO_DIR="$TMP_DIR/repo"
 TOOLS_DIR="$TMP_DIR/tools"
 STATUS_LOG_FILE="$TMP_DIR/status.log"
+STATE_FILE="$TMP_DIR/workflow-state.json"
 mkdir -p "$FAKE_BIN" "$REPO_DIR" "$TOOLS_DIR"
-export REPO_DIR TOOLS_DIR STATUS_LOG_FILE PATH="$FAKE_BIN:$PATH"
+printf '{"tasks":{}}' > "$STATE_FILE"
+export REPO_DIR TOOLS_DIR STATUS_LOG_FILE STATE_FILE PATH="$FAKE_BIN:$PATH"
 
 cat > "$FAKE_BIN/npx" <<'EOF'
 #!/usr/bin/env bash
@@ -63,7 +65,7 @@ startup_log() {
 source "$REPO_ROOT/shared/lib/wavemill-common.sh"
 eval "$(extract_spawn_function)"
 
-tmux new-session -d -s "$SESSION" -n control -c "$REPO_DIR" 'sleep 300'
+tmux new-session -d -s "$SESSION" -n mill -c "$REPO_DIR" 'sleep 300'
 spawn_integration_window
 
 pattern="session=$SESSION"
@@ -83,7 +85,7 @@ tmux kill-session -t "$SESSION"
 
 for _ in {1..30}; do
   if ! pgrep -f "$pattern" >/dev/null 2>&1; then
-    echo "PASS: integration process exited with session shutdown"
+    echo "PASS: backstage tend process exited with session shutdown"
     exit 0
   fi
   sleep 0.1

@@ -302,17 +302,17 @@ create_tmux_session() {
     tmux kill-session -t "$SESSION" 2>/dev/null || true
   fi
 
-  tmux -f "$tmux_conf" new-session -d -s "$SESSION" -c "$REPO_DIR" -n control
-  # Prevent control panes from being destroyed if their process crashes.
+  tmux -f "$tmux_conf" new-session -d -s "$SESSION" -c "$REPO_DIR" -n "$WAVEMILL_WINDOW_MILL"
+  # Prevent mill panes from being destroyed if their process crashes.
   # Without this, a dashboard crash collapses the entire control layout.
-  tmux set-option -t "$SESSION:control" remain-on-exit on 2>/dev/null || true
+  tmux set-option -t "$SESSION:$WAVEMILL_WINDOW_MILL" remain-on-exit on 2>/dev/null || true
   tmux set-environment -t "$SESSION" REPO_DIR "$REPO_DIR"
   tmux set-environment -t "$SESSION" WAVEMILL_MILL_ACTIVE "$REPO_DIR"
   [[ -n "${WAVEMILL_NO_PROGRESS:-}" ]] && tmux set-environment -t "$SESSION" WAVEMILL_NO_PROGRESS "$WAVEMILL_NO_PROGRESS"
   if [[ -x "$next_done_script" ]]; then
     tmux bind-key -T prefix N run-shell "WAVEMILL_SESSION='#{session_name}' '$next_done_script'"
   fi
-  tmux send-keys -t "$SESSION:control" "echo 'Control window for $SESSION'" C-m
+  tmux send-keys -t "$SESSION:$WAVEMILL_WINDOW_MILL" "echo 'Mill window for $SESSION'" C-m
 }
 
 # Write the launch plan JSON for startup runner consumption.
@@ -2037,7 +2037,7 @@ done
 
 LAUNCH_ARGS=("${FINAL_LAUNCH_ARGS[@]}")
 # Create monitoring script that will run in tmux
-STATUS_LOG_FILE="/tmp/${SESSION}-control-status.log"
+STATUS_LOG_FILE="/tmp/${SESSION}-mill-status.log"
 MONITOR_ENV="/tmp/${SESSION}-monitor.env"
 MONITOR_SCRIPT="/tmp/${SESSION}-monitor.sh"
 LAUNCHED_ISSUES_FILE="/tmp/${SESSION}-launched-issues.txt"
@@ -2444,8 +2444,8 @@ cleanup_dashboard_pane() {
   _AUX_PANES_CLEANED=1
 
   for pane in 1 2; do
-    tmux list-panes -t "$SESSION:control.$pane" >/dev/null 2>&1 || continue
-    tmux kill-pane -t "$SESSION:control.$pane" >/dev/null 2>&1 || true
+    tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL.$pane" >/dev/null 2>&1 || continue
+    tmux kill-pane -t "$SESSION:$WAVEMILL_WINDOW_MILL.$pane" >/dev/null 2>&1 || true
   done
 }
 trap cleanup_dashboard_pane EXIT INT TERM
@@ -8716,20 +8716,20 @@ monitor_issue_state() {
 }
 
 # ── Control pane health watchdog ──────────────────────────────────────
-# Respawns dead control panes (dashboard, log) to prevent layout collapse.
+# Respawns dead mill panes (dashboard, log) to prevent layout collapse.
 # Called each monitor cycle. Relies on remain-on-exit keeping dead panes
 # visible so we can detect and respawn them without losing the layout.
 LAST_DASHBOARD_HEALTH_CHECK=0
 DASHBOARD_HEALTH_INTERVAL=30  # seconds between checks
 
-check_control_pane_health() {
+check_mill_pane_health() {
   local now
   now=$(date +%s)
   (( now - LAST_DASHBOARD_HEALTH_CHECK < DASHBOARD_HEALTH_INTERVAL )) && return 0
   LAST_DASHBOARD_HEALTH_CHECK=$now
 
   local pane_count
-  pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
+  pane_count=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
 
   # If panes were destroyed (layout collapsed), rebuild from scratch.
   if (( pane_count < 3 )); then
@@ -8738,34 +8738,34 @@ check_control_pane_health() {
 
     if (( pane_count == 1 )); then
       # Single pane remaining — recreate both missing panes
-      tmux split-window -t "$SESSION:control.0" -hb -p 50 "exec bash" 2>/dev/null || true
-      tmux split-window -t "$SESSION:control.0" -v -p 65 "exec bash" 2>/dev/null || true
+      tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" -hb -p 50 "exec bash" 2>/dev/null || true
+      tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" -v -p 65 "exec bash" 2>/dev/null || true
     elif (( pane_count == 2 )); then
       # Two panes — add the missing one
-      tmux split-window -t "$SESSION:control.0" -v -p 65 "exec bash" 2>/dev/null || true
+      tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" -v -p 65 "exec bash" 2>/dev/null || true
     fi
 
     # Re-count after splits
-    pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
+    pane_count=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
     if (( pane_count >= 3 )); then
       # Respawn dashboard (pane 1) and log (pane 2)
-      tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
-      tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
+      tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
+      tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
       # Update dashboard PID
       sleep 0.3
       local new_pid
-      new_pid=$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)
+      new_pid=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" -F '#{pane_pid}' 2>/dev/null || true)
       [[ -n "$new_pid" ]] && tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$new_pid" 2>/dev/null || true
       log "status" "Control panes rebuilt successfully"
     else
-      log_warn "Failed to rebuild control panes (got $pane_count)"
+      log_warn "Failed to rebuild mill panes (got $pane_count)"
     fi
     return 0
   fi
 
   # All 3 panes exist — check for dead ones and respawn in place.
   local dead_panes
-  dead_panes=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index} #{pane_dead}' 2>/dev/null || true)
+  dead_panes=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL" -F '#{pane_index} #{pane_dead}' 2>/dev/null || true)
 
   while IFS=' ' read -r idx is_dead; do
     [[ "$is_dead" == "1" ]] || continue
@@ -8773,16 +8773,16 @@ check_control_pane_health() {
       1)
         log_warn "Dashboard pane (control.1) is dead. Respawning..."
         local status_script="$LIB_DIR/wavemill-status.sh"
-        tmux respawn-pane -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
+        tmux respawn-pane -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
         sleep 0.3
         local new_pid
-        new_pid=$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)
+        new_pid=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" -F '#{pane_pid}' 2>/dev/null || true)
         [[ -n "$new_pid" ]] && tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$new_pid" 2>/dev/null || true
         log "status" "Dashboard pane respawned"
         ;;
       2)
         log_warn "Log pane (control.2) is dead. Respawning..."
-        tmux respawn-pane -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
+        tmux respawn-pane -t "$SESSION:$WAVEMILL_WINDOW_MILL.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
         log "status" "Log pane respawned"
         ;;
     esac
@@ -8813,7 +8813,7 @@ while :; do
   done
   poll_challenge_jobs
   run_ready_watchdog_tick
-  check_control_pane_health
+  check_mill_pane_health
   wavemill_pr_cache_refresh
   refresh_ready_merge_queue_tick
   active_count=0
@@ -9167,7 +9167,7 @@ MONITOR_EOF
 # 1. ✓ Ran `bash -n shared/lib/wavemill-mill.sh` → PASS (no syntax errors found)
 # 2. ✓ Ran `bash -n` on the extracted monitor heredoc content → PASS
 # 3. ✓ Examined the reported lines: `sleep "$POLL_SECONDS"` and
-#      `log "info" "  Type 'q' in control window to quit"` are syntactically correct
+#      `log "info" "  Type 'q' in mill window to quit"` are syntactically correct
 # 4. ✓ Checked git history: No missing quote fix exists between the report and current HEAD
 # 5. ✓ Searched for invalid 'local' keywords outside function context → NONE FOUND
 #    (Previous bugs: fc198c8, d45ea00 fixed similar runtime errors with 'local')
@@ -9252,14 +9252,14 @@ create_tmux_session
 
 printf -v STARTUP_CMD '%q %q' "$STARTUP_RUNNER" "$LAUNCH_PLAN_FILE"
 STARTUP_CMD="/opt/homebrew/bin/bash $STARTUP_CMD"
-tmux respawn-pane -k -t "$SESSION:control.0" "$STARTUP_CMD"
+tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" "$STARTUP_CMD"
 
 
 # Now attach to the session
 log "status" "Attaching to session: $SESSION"
 log "info" "  Ctrl+B then W to switch windows"
 log "info" "  Ctrl+B then D to detach"
-log "info" "  Type 'q' in control window to quit"
+log "info" "  Type 'q' in mill window to quit"
 log "info" "  Or: touch $STATE_DIR/.stop-loop"
 echo ""
 sleep 1
