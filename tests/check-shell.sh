@@ -1648,13 +1648,31 @@ if [[ ! -f "$MILL_SCRIPT" ]]; then
   fail "wavemill-mill.sh not found for log filtering checks"
 else
   if ! grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT" \
-    && grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" \
+    && { grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" || grep -Fq 'task_pane_buf="Next tasks:"' "$MILL_SCRIPT"; } \
     && grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT" \
     && ! grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" \
     && ! grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT"; then
     pass "monitor uses echo for interactive prompts, not log"
   else
     fail "monitor should use echo (not log) for task selection prompt"
+  fi
+
+  TASK_RENDER_REFRESH_BLOCK=$(awk '
+    /\[\[ "\$display_fingerprint" != "\$LAST_DISPLAY" \]\]/ { capture=1 }
+    capture { print }
+    capture && /TASK_LIST_RENDERED=1/ { exit }
+  ' "$MILL_SCRIPT")
+
+  TASK_RENDER_FETCH_LINE=$(printf '%s\n' "$TASK_RENDER_REFRESH_BLOCK" | awk '/fetch_queue_plan/ { print NR; exit }')
+  TASK_RENDER_CLEAR_LINE=$(printf '%s\n' "$TASK_RENDER_REFRESH_BLOCK" | awk '/tput ed/ { print NR; exit }')
+  TASK_RENDER_PRINT_LINE=$(printf '%s\n' "$TASK_RENDER_REFRESH_BLOCK" | awk '/printf '\''%s'\'' "\$task_pane_buf"/ { print NR; exit }')
+
+  if [[ -n "$TASK_RENDER_FETCH_LINE" && -n "$TASK_RENDER_CLEAR_LINE" && -n "$TASK_RENDER_PRINT_LINE" ]] \
+    && (( TASK_RENDER_FETCH_LINE < TASK_RENDER_CLEAR_LINE )) \
+    && (( TASK_RENDER_CLEAR_LINE < TASK_RENDER_PRINT_LINE )); then
+    pass "task backlog refresh buffers content before clearing pane"
+  else
+    fail "task backlog refresh should fetch and buffer before clearing pane"
   fi
 
   LOG_FUNCTION_BLOCK=$(awk '
