@@ -72,6 +72,11 @@ export interface TaskSelectionConfig {
   enterLaunchesWave?: boolean;
 }
 
+export interface ProjectContextConfig {
+  compactionThresholdKb?: number;
+  recentWorkKeep?: number;
+}
+
 export interface JudgeConfig {
   model?: string;
   provider?: 'anthropic';
@@ -323,6 +328,7 @@ export interface QuotaConfig {
 export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
+  migrationKind?: 'alembic' | 'sql' | 'none';
   migrationPatterns?: string[];
   migrationDangerLabels?: Record<string, string>;
   migrationForbiddenPatterns?: string[];
@@ -423,6 +429,7 @@ export interface WavemillConfig {
   plan?: PlanConfig;
   dashboard?: DashboardConfig;
   taskSelection?: TaskSelectionConfig;
+  projectContext?: ProjectContextConfig;
   eval?: EvalConfig;
   evalContextUpdates?: EvalContextUpdatesConfig;
   autoEval?: boolean;
@@ -590,6 +597,44 @@ function validateConfig(config: unknown): asserts config is WavemillConfig {
       `Config validation failed:\n${errorMessages}\n\n` +
       `Check .wavemill-config.json against wavemill-config.schema.json`
     );
+  }
+
+  validateReadyPolicySubset(config);
+}
+
+function canonicalizeReadyCheckName(name: string): string {
+  return name === 'merge-conflicts' ? 'merge-conflict' : name;
+}
+
+// These are the universal checks always included by resolveReadyPolicy when no explicit
+// ready.checks are configured. Keeping them here (rather than importing from ready-stage.ts)
+// avoids a circular dependency since ready-stage.ts imports from config.ts.
+const UNIVERSAL_CHECK_NAMES = ['pr-exists', 'merge-conflict', 'ci-status'];
+
+function validateReadyPolicySubset(config: unknown): void {
+  if (typeof config !== 'object' || config === null) {
+    return;
+  }
+
+  const ready = (config as WavemillConfig).ready;
+  if (!ready || !Array.isArray(ready.requiredChecks) || ready.requiredChecks.length === 0) {
+    return;
+  }
+
+  // Effective check set = explicitly configured checks + universal defaults (always present at runtime).
+  const configuredChecks = Array.isArray(ready.checks) ? ready.checks : [];
+  const effectiveCheckSet = new Set(
+    [...configuredChecks, ...UNIVERSAL_CHECK_NAMES].map(canonicalizeReadyCheckName)
+  );
+  for (const requiredCheck of ready.requiredChecks) {
+    const canonicalRequired = canonicalizeReadyCheckName(requiredCheck);
+    if (!effectiveCheckSet.has(canonicalRequired)) {
+      throw new Error(
+        `Config validation failed:\n` +
+        `  /ready/requiredChecks: "${requiredCheck}" must also be present in ready.checks\n\n` +
+        `Check .wavemill-config.json against wavemill-config.schema.json`
+      );
+    }
   }
 }
 
@@ -855,6 +900,7 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
   return {
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
+    migrationKind: config.ready?.migrationKind,
     migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
     migrationDangerLabels: {
       ...DEFAULT_READY_MIGRATION_DANGER_LABELS,
@@ -984,6 +1030,14 @@ export function getDashboardConfig(repoDir?: string): DashboardConfig {
 
 export function getTaskSelectionConfig(repoDir?: string): TaskSelectionConfig {
   return loadWavemillConfig(repoDir).taskSelection || {};
+}
+
+export function getProjectContextConfig(repoDir?: string): Required<ProjectContextConfig> {
+  const config = loadWavemillConfig(repoDir).projectContext || {};
+  return {
+    compactionThresholdKb: config.compactionThresholdKb ?? 100,
+    recentWorkKeep: config.recentWorkKeep ?? 25,
+  };
 }
 
 /**

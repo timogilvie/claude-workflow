@@ -1444,6 +1444,32 @@ check_subsystem_drift() {
   printf '%s\n' "$drift_output"
 }
 
+PROJECT_CONTEXT_OVERSIZED=""
+check_project_context_size() {
+  local context_file="$REPO_DIR/.wavemill/project-context.md"
+  local threshold_kb="${PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB:-100}"
+  local threshold_bytes=$(( threshold_kb * 1024 ))
+
+  PROJECT_CONTEXT_OVERSIZED=""
+  if [[ ! -f "$context_file" ]]; then
+    project_context_suggestion_clear 2>/dev/null || true
+    return 0
+  fi
+
+  local size_bytes
+  size_bytes="$(get_file_size_bytes "$context_file" 2>/dev/null)" || return 0
+
+  if (( size_bytes > threshold_bytes )); then
+    PROJECT_CONTEXT_OVERSIZED=$(( size_bytes / 1024 ))
+    project_context_suggestion_set "$size_bytes" "$threshold_bytes" 2>/dev/null || true
+    log "info" "  project-context.md is ${PROJECT_CONTEXT_OVERSIZED}KB (>${threshold_kb}KB threshold; suggesting compaction)$(wavemill_config_annotation "projectContext.compactionThresholdKb" "$threshold_kb")"
+  else
+    project_context_suggestion_clear 2>/dev/null || true
+  fi
+}
+
+
+check_project_context_size
 
 if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
   # Split candidates into unblocked and blocked
@@ -1470,6 +1496,11 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
     if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
       echo ""
       echo "  Warning: Subsystem docs stale ($DRIFT_SUBSYSTEMS) - press d to refresh"
+    fi
+
+    if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+      echo ""
+      echo "  ⚠ project-context.md is ${PROJECT_CONTEXT_OVERSIZED}KB (>${PROJECT_CONTEXT_COMPACTION_THRESHOLD_KB:-100}KB) - press 'c' to compact"
     fi
 
     echo ""
@@ -1505,18 +1536,46 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
     fi
     if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
       if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, q to quit, or Enter to launch recommended wave:"
+        if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+          echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, c to compact context, q to quit, or Enter to launch recommended wave:"
+        else
+          echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, m for more, q to quit, or Enter to launch recommended wave:"
+        fi
       else
-        echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, q to quit, or Enter to launch recommended wave:"
+        if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+          echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, c to compact context, q to quit, or Enter to launch recommended wave:"
+        else
+          echo "Enter numbers to run (e.g. 1 3 5), d to refresh docs, q to quit, or Enter to launch recommended wave:"
+        fi
       fi
     else
       if (( BLOCKED_COUNT > 0 )) && [[ "$SHOW_BLOCKED_TASKS" != "true" ]]; then
-        echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to launch recommended wave:"
+        if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+          echo "Enter numbers to run (e.g. 1 3 5), m for more, c to compact context, q to quit, or Enter to launch recommended wave:"
+        else
+          echo "Enter numbers to run (e.g. 1 3 5), m for more, q to quit, or Enter to launch recommended wave:"
+        fi
       else
-        echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to launch recommended wave:"
+        if [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+          echo "Enter numbers to run (e.g. 1 3 5), c to compact context, q to quit, or Enter to launch recommended wave:"
+        else
+          echo "Enter numbers to run (e.g. 1 3 5), q to quit, or Enter to launch recommended wave:"
+        fi
       fi
     fi
     read -r SELECTED
+
+    if [[ "$SELECTED" =~ ^[cC](ompact)?$ ]] && [[ -n "${PROJECT_CONTEXT_OVERSIZED:-}" ]]; then
+      echo ""
+      log "info" "Compacting project-context.md..."
+      if npx tsx "$TOOLS_DIR/compact-project-context.ts" "$REPO_DIR"; then
+        PROJECT_CONTEXT_OVERSIZED=""
+        project_context_suggestion_clear 2>/dev/null || true
+        echo ""
+        log "info" "Compaction complete. Re-displaying task list..."
+      fi
+      continue
+    fi
 
     if [[ "$SELECTED" =~ ^[dD](ocs)?$ ]]; then
       echo ""
@@ -5874,26 +5933,34 @@ invoke_first_wave_helper() {
 
 render_grouped_task_list() {
   local queue_plan="$1" available="$2"
-  local counter=0 output="" select_lines="" section_body="" line rec group_index task_id blockers triage_id
+  local counter=0 output="" select_lines="" section_body="" line rec group_index task_id blockers triage_id task_key
   declare -A id_to_record=()
+  declare -A rendered_ids=()
 
   jq -e . >/dev/null 2>&1 <<<"$queue_plan" || return 1
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     task_id=${line%%|*}
-    [[ -n "$task_id" ]] && id_to_record["$task_id"]="$line"
+    if [[ -n "$task_id" ]]; then
+      id_to_record["$task_id"]="$line"
+      task_key="$(printf '%s' "$task_id" | tr '[:lower:]' '[:upper:]')"
+      id_to_record["$task_key"]="$line"
+    fi
   done <<<"$available"
 
   section_body=""
   while IFS= read -r task_id; do
     [[ -n "$task_id" ]] || continue
-    rec="${id_to_record[$task_id]:-}"
+    task_key="$(printf '%s' "$task_id" | tr '[:lower:]' '[:upper:]')"
+    [[ -n "${rendered_ids[$task_key]:-}" ]] && continue
+    rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
     counter=$((counter + 1))
-    section_body+=$(printf '  %s. %s - %s\n' "$counter" "$task_id" "$title")
+    section_body+="$(printf '  %s. %s - %s' "$counter" "$task_id" "$title")"$'\n'
     select_lines+="${rec}"$'\n'
+    rendered_ids["$task_key"]=1
   done < <(jq -r '.availableNow[]?' <<<"$queue_plan" 2>/dev/null)
   if [[ -n "$section_body" ]]; then
     output+="Available Now - Parallel Wave 1"$'\n'
@@ -5903,12 +5970,15 @@ render_grouped_task_list() {
   section_body=""
   while IFS=$'\t' read -r task_id blockers; do
     [[ -n "$task_id" ]] || continue
-    rec="${id_to_record[$task_id]:-}"
+    task_key="$(printf '%s' "$task_id" | tr '[:lower:]' '[:upper:]')"
+    [[ -n "${rendered_ids[$task_key]:-}" ]] && continue
+    rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
     counter=$((counter + 1))
-    section_body+=$(printf '  %s. %s - %s (blocked by: %s)\n' "$counter" "$task_id" "$title" "$blockers")
+    section_body+="$(printf '  %s. %s - %s (blocked by: %s)' "$counter" "$task_id" "$title" "$blockers")"$'\n'
     select_lines+="${rec}"$'\n'
+    rendered_ids["$task_key"]=1
   done < <(jq -r '.queuedAfterDependencies[]? | [.taskId, (.ancestors | join(", "))] | @tsv' <<<"$queue_plan" 2>/dev/null)
   if [[ -n "$section_body" ]]; then
     [[ -n "$output" ]] && output+=$'\n'
@@ -5924,15 +5994,19 @@ render_grouped_task_list() {
     local cluster_body=""
     while IFS= read -r task_id; do
       [[ -n "$task_id" ]] || continue
-      rec="${id_to_record[$task_id]:-}"
+      task_key="$(printf '%s' "$task_id" | tr '[:lower:]' '[:upper:]')"
+      [[ -n "${rendered_ids[$task_key]:-}" ]] && continue
+      rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
       [[ -n "$rec" ]] || continue
       IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
       counter=$((counter + 1))
-      cluster_body+=$(printf '    %s. %s - %s\n' "$counter" "$task_id" "$title")
+      cluster_body+="$(printf '    %s. %s - %s' "$counter" "$task_id" "$title")"$'\n'
       select_lines+="${rec}"$'\n'
+      rendered_ids["$task_key"]=1
     done < <(jq -r '.[]' <<<"$blockers" 2>/dev/null)
     if [[ -n "$cluster_body" ]]; then
-      section_body+=$(printf '  [conflict cluster %s]\n%s' "$group_index" "$cluster_body")
+      section_body+="$(printf '  [conflict cluster %s]' "$group_index")"$'\n'
+      section_body+="$cluster_body"
     fi
   done < <(jq -c '.avoidRunningTogether[]?' <<<"$queue_plan" 2>/dev/null)
   if [[ -n "$section_body" ]]; then
@@ -5944,12 +6018,15 @@ render_grouped_task_list() {
   section_body=""
   while IFS= read -r triage_id; do
     [[ -n "$triage_id" ]] || continue
-    rec="${id_to_record[$triage_id]:-}"
+    task_key="$(printf '%s' "$triage_id" | tr '[:lower:]' '[:upper:]')"
+    [[ -n "${rendered_ids[$task_key]:-}" ]] && continue
+    rec="${id_to_record[$triage_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
     counter=$((counter + 1))
-    section_body+=$(printf '  %s. %s - %s [triage]\n' "$counter" "$task_id" "$title")
+    section_body+="$(printf '  %s. %s - %s [triage]' "$counter" "$task_id" "$title")"$'\n'
     select_lines+="${rec}"$'\n'
+    rendered_ids["$task_key"]=1
   done < <(jq -r '.needsTriage[]? | .edge.to' <<<"$queue_plan" 2>/dev/null)
   if [[ -n "$section_body" ]]; then
     [[ -n "$output" ]] && output+=$'\n'

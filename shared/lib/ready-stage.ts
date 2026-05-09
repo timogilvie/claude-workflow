@@ -17,7 +17,7 @@
 
 import { execShellCommand, escapeShellArg } from './shell-utils.ts';
 import { extractReleaseReadiness, type ReleaseReadiness } from './task-packet-utils.ts';
-import { DEFAULT_READY_MIGRATION_PATTERNS, getReadyConfig } from './config.ts';
+import { DEFAULT_READY_MIGRATION_PATTERNS, getReadyConfig, loadWavemillConfig } from './config.ts';
 import {
   classifyDowngradeBody,
   extractOperationCalls,
@@ -116,6 +116,7 @@ export interface ReadyStageConfig {
    * Other checks can warn but won't fail the verdict.
    */
   requiredChecks?: string[];
+  migrationKind?: 'alembic' | 'sql' | 'none';
 
   /**
    * Regex patterns used to identify migration files in the repository.
@@ -247,6 +248,68 @@ const MIGRATION_CHAIN_IGNORED_FILES = new Set([
   'env.py',
   'script.py.mako',
 ]);
+
+export const UNIVERSAL_READY_CHECKS = ['pr-exists', 'merge-conflict', 'ci-status'] as const;
+export const UNIVERSAL_REQUIRED_CHECKS = ['pr-exists', 'merge-conflict', 'ci-status'] as const;
+
+interface ResolvedReadyPolicy {
+  checks: string[];
+  requiredChecks: string[];
+  migrationKind?: 'alembic' | 'sql' | 'none';
+  migrationPatterns: string[];
+  hasExplicitReadyConfig: boolean;
+}
+
+function canonicalizeReadyCheckName(name: string): string {
+  return name === 'merge-conflicts' ? 'merge-conflict' : name;
+}
+
+function uniqueOrdered(values: string[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const value of values) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      ordered.push(value);
+    }
+  }
+  return ordered;
+}
+
+function resolveReadyPolicy(repoDir: string): ResolvedReadyPolicy {
+  const rawConfig = loadWavemillConfig(repoDir);
+  const readyConfig = getReadyConfig(repoDir);
+  const rawReady = rawConfig.ready;
+  const rawChecks = rawReady?.checks;
+  const hasExplicitReadyConfig = Boolean(rawReady);
+
+  const configuredChecks = Array.isArray(rawChecks)
+    ? uniqueOrdered(rawChecks.map(canonicalizeReadyCheckName))
+    : [];
+
+  if (configuredChecks.length === 0) {
+    return {
+      checks: [...UNIVERSAL_READY_CHECKS],
+      requiredChecks: [...UNIVERSAL_REQUIRED_CHECKS],
+      migrationKind: readyConfig.migrationKind,
+      migrationPatterns: readyConfig.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+      hasExplicitReadyConfig,
+    };
+  }
+
+  const rawRequired = rawReady?.requiredChecks;
+  const requiredChecks = !Array.isArray(rawRequired)
+    ? configuredChecks
+    : uniqueOrdered(rawRequired.map(canonicalizeReadyCheckName));
+
+  return {
+    checks: configuredChecks,
+    requiredChecks,
+    migrationKind: readyConfig.migrationKind,
+    migrationPatterns: readyConfig.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    hasExplicitReadyConfig,
+  };
+}
 
 function compileMigrationPatterns(
   patternSources: string[]
@@ -787,8 +850,21 @@ function checkReleaseRequirements(
 
 export async function checkMigrationChainIntegrity(
   repoDir: string,
-  migrationPatternSources: string[] = [...DEFAULT_READY_MIGRATION_PATTERNS]
+  migrationPatternSources: string[] = [...DEFAULT_READY_MIGRATION_PATTERNS],
+  migrationKind?: 'alembic' | 'sql' | 'none'
 ): Promise<ReadyCheck> {
+  if (migrationKind !== undefined && migrationKind !== 'alembic') {
+    const kind = migrationKind ?? 'unspecified';
+    return {
+      name: 'migration-chain-integrity',
+      status: 'skip',
+      message: `migration-chain-integrity unsupported for ${kind} migrations`,
+      details: {
+        migrationKind: kind,
+      },
+    };
+  }
+
   const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
     migrationPatternSources,
     'migration-chain-integrity'
@@ -951,6 +1027,15 @@ function summarizeForbiddenDDLFinding(finding: ForbiddenDDLFinding): string {
 
 export function checkForbiddenDDL(prContext: PRContext, repoDir: string): ReadyCheck {
   const config = getReadyConfig(repoDir);
+  if (config.migrationKind !== undefined && config.migrationKind !== 'alembic' && config.migrationKind !== 'sql') {
+    const kind = config.migrationKind ?? 'unspecified';
+    return {
+      name: 'forbidden-ddl',
+      status: 'skip',
+      message: `forbidden-ddl unsupported for ${kind} migrations`,
+      details: { migrationKind: kind },
+    };
+  }
   const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
     config.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
     'forbidden-ddl'
@@ -1199,8 +1284,19 @@ export async function checkMigrationReversibility(
   changedFiles: string[],
   repoDir: string,
   labels: string[],
-  migrationPatternSources: string[] = [...DEFAULT_READY_MIGRATION_PATTERNS]
+  migrationPatternSources: string[] = [...DEFAULT_READY_MIGRATION_PATTERNS],
+  migrationKind?: 'alembic' | 'sql' | 'none'
 ): Promise<ReadyCheck> {
+  if (migrationKind !== undefined && migrationKind !== 'alembic' && migrationKind !== 'sql') {
+    const kind = migrationKind ?? 'unspecified';
+    return {
+      name: 'migration-reversibility',
+      status: 'skip',
+      message: `migration-reversibility unsupported for ${kind} migrations`,
+      details: { migrationKind: kind },
+    };
+  }
+
   const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
     migrationPatternSources,
     'migration-reversibility'
@@ -1225,6 +1321,13 @@ export async function checkMigrationReversibility(
   const changedFileSet = new Set(migrationFiles);
 
   for (const file of migrationFiles) {
+    if (migrationKind === 'sql' && !file.toLowerCase().endsWith('.sql')) {
+      continue;
+    }
+    if (migrationKind === 'alembic' && file.toLowerCase().endsWith('.sql')) {
+      continue;
+    }
+
     if (file.toLowerCase().endsWith('.sql')) {
       if (isSqlRollbackMigration(file)) {
         rollbackFiles.add(file);
@@ -1560,30 +1663,44 @@ export async function checkMergeConflicts(
  * @returns Overall verdict
  * @internal Exported for testing purposes
  */
-export function computeVerdict(checks: ReadyCheck[]): 'pass' | 'fail' | 'warn' | 'pending' {
+export function computeVerdict(
+  checks: ReadyCheck[],
+  requiredCheckNames?: string[]
+): 'pass' | 'fail' | 'warn' | 'pending' {
   // Empty checks array means nothing failed
   if (checks.length === 0) {
     return 'pass';
   }
 
-  // Any failure blocks merge
-  const hasFail = checks.some(check => check.status === 'fail');
-  if (hasFail) {
-    return 'fail';
+  if (!requiredCheckNames) {
+    const hasFail = checks.some(check => check.status === 'fail');
+    if (hasFail) return 'fail';
+    const hasPending = checks.some(check => check.status === 'pending');
+    if (hasPending) return 'pending';
+    const hasWarn = checks.some(check => check.status === 'warn');
+    if (hasWarn) return 'warn';
+    return 'pass';
   }
 
-  const hasPending = checks.some(check => check.status === 'pending');
-  if (hasPending) {
-    return 'pending';
-  }
+  const requiredSet = requiredCheckNames
+    ? new Set(requiredCheckNames.map(canonicalizeReadyCheckName))
+    : new Set(checks.map(check => check.name));
+  const requiredChecks = checks.filter(check => requiredSet.has(check.name));
+  const optionalChecks = checks.filter(check => !requiredSet.has(check.name));
 
-  // No failures, but warnings present
-  const hasWarn = checks.some(check => check.status === 'warn');
-  if (hasWarn) {
+  if (requiredChecks.some(check => check.status === 'fail')) return 'fail';
+  if (requiredChecks.some(check => check.status === 'pending')) return 'pending';
+
+  // 'skip' on optional checks means "not applicable" — it is not a warning condition.
+  // Only treat optional fail/pending/warn as noteworthy.
+  const hasWarnings = requiredChecks.some(check => check.status === 'warn' || check.status === 'skip')
+    || optionalChecks.some(
+      check => check.status === 'warn' || check.status === 'fail' || check.status === 'pending'
+    );
+  if (hasWarnings) {
     return 'warn';
   }
 
-  // All checks passed or skipped
   return 'pass';
 }
 
@@ -1608,40 +1725,110 @@ export async function runReadyStage(options: {
 }): Promise<ReadyResult> {
   const { prNumber, repoDir } = options;
 
-  // Load ready config
-  const config = getReadyConfig(repoDir);
+  const policy = resolveReadyPolicy(repoDir);
 
   // 1. Gather context
-  const prContext = await gatherPRContext(prNumber, repoDir);
-  const taskPacket = await findTaskPacket(repoDir, prNumber);
-  const deployConfig = loadDeployConfig(repoDir);
-  const mergeConflict = await checkMergeConflicts(prNumber, repoDir);
+  let prContext: PRContext;
+  try {
+    prContext = await gatherPRContext(prNumber, repoDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/not found|could not resolve to a PullRequest/i.test(message)) {
+      return {
+        prNumber,
+        verdict: 'fail',
+        checks: [{
+          name: 'pr-exists',
+          status: 'fail',
+          message,
+        }],
+        timestamp: new Date().toISOString(),
+        summary: 'Pull request was not found',
+      };
+    }
+    throw error;
+  }
 
-  // 2. Run all checks
-  const allChecks: ReadyCheck[] = [
-    checkSchemaMigrations(prContext.changedFiles, repoDir),
-    await checkMigrationChainIntegrity(repoDir, config.migrationPatterns),
-    checkForbiddenDDL(prContext, repoDir),
-    await checkMigrationReversibility(
-      prContext.changedFiles,
-      repoDir,
-      prContext.labels,
-      config.migrationPatterns
-    ),
-    checkDeployPaths(prContext.changedFiles, deployConfig),
-    checkReleaseRequirements(taskPacket, prContext, repoDir),
-    checkCIStatus(prNumber, repoDir),
-  ];
+  const checks: ReadyCheck[] = [];
+  if (policy.checks.includes('pr-exists')) {
+    checks.push({
+      name: 'pr-exists',
+      status: 'pass',
+      message: `PR #${prNumber} is accessible`,
+    });
+  }
 
-  // 3. Filter checks based on config
-  let checks = allChecks;
-  if (config.checks && config.checks.length > 0) {
-    // Only include checks specified in config
-    checks = allChecks.filter(check => config.checks!.includes(check.name));
+  const taskPacket = policy.checks.includes('release-requirements')
+    ? await findTaskPacket(repoDir, prNumber)
+    : null;
+  const deployConfig = policy.checks.includes('deploy-paths')
+    ? loadDeployConfig(repoDir)
+    : {};
+  let mergeConflict: MergeConflictResult | undefined;
+  if (policy.checks.includes('merge-conflict')) {
+    mergeConflict = await checkMergeConflicts(prNumber, repoDir);
+    checks.push({
+      name: 'merge-conflict',
+      status:
+        mergeConflict.status === 'CLEAN' ? 'pass'
+          : mergeConflict.status === 'CONFLICTED' ? 'fail'
+          : mergeConflict.status === 'UNKNOWN' ? 'pending'
+          : 'warn',
+      message: mergeConflict.message,
+      details: {
+        mergeable: mergeConflict.mergeable,
+        mergeStateStatus: mergeConflict.mergeStateStatus,
+        attempts: mergeConflict.attempts,
+      },
+    });
+  }
+
+  for (const checkName of policy.checks) {
+    if (checkName === 'pr-exists' || checkName === 'merge-conflict') {
+      continue;
+    }
+    if (checkName === 'ci-status') {
+      checks.push(checkCIStatus(prNumber, repoDir));
+      continue;
+    }
+    if (checkName === 'schema-migrations') {
+      checks.push(checkSchemaMigrations(prContext.changedFiles, repoDir));
+      continue;
+    }
+    if (checkName === 'migration-chain-integrity') {
+      checks.push(await checkMigrationChainIntegrity(repoDir, policy.migrationPatterns, policy.migrationKind));
+      continue;
+    }
+    if (checkName === 'forbidden-ddl') {
+      checks.push(checkForbiddenDDL(prContext, repoDir));
+      continue;
+    }
+    if (checkName === 'migration-reversibility') {
+      checks.push(await checkMigrationReversibility(
+        prContext.changedFiles,
+        repoDir,
+        prContext.labels,
+        policy.migrationPatterns,
+        policy.migrationKind
+      ));
+      continue;
+    }
+    if (checkName === 'deploy-paths') {
+      checks.push(checkDeployPaths(prContext.changedFiles, deployConfig));
+      continue;
+    }
+    if (checkName === 'release-requirements') {
+      checks.push(checkReleaseRequirements(taskPacket, prContext, repoDir));
+      continue;
+    }
+  }
+
+  if (!policy.hasExplicitReadyConfig) {
+    checks.push(await checkBaselineDiscovery(repoDir));
   }
 
   // 4. Compute verdict
-  const verdict = computeVerdict(checks);
+  const verdict = computeVerdict(checks, policy.requiredChecks);
 
   // 5. Generate summary
   let summary: string;
@@ -1665,6 +1852,77 @@ export async function runReadyStage(options: {
     summary,
     mergeConflict,
   };
+}
+
+async function checkBaselineDiscovery(repoDir: string): Promise<ReadyCheck> {
+  const suggestions: string[] = [];
+  const alembicDir = path.join(repoDir, 'alembic', 'versions');
+  if (await fileExists(alembicDir)) {
+    suggestions.push(
+      'ready.checks: schema-migrations, migration-chain-integrity, migration-reversibility, forbidden-ddl',
+      'ready.requiredChecks: schema-migrations, migration-chain-integrity',
+      'ready.migrationKind: alembic',
+      'ready.migrationPatterns: alembic/versions/.*\\.py$'
+    );
+  }
+
+  const sqlMigrationsDir = path.join(repoDir, 'migrations');
+  if (await fileExists(sqlMigrationsDir)) {
+    const hasSql = await repoContainsSqlMigrations(sqlMigrationsDir);
+    if (hasSql) {
+      suggestions.push(
+        'ready.checks: schema-migrations, forbidden-ddl',
+        'ready.migrationKind: sql',
+        'ready.migrationPatterns: migrations/.*\\.sql$'
+      );
+    }
+  }
+
+  if (suggestions.length === 0) {
+    return {
+      name: 'baseline-discovery',
+      status: 'skip',
+      message: 'Baseline discovery found no migration-specific suggestions',
+      details: {},
+    };
+  }
+
+  return {
+    name: 'baseline-discovery',
+    status: 'warn',
+    message: 'Baseline discovery found optional readiness policy suggestions',
+    details: { suggestions: uniqueOrdered(suggestions) },
+  };
+}
+
+async function repoContainsSqlMigrations(rootDir: string): Promise<boolean> {
+  const stack = [rootDir];
+  let scannedFiles = 0;
+  const maxFiles = 3000;
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (!dir) continue;
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!MIGRATION_SCAN_IGNORED_DIRS.has(entry.name)) {
+          stack.push(entryPath);
+        }
+        continue;
+      }
+      if (entry.isFile()) {
+        scannedFiles += 1;
+        if (entry.name.toLowerCase().endsWith('.sql')) {
+          return true;
+        }
+        if (scannedFiles >= maxFiles) {
+          return false;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 // ────────────────────────────────────────────────────────────────
