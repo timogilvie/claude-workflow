@@ -31,6 +31,7 @@ import {
   getUiConfig,
   getPermissionsConfig,
   getDashboardConfig,
+  getProjectContextConfig,
   getDeepSeekProviderConfig,
   getDeepSeekLauncherConfig,
   getHokusaiSubmissionConfig,
@@ -1242,6 +1243,41 @@ test('getDashboardConfig returns dashboard section', () => {
   }
 });
 
+test('getProjectContextConfig returns defaults when section missing', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ mill: { maxParallel: 5 } }));
+
+    assert.deepEqual(getProjectContextConfig(tmp), {
+      compactionThresholdKb: 100,
+      recentWorkKeep: 25,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getProjectContextConfig returns explicit overrides', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      projectContext: {
+        compactionThresholdKb: 180,
+        recentWorkKeep: 40,
+      },
+    }));
+
+    assert.deepEqual(getProjectContextConfig(tmp), {
+      compactionThresholdKb: 180,
+      recentWorkKeep: 40,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('getHokusaiSubmissionConfig returns hokusai section', () => {
   const tmp = makeTempRepo();
   try {
@@ -1479,6 +1515,57 @@ test('getReadyConfig honors explicit migration patterns', () => {
 
     const readyConfig = getReadyConfig(tmp);
     assert.deepEqual(readyConfig.migrationPatterns, ['db/revisions/', 'custom_migrations/']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getReadyConfig returns migrationKind when configured', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        migrationKind: 'sql',
+      }
+    }));
+
+    const readyConfig = getReadyConfig(tmp);
+    assert.equal(readyConfig.migrationKind, 'sql');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready.requiredChecks must be a subset of ready.checks', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        checks: ['ci-status'],
+        requiredChecks: ['forbidden-ddl'],
+      }
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /ready\/requiredChecks/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('ready.requiredChecks accepts merge-conflicts alias when checks uses merge-conflict', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        checks: ['merge-conflict', 'ci-status'],
+        requiredChecks: ['merge-conflicts'],
+      }
+    }));
+
+    assert.doesNotThrow(() => loadWavemillConfig(tmp));
   } finally {
     cleanUp(tmp);
   }

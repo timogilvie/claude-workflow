@@ -31,6 +31,7 @@ for f in \
   "$REPO_DIR"/tests/dashboard-refresh.test.sh \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
+  "$REPO_DIR"/tests/project-context-suggestion.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
@@ -113,6 +114,18 @@ else
   fail "task id log prefix formatter behavior: $task_log_prefix_output"
 fi
 unset task_log_prefix_status
+
+echo ""
+echo "=== Project Context Suggestion ==="
+
+project_context_suggestion_output="$(bash "$REPO_DIR/tests/project-context-suggestion.test.sh" 2>&1)" || project_context_suggestion_status=$?
+project_context_suggestion_status="${project_context_suggestion_status:-0}"
+if [[ "$project_context_suggestion_status" -eq 0 ]]; then
+  pass "project context suggestion lifecycle"
+else
+  fail "project context suggestion lifecycle: $project_context_suggestion_output"
+fi
+unset project_context_suggestion_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check

@@ -178,6 +178,32 @@ cmd_search() {
   fi
 }
 
+cmd_compact() {
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run|-n)
+        args+=("--dry-run")
+        shift
+        ;;
+      --threshold-kb=*|--keep-recent=*)
+        args+=("$1")
+        shift
+        ;;
+      --threshold-kb|--keep-recent)
+        args+=("$1" "$2")
+        shift 2
+        ;;
+      *)
+        log_error "Unknown flag: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  npx tsx "$TOOLS_DIR/compact-project-context.ts" "${args[@]}" "$REPO_DIR"
+}
+
 show_help() {
   cat <<EOF
 Wavemill Context - Subsystem documentation lifecycle management
@@ -208,6 +234,12 @@ Commands:
                       --limit N         Max results (default: 10)
                       --section NAME    Search only specific section
 
+  compact           Compact .wavemill/project-context.md recent work history
+                    Options:
+                      --dry-run, -n     Preview without writing files
+                      --threshold-kb N  Override compaction threshold
+                      --keep-recent N   Keep only the most recent N entries
+
 Examples:
   # Initialize subsystem documentation
   wavemill context init
@@ -226,6 +258,9 @@ Examples:
 
   # Search with limit
   wavemill context search "api" --limit 5
+
+  # Compact project context recent work
+  wavemill context compact
 
 EOF
 }
@@ -256,6 +291,9 @@ main() {
       ;;
     search)
       cmd_search "$@"
+      ;;
+    compact)
+      cmd_compact "$@"
       ;;
     help|--help|-h)
       show_help

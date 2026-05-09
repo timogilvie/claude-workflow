@@ -48,16 +48,10 @@ describe('plan-queue CLI', () => {
     assert.deepEqual(result.queuedAfterDependencies, [
       { taskId: 'HOK-11', ancestors: ['HOK-10'] },
       { taskId: 'HOK-12', ancestors: ['HOK-10'] },
+      { taskId: 'HOK-14', ancestors: ['HOK-99'] },
     ]);
     assert.deepEqual(result.avoidRunningTogether, [['HOK-11', 'HOK-13']]);
-    assert.equal(result.needsTriage.length, 1);
-    assert.equal(result.needsTriage[0].reason, 'unknown_endpoint');
-    assert.deepEqual(result.needsTriage[0].edge, {
-      type: 'depends_on',
-      from: 'HOK-99',
-      to: 'HOK-14',
-      source: 'explicit',
-    });
+    assert.deepEqual(result.needsTriage, []);
   });
 
   it('renders preview sections to stdout', () => {
@@ -69,6 +63,31 @@ describe('plan-queue CLI', () => {
     assert.match(result.stdout, /Queued After Dependencies/);
     assert.match(result.stdout, /Avoid Running Together/);
     assert.match(result.stdout, /Needs Triage/);
+    assert.match(result.stdout, /\(none\)/);
+  });
+
+  it('keeps externally blocked known tasks out of needsTriage', () => {
+    const backlog = JSON.stringify([
+      { id: 'HOK-1509', title: 'Blocked by external issue', dependsOn: ['HOK-9999'] },
+      { id: 'HOK-1588', title: 'Ready task' },
+    ]);
+    const result = parseJson(runPlanQueue(['--stdin', '--json'], backlog).stdout);
+
+    assert.deepEqual(result.availableNow, ['HOK-1588']);
+    assert.deepEqual(result.queuedAfterDependencies, [{ taskId: 'HOK-1509', ancestors: ['HOK-9999'] }]);
+    assert.deepEqual(result.needsTriage, []);
+  });
+
+  it('suppresses duplicate-edge triage from needsTriage while keeping queue output', () => {
+    const backlog = JSON.stringify([
+      { id: 'HOK-100', title: 'Dependency root' },
+      { id: 'HOK-200', title: 'Depends twice', dependsOn: ['HOK-100', 'HOK-100'] },
+    ]);
+    const result = parseJson(runPlanQueue(['--stdin', '--json'], backlog).stdout);
+
+    assert.deepEqual(result.availableNow, ['HOK-100']);
+    assert.deepEqual(result.queuedAfterDependencies, [{ taskId: 'HOK-200', ancestors: ['HOK-100'] }]);
+    assert.deepEqual(result.needsTriage, []);
   });
 
   it('reads stdin and matches file-mode JSON', () => {

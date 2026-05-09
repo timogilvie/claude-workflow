@@ -191,7 +191,7 @@ test_fetch_queue_plan_transforms_linear_backlog() {
   check_contains "fetch_queue_plan maps dependency queue" "$output" '"taskId": "HOK-11"'
   check_contains "fetch_queue_plan preserves shared-surface clusters" "$output" '"avoidRunningTogether"'
   check_contains "fetch_queue_plan preserves shared-surface ids" "$output" '"HOK-13"'
-  check_contains "fetch_queue_plan triages unknown dependency" "$output" '"to": "HOK-14"'
+  check_contains "fetch_queue_plan keeps externally blocked task queued" "$output" '"taskId": "HOK-14"'
 }
 
 test_backlog_refresh_persists_cache_in_parent_shell() {
@@ -295,18 +295,35 @@ test_grouped_render_with_fixture_output() {
 
   check_contains "render prints available section" "$output" "Available Now - Parallel Wave 1"
   check_contains "render prints queued section" "$output" "Queued After Dependencies"
-  check_contains "render prints avoid section" "$output" "Avoid Running Together"
-  check_contains "render prints triage section" "$output" "Needs Triage"
+  check_not_contains "render skips avoid section after de-dup precedence" "$output" "Avoid Running Together"
+  check_not_contains "render hides external blockers from triage section" "$output" "Needs Triage"
   check_contains "render annotates blockers" "$output" "3. HOK-11 - Depends on foundation (blocked by: HOK-10)"
-  check_contains "render includes conflict cluster" "$output" "[conflict cluster 1]"
-  check_contains "render marks triage" "$output" "7. HOK-14 - Broken dependency [triage]"
+  check_not_contains "render omits conflict cluster after de-dup precedence" "$output" "[conflict cluster 1]"
+  check_contains "render keeps external blocker in queued section" "$output" "5. HOK-14 - Broken dependency (blocked by: HOK-99)"
 
   line3=$(awk '/---SELECT---/{flag=1; next} flag {print; exit}' <<<"$output")
   line5=$(awk '/---SELECT---/{flag=1; next} flag {count++; if (count == 3) { print; exit }}' <<<"$output")
-  line7=$(awk '/---SELECT---/{flag=1; next} flag {count++; if (count == 7) { print; exit }}' <<<"$output")
+  line7=$(awk '/---SELECT---/{flag=1; next} flag {count++; if (count == 5) { print; exit }}' <<<"$output")
   check_eq "selection line 1 matches first rendered task" "HOK-10|foundation-task|Foundation task|core|98|0" "$line3"
   check_eq "selection line 3 matches queued task order" "HOK-11|depends-on-foundation|Depends on foundation|core|95|1" "$line5"
-  check_eq "selection line 7 matches triage task order" "HOK-14|broken-dependency|Broken dependency|core|80|1" "$line7"
+  check_eq "selection line 5 includes blocked external dependency task" "HOK-14|broken-dependency|Broken dependency|core|80|1" "$line7"
+}
+
+test_grouped_render_deduplicates_and_keeps_one_item_per_line() {
+  local output
+  output=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" CANDIDATES="$CANDIDATES" QUEUE_PLAN='{"availableNow":["HOK-10"],"queuedAfterDependencies":[{"taskId":"HOK-11","ancestors":["HOK-10"]}],"avoidRunningTogether":[["HOK-13"]],"needsTriage":[{"reason":"duplicate","edge":{"type":"depends_on","from":"HOK-10","to":"HOK-11","source":"explicit"}},{"reason":"unknown_endpoint","edge":{"type":"depends_on","from":"HOK-99","to":"HOK-14","source":"explicit"}}]}' bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    GROUPED_DISPLAY=""
+    GROUPED_SELECT_FROM=""
+    render_grouped_task_list "$QUEUE_PLAN" "$CANDIDATES"
+    echo "$GROUPED_DISPLAY"
+  ')
+
+  check_eq "render shows HOK-11 once across sections" "1" "$(grep -c 'HOK-11 - Depends on foundation' <<<"$output" || true)"
+  check_eq "triage item rendered on its own line" "1" "$(grep -c '^[[:space:]]*[0-9]\+\. HOK-14 - Broken dependency \[triage\]$' <<<"$output" || true)"
+  check_not_contains "no collapsed triage formatting line" "$output" "[triage]  "
 }
 
 test_render_rejects_malformed_json() {
@@ -528,6 +545,7 @@ test_fetch_queue_plan_transforms_linear_backlog
 test_backlog_refresh_persists_cache_in_parent_shell
 test_invoke_first_wave_helper_packs_priority_without_violating_dependencies
 test_grouped_render_with_fixture_output
+test_grouped_render_deduplicates_and_keeps_one_item_per_line
 test_render_rejects_malformed_json
 test_fallback_when_queue_analysis_fails
 test_fetch_queue_plan_failure_diagnostics_cache_empty
