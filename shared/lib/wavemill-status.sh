@@ -324,10 +324,10 @@ gather_tasks() {
 
 gather_jobs() {
   [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
-  jq -r '
+  jq -r --arg session "$SESSION" '
     (.jobs // {}) |
     if type == "array" then .[] else (to_entries[] | .value) end |
-    select(.kind == "eval" or .kind == "comparison") |
+    select((.kind == "eval" or .kind == "comparison") and .session? == $session) |
     [
       .id,
       .kind,

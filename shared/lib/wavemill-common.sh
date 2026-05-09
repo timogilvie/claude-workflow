@@ -1767,6 +1767,24 @@ state_mutate() {
   return "$mutate_status"
 }
 
+cleanup_background_jobs_startup() {
+  # Keep only jobs created by the current session; older or pre-session jobs
+  # are stale once a new session starts.
+  [[ -r "${STATE_FILE:-}" && -s "${STATE_FILE:-}" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.jobs = ((.jobs // {}) | with_entries(select(.value.session? == $session)))' \
+    --arg session "${SESSION:-}"
+}
+
+cleanup_background_jobs_shutdown() {
+  # Drop the current session's jobs on exit so the next dashboard view starts
+  # from live background work rather than a retained log.
+  [[ -r "${STATE_FILE:-}" && -s "${STATE_FILE:-}" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.jobs = ((.jobs // {}) | with_entries(select(.value.session? != $session)))' \
+    --arg session "${SESSION:-}"
+}
+
 get_file_size_bytes() {
   local path="$1"
   if stat -f%z "$path" 2>/dev/null; then
