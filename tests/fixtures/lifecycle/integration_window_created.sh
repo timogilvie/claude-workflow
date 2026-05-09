@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guard against being sourced by lifecycle-scenarios.test.sh
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
+
 if ! command -v tmux >/dev/null 2>&1; then
   echo "SKIP: tmux unavailable"
+  exit 0
+fi
+
+# tmux split-window -p requires an interactive terminal; skip in CI
+if [[ -n "${CI:-}" ]]; then
+  echo "SKIP: tmux layout test not available in CI"
   exit 0
 fi
 

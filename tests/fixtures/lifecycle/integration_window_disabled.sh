@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guard against being sourced by lifecycle-scenarios.test.sh
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
+
 if ! command -v tmux >/dev/null 2>&1; then
   echo "SKIP: tmux unavailable"
   exit 0
