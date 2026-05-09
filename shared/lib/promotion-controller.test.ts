@@ -32,6 +32,7 @@ function shellHarness(overrides: {
   integrationTreeLog?: string;
   integrationTree?: string;
   promotionTree?: string;
+  pushError?: string;
 } = {}): {
   shellRunner: (cmd: string, opts?: { encoding?: string; cwd?: string }) => string;
   calls: string[];
@@ -87,11 +88,14 @@ function shellHarness(overrides: {
       if (cmd.includes("rm -f '/tmp/promotion-body-")) return '';
       if (cmd.includes("git commit-tree 'integration-sha^{tree}'")) return 'reconciled-sha\n';
       if (cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'") return '';
+      if (cmd === "git update-ref 'refs/heads/auto/integration' 'integration-sha' 'reconciled-sha'") return '';
       if (cmd === "git update-ref 'refs/heads/auto/integration' 'main-sha' 'integration-sha'") return '';
+      if (cmd === "git update-ref 'refs/heads/auto/integration' 'integration-sha' 'main-sha'") return '';
       if (
         cmd ===
         "git push --force-with-lease='refs/heads/auto/integration:integration-sha' origin 'refs/heads/auto/integration:refs/heads/auto/integration'"
       ) {
+        if (overrides.pushError) throw new Error(overrides.pushError);
         return '';
       }
 
@@ -178,6 +182,39 @@ describe('runPromotion', () => {
       assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
       assert(shell.calls.some((cmd) => cmd.includes("git push --force-with-lease='refs/heads/auto/integration:integration-sha'")));
       assert(shell.calls.some((cmd) => cmd.includes("git merge-base --is-ancestor 'reconciled-sha' 'main'")));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('restores local integration ref and explains protected branch rejection', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      integrationTree: 'current-integration-tree',
+      promotionTree: 'promoted-tree',
+      integrationTreeLog: [
+        'integration-sha current-integration-tree',
+        'previous-integration-sha promoted-tree',
+        'older-sha old-tree',
+      ].join('\n'),
+      pushError: [
+        'remote: error: GH006: Protected branch update failed for refs/heads/auto/integration.',
+        'remote: - Cannot force-push to this branch',
+      ].join('\n'),
+    });
+
+    try {
+      await assert.rejects(
+        runPromotion({
+          repoDir: repo.repoDir,
+          shellRunner: shell.shellRunner,
+          healthChecker: async () => ({ state: 'healthy' }),
+        }),
+        /GitHub rejected the required reconciliation push to protected branch `auto\/integration`/,
+      );
+      assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
+      assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'integration-sha' 'reconciled-sha'"));
+      assert(!shell.calls.some((cmd) => cmd.includes('gh pr create')));
     } finally {
       repo.cleanup();
     }
