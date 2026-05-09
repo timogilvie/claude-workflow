@@ -33,6 +33,7 @@ for f in \
   "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
   "$REPO_DIR"/tests/project-context-suggestion.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
+  "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
@@ -1661,7 +1662,7 @@ if [[ ! -f "$MILL_SCRIPT" ]]; then
   fail "wavemill-mill.sh not found for log filtering checks"
 else
   if ! grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT" \
-    && grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" \
+    && (grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" || grep -Fq '_task_frame="Next tasks:"' "$MILL_SCRIPT") \
     && grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT" \
     && ! grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" \
     && ! grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT"; then

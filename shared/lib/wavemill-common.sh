@@ -1962,3 +1962,12 @@ queue_mark_waiting() {
     --arg issue "$child_issue" \
     --arg reason "$reason"
 }
+
+wavemill_pane_repaint() {
+  local content="${1-}" line frame_bytes=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    frame_bytes+="${line}"$'\033[K\n'
+  done <<< "$content"
+  frame_bytes+=$'\033[J'
+  printf '%s' "$frame_bytes"
+}

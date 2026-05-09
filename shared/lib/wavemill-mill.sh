@@ -8887,14 +8887,8 @@ while :; do
         display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
           SELECT_SHOW_ALL=false
-          if (( TASK_LIST_RENDERED == 1 )); then
-            tput rc 2>/dev/null || true
-            tput ed 2>/dev/null || printf '\033[J'
-          else
-            echo ""
-            tput sc 2>/dev/null || true
-          fi
-          echo "Next tasks:"
+
+          # Gather data first so old content stays visible during queue analysis.
           queue_plan_json=""
           queue_plan_diag_file=""
           queue_plan_diag_previous="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
@@ -8909,7 +8903,6 @@ while :; do
             fi
             render_grouped_task_list "$queue_plan_json" "$available"
             if [[ -n "$GROUPED_DISPLAY" ]]; then
-              echo "$GROUPED_DISPLAY"
               select_from="$GROUPED_SELECT_FROM"
               USING_GROUPED_VIEW=true
             fi
@@ -8920,28 +8913,42 @@ while :; do
               log_warn "queue analysis unavailable, falling back to flat list"
               [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
             fi
-            if [[ -n "$avail_unblocked" ]]; then
-              echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
-            else
-              echo "  (no unblocked tasks)"
-            fi
-            if (( avail_blocked_count > 0 )); then
-              echo ""
-              echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
-            fi
           fi
           queue_fp="${queue_plan_json:0:50}"
           display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}"
           rm -f "$queue_plan_diag_file"
           FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_previous"
-          echo ""
-          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
-            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
-          elif (( avail_blocked_count > 0 )); then
-            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+
+          _task_frame="Next tasks:"$'\n'
+          if [[ -n "$GROUPED_DISPLAY" ]]; then
+            _task_frame+="${GROUPED_DISPLAY}"$'\n'
           else
-            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            if [[ -n "$avail_unblocked" ]]; then
+              _task_frame+="$(echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}')"
+            else
+              _task_frame+="  (no unblocked tasks)"$'\n'
+            fi
+            if (( avail_blocked_count > 0 )); then
+              _task_frame+=$'\n'"  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"$'\n'
+            fi
           fi
+          _task_frame+=$'\n'
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
+          elif (( avail_blocked_count > 0 )); then
+            _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
+          else
+            _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
+          fi
+
+          if (( TASK_LIST_RENDERED == 1 )); then
+            tput rc 2>/dev/null || true
+          else
+            echo ""
+            tput sc 2>/dev/null || true
+          fi
+          wavemill_pane_repaint "$_task_frame"
+
           LAST_DISPLAY="$display_fingerprint"
           LAST_ACTIVE_COUNT=$active_count
           LAST_WAITING_MSG=""  # Clear waiting state when tasks are available
