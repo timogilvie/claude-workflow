@@ -109,7 +109,11 @@ test_shorter_frame_clears_trailing_lines() {
 
 test_monitor_no_longer_clears_before_backlog_print() {
   local snippet
-  snippet="$(sed -n '8878,8958p' "$MILL_SCRIPT")"
+  snippet="$(awk '
+    /_task_frame="Next tasks:"/ { capture = 1 }
+    capture { print }
+    capture && /TASK_LIST_RENDERED=1/ { exit }
+  ' "$MILL_SCRIPT")"
 
   check_contains "render path uses pane repaint" "$snippet" "wavemill_pane_repaint"
   check_not_contains "render path omits tput ed" "$snippet" "tput ed"

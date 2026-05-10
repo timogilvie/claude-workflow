@@ -568,6 +568,14 @@ else
     in_fn { print }
     in_fn && /^\}/ { exit }
   ' <<< "$HEREDOC_CONTENT")
+  if grep -qF 'READY_STALE_MERGE_LANE_LOG_KEYS' <<< "$HEREDOC_CONTENT" \
+    && grep -qE '^log_ready_stale_merge_lane_once\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && grep -qF 'log_ready_stale_merge_lane_once "$ISSUE" "$PR" "$stored_base_sha" "$current_main_sha"' <<< "$MONITOR_ISSUE_BLOCK"; then
+    pass "monitor de-duplicates stale ready merge-lane notices"
+  else
+    fail "monitor can repeatedly log stale ready merge-lane notices"
+  fi
+
   # HOK-1194: Phase resolution refactored to use resolve_phase() with controller-owned state priority
   RESOLVE_PHASE_LINE=$(grep -Fn 'resolved_phase=$(resolve_phase "$FEATURE_DIR")' <<< "$MONITOR_ISSUE_BLOCK" | head -n1 | cut -d: -f1 || true)
   PANE_EARLY_RETURN_LINE=$(grep -n 'Not completed externally - keep controller-owned running stages active' <<< "$MONITOR_ISSUE_BLOCK" | head -n1 | cut -d: -f1 || true)
