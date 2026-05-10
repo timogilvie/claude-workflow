@@ -205,6 +205,44 @@ describe('branch sibling detection in applyChallengePairGates', () => {
       cleanup();
     }
   });
+
+  it('does not re-block a resolved winner when workflow state stores PR numbers as strings', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [makeWorkItem({
+        number: 579,
+        headRefName: 'task/foo',
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1623: { pr: '579', challengePairId: 'HOK-1623', challengeRole: 'primary' },
+        HOK_1623_c: { pr: '578', challengePairId: 'HOK-1623', challengeRole: 'challenger' },
+      });
+      mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'HOK-1623',
+          primaryPrUrl: 'https://github.com/org/repo/pull/579',
+          challengerPrUrl: 'https://github.com/org/repo/pull/578',
+          winner: 'primary',
+          timestamp: '2026-05-09T15:31:00Z',
+        }),
+      );
+
+      const options: ChallengeGateOptions = {
+        remoteBranches: ['task/foo', 'task/foo-challenger'],
+        coolOffSeconds: 0,
+      };
+
+      const result = await applyChallengePairGates(items, [], repoDir, options);
+      assert.equal(result.eligible.length, 1);
+      assert.equal(result.eligible[0].pr.number, 579);
+      assert.equal(result.blocked.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe('cool-off window in applyChallengePairGates', () => {

@@ -6799,6 +6799,7 @@ _active_count_prev=0
 LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
+READY_STALE_MERGE_LANE_LOG_KEYS=$'\n'
 TASK_LIST_RENDERED=0  # track task list cursor region in control pane
 SELECT_SHOW_ALL=false
 USING_GROUPED_VIEW=false
@@ -6815,6 +6816,19 @@ clear_task_list_display() {
     tput ed 2>/dev/null || printf '\033[J'
     TASK_LIST_RENDERED=0
   fi
+}
+
+log_ready_stale_merge_lane_once() {
+  local issue="$1" pr="$2" stored_base_sha="$3" current_main_sha="$4"
+  local key="${issue}|${pr}|${stored_base_sha}|${current_main_sha}"
+  local logged_keys="${READY_STALE_MERGE_LANE_LOG_KEYS:-$'\n'}"
+
+  if [[ "$logged_keys" == *$'\n'"$key"$'\n'* ]]; then
+    return 0
+  fi
+
+  READY_STALE_MERGE_LANE_LOG_KEYS="${logged_keys}${key}"$'\n'
+  log "status" "⚠ $issue → Ready marked stale; waiting for merge lane (PR #$pr)"
 }
 
 monitor_command_timestamp() {
@@ -8564,7 +8578,7 @@ monitor_issue_state() {
         if merge_queue_enabled; then
           if [[ "$queue_state" != "merge-candidate" ]]; then
             mark_ready_stale "$ISSUE" "$ready_state_dir_path" "$stored_base_sha" "$current_main_sha"
-            log "status" "⚠ $ISSUE → Ready marked stale; waiting for merge lane (PR #$PR)"
+            log_ready_stale_merge_lane_once "$ISSUE" "$PR" "$stored_base_sha" "$current_main_sha"
             set_window_attention_state "$WIN" "clear"
             active_count=$((active_count + 1))
             return 0
