@@ -99,12 +99,13 @@ export function loadWorkflowStateChallengePairs(repoDir: string): Map<number, Ch
     const pairs = new Map<number, ChallengePairInfo>();
 
     for (const task of Object.values(tasks)) {
+      const prNumber = parseWorkflowStatePr(task.pr);
       if (
-        typeof task.pr === 'number' &&
+        prNumber !== null &&
         typeof task.challengePairId === 'string' &&
         (task.challengeRole === 'primary' || task.challengeRole === 'challenger')
       ) {
-        pairs.set(task.pr, { pairId: task.challengePairId, role: task.challengeRole });
+        pairs.set(prNumber, { pairId: task.challengePairId, role: task.challengeRole });
       }
     }
 
@@ -113,6 +114,18 @@ export function loadWorkflowStateChallengePairs(repoDir: string): Map<number, Ch
     console.warn(`[tend-challenge-gate] Failed to read workflow-state.json: ${errorMessage(error)}`);
     return new Map();
   }
+}
+
+function parseWorkflowStatePr(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    return Number(value);
+  }
+
+  return null;
 }
 
 export function classifyChallengeState(

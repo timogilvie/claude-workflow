@@ -131,6 +131,7 @@ harness_extract_real_functions() {
   for func in \
     ready_stage_allows_merge \
     ready_stage_pending_verdict \
+    log_ready_stale_merge_lane_once \
     monitor_issue_state \
     validate_planning_phase_output \
     validate_coding_phase_output \
