@@ -777,6 +777,18 @@ get_expansion_handshake_policy() {
   esac
 }
 
+get_expansion_handshake_timeout_seconds() {
+  local repo_dir="$1"
+  local cfg_timeout=""
+
+  cfg_timeout=$(wavemill_load_config "$repo_dir" | jq -r '.mill.expansionHandshake.timeoutSeconds // 300' 2>/dev/null || echo "300")
+  if [[ "$cfg_timeout" =~ ^[0-9]+$ ]] && (( cfg_timeout >= 1 )); then
+    printf '%s\n' "$cfg_timeout"
+  else
+    printf '300\n'
+  fi
+}
+
 validate_expanded_route_artifact() {
   local route_file="$1"
 
