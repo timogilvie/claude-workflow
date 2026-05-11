@@ -134,6 +134,10 @@ harness_extract_real_functions() {
     log_ready_stale_merge_lane_once \
     monitor_issue_state \
     validate_planning_phase_output \
+    planning_rejection_files_summary \
+    write_planning_rejection_artifact \
+    notify_planning_rejection_agent \
+    handle_planning_overreach_rejection \
     validate_coding_phase_output \
     resolve_phase \
     approve_plan \
@@ -488,7 +492,11 @@ test_source_edit_blocks_handoff() {
   check_eq "negative: planning stays awaiting_user" "awaiting_user" "$(harness_read_stage_status "$repo" "$slug" planning)"
   check_file_absent "negative: .plan-approved removed" "$repo/features/$slug/.plan-approved"
   check_file_absent "negative: overreach file cleaned up" "$repo/shared/lib/foo.ts"
+  check_file_exists "negative: planning rejection artifact written" "$repo/features/$slug/.planning-rejected.json"
+  check_eq "negative: planning rejection reason recorded" "planning_modified_out_of_scope_files" "$(jq -r '.reason' "$repo/features/$slug/.planning-rejected.json")"
+  check_eq "negative: planning rejection file recorded" "shared/lib/foo.ts" "$(jq -r '.outOfScopeFiles[0]' "$repo/features/$slug/.planning-rejected.json")"
   check_contains "negative: source-overreach warning emitted" "$(kv_value "$tick" warn_output)" "source code"
+  check_contains "negative: source-overreach attention emitted" "$(kv_value "$tick" warn_output)" "needs attention"
   check_eq "negative: coding launch not invoked" "false" "$(kv_value "$tick" coding_launched)"
 }
 
