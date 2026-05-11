@@ -44,6 +44,19 @@ DEFAULT_REFRESH=2
 MAX_REFRESH=10
 PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 PR_TTL=15
+declare -ga WAVEMILL_DASHBOARD_TIPS=(
+  "Ctrl+B <PANE>: switch task pane; Ctrl+B N jumps to next done"
+  "Set WAVEMILL_DASHBOARD_REFRESH_SECONDS=1..10 to tune refresh"
+  "Run wavemill expand HOK-123 to expand a Linear issue from CLI"
+  "Run wavemill plan to break a Linear initiative into issues"
+  "Run wavemill eval to score a finished workflow with the rubric"
+  "Use wavemill mill --dry-run to preview launches without agents"
+  "Use SKIP_CONTEXT_CHECK=true wavemill mill to skip context prompts"
+  "Run wavemill context compact when project-context.md gets large"
+  "Set permissions.autoApprovePatterns to reduce read-only prompts"
+  "Set challenge.autoMergeWinner=true to auto-merge winners"
+)
+WAVEMILL_CURRENT_DASHBOARD_TIP=""
 
 # Colors
 G='\033[32m'; Y='\033[33m'; R='\033[31m'; D='\033[90m'; B='\033[1m'; N='\033[0m'
@@ -69,6 +82,23 @@ resolve_dashboard_refresh_seconds() {
 }
 
 REFRESH="$(resolve_dashboard_refresh_seconds)"
+PICKED_DASHBOARD_TIP=""
+
+pick_dashboard_tip() {
+  local tip_count="${#WAVEMILL_DASHBOARD_TIPS[@]}"
+  if (( tip_count == 0 )); then
+    PICKED_DASHBOARD_TIP="Run wavemill mill --dry-run to preview launch plans"
+    return 0
+  fi
+  PICKED_DASHBOARD_TIP="${WAVEMILL_DASHBOARD_TIPS[RANDOM % tip_count]}"
+}
+
+current_dashboard_tip() {
+  if [[ -z "$WAVEMILL_CURRENT_DASHBOARD_TIP" ]]; then
+    pick_dashboard_tip
+    WAVEMILL_CURRENT_DASHBOARD_TIP="$PICKED_DASHBOARD_TIP"
+  fi
+}
 
 # Hide cursor during rendering
 tput civis 2>/dev/null || true
@@ -851,6 +881,7 @@ redraw_dashboard_frame() {
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
   local win agent_state classification task_data free_slots
+  local dashboard_tip
   declare -ga inbox_tasks=()
   declare -ga active_tasks=()
 
@@ -902,7 +933,9 @@ render_dashboard() {
   render_active_section
   render_project_context_suggestion
 
-  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
+  current_dashboard_tip
+  dashboard_tip="$WAVEMILL_CURRENT_DASHBOARD_TIP"
+  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Tip: ${dashboard_tip}${N}${EL}\n" >> "$FRAME"
 }
 
 run_dashboard() {

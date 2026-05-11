@@ -2379,11 +2379,11 @@ EOF
     fail "mill session setup is missing the next done keybinding"
   fi
 
-  if grep -q "Ctrl+B <PANE>: switch task" "$REPO_DIR/shared/lib/wavemill-status.sh" \
-    && grep -q "Ctrl+B N: next done" "$REPO_DIR/shared/lib/wavemill-status.sh"; then
-    pass "dashboard footer advertises pane switching and next done keybindings"
+  if grep -q "Refreshes every \${REFRESH}s │ Tip:" "$REPO_DIR/shared/lib/wavemill-status.sh" \
+    && grep -q "Ctrl+B <PANE>: switch task pane; Ctrl+B N jumps to next done" "$REPO_DIR/shared/lib/wavemill-status.sh"; then
+    pass "dashboard footer uses rotating tip format with navigation hint"
   else
-    fail "dashboard footer is missing pane switching or next done hint"
+    fail "dashboard footer is missing rotating tip format or navigation hint"
   fi
 fi
 

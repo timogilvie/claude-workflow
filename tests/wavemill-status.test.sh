@@ -102,6 +102,60 @@ run_render() {
   )
 }
 
+run_tip_checks() {
+  local output_file="$1"
+  (
+    tput() { :; }
+    set -- test-session "$TMP_DIR/worktrees" "$TMP_DIR/state-one.json"
+    source "$REPO_DIR/shared/lib/wavemill-status.sh"
+
+    local tip_count unique_count
+    tip_count="${#WAVEMILL_DASHBOARD_TIPS[@]}"
+    unique_count=$(printf '%s\n' "${WAVEMILL_DASHBOARD_TIPS[@]}" | sort -u | wc -l | tr -d ' ')
+
+    printf 'tip_count=%s\n' "$tip_count"
+    printf 'unique_count=%s\n' "$unique_count"
+
+    local tip
+    local all_format_ok=1
+    local all_len_ok=1
+    for tip in "${WAVEMILL_DASHBOARD_TIPS[@]}"; do
+      if [[ "$tip" != "${tip#"${tip%%[![:space:]]*}"}" ]] || [[ "$tip" != "${tip%"${tip##*[![:space:]]}"}" ]] || [[ "$tip" == *$'\n'* ]]; then
+        all_format_ok=0
+      fi
+      if (( ${#tip} > 80 )); then
+        all_len_ok=0
+      fi
+    done
+    printf 'all_format_ok=%s\n' "$all_format_ok"
+    printf 'all_len_ok=%s\n' "$all_len_ok"
+
+    local first_tip second_tip
+    current_dashboard_tip
+    first_tip="$WAVEMILL_CURRENT_DASHBOARD_TIP"
+    current_dashboard_tip
+    second_tip="$WAVEMILL_CURRENT_DASHBOARD_TIP"
+    if [[ "$first_tip" == "$second_tip" ]]; then
+      printf 'cached_tip_same=1\n'
+    else
+      printf 'cached_tip_same=0\n'
+    fi
+
+    local seen_count
+    seen_count="$(
+      RANDOM=1
+      local picks=()
+      local i
+      for ((i=0; i<100; i++)); do
+        pick_dashboard_tip
+        picks+=("$PICKED_DASHBOARD_TIP")
+      done
+      printf '%s\n' "${picks[@]}" | sort -u | wc -l | tr -d ' '
+    )"
+    printf 'random_seen_count=%s\n' "$seen_count"
+  ) > "$output_file"
+}
+
 echo "=== wavemill-status inbox renderer ==="
 
 TMP_DIR="$(mktemp -d)"
@@ -181,6 +235,32 @@ EOF
 
 OUTPUT_ONE="$TMP_DIR/output-one.txt"
 run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ONE"
+TIP_CHECKS="$TMP_DIR/tip-checks.txt"
+run_tip_checks "$TIP_CHECKS"
+
+if grep -q '^tip_count=10$' "$TIP_CHECKS" && grep -q '^unique_count=10$' "$TIP_CHECKS"; then
+  pass "defines exactly 10 unique dashboard usage tips"
+else
+  fail "dashboard tips are missing, duplicated, or wrong count"
+fi
+
+if grep -q '^all_format_ok=1$' "$TIP_CHECKS" && grep -q '^all_len_ok=1$' "$TIP_CHECKS"; then
+  pass "keeps tip lines trimmed, single-line, and compact"
+else
+  fail "one or more tips violate formatting or length constraints"
+fi
+
+if grep -q '^cached_tip_same=1$' "$TIP_CHECKS"; then
+  pass "reuses one cached tip across repeated dashboard renders"
+else
+  fail "dashboard tip changed inside a single sourced session"
+fi
+
+if grep -Eq '^random_seen_count=([2-9]|10)$' "$TIP_CHECKS"; then
+  pass "tip picker can emit multiple distinct tips"
+else
+  fail "tip picker did not show enough variation"
+fi
 
 if grep -q $'\033\\[K' "${OUTPUT_ONE}.raw"; then
   pass "includes end-of-line clearing in raw dashboard frame"
@@ -316,10 +396,10 @@ else
   fail "queued/pending pane is missing queued monitor commands"
 fi
 
-if grep -q 'Ctrl+B <PANE>: switch task' "$OUTPUT_ONE"; then
-  pass "footer advertises pane-number switching"
+if grep -q 'Refreshes every 2s │ Tip:' "$OUTPUT_ONE"; then
+  pass "footer shows refresh cadence and rotating tip prefix"
 else
-  fail "footer is missing pane-number switching hint"
+  fail "footer is missing rotating tip format"
 fi
 
 # Test truncation of long detail strings

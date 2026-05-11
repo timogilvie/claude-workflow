@@ -42,6 +42,7 @@ wavemill mill \
 This mode reuses the real startup planning pipeline, writes the generated launch plan to the requested path, and exits before creating tmux sessions, launching agents, opening PRs, or updating Linear. It is intended for fixture-backed validation, so supply backlog JSON explicitly with `--dry-run-backlog`.
 
 `WAVEMILL_DASHBOARD_REFRESH_SECONDS` accepts integer values from `1` through `10`. Invalid values fall back to the default `2` second dashboard refresh cadence.
+The main dashboard footer also shows one single-line usage tip per dashboard session to surface keyboard shortcuts, CLI flows, and useful `.wavemill-config.json` options.
 
 ## Startup Progress Table
 
