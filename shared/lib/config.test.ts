@@ -1107,7 +1107,10 @@ test('getExpansionHandshakeConfig defaults to recover when section absent', () =
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({ mill: { maxParallel: 5 } }));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'recover',
+      timeoutSeconds: 300,
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -1118,7 +1121,10 @@ test('getExpansionHandshakeConfig defaults to recover when mill absent', () => {
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({}));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'recover',
+      timeoutSeconds: 300,
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -1135,7 +1141,10 @@ test('getExpansionHandshakeConfig returns recover when configured', () => {
         },
       },
     }));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'recover',
+      timeoutSeconds: 300,
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -1152,7 +1161,31 @@ test('getExpansionHandshakeConfig returns warn when configured', () => {
         },
       },
     }));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'warn' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'warn',
+      timeoutSeconds: 300,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getExpansionHandshakeConfig returns configured recovery timeout', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: {
+        expansionHandshake: {
+          policy: 'recover',
+          timeoutSeconds: 180,
+        },
+      },
+    }));
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'recover',
+      timeoutSeconds: 180,
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -1166,6 +1199,32 @@ test('invalid expansionHandshake policy fails validation', () => {
       mill: {
         expansionHandshake: {
           policy: 'silent',
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid expansionHandshake timeout fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: {
+        expansionHandshake: {
+          timeoutSeconds: 0,
         },
       },
     }));

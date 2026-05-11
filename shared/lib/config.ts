@@ -44,6 +44,7 @@ export interface MillConfig {
 
 export interface ExpansionHandshakeConfig {
   policy?: 'recover' | 'block' | 'warn';
+  timeoutSeconds?: number;
 }
 
 export interface GitConfig {
@@ -983,9 +984,12 @@ export function getMillConfig(repoDir?: string): MillConfig {
   return loadWavemillConfig(repoDir).mill || {};
 }
 
-export function getExpansionHandshakeConfig(repoDir?: string): { policy: 'recover' | 'block' | 'warn' } {
-  const policy = loadWavemillConfig(repoDir).mill?.expansionHandshake?.policy;
-  return { policy: policy ?? 'recover' };
+export function getExpansionHandshakeConfig(repoDir?: string): { policy: 'recover' | 'block' | 'warn'; timeoutSeconds: number } {
+  const config = loadWavemillConfig(repoDir).mill?.expansionHandshake ?? {};
+  return {
+    policy: config.policy ?? 'recover',
+    timeoutSeconds: config.timeoutSeconds ?? 300,
+  };
 }
 
 /**

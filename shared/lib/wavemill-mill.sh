@@ -5695,6 +5695,7 @@ recover_missing_expansion_artifact() {
   local route_file="$feature_dir/.post-expansion-route.json"
   local recovery_log_dir="$REPO_DIR/.wavemill/logs"
   local recovery_log_file="$recovery_log_dir/expansion-recovery-${issue}.log"
+  local recovery_timeout=""
   local packet_content="" detail="" rc=0
 
   if expansion_recovery_already_attempted "$feature_dir"; then
@@ -5716,13 +5717,22 @@ recover_missing_expansion_artifact() {
     return 1
   fi
 
-  if _with_timeout "$API_TIMEOUT" npx tsx "$expand_tool" "$issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
+  recovery_timeout="$(get_expansion_handshake_timeout_seconds "$REPO_DIR")"
+  if _with_timeout "$recovery_timeout" npx tsx "$expand_tool" "$issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
     :
   else
     rc=$?
-    detail="expand-issue-exited-non-zero"
+    if [[ "$rc" == "124" || "$rc" == "143" ]]; then
+      detail="expand-issue-timed-out"
+    else
+      detail="expand-issue-exited-non-zero"
+    fi
     expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "$rc" || true
-    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail exit=$rc log=\"$recovery_log_file\""
+    if [[ "$detail" == "expand-issue-timed-out" ]]; then
+      log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail timeoutSeconds=$recovery_timeout exit=$rc log=\"$recovery_log_file\""
+    else
+      log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail exit=$rc log=\"$recovery_log_file\""
+    fi
     return 1
   fi
 
