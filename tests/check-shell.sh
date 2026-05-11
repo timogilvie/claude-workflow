@@ -32,6 +32,7 @@ for f in \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
   "$REPO_DIR"/tests/project-context-suggestion.test.sh \
+  "$REPO_DIR"/tests/wavemill-usage-tips.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-budget.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
@@ -2392,11 +2393,28 @@ EOF
     fail "mill session setup is missing the next done keybinding"
   fi
 
-  if grep -q "Ctrl+B <PANE>: switch task" "$REPO_DIR/shared/lib/wavemill-status.sh" \
-    && grep -q "Ctrl+B N: next done" "$REPO_DIR/shared/lib/wavemill-status.sh"; then
-    pass "dashboard footer advertises pane switching and next done keybindings"
+  if grep -q '^declare -ag WAVEMILL_USAGE_TIPS=' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+    pass "wavemill-common.sh defines shared usage tip array"
   else
-    fail "dashboard footer is missing pane switching or next done hint"
+    fail "wavemill-common.sh is missing shared usage tip array"
+  fi
+
+  if grep -q '^wavemill_pick_usage_tip()' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+    pass "wavemill-common.sh defines usage tip picker"
+  else
+    fail "wavemill-common.sh is missing usage tip picker"
+  fi
+
+  if grep -q 'wavemill_pick_usage_tip' "$REPO_DIR/shared/lib/wavemill-status.sh"; then
+    pass "dashboard footer uses shared usage tip picker"
+  else
+    fail "dashboard footer is missing shared usage tip picker call"
+  fi
+
+  if grep -q 'Ctrl+B N: next done' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+    pass "usage tip source preserves next done discoverability"
+  else
+    fail "usage tip source is missing next done discoverability"
   fi
 fi
 

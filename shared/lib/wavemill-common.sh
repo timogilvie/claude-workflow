@@ -6,6 +6,38 @@
 WAVEMILL_WINDOW_MILL="${WAVEMILL_WINDOW_MILL:-mill}"
 WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
 
+# Dashboard footer tips should stay short enough to fit on one line with the
+# stable refresh prefix.
+declare -ag WAVEMILL_USAGE_TIPS=(
+  "wavemill expand HOK-1234: build a task packet from Linear"
+  "wavemill plan: split large work into scoped issues"
+  "wavemill eval: inspect workflow results and export data"
+  "wavemill ready 42: check if a PR can merge"
+  "wavemill tend --once: run one integration queue pass"
+  "wavemill context init --force: refresh subsystem specs"
+  "WAVEMILL_DASHBOARD_REFRESH_SECONDS=1..10: tune refresh"
+  "Ctrl+B N: jump to the next done task"
+  "challenge.autoMergeWinner=true: auto-merge challenge winners"
+  "constraints.cleanupAfterMerge=true: clean merged constraints"
+)
+
+wavemill_pick_usage_tip() {
+  local tip_count="${#WAVEMILL_USAGE_TIPS[@]}"
+  local tip_index="${WAVEMILL_TIP_INDEX:-}"
+
+  if (( tip_count == 0 )); then
+    printf 'Ctrl+B N: next done\n'
+    return 0
+  fi
+
+  if [[ "$tip_index" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${WAVEMILL_USAGE_TIPS[tip_index % tip_count]}"
+    return 0
+  fi
+
+  printf '%s\n' "${WAVEMILL_USAGE_TIPS[RANDOM % tip_count]}"
+}
+
 # ============================================================================
 # LAYERED CONFIGURATION LOADING
 # ============================================================================
