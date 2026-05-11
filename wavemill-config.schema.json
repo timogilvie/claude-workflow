@@ -214,6 +214,30 @@
             },
             "additionalProperties": false
         },
+        "backlog": {
+            "type": "object",
+            "description": "Controls backlog rendering in the mill control pane.",
+            "properties": {
+                "maxLines": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 200,
+                    "description": "Maximum number of backlog lines to render before truncation rules apply. When omitted, Wavemill derives the budget from the tmux pane height."
+                },
+                "defaultAvailableNowCap": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 12,
+                    "description": "Default cap for Available Now tasks when the backlog must be condensed."
+                },
+                "defaultExpanded": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether grouped backlog rendering starts expanded when truncation would otherwise hide tasks."
+                }
+            },
+            "additionalProperties": false
+        },
         "projectContext": {
             "type": "object",
             "description": "Settings for project-context compaction suggestions and behavior.",

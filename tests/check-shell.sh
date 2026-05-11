@@ -33,6 +33,7 @@ for f in \
   "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
   "$REPO_DIR"/tests/project-context-suggestion.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
+  "$REPO_DIR"/tests/wavemill-backlog-budget.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
@@ -92,6 +93,18 @@ if command -v zsh >/dev/null 2>&1; then
 else
   skip "state_mutate zsh compatibility (zsh unavailable)"
 fi
+
+echo ""
+echo "=== Backlog Budget ==="
+
+backlog_budget_output="$(bash "$REPO_DIR/tests/wavemill-backlog-budget.test.sh" 2>&1)" || backlog_budget_status=$?
+backlog_budget_status="${backlog_budget_status:-0}"
+if [[ "$backlog_budget_status" -eq 0 ]]; then
+  pass "backlog budget rendering behavior"
+else
+  fail "backlog budget rendering behavior: $backlog_budget_output"
+fi
+unset backlog_budget_status
 
 echo ""
 echo "=== Dependent Launch ==="
