@@ -42,6 +42,7 @@ run_render() {
       local dir="$1"
       case "$(basename "$dir")" in
         plan-task) echo "12m" ;;
+        rejected-plan-task) echo "10m" ;;
         waiting-task) echo "7m" ;;
         active-task) echo "3m" ;;
         stale-task) echo "9m" ;;
@@ -57,6 +58,7 @@ run_render() {
     agent_status() {
       case "$1" in
         HOK-1220-plan-task) echo "exited" ;;
+        HOK-1230-rejected-plan-task) echo "running" ;;
         HOK-1221-waiting-task) echo "waiting" ;;
         HOK-1222-active-task) echo "running" ;;
         *) echo "running" ;;
@@ -111,6 +113,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 WORKTREES_DIR="$TMP_DIR/worktrees"
 mkdir -p \
   "$WORKTREES_DIR/plan-task/features/plan-task" \
+  "$WORKTREES_DIR/rejected-plan-task/features/rejected-plan-task" \
   "$WORKTREES_DIR/waiting-task/features/waiting-task" \
   "$WORKTREES_DIR/active-task/features/active-task" \
   "$WORKTREES_DIR/coding-task/features/coding-task" \
@@ -223,6 +226,58 @@ if grep -q 'HOK-1222.*active-task.*🔨 executing.*● running.*#45 ✓' "$OUTPU
   pass "shows active task PR and running status"
 else
   fail "active row is missing expected PR or status details"
+fi
+
+cat > "$WORKTREES_DIR/rejected-plan-task/features/rejected-plan-task/.planning-rejected.json" <<'EOF'
+{
+  "reason": "planning_modified_out_of_scope_files",
+  "outOfScopeFiles": ["src/new-feature.ts"],
+  "reverted": true
+}
+EOF
+
+STATE_FILE_PLANNING_REJECTED="$TMP_DIR/state-planning-rejected.json"
+cat > "$STATE_FILE_PLANNING_REJECTED" <<EOF
+{
+  "freeSlots": 2,
+  "tasks": {
+    "HOK-1230": {
+      "slug": "rejected-plan-task",
+      "branch": "task/rejected-plan-task",
+      "worktree": "$WORKTREES_DIR/rejected-plan-task",
+      "status": "",
+      "phase": "planning",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_PLANNING_REJECTED="$TMP_DIR/behavior-planning-rejected.json"
+cat > "$BEHAVIOR_PLANNING_REJECTED" <<'EOF'
+{
+  "hook": {},
+  "pane": {
+    "HOK-1230-rejected-plan-task": "9"
+  },
+  "reported": {},
+  "planning": {
+    "rejected-plan-task": "awaiting_approval"
+  },
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_PLANNING_REJECTED="$TMP_DIR/output-planning-rejected.txt"
+run_render "$STATE_FILE_PLANNING_REJECTED" "$WORKTREES_DIR" "$BEHAVIOR_PLANNING_REJECTED" "$OUTPUT_PLANNING_REJECTED"
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_PLANNING_REJECTED" \
+  && grep -q 'HOK-1230.*rejected-plan-task.*⚠ planning' "$OUTPUT_PLANNING_REJECTED" \
+  && grep -q 'Planning needs attention: edited src/new-feature.ts' "$OUTPUT_PLANNING_REJECTED"; then
+  pass "surfaces planning rejection artifact as actionable needs-attention row"
+else
+  fail "planning rejection artifact is not surfaced as actionable dashboard detail"
 fi
 
 STATE_FILE_SKIPPED="$TMP_DIR/state-skipped.json"

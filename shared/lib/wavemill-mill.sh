@@ -3127,6 +3127,8 @@ validate_planning_phase_output() {
   local -a tracked_out_of_scope=()
   local -a untracked_out_of_scope=()
 
+  VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES=()
+
   [[ -d "$wt_dir/.git" || -f "$wt_dir/.git" ]] || return 0
 
   while IFS= read -r changed_file; do
@@ -3155,6 +3157,7 @@ validate_planning_phase_output() {
     return 0
   fi
 
+  VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES=("${out_of_scope_files[@]}")
   log_warn "WARNING: Planning phase modified source code files: ${out_of_scope_files[*]}"
 
   local cleanup_failed=0
@@ -3196,6 +3199,101 @@ validate_planning_phase_output() {
 
   rm -f "$feature_dir/.plan-approved"
   return 1
+}
+
+planning_rejection_files_summary() {
+  local -a files=("$@")
+  local joined=""
+  local file
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    printf 'out-of-scope files'
+    return 0
+  fi
+
+  for file in "${files[@]:0:3}"; do
+    if [[ -n "$joined" ]]; then
+      joined+=", "
+    fi
+    joined+="$file"
+  done
+
+  if (( ${#files[@]} > 3 )); then
+    joined+=" (+$(( ${#files[@]} - 3 )) more)"
+  fi
+
+  printf '%s' "$joined"
+}
+
+write_planning_rejection_artifact() {
+  local issue="$1" feature_dir="$2"
+  shift 2
+  local -a files=("$@")
+  local artifact="$feature_dir/.planning-rejected.json"
+  local files_json created_at
+
+  mkdir -p "$feature_dir"
+  if (( ${#files[@]} == 0 )); then
+    files_json='[]'
+  else
+    files_json=$(printf '%s\n' "${files[@]}" | jq -R . | jq -s . 2>/dev/null || printf '[]')
+  fi
+  created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  jq -n \
+    --arg issue "$issue" \
+    --arg stage "planning" \
+    --arg status "awaiting_user" \
+    --arg reason "planning_modified_out_of_scope_files" \
+    --arg createdAt "$created_at" \
+    --arg recommendedAction "Review plan.md and re-approve the plan. Planning may only write feature artifacts." \
+    --argjson outOfScopeFiles "$files_json" \
+    '{issue: $issue, stage: $stage, status: $status, reason: $reason, outOfScopeFiles: $outOfScopeFiles, reverted: true, approvalMarkerRemoved: true, recommendedAction: $recommendedAction, createdAt: $createdAt}' > "$artifact"
+}
+
+notify_planning_rejection_agent() {
+  local feature_dir="$1" win="$2"
+  shift 2
+  local -a files=("$@")
+  local artifact="$feature_dir/.planning-rejected.json"
+  local slug files_summary notified tmp message
+
+  [[ -n "${SESSION:-}" && -n "$win" && -f "$artifact" ]] || return 0
+
+  notified=$(jq -r '.notifiedAt // empty' "$artifact" 2>/dev/null || true)
+  [[ -z "$notified" ]] || return 0
+
+  if command -v _pane_is_dead_or_idle >/dev/null 2>&1 && _pane_is_dead_or_idle "$SESSION:$win"; then
+    return 0
+  fi
+
+  if [[ "$(tmux list-panes -t "$SESSION:$win" -F '#{pane_dead}' 2>/dev/null | head -1)" == "1" ]]; then
+    return 0
+  fi
+
+  slug="$(basename "$feature_dir")"
+  files_summary="$(planning_rejection_files_summary "${files[@]}")"
+  message="Planning approval was rejected because planning modified out-of-scope files: $files_summary. Those changes were reverted and .plan-approved was removed. Do not edit source/config files during planning. Update only features/$slug/plan.md if needed, then wait for user approval again."
+
+  tmux send-keys -t "$SESSION:$win" "$message" C-m 2>/dev/null || return 0
+
+  tmp=$(mktemp "${artifact}.tmp.XXXXXX" 2>/dev/null) || return 0
+  jq --arg notifiedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '.notifiedAt = $notifiedAt' "$artifact" > "$tmp" 2>/dev/null \
+    && mv "$tmp" "$artifact" 2>/dev/null \
+    || rm -f "$tmp"
+}
+
+handle_planning_overreach_rejection() {
+  local issue="$1" feature_dir="$2" win="$3" current_agent="${4:-}"
+  local -a files=("${VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES[@]:-}")
+  local files_summary
+
+  files_summary="$(planning_rejection_files_summary "${files[@]}")"
+  write_planning_rejection_artifact "$issue" "$feature_dir" "${files[@]}"
+  log_warn "$issue needs attention: planning edited $files_summary. Reverted. Review plan.md and re-approve to continue."
+  write_stage_result "$feature_dir" "planning" "awaiting_user" "$current_agent" "" "Planning edited $files_summary. Reverted and awaiting re-approval"
+  notify_planning_rejection_agent "$feature_dir" "$win" "${files[@]}"
+  set_window_attention_state "$win" "needs-user"
 }
 
 # Warn if coding already created a PR before the review phase can run.
@@ -7774,9 +7872,7 @@ monitor_issue_state() {
             unset "$approval_wait_var" 2>/dev/null || true
             # Before launching coding, validate planning did not overreach.
             if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
-              log_warn "$ISSUE → Planning phase modified source code, reverted changes and blocked transition"
-              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Planning modified files outside features/, reverted and awaiting re-approval"
-              set_window_attention_state "$WIN" "needs-user"
+              handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
               active_count=$((active_count + 1))
               return 0
             fi
@@ -7936,9 +8032,7 @@ monitor_issue_state() {
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
               if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
-                log_warn "$ISSUE → Planning phase modified source code, reverted changes and blocked transition"
-                write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Planning modified files outside features/, reverted and awaiting re-approval"
-                set_window_attention_state "$WIN" "needs-user"
+                handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
                 active_count=$((active_count + 1))
                 return 0
               fi
@@ -7968,9 +8062,7 @@ monitor_issue_state() {
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
               if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
-                log_warn "$ISSUE → Planning phase modified source code, reverted changes and blocked transition"
-                write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Planning modified files outside features/, reverted and awaiting re-approval"
-                set_window_attention_state "$WIN" "needs-user"
+                handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
                 active_count=$((active_count + 1))
                 return 0
               fi

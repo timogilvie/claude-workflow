@@ -611,11 +611,13 @@ else
   fi
 
   if grep -qE '^validate_planning_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && grep -qE '^handle_planning_overreach_rejection\(\) \{' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.claude/settings.local.json) ;;' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' <<< "$MONITOR_ISSUE_BLOCK" \
-    && grep -Fq 'Planning phase modified source code, reverted changes and blocked transition' <<< "$MONITOR_ISSUE_BLOCK" \
-    && grep -Fq 'write_stage_result "$FEATURE_DIR" "planning" "awaiting_user"' <<< "$MONITOR_ISSUE_BLOCK"; then
+    && grep -Fq 'handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq '.planning-rejected.json' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq 'write_stage_result "$feature_dir" "planning" "awaiting_user"' <<< "$HEREDOC_CONTENT"; then
     pass "monitor validates planning output before coding transition"
   else
     fail "monitor is missing planning phase-boundary validation"
