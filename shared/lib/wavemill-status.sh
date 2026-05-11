@@ -11,8 +11,14 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/wavemill-common.sh"
+if ! declare -f wavemill_pick_usage_tip >/dev/null 2>&1; then
+  _wss_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || true
+  if [[ -f "${_wss_dir}/wavemill-common.sh" ]]; then
+    # shellcheck source=wavemill-common.sh
+    source "${_wss_dir}/wavemill-common.sh"
+  fi
+  unset _wss_dir
+fi
 
 PANE_MODE=""
 if [[ "${1:-}" == --pane=* ]]; then
