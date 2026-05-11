@@ -60,9 +60,6 @@ for override in foo -1 ''; do
   tip_output="$(
     WAVEMILL_TIP_INDEX="$override" wavemill_pick_usage_tip 2>"$tmp_err"
   )"
-  if [[ ! -s "$tmp_err" || -z "$tip_output" ]]; then
-    :
-  fi
   if [[ -s "$tmp_err" || -z "$tip_output" ]]; then
     invalid_ok=0
   fi
