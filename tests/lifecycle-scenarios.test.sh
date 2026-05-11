@@ -99,6 +99,10 @@ MONITOR_FUNC_FILE="$TEST_TMP/lifecycle-controller-functions.sh"
 for fn in \
   approve_plan \
   validate_planning_phase_output \
+  planning_rejection_files_summary \
+  write_planning_rejection_artifact \
+  notify_planning_rejection_agent \
+  handle_planning_overreach_rejection \
   check_stage_aborted \
   check_stage_complete \
   check_stage_awaiting_user \

@@ -244,6 +244,21 @@ ready_attention_detail() {
   head -1 "$attention_file" 2>/dev/null | tr -d '\r'
 }
 
+planning_rejection_detail() {
+  local worktree="$1" slug="$2"
+  local feature_dir="$worktree/features/$slug"
+  local artifact="$feature_dir/.planning-rejected.json"
+  local reason files
+
+  [[ -f "$artifact" ]] || return 0
+  reason=$(jq -r '.reason // empty' "$artifact" 2>/dev/null || true)
+  [[ "$reason" == "planning_modified_out_of_scope_files" ]] || return 0
+
+  files=$(jq -r '(.outOfScopeFiles // []) | join(", ")' "$artifact" 2>/dev/null || true)
+  [[ -n "$files" ]] || files="out-of-scope files"
+  printf 'Planning needs attention: edited %s; reverted. Review plan.md and re-approve.\n' "$files"
+}
+
 ready_watchdog_state_file() {
   [[ -n "$STATE_FILE" ]] || return 0
   printf '%s\n' "$(dirname "$STATE_FILE")/ready-watchdog-state.json"
@@ -520,7 +535,13 @@ is_actionable_state() {
   local worktree="${3:-}"
   local slug="${4:-}"
   local issue="${5:-}"
-  local ready_status attention_detail watchdog_classification
+  local ready_status attention_detail planning_detail watchdog_classification
+
+  planning_detail=$(planning_rejection_detail "$worktree" "$slug")
+  if [[ -n "$planning_detail" ]]; then
+    echo "actionable"
+    return
+  fi
 
   attention_detail=$(ready_attention_detail "$worktree" "$slug")
   if [[ -n "$attention_detail" ]]; then
@@ -583,7 +604,7 @@ render_section_header() {
 render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
-  local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail reported ds pane watchdog_classification watchdog_detail running_detail
+  local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail planning_detail reported ds pane watchdog_classification watchdog_detail running_detail
 
   t=$(elapsed "$worktree")
   reported=""
@@ -639,8 +660,15 @@ render_task_row() {
     planning)
       plan_status=""
       [[ -n "$worktree" && -n "$slug" ]] && plan_status=$(get_planning_display_status "$worktree" "$slug")
+      planning_detail=$(planning_rejection_detail "$worktree" "$slug")
       case "$plan_status" in
-        awaiting_approval) phase_str="${Y}⏳ awaiting${N}" ;;
+        awaiting_approval)
+          if [[ -n "$planning_detail" ]]; then
+            phase_str="${R}⚠ planning${N}"
+          else
+            phase_str="${Y}⏳ awaiting${N}"
+          fi
+          ;;
         approved)          phase_str="${G}✅ approved${N}" ;;
         rejected)          phase_str="${R}❌ rejected${N}" ;;
         *)                 phase_str="${Y}📋 planning${N}" ;;
@@ -686,7 +714,10 @@ render_task_row() {
   printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
     "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
-  if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
+  planning_detail=$(planning_rejection_detail "$worktree" "$slug")
+  if [[ -n "$planning_detail" ]]; then
+    reported="$planning_detail"
+  elif plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
     reported="Plan ready — waiting for approval"
   fi
   attention_detail=$(ready_attention_detail "$worktree" "$slug")
