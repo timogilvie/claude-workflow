@@ -26,6 +26,7 @@ run_render() {
   local pane_mode="${5:-}"
 
   (
+    export WAVEMILL_TIP_INDEX=0
     if [[ -n "$pane_mode" ]]; then
       set -- "--pane=$pane_mode" test-session "$workspace_root" "$state_file"
     else
@@ -316,10 +317,10 @@ else
   fail "queued/pending pane is missing queued monitor commands"
 fi
 
-if grep -q 'Ctrl+B <PANE>: switch task' "$OUTPUT_ONE"; then
-  pass "footer advertises pane-number switching"
+if grep -q 'Refreshes every 2s │ wavemill expand HOK-1234: build a task packet from Linear' "$OUTPUT_ONE"; then
+  pass "footer renders stable refresh prefix with selected usage tip"
 else
-  fail "footer is missing pane-number switching hint"
+  fail "footer is missing expected selected usage tip"
 fi
 
 # Test truncation of long detail strings

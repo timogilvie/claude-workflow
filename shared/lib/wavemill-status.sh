@@ -11,6 +11,15 @@
 
 set -euo pipefail
 
+if ! declare -f wavemill_pick_usage_tip >/dev/null 2>&1; then
+  _wss_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || true
+  if [[ -f "${_wss_dir}/wavemill-common.sh" ]]; then
+    # shellcheck source=wavemill-common.sh
+    source "${_wss_dir}/wavemill-common.sh"
+  fi
+  unset _wss_dir
+fi
+
 PANE_MODE=""
 if [[ "${1:-}" == --pane=* ]]; then
   PANE_MODE="${1#--pane=}"
@@ -850,7 +859,7 @@ redraw_dashboard_frame() {
 
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
-  local win agent_state classification task_data free_slots
+  local win agent_state classification task_data free_slots usage_tip
   declare -ga inbox_tasks=()
   declare -ga active_tasks=()
 
@@ -902,7 +911,8 @@ render_dashboard() {
   render_active_section
   render_project_context_suggestion
 
-  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
+  usage_tip="$(wavemill_pick_usage_tip)"
+  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ %s${N}${EL}\n" "$usage_tip" >> "$FRAME"
 }
 
 run_dashboard() {
