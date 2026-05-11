@@ -99,6 +99,48 @@ EOF
 }
 
 {
+  mapfile -t fixture < <(new_fixture "expansion-handshake-timeout-default")
+  root="${fixture[0]}"; feature_dir="${fixture[1]}"
+  timeout="$(get_expansion_handshake_timeout_seconds "$root")"
+  if [[ "$timeout" == "300" ]]; then
+    pass "expansion recovery timeout defaults to 300 seconds"
+  else
+    fail "expansion recovery timeout should default to 300 seconds"
+  fi
+  rm -rf "$root"
+}
+
+{
+  mapfile -t fixture < <(new_fixture "expansion-handshake-timeout-configured")
+  root="${fixture[0]}"; feature_dir="${fixture[1]}"
+  cat > "$root/.wavemill-config.json" <<'EOF'
+{"mill":{"expansionHandshake":{"timeoutSeconds":180}}}
+EOF
+  timeout="$(get_expansion_handshake_timeout_seconds "$root")"
+  if [[ "$timeout" == "180" ]]; then
+    pass "expansion recovery timeout honors config"
+  else
+    fail "expansion recovery timeout should honor config"
+  fi
+  rm -rf "$root"
+}
+
+{
+  mapfile -t fixture < <(new_fixture "expansion-handshake-timeout-invalid")
+  root="${fixture[0]}"; feature_dir="${fixture[1]}"
+  cat > "$root/.wavemill-config.json" <<'EOF'
+{"mill":{"expansionHandshake":{"timeoutSeconds":"slow"}}}
+EOF
+  timeout="$(get_expansion_handshake_timeout_seconds "$root")"
+  if [[ "$timeout" == "300" ]]; then
+    pass "invalid expansion recovery timeout falls back to default"
+  else
+    fail "invalid expansion recovery timeout should fall back to default"
+  fi
+  rm -rf "$root"
+}
+
+{
   mapfile -t fixture < <(new_fixture "expansion-handshake-task-packet")
   root="${fixture[0]}"; feature_dir="${fixture[1]}"
   cat > "$feature_dir/task-packet.md" <<'EOF'

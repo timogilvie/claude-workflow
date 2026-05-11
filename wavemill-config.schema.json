@@ -123,6 +123,12 @@
                             ],
                             "default": "recover",
                             "description": "recover (default): attempt one missing-artifact recovery, then fall back to the bootstrap route if recovery fails. block: halt transition. warn: proceed with a warning log line and skip recovery."
+                        },
+                        "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 300,
+                            "description": "Timeout in seconds for missing expansion artifact recovery. This runs the LLM-backed issue expander and should be longer than short GitHub/Linear API timeouts."
                         }
                     },
                     "additionalProperties": false
