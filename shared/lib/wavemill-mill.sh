@@ -5935,13 +5935,31 @@ invoke_first_wave_helper() {
   printf '%s\n' "$input_json" | _with_timeout 10 npx tsx "$TOOLS_DIR/select-wave.ts" 2>/dev/null
 }
 
+BACKLOG_LAST_TIER=""
+BACKLOG_DEFAULT_AVAILABLE_CAP=12
+
 render_grouped_task_list() {
-  local queue_plan="$1" available="$2"
+  local queue_plan="$1" available="$2" budget="${3:-999}" expanded="${4:-false}"
   local counter=0 output="" select_lines="" section_body="" line rec group_index task_id blockers triage_id task_key
+  local backlog_cap="${BACKLOG_DEFAULT_AVAILABLE_CAP:-12}"
+  local tier=0 hidden_count=0 config_max="" indicator_label="expand"
+  local -a available_entries=() queued_entries=()
+  local available_section_lines=0 queued_section_lines=0 total_lines=0 max_queued=0 available_limit=0
   declare -A id_to_record=()
   declare -A rendered_ids=()
 
   jq -e . >/dev/null 2>&1 <<<"$queue_plan" || return 1
+
+  if [[ -n "${REPO_DIR:-}" ]] && declare -F wavemill_load_config >/dev/null 2>&1; then
+    backlog_cap="$(wavemill_load_config "$REPO_DIR" | jq -r '.backlog.defaultAvailableNowCap // 12' 2>/dev/null || printf '12')"
+    config_max="$(wavemill_load_config "$REPO_DIR" | jq -r '.backlog.maxLines // empty' 2>/dev/null || true)"
+  fi
+  if ! [[ "$backlog_cap" =~ ^[0-9]+$ ]] || (( backlog_cap < 1 )); then
+    backlog_cap=12
+  fi
+  if ! [[ "$budget" =~ ^[0-9]+$ ]]; then
+    budget=999
+  fi
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
@@ -5961,15 +5979,9 @@ render_grouped_task_list() {
     rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
-    counter=$((counter + 1))
-    section_body+="$(printf '  %s. %s - %s' "$counter" "$task_id" "$title")"$'\n'
-    select_lines+="${rec}"$'\n'
+    available_entries+=("$rec")
     rendered_ids["$task_key"]=1
   done < <(jq -r '.availableNow[]?' <<<"$queue_plan" 2>/dev/null)
-  if [[ -n "$section_body" ]]; then
-    output+="Available Now - Parallel Wave 1"$'\n'
-    output+="${section_body}"
-  fi
 
   section_body=""
   while IFS=$'\t' read -r task_id blockers; do
@@ -5979,15 +5991,78 @@ render_grouped_task_list() {
     rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
-    counter=$((counter + 1))
-    section_body+="$(printf '  %s. %s - %s (blocked by: %s)' "$counter" "$task_id" "$title" "$blockers")"$'\n'
-    select_lines+="${rec}"$'\n'
+    queued_entries+=("${rec}"$'\t'"$blockers")
     rendered_ids["$task_key"]=1
   done < <(jq -r '.queuedAfterDependencies[]? | [.taskId, (.ancestors | join(", "))] | @tsv' <<<"$queue_plan" 2>/dev/null)
-  if [[ -n "$section_body" ]]; then
+
+  available_section_lines=0
+  if (( ${#available_entries[@]} > 0 )); then
+    available_section_lines=$((1 + ${#available_entries[@]}))
+  fi
+  queued_section_lines=0
+  if (( ${#queued_entries[@]} > 0 )); then
+    queued_section_lines=$((2 + ${#queued_entries[@]}))
+  fi
+  total_lines=$((available_section_lines + queued_section_lines))
+
+  if [[ "$expanded" != "true" ]] && (( total_lines > budget )); then
+    if (( ${#queued_entries[@]} > 0 )); then
+      max_queued=$((budget - available_section_lines - 2))
+      if (( max_queued > 0 )); then
+        tier=1
+        if (( max_queued < ${#queued_entries[@]} )); then
+          hidden_count=$((hidden_count + ${#queued_entries[@]} - max_queued))
+          queued_entries=("${queued_entries[@]:0:max_queued}")
+        else
+          tier=0
+        fi
+      else
+        hidden_count=$((hidden_count + ${#queued_entries[@]}))
+        queued_entries=()
+        tier=2
+      fi
+    fi
+
+    if (( available_section_lines > budget )); then
+      tier=3
+      hidden_count=$((hidden_count + ${#queued_entries[@]}))
+      queued_entries=()
+      local min_visible=$((budget - 1))
+      (( min_visible < 10 )) && min_visible=10
+      available_limit=$min_visible
+      if (( backlog_cap < available_limit )); then
+        available_limit=$backlog_cap
+      fi
+      if (( available_limit > budget - 1 )); then
+        available_limit=$((budget - 1))
+      fi
+      if (( ${#available_entries[@]} > available_limit )); then
+        hidden_count=$((hidden_count + ${#available_entries[@]} - available_limit))
+        available_entries=("${available_entries[@]:0:available_limit}")
+      fi
+    fi
+  fi
+
+  if (( ${#available_entries[@]} > 0 )); then
+    output+="Available Now - Parallel Wave 1"$'\n'
+    for rec in "${available_entries[@]}"; do
+      IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
+      counter=$((counter + 1))
+      output+="$(printf '  %s. %s - %s' "$counter" "$task_id" "$title")"$'\n'
+      select_lines+="${rec}"$'\n'
+    done
+  fi
+
+  if (( ${#queued_entries[@]} > 0 )); then
     [[ -n "$output" ]] && output+=$'\n'
     output+="Queued After Dependencies"$'\n'
-    output+="${section_body}"
+    for line in "${queued_entries[@]}"; do
+      IFS=$'\t' read -r rec blockers <<<"$line"
+      IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
+      counter=$((counter + 1))
+      output+="$(printf '  %s. %s - %s (blocked by: %s)' "$counter" "$task_id" "$title" "$blockers")"$'\n'
+      select_lines+="${rec}"$'\n'
+    done
   fi
 
   section_body=""
@@ -6038,7 +6113,23 @@ render_grouped_task_list() {
     output+="${section_body}"
   fi
 
+  if [[ "$expanded" != "true" ]] && (( tier > 0 )) && (( hidden_count > 0 )); then
+    output+="$(printf '... %s tasks hidden (m to expand)' "$hidden_count")"$'\n'
+  elif [[ "$expanded" == "true" ]] && (( total_lines > budget )); then
+    output+="(m to collapse)"$'\n'
+    indicator_label="collapse"
+  fi
+
   (( counter > 0 )) || return 1
+
+  if [[ "$tier" != "${BACKLOG_LAST_TIER:-}" ]] && declare -F log >/dev/null 2>&1; then
+    local backlog_annotation=" (backlog.maxLines=${config_max:-auto})"
+    if declare -F wavemill_config_annotation >/dev/null 2>&1; then
+      backlog_annotation="$(wavemill_config_annotation "backlog.maxLines" "${config_max:-auto}")"
+    fi
+    log "status" "[backlog] tier=$tier budget=$budget${backlog_annotation}"
+    BACKLOG_LAST_TIER="$tier"
+  fi
 
   GROUPED_SELECT_FROM="${select_lines%$'\n'}"
   GROUPED_DISPLAY="${output%$'\n'}"
@@ -8904,7 +8995,7 @@ while :; do
 
         # Only re-render the prompt when the display would actually change
         queue_fp="${QUEUE_PLAN_CACHE:0:50}"
-        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}"
+        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}|${_backlog_budget:-}|${_backlog_expanded:-}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
           SELECT_SHOW_ALL=false
 
@@ -8916,12 +9007,15 @@ while :; do
           FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_file"
           GROUPED_DISPLAY=""
           GROUPED_SELECT_FROM=""
+          _backlog_default_expanded="$(wavemill_load_config "$REPO_DIR" | jq -r '.backlog.defaultExpanded // false' 2>/dev/null || echo "false")"
+          _backlog_expanded="$(jq -r --arg def "$_backlog_default_expanded" '.backlogExpanded // $def' "$STATE_FILE" 2>/dev/null || echo "$_backlog_default_expanded")"
+          _backlog_budget="$(wavemill_backlog_compute_budget "$SESSION" "$WAVEMILL_WINDOW_MILL.0" "$REPO_DIR/.wavemill-config.json" 2>/dev/null || echo 20)"
           if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
             if [[ -n "$queue_plan_json" ]]; then
               QUEUE_PLAN_CACHE="$queue_plan_json"
               LAST_QUEUE_PLAN_FETCH=$(date +%s)
             fi
-            render_grouped_task_list "$queue_plan_json" "$available"
+            render_grouped_task_list "$queue_plan_json" "$available" "$_backlog_budget" "$_backlog_expanded"
             if [[ -n "$GROUPED_DISPLAY" ]]; then
               select_from="$GROUPED_SELECT_FROM"
               USING_GROUPED_VIEW=true
@@ -8935,7 +9029,7 @@ while :; do
             fi
           fi
           queue_fp="${queue_plan_json:0:50}"
-          display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}"
+          display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}|${_backlog_budget}|${_backlog_expanded}"
           rm -f "$queue_plan_diag_file"
           FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_previous"
 
@@ -9008,7 +9102,9 @@ while :; do
           fi
         elif [[ "$REPLY" =~ ^[mM]$ ]]; then
           if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
-            :
+            state_mutate "$STATE_FILE" \
+              '.backlogExpanded = (if (.backlogExpanded // false) then false else true end) | .updated = (now | todate)'
+            LAST_DISPLAY=""
           else
             clear_task_list_display
             all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)

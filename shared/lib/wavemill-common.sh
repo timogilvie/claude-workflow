@@ -291,6 +291,45 @@ wavemill_config_annotation() {
   printf ' (%s=%s)' "$path" "$value"
 }
 
+BACKLOG_BUDGET_WARNED=false
+
+wavemill_backlog_compute_budget() {
+  local session="${1:-}"
+  local window_pane="${2:-}"
+  local config_file="${3:-}"
+  local budget=""
+
+  if [[ -n "$config_file" && -f "$config_file" ]]; then
+    budget="$(jq -r '.backlog.maxLines // empty' "$config_file" 2>/dev/null || true)"
+  elif [[ -n "${REPO_DIR:-}" ]]; then
+    budget="$(wavemill_load_config "$REPO_DIR" | jq -r '.backlog.maxLines // empty' 2>/dev/null || true)"
+  fi
+
+  if [[ "$budget" =~ ^[0-9]+$ ]] && (( budget >= 10 && budget <= 200 )); then
+    printf '%s\n' "$budget"
+    return 0
+  fi
+
+  local pane_height=""
+  if [[ -n "$session" && -n "$window_pane" ]]; then
+    pane_height="$(tmux display-message -t "$session:$window_pane" -p "#{pane_height}" 2>/dev/null || true)"
+  fi
+
+  if [[ "$pane_height" =~ ^[0-9]+$ ]]; then
+    budget=$((pane_height - 4))
+    (( budget < 10 )) && budget=10
+    printf '%s\n' "$budget"
+    return 0
+  fi
+
+  if [[ "${BACKLOG_BUDGET_WARNED:-false}" != "true" ]]; then
+    log_warn "Backlog pane height unavailable; using fallback budget 20"
+    BACKLOG_BUDGET_WARNED=true
+  fi
+  printf '20\n'
+  return 0
+}
+
 ready_debug_log_file() {
   local session="${SESSION:-${WAVEMILL_SESSION:-wavemill}}"
   local sanitized="${session//[^[:alnum:]._-]/-}"
