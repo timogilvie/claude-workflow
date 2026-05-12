@@ -1093,6 +1093,30 @@ test_coding_blocked_completion_malformed_json_falls_back() {
   check_contains "malformed blocked completion: generic log emitted" "$(kv_value "$tick" log_output)" "needs attention: coding done; verification blocked"
 }
 
+test_coding_blocked_completion_dedupes_when_stat_unavailable() {
+  local slug="coding-blocked-completion-no-stat"
+  local issue="HOK-1642-NOSTAT"
+  local repo tick1 tick2
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<'EOF'
+{
+  "summary": "coding done; Docker unavailable"
+}
+EOF
+
+  # Simulate stat unavailable by overriding portable_file_mtime_epoch to return empty
+  local stub='CURRENT_PHASE="coding"; portable_file_mtime_epoch() { return 1; }'
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" "$stub")"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" "$stub")"
+
+  check_contains "no-stat dedupe: first poll logs attention" "$(kv_value "$tick1" log_output)" "needs attention: coding done; Docker unavailable"
+  check_eq "no-stat dedupe: second poll stays active" "1" "$(kv_value "$tick2" active_count)"
+  check_eq "no-stat dedupe: second poll keeps needs-user" "needs-user" "$(kv_value "$tick2" attention)"
+  check_not_contains "no-stat dedupe: second poll emits no duplicate log" "$(kv_value "$tick2" log_output)" "needs attention:"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -1115,6 +1139,7 @@ test_coding_blocked_completion_dedupes_same_artifact
 test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
 test_coding_blocked_completion_malformed_json_falls_back
+test_coding_blocked_completion_dedupes_when_stat_unavailable
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then

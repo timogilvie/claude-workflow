@@ -3290,24 +3290,26 @@ blocked_completion_announce_marker() {
 
 blocked_completion_should_announce() {
   local feature_dir="$1" artifact_mtime="${2:-}"
-  local marker last_announced
+  local marker last_announced effective_mtime
 
-  [[ -n "$artifact_mtime" ]] || return 0
+  # Use UNKNOWN sentinel when stat is unavailable so dedupe still works
+  effective_mtime="${artifact_mtime:-UNKNOWN}"
   marker="$(blocked_completion_announce_marker "$feature_dir")"
   [[ -f "$marker" ]] || return 0
 
   last_announced="$(head -1 "$marker" 2>/dev/null | tr -d '\r')"
-  [[ "$last_announced" != "$artifact_mtime" ]]
+  [[ "$last_announced" != "$effective_mtime" ]]
 }
 
 mark_blocked_completion_announced() {
   local feature_dir="$1" artifact_mtime="${2:-}"
-  local marker tmp_file
+  local marker tmp_file effective_mtime
 
-  [[ -n "$artifact_mtime" ]] || return 0
+  # Use UNKNOWN sentinel when stat is unavailable so dedupe still works
+  effective_mtime="${artifact_mtime:-UNKNOWN}"
   marker="$(blocked_completion_announce_marker "$feature_dir")"
   tmp_file="$(mktemp "$feature_dir/.blocked-completion-announced.tmp.XXXXXX" 2>/dev/null)" || return 0
-  printf '%s\n' "$artifact_mtime" > "$tmp_file" && mv "$tmp_file" "$marker" 2>/dev/null || rm -f "$tmp_file"
+  printf '%s\n' "$effective_mtime" > "$tmp_file" && mv "$tmp_file" "$marker" 2>/dev/null || rm -f "$tmp_file"
 }
 
 emit_blocked_completion_attention() {
