@@ -9,6 +9,16 @@ import {
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
 export type DescriptorModelStage = 'planner' | 'coder' | 'reviewer';
+export type ToolSupport = 'none' | 'basic' | 'full';
+export type LatencyTier = 'fast' | 'standard' | 'slow';
+export type ReasoningTier = 'basic' | 'standard' | 'advanced';
+
+export interface MultimodalSupport {
+  text: boolean;
+  image: boolean;
+  audio?: boolean;
+  video?: boolean;
+}
 
 export interface ModelCapabilities {
   vendor: string;
@@ -23,7 +33,13 @@ export interface ModelCapabilities {
     cacheReadCostPerMTok?: number;
   };
   defaultLadderEligible?: boolean;
-  contextWindowTokens?: number;
+  contextWindowTokens: number;
+  toolSupport: ToolSupport;
+  multimodal: MultimodalSupport;
+  latencyTier: LatencyTier;
+  reasoningTier: ReasoningTier;
+  costPerMillionInputTokensUsd: number;
+  costPerMillionOutputTokensUsd: number;
   agent?: string;
 }
 
@@ -65,6 +81,12 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     pricing: capabilities.pricing ? { ...capabilities.pricing } : undefined,
     defaultLadderEligible: capabilities.defaultLadderEligible,
     contextWindowTokens: capabilities.contextWindowTokens,
+    toolSupport: capabilities.toolSupport,
+    multimodal: { ...capabilities.multimodal },
+    latencyTier: capabilities.latencyTier,
+    reasoningTier: capabilities.reasoningTier,
+    costPerMillionInputTokensUsd: capabilities.costPerMillionInputTokensUsd,
+    costPerMillionOutputTokensUsd: capabilities.costPerMillionOutputTokensUsd,
     agent: capabilities.agent,
   };
 }
@@ -111,7 +133,13 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
     },
     pricing: override?.pricing ? { ...override.pricing } : undefined,
     defaultLadderEligible: override?.defaultLadderEligible ?? true,
-    contextWindowTokens: override?.contextWindowTokens,
+    contextWindowTokens: override?.contextWindowTokens ?? 128_000,
+    toolSupport: override?.toolSupport ?? 'full',
+    multimodal: override?.multimodal ? { ...override.multimodal } : { text: true, image: false },
+    latencyTier: override?.latencyTier ?? 'standard',
+    reasoningTier: override?.reasoningTier ?? 'standard',
+    costPerMillionInputTokensUsd: override?.costPerMillionInputTokensUsd ?? 0,
+    costPerMillionOutputTokensUsd: override?.costPerMillionOutputTokensUsd ?? 0,
     agent: override?.agent,
   };
 }
@@ -134,6 +162,12 @@ function mergeCapabilities(
     pricing: override.pricing ? { ...override.pricing } : seed.pricing ? { ...seed.pricing } : undefined,
     defaultLadderEligible: override.defaultLadderEligible ?? seed.defaultLadderEligible ?? true,
     contextWindowTokens: override.contextWindowTokens ?? seed.contextWindowTokens,
+    toolSupport: override.toolSupport ?? seed.toolSupport,
+    multimodal: override.multimodal ? { ...override.multimodal } : { ...seed.multimodal },
+    latencyTier: override.latencyTier ?? seed.latencyTier,
+    reasoningTier: override.reasoningTier ?? seed.reasoningTier,
+    costPerMillionInputTokensUsd: override.costPerMillionInputTokensUsd ?? seed.costPerMillionInputTokensUsd,
+    costPerMillionOutputTokensUsd: override.costPerMillionOutputTokensUsd ?? seed.costPerMillionOutputTokensUsd,
     agent: override.agent ?? seed.agent,
   };
 }
@@ -438,6 +472,19 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['long-horizon reasoning', 'code review', 'architecture'],
       weaknesses: ['higher cost', 'slower'],
       qualityScores: scores(60, 95, 85, 95, 60),
+      pricing: {
+        inputCostPerMTok: 5,
+        outputCostPerMTok: 25,
+        cacheWriteCostPerMTok: 6.25,
+        cacheReadCostPerMTok: 0.5,
+      },
+      contextWindowTokens: 200_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 5,
+      costPerMillionOutputTokensUsd: 25,
     },
     'claude-opus-4-6': {
       vendor: 'anthropic',
@@ -445,6 +492,19 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['long-horizon reasoning', 'code review', 'architecture'],
       weaknesses: ['higher cost', 'slower'],
       qualityScores: scores(58, 92, 82, 92, 58),
+      pricing: {
+        inputCostPerMTok: 5,
+        outputCostPerMTok: 25,
+        cacheWriteCostPerMTok: 6.25,
+        cacheReadCostPerMTok: 0.5,
+      },
+      contextWindowTokens: 200_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 5,
+      costPerMillionOutputTokensUsd: 25,
     },
     'claude-sonnet-4-6': {
       vendor: 'anthropic',
@@ -452,6 +512,19 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['code generation', 'balanced quality/cost', 'instruction following'],
       weaknesses: ['less deep reasoning'],
       qualityScores: scores(75, 82, 90, 82, 78),
+      pricing: {
+        inputCostPerMTok: 3,
+        outputCostPerMTok: 15,
+        cacheWriteCostPerMTok: 3.75,
+        cacheReadCostPerMTok: 0.3,
+      },
+      contextWindowTokens: 200_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 3,
+      costPerMillionOutputTokensUsd: 15,
     },
     'claude-sonnet-4-5-20250929': {
       vendor: 'anthropic',
@@ -459,6 +532,19 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['code generation', 'balanced quality/cost', 'instruction following'],
       weaknesses: ['less deep reasoning'],
       qualityScores: scores(72, 78, 86, 78, 74),
+      pricing: {
+        inputCostPerMTok: 3,
+        outputCostPerMTok: 15,
+        cacheWriteCostPerMTok: 3.75,
+        cacheReadCostPerMTok: 0.3,
+      },
+      contextWindowTokens: 200_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 3,
+      costPerMillionOutputTokensUsd: 15,
     },
     'claude-haiku-4-5-20251001': {
       vendor: 'anthropic',
@@ -466,6 +552,19 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['speed', 'low cost', 'classification'],
       weaknesses: ['less depth on complex reasoning'],
       qualityScores: scores(88, 55, 60, 55, 92),
+      pricing: {
+        inputCostPerMTok: 0.8,
+        outputCostPerMTok: 4,
+        cacheWriteCostPerMTok: 1,
+        cacheReadCostPerMTok: 0.08,
+      },
+      contextWindowTokens: 200_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'fast',
+      reasoningTier: 'basic',
+      costPerMillionInputTokensUsd: 0.8,
+      costPerMillionOutputTokensUsd: 4,
     },
     'gpt-5.5': {
       vendor: 'openai',
@@ -473,6 +572,17 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['frontier reasoning', 'code generation', 'architecture'],
       weaknesses: ['higher cost'],
       qualityScores: scores(62, 96, 92, 94, 62),
+      pricing: {
+        inputCostPerMTok: 5,
+        outputCostPerMTok: 30,
+      },
+      contextWindowTokens: 400_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 5,
+      costPerMillionOutputTokensUsd: 30,
     },
     'gpt-5.4': {
       vendor: 'openai',
@@ -480,6 +590,18 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['frontier reasoning', 'code generation', 'architecture'],
       weaknesses: ['higher cost'],
       qualityScores: scores(60, 94, 90, 92, 60),
+      pricing: {
+        inputCostPerMTok: 2.5,
+        outputCostPerMTok: 15,
+        cacheReadCostPerMTok: 0.25,
+      },
+      contextWindowTokens: 256_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 2.5,
+      costPerMillionOutputTokensUsd: 15,
     },
     'deepseek-v4-pro': {
       vendor: 'deepseek',
@@ -495,6 +617,12 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       },
       defaultLadderEligible: false,
       contextWindowTokens: 1_000_000,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 0.435,
+      costPerMillionOutputTokensUsd: 0.87,
       agent: 'claude',
     },
     'deepseek-v4-pro[1m]': {
@@ -511,6 +639,12 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       },
       defaultLadderEligible: false,
       contextWindowTokens: 1_000_000,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 0.435,
+      costPerMillionOutputTokensUsd: 0.87,
       agent: 'claude',
     },
     'deepseek-v4-flash': {
@@ -527,6 +661,12 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       },
       defaultLadderEligible: false,
       contextWindowTokens: 1_000_000,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'fast',
+      reasoningTier: 'basic',
+      costPerMillionInputTokensUsd: 0.14,
+      costPerMillionOutputTokensUsd: 0.28,
       agent: 'claude',
     },
     'deepseek-chat': {
@@ -535,6 +675,20 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['compatibility alias for existing DeepSeek integrations'],
       weaknesses: ['compatibility alias', 'future deprecation risk'],
       qualityScores: scores(46, 70, 76, 68, 40),
+      pricing: {
+        inputCostPerMTok: 0.435,
+        outputCostPerMTok: 0.87,
+        cacheWriteCostPerMTok: 0.435,
+        cacheReadCostPerMTok: 0.003625,
+      },
+      defaultLadderEligible: false,
+      contextWindowTokens: 1_000_000,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'standard',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 0.435,
+      costPerMillionOutputTokensUsd: 0.87,
       agent: 'claude',
     },
     'deepseek-reasoner': {
@@ -543,6 +697,20 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['reasoning-oriented compatibility alias'],
       weaknesses: ['compatibility alias', 'future deprecation risk'],
       qualityScores: scores(44, 78, 74, 70, 36),
+      pricing: {
+        inputCostPerMTok: 0.435,
+        outputCostPerMTok: 0.87,
+        cacheWriteCostPerMTok: 0.435,
+        cacheReadCostPerMTok: 0.003625,
+      },
+      defaultLadderEligible: false,
+      contextWindowTokens: 1_000_000,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 0.435,
+      costPerMillionOutputTokensUsd: 0.87,
       agent: 'claude',
     },
   },

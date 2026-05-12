@@ -19,6 +19,19 @@ Wavemill model support is deliberately explicit. When adding a new model, update
 
 For frontier models, use `class: "frontier"` in the registry and include the model in the planning, coding, and review ladders. Prefer putting same-vendor successors next to the previous model so quota fallback can substitute within the same class cleanly.
 
+## Registry Metadata
+
+Every canonical entry in `DEFAULT_MODEL_REGISTRY` must include:
+
+- `contextWindowTokens`
+- `toolSupport` as one of `none`, `basic`, or `full`
+- `multimodal` with `text` and `image`, plus optional `audio` and `video`
+- `latencyTier` as one of `fast`, `standard`, or `slow`
+- `reasoningTier` as one of `basic`, `standard`, or `advanced`
+- `costPerMillionInputTokensUsd` and `costPerMillionOutputTokensUsd`
+
+Workspace `modelRegistry.models.<id>` overrides may provide any subset of those fields. Canonical registry entries must provide all of them.
+
 ## Family Aliases
 
 Family aliases are stable developer-facing names that parse into `ModelSelector` values in `shared/lib/model-registry.ts`. `parseModelSelector` only validates selector syntax and shape; it does not resolve aliases against the active registry.
