@@ -2410,7 +2410,7 @@ EOF
     fail "mill session setup is missing the next done keybinding"
   fi
 
-  if grep -q '^declare -ag WAVEMILL_USAGE_TIPS=' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+  if grep -q '^declare -a WAVEMILL_USAGE_TIPS=' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
     pass "wavemill-common.sh defines shared usage tip array"
   else
     fail "wavemill-common.sh is missing shared usage tip array"

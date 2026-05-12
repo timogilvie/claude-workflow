@@ -8,7 +8,7 @@ WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
 
 # Dashboard footer tips should stay short enough to fit on one line with the
 # stable refresh prefix.
-declare -ag WAVEMILL_USAGE_TIPS=(
+declare -a WAVEMILL_USAGE_TIPS=(
   "wavemill expand HOK-1234: build a task packet from Linear"
   "wavemill plan: split large work into scoped issues"
   "wavemill eval: inspect workflow results and export data"
