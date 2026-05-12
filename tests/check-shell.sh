@@ -34,6 +34,7 @@ for f in \
   "$REPO_DIR"/tests/project-context-suggestion.test.sh \
   "$REPO_DIR"/tests/wavemill-usage-tips.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
+  "$REPO_DIR"/tests/wavemill-mill-advance.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-budget.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
@@ -240,6 +241,7 @@ else
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
       | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling|tostring)$' \
       | grep -vE '^(bad|internal|marking|rate|reduce|service|timed|too|using|wavemill|waiting)$' \
+      | grep -vE '^(advance|review)$' \
       | grep -vE '^(a|already|available|blocked_by_count|break|coding|cp|debug|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
 
     # Check which called names look like they could be custom functions
@@ -2880,6 +2882,18 @@ if grep -qE '^render_monitor_command_queue_section\(\) \{' "$STATUS_SCRIPT" 2>/d
 else
   fail "wavemill-status.sh is missing render_monitor_command_queue_section"
 fi
+
+echo ""
+echo "=== Advance Command ==="
+
+advance_command_output="$(bash "$REPO_DIR/tests/wavemill-mill-advance.test.sh" 2>&1)" || advance_command_status=$?
+advance_command_status="${advance_command_status:-0}"
+if [[ "$advance_command_status" -eq 0 ]]; then
+  pass "advance command lifecycle"
+else
+  fail "advance command lifecycle: $advance_command_output"
+fi
+unset advance_command_status
 
 # ============================================================================
 # RESULTS
