@@ -166,6 +166,15 @@ test('valid config passes validation', () => {
             },
             defaultLadderEligible: false,
             contextWindowTokens: 1000000,
+            toolSupport: 'basic',
+            multimodal: {
+              text: true,
+              image: false,
+            },
+            latencyTier: 'standard',
+            reasoningTier: 'advanced',
+            costPerMillionInputTokensUsd: 0.435,
+            costPerMillionOutputTokensUsd: 0.87,
             agent: 'claude',
           },
         },
@@ -226,6 +235,12 @@ test('valid config passes validation', () => {
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.pricing?.inputCostPerMTok, 0.435);
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.defaultLadderEligible, false);
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.contextWindowTokens, 1000000);
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.toolSupport, 'basic');
+    assert.deepEqual(config.modelRegistry?.models?.['deepseek-v4-pro']?.multimodal, { text: true, image: false });
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.latencyTier, 'standard');
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.reasoningTier, 'advanced');
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.costPerMillionInputTokensUsd, 0.435);
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.costPerMillionOutputTokensUsd, 0.87);
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.agent, 'claude');
     assert.deepEqual(config.modelRegistry?.ladders?.review, ['claude-opus-4-7', 'claude-sonnet-4-6']);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
@@ -415,6 +430,113 @@ test('invalid model registry shape throws validation error', () => {
       assert.throws(() => {
         loadWavemillConfig(tmp);
       }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('minimal model registry override remains valid', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            strengths: ['speed', 'triage'],
+          },
+        },
+      },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.deepEqual(config.modelRegistry?.models?.['claude-sonnet-4-6'], {
+      strengths: ['speed', 'triage'],
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid model registry capability enum fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            latencyTier: 'instant',
+          },
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /latencyTier|validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid model registry multimodal shape fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            multimodal: 'image',
+          },
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /multimodal|validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid model registry negative normalized cost fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            costPerMillionInputTokensUsd: -1,
+          },
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /costPerMillionInputTokensUsd|validation failed/);
     } else {
       assert.doesNotThrow(() => {
         loadWavemillConfig(tmp);
@@ -763,6 +885,11 @@ test('getModelRegistryConfig returns configured overrides', () => {
         models: {
           'claude-haiku-4-5-20251001': {
             strengths: ['speed', 'triage'],
+            toolSupport: 'full',
+            multimodal: {
+              text: true,
+              image: true,
+            },
           },
         },
         ladders: {
@@ -775,6 +902,11 @@ test('getModelRegistryConfig returns configured overrides', () => {
       models: {
         'claude-haiku-4-5-20251001': {
           strengths: ['speed', 'triage'],
+          toolSupport: 'full',
+          multimodal: {
+            text: true,
+            image: true,
+          },
         },
       },
       ladders: {
