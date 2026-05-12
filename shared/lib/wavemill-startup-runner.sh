@@ -224,23 +224,47 @@ linear_set_state() {
   npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1
 }
 
+linear_enqueue_retry() {
+  local state="$1"
+  local issues_csv="$2"
+  local category="${3:-unknown}"
+  local http="${4:-none}"
+  local message="${5:-Queued from startup batch retry path}"
+  [[ "$DRY_RUN" == "true" ]] && return 0
+  [[ -z "$issues_csv" ]] && return 0
+  npx tsx "$TOOLS_DIR/linear-retry-drain.ts" enqueue \
+    --state "$state" \
+    --issues "$issues_csv" \
+    --category "$category" \
+    --http "$http" \
+    --message "$message" >/dev/null 2>&1 || true
+}
+
 linear_batch_set_state() {
   local state="$1"
   shift || true
   local -a issues=("$@")
-  local output exit_code=0
+  local output exit_code=0 stderr_tmp stderr_output retryable_issues_csv retry_category retry_http retry_message
   [[ "$DRY_RUN" == "true" ]] && return 0
   [[ "${#issues[@]}" -eq 0 ]] && return 0
 
-  output="$(npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" 2>/dev/null)" || exit_code=$?
+  stderr_tmp="$(mktemp -t wavemill-linear-batch-stderr.XXXXXX)"
+  output="$(npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" 2>"$stderr_tmp")" || exit_code=$?
+  stderr_output="$(cat "$stderr_tmp" 2>/dev/null || true)"
 
   if jq -e '.failed | length > 0' >/dev/null 2>&1 <<<"$output"; then
     while IFS= read -r failure; do
       startup_log "WARN: Linear state update to '$state' failed for $failure"
-    done < <(jq -r '.failed[] | "\(.issueId): \(.error)"' <<<"$output")
+    done < <(jq -r '.failed[] | "\(.issueId): \(.error) [category=\(.category // "unknown"), http=\((.httpStatus // "none") | tostring), retryable=\(.isRetryable // false)]"' <<<"$output")
+    retryable_issues_csv="$(jq -r '[.failed[] | select(.isRetryable == true) | .issueId] | unique | join(",")' <<<"$output")"
+    retry_category="$(jq -r '([.failed[] | select(.isRetryable == true) | .category] | first) // "unknown"' <<<"$output")"
+    retry_http="$(jq -r '([.failed[] | select(.isRetryable == true) | .httpStatus] | map(select(. != null)) | first // "none") | tostring' <<<"$output")"
+    retry_message="$(jq -r '([.failed[] | select(.isRetryable == true) | .error] | first) // "Queued from startup batch retry path"' <<<"$output")"
+    linear_enqueue_retry "$state" "$retryable_issues_csv" "$retry_category" "$retry_http" "$retry_message"
   elif [[ "$exit_code" -ne 0 ]]; then
-    startup_log "WARN: Batch Linear state update to '$state' failed for ${#issues[@]} issue(s)"
+    startup_log "WARN: Batch Linear state update to '$state' failed for ${#issues[@]} issue(s) [category=unknown, http=none, retryable=false, details=${stderr_output:-none}]"
   fi
+  rm -f "$stderr_tmp"
   return 0
 }
 
