@@ -6048,13 +6048,16 @@ BACKLOG_DEFAULT_AVAILABLE_CAP=12
 
 render_grouped_task_list() {
   local queue_plan="$1" available="$2" budget="${3:-999}" expanded="${4:-false}"
+  local deps_expanded="${5:-false}" active_issue_ids="${6:-}"
   local counter=0 output="" select_lines="" section_body="" line rec group_index task_id blockers triage_id task_key
   local backlog_cap="${BACKLOG_DEFAULT_AVAILABLE_CAP:-12}"
   local tier=0 hidden_count=0 config_max="" indicator_label="expand"
-  local -a available_entries=() queued_entries=()
-  local available_section_lines=0 queued_section_lines=0 total_lines=0 max_queued=0 available_limit=0
+  local deps_hidden_count=0 available_limit=0 queued_line_budget=0 max_queued_entries=0
+  local -a available_entries=() queued_entries=() on_deck_queued=() off_deck_queued=()
+  local available_section_lines=0 queued_section_lines=0 total_lines=0
   declare -A id_to_record=()
   declare -A rendered_ids=()
+  declare -A on_deck_set=()
 
   jq -e . >/dev/null 2>&1 <<<"$queue_plan" || return 1
 
@@ -6103,24 +6106,63 @@ render_grouped_task_list() {
     rendered_ids["$task_key"]=1
   done < <(jq -r '.queuedAfterDependencies[]? | [.taskId, (.ancestors | join(", "))] | @tsv' <<<"$queue_plan" 2>/dev/null)
 
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    local avail_id="${line%%|*}"
+    [[ -n "$avail_id" ]] && on_deck_set["$(printf '%s' "$avail_id" | tr '[:lower:]' '[:upper:]')"]=1
+  done <<<"$available"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    on_deck_set["$(printf '%s' "$line" | tr '[:lower:]' '[:upper:]')"]=1
+  done <<<"$active_issue_ids"
+
+  for line in "${queued_entries[@]}"; do
+    IFS=$'\t' read -r rec blockers <<<"$line"
+    local is_on_deck=false blocker bkey
+    if [[ -z "$blockers" ]]; then
+      is_on_deck=true
+    else
+      while IFS= read -r blocker; do
+        [[ -n "$blocker" ]] || continue
+        bkey="$(printf '%s' "${blocker// /}" | tr '[:lower:]' '[:upper:]')"
+        if [[ -n "${on_deck_set[$bkey]:-}" ]]; then
+          is_on_deck=true
+          break
+        fi
+      done < <(printf '%s\n' "$blockers" | tr ',' '\n')
+    fi
+    if [[ "$is_on_deck" == "true" ]]; then
+      on_deck_queued+=("$line")
+    else
+      off_deck_queued+=("$line")
+    fi
+  done
+  deps_hidden_count=${#off_deck_queued[@]}
+  if [[ "$deps_expanded" == "true" ]]; then
+    queued_entries=("${on_deck_queued[@]+"${on_deck_queued[@]}"}" "${off_deck_queued[@]+"${off_deck_queued[@]}"}")
+  else
+    queued_entries=("${on_deck_queued[@]+"${on_deck_queued[@]}"}")
+  fi
+
   available_section_lines=0
   if (( ${#available_entries[@]} > 0 )); then
     available_section_lines=$((1 + ${#available_entries[@]}))
   fi
   queued_section_lines=0
   if (( ${#queued_entries[@]} > 0 )); then
-    queued_section_lines=$((2 + ${#queued_entries[@]}))
+    queued_section_lines=$((2 + ${#queued_entries[@]} * 2))
   fi
   total_lines=$((available_section_lines + queued_section_lines))
 
   if [[ "$expanded" != "true" ]] && (( total_lines > budget )); then
     if (( ${#queued_entries[@]} > 0 )); then
-      max_queued=$((budget - available_section_lines - 2))
-      if (( max_queued > 0 )); then
+      queued_line_budget=$((budget - available_section_lines - 2))
+      max_queued_entries=$((queued_line_budget / 2))
+      if (( max_queued_entries > 0 )); then
         tier=1
-        if (( max_queued < ${#queued_entries[@]} )); then
-          hidden_count=$((hidden_count + ${#queued_entries[@]} - max_queued))
-          queued_entries=("${queued_entries[@]:0:max_queued}")
+        if (( max_queued_entries < ${#queued_entries[@]} )); then
+          hidden_count=$((hidden_count + ${#queued_entries[@]} - max_queued_entries))
+          queued_entries=("${queued_entries[@]:0:max_queued_entries}")
         else
           tier=0
         fi
@@ -6171,6 +6213,11 @@ render_grouped_task_list() {
       output+="$(printf '  %s. %s - %s (blocked by: %s)' "$counter" "$task_id" "$title" "$blockers")"$'\n'
       select_lines+="${rec}"$'\n'
     done
+    if [[ "$deps_expanded" != "true" ]] && (( deps_hidden_count > 0 )); then
+      output+="$(printf '  +%s hidden - d to expand' "$deps_hidden_count")"$'\n'
+    elif [[ "$deps_expanded" == "true" ]] && (( deps_hidden_count > 0 )); then
+      output+="  (d to collapse)"$'\n'
+    fi
   fi
 
   section_body=""
@@ -9097,7 +9144,7 @@ while :; do
 
         # Only re-render the prompt when the display would actually change
         queue_fp="${QUEUE_PLAN_CACHE:0:50}"
-        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}|${_backlog_budget:-}|${_backlog_expanded:-}"
+        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}|${_backlog_budget:-}|${_backlog_expanded:-}|${_deps_expanded:-}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
           SELECT_SHOW_ALL=false
 
@@ -9111,13 +9158,19 @@ while :; do
           GROUPED_SELECT_FROM=""
           _backlog_default_expanded="$(wavemill_load_config "$REPO_DIR" | jq -r '.backlog.defaultExpanded // false' 2>/dev/null || echo "false")"
           _backlog_expanded="$(jq -r --arg def "$_backlog_default_expanded" '.backlogExpanded // $def' "$STATE_FILE" 2>/dev/null || echo "$_backlog_default_expanded")"
+          _deps_expanded="$(jq -r --arg def "false" '.depsExpanded // $def' "$STATE_FILE" 2>/dev/null || echo "false")"
           _backlog_budget="$(wavemill_backlog_compute_budget "$SESSION" "$WAVEMILL_WINDOW_MILL.0" "$REPO_DIR/.wavemill-config.json" 2>/dev/null || echo 20)"
+          _active_issue_ids=""
+          for _ai in "${!BRANCH_BY_ISSUE[@]}"; do
+            [[ -n "${CLEANED[$_ai]:-}" ]] && continue
+            _active_issue_ids+="${_ai}"$'\n'
+          done
           if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
             if [[ -n "$queue_plan_json" ]]; then
               QUEUE_PLAN_CACHE="$queue_plan_json"
               LAST_QUEUE_PLAN_FETCH=$(date +%s)
             fi
-            render_grouped_task_list "$queue_plan_json" "$available" "$_backlog_budget" "$_backlog_expanded"
+            render_grouped_task_list "$queue_plan_json" "$available" "$_backlog_budget" "$_backlog_expanded" "$_deps_expanded" "$_active_issue_ids"
             if [[ -n "$GROUPED_DISPLAY" ]]; then
               select_from="$GROUPED_SELECT_FROM"
               USING_GROUPED_VIEW=true
@@ -9131,7 +9184,7 @@ while :; do
             fi
           fi
           queue_fp="${queue_plan_json:0:50}"
-          display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}|${_backlog_budget}|${_backlog_expanded}"
+          display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}|${_backlog_budget}|${_backlog_expanded}|${_deps_expanded}"
           rm -f "$queue_plan_diag_file"
           FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_previous"
 
@@ -9150,7 +9203,7 @@ while :; do
           fi
           _task_frame+=$'\n'
           if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
-            _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
+            _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'd' for deps, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
           elif (( avail_blocked_count > 0 )); then
             _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
           else
@@ -9225,6 +9278,12 @@ while :; do
             echo ""
             echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
             SELECT_SHOW_ALL=true
+          fi
+        elif [[ "$REPLY" =~ ^[dD]$ ]]; then
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            state_mutate "$STATE_FILE" \
+              '.depsExpanded = (if (.depsExpanded // false) then false else true end) | .updated = (now | todate)'
+            LAST_DISPLAY=""
           fi
         elif [[ "$REPLY" =~ ^unknown\  ]]; then
           log_warn "Unknown input: ${REPLY#unknown }"

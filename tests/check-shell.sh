@@ -35,6 +35,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-usage-tips.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-budget.test.sh \
+  "$REPO_DIR"/tests/wavemill-dependency-queue-filter.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
@@ -106,6 +107,18 @@ else
   fail "backlog budget rendering behavior: $backlog_budget_output"
 fi
 unset backlog_budget_status
+
+echo ""
+echo "=== Dependency Queue Filter ==="
+
+dependency_queue_output="$(bash "$REPO_DIR/tests/wavemill-dependency-queue-filter.test.sh" 2>&1)" || dependency_queue_status=$?
+dependency_queue_status="${dependency_queue_status:-0}"
+if [[ "$dependency_queue_status" -eq 0 ]]; then
+  pass "dependency queue filter behavior"
+else
+  fail "dependency queue filter behavior: $dependency_queue_output"
+fi
+unset dependency_queue_status
 
 echo ""
 echo "=== Dependent Launch ==="
