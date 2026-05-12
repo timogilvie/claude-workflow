@@ -190,7 +190,7 @@ export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | '
 export interface ResolvedModel {
   requested: ModelSelector;
   resolved: string;
-  source: 'alias' | 'pinned' | 'inherited';
+  source: ResolutionSource;
   familyChannel?: string;
   parentContextId?: string;
 }
@@ -409,6 +409,10 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
         result.parentContextId = context.parentContextId;
       }
       return result;
+    }
+    default: {
+      const _exhaustive: never = selector;
+      throw new ModelResolutionError(_exhaustive, 'Unhandled ModelSelector kind');
     }
   }
 }

@@ -37,3 +37,46 @@ Selector syntax:
 - `family:channel` parses as an alias selector with the channel captured.
 - `inherit` parses as an inherit selector.
 - A concrete model ID parses as a pinned selector.
+
+## resolveSelector()
+
+`resolveSelector(selector, context?)` in `shared/lib/model-registry.ts` resolves a `ModelSelector` to a concrete pinned model ID and returns a `ResolvedModel` record with structured provenance.
+
+### Function signature
+
+```typescript
+export function resolveSelector(
+  selector: ModelSelector,
+  context?: ResolutionContext,
+): ResolvedModel
+```
+
+### ResolvedModel shape
+
+```typescript
+export interface ResolvedModel {
+  requested: ModelSelector;     // the original selector as supplied
+  resolved: string;             // the concrete pinned model ID
+  source: ResolutionSource;     // how the model was resolved (see below)
+  familyChannel?: string;       // present when selector.kind === 'alias' and a channel was specified
+  parentContextId?: string;     // present when source === 'inherited' and context.parentContextId was supplied
+}
+
+export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | 'policy';
+```
+
+### Source values emitted by resolveSelector
+
+| source | When emitted | Example |
+|--------|-------------|---------|
+| `alias` | Selector is `{ kind: 'alias', family }` and the family matches a `FAMILY_ALIASES` entry | `resolveSelector({ kind: 'alias', family: 'sonnet' })` → `{ resolved: 'claude-sonnet-4-6', source: 'alias' }` |
+| `pinned` | Selector is `{ kind: 'pinned', modelId }` and the ID passes `validateModelId` | `resolveSelector({ kind: 'pinned', modelId: 'claude-opus-4-7' })` → `{ resolved: 'claude-opus-4-7', source: 'pinned' }` |
+| `inherited` | Selector is `{ kind: 'inherit' }` and `context.parent` is supplied | `resolveSelector({ kind: 'inherit' }, { parent: parentResult })` → `{ resolved: parentResult.resolved, source: 'inherited' }` |
+| `fallback` | Reserved for the policy layer (not emitted directly by `resolveSelector`) | — |
+| `policy` | Reserved for the policy layer (not emitted directly by `resolveSelector`) | — |
+
+### Error cases
+
+- `alias` selector: throws `ModelResolutionError` if `selector.family` is not in `FAMILY_ALIASES`.
+- `pinned` selector: throws `ModelResolutionError` (via `validateModelId`) if the model ID is malformed.
+- `inherit` selector: throws `ModelResolutionError` if `context?.parent` is absent.
