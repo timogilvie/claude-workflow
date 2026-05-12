@@ -178,10 +178,11 @@ Configuration (`.wavemill-config.json`):
 ## Control Layout And Input
 
 - Mill keeps the same three visible control panes:
-- `mill.0` monitor + command input (`1 3`, `m`, `q`)
+- `mill.0` monitor + command input (`1 3`, `advance HOK-1639`, `m`, `q`)
 - `mill.1` dashboard
 - `mill.2` status log
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
+- `advance <issue-id>` records a manual coding override for a tracked coding task with a valid running `.coding-result.json`, writes `features/<slug>/.coding-advance-override.json`, and creates `features/<slug>/.coding-complete` so review launches on the next monitor tick.
 
 ## When to Prefer Mill Mode
 
