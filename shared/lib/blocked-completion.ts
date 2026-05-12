@@ -106,10 +106,15 @@ function isEnumValue<T extends readonly string[]>(
   return typeof value === 'string' && enumValues.includes(value as T[number]);
 }
 
+/** Returns the absolute path to the blocked-completion artifact for a feature directory. */
 export function getBlockedCompletionPath(featureDir: string): string {
   return path.join(featureDir, BLOCKED_COMPLETION_FILENAME);
 }
 
+/**
+ * Validates a parsed JSON value against the BlockedCompletion schema.
+ * Returns `{ ok: true, value }` on success or `{ ok: false, code, message }` on failure.
+ */
 export function validateBlockedCompletion(
   value: unknown,
 ): BlockedCompletionValidationResult {
@@ -219,6 +224,10 @@ export function validateBlockedCompletion(
   };
 }
 
+/**
+ * Reads and validates a blocked-completion artifact from disk.
+ * Propagates filesystem errors (e.g. ENOENT) and returns a MALFORMED_JSON error for invalid JSON.
+ */
 export async function readBlockedCompletion(
   filePath: string,
 ): Promise<BlockedCompletionValidationResult> {

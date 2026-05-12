@@ -191,6 +191,18 @@ test('validateBlockedCompletion rejects invalid optional field types', () => {
   });
 });
 
+test('readBlockedCompletion propagates ENOENT for a non-existent file', async () => {
+  const missingPath = join(tmpdir(), 'no-such-file-.coding-blocked-completion.json');
+
+  await assert.rejects(
+    () => readBlockedCompletion(missingPath),
+    (err: NodeJS.ErrnoException) => {
+      assert.equal(err.code, 'ENOENT');
+      return true;
+    },
+  );
+});
+
 test('schema required fields and enums stay aligned with the validator exports', () => {
   assert.deepEqual(schema.required, [...BLOCKED_COMPLETION_REQUIRED_FIELDS]);
   assert.equal(schema.properties?.stage?.const, BLOCKED_COMPLETION_STAGE);
