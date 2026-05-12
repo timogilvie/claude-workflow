@@ -700,6 +700,19 @@ describe('resolveSelector', () => {
     assert.throws(() => resolveSelector({ kind: 'pinned', modelId: 'DEEPSEEK-V4-PRO' }), /Invalid model ID/);
   });
 
+  it('throws a typed error for unknown alias families', () => {
+    assert.throws(
+      () => resolveSelector({ kind: 'alias', family: 'nonexistent-family' }),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelResolutionError);
+        assert.equal(error.code, 'unknown_alias');
+        assert.equal(error.selector.kind, 'alias');
+        assert.match(error.message, /Unknown model family alias/);
+        return true;
+      },
+    );
+  });
+
   it('inherits a resolved model from the parent context', () => {
     assert.deepEqual(
       resolveSelector(

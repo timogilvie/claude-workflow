@@ -218,12 +218,16 @@ export type ParseModelSelectorResult =
   | { ok: true; selector: ModelSelector }
   | { ok: false; error: ModelSelectorParseError };
 
+export type ModelResolutionErrorCode = 'missing_parent' | 'invalid_pinned_id' | 'unknown_alias';
+
 export class ModelResolutionError extends Error {
+  readonly code: ModelResolutionErrorCode;
   readonly selector: ModelSelector;
 
-  constructor(selector: ModelSelector, message: string) {
+  constructor(code: ModelResolutionErrorCode, selector: ModelSelector, message: string) {
     super(message);
     this.name = 'ModelResolutionError';
+    this.code = code;
     this.selector = selector;
   }
 }
@@ -375,7 +379,14 @@ export function validateModelId(modelId: string): void {
 export function resolveSelector(selector: ModelSelector, context?: ResolutionContext): ResolvedModel {
   switch (selector.kind) {
     case 'alias': {
-      const entry = FAMILY_ALIASES[selector.family];
+      const entry = FAMILY_ALIASES[selector.family as keyof typeof FAMILY_ALIASES];
+      if (!entry) {
+        throw new ModelResolutionError(
+          'unknown_alias',
+          selector,
+          `Unknown model family alias "${selector.family}". Known aliases: ${Object.keys(FAMILY_ALIASES).join(', ')}.`,
+        );
+      }
       const result: ResolvedModel = {
         requested: selector,
         resolved: entry.recommendedModelId,
@@ -386,16 +397,18 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
       }
       return result;
     }
-    case 'pinned':
+    case 'pinned': {
       validateModelId(selector.modelId);
       return {
         requested: selector,
         resolved: selector.modelId,
         source: 'pinned',
       };
+    }
     case 'inherit': {
       if (!context?.parent) {
         throw new ModelResolutionError(
+          'missing_parent',
           selector,
           'Cannot resolve "inherit" selector without a parent resolution in context.parent.',
         );
@@ -412,7 +425,7 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
     }
     default: {
       const _exhaustive: never = selector;
-      throw new ModelResolutionError(_exhaustive, 'Unhandled ModelSelector kind');
+      throw new Error(`Unhandled ModelSelector kind: ${JSON.stringify(_exhaustive)}`);
     }
   }
 }
