@@ -326,6 +326,7 @@ harness_run_tick() {
   printf '%s\n' "$extra_setup" > "$tick_setup_file"
 
   REPO_UNDER_TEST="$repo" \
+  REPO_DIR="$REPO_DIR" \
   TEST_SLUG="$slug" \
   TEST_ISSUE="$issue" \
   REAL_FUNC_FILE="$REAL_FUNC_FILE" \
