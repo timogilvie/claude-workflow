@@ -1894,10 +1894,12 @@ portable_file_mtime_epoch() {
   local path="$1"
   [[ -n "$path" && -e "$path" ]] || return 1
 
-  if stat -f %m "$path" 2>/dev/null; then
+  # Try GNU stat (Linux) first; stat -f on Linux returns mount point, not mtime
+  if stat -c %Y "$path" 2>/dev/null; then
     return 0
   fi
-  if stat -c %Y "$path" 2>/dev/null; then
+  # Fall back to BSD stat (macOS)
+  if stat -f %m "$path" 2>/dev/null; then
     return 0
   fi
   return 1
