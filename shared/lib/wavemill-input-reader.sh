@@ -32,6 +32,8 @@ while :; do
     event="enter"
   elif [[ "$line" =~ ^[0-9]+([[:space:]]+[0-9]+)*$ ]]; then
     event="select $line"
+  elif [[ "$line" =~ ^advance[[:space:]]+.+$ ]]; then
+    event="advance ${line#* }"
   elif [[ "$line" == "m" || "$line" == "more" ]]; then
     event="more"
   elif [[ "$line" == "q" || "$line" == "quit" || "$line" == "exit" ]]; then

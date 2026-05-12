@@ -7477,6 +7477,149 @@ handle_select_command() {
   fi
 }
 
+handle_advance_command() {
+  local event="$1"
+  local payload issue slug worktree feature_dir current_phase artifact_path artifact_rel_path
+  local marker_path audit_path audit_tmp audit_timestamp task_phase
+  local artifact_json artifact_status artifact_stage artifact_agent artifact_model artifact_notes artifact_keys_json
+
+  MONITOR_COMMAND_STATUS="noop"
+  MONITOR_COMMAND_DEFER_EVENT=""
+  MONITOR_COMMAND_DEFER_REASON=""
+
+  payload="${event#advance }"
+  if [[ "$payload" == "$event" ]]; then
+    log_warn "usage: advance <issue-id>"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  set -- $payload
+  if (( $# != 1 )); then
+    log_warn "usage: advance <issue-id>"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+  issue="$1"
+
+  if [[ ! "$issue" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
+    log_warn "usage: advance <issue-id>"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  slug=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].slug // empty')
+  worktree=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].worktree // empty')
+  if [[ -z "$slug" || -z "$worktree" ]]; then
+    log_warn "$issue is not tracked"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  feature_dir="$worktree/features/$slug"
+  if [[ ! -d "$feature_dir" ]]; then
+    log_warn "$issue is not tracked (missing feature dir: $feature_dir)"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  current_phase=$(resolve_phase "$feature_dir")
+  task_phase=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].phase // empty')
+  if [[ "$current_phase" != "coding" ]]; then
+    if [[ -n "$task_phase" && "$task_phase" != "$current_phase" ]]; then
+      log_warn "$issue is in phase $current_phase (state: $task_phase); advance only works for coding tasks"
+    else
+      log_warn "$issue is in phase $current_phase; advance only works for coding tasks"
+    fi
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  artifact_path="$feature_dir/.coding-result.json"
+  artifact_rel_path="features/$slug/.coding-result.json"
+  if [[ ! -f "$artifact_path" ]]; then
+    log_warn "$issue has no valid blocked-completion artifact at $artifact_rel_path"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  if ! jq empty "$artifact_path" >/dev/null 2>&1; then
+    log_warn "$issue has no valid blocked-completion artifact at $artifact_rel_path"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  artifact_json=$(cat "$artifact_path")
+  artifact_status=$(printf '%s' "$artifact_json" | jq -r '.status // empty' 2>/dev/null || echo "")
+  artifact_stage=$(printf '%s' "$artifact_json" | jq -r '.stage // "coding"' 2>/dev/null || echo "coding")
+  if [[ "$artifact_status" != "running" || "$artifact_stage" != "coding" ]]; then
+    log_warn "$issue has no valid blocked-completion artifact at $artifact_rel_path"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  artifact_agent=$(printf '%s' "$artifact_json" | jq -r '.agent // empty' 2>/dev/null || echo "")
+  artifact_model=$(printf '%s' "$artifact_json" | jq -r '.model // empty' 2>/dev/null || echo "")
+  artifact_notes=$(printf '%s' "$artifact_json" | jq -r '.notes // empty' 2>/dev/null || echo "")
+  artifact_keys_json=$(printf '%s' "$artifact_json" | jq -c '(.artifacts // {}) | if type == "object" then keys else [] end' 2>/dev/null || echo '[]')
+
+  audit_path="$feature_dir/.coding-advance-override.json"
+  audit_timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  audit_tmp="$(mktemp "$feature_dir/.coding-advance-override.json.tmp.XXXXXX")" || {
+    log_warn "$issue advance failed: could not create audit artifact"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  }
+
+  if ! jq -n \
+    --arg timestamp "$audit_timestamp" \
+    --arg issue "$issue" \
+    --arg reason "manual advance via mill input" \
+    --arg path "$artifact_rel_path" \
+    --arg stage "$artifact_stage" \
+    --arg status "$artifact_status" \
+    --arg agent "$artifact_agent" \
+    --arg model "$artifact_model" \
+    --arg notes "$artifact_notes" \
+    --argjson artifactKeys "$artifact_keys_json" \
+    '{
+      timestamp: $timestamp,
+      issue: $issue,
+      reason: $reason,
+      artifact_summary: {
+        path: $path,
+        stage: $stage,
+        status: $status,
+        agent: $agent,
+        model: $model,
+        notes: $notes,
+        artifact_keys: $artifactKeys
+      }
+    }' > "$audit_tmp"; then
+    rm -f "$audit_tmp"
+    log_warn "$issue advance failed: could not write audit artifact"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  if ! mv "$audit_tmp" "$audit_path"; then
+    rm -f "$audit_tmp"
+    log_warn "$issue advance failed: could not finalize audit artifact"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  marker_path="$feature_dir/.coding-complete"
+  if ! touch "$marker_path"; then
+    log_warn "$issue advance failed: could not create $marker_path"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  log "status" "$issue -> advance recorded; review will launch on the next monitor tick"
+  MONITOR_COMMAND_STATUS="handled"
+}
+
 execute_or_defer_monitor_command() {
   local source="$1" event="$2" event_offset="$3" free_slots="$4" queue_plan_json="$5" avail_unblocked="$6" avail_blocked="$7" select_from="$8"
 
@@ -7497,6 +7640,9 @@ execute_or_defer_monitor_command() {
       ;;
     enter)
       handle_enter_command "$event" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked"
+      ;;
+    advance|advance\ *)
+      handle_advance_command "$event"
       ;;
     select\ *)
       handle_select_command "$event" "$free_slots" "$select_from"
