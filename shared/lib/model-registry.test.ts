@@ -24,6 +24,13 @@ import {
 import { clearConfigCache } from './config.ts';
 
 type TaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
+type ToolSupport = 'none' | 'basic' | 'full';
+type LatencyTier = 'fast' | 'standard' | 'slow';
+type ReasoningTier = 'basic' | 'standard' | 'advanced';
+
+const TOOL_SUPPORT_VALUES = new Set<ToolSupport>(['none', 'basic', 'full']);
+const LATENCY_TIER_VALUES = new Set<LatencyTier>(['fast', 'standard', 'slow']);
+const REASONING_TIER_VALUES = new Set<ReasoningTier>(['basic', 'standard', 'advanced']);
 
 function makeTempRepo(): string {
   return mkdtempSync(join(tmpdir(), 'model-registry-test-'));
@@ -45,6 +52,53 @@ function makeScores(value: number): Record<TaskType, number> {
     review: value,
     classify: value,
   };
+}
+
+function makeCapabilities(
+  overrides: Partial<ModelRegistry['models'][string]> & {
+    qualityScores?: Partial<Record<TaskType, number>>;
+  } = {},
+): ModelRegistry['models'][string] {
+  return {
+    vendor: overrides.vendor ?? 'test',
+    class: overrides.class ?? 'strong_generalist',
+    strengths: overrides.strengths ? [...overrides.strengths] : ['balanced'],
+    weaknesses: overrides.weaknesses ? [...overrides.weaknesses] : ['none'],
+    qualityScores: {
+      ...makeScores(0),
+      ...overrides.qualityScores,
+    },
+    pricing: overrides.pricing ? { ...overrides.pricing } : undefined,
+    defaultLadderEligible: overrides.defaultLadderEligible ?? true,
+    contextWindowTokens: overrides.contextWindowTokens ?? 128_000,
+    toolSupport: overrides.toolSupport ?? 'full',
+    multimodal: overrides.multimodal ? { ...overrides.multimodal } : { text: true, image: false },
+    latencyTier: overrides.latencyTier ?? 'standard',
+    reasoningTier: overrides.reasoningTier ?? 'standard',
+    costPerMillionInputTokensUsd: overrides.costPerMillionInputTokensUsd ?? 1,
+    costPerMillionOutputTokensUsd: overrides.costPerMillionOutputTokensUsd ?? 2,
+    agent: overrides.agent,
+  };
+}
+
+function assertCapabilityMetadata(modelId: string, model: ModelRegistry['models'][string]): void {
+  assert.ok(Number.isFinite(model.contextWindowTokens));
+  assert.ok(model.contextWindowTokens > 0, `${modelId} should have a positive context window`);
+  assert.ok(TOOL_SUPPORT_VALUES.has(model.toolSupport), `${modelId} should have a valid tool support tier`);
+  assert.equal(typeof model.multimodal.text, 'boolean');
+  assert.equal(typeof model.multimodal.image, 'boolean');
+  if (model.multimodal.audio !== undefined) {
+    assert.equal(typeof model.multimodal.audio, 'boolean');
+  }
+  if (model.multimodal.video !== undefined) {
+    assert.equal(typeof model.multimodal.video, 'boolean');
+  }
+  assert.ok(LATENCY_TIER_VALUES.has(model.latencyTier), `${modelId} should have a valid latency tier`);
+  assert.ok(REASONING_TIER_VALUES.has(model.reasoningTier), `${modelId} should have a valid reasoning tier`);
+  assert.ok(Number.isFinite(model.costPerMillionInputTokensUsd));
+  assert.ok(model.costPerMillionInputTokensUsd >= 0, `${modelId} should have non-negative input cost`);
+  assert.ok(Number.isFinite(model.costPerMillionOutputTokensUsd));
+  assert.ok(model.costPerMillionOutputTokensUsd >= 0, `${modelId} should have non-negative output cost`);
 }
 
 describe('model-registry', () => {
@@ -71,6 +125,7 @@ describe('model-registry', () => {
       assert.ok(model.vendor.length > 0);
       assert.ok(model.strengths.length > 0);
       assert.ok(model.weaknesses.length > 0);
+      assertCapabilityMetadata(modelId, model);
 
       for (const taskType of ['routing', 'planning', 'coding', 'review', 'classify'] as TaskType[]) {
         assert.equal(typeof model.qualityScores[taskType], 'number');
@@ -111,27 +166,9 @@ describe('model-registry', () => {
   it('getLadder derives a deterministic fallback order from scores', () => {
     const registry: ModelRegistry = {
       models: {
-        A: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), review: 90 },
-        },
-        B: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), review: 80 },
-        },
-        C: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), review: 70 },
-        },
+        A: makeCapabilities({ qualityScores: { review: 90 } }),
+        B: makeCapabilities({ qualityScores: { review: 80 } }),
+        C: makeCapabilities({ qualityScores: { review: 70 } }),
       },
       ladders: {},
     };
@@ -146,20 +183,18 @@ describe('model-registry', () => {
   it('getLadder breaks score ties by model class', () => {
     const registry: ModelRegistry = {
       models: {
-        economy: {
-          vendor: 'test',
+        economy: makeCapabilities({
           class: 'fast_economy',
           strengths: ['speed'],
           weaknesses: ['depth'],
-          qualityScores: { ...makeScores(0), planning: 90 },
-        },
-        frontier: {
-          vendor: 'test',
+          qualityScores: { planning: 90 },
+        }),
+        frontier: makeCapabilities({
           class: 'frontier',
           strengths: ['depth'],
           weaknesses: ['cost'],
-          qualityScores: { ...makeScores(0), planning: 90 },
-        },
+          qualityScores: { planning: 90 },
+        }),
       },
       ladders: {},
     };
@@ -170,20 +205,8 @@ describe('model-registry', () => {
   it('getLadder breaks remaining ties by model ID', () => {
     const registry: ModelRegistry = {
       models: {
-        zebra: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), coding: 88 },
-        },
-        alpha: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), coding: 88 },
-        },
+        zebra: makeCapabilities({ qualityScores: { coding: 88 } }),
+        alpha: makeCapabilities({ qualityScores: { coding: 88 } }),
       },
       ladders: {},
     };
@@ -194,13 +217,7 @@ describe('model-registry', () => {
   it('getLadder returns an empty derived ladder when no model has a positive score', () => {
     const registry: ModelRegistry = {
       models: {
-        alpha: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: makeScores(0),
-        },
+        alpha: makeCapabilities(),
       },
       ladders: {},
     };
@@ -320,12 +337,44 @@ describe('model-registry', () => {
             review: 87,
             classify: 70,
           },
+          contextWindowTokens: 400_000,
+          toolSupport: 'full',
+          multimodal: { text: true, image: true },
+          latencyTier: 'standard',
+          reasoningTier: 'advanced',
+          costPerMillionInputTokensUsd: 6,
+          costPerMillionOutputTokensUsd: 36,
         },
       },
     });
 
     assert.equal(merged.models['gpt-5.6'].vendor, 'openai');
     assert.equal(merged.models['gpt-5.6'].qualityScores.planning, 90);
+  });
+
+  it('mergeModelRegistry merges and clones capability metadata overrides', () => {
+    const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
+      models: {
+        'claude-opus-4-7': {
+          contextWindowTokens: 250_000,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'advanced',
+          costPerMillionInputTokensUsd: 6,
+          costPerMillionOutputTokensUsd: 26,
+        },
+      },
+    });
+
+    assert.equal(merged.models['claude-opus-4-7'].contextWindowTokens, 250_000);
+    assert.equal(merged.models['claude-opus-4-7'].toolSupport, 'basic');
+    assert.deepEqual(merged.models['claude-opus-4-7'].multimodal, { text: true, image: false });
+    assert.equal(merged.models['claude-opus-4-7'].latencyTier, 'standard');
+    assert.equal(merged.models['claude-opus-4-7'].reasoningTier, 'advanced');
+    assert.equal(merged.models['claude-opus-4-7'].costPerMillionInputTokensUsd, 6);
+    assert.equal(merged.models['claude-opus-4-7'].costPerMillionOutputTokensUsd, 26);
+    assert.deepEqual(DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7'].multimodal, { text: true, image: true });
   });
 
   it('exposes DeepSeek metadata in the default registry', () => {
@@ -337,12 +386,33 @@ describe('model-registry', () => {
     assert.equal(pro.class, 'strong_generalist');
     assert.equal(pro.defaultLadderEligible, false);
     assert.equal(pro.contextWindowTokens, 1_000_000);
+    assert.equal(pro.toolSupport, 'basic');
+    assert.deepEqual(pro.multimodal, { text: true, image: false });
+    assert.equal(pro.reasoningTier, 'advanced');
+    assert.equal(pro.costPerMillionInputTokensUsd, 0.435);
     assert.equal(pro.agent, 'claude');
     assert.equal(pro.pricing?.inputCostPerMTok, 0.435);
     assert.equal(pro.pricing?.outputCostPerMTok, 0.87);
     assert.equal(flash.class, 'fast_economy');
+    assert.equal(flash.latencyTier, 'fast');
     assert.equal(flash.pricing?.inputCostPerMTok, 0.14);
     assert.equal(oneMillion.contextWindowTokens, 1_000_000);
+  });
+
+  it('exposes normalized capability metadata for frontier and economy models', () => {
+    const frontier = DEFAULT_MODEL_REGISTRY.models['gpt-5.5'];
+    const economy = DEFAULT_MODEL_REGISTRY.models['claude-haiku-4-5-20251001'];
+
+    assert.equal(frontier.contextWindowTokens, 400_000);
+    assert.equal(frontier.toolSupport, 'full');
+    assert.equal(frontier.reasoningTier, 'advanced');
+    assert.equal(frontier.costPerMillionInputTokensUsd, 5);
+    assert.equal(frontier.costPerMillionOutputTokensUsd, 30);
+
+    assert.equal(economy.latencyTier, 'fast');
+    assert.equal(economy.reasoningTier, 'basic');
+    assert.equal(economy.costPerMillionInputTokensUsd, 0.8);
+    assert.equal(economy.costPerMillionOutputTokensUsd, 4);
   });
 
   it('recognizes configured DeepSeek IDs and validates bracket syntax', () => {
@@ -431,6 +501,13 @@ describe('model-registry', () => {
               strengths: ['coding'],
               weaknesses: ['none'],
               qualityScores: { coding: 89 },
+              contextWindowTokens: 128_000,
+              toolSupport: 'full',
+              multimodal: { text: true, image: false },
+              latencyTier: 'standard',
+              reasoningTier: 'standard',
+              costPerMillionInputTokensUsd: 1.75,
+              costPerMillionOutputTokensUsd: 14,
               agent: 'codex',
             },
           },

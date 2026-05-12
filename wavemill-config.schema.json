@@ -979,6 +979,45 @@
                                 "type": "integer",
                                 "minimum": 1
                             },
+                            "toolSupport": {
+                                "type": "string",
+                                "enum": ["none", "basic", "full"]
+                            },
+                            "multimodal": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "boolean"
+                                    },
+                                    "image": {
+                                        "type": "boolean"
+                                    },
+                                    "audio": {
+                                        "type": "boolean"
+                                    },
+                                    "video": {
+                                        "type": "boolean"
+                                    }
+                                },
+                                "required": ["text", "image"],
+                                "additionalProperties": false
+                            },
+                            "latencyTier": {
+                                "type": "string",
+                                "enum": ["fast", "standard", "slow"]
+                            },
+                            "reasoningTier": {
+                                "type": "string",
+                                "enum": ["basic", "standard", "advanced"]
+                            },
+                            "costPerMillionInputTokensUsd": {
+                                "type": "number",
+                                "minimum": 0
+                            },
+                            "costPerMillionOutputTokensUsd": {
+                                "type": "number",
+                                "minimum": 0
+                            },
                             "agent": {
                                 "type": "string",
                                 "minLength": 1

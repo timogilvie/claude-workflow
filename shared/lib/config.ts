@@ -14,7 +14,13 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
-import type { RegistryTaskType } from './model-registry.ts';
+import type {
+  LatencyTier,
+  MultimodalSupport,
+  ReasoningTier,
+  RegistryTaskType,
+  ToolSupport,
+} from './model-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // TypeScript Types (matching wavemill-config.schema.json)
@@ -123,6 +129,12 @@ export interface ModelCapabilitiesOverride {
   pricing?: PricingEntry;
   defaultLadderEligible?: boolean;
   contextWindowTokens?: number;
+  toolSupport?: ToolSupport;
+  multimodal?: MultimodalSupport;
+  latencyTier?: LatencyTier;
+  reasoningTier?: ReasoningTier;
+  costPerMillionInputTokensUsd?: number;
+  costPerMillionOutputTokensUsd?: number;
   agent?: string;
 }
 
