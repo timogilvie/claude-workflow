@@ -3283,6 +3283,56 @@ notify_planning_rejection_agent() {
     || rm -f "$tmp"
 }
 
+blocked_completion_announce_marker() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.blocked-completion-announced"
+}
+
+blocked_completion_should_announce() {
+  local feature_dir="$1" artifact_mtime="${2:-}"
+  local marker last_announced effective_mtime
+
+  # Use UNKNOWN sentinel when stat is unavailable so dedupe still works
+  effective_mtime="${artifact_mtime:-UNKNOWN}"
+  marker="$(blocked_completion_announce_marker "$feature_dir")"
+  [[ -f "$marker" ]] || return 0
+
+  last_announced="$(head -1 "$marker" 2>/dev/null | tr -d '\r')"
+  [[ "$last_announced" != "$effective_mtime" ]]
+}
+
+mark_blocked_completion_announced() {
+  local feature_dir="$1" artifact_mtime="${2:-}"
+  local marker tmp_file effective_mtime
+
+  # Use UNKNOWN sentinel when stat is unavailable so dedupe still works
+  effective_mtime="${artifact_mtime:-UNKNOWN}"
+  marker="$(blocked_completion_announce_marker "$feature_dir")"
+  tmp_file="$(mktemp "$feature_dir/.blocked-completion-announced.tmp.XXXXXX" 2>/dev/null)" || return 0
+  printf '%s\n' "$effective_mtime" > "$tmp_file" && mv "$tmp_file" "$marker" 2>/dev/null || rm -f "$tmp_file"
+}
+
+emit_blocked_completion_attention() {
+  local issue="$1" feature_dir="$2"
+  local artifact_record summary reason artifact_mtime slug win
+
+  artifact_record="$(read_blocked_completion "$feature_dir")"
+  [[ -n "$artifact_record" ]] || return 1
+
+  IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
+  slug="$(basename "$feature_dir")"
+  win="$issue-$slug"
+
+  if blocked_completion_should_announce "$feature_dir" "$artifact_mtime"; then
+    log "status" "$issue needs attention: $summary. Type \"advance $issue\" to launch review."
+    mark_blocked_completion_announced "$feature_dir" "$artifact_mtime"
+  fi
+
+  set_window_attention_state "$win" "needs-user"
+  active_count=$((active_count + 1))
+  return 0
+}
+
 handle_planning_overreach_rejection() {
   local issue="$1" feature_dir="$2" win="$3" current_agent="${4:-}"
   local -a files=("${VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES[@]:-}")
@@ -8367,6 +8417,9 @@ monitor_issue_state() {
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
+              return 0
+            fi
+            if emit_blocked_completion_attention "$ISSUE" "$FEATURE_DIR"; then
               return 0
             fi
             log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"

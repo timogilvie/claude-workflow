@@ -137,9 +137,14 @@ harness_extract_real_functions() {
     planning_rejection_files_summary \
     write_planning_rejection_artifact \
     notify_planning_rejection_agent \
+    blocked_completion_announce_marker \
+    blocked_completion_should_announce \
+    mark_blocked_completion_announced \
+    emit_blocked_completion_attention \
     handle_planning_overreach_rejection \
     validate_coding_phase_output \
     resolve_phase \
+    resolve_stage_result_model \
     approve_plan \
     write_stage_result \
     read_stage_status \
@@ -208,6 +213,24 @@ harness_setup_runtime_artifacts() {
   local repo="$1"
   mkdir -p "$repo/.wavemill/logs"
   printf '{"warning":"linear validation unavailable"}\n' > "$repo/.wavemill/logs/linear-validation-warnings.jsonl"
+}
+
+harness_setup_coding_state() {
+  local repo="$1" slug="$2" status="${3:-running}"
+  local feature_dir="$repo/features/$slug"
+  mkdir -p "$feature_dir"
+
+  cat > "$feature_dir/.coding-result.json" <<EOF
+{
+  "stage": "coding",
+  "status": "$status",
+  "startedAt": "2026-04-15T00:00:00Z",
+  "finishedAt": null,
+  "agent": "codex",
+  "model": "test-model",
+  "notes": ""
+}
+EOF
 }
 
 harness_seed_bootstrap_route() {
@@ -303,12 +326,14 @@ harness_run_tick() {
   printf '%s\n' "$extra_setup" > "$tick_setup_file"
 
   REPO_UNDER_TEST="$repo" \
+  REPO_DIR="$REPO_DIR" \
   TEST_SLUG="$slug" \
   TEST_ISSUE="$issue" \
   REAL_FUNC_FILE="$REAL_FUNC_FILE" \
   EXTRA_SETUP_FILE="$tick_setup_file" \
   env -u npm_config_prefix bash -lc '
     set -euo pipefail
+    source "$REPO_DIR/shared/lib/wavemill-common.sh"
     source "$REAL_FUNC_FILE"
 
     declare -Ag BRANCH_BY_ISSUE=()
@@ -452,6 +477,7 @@ harness_run_tick() {
     printf "challenge_refresh_called=%s\n" "$CHALLENGE_REFRESH_CALLED"
     printf "attention=%s\n" "$ATTENTION_STATE"
     printf "active_count=%s\n" "$active_count"
+    printf "log_output=%s\n" "$(printf "%s" "$LOG_OUTPUT" | tr "\n" "|")"
     printf "warn_output=%s\n" "$(printf "%s" "$WARN_OUTPUT" | tr "\n" "|")"
   '
 }
@@ -962,6 +988,136 @@ EOF
   check_eq "merge queue disabled: task remains active" "1" "$(kv_value "$tick" active_count)"
 }
 
+test_coding_blocked_completion_needs_user_without_advancing() {
+  local slug="coding-blocked-completion"
+  local issue="HOK-1642-BLOCKED"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<'EOF'
+{
+  "summary": "coding done; full verification blocked by Docker",
+  "reason": "Integration tests require Docker."
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "blocked completion: phase remains coding" "coding" "$(kv_value "$tick" phase)"
+  check_eq "blocked completion: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "blocked completion: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "blocked completion: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_contains "blocked completion: attention log emitted" "$(kv_value "$tick" log_output)" "needs attention: coding done; full verification blocked by Docker"
+  check_file_exists "blocked completion: dedupe marker written" "$repo/features/$slug/.blocked-completion-announced"
+}
+
+test_coding_blocked_completion_dedupes_same_artifact() {
+  local slug="coding-blocked-completion-dedupe"
+  local issue="HOK-1642-DEDUP"
+  local repo tick1 tick2
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<'EOF'
+{
+  "summary": "coding done; waiting on baseline tests"
+}
+EOF
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_contains "dedupe: first poll logs attention" "$(kv_value "$tick1" log_output)" "needs attention: coding done; waiting on baseline tests"
+  check_eq "dedupe: second poll stays active" "1" "$(kv_value "$tick2" active_count)"
+  check_eq "dedupe: second poll keeps needs-user attention" "needs-user" "$(kv_value "$tick2" attention)"
+  check_not_contains "dedupe: second poll emits no duplicate log" "$(kv_value "$tick2" log_output)" "needs attention: coding done; waiting on baseline tests"
+}
+
+test_coding_blocked_completion_reannounces_on_mtime_change() {
+  local slug="coding-blocked-completion-refresh"
+  local issue="HOK-1642-REFRESH"
+  local repo tick1 tick2 artifact
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  artifact="$repo/features/$slug/.coding-blocked-completion.json"
+  cat > "$artifact" <<'EOF'
+{
+  "summary": "coding done; verification blocked by Docker"
+}
+EOF
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  perl -e 'my $path = shift; my $now = time + 5; utime $now, $now, $path or die $!;' "$artifact"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_contains "mtime refresh: first poll logs attention" "$(kv_value "$tick1" log_output)" "needs attention: coding done; verification blocked by Docker"
+  check_contains "mtime refresh: second poll logs again after touch" "$(kv_value "$tick2" log_output)" "needs attention: coding done; verification blocked by Docker"
+}
+
+test_coding_complete_wins_over_blocked_completion() {
+  local slug="coding-complete-wins"
+  local issue="HOK-1642-COMPLETE"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  touch "$repo/features/$slug/.coding-complete"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<'EOF'
+{
+  "summary": "coding done; verification blocked by Docker"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "coding complete wins: phase does not request needs-user" "" "$(kv_value "$tick" attention)"
+  check_eq "coding complete wins: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_not_contains "coding complete wins: no blocked-attention log" "$(kv_value "$tick" log_output)" "needs attention:"
+}
+
+test_coding_blocked_completion_malformed_json_falls_back() {
+  local slug="coding-blocked-completion-malformed"
+  local issue="HOK-1642-MALFORMED"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  printf '{invalid json\n' > "$repo/features/$slug/.coding-blocked-completion.json"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "malformed blocked completion: phase remains coding" "coding" "$(kv_value "$tick" phase)"
+  check_eq "malformed blocked completion: stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "malformed blocked completion: attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_contains "malformed blocked completion: generic log emitted" "$(kv_value "$tick" log_output)" "needs attention: coding done; verification blocked"
+}
+
+test_coding_blocked_completion_dedupes_when_stat_unavailable() {
+  local slug="coding-blocked-completion-no-stat"
+  local issue="HOK-1642-NOSTAT"
+  local repo tick1 tick2
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<'EOF'
+{
+  "summary": "coding done; Docker unavailable"
+}
+EOF
+
+  # Simulate stat unavailable by overriding portable_file_mtime_epoch to return empty
+  local stub='CURRENT_PHASE="coding"; portable_file_mtime_epoch() { return 1; }'
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" "$stub")"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" "$stub")"
+
+  check_contains "no-stat dedupe: first poll logs attention" "$(kv_value "$tick1" log_output)" "needs attention: coding done; Docker unavailable"
+  check_eq "no-stat dedupe: second poll stays active" "1" "$(kv_value "$tick2" active_count)"
+  check_eq "no-stat dedupe: second poll keeps needs-user" "needs-user" "$(kv_value "$tick2" attention)"
+  check_not_contains "no-stat dedupe: second poll emits no duplicate log" "$(kv_value "$tick2" log_output)" "needs attention:"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -979,6 +1135,12 @@ test_already_expanded_packet_skips_mandatory_expansion
 test_resume_uses_expanded_phase_config_over_stale_state
 test_merge_queue_marks_non_candidate_stale_without_rerun
 test_merge_queue_disabled_keeps_legacy_rerun
+test_coding_blocked_completion_needs_user_without_advancing
+test_coding_blocked_completion_dedupes_same_artifact
+test_coding_blocked_completion_reannounces_on_mtime_change
+test_coding_complete_wins_over_blocked_completion
+test_coding_blocked_completion_malformed_json_falls_back
+test_coding_blocked_completion_dedupes_when_stat_unavailable
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then

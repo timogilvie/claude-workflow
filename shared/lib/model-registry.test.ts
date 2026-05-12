@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import {
+  FAMILY_ALIASES,
   getConfiguredModelsForDescriptor,
   getConfiguredModelsForDescriptorStage,
   configuredDeepSeekModelIds,
@@ -14,6 +15,7 @@ import {
   getModel,
   isKnownModelId,
   mergeModelRegistry,
+  parseModelSelector,
   rankCandidates,
   validateModelId,
 } from './model-registry.ts';
@@ -535,5 +537,125 @@ describe('model-registry', () => {
       clearConfigCache(repoDir);
       cleanUp(repoDir);
     }
+  });
+});
+
+function serializeSelector(input: string): string {
+  const parsed = parseModelSelector(input);
+  assert.equal(parsed.ok, true);
+
+  const { selector } = parsed;
+  if (selector.kind === 'inherit') {
+    return 'inherit';
+  }
+  if (selector.kind === 'pinned') {
+    return selector.modelId;
+  }
+  return selector.channel ? `${selector.family}:${selector.channel}` : selector.family;
+}
+
+describe('parseModelSelector', () => {
+  it('exports the required family aliases as a frozen registry', () => {
+    assert.equal(Object.isFrozen(FAMILY_ALIASES), true);
+
+    for (const family of ['opus', 'sonnet', 'haiku', 'gpt-5.5', 'gemini-pro']) {
+      assert.ok(Object.hasOwn(FAMILY_ALIASES, family));
+      assert.ok(FAMILY_ALIASES[family].recommendedModelId.length > 0);
+    }
+  });
+
+  it('parses bare family aliases', () => {
+    assert.deepEqual(parseModelSelector('opus'), {
+      ok: true,
+      selector: { kind: 'alias', family: 'opus' },
+    });
+  });
+
+  it('parses family aliases with channels', () => {
+    assert.deepEqual(parseModelSelector('opus:beta'), {
+      ok: true,
+      selector: { kind: 'alias', family: 'opus', channel: 'beta' },
+    });
+    assert.deepEqual(parseModelSelector('opus:beta:gamma'), {
+      ok: true,
+      selector: { kind: 'alias', family: 'opus', channel: 'beta:gamma' },
+    });
+  });
+
+  it('rejects empty alias channels as malformed selector syntax', () => {
+    const parsed = parseModelSelector('opus:');
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error.code, 'malformed_pinned_id');
+    assert.equal(parsed.error.input, 'opus:');
+    assert.match(parsed.error.message, /Invalid model selector/);
+  });
+
+  it('parses pinned model IDs', () => {
+    assert.deepEqual(parseModelSelector('claude-opus-4-7'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'claude-opus-4-7' },
+    });
+    assert.deepEqual(parseModelSelector('deepseek-v4-pro[1m]'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'deepseek-v4-pro[1m]' },
+    });
+    assert.deepEqual(parseModelSelector('deepseek-chat'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'deepseek-chat' },
+    });
+    assert.deepEqual(parseModelSelector('deepseek-reasoner'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'deepseek-reasoner' },
+    });
+  });
+
+  it('parses inherit and trims whitespace on successful selectors', () => {
+    assert.deepEqual(parseModelSelector('inherit'), {
+      ok: true,
+      selector: { kind: 'inherit' },
+    });
+    assert.deepEqual(parseModelSelector('  haiku  '), {
+      ok: true,
+      selector: { kind: 'alias', family: 'haiku' },
+    });
+    assert.deepEqual(parseModelSelector(' inherit '), {
+      ok: true,
+      selector: { kind: 'inherit' },
+    });
+  });
+
+  it('returns typed empty input errors', () => {
+    for (const input of ['', '   ']) {
+      const parsed = parseModelSelector(input);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'empty_input');
+      assert.equal(parsed.error.input, input);
+      assert.match(parsed.error.message, /must not be empty/);
+    }
+  });
+
+  it('returns typed unknown family errors for unsupported aliases', () => {
+    for (const input of ['unknown-family', 'mystral', 'Opus', 'INHERIT']) {
+      const parsed = parseModelSelector(input);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'unknown_family');
+      assert.equal(parsed.error.input, input);
+      assert.match(parsed.error.message, /Unknown model family/);
+    }
+  });
+
+  it('returns typed malformed pinned ID errors for invalid syntax', () => {
+    for (const input of ['!!bad!!', 'claude_opus']) {
+      const parsed = parseModelSelector(input);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'malformed_pinned_id');
+      assert.equal(parsed.error.input, input);
+      assert.match(parsed.error.message, /Invalid/);
+    }
+  });
+
+  it('round-trips canonical selector forms', () => {
+    const inputs = ['opus', 'opus:beta', 'claude-opus-4-7', 'deepseek-v4-pro[1m]', 'inherit', 'haiku'];
+    assert.deepEqual(inputs.map((input) => serializeSelector(input)), inputs);
   });
 });

@@ -178,6 +178,151 @@ export class ModelValidationError extends Error {
 }
 
 const MODEL_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*(?:\[[a-z0-9]+\])?$/;
+const PINNED_MODEL_PREFIXES = ['claude-', 'gpt-', 'deepseek-', 'gemini-'] as const;
+
+export type ModelSelector =
+  | { kind: 'alias'; family: string; channel?: string }
+  | { kind: 'pinned'; modelId: string }
+  | { kind: 'inherit' };
+
+export type ModelSelectorParseErrorCode = 'empty_input' | 'unknown_family' | 'malformed_pinned_id';
+
+export class ModelSelectorParseError extends Error {
+  readonly code: ModelSelectorParseErrorCode;
+  readonly input: string;
+
+  constructor(code: ModelSelectorParseErrorCode, input: string, message: string) {
+    super(message);
+    this.name = 'ModelSelectorParseError';
+    this.code = code;
+    this.input = input;
+  }
+}
+
+export type ParseModelSelectorResult =
+  | { ok: true; selector: ModelSelector }
+  | { ok: false; error: ModelSelectorParseError };
+
+export const FAMILY_ALIASES = Object.freeze({
+  opus: Object.freeze({
+    recommendedModelId: 'claude-opus-4-7',
+    description: 'Stable Anthropic frontier alias for the Opus family.',
+  }),
+  sonnet: Object.freeze({
+    recommendedModelId: 'claude-sonnet-4-6',
+    description: 'Stable Anthropic generalist alias for the Sonnet family.',
+  }),
+  haiku: Object.freeze({
+    recommendedModelId: 'claude-haiku-4-5-20251001',
+    description: 'Stable Anthropic economy alias for the Haiku family.',
+  }),
+  'gpt-5.5': Object.freeze({
+    recommendedModelId: 'gpt-5.5',
+    description: 'Stable OpenAI frontier alias for the GPT-5.5 family.',
+  }),
+  'gemini-pro': Object.freeze({
+    recommendedModelId: 'gemini-pro',
+    description: 'Selector alias reserved for Gemini Pro integration follow-up work.',
+  }),
+}) satisfies Readonly<Record<string, { recommendedModelId: string; description?: string }>>;
+
+function makeModelSelectorParseError(
+  code: ModelSelectorParseErrorCode,
+  input: string,
+  message: string,
+): ModelSelectorParseError {
+  return new ModelSelectorParseError(code, input, message);
+}
+
+function isKnownFamilyAlias(family: string): boolean {
+  return Object.hasOwn(FAMILY_ALIASES, family);
+}
+
+function isLikelyPinnedModelId(modelId: string): boolean {
+  return PINNED_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix)) || /\d/.test(modelId);
+}
+
+function isFamilyLikeSelector(input: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9.-]*$/.test(input);
+}
+
+export function parseModelSelector(input: string): ParseModelSelectorResult {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return {
+      ok: false,
+      error: makeModelSelectorParseError(
+        'empty_input',
+        input,
+        'Model selector input must not be empty.',
+      ),
+    };
+  }
+
+  if (trimmed === 'inherit') {
+    return { ok: true, selector: { kind: 'inherit' } };
+  }
+
+  const colonIndex = trimmed.indexOf(':');
+  if (colonIndex >= 0) {
+    const family = trimmed.slice(0, colonIndex);
+    const channel = trimmed.slice(colonIndex + 1).trim();
+    if (isKnownFamilyAlias(family) && channel.length > 0) {
+      return {
+        ok: true,
+        selector: { kind: 'alias', family, channel },
+      };
+    }
+
+    return {
+      ok: false,
+      error: makeModelSelectorParseError(
+        'malformed_pinned_id',
+        input,
+        `Invalid model selector "${trimmed}". Use "family[:channel]", "inherit", or a pinned model ID.`,
+      ),
+    };
+  }
+
+  if (isKnownFamilyAlias(trimmed)) {
+    return { ok: true, selector: { kind: 'alias', family: trimmed } };
+  }
+
+  if (MODEL_ID_PATTERN.test(trimmed)) {
+    if (isLikelyPinnedModelId(trimmed)) {
+      return { ok: true, selector: { kind: 'pinned', modelId: trimmed } };
+    }
+
+    return {
+      ok: false,
+      error: makeModelSelectorParseError(
+        'unknown_family',
+        input,
+        `Unknown model family "${trimmed}". Add it to FAMILY_ALIASES or use a concrete pinned model ID.`,
+      ),
+    };
+  }
+
+  if (isFamilyLikeSelector(trimmed)) {
+    return {
+      ok: false,
+      error: makeModelSelectorParseError(
+        'unknown_family',
+        input,
+        `Unknown model family "${trimmed}". Add it to FAMILY_ALIASES or use a concrete pinned model ID.`,
+      ),
+    };
+  }
+
+  return {
+    ok: false,
+    error: makeModelSelectorParseError(
+      'malformed_pinned_id',
+      input,
+      `Invalid pinned model ID "${trimmed}". Model IDs must be lowercase and may include digits, hyphens, dots, and one bracket suffix.`,
+    ),
+  };
+}
 
 export function isDeepSeekLikeModelId(modelId: string): boolean {
   return /^deepseek-/i.test(modelId);

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "blocked-completion.schema.json",
+  "title": "BlockedCompletion",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "stage",
+    "implementationComplete",
+    "committed",
+    "passingChecks",
+    "blockingChecks",
+    "blockingReason",
+    "evidence",
+    "recommendedAction"
+  ],
+  "properties": {
+    "stage": {
+      "const": "coding"
+    },
+    "implementationComplete": {
+      "type": "boolean"
+    },
+    "committed": {
+      "type": "boolean"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "passingChecks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blockingChecks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blockingReason": {
+      "enum": [
+        "repo_verification_blocked",
+        "environment_blocked",
+        "baseline_tests_failing"
+      ]
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "recommendedAction": {
+      "enum": [
+        "advance_to_review"
+      ]
+    },
+    "createdAt": {
+      "type": "string"
+    }
+  }
+}
