@@ -299,14 +299,14 @@ test_grouped_render_with_fixture_output() {
   check_not_contains "render hides external blockers from triage section" "$output" "Needs Triage"
   check_contains "render annotates blockers" "$output" "3. HOK-11 - Depends on foundation (blocked by: HOK-10)"
   check_not_contains "render omits conflict cluster after de-dup precedence" "$output" "[conflict cluster 1]"
-  check_contains "render keeps external blocker in queued section" "$output" "5. HOK-14 - Broken dependency (blocked by: HOK-99)"
+  check_not_contains "render hides off-deck external blocker from queued section" "$output" "HOK-14 - Broken dependency (blocked by: HOK-99)"
 
   line3=$(awk '/---SELECT---/{flag=1; next} flag {print; exit}' <<<"$output")
   line5=$(awk '/---SELECT---/{flag=1; next} flag {count++; if (count == 3) { print; exit }}' <<<"$output")
   line7=$(awk '/---SELECT---/{flag=1; next} flag {count++; if (count == 5) { print; exit }}' <<<"$output")
   check_eq "selection line 1 matches first rendered task" "HOK-10|foundation-task|Foundation task|core|98|0" "$line3"
   check_eq "selection line 3 matches queued task order" "HOK-11|depends-on-foundation|Depends on foundation|core|95|1" "$line5"
-  check_eq "selection line 5 includes blocked external dependency task" "HOK-14|broken-dependency|Broken dependency|core|80|1" "$line7"
+  check_eq "selection line 5 omits off-deck external dependency task" "" "$line7"
 }
 
 test_grouped_render_deduplicates_and_keeps_one_item_per_line() {

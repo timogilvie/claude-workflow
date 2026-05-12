@@ -172,9 +172,10 @@ test_tier_one_trims_queued_entries() {
   local output
   output="$(render_case 8 20 16)"
   check_contains "tier 1 keeps queued header" "$output" "Queued After Dependencies"
-  check_contains "tier 1 shows hidden indicator" "$output" "... 15 tasks hidden (m to expand)"
+  check_contains "tier 1 shows hidden indicator" "$output" "... 18 tasks hidden (m to expand)"
   check_contains "tier 1 keeps first queued task" "$output" "HOK-9 - Visible Task 9"
-  check_not_contains "tier 1 hides deep queued task" "$output" "HOK-28 - Visible Task 28"
+  check_contains "tier 1 keeps second queued task" "$output" "HOK-10 - Visible Task 10"
+  check_not_contains "tier 1 hides deep queued task" "$output" "HOK-11 - Visible Task 11"
 }
 
 test_tier_two_drops_queued_section() {
