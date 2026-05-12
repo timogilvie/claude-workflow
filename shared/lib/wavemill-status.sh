@@ -244,6 +244,30 @@ ready_attention_detail() {
   head -1 "$attention_file" 2>/dev/null | tr -d '\r'
 }
 
+truncate_blocked_completion_summary() {
+  local summary="${1:-}"
+  local max_len=80
+
+  if (( ${#summary} > max_len )); then
+    printf '%s...\n' "${summary:0:77}"
+  else
+    printf '%s\n' "$summary"
+  fi
+}
+
+coding_blocked_completion_detail() {
+  local worktree="$1" slug="$2" issue="$3"
+  local feature_dir="$worktree/features/$slug"
+  local artifact_record summary reason artifact_mtime
+
+  artifact_record="$(read_blocked_completion "$feature_dir" "$issue")"
+  [[ -n "$artifact_record" ]] || return 0
+
+  IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
+  summary="$(truncate_blocked_completion_summary "$summary")"
+  printf '%s needs attention: %s. Type "advance %s" to launch review.\n' "$issue" "$summary" "$issue"
+}
+
 planning_rejection_detail() {
   local worktree="$1" slug="$2"
   local feature_dir="$worktree/features/$slug"
@@ -535,7 +559,15 @@ is_actionable_state() {
   local worktree="${3:-}"
   local slug="${4:-}"
   local issue="${5:-}"
-  local ready_status attention_detail planning_detail watchdog_classification
+  local ready_status attention_detail planning_detail watchdog_classification coding_detail
+
+  if [[ "$task_phase" == "coding" ]]; then
+    coding_detail=$(coding_blocked_completion_detail "$worktree" "$slug" "$issue")
+    if [[ -n "$coding_detail" ]]; then
+      echo "actionable"
+      return
+    fi
+  fi
 
   planning_detail=$(planning_rejection_detail "$worktree" "$slug")
   if [[ -n "$planning_detail" ]]; then
@@ -604,12 +636,13 @@ render_section_header() {
 render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
-  local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail planning_detail reported ds pane watchdog_classification watchdog_detail running_detail
+  local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail planning_detail reported ds pane watchdog_classification watchdog_detail running_detail coding_blocked_detail
 
   t=$(elapsed "$worktree")
   reported=""
   watchdog_classification=""
   watchdog_detail=""
+  coding_blocked_detail=""
 
   if [[ "$task_status" == "merged" ]]; then
     st_str="${G}✓ merged${N}"
@@ -675,7 +708,14 @@ render_task_row() {
       esac
       ;;
     executing) phase_str="${G}🔨 executing${N}" ;;
-    coding)    phase_str="${G}💻 coding${N}" ;;
+    coding)
+      coding_blocked_detail=$(coding_blocked_completion_detail "$worktree" "$slug" "$issue")
+      if [[ -n "$coding_blocked_detail" ]]; then
+        phase_str="${R}⚠ coding${N}"
+      else
+        phase_str="${G}💻 coding${N}"
+      fi
+      ;;
     review)    phase_str="${Y}🔍 review${N}" ;;
     ready)
       watchdog_classification=$(ready_watchdog_field "$issue" "classification")
@@ -714,10 +754,13 @@ render_task_row() {
   printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
     "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
+  if [[ -n "$coding_blocked_detail" ]]; then
+    reported="$coding_blocked_detail"
+  fi
   planning_detail=$(planning_rejection_detail "$worktree" "$slug")
-  if [[ -n "$planning_detail" ]]; then
+  if [[ -z "$reported" && -n "$planning_detail" ]]; then
     reported="$planning_detail"
-  elif plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
+  elif [[ -z "$reported" ]] && plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
     reported="Plan ready — waiting for approval"
   fi
   attention_detail=$(ready_attention_detail "$worktree" "$slug")
