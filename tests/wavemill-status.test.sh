@@ -105,6 +105,18 @@ run_render() {
   )
 }
 
+run_blocked_detail() {
+  local workspace_root="$1"
+  local issue="$2"
+  local slug="$3"
+
+  (
+    set -- test-session "$workspace_root"
+    source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+    coding_blocked_completion_detail "$workspace_root/$slug" "$slug" "$issue"
+  ) | strip_ansi | head -1
+}
+
 echo "=== wavemill-status inbox renderer ==="
 
 TMP_DIR="$(mktemp -d)"
@@ -278,6 +290,111 @@ if grep -q '📥 INBOX (1)' "$OUTPUT_PLANNING_REJECTED" \
   pass "surfaces planning rejection artifact as actionable needs-attention row"
 else
   fail "planning rejection artifact is not surfaced as actionable dashboard detail"
+fi
+
+cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json" <<'EOF'
+{
+  "summary": "coding done; full verification blocked by Docker and baseline tests",
+  "reason": "The task is ready for review, but local verification cannot finish in this environment."
+}
+EOF
+
+CODING_DETAIL_OUTPUT="$(run_blocked_detail "$WORKTREES_DIR" "HOK-1642" "coding-task")"
+if [[ "$CODING_DETAIL_OUTPUT" == 'HOK-1642 needs attention: coding done; full verification blocked by Docker and baseline tests. Type "advance HOK-1642" to launch review.' ]]; then
+  pass "formats coding blocked-completion detail with advance guidance"
+else
+  fail "coding blocked-completion detail formatting is incorrect"
+fi
+
+STATE_FILE_CODING_BLOCKED="$TMP_DIR/state-coding-blocked.json"
+cat > "$STATE_FILE_CODING_BLOCKED" <<EOF
+{
+  "tasks": {
+    "HOK-1642": {
+      "slug": "coding-task",
+      "branch": "task/coding-task",
+      "worktree": "$WORKTREES_DIR/coding-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    },
+    "HOK-1222": {
+      "slug": "active-task",
+      "branch": "task/active-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "executing",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+BEHAVIOR_CODING_BLOCKED="$TMP_DIR/behavior-coding-blocked.json"
+cat > "$BEHAVIOR_CODING_BLOCKED" <<'EOF'
+{
+  "hook": {},
+  "pane": {
+    "HOK-1642-coding-task": "5",
+    "HOK-1222-active-task": "12"
+  },
+  "reported": {
+    "HOK-1642": "still running tests"
+  },
+  "planning": {},
+  "pr": {
+    "task/active-task": "45|OPEN"
+  },
+  "checks": {
+    "task/active-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_CODING_BLOCKED="$TMP_DIR/output-coding-blocked.txt"
+run_render "$STATE_FILE_CODING_BLOCKED" "$WORKTREES_DIR" "$BEHAVIOR_CODING_BLOCKED" "$OUTPUT_CODING_BLOCKED"
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_CODING_BLOCKED" \
+  && grep -q '⚡ ACTIVE (1)' "$OUTPUT_CODING_BLOCKED" \
+  && grep -q 'HOK-1642.*coding-task.*⚠ coding.*● running' "$OUTPUT_CODING_BLOCKED" \
+  && grep -q 'HOK-1642 needs attention: coding done; full verifica' "$OUTPUT_CODING_BLOCKED"; then
+  pass "coding blocked-completion renders as actionable coding row with detail precedence"
+else
+  fail "coding blocked-completion row did not move to inbox or show attention detail"
+fi
+
+printf '{"summary":"%s"}\n' "$(perl -e 'print "x" x 120')" > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json"
+
+LONG_CODING_DETAIL_OUTPUT="$(run_blocked_detail "$WORKTREES_DIR" "HOK-1642" "coding-task")"
+if [[ "$LONG_CODING_DETAIL_OUTPUT" == *'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...'* ]]; then
+  pass "coding blocked-completion summary truncates in detail helper"
+else
+  fail "coding blocked-completion summary was not truncated"
+fi
+
+cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json" <<'EOF'
+{
+  "reason": "No summary was written."
+}
+EOF
+
+FALLBACK_CODING_DETAIL_OUTPUT="$(run_blocked_detail "$WORKTREES_DIR" "HOK-1642" "coding-task")"
+if [[ "$FALLBACK_CODING_DETAIL_OUTPUT" == 'HOK-1642 needs attention: coding done; verification blocked. Type "advance HOK-1642" to launch review.' ]]; then
+  pass "coding blocked-completion falls back when summary is missing"
+else
+  fail "coding blocked-completion did not use the generic fallback summary"
+fi
+
+rm -f "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json"
+
+OUTPUT_CODING_NORMAL="$TMP_DIR/output-coding-normal.txt"
+run_render "$STATE_FILE_CODING_BLOCKED" "$WORKTREES_DIR" "$BEHAVIOR_CODING_BLOCKED" "$OUTPUT_CODING_NORMAL"
+
+if grep -q 'HOK-1642.*coding-task.*💻 coding.*● running' "$OUTPUT_CODING_NORMAL" \
+  && ! grep -q 'needs attention:' "$OUTPUT_CODING_NORMAL"; then
+  pass "coding row stays unchanged when blocked-completion artifact is absent"
+else
+  fail "coding row changed without a blocked-completion artifact"
 fi
 
 STATE_FILE_SKIPPED="$TMP_DIR/state-skipped.json"

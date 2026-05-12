@@ -1890,6 +1890,67 @@ get_file_size_bytes() {
   return 1
 }
 
+portable_file_mtime_epoch() {
+  local path="$1"
+  [[ -n "$path" && -e "$path" ]] || return 1
+
+  if stat -f %m "$path" 2>/dev/null; then
+    return 0
+  fi
+  if stat -c %Y "$path" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+blocked_completion_artifact_path() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-blocked-completion.json"
+}
+
+blocked_completion_default_summary() {
+  printf 'coding done; verification blocked\n'
+}
+
+sanitize_blocked_completion_text() {
+  local raw="${1-}"
+  printf '%s' "$raw" \
+    | tr '\r\n' '  ' \
+    | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
+    | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+read_blocked_completion() {
+  local feature_dir="$1" issue="${2:-}"
+  local artifact mtime summary reason summary_raw reason_raw
+  local separator=$'\001'
+
+  artifact="$(blocked_completion_artifact_path "$feature_dir")"
+  [[ -f "$artifact" ]] || return 0
+
+  mtime="$(portable_file_mtime_epoch "$artifact" 2>/dev/null || echo "")"
+  summary="$(blocked_completion_default_summary)"
+  summary="$(sanitize_blocked_completion_text "$summary")"
+  reason=""
+
+  if [[ ! -s "$artifact" ]] || ! command -v jq >/dev/null 2>&1 || ! jq empty "$artifact" >/dev/null 2>&1; then
+    printf '%s%s%s%s%s\n' "$summary" "$separator" "$reason" "$separator" "$mtime"
+    return 0
+  fi
+
+  summary_raw="$(jq -r '.summary // empty' "$artifact" 2>/dev/null || true)"
+  reason_raw="$(jq -r '.reason // empty' "$artifact" 2>/dev/null || true)"
+  summary_raw="$(sanitize_blocked_completion_text "$summary_raw")"
+  reason_raw="$(sanitize_blocked_completion_text "$reason_raw")"
+
+  if [[ -z "$summary_raw" ]]; then
+    printf '%s%s%s%s%s\n' "$summary" "$separator" "$reason_raw" "$separator" "$mtime"
+    return 0
+  fi
+
+  printf '%s%s%s%s%s\n' "$summary_raw" "$separator" "$reason_raw" "$separator" "$mtime"
+}
+
 project_context_suggestion_set() {
   local size_bytes="$1"
   local threshold_bytes="$2"
