@@ -178,7 +178,7 @@ Configuration (`.wavemill-config.json`):
 ## Control Layout And Input
 
 - Mill keeps the same three visible control panes:
-- `mill.0` monitor + command input (`1 3`, `advance HOK-1639`, `m`, `q`)
+- `mill.0` monitor + command input (`1 3`, `advance HOK-1639`, `m`, `d`, `q`)
 - `mill.1` dashboard
 - `mill.2` status log
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
@@ -234,6 +234,8 @@ When the monitor loop detects that a parent task has opened a PR, mill automatic
 ## Dependency-Aware Task Queue
 
 The dependency-aware queue extends startup planning and monitor dispatch into an eight-stage flow that keeps blocked work visible without launching it too early.
+
+In the grouped backlog pane, mill shows queued dependency items by default only when they are on-deck: either immediately unblocked by an active task or unblockable by an item currently in the backlog. Press `d` to expand suppressed dependency rows or collapse them again.
 
 | Stage | What happens | Source files | Observable signals |
 | --- | --- | --- | --- |
