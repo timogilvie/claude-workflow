@@ -1921,7 +1921,7 @@ sanitize_blocked_completion_text() {
 }
 
 read_blocked_completion() {
-  local feature_dir="$1" issue="${2:-}"
+  local feature_dir="$1"
   local artifact mtime summary reason summary_raw reason_raw
   local separator=$'\001'
 

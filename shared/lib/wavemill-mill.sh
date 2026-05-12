@@ -3316,7 +3316,7 @@ emit_blocked_completion_attention() {
   local issue="$1" feature_dir="$2"
   local artifact_record summary reason artifact_mtime slug win
 
-  artifact_record="$(read_blocked_completion "$feature_dir" "$issue")"
+  artifact_record="$(read_blocked_completion "$feature_dir")"
   [[ -n "$artifact_record" ]] || return 1
 
   IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
