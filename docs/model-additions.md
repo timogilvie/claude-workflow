@@ -18,3 +18,22 @@ Wavemill model support is deliberately explicit. When adding a new model, update
 10. Run focused config, registry, router, and provider-launch tests before merging.
 
 For frontier models, use `class: "frontier"` in the registry and include the model in the planning, coding, and review ladders. Prefer putting same-vendor successors next to the previous model so quota fallback can substitute within the same class cleanly.
+
+## Family Aliases
+
+Family aliases are stable developer-facing names that parse into `ModelSelector` values in `shared/lib/model-registry.ts`. `parseModelSelector` only validates selector syntax and shape; it does not resolve aliases against the active registry.
+
+| Family | Recommended model ID | Notes |
+| --- | --- | --- |
+| `opus` | `claude-opus-4-7` | Stable Anthropic frontier alias. |
+| `sonnet` | `claude-sonnet-4-6` | Stable Anthropic generalist alias. |
+| `haiku` | `claude-haiku-4-5-20251001` | Stable Anthropic economy alias. |
+| `gpt-5.5` | `gpt-5.5` | Alias lookup wins over pinned-ID parsing for this family name. |
+| `gemini-pro` | `gemini-pro` | Declared for selector compatibility; provider/model integration is separate follow-up work when Gemini is not present in the active registry. |
+
+Selector syntax:
+
+- `family` parses as an alias selector.
+- `family:channel` parses as an alias selector with the channel captured.
+- `inherit` parses as an inherit selector.
+- A concrete model ID parses as a pinned selector.
