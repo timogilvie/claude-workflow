@@ -15,8 +15,10 @@ import {
   getModel,
   isKnownModelId,
   mergeModelRegistry,
+  ModelResolutionError,
   parseModelSelector,
   rankCandidates,
+  resolveSelector,
   validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
@@ -657,5 +659,110 @@ describe('parseModelSelector', () => {
   it('round-trips canonical selector forms', () => {
     const inputs = ['opus', 'opus:beta', 'claude-opus-4-7', 'deepseek-v4-pro[1m]', 'inherit', 'haiku'];
     assert.deepEqual(inputs.map((input) => serializeSelector(input)), inputs);
+  });
+});
+
+describe('resolveSelector', () => {
+  it('resolves aliases without a channel', () => {
+    assert.deepEqual(resolveSelector({ kind: 'alias', family: 'opus' }), {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: FAMILY_ALIASES.opus.recommendedModelId,
+      source: 'alias',
+    });
+  });
+
+  it('passes through alias channels into the resolution metadata', () => {
+    assert.deepEqual(resolveSelector({ kind: 'alias', family: 'opus', channel: 'beta' }), {
+      requested: { kind: 'alias', family: 'opus', channel: 'beta' },
+      resolved: FAMILY_ALIASES.opus.recommendedModelId,
+      source: 'alias',
+      familyChannel: 'beta',
+    });
+  });
+
+  it('resolves every known family alias to its recommended model ID', () => {
+    for (const [family, entry] of Object.entries(FAMILY_ALIASES)) {
+      const resolved = resolveSelector({ kind: 'alias', family });
+      assert.equal(resolved.resolved, entry.recommendedModelId);
+      assert.equal(resolved.source, 'alias');
+    }
+  });
+
+  it('passes through valid pinned model IDs', () => {
+    assert.deepEqual(resolveSelector({ kind: 'pinned', modelId: 'deepseek-v4-pro[1m]' }), {
+      requested: { kind: 'pinned', modelId: 'deepseek-v4-pro[1m]' },
+      resolved: 'deepseek-v4-pro[1m]',
+      source: 'pinned',
+    });
+  });
+
+  it('rejects invalid pinned model IDs', () => {
+    assert.throws(() => resolveSelector({ kind: 'pinned', modelId: 'DEEPSEEK-V4-PRO' }), /Invalid model ID/);
+  });
+
+  it('inherits a resolved model from the parent context', () => {
+    assert.deepEqual(
+      resolveSelector(
+        { kind: 'inherit' },
+        {
+          parent: {
+            requested: { kind: 'alias', family: 'sonnet' },
+            resolved: 'claude-sonnet-4-6',
+            source: 'alias',
+          },
+        },
+      ),
+      {
+        requested: { kind: 'inherit' },
+        resolved: 'claude-sonnet-4-6',
+        source: 'inherited',
+      },
+    );
+  });
+
+  it('includes the parent context ID when provided', () => {
+    assert.deepEqual(
+      resolveSelector(
+        { kind: 'inherit' },
+        {
+          parent: {
+            requested: { kind: 'pinned', modelId: 'gpt-5.5' },
+            resolved: 'gpt-5.5',
+            source: 'pinned',
+          },
+          parentContextId: 'agent-123',
+        },
+      ),
+      {
+        requested: { kind: 'inherit' },
+        resolved: 'gpt-5.5',
+        source: 'inherited',
+        parentContextId: 'agent-123',
+      },
+    );
+  });
+
+  it('throws a typed error when inherit has no parent in context', () => {
+    assert.throws(
+      () => resolveSelector({ kind: 'inherit' }, { parentContextId: 'agent-123' }),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelResolutionError);
+        assert.equal(error.selector.kind, 'inherit');
+        assert.match(error.message, /Cannot resolve "inherit" selector/);
+        return true;
+      },
+    );
+  });
+
+  it('throws a typed error when inherit has no context', () => {
+    assert.throws(
+      () => resolveSelector({ kind: 'inherit' }),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelResolutionError);
+        assert.equal(error.selector.kind, 'inherit');
+        assert.match(error.message, /Cannot resolve "inherit" selector/);
+        return true;
+      },
+    );
   });
 });

@@ -185,6 +185,21 @@ export type ModelSelector =
   | { kind: 'pinned'; modelId: string }
   | { kind: 'inherit' };
 
+export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | 'policy';
+
+export interface ResolvedModel {
+  requested: ModelSelector;
+  resolved: string;
+  source: 'alias' | 'pinned' | 'inherited';
+  familyChannel?: string;
+  parentContextId?: string;
+}
+
+export interface ResolutionContext {
+  parent?: ResolvedModel;
+  parentContextId?: string;
+}
+
 export type ModelSelectorParseErrorCode = 'empty_input' | 'unknown_family' | 'malformed_pinned_id';
 
 export class ModelSelectorParseError extends Error {
@@ -202,6 +217,16 @@ export class ModelSelectorParseError extends Error {
 export type ParseModelSelectorResult =
   | { ok: true; selector: ModelSelector }
   | { ok: false; error: ModelSelectorParseError };
+
+export class ModelResolutionError extends Error {
+  readonly selector: ModelSelector;
+
+  constructor(selector: ModelSelector, message: string) {
+    super(message);
+    this.name = 'ModelResolutionError';
+    this.selector = selector;
+  }
+}
 
 export const FAMILY_ALIASES = Object.freeze({
   opus: Object.freeze({
@@ -344,6 +369,47 @@ export function validateModelId(modelId: string): void {
       modelId,
       `Error: Invalid model ID "${modelId}"\n\nModel IDs must be lowercase and may include digits, hyphens, dots, and a single bracket suffix like [1m].`,
     );
+  }
+}
+
+export function resolveSelector(selector: ModelSelector, context?: ResolutionContext): ResolvedModel {
+  switch (selector.kind) {
+    case 'alias': {
+      const entry = FAMILY_ALIASES[selector.family];
+      const result: ResolvedModel = {
+        requested: selector,
+        resolved: entry.recommendedModelId,
+        source: 'alias',
+      };
+      if (selector.channel !== undefined) {
+        result.familyChannel = selector.channel;
+      }
+      return result;
+    }
+    case 'pinned':
+      validateModelId(selector.modelId);
+      return {
+        requested: selector,
+        resolved: selector.modelId,
+        source: 'pinned',
+      };
+    case 'inherit': {
+      if (!context?.parent) {
+        throw new ModelResolutionError(
+          selector,
+          'Cannot resolve "inherit" selector without a parent resolution in context.parent.',
+        );
+      }
+      const result: ResolvedModel = {
+        requested: selector,
+        resolved: context.parent.resolved,
+        source: 'inherited',
+      };
+      if (context.parentContextId !== undefined) {
+        result.parentContextId = context.parentContextId;
+      }
+      return result;
+    }
   }
 }
 
