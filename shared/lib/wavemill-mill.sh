@@ -91,6 +91,7 @@ MERGE_QUEUE_SELECTION_FILE="${STATE_DIR}/merge-queue-selection.json"
 EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
 # Persists queue plan for launch-plan JSON emission (set during task selection).
 LAUNCH_QUEUE_PLAN=""
+LINEAR_RETRY_DRAIN_STAMP_FILE="${STATE_DIR}/linear-retry-drain.last-run"
 
 trim_outer_whitespace() {
   local value="${1-}"
@@ -127,6 +128,23 @@ _update_effective_max_parallel() {
 }
 
 _update_effective_max_parallel
+
+run_linear_retry_drain_tick() {
+  [[ "$DRY_RUN" == "true" ]] && return 0
+
+  local now last_run=0
+  now="$(date +%s)"
+  if [[ -f "$LINEAR_RETRY_DRAIN_STAMP_FILE" ]]; then
+    last_run="$(cat "$LINEAR_RETRY_DRAIN_STAMP_FILE" 2>/dev/null || echo 0)"
+  fi
+
+  if (( now - last_run < 60 )); then
+    return 0
+  fi
+
+  printf '%s\n' "$now" > "$LINEAR_RETRY_DRAIN_STAMP_FILE"
+  npx tsx "$TOOLS_DIR/linear-retry-drain.ts" drain --max-entries 10 >/dev/null 2>&1 || true
+}
 
 FORCE_MODEL="$(trim_outer_whitespace "${FORCE_MODEL:-}")"
 if [[ -z "$FORCE_MODEL" ]]; then
@@ -9251,6 +9269,7 @@ check_mill_pane_health() {
 while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
   _update_effective_max_parallel
+  run_linear_retry_drain_tick
   drain_command_events
   while consume_next_command; do
     case "$REPLY" in
