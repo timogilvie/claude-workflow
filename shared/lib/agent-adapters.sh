@@ -937,6 +937,31 @@ Before creating .coding-complete, verify ALL of these are true:
 - Changes are committed to git
 If ANY item is false, continue working. Do NOT create the marker.
 
+### When Verification Is Blocked
+
+Write "$feature_dir/.coding-blocked-completion.json" only when ALL of these are true:
+- Scoped implementation is complete.
+- Relevant changes are committed.
+- Targeted/scoped verification passed.
+- Remaining verification blockers are clearly unrelated, pre-existing, or environmental.
+- You are not comfortable creating .coding-complete.
+
+Use this compact JSON shape:
+
+    {
+      "stage": "coding",
+      "implementationComplete": true,
+      "committed": true,
+      "commit": "abc1234",
+      "passingChecks": ["targeted test command"],
+      "blockingChecks": ["repo-level command that failed"],
+      "blockingReason": "baseline_tests_failing",
+      "evidence": "Short summary of why the failure is unrelated.",
+      "recommendedAction": "advance_to_review"
+    }
+
+.coding-complete remains the preferred signal when full verification passes. The blocked-completion artifact is not a substitute for incomplete implementation, uncommitted work, or skipped scoped verification.
+
 After implementation is complete and tests pass, create "$feature_dir/.coding-complete", then $coding_completion_text
 _WVML_PROMPT_
 }
