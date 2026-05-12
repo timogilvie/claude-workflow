@@ -102,6 +102,10 @@ for fn in \
   planning_rejection_files_summary \
   write_planning_rejection_artifact \
   notify_planning_rejection_agent \
+  blocked_completion_announce_marker \
+  blocked_completion_should_announce \
+  mark_blocked_completion_announced \
+  emit_blocked_completion_attention \
   handle_planning_overreach_rejection \
   check_stage_aborted \
   check_stage_complete \
