@@ -40,7 +40,17 @@ const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
 const MAX_RETRIES = 2;
-const TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+function getEvalTimeoutMs(): number {
+  const raw = process.env.EVAL_TIMEOUT_MS;
+  if (!raw) return DEFAULT_TIMEOUT_MS;
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+}
+
+const TIMEOUT_MS = getEvalTimeoutMs();
 
 // ────────────────────────────────────────────────────────────────
 // Types
