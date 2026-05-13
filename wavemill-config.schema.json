@@ -1219,6 +1219,17 @@
                     },
                     "additionalProperties": false
                 },
+                "capabilityFiltering": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable capability-aware candidate filtering inside Layer 3 policy and stage-aware routing."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "hokusai": {
                     "type": "object",
                     "description": "Hokusai API configuration for ML-based workflow routing. Hokusai is only available via API.",
