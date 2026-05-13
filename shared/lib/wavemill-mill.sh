@@ -9345,6 +9345,42 @@ while :; do
   free_slots=$((EFFECTIVE_MAX_PARALLEL - (active_count - active_challenger_count)))
   update_free_slots_state "$free_slots"
 
+  if (( free_slots <= 0 )); then
+    refresh_backlog_cache
+    candidates=$(print_cached_candidates)
+    available=""
+    [[ -n "$candidates" ]] && available=$(filter_active_issues "$candidates")
+
+    display_fingerprint="slots-full|${active_count}|${available}"
+    if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
+      _task_frame="Next tasks (slots full):"$'\n'
+      if [[ -n "$available" ]]; then
+        _task_frame+="$(echo "$available" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}')"
+      elif [[ -n "$candidates" ]]; then
+        _task_frame+="  (all listed backlog tasks are already active)"$'\n'
+      else
+        _task_frame+="  (backlog empty)"$'\n'
+      fi
+      _task_frame+=$'\n'"0 slots available; waiting for active tasks to finish. Press 'q' to quit or wait ${POLL_SECONDS}s to refresh."$'\n'
+
+      if (( TASK_LIST_RENDERED == 1 )); then
+        tput rc 2>/dev/null || true
+      else
+        echo ""
+        tput sc 2>/dev/null || true
+      fi
+      wavemill_pane_repaint "$_task_frame"
+
+      LAST_DISPLAY="$display_fingerprint"
+      LAST_ACTIVE_COUNT=$active_count
+      LAST_WAITING_MSG=""
+      TASK_LIST_RENDERED=1
+    fi
+
+    poll_sleep "$POLL_SECONDS"
+    continue
+  fi
+
   if (( free_slots > 0 )); then
     refresh_backlog_cache
     candidates=$(print_cached_candidates)
