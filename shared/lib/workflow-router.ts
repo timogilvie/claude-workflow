@@ -82,6 +82,9 @@ export interface WorkflowRouteDecision {
   resourceSelections?: RuntimeResourceSelection[];
   provenance?: RouteProvenance;
   routingMode?: string;
+  capabilityFilterApplied?: boolean;
+  capabilityFilterFallback?: boolean;
+  capabilityConstraints?: CapabilityConstraints;
 }
 
 export interface RouteWorkflowOptions {
@@ -1530,6 +1533,10 @@ export function tryPolicyResolution(
     constraints: options?.maxCostUsd === undefined
       ? undefined
       : { maxCostUsd: options.maxCostUsd },
+    capabilityFilterApplied: capabilityAwareRouting && (
+      !!plannerConstraints || !!coderConstraints || !!reviewerConstraints
+    ),
+    capabilityConstraints: options?.capabilityConstraints,
   };
 }
 

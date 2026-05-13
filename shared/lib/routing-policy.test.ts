@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
-import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
+import { DEFAULT_MODEL_REGISTRY, resolveSelector } from './model-registry.ts';
 import type { QuotaSnapshot, QuotaStatus } from './quota-state.ts';
 import { resolveModel } from './routing-policy.ts';
 import { routeWorkflowAuto, tryPolicyResolution } from './workflow-router.ts';
@@ -794,7 +794,37 @@ describe('capability-aware routing', () => {
   });
 
   it('excludes models without tool support when requiresTools is true', () => {
-    const snapshot = makeSnapshot();
+    // Use a custom registry with one model that has no tool support to ensure non-vacuous assertion
+    const noToolRegistry = {
+      ...DEFAULT_MODEL_REGISTRY,
+      models: {
+        ...DEFAULT_MODEL_REGISTRY.models,
+        'test-no-tool-model': {
+          ...DEFAULT_MODEL_REGISTRY.models['claude-haiku-4-5-20251001'],
+          toolSupport: 'none' as const,
+        },
+      },
+    };
+    const snapshot: QuotaSnapshot = {
+      models: {
+        'test-no-tool-model': {
+          status: 'healthy',
+          remainingEstimate: null,
+          resetAt: null,
+          confidence: 1,
+          lastLimitErrorAt: null,
+          lastSuccessAt: null,
+          lastReason: null,
+        },
+        ...Object.fromEntries(
+          Object.keys(DEFAULT_MODEL_REGISTRY.models).map((id) => [
+            id,
+            { status: 'healthy' as const, remainingEstimate: null, resetAt: null, confidence: 1, lastLimitErrorAt: null, lastSuccessAt: null, lastReason: null },
+          ]),
+        ),
+      },
+      snapshotAt: new Date().toISOString(),
+    };
     const candidates = resolveModel({
       taskType: 'coding',
       difficulty: 'trivial',
@@ -803,9 +833,10 @@ describe('capability-aware routing', () => {
         requiresTools: true,
       },
       capabilityAwareRouting: true,
-    });
+    }, noToolRegistry);
 
     const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
+    assert.ok(rejected.length > 0, 'Should reject test-no-tool-model which has toolSupport: none');
     assert.ok(rejected.every((c) => {
       const hasToolReason = c.capabilityRejectedReasons?.some((r) => r.includes('tool support'));
       return hasToolReason || false;
@@ -813,7 +844,43 @@ describe('capability-aware routing', () => {
   });
 
   it('excludes models without multimodal support when requiresMultimodal is true', () => {
-    const snapshot = makeSnapshot();
+    // Use a custom registry with one model that has no image support to ensure non-vacuous assertion.
+    // DeepSeek models (which have image:false in the default registry) are filtered out by provider
+    // availability before capability filtering runs, so we inject a test-only model.
+    const noImageRegistry = {
+      ...DEFAULT_MODEL_REGISTRY,
+      models: {
+        ...DEFAULT_MODEL_REGISTRY.models,
+        'test-no-image-model': {
+          ...DEFAULT_MODEL_REGISTRY.models['claude-haiku-4-5-20251001'],
+          multimodal: { text: true, image: false } as const,
+        },
+      },
+      ladders: {
+        ...DEFAULT_MODEL_REGISTRY.ladders,
+        review: ['test-no-image-model', ...DEFAULT_MODEL_REGISTRY.ladders.review],
+      },
+    };
+    const snapshot: QuotaSnapshot = {
+      models: {
+        'test-no-image-model': {
+          status: 'healthy',
+          remainingEstimate: null,
+          resetAt: null,
+          confidence: 1,
+          lastLimitErrorAt: null,
+          lastSuccessAt: null,
+          lastReason: null,
+        },
+        ...Object.fromEntries(
+          Object.keys(DEFAULT_MODEL_REGISTRY.models).map((id) => [
+            id,
+            { status: 'healthy' as const, remainingEstimate: null, resetAt: null, confidence: 1, lastLimitErrorAt: null, lastSuccessAt: null, lastReason: null },
+          ]),
+        ),
+      },
+      snapshotAt: new Date().toISOString(),
+    };
     const candidates = resolveModel({
       taskType: 'review',
       difficulty: 'trivial',
@@ -822,9 +889,10 @@ describe('capability-aware routing', () => {
         requiresMultimodal: true,
       },
       capabilityAwareRouting: true,
-    });
+    }, noImageRegistry);
 
     const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
+    assert.ok(rejected.length > 0, 'Should reject test-no-image-model which has multimodal.image: false');
     assert.ok(rejected.every((c) => {
       const hasMultimodalReason = c.capabilityRejectedReasons?.some((r) => r.includes('multimodal'));
       return hasMultimodalReason || false;
@@ -844,6 +912,7 @@ describe('capability-aware routing', () => {
     });
 
     const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
+    assert.ok(rejected.length > 0, 'Should reject models with latencyTier standard or slow');
     assert.ok(rejected.every((c) => {
       const hasLatencyReason = c.capabilityRejectedReasons?.some((r) => r.includes('latency'));
       return hasLatencyReason || false;
@@ -923,5 +992,41 @@ describe('capability-aware routing', () => {
 
     const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
     assert.equal(rejected.length, 0, 'Empty constraints should not reject any models');
+  });
+
+  it('REQ-F9: pinned model selector (Layer 1) bypasses capability filtering', () => {
+    // resolveSelector() short-circuits before resolveModel(), so pinned IDs
+    // are never subject to capability constraint evaluation — this is the
+    // architectural invariant that prevents capability constraints from
+    // overriding an explicit user-pinned model choice.
+    const result = resolveSelector({ kind: 'pinned', modelId: 'claude-opus-4-7' });
+    assert.equal(result.resolved, 'claude-opus-4-7');
+    assert.equal(result.source, 'pinned');
+
+    // Verify that even with impossible constraints, resolveSelector returns the pinned model
+    // (capability filtering lives in resolveModel/topViableCandidate, not resolveSelector)
+    const result2 = resolveSelector({ kind: 'pinned', modelId: 'claude-haiku-4-5-20251001' });
+    assert.equal(result2.resolved, 'claude-haiku-4-5-20251001');
+    assert.equal(result2.source, 'pinned');
+  });
+
+  it('preserves pre-existing exclusionReason when capability filtering also rejects a candidate', () => {
+    const snapshot = makeSnapshot({ 'claude-haiku-4-5-20251001': 'exhausted' });
+    const candidates = resolveModel({
+      taskType: 'coding',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {
+        minContextWindow: 300000,
+      },
+      capabilityAwareRouting: true,
+    });
+
+    // claude-haiku-4-5-20251001 is quota-exhausted AND may fail context window check.
+    // The original exclusionReason (quota-exhausted) must not be overwritten by capability-constraint.
+    const haiku = candidates.find((c) => c.modelId === 'claude-haiku-4-5-20251001');
+    assert.ok(haiku, 'haiku candidate should exist');
+    // quota-exhausted takes precedence over capability-constraint
+    assert.equal(haiku?.exclusionReason, 'quota-exhausted');
   });
 });

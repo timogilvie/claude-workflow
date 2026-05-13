@@ -362,7 +362,8 @@ export function resolveModel(
           return {
             ...candidate,
             viable: false,
-            exclusionReason: 'capability-constraint' satisfies ExclusionReason,
+            // Preserve the original exclusion reason if one already exists
+            exclusionReason: candidate.exclusionReason ?? ('capability-constraint' satisfies ExclusionReason),
             capabilityRejectedReasons: rejection.reasons,
           };
         }
