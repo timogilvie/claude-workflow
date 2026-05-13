@@ -1,6 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import {
   assembleNearbyContext,
   buildPartialRefreshPrompt,
@@ -35,6 +36,8 @@ import {
   type QueuePlan,
 } from '../shared/lib/plan-queue-utils.ts';
 import { toKebabCase } from '../shared/lib/string-utils.ts';
+
+const queueAnalysisPromptPath = fileURLToPath(new URL('./prompts/queue-analysis.md', import.meta.url));
 
 function renderPreview(queuePlan: QueuePlan, records: BacklogRecord[]): string {
   const titleById = new Map(records.map((record) => [record.id, record.title ?? '']));
@@ -218,17 +221,17 @@ runTool({
       const contextTasks = contextTaskIds
         .map((taskId) => taskById.get(taskId))
         .filter((record): record is BacklogRecord => record !== undefined);
-      const [{ callLLM }, { loadPromptTemplate }] = await Promise.all([
-        import('../shared/lib/llm-cli.ts'),
-        import('../shared/lib/prompt-utils.ts'),
-      ]);
-      const promptTemplate = await loadPromptTemplate('tools/prompts/queue-analysis.md');
-      const prompt = buildPartialRefreshPrompt({
-        changedTaskIds,
-        contextTasks,
-        template: promptTemplate,
-      });
       try {
+        const [{ callLLM }, { loadPromptTemplate }] = await Promise.all([
+          import('../shared/lib/llm-cli.ts'),
+          import('../shared/lib/prompt-utils.ts'),
+        ]);
+        const promptTemplate = await loadPromptTemplate(queueAnalysisPromptPath);
+        const prompt = buildPartialRefreshPrompt({
+          changedTaskIds,
+          contextTasks,
+          template: promptTemplate,
+        });
         const llmResult = await callLLM(prompt, { taskType: 'classify', repoDir: process.cwd() });
         const currentFingerprints = Object.fromEntries(fingerprintTasks.map((t) => [t.id, computeTaskFingerprint(t)]));
         const fingerprintMap = new Map([...Object.entries(cacheAfterPrune.fingerprints), ...Object.entries(currentFingerprints)]);
