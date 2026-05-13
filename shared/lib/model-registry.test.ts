@@ -639,7 +639,7 @@ describe('parseModelSelector', () => {
 
     for (const family of ['opus', 'sonnet', 'haiku', 'gpt-5.5', 'gemini-pro']) {
       assert.ok(Object.hasOwn(FAMILY_ALIASES, family));
-      assert.ok(FAMILY_ALIASES[family].recommendedModelId.length > 0);
+      assert.ok(FAMILY_ALIASES[family].channels.stable.length > 0);
     }
   });
 
@@ -651,13 +651,13 @@ describe('parseModelSelector', () => {
   });
 
   it('parses family aliases with channels', () => {
-    assert.deepEqual(parseModelSelector('opus:beta'), {
+    assert.deepEqual(parseModelSelector('opus:stable'), {
       ok: true,
-      selector: { kind: 'alias', family: 'opus', channel: 'beta' },
+      selector: { kind: 'alias', family: 'opus', channel: 'stable' },
     });
-    assert.deepEqual(parseModelSelector('opus:beta:gamma'), {
+    assert.deepEqual(parseModelSelector('opus:preview'), {
       ok: true,
-      selector: { kind: 'alias', family: 'opus', channel: 'beta:gamma' },
+      selector: { kind: 'alias', family: 'opus', channel: 'preview' },
     });
   });
 
@@ -734,8 +734,56 @@ describe('parseModelSelector', () => {
   });
 
   it('round-trips canonical selector forms', () => {
-    const inputs = ['opus', 'opus:beta', 'claude-opus-4-7', 'deepseek-v4-pro[1m]', 'inherit', 'haiku'];
+    const inputs = ['opus', 'opus:stable', 'claude-opus-4-7', 'deepseek-v4-pro[1m]', 'inherit', 'haiku'];
     assert.deepEqual(inputs.map((input) => serializeSelector(input)), inputs);
+  });
+
+  describe('stability channels', () => {
+    it('parses suffix form for valid channels (opus-preview)', () => {
+      assert.deepEqual(parseModelSelector('opus-preview'), {
+        ok: true,
+        selector: { kind: 'alias', family: 'opus', channel: 'preview' },
+      });
+      assert.deepEqual(parseModelSelector('opus-experimental'), {
+        ok: true,
+        selector: { kind: 'alias', family: 'opus', channel: 'experimental' },
+      });
+      assert.deepEqual(parseModelSelector('opus-stable'), {
+        ok: true,
+        selector: { kind: 'alias', family: 'opus', channel: 'stable' },
+      });
+    });
+
+    it('parses colon form for valid channels (opus:preview)', () => {
+      assert.deepEqual(parseModelSelector('opus:preview'), {
+        ok: true,
+        selector: { kind: 'alias', family: 'opus', channel: 'preview' },
+      });
+      assert.deepEqual(parseModelSelector('sonnet:experimental'), {
+        ok: true,
+        selector: { kind: 'alias', family: 'sonnet', channel: 'experimental' },
+      });
+    });
+
+    it('rejects colon form with unknown channel', () => {
+      const parsed = parseModelSelector('opus:bogus');
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'unknown_channel');
+      assert.match(parsed.error.message, /Unknown channel/);
+      assert.match(parsed.error.message, /stable, preview, experimental/);
+    });
+
+    it('treats unknown-family-preview as unknown_family error (not unknown_channel)', () => {
+      const parsed = parseModelSelector('unicorn-preview');
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'unknown_family');
+    });
+
+    it('treats opus-bogus as unknown_family error (suffix does not match any channel)', () => {
+      const parsed = parseModelSelector('opus-bogus');
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'unknown_family');
+    });
   });
 });
 
@@ -743,25 +791,28 @@ describe('resolveSelector', () => {
   it('resolves aliases without a channel', () => {
     assert.deepEqual(resolveSelector({ kind: 'alias', family: 'opus' }), {
       requested: { kind: 'alias', family: 'opus' },
-      resolved: FAMILY_ALIASES.opus.recommendedModelId,
+      resolved: FAMILY_ALIASES.opus.channels.stable,
       source: 'alias',
+      channel: 'stable',
     });
   });
 
   it('passes through alias channels into the resolution metadata', () => {
-    assert.deepEqual(resolveSelector({ kind: 'alias', family: 'opus', channel: 'beta' }), {
-      requested: { kind: 'alias', family: 'opus', channel: 'beta' },
-      resolved: FAMILY_ALIASES.opus.recommendedModelId,
+    assert.deepEqual(resolveSelector({ kind: 'alias', family: 'opus', channel: 'stable' }), {
+      requested: { kind: 'alias', family: 'opus', channel: 'stable' },
+      resolved: FAMILY_ALIASES.opus.channels.stable,
       source: 'alias',
-      familyChannel: 'beta',
+      channel: 'stable',
+      familyChannel: 'stable',
     });
   });
 
-  it('resolves every known family alias to its recommended model ID', () => {
+  it('resolves every known family alias to its stable model ID', () => {
     for (const [family, entry] of Object.entries(FAMILY_ALIASES)) {
       const resolved = resolveSelector({ kind: 'alias', family });
-      assert.equal(resolved.resolved, entry.recommendedModelId);
+      assert.equal(resolved.resolved, entry.channels.stable);
       assert.equal(resolved.source, 'alias');
+      assert.equal(resolved.channel, 'stable');
     }
   });
 
@@ -770,6 +821,7 @@ describe('resolveSelector', () => {
       requested: { kind: 'pinned', modelId: 'deepseek-v4-pro[1m]' },
       resolved: 'deepseek-v4-pro[1m]',
       source: 'pinned',
+      channel: 'stable',
     });
   });
 
@@ -799,6 +851,7 @@ describe('resolveSelector', () => {
             requested: { kind: 'alias', family: 'sonnet' },
             resolved: 'claude-sonnet-4-6',
             source: 'alias',
+            channel: 'stable',
           },
         },
       ),
@@ -806,6 +859,7 @@ describe('resolveSelector', () => {
         requested: { kind: 'inherit' },
         resolved: 'claude-sonnet-4-6',
         source: 'inherited',
+        channel: 'stable',
       },
     );
   });
@@ -819,6 +873,7 @@ describe('resolveSelector', () => {
             requested: { kind: 'pinned', modelId: 'gpt-5.5' },
             resolved: 'gpt-5.5',
             source: 'pinned',
+            channel: 'stable',
           },
           parentContextId: 'agent-123',
         },
@@ -827,6 +882,7 @@ describe('resolveSelector', () => {
         requested: { kind: 'inherit' },
         resolved: 'gpt-5.5',
         source: 'inherited',
+        channel: 'stable',
         parentContextId: 'agent-123',
       },
     );
@@ -854,5 +910,43 @@ describe('resolveSelector', () => {
         return true;
       },
     );
+  });
+
+  describe('stability channels', () => {
+    it('resolves explicit stable channel to same model as default', () => {
+      const withoutChannel = resolveSelector({ kind: 'alias', family: 'opus' });
+      const withStableChannel = resolveSelector({ kind: 'alias', family: 'opus', channel: 'stable' });
+      assert.equal(withoutChannel.resolved, withStableChannel.resolved);
+      assert.equal(withStableChannel.channel, 'stable');
+      assert.equal(withStableChannel.familyChannel, 'stable');
+    });
+
+    it('rejects unpinned channel with typed error', () => {
+      assert.throws(
+        () => resolveSelector({ kind: 'alias', family: 'opus', channel: 'experimental' }),
+        (error: unknown) => {
+          assert.ok(error instanceof ModelResolutionError);
+          assert.equal(error.code, 'unpinned_channel');
+          assert.match(error.message, /No model pinned/);
+          return true;
+        },
+      );
+    });
+
+    it('propagates channel through inheritance', () => {
+      const parentWithPreview = {
+        requested: { kind: 'alias', family: 'sonnet', channel: 'preview' },
+        resolved: 'claude-sonnet-preview',
+        source: 'alias' as const,
+        channel: 'preview' as const,
+      };
+      const inherited = resolveSelector({ kind: 'inherit' }, { parent: parentWithPreview });
+      assert.equal(inherited.channel, 'preview');
+    });
+
+    it('pinned selectors always resolve to stable channel', () => {
+      const resolved = resolveSelector({ kind: 'pinned', modelId: 'claude-opus-4-7' });
+      assert.equal(resolved.channel, 'stable');
+    });
   });
 });

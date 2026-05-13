@@ -36,18 +36,20 @@ Workspace `modelRegistry.models.<id>` overrides may provide any subset of those 
 
 Family aliases are stable developer-facing names that parse into `ModelSelector` values in `shared/lib/model-registry.ts`. `parseModelSelector` only validates selector syntax and shape; it does not resolve aliases against the active registry.
 
-| Family | Recommended model ID | Notes |
-| --- | --- | --- |
-| `opus` | `claude-opus-4-7` | Stable Anthropic frontier alias. |
-| `sonnet` | `claude-sonnet-4-6` | Stable Anthropic generalist alias. |
-| `haiku` | `claude-haiku-4-5-20251001` | Stable Anthropic economy alias. |
-| `gpt-5.5` | `gpt-5.5` | Alias lookup wins over pinned-ID parsing for this family name. |
-| `gemini-pro` | `gemini-pro` | Declared for selector compatibility; provider/model integration is separate follow-up work when Gemini is not present in the active registry. |
+Each family alias has a `channels` record mapping stability channels to pinned model IDs. The `stable` channel is the default when no channel is specified.
+
+| Family | Stable | Preview | Experimental | Notes |
+| --- | --- | --- | --- | --- |
+| `opus` | `claude-opus-4-7` | — | — | Stable Anthropic frontier alias. |
+| `sonnet` | `claude-sonnet-4-6` | — | — | Stable Anthropic generalist alias. |
+| `haiku` | `claude-haiku-4-5-20251001` | — | — | Stable Anthropic economy alias. |
+| `gpt-5.5` | `gpt-5.5` | — | — | Alias lookup wins over pinned-ID parsing for this family name. |
+| `gemini-pro` | `gemini-pro` | — | — | Declared for selector compatibility; provider/model integration is separate follow-up work when Gemini is not present in the active registry. |
 
 Selector syntax:
 
-- `family` parses as an alias selector.
-- `family:channel` parses as an alias selector with the channel captured.
+- `family` parses as an alias selector with implicit `stable` channel (applied at resolution time, not parsing).
+- `family:channel` or `family-channel` parses as an alias selector with the channel captured.
 - `inherit` parses as an inherit selector.
 - A concrete model ID parses as a pinned selector.
 
@@ -71,11 +73,13 @@ export interface ResolvedModel {
   requested: ModelSelector;     // the original selector as supplied
   resolved: string;             // the concrete pinned model ID
   source: ResolutionSource;     // how the model was resolved (see below)
+  channel: Channel;             // the stability channel; 'stable' for pinned/inherited, specified channel for alias
   familyChannel?: string;       // present when selector.kind === 'alias' and a channel was specified
   parentContextId?: string;     // present when source === 'inherited' and context.parentContextId was supplied
 }
 
 export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | 'policy';
+export type Channel = 'stable' | 'preview' | 'experimental';
 ```
 
 ### Source values emitted by resolveSelector
@@ -93,3 +97,51 @@ export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | '
 - `alias` selector: throws `ModelResolutionError` if `selector.family` is not in `FAMILY_ALIASES`.
 - `pinned` selector: throws `ModelResolutionError` (via `validateModelId`) if the model ID is malformed.
 - `inherit` selector: throws `ModelResolutionError` if `context?.parent` is absent.
+
+## Stability Channels
+
+Family aliases support **stability channels** to allow early adopters to opt into newer models without abandoning the alias UX. Three channels are defined:
+
+| Channel | Purpose | Opt-in |
+| --- | --- | --- |
+| `stable` | Production-ready models pinned by the team. Recommended default. | Implicit (no suffix required) |
+| `preview` | Early-adopter opt-in for newer models. May change version or break in the next milestone. | Use `opus-preview`, `opus:preview`, or `{ family: 'opus', channel: 'preview' }` |
+| `experimental` | Bleeding edge, evaluation-stage models. Highest risk; only for power users. | Use `opus-experimental`, `opus:experimental`, or `{ family: 'opus', channel: 'experimental' }` |
+
+### Adding a channel pin
+
+To add a preview or experimental model for a family, extend the family's `channels` record in `FAMILY_ALIASES` (in `shared/lib/model-registry.ts`):
+
+```typescript
+opus: Object.freeze({
+  channels: Object.freeze({
+    stable: 'claude-opus-4-7',
+    preview: 'claude-opus-4-8-preview',  // add this line
+  }),
+  description: 'Stable Anthropic frontier alias for the Opus family.',
+}),
+```
+
+### Promotion policy (manual)
+
+Channel pins are **promoted manually** — the team decides when a model graduates from preview to stable. Promotion is not automated or eval-driven; it is a deliberate policy decision captured in a PR.
+
+To promote a model:
+1. Update `FAMILY_ALIASES[family].channels.stable` to the new model ID.
+2. Optionally add a newer preview model.
+3. Update the "Stability Channels" table in this document.
+4. Create a PR with a clear title like "Promote opus to claude-opus-4-8".
+
+### Parser and resolver behavior
+
+**Parser** (`parseModelSelector`):
+- `opus-preview` → `{ kind: 'alias', family: 'opus', channel: 'preview' }` (suffix form)
+- `opus:preview` → `{ kind: 'alias', family: 'opus', channel: 'preview' }` (colon form)
+- `opus:bogus` → parse error `unknown_channel` (invalid channel in colon form)
+- `unicorn-preview` → parse error `unknown_family` (valid channel suffix, but family not recognized)
+
+**Resolver** (`resolveSelector`):
+- `{ kind: 'alias', family: 'opus' }` → resolves with default channel `stable`
+- `{ kind: 'alias', family: 'opus', channel: 'preview' }` → resolves to the pinned preview model or throws `ModelResolutionError` with code `unpinned_channel` if not pinned
+- `{ kind: 'pinned', modelId: 'gpt-5.5' }` → resolves with channel `stable` (pinned IDs are not channel-aware)
+- `{ kind: 'inherit' }` → propagates the parent resolution's channel

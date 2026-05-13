@@ -6,6 +6,9 @@ import {
   type ModelRegistryConfig,
 } from './config.ts';
 
+export type Channel = 'stable' | 'preview' | 'experimental';
+export const CHANNELS: readonly Channel[] = ['stable', 'preview', 'experimental'];
+
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
 export type DescriptorModelStage = 'planner' | 'coder' | 'reviewer';
@@ -225,6 +228,7 @@ export interface ResolvedModel {
   requested: ModelSelector;
   resolved: string;
   source: ResolutionSource;
+  channel: Channel;
   familyChannel?: string;
   parentContextId?: string;
 }
@@ -234,7 +238,7 @@ export interface ResolutionContext {
   parentContextId?: string;
 }
 
-export type ModelSelectorParseErrorCode = 'empty_input' | 'unknown_family' | 'malformed_pinned_id';
+export type ModelSelectorParseErrorCode = 'empty_input' | 'unknown_family' | 'malformed_pinned_id' | 'unknown_channel';
 
 export class ModelSelectorParseError extends Error {
   readonly code: ModelSelectorParseErrorCode;
@@ -252,7 +256,7 @@ export type ParseModelSelectorResult =
   | { ok: true; selector: ModelSelector }
   | { ok: false; error: ModelSelectorParseError };
 
-export type ModelResolutionErrorCode = 'missing_parent' | 'invalid_pinned_id' | 'unknown_alias';
+export type ModelResolutionErrorCode = 'missing_parent' | 'invalid_pinned_id' | 'unknown_alias' | 'unpinned_channel';
 
 export class ModelResolutionError extends Error {
   readonly code: ModelResolutionErrorCode;
@@ -268,26 +272,36 @@ export class ModelResolutionError extends Error {
 
 export const FAMILY_ALIASES = Object.freeze({
   opus: Object.freeze({
-    recommendedModelId: 'claude-opus-4-7',
+    channels: Object.freeze({
+      stable: 'claude-opus-4-7',
+    }),
     description: 'Stable Anthropic frontier alias for the Opus family.',
   }),
   sonnet: Object.freeze({
-    recommendedModelId: 'claude-sonnet-4-6',
+    channels: Object.freeze({
+      stable: 'claude-sonnet-4-6',
+    }),
     description: 'Stable Anthropic generalist alias for the Sonnet family.',
   }),
   haiku: Object.freeze({
-    recommendedModelId: 'claude-haiku-4-5-20251001',
+    channels: Object.freeze({
+      stable: 'claude-haiku-4-5-20251001',
+    }),
     description: 'Stable Anthropic economy alias for the Haiku family.',
   }),
   'gpt-5.5': Object.freeze({
-    recommendedModelId: 'gpt-5.5',
+    channels: Object.freeze({
+      stable: 'gpt-5.5',
+    }),
     description: 'Stable OpenAI frontier alias for the GPT-5.5 family.',
   }),
   'gemini-pro': Object.freeze({
-    recommendedModelId: 'gemini-pro',
+    channels: Object.freeze({
+      stable: 'gemini-pro',
+    }),
     description: 'Selector alias reserved for Gemini Pro integration follow-up work.',
   }),
-}) satisfies Readonly<Record<string, { recommendedModelId: string; description?: string }>>;
+}) satisfies Readonly<Record<string, { channels: Partial<Record<Channel, string>>; description?: string }>>;
 
 function makeModelSelectorParseError(
   code: ModelSelectorParseErrorCode,
@@ -299,6 +313,10 @@ function makeModelSelectorParseError(
 
 function isKnownFamilyAlias(family: string): boolean {
   return Object.hasOwn(FAMILY_ALIASES, family);
+}
+
+function isKnownChannel(channel: string): boolean {
+  return CHANNELS.includes(channel as Channel);
 }
 
 function isLikelyPinnedModelId(modelId: string): boolean {
@@ -331,6 +349,16 @@ export function parseModelSelector(input: string): ParseModelSelectorResult {
     const family = trimmed.slice(0, colonIndex);
     const channel = trimmed.slice(colonIndex + 1).trim();
     if (isKnownFamilyAlias(family) && channel.length > 0) {
+      if (!isKnownChannel(channel)) {
+        return {
+          ok: false,
+          error: makeModelSelectorParseError(
+            'unknown_channel',
+            input,
+            `Unknown channel "${channel}". Valid channels: ${CHANNELS.join(', ')}.`,
+          ),
+        };
+      }
       return {
         ok: true,
         selector: { kind: 'alias', family, channel },
@@ -349,6 +377,30 @@ export function parseModelSelector(input: string): ParseModelSelectorResult {
 
   if (isKnownFamilyAlias(trimmed)) {
     return { ok: true, selector: { kind: 'alias', family: trimmed } };
+  }
+
+  // Try suffix form detection (opus-preview) — check channels from longest to shortest
+  for (const channel of CHANNELS) {
+    const suffix = `-${channel}`;
+    if (trimmed.endsWith(suffix)) {
+      const family = trimmed.slice(0, trimmed.length - suffix.length);
+      if (isKnownFamilyAlias(family)) {
+        return {
+          ok: true,
+          selector: { kind: 'alias', family, channel },
+        };
+      }
+      if (isFamilyLikeSelector(family)) {
+        return {
+          ok: false,
+          error: makeModelSelectorParseError(
+            'unknown_family',
+            input,
+            `Unknown model family "${family}". Add it to FAMILY_ALIASES or use a concrete pinned model ID.`,
+          ),
+        };
+      }
+    }
   }
 
   if (MODEL_ID_PATTERN.test(trimmed)) {
@@ -421,10 +473,20 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
           `Unknown model family alias "${selector.family}". Known aliases: ${Object.keys(FAMILY_ALIASES).join(', ')}.`,
         );
       }
+      const channel = (selector.channel ?? 'stable') as Channel;
+      const pin = entry.channels[channel];
+      if (pin === undefined) {
+        throw new ModelResolutionError(
+          'unpinned_channel',
+          selector,
+          `No model pinned for ${selector.family} channel "${channel}". Available channels: ${Object.keys(entry.channels).join(', ')}.`,
+        );
+      }
       const result: ResolvedModel = {
         requested: selector,
-        resolved: entry.recommendedModelId,
+        resolved: pin,
         source: 'alias',
+        channel,
       };
       if (selector.channel !== undefined) {
         result.familyChannel = selector.channel;
@@ -437,6 +499,7 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
         requested: selector,
         resolved: selector.modelId,
         source: 'pinned',
+        channel: 'stable',
       };
     }
     case 'inherit': {
@@ -451,6 +514,7 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
         requested: selector,
         resolved: context.parent.resolved,
         source: 'inherited',
+        channel: context.parent.channel,
       };
       if (context.parentContextId !== undefined) {
         result.parentContextId = context.parentContextId;
