@@ -1111,7 +1111,13 @@ export async function updateIssue(issueId: string, input: IssueUpdateInput): Pro
     { issueId, input },
   );
 
-  const result = data.issueUpdate as LinearIssueUpdateResult;
+  const result = data.issueUpdate as Partial<LinearIssueUpdateResult> | undefined;
+  if (!result || typeof result.success !== 'boolean') {
+    throw new LinearApiError('Linear API response missing issueUpdate result', {
+      category: 'graphql',
+    });
+  }
+
   return result;
 }
 
