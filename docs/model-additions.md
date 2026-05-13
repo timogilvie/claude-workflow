@@ -36,7 +36,7 @@ Workspace `modelRegistry.models.<id>` overrides may provide any subset of those 
 
 Family aliases are stable developer-facing names that parse into `ModelSelector` values in `shared/lib/model-registry.ts`. `parseModelSelector` only validates selector syntax and shape; it does not resolve aliases against the active registry.
 
-| Family | Recommended model ID | Notes |
+| Family | Stable model ID | Notes |
 | --- | --- | --- |
 | `opus` | `claude-opus-4-7` | Stable Anthropic frontier alias. |
 | `sonnet` | `claude-sonnet-4-6` | Stable Anthropic generalist alias. |
@@ -46,10 +46,35 @@ Family aliases are stable developer-facing names that parse into `ModelSelector`
 
 Selector syntax:
 
-- `family` parses as an alias selector.
-- `family:channel` parses as an alias selector with the channel captured.
+- `family` parses as an alias selector and defaults to `channel: "stable"`.
+- `family:channel` parses as an alias selector with a validated channel.
+- `family-channel` also parses as an alias selector with a validated channel.
 - `inherit` parses as an inherit selector.
 - A concrete model ID parses as a pinned selector.
+
+## Stability Channels
+
+Family aliases can expose up to three stability channels:
+
+- `stable`: the default production-ready pin. Bare aliases like `opus` resolve as `{ family: "opus", channel: "stable" }`.
+- `preview`: an early-adopter opt-in for newer candidates that may change before promotion.
+- `experimental`: the bleeding-edge opt-in for work that may break or disappear without deprecation.
+
+Channel promotion is manual. Additions and promotions should update the pinned model ID in `shared/lib/model-registry.ts` after whatever evaluation or operational review you require. Do not build automated channel promotion or eval-driven channel selection into the alias resolver.
+
+To add a channel pin for a family alias, extend the alias entry's `channels` map:
+
+```typescript
+opus: Object.freeze({
+  channels: Object.freeze({
+    stable: 'claude-opus-4-7',
+    preview: 'claude-opus-4-8-preview',
+  }),
+  description: 'Stable Anthropic frontier alias for the Opus family.',
+}),
+```
+
+If a selector requests a known channel that has no registered pin for that family, `resolveSelector()` throws `ModelResolutionError` with code `channel_unpinned`.
 
 ## resolveSelector()
 
@@ -71,7 +96,7 @@ export interface ResolvedModel {
   requested: ModelSelector;     // the original selector as supplied
   resolved: string;             // the concrete pinned model ID
   source: ResolutionSource;     // how the model was resolved (see below)
-  familyChannel?: string;       // present when selector.kind === 'alias' and a channel was specified
+  familyChannel?: Channel;      // present when selector.kind === 'alias'; defaults to "stable"
   parentContextId?: string;     // present when source === 'inherited' and context.parentContextId was supplied
 }
 
@@ -82,7 +107,7 @@ export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | '
 
 | source | When emitted | Example |
 |--------|-------------|---------|
-| `alias` | Selector is `{ kind: 'alias', family }` and the family matches a `FAMILY_ALIASES` entry | `resolveSelector({ kind: 'alias', family: 'sonnet' })` → `{ resolved: 'claude-sonnet-4-6', source: 'alias' }` |
+| `alias` | Selector is `{ kind: 'alias', family, channel }` and the family/channel pair matches a pinned `FAMILY_ALIASES` entry | `resolveSelector({ kind: 'alias', family: 'sonnet', channel: 'stable' })` → `{ resolved: 'claude-sonnet-4-6', source: 'alias', familyChannel: 'stable' }` |
 | `pinned` | Selector is `{ kind: 'pinned', modelId }` and the ID passes `validateModelId` | `resolveSelector({ kind: 'pinned', modelId: 'claude-opus-4-7' })` → `{ resolved: 'claude-opus-4-7', source: 'pinned' }` |
 | `inherited` | Selector is `{ kind: 'inherit' }` and `context.parent` is supplied | `resolveSelector({ kind: 'inherit' }, { parent: parentResult })` → `{ resolved: parentResult.resolved, source: 'inherited' }` |
 | `fallback` | Reserved for the policy layer (not emitted directly by `resolveSelector`) | — |
@@ -90,6 +115,6 @@ export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | '
 
 ### Error cases
 
-- `alias` selector: throws `ModelResolutionError` if `selector.family` is not in `FAMILY_ALIASES`.
+- `alias` selector: throws `ModelResolutionError` if `selector.family` is not in `FAMILY_ALIASES` or if `selector.channel` is known but not pinned for that family.
 - `pinned` selector: throws `ModelResolutionError` (via `validateModelId`) if the model ID is malformed.
 - `inherit` selector: throws `ModelResolutionError` if `context?.parent` is absent.
