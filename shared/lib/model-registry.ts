@@ -12,6 +12,11 @@ export type DescriptorModelStage = 'planner' | 'coder' | 'reviewer';
 export type ToolSupport = 'none' | 'basic' | 'full';
 export type LatencyTier = 'fast' | 'standard' | 'slow';
 export type ReasoningTier = 'basic' | 'standard' | 'advanced';
+export type CapabilityConstraintName =
+  | 'minContextWindow'
+  | 'requiresTools'
+  | 'requiresMultimodal'
+  | 'maxLatencyTier';
 
 export interface MultimodalSupport {
   text: boolean;
@@ -48,11 +53,28 @@ export interface ModelRegistry {
   ladders: Partial<Record<RegistryTaskType, string[]>>;
 }
 
+export interface CapabilityConstraints {
+  minContextWindow?: number;
+  requiresTools?: boolean;
+  requiresMultimodal?: boolean;
+  maxLatencyTier?: LatencyTier;
+}
+
+export interface CapabilityFilterResult {
+  satisfied: boolean;
+  failedConstraints: CapabilityConstraintName[];
+}
+
 const TASK_TYPES: RegistryTaskType[] = ['routing', 'planning', 'coding', 'review', 'classify'];
 export const CLASS_RANK: Record<ModelClass, number> = {
   frontier: 3,
   strong_generalist: 2,
   fast_economy: 1,
+};
+const LATENCY_TIER_RANK: Record<LatencyTier, number> = {
+  fast: 0,
+  standard: 1,
+  slow: 2,
 };
 const warnedUnknownLadders = new Set<string>();
 const DESCRIPTOR_STAGE_TO_TASK_TYPE: Record<DescriptorModelStage, RegistryTaskType> = {
@@ -115,6 +137,83 @@ function dedupeModelIds(modelIds: readonly string[]): string[] {
   }
 
   return deduped;
+}
+
+export function hasCapabilityConstraints(
+  constraints?: CapabilityConstraints,
+): constraints is CapabilityConstraints {
+  if (!constraints) {
+    return false;
+  }
+
+  return (
+    constraints.minContextWindow !== undefined
+    || constraints.requiresTools === true
+    || constraints.requiresMultimodal === true
+    || constraints.maxLatencyTier !== undefined
+  );
+}
+
+export function compareLatencyTier(left: LatencyTier, right: LatencyTier): number {
+  return LATENCY_TIER_RANK[left] - LATENCY_TIER_RANK[right];
+}
+
+export function evaluateCapabilityConstraints(
+  model: Partial<ModelCapabilities>,
+  constraints?: CapabilityConstraints,
+): CapabilityFilterResult {
+  if (!hasCapabilityConstraints(constraints)) {
+    return { satisfied: true, failedConstraints: [] };
+  }
+
+  const failedConstraints: CapabilityConstraintName[] = [];
+
+  if (
+    constraints.minContextWindow !== undefined
+    && (
+      typeof model.contextWindowTokens !== 'number'
+      || !Number.isFinite(model.contextWindowTokens)
+      || model.contextWindowTokens < constraints.minContextWindow
+    )
+  ) {
+    failedConstraints.push('minContextWindow');
+  }
+
+  if (
+    constraints.requiresTools === true
+    && (model.toolSupport === undefined || model.toolSupport === 'none')
+  ) {
+    failedConstraints.push('requiresTools');
+  }
+
+  if (
+    constraints.requiresMultimodal === true
+    && model.multimodal?.image !== true
+  ) {
+    failedConstraints.push('requiresMultimodal');
+  }
+
+  if (
+    constraints.maxLatencyTier !== undefined
+    && (
+      model.latencyTier === undefined
+      || compareLatencyTier(model.latencyTier, constraints.maxLatencyTier) > 0
+    )
+  ) {
+    failedConstraints.push('maxLatencyTier');
+  }
+
+  return {
+    satisfied: failedConstraints.length === 0,
+    failedConstraints,
+  };
+}
+
+export function satisfiesCapabilities(
+  model: Partial<ModelCapabilities>,
+  constraints?: CapabilityConstraints,
+): boolean {
+  return evaluateCapabilityConstraints(model, constraints).satisfied;
 }
 
 function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCapabilities {

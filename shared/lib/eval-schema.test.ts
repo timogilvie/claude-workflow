@@ -1122,6 +1122,48 @@ test('Record without fallbackEvent still validates and parses unchanged', () => 
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
+test('TaskDescriptor constraints accept capability_constraints', () => {
+  const record = {
+    ...scenarios[0].record,
+    taskDescriptor: {
+      schema_version: '1.0',
+      signals: {
+        heuristic: {
+          task_type: 'feature',
+          languages: ['typescript'],
+          framework_tags: [],
+          files_touched: 3,
+          repo_size_loc: 1000,
+          description_tokens: 120,
+          is_greenfield: false,
+          has_migration: false,
+          has_ui: false,
+          has_tests: true,
+          cross_service: false,
+        },
+        learned: {
+          complexity: 3,
+          domain: 'backend',
+          risk_flags: [],
+        },
+      },
+      constraints: {
+        models_available: ['gpt-5.3-codex'],
+        objective: 'balanced',
+        capability_constraints: {
+          minContextWindow: 200000,
+          requiresTools: true,
+          maxLatencyTier: 'standard',
+        },
+      },
+      stages: {},
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
 console.log('\n--- RubricEval Field Tests (HOK-1406) ---\n');
 
 const validRubricEval = {

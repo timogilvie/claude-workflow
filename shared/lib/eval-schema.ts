@@ -937,6 +937,13 @@ export interface DescriptorConstraints {
   models_available: string[];
   /** Routing objective (maximize success, minimize cost, or balanced) */
   objective: 'max_success' | 'min_cost' | 'balanced';
+  /** Optional capability-aware routing constraints */
+  capability_constraints?: {
+    minContextWindow?: number;
+    requiresTools?: boolean;
+    requiresMultimodal?: boolean;
+    maxLatencyTier?: 'fast' | 'standard' | 'slow';
+  };
 }
 
 /**

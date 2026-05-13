@@ -205,6 +205,9 @@ export interface RouterConfig {
     minCoverage?: number;
     weight?: number;
   };
+  capabilityFiltering?: {
+    enabled?: boolean;
+  };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
 }
@@ -817,6 +820,10 @@ export function clearConfigCache(repoDir?: string): void {
  */
 export function getRouterConfig(repoDir?: string): RouterConfig {
   return loadWavemillConfig(repoDir).router || {};
+}
+
+export function isRouterCapabilityFilteringEnabled(repoDir?: string): boolean {
+  return getRouterConfig(repoDir).capabilityFiltering?.enabled === true;
 }
 
 /**
