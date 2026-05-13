@@ -2,6 +2,7 @@ import {
   CLASS_RANK,
   getEffectiveRegistry,
   getLadder,
+  type LatencyTier,
   type ModelClass,
   type ModelRegistry,
   type RegistryTaskType,
@@ -10,6 +11,35 @@ import { filterDeepSeekModels } from './deepseek-provider.ts';
 import { type QuotaSnapshot, type QuotaStatus } from './quota-state.ts';
 import { getAllowedModelFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 
+/**
+ * Capability constraints for model selection.
+ * Used by capability-aware routing to filter candidates based on task requirements.
+ */
+export interface CapabilityConstraints {
+  minContextWindow?: number;
+  requiresTools?: boolean;
+  requiresMultimodal?: boolean;
+  maxLatencyTier?: LatencyTier;
+}
+
+/**
+ * Rejection metadata for a single model that failed capability filtering.
+ */
+export interface CapabilityFilterRejection {
+  id: string;
+  reasons: string[];
+}
+
+/**
+ * Result of capability filtering operation.
+ */
+export interface CapabilityFilterResult<T> {
+  accepted: T[];
+  rejected: CapabilityFilterRejection[];
+  applied: boolean;
+  fallback: boolean;
+}
+
 export interface RoutingPolicy {
   taskType: RegistryTaskType;
   difficulty: RoutingDifficulty;
@@ -17,6 +47,8 @@ export interface RoutingPolicy {
   minQualityScore?: number;
   maxCostTier?: ModelClass;
   repoDir?: string;
+  capabilityConstraints?: CapabilityConstraints;
+  capabilityAwareRouting?: boolean;
 }
 
 export type ExclusionReason =
@@ -24,7 +56,8 @@ export type ExclusionReason =
   | 'below-difficulty-floor'
   | 'below-quality-threshold'
   | 'exceeds-cost-tier'
-  | 'below-frontier-substitute';
+  | 'below-frontier-substitute'
+  | 'capability-constraint';
 
 export interface RankedCandidate {
   modelId: string;
@@ -34,6 +67,7 @@ export interface RankedCandidate {
   viable: boolean;
   exclusionReason?: ExclusionReason;
   quotaStatus?: QuotaStatus;
+  capabilityRejectedReasons?: string[];
 }
 
 const DEGRADING_SCORE_PENALTY = 0.85;
@@ -128,6 +162,102 @@ function filterProviderUnavailableModels(
   };
 }
 
+const LATENCY_TIER_ORDER: Record<LatencyTier, number> = {
+  fast: 0,
+  standard: 1,
+  slow: 2,
+};
+
+/**
+ * Filter candidates by capability constraints.
+ * Returns accepted candidates and rejection metadata.
+ */
+export function filterByCapabilities<T>(
+  candidates: T[],
+  constraints: CapabilityConstraints | undefined,
+  registry: ModelRegistry,
+  getModelId: (candidate: T) => string,
+): CapabilityFilterResult<T> {
+  // No constraints or empty constraints means no filtering
+  if (!constraints || Object.keys(constraints).length === 0) {
+    return {
+      accepted: candidates,
+      rejected: [],
+      applied: false,
+      fallback: false,
+    };
+  }
+
+  const rejected: CapabilityFilterRejection[] = [];
+  const accepted: T[] = [];
+
+  for (const candidate of candidates) {
+    const modelId = getModelId(candidate);
+    const capabilities = registry.models[modelId];
+
+    if (!capabilities) {
+      rejected.push({
+        id: modelId,
+        reasons: ['missing capability metadata'],
+      });
+      continue;
+    }
+
+    const reasons: string[] = [];
+
+    // Check context window requirement
+    if (constraints.minContextWindow !== undefined) {
+      const modelContextWindow = capabilities.contextWindowTokens ?? 0;
+      if (modelContextWindow < constraints.minContextWindow) {
+        reasons.push(
+          `context window ${modelContextWindow} < required ${constraints.minContextWindow}`,
+        );
+      }
+    }
+
+    // Check tool support requirement (only if explicitly required)
+    if (constraints.requiresTools === true) {
+      const toolSupport = capabilities.toolSupport ?? 'none';
+      if (toolSupport === 'none') {
+        reasons.push('no tool support');
+      }
+    }
+
+    // Check multimodal requirement (only if explicitly required)
+    if (constraints.requiresMultimodal === true) {
+      const hasImageSupport = capabilities.multimodal?.image ?? false;
+      if (!hasImageSupport) {
+        reasons.push('no multimodal/image support');
+      }
+    }
+
+    // Check latency tier requirement
+    if (constraints.maxLatencyTier !== undefined) {
+      const modelLatency = capabilities.latencyTier ?? 'slow';
+      const maxLatencyOrder = LATENCY_TIER_ORDER[constraints.maxLatencyTier];
+      const modelLatencyOrder = LATENCY_TIER_ORDER[modelLatency];
+      if (modelLatencyOrder > maxLatencyOrder) {
+        reasons.push(`latency ${modelLatency} > max ${constraints.maxLatencyTier}`);
+      }
+    }
+
+    if (reasons.length > 0) {
+      rejected.push({ id: modelId, reasons });
+    } else {
+      accepted.push(candidate);
+    }
+  }
+
+  // If all candidates were rejected, fall back to original list
+  const fallback = accepted.length === 0;
+  return {
+    accepted: fallback ? candidates : accepted,
+    rejected,
+    applied: true,
+    fallback,
+  };
+}
+
 export function resolveModel(
   policy: RoutingPolicy,
   registryOverride?: ModelRegistry,
@@ -171,7 +301,7 @@ export function resolveModel(
     )
   );
 
-  const candidates = Object.entries(registry.models).map(([modelId, capabilities]) => {
+  let candidates = Object.entries(registry.models).map(([modelId, capabilities]) => {
     const qualityScore = capabilities.qualityScores[policy.taskType] ?? 0;
     const status = getQuotaStatus(policy.quotaState, modelId);
     const adjustedScore = computeAdjustedScore(qualityScore, status);
@@ -214,6 +344,44 @@ export function resolveModel(
       quotaStatus: status,
     } satisfies RankedCandidate;
   });
+
+  // Apply capability filtering if enabled
+  if (policy.capabilityAwareRouting && policy.capabilityConstraints) {
+    const filterResult = filterByCapabilities(
+      candidates,
+      policy.capabilityConstraints,
+      registry,
+      (candidate) => candidate.modelId,
+    );
+
+    // Only apply filtering if we have some accepted candidates or we're not falling back
+    if (!filterResult.fallback) {
+      candidates = candidates.map((candidate) => {
+        const rejection = filterResult.rejected.find((r) => r.id === candidate.modelId);
+        if (rejection) {
+          return {
+            ...candidate,
+            viable: false,
+            exclusionReason: 'capability-constraint' satisfies ExclusionReason,
+            capabilityRejectedReasons: rejection.reasons,
+          };
+        }
+        return candidate;
+      });
+    } else if (filterResult.rejected.length > 0) {
+      // Fallback case: mark rejection reasons but keep viable status unchanged
+      candidates = candidates.map((candidate) => {
+        const rejection = filterResult.rejected.find((r) => r.id === candidate.modelId);
+        if (rejection) {
+          return {
+            ...candidate,
+            capabilityRejectedReasons: rejection.reasons,
+          };
+        }
+        return candidate;
+      });
+    }
+  }
 
   return candidates.sort(compareCandidates);
 }

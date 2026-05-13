@@ -1270,6 +1270,11 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "capabilityAwareRouting": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable capability-aware routing that considers context-window requirements, tool support, multimodal capabilities, and latency budgets when selecting models. When disabled, routing ignores capability constraints."
                 }
             }
         },

@@ -207,6 +207,7 @@ export interface RouterConfig {
   };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
+  capabilityAwareRouting?: boolean;
 }
 
 export interface ChallengeGateConfig {

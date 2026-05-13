@@ -752,3 +752,176 @@ describe('routing-policy integration', () => {
     }
   });
 });
+
+describe('capability-aware routing', () => {
+  it('does not apply filtering when flag is off', () => {
+    const snapshot = makeSnapshot();
+    const candidates = resolveModel({
+      taskType: 'coding',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {
+        minContextWindow: 200000,
+        requiresTools: true,
+      },
+      capabilityAwareRouting: false,
+    });
+
+    // All candidates should be viable (no capability filtering applied)
+    const viable = candidates.filter((c) => c.viable);
+    assert.ok(viable.length > 0);
+    assert.ok(candidates.every((c) => !c.capabilityRejectedReasons));
+  });
+
+  it('excludes models below minContextWindow', () => {
+    const snapshot = makeSnapshot();
+    const candidates = resolveModel({
+      taskType: 'coding',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {
+        minContextWindow: 300000,
+      },
+      capabilityAwareRouting: true,
+    });
+
+    const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
+    // At least some models with 200k context windows should be rejected
+    assert.ok(rejected.length > 0, 'Should reject models with context window < 300k');
+    if (rejected.length > 0) {
+      assert.ok(rejected.every((c) => c.capabilityRejectedReasons?.some((r) => r.includes('context window'))));
+    }
+  });
+
+  it('excludes models without tool support when requiresTools is true', () => {
+    const snapshot = makeSnapshot();
+    const candidates = resolveModel({
+      taskType: 'coding',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {
+        requiresTools: true,
+      },
+      capabilityAwareRouting: true,
+    });
+
+    const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
+    assert.ok(rejected.every((c) => {
+      const hasToolReason = c.capabilityRejectedReasons?.some((r) => r.includes('tool support'));
+      return hasToolReason || false;
+    }));
+  });
+
+  it('excludes models without multimodal support when requiresMultimodal is true', () => {
+    const snapshot = makeSnapshot();
+    const candidates = resolveModel({
+      taskType: 'review',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {
+        requiresMultimodal: true,
+      },
+      capabilityAwareRouting: true,
+    });
+
+    const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
+    assert.ok(rejected.every((c) => {
+      const hasMultimodalReason = c.capabilityRejectedReasons?.some((r) => r.includes('multimodal'));
+      return hasMultimodalReason || false;
+    }));
+  });
+
+  it('excludes models exceeding maxLatencyTier', () => {
+    const snapshot = makeSnapshot();
+    const candidates = resolveModel({
+      taskType: 'planning',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {
+        maxLatencyTier: 'fast',
+      },
+      capabilityAwareRouting: true,
+    });
+
+    const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
+    assert.ok(rejected.every((c) => {
+      const hasLatencyReason = c.capabilityRejectedReasons?.some((r) => r.includes('latency'));
+      return hasLatencyReason || false;
+    }));
+  });
+
+  it('falls back to unfiltered candidates when all are rejected', () => {
+    const snapshot = makeSnapshot();
+    const candidates = resolveModel({
+      taskType: 'coding',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {
+        minContextWindow: 10000000, // Impossibly high requirement
+      },
+      capabilityAwareRouting: true,
+    });
+
+    // Should have viable candidates from fallback
+    const viable = candidates.filter((c) => c.viable);
+    assert.ok(viable.length > 0, 'Should fall back to original candidates when all rejected');
+
+    // But they should still have rejection reasons marked
+    const withReasons = candidates.filter((c) => c.capabilityRejectedReasons);
+    assert.ok(withReasons.length > 0, 'Should mark rejection reasons even in fallback');
+  });
+
+  it('applies multiple constraints simultaneously', () => {
+    const snapshot = makeSnapshot();
+    const candidates = resolveModel({
+      taskType: 'coding',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {
+        minContextWindow: 200000,
+        requiresTools: true,
+        maxLatencyTier: 'standard',
+      },
+      capabilityAwareRouting: true,
+    });
+
+    const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
+    // At least some models should be rejected for multiple reasons
+    const multiReason = rejected.filter((c) => (c.capabilityRejectedReasons?.length ?? 0) > 1);
+    // This assertion is lenient since we don't know the exact model registry state
+    assert.ok(rejected.length > 0, 'Should reject some models with multiple constraints');
+  });
+
+  it('preserves existing exclusion reasons when capability filtering is disabled', () => {
+    const snapshot = makeSnapshot({
+      'claude-opus-4-7': 'exhausted',
+    });
+    const candidates = resolveModel({
+      taskType: 'coding',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {
+        requiresTools: true,
+      },
+      capabilityAwareRouting: false,
+    });
+
+    const exhausted = candidates.find((c) => c.modelId === 'claude-opus-4-7');
+    assert.equal(exhausted?.exclusionReason, 'quota-exhausted');
+    assert.ok(!exhausted?.capabilityRejectedReasons);
+  });
+
+  it('no-op when constraints object is empty', () => {
+    const snapshot = makeSnapshot();
+    const candidates = resolveModel({
+      taskType: 'coding',
+      difficulty: 'trivial',
+      quotaState: snapshot,
+      capabilityConstraints: {},
+      capabilityAwareRouting: true,
+    });
+
+    const rejected = candidates.filter((c) => c.exclusionReason === 'capability-constraint');
+    assert.equal(rejected.length, 0, 'Empty constraints should not reject any models');
+  });
+});

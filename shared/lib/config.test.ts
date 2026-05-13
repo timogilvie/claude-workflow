@@ -1118,6 +1118,36 @@ test('getRouterConfig returns router section', () => {
   }
 });
 
+test('router.capabilityAwareRouting accepts boolean and defaults to undefined', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: { capabilityAwareRouting: true },
+    }));
+
+    const routerConfig = getRouterConfig(tmp);
+    assert.equal(routerConfig.capabilityAwareRouting, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('router.capabilityAwareRouting is undefined when not set', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: { enabled: true },
+    }));
+
+    const routerConfig = getRouterConfig(tmp);
+    assert.equal(routerConfig.capabilityAwareRouting, undefined);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('getAvailableModelsForStage prefers stage-specific models over router.models', () => {
   const routerConfig = {
     models: ['shared-model'],
