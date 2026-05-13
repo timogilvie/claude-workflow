@@ -139,18 +139,19 @@ test_off_deck_items_suppressed() {
   output="$(render_case "$(mixed_queue_plan)" "$(base_available)" 40)"
   check_contains "default shows queued header" "$output" "Queued After Dependencies"
   check_contains "shows on-deck available blocker item" "$output" "HOK-2 - Issue 2"
-  check_contains "shows multi-blocker on-deck item" "$output" "HOK-3 - Issue 3"
+  check_not_contains "suppresses partially on-deck multi-blocker item" "$output" "HOK-3 - Issue 3"
   check_not_contains "suppresses off-deck item 4" "$output" "HOK-4 - Issue 4"
   check_not_contains "suppresses off-deck item 5" "$output" "HOK-5 - Issue 5"
-  check_contains "shows hidden deps count" "$output" "+2 hidden - d to expand"
+  check_contains "shows hidden deps count" "$output" "+3 hidden - d to expand"
 }
 
 test_active_issue_ids_make_item_on_deck() {
   local output
   output="$(render_case "$(mixed_queue_plan)" "$(base_available)" 40 false false $'HOK-7\n')"
   check_contains "active blocker item becomes visible" "$output" "HOK-4 - Issue 4"
+  check_not_contains "partially on-deck multi-blocker item stays hidden" "$output" "HOK-3 - Issue 3"
   check_not_contains "remaining off-deck item stays hidden" "$output" "HOK-5 - Issue 5"
-  check_contains "hidden count updates" "$output" "+1 hidden - d to expand"
+  check_contains "hidden count updates" "$output" "+2 hidden - d to expand"
 }
 
 test_no_hidden_indicator_when_all_on_deck() {
