@@ -309,6 +309,74 @@ test_grouped_render_with_fixture_output() {
   check_eq "selection line 5 omits off-deck external dependency task" "" "$line7"
 }
 
+test_grouped_render_orders_available_by_score() {
+  local output scored_candidates queue_plan
+  scored_candidates=$'HOK-1|low-score|Low score|core|20|0\nHOK-2|focus-score|Focus score|core|130|0\nHOK-3|medium-score|Medium score|core|90|0'
+  queue_plan='{"availableNow":["HOK-1","HOK-2","HOK-3"],"queuedAfterDependencies":[],"avoidRunningTogether":[],"needsTriage":[]}'
+
+  output=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" CANDIDATES="$scored_candidates" QUEUE_PLAN="$queue_plan" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    GROUPED_DISPLAY=""
+    GROUPED_SELECT_FROM=""
+    render_grouped_task_list "$QUEUE_PLAN" "$CANDIDATES"
+    echo "$GROUPED_DISPLAY"
+    echo
+    echo "---SELECT---"
+    printf "%s\n" "$GROUPED_SELECT_FROM"
+  ')
+
+  check_contains "render promotes highest scored available task" "$output" "1. HOK-2 - Focus score"
+  check_contains "render keeps second scored available task next" "$output" "2. HOK-3 - Medium score"
+  check_contains "render demotes low scored available task" "$output" "3. HOK-1 - Low score"
+}
+
+test_scoring_boosts_focus_and_near_milestones() {
+  local output first second
+  output=$(REPO_DIR="$REPO_DIR" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$REPO_DIR/shared/lib/wavemill-common.sh"
+    WAVEMILL_BACKLOG_SCORE_TODAY=2026-05-13
+    backlog_json=$(cat <<'"'"'EOF'"'"'
+[
+  {
+    "identifier": "HOK-200",
+    "title": "Later launch urgent task",
+    "description": "",
+    "state": { "name": "Backlog" },
+    "labels": { "nodes": [] },
+    "priority": 1,
+    "estimate": null,
+    "projectMilestone": { "name": "Phase 7: Mainnet deploy", "targetDate": "2026-05-29" },
+    "relations": { "nodes": [] },
+    "inverseRelations": { "nodes": [] }
+  },
+  {
+    "identifier": "HOK-201",
+    "title": "Focused milestone task",
+    "description": "",
+    "state": { "name": "Backlog" },
+    "labels": { "nodes": [] },
+    "priority": 2,
+    "estimate": null,
+    "projectMilestone": { "name": "Three Contracts Tested", "targetDate": "2026-05-19" },
+    "relations": { "nodes": [] },
+    "inverseRelations": { "nodes": [] }
+  }
+]
+EOF
+)
+    score_and_rank_issues "$backlog_json" 2 "[\"Three Contracts Tested\"]"
+  ')
+
+  first="$(sed -n '1p' <<<"$output" | cut -d'|' -f1)"
+  second="$(sed -n '2p' <<<"$output" | cut -d'|' -f1)"
+  check_eq "focus milestone outranks later urgent task" "HOK-201" "$first"
+  check_eq "later milestone remains visible after focus task" "HOK-200" "$second"
+}
+
 test_grouped_render_deduplicates_and_keeps_one_item_per_line() {
   local output
   output=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" CANDIDATES="$CANDIDATES" QUEUE_PLAN='{"availableNow":["HOK-10"],"queuedAfterDependencies":[{"taskId":"HOK-11","ancestors":["HOK-10"]}],"avoidRunningTogether":[["HOK-13"]],"needsTriage":[{"reason":"duplicate","edge":{"type":"depends_on","from":"HOK-10","to":"HOK-11","source":"explicit"}},{"reason":"unknown_endpoint","edge":{"type":"depends_on","from":"HOK-99","to":"HOK-14","source":"explicit"}}]}' bash -lc '
@@ -545,6 +613,8 @@ test_fetch_queue_plan_transforms_linear_backlog
 test_backlog_refresh_persists_cache_in_parent_shell
 test_invoke_first_wave_helper_packs_priority_without_violating_dependencies
 test_grouped_render_with_fixture_output
+test_grouped_render_orders_available_by_score
+test_scoring_boosts_focus_and_near_milestones
 test_grouped_render_deduplicates_and_keeps_one_item_per_line
 test_render_rejects_malformed_json
 test_fallback_when_queue_analysis_fails

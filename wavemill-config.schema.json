@@ -240,6 +240,15 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Whether grouped backlog rendering starts expanded when truncation would otherwise hide tasks."
+                },
+                "focusMilestones": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "default": [],
+                    "description": "Linear project milestone names to boost in backlog scoring."
                 }
             },
             "additionalProperties": false

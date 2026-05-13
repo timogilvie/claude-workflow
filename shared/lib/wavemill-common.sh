@@ -1319,8 +1319,29 @@ is_task_packet() {
 score_and_rank_issues() {
   local backlog_json="$1"
   local show_limit="${2:-9}"
+  local focus_milestones_json="${3:-[]}"
+  local today="${WAVEMILL_BACKLOG_SCORE_TODAY:-$(date +%F)}"
 
-  echo "$backlog_json" | jq -r --argjson show_limit "$show_limit" '
+  printf '%s\n' "$backlog_json" | jq -r \
+    --argjson show_limit "$show_limit" \
+    --argjson focus_milestones "$focus_milestones_json" \
+    --arg today "$today" '
+    def epoch_ymd:
+      try (strptime("%Y-%m-%d") | mktime) catch null;
+    def days_until:
+      . as $date
+      | ($date | epoch_ymd) as $target
+      | ($today | epoch_ymd) as $now
+      | if $target == null or $now == null then null else (($target - $now) / 86400 | floor) end;
+    def date_urgency($days):
+      if $days == null then 0
+      elif $days < 0 then 55
+      elif $days <= 3 then 45
+      elif $days <= 7 then 30
+      elif $days <= 14 then 15
+      else 0
+      end;
+
     # Filter to backlog/todo only
     map(select((.state.name|ascii_downcase) == "todo" or (.state.name|ascii_downcase) == "backlog"))
 
@@ -1359,7 +1380,30 @@ score_and_rank_issues() {
           (.inverseRelations.nodes // [])
           | map(select(.type == "blocks" and .issue.completedAt == null and .issue.canceledAt == null))
           | length
-        )
+        ),
+
+        is_focus_milestone: (
+          (.projectMilestone.name // "") as $milestone
+          | ((($focus_milestones // []) | length) > 0 and (($focus_milestones // []) | index($milestone)) != null)
+        ),
+
+        milestone_days_until: (.projectMilestone.targetDate // null | days_until),
+        due_days_until: (.dueDate // null | days_until)
+      })
+
+    | map(. + {
+        milestone_urgency: (
+          if .is_focus_milestone then 80
+          else date_urgency(.milestone_days_until)
+          end
+        ),
+        due_urgency: date_urgency(.due_days_until)
+      })
+
+    | map(. + {
+        # Prefer work on earlier dated milestones when score is otherwise close.
+        milestone_sort_date: (.projectMilestone.targetDate // "9999-12-31"),
+        due_sort_date: (.dueDate // "9999-12-31")
       })
 
     # Calculate composite priority score (higher = higher priority)
@@ -1383,6 +1427,10 @@ score_and_rank_issues() {
           # Boost: Unblocked work is ready to go (+15 points)
           + (if .blocked_by_count == 0 then 15 else 0 end)
 
+          # Boost: User-configured focus milestones, near milestone targets, and due dates
+          + .milestone_urgency
+          + .due_urgency
+
           # Penalty: Blocked by other work (-20 per blocker, harder penalty)
           - (.blocked_by_count * 20)
 
@@ -1392,7 +1440,7 @@ score_and_rank_issues() {
       })
 
     # Sort by score descending (higher score = higher priority)
-    | sort_by(-.score)
+    | sort_by(-.score, .milestone_sort_date, .due_sort_date, .identifier)
 
     # Take top candidates for display
     | .[0:$show_limit]
