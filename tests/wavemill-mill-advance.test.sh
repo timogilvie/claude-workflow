@@ -93,6 +93,7 @@ for fn in \
   check_stage_aborted \
   _persist_phase \
   resolve_phase \
+  normalize_prompt_command_reply \
   handle_advance_command \
   execute_or_defer_monitor_command
 do
@@ -205,6 +206,7 @@ assert_eq "success audit path" "features/test-slug/.coding-result.json" "$(jq -r
 assert_eq "success audit status" "running" "$(jq -r '.artifact_summary.status' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "success audit artifact keys count" "2" "$(jq -r '.artifact_summary.artifact_keys | length' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_contains "success audit timestamp present" "T" "$(jq -r '.timestamp' "$FEATURE_SUCCESS/.coding-advance-override.json")"
+assert_eq "backlog prompt preserves advance command" "advance HOK-1639" "$(normalize_prompt_command_reply "advance HOK-1639")"
 
 # Unknown issue
 init_state "$STATE_FILE"
