@@ -35,6 +35,8 @@ export interface FingerprintableTask {
   priority?: unknown;
   estimate?: unknown;
   state?: unknown;
+  dueDate?: unknown;
+  projectMilestone?: unknown;
   blocks?: unknown;
 }
 
@@ -84,14 +86,23 @@ function normalizeState(value: unknown): string | null {
   return typeof id === 'string' ? id : null;
 }
 
+function normalizeProjectMilestone(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const name = normalizeString(value.name);
+  const targetDate = normalizeString(value.targetDate);
+  return { name, targetDate };
+}
+
 function canonicalizeTask(task: FingerprintableTask): Record<string, unknown> {
   return {
     blocks: normalizeStringArray(task.blocks),
     description: normalizeString(task.description),
+    dueDate: normalizeString(task.dueDate),
     estimate: task.estimate ?? null,
     id: task.id,
     labels: normalizeStringArray(task.labels),
     priority: task.priority ?? null,
+    projectMilestone: normalizeProjectMilestone(task.projectMilestone),
     state: normalizeState(task.state),
     title: normalizeString(task.title),
   };
