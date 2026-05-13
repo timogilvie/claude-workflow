@@ -73,9 +73,11 @@ export interface ResolvedModel {
   source: ResolutionSource;     // how the model was resolved (see below)
   familyChannel?: string;       // present when selector.kind === 'alias' and a channel was specified
   parentContextId?: string;     // present when source === 'inherited' and context.parentContextId was supplied
+  fallbackReason?: FallbackReason; // present when the policy layer had to substitute another model
 }
 
 export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | 'policy';
+export type FallbackReason = 'quota-exhausted' | 'disabled-by-policy' | 'unavailable';
 ```
 
 ### Source values emitted by resolveSelector
@@ -93,6 +95,51 @@ export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | '
 - `alias` selector: throws `ModelResolutionError` if `selector.family` is not in `FAMILY_ALIASES`.
 - `pinned` selector: throws `ModelResolutionError` (via `validateModelId`) if the model ID is malformed.
 - `inherit` selector: throws `ModelResolutionError` if `context?.parent` is absent.
+
+## resolveSelectorWithPolicy()
+
+`resolveSelectorWithPolicy(selector, context, options)` in `shared/lib/model-resolution-policy.ts` composes selector resolution with quota and routing policy checks. `resolveSelector()` remains unchanged; this wrapper is the policy-aware entry point when callers need explicit downgrade metadata.
+
+### Function signature
+
+```typescript
+export function resolveSelectorWithPolicy(
+  selector: ModelSelector,
+  context: ResolutionContext | undefined,
+  options: ResolveSelectorWithPolicyOptions,
+): ResolvedModel
+```
+
+### Behavior
+
+- Calls `resolveSelector()` first and preserves the original `requested` selector, `familyChannel`, and `parentContextId`.
+- Returns the baseline result unchanged when the resolved model is still viable under policy.
+- Returns `source: 'fallback'` with `fallbackReason: 'quota-exhausted'` when quota blocks the requested model.
+- Returns `source: 'policy'` with `fallbackReason: 'disabled-by-policy'` when non-quota policy rules block the requested model.
+- Returns `source: 'fallback'` with `fallbackReason: 'unavailable'` when the requested pinned target is absent from the active registry or filtered out as unavailable.
+- Throws a typed `ModelPolicyResolutionError` when no viable substitute exists.
+
+### Canonical example
+
+```typescript
+resolveSelectorWithPolicy(
+  { kind: 'alias', family: 'opus' },
+  undefined,
+  {
+    taskType: 'review',
+    difficulty: 'moderate',
+    quotaState: exhaustedOpusSnapshot,
+    registryOverride: DEFAULT_MODEL_REGISTRY,
+  },
+);
+// =>
+// {
+//   requested: { kind: 'alias', family: 'opus' },
+//   resolved: 'claude-sonnet-4-6',
+//   source: 'fallback',
+//   fallbackReason: 'quota-exhausted',
+// }
+```
 
 ## Capability-Aware Routing
 
