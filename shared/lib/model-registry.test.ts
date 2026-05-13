@@ -6,6 +6,8 @@ import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import {
   CHANNELS,
+  compareLatencyTier,
+  evaluateCapabilityConstraints,
   FAMILY_ALIASES,
   getConfiguredModelsForDescriptor,
   getConfiguredModelsForDescriptorStage,
@@ -20,9 +22,15 @@ import {
   parseModelSelector,
   rankCandidates,
   resolveSelector,
+  satisfiesCapabilities,
   validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
+import {
+  ModelPolicyResolutionError,
+  resolveSelectorWithPolicy,
+} from './model-resolution-policy.ts';
+import type { QuotaSnapshot, QuotaStatus } from './quota-state.ts';
 
 type TaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
 type ToolSupport = 'none' | 'basic' | 'full';
@@ -79,6 +87,29 @@ function makeCapabilities(
     costPerMillionInputTokensUsd: overrides.costPerMillionInputTokensUsd ?? 1,
     costPerMillionOutputTokensUsd: overrides.costPerMillionOutputTokensUsd ?? 2,
     agent: overrides.agent,
+  };
+}
+
+function makeQuotaSnapshot(
+  registry: ModelRegistry,
+  statuses: Partial<Record<string, QuotaStatus>> = {},
+): QuotaSnapshot {
+  return {
+    models: Object.fromEntries(
+      Object.keys(registry.models).map((modelId) => [
+        modelId,
+        {
+          status: statuses[modelId] ?? 'healthy',
+          remainingEstimate: null,
+          resetAt: null,
+          confidence: 1,
+          lastLimitErrorAt: null,
+          lastSuccessAt: null,
+          lastReason: null,
+        },
+      ]),
+    ),
+    snapshotAt: new Date().toISOString(),
   };
 }
 
@@ -414,6 +445,64 @@ describe('model-registry', () => {
     assert.equal(economy.reasoningTier, 'basic');
     assert.equal(economy.costPerMillionInputTokensUsd, 0.8);
     assert.equal(economy.costPerMillionOutputTokensUsd, 4);
+  });
+
+  it('treats empty capability constraints as satisfied', () => {
+    const model = DEFAULT_MODEL_REGISTRY.models['gpt-5.5'];
+
+    assert.equal(satisfiesCapabilities(model), true);
+    assert.deepEqual(evaluateCapabilityConstraints(model, {}).failedConstraints, []);
+  });
+
+  it('checks minimum context window constraints', () => {
+    const model = DEFAULT_MODEL_REGISTRY.models['gpt-5.5'];
+
+    assert.equal(satisfiesCapabilities(model, { minContextWindow: 128_000 }), true);
+    assert.equal(satisfiesCapabilities(model, { minContextWindow: 500_000 }), false);
+    assert.deepEqual(
+      evaluateCapabilityConstraints(model, { minContextWindow: 500_000 }).failedConstraints,
+      ['minContextWindow'],
+    );
+  });
+
+  it('checks tool support constraints', () => {
+    assert.equal(satisfiesCapabilities(makeCapabilities({ toolSupport: 'none' }), { requiresTools: true }), false);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ toolSupport: 'basic' }), { requiresTools: true }), true);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ toolSupport: 'full' }), { requiresTools: true }), true);
+  });
+
+  it('checks multimodal image constraints', () => {
+    assert.equal(
+      satisfiesCapabilities(makeCapabilities({ multimodal: { text: true, image: true } }), { requiresMultimodal: true }),
+      true,
+    );
+    assert.equal(
+      satisfiesCapabilities(makeCapabilities({ multimodal: { text: true, image: false } }), { requiresMultimodal: true }),
+      false,
+    );
+  });
+
+  it('orders latency tiers from fast to slow', () => {
+    assert.ok(compareLatencyTier('fast', 'standard') < 0);
+    assert.ok(compareLatencyTier('standard', 'slow') < 0);
+    assert.ok(compareLatencyTier('slow', 'fast') > 0);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ latencyTier: 'fast' }), { maxLatencyTier: 'standard' }), true);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ latencyTier: 'slow' }), { maxLatencyTier: 'standard' }), false);
+  });
+
+  it('fails closed when a required capability field is missing', () => {
+    const partialModel = {
+      contextWindowTokens: 200_000,
+      toolSupport: 'basic',
+    } as Partial<ModelRegistry['models'][string]>;
+
+    assert.deepEqual(
+      evaluateCapabilityConstraints(partialModel, {
+        requiresMultimodal: true,
+        maxLatencyTier: 'standard',
+      }).failedConstraints,
+      ['requiresMultimodal', 'maxLatencyTier'],
+    );
   });
 
   it('recognizes configured DeepSeek IDs and validates bracket syntax', () => {
@@ -930,5 +1019,196 @@ describe('resolveSelector', () => {
         return true;
       },
     );
+  });
+});
+
+describe('resolveSelectorWithPolicy', () => {
+  it('passes through a healthy eligible alias without fallback metadata', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.deepEqual(resolved, {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: 'claude-opus-4-7',
+      source: 'alias',
+      familyChannel: 'stable',
+    });
+  });
+
+  it('falls back to sonnet when opus quota is exhausted', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-7': 'exhausted',
+        }),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.deepEqual(resolved, {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: 'claude-sonnet-4-6',
+      source: 'fallback',
+      familyChannel: 'stable',
+      fallbackReason: 'quota-exhausted',
+    });
+  });
+
+  it('returns a policy downgrade when cost policy blocks the requested model', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        maxCostTier: 'strong_generalist',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.deepEqual(resolved, {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: 'claude-sonnet-4-6',
+      source: 'policy',
+      familyChannel: 'stable',
+      fallbackReason: 'disabled-by-policy',
+    });
+  });
+
+  it('treats an alias target missing from the registry as unavailable', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'claude-sonnet-4-6': DEFAULT_MODEL_REGISTRY.models['claude-sonnet-4-6'],
+        'gpt-5.5': DEFAULT_MODEL_REGISTRY.models['gpt-5.5'],
+      },
+      ladders: {
+        review: ['claude-sonnet-4-6', 'gpt-5.5'],
+      },
+    };
+
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(registry),
+        registryOverride: registry,
+      },
+    );
+
+    assert.deepEqual(resolved, {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: 'claude-sonnet-4-6',
+      source: 'fallback',
+      familyChannel: 'stable',
+      fallbackReason: 'unavailable',
+    });
+  });
+
+  it('preserves the original alias family and channel during fallback', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus', channel: 'stable' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-7': 'exhausted',
+        }),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.equal(resolved.requested.kind, 'alias');
+    assert.equal(resolved.requested.family, 'opus');
+    assert.equal(resolved.familyChannel, 'stable');
+    assert.equal(resolved.fallbackReason, 'quota-exhausted');
+  });
+
+  it('throws a typed error when no viable substitute exists', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'claude-opus-4-7': DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7'],
+        'gpt-5.5': DEFAULT_MODEL_REGISTRY.models['gpt-5.5'],
+      },
+      ladders: {
+        review: ['claude-opus-4-7', 'gpt-5.5'],
+      },
+    };
+
+    assert.throws(
+      () =>
+        resolveSelectorWithPolicy(
+          { kind: 'alias', family: 'opus' },
+          undefined,
+          {
+            taskType: 'review',
+            difficulty: 'moderate',
+            maxCostTier: 'strong_generalist',
+            quotaState: makeQuotaSnapshot(registry, {
+              'claude-opus-4-7': 'exhausted',
+              'gpt-5.5': 'exhausted',
+            }),
+            registryOverride: registry,
+          },
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelPolicyResolutionError);
+        assert.equal(error.code, 'no_viable_substitute');
+        assert.equal(error.reason, 'quota-exhausted');
+        assert.match(error.message, /No viable substitute/);
+        return true;
+      },
+    );
+  });
+
+  it('prefers the quota outcome when quota and policy both block the request', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        maxCostTier: 'strong_generalist',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-7': 'exhausted',
+        }),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.equal(resolved.source, 'fallback');
+    assert.equal(resolved.fallbackReason, 'quota-exhausted');
+  });
+
+  it('prefers a same-vendor nearest downgrade over a higher-ranked cross-vendor fallback', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-7': 'exhausted',
+        }),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.equal(resolved.resolved, 'claude-sonnet-4-6');
   });
 });
