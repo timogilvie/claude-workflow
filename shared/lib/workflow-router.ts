@@ -15,7 +15,7 @@ import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { getEffectiveRegistry, getLadder, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
-import { resolveModel, topViableCandidate } from './routing-policy.ts';
+import { resolveModel, topViableCandidate, type CapabilityConstraints } from './routing-policy.ts';
 import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { loadConfiguredPricingTable } from './workflow-cost.ts';
@@ -97,6 +97,7 @@ export interface RouteWorkflowOptions {
   packetContent?: string;
   skipDifficultyClassification?: boolean;
   additionalEvalsPaths?: string[];
+  capabilityConstraints?: CapabilityConstraints;
 }
 
 function withSignals(
@@ -218,6 +219,69 @@ export const REVIEW_TOKENS: Record<Exclude<ReviewMode, 'none'>, StageTokenProfil
   llm: { inputTokens: 95_000, cacheCreationTokens: 25_000, cacheReadTokens: 80_000, outputTokens: 8_000 },
   'static+llm': { inputTokens: 180_000, cacheCreationTokens: 40_000, cacheReadTokens: 160_000, outputTokens: 12_000 },
 };
+
+/**
+ * Derive capability constraints for a specific workflow role.
+ * Conservative defaults based on role requirements and task characteristics.
+ */
+function deriveCapabilityConstraints(
+  role: 'planner' | 'coder' | 'reviewer',
+  prompt: string,
+  depth: PlanDepth | CodeDepth | ReviewMode,
+  options?: RouteWorkflowOptions,
+): CapabilityConstraints | undefined {
+  // If explicit constraints provided, use those
+  if (options?.capabilityConstraints) {
+    return options.capabilityConstraints;
+  }
+
+  const constraints: CapabilityConstraints = {};
+
+  // Derive context window requirement from depth and role
+  const depthTokens =
+    role === 'planner'
+      ? PLAN_TOKENS[depth as PlanDepth]
+      : role === 'coder'
+        ? CODE_TOKENS[depth as CodeDepth]
+        : depth !== 'none'
+          ? REVIEW_TOKENS[depth as Exclude<ReviewMode, 'none'>]
+          : undefined;
+
+  if (depthTokens) {
+    // Conservative estimate: input + cache creation + some headroom
+    const estimatedTokens = depthTokens.inputTokens + depthTokens.cacheCreationTokens;
+    // Only set if we need more than baseline (200k)
+    if (estimatedTokens > 200_000) {
+      constraints.minContextWindow = estimatedTokens;
+    }
+  }
+
+  // Coder always requires tools
+  if (role === 'coder') {
+    constraints.requiresTools = true;
+  }
+
+  // Reviewer requires multimodal for UI/visual tasks
+  if (role === 'reviewer') {
+    const promptLower = prompt.toLowerCase();
+    const packetLower = (options?.packetContent ?? '').toLowerCase();
+    const hasUiIndicators =
+      promptLower.includes('ui') ||
+      promptLower.includes('visual') ||
+      promptLower.includes('screenshot') ||
+      promptLower.includes('image') ||
+      packetLower.includes('has_ui') ||
+      packetLower.includes('frontend') ||
+      packetLower.includes('component');
+
+    if (hasUiIndicators) {
+      constraints.requiresMultimodal = true;
+    }
+  }
+
+  // Return undefined if no constraints were set
+  return Object.keys(constraints).length > 0 ? constraints : undefined;
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -396,6 +460,7 @@ function readRoutingQuotaState(repoDir?: string): QuotaSnapshot | null {
 }
 
 function resolvePolicyStagePools(
+  prompt: string,
   options: RouteWorkflowOptions,
 ): { taskDifficulty: RoutingDifficulty; quotaState: QuotaSnapshot; policyStagePools: ReturnType<typeof buildPolicyStagePools> } | null {
   const repoDir = options.repoDir;
@@ -410,7 +475,36 @@ function resolvePolicyStagePools(
   }
 
   const pool = getModelPool(repoDir).models;
-  const policyStagePools = buildPolicyStagePools({ difficulty: taskDifficulty, quotaState, pool, repoDir });
+
+  // Derive capability constraints for stage pools
+  const routerConfig = loadRouterConfig(repoDir);
+  const capabilityAwareRouting = routerConfig.capabilityAwareRouting ?? false;
+  const characteristics = analyzePrompt(prompt);
+  const riskScore = computeRiskScore(prompt, characteristics);
+  const planDepth = choosePlanDepth(characteristics, riskScore);
+  const codeDepth = chooseCodeDepth(characteristics, riskScore);
+  const reviewRecommended = chooseReviewMode(characteristics, riskScore);
+
+  const plannerConstraints = capabilityAwareRouting
+    ? deriveCapabilityConstraints('planner', prompt, planDepth, options)
+    : undefined;
+  const coderConstraints = capabilityAwareRouting
+    ? deriveCapabilityConstraints('coder', prompt, codeDepth, options)
+    : undefined;
+  const reviewerConstraints = capabilityAwareRouting
+    ? deriveCapabilityConstraints('reviewer', prompt, reviewRecommended, options)
+    : undefined;
+
+  const policyStagePools = buildPolicyStagePools({
+    difficulty: taskDifficulty,
+    quotaState,
+    pool,
+    repoDir,
+    capabilityAwareRouting,
+    plannerConstraints,
+    coderConstraints,
+    reviewerConstraints,
+  });
 
   return { taskDifficulty, quotaState, policyStagePools };
 }
@@ -420,26 +514,34 @@ function buildPolicyStagePools(params: {
   pool: string[];
   quotaState: QuotaSnapshot;
   repoDir?: string;
+  capabilityAwareRouting?: boolean;
+  plannerConstraints?: CapabilityConstraints;
+  coderConstraints?: CapabilityConstraints;
+  reviewerConstraints?: CapabilityConstraints;
 }): { plannerModels: string[]; coderModels: string[]; reviewerModels: string[] } {
   const basePolicy = {
     difficulty: params.difficulty,
     quotaState: params.quotaState,
     repoDir: params.repoDir,
+    capabilityAwareRouting: params.capabilityAwareRouting ?? false,
   } as const;
   const poolSet = new Set(params.pool);
 
   // Pools inherit the healthy frontier sibling substitution rule from resolveModel:
   // when top-of-ladder frontier is degrading/exhausted and a healthy frontier sibling exists,
   // non-frontier models are excluded from viable candidates
-  const toPoolModels = (taskType: 'planning' | 'coding' | 'review'): string[] =>
-    resolveModel({ ...basePolicy, taskType })
+  const toPoolModels = (
+    taskType: 'planning' | 'coding' | 'review',
+    constraints?: CapabilityConstraints,
+  ): string[] =>
+    resolveModel({ ...basePolicy, taskType, capabilityConstraints: constraints })
       .filter((candidate) => candidate.viable && poolSet.has(candidate.modelId))
       .map((candidate) => candidate.modelId);
 
   return {
-    plannerModels: toPoolModels('planning'),
-    coderModels: toPoolModels('coding'),
-    reviewerModels: toPoolModels('review'),
+    plannerModels: toPoolModels('planning', params.plannerConstraints),
+    coderModels: toPoolModels('coding', params.coderConstraints),
+    reviewerModels: toPoolModels('review', params.reviewerConstraints),
   };
 }
 
@@ -853,7 +955,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
 
   const routerConfig = getRouterConfig(repoDir);
   const modelRouterConfig = loadRouterConfig(repoDir);
-  const policyResolution = resolvePolicyStagePools(options || {});
+  const policyResolution = resolvePolicyStagePools(prompt, options || {});
   const plannerPoolResolution = resolveStagePool('planner', pool, routerConfig, options, policyResolution?.policyStagePools.plannerModels);
   const coderPoolResolution = resolveStagePool('coder', pool, routerConfig, options, policyResolution?.policyStagePools.coderModels);
   const reviewerPoolResolution = resolveStagePool('reviewer', pool, routerConfig, options, policyResolution?.policyStagePools.reviewerModels);
@@ -1053,7 +1155,7 @@ function routeWorkflowStageAwareInternal(
 
   // Resolve difficulty and policy pools before stage-aware routing
   // so both KNN selection and difficulty floor application respect frontier substitution
-  const policyResolution = resolvePolicyStagePools(options || {});
+  const policyResolution = resolvePolicyStagePools(prompt, options || {});
   const taskDifficulty = policyResolution?.taskDifficulty || resolveTaskDifficulty(options || {}, repoDir);
 
   let stageAwareDecision;
@@ -1330,15 +1432,37 @@ export function tryPolicyResolution(
   const planDepth = choosePlanDepth(characteristics, riskScore);
   const codeDepth = chooseCodeDepth(characteristics, riskScore);
   const reviewRecommended = chooseReviewMode(characteristics, riskScore);
+  const capabilityAwareRouting = routerConfig.capabilityAwareRouting ?? false;
   const basePolicy = {
     difficulty: taskDifficulty,
     quotaState,
     repoDir,
+    capabilityAwareRouting,
   } as const;
 
-  const plannerModel = topViableCandidate({ ...basePolicy, taskType: 'planning' }, pool);
-  const coderModel = topViableCandidate({ ...basePolicy, taskType: 'coding' }, pool);
-  const reviewerModel = topViableCandidate({ ...basePolicy, taskType: 'review' }, pool);
+  // Derive capability constraints for each role
+  const plannerConstraints = capabilityAwareRouting
+    ? deriveCapabilityConstraints('planner', prompt, planDepth, options)
+    : undefined;
+  const coderConstraints = capabilityAwareRouting
+    ? deriveCapabilityConstraints('coder', prompt, codeDepth, options)
+    : undefined;
+  const reviewerConstraints = capabilityAwareRouting
+    ? deriveCapabilityConstraints('reviewer', prompt, reviewRecommended, options)
+    : undefined;
+
+  const plannerModel = topViableCandidate(
+    { ...basePolicy, taskType: 'planning', capabilityConstraints: plannerConstraints },
+    pool,
+  );
+  const coderModel = topViableCandidate(
+    { ...basePolicy, taskType: 'coding', capabilityConstraints: coderConstraints },
+    pool,
+  );
+  const reviewerModel = topViableCandidate(
+    { ...basePolicy, taskType: 'review', capabilityConstraints: reviewerConstraints },
+    pool,
+  );
 
   if (!plannerModel || !coderModel || !reviewerModel) {
     console.warn(
@@ -1414,7 +1538,7 @@ export async function routeWorkflowHokusai(
   options?: RouteWorkflowOptions,
 ): Promise<StageAwareDecision> {
   const repoDir = options?.repoDir;
-  const policyResolution = resolvePolicyStagePools(options || {});
+  const policyResolution = resolvePolicyStagePools(prompt, options || {});
   const taskDifficulty = policyResolution?.taskDifficulty || resolveTaskDifficulty(options || {}, repoDir);
   const decision = await routeViaHokusai(prompt, {
     ...options,
