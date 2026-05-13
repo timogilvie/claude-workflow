@@ -132,6 +132,7 @@ mkdir -p \
   "$WORKTREES_DIR/review-task/features/review-task" \
   "$WORKTREES_DIR/ready-task/features/ready-task" \
   "$WORKTREES_DIR/ready-stale-task/features/ready-stale-task" \
+  "$WORKTREES_DIR/merged-done-task/features/merged-done-task" \
   "$WORKTREES_DIR/merge-candidate-task/features/merge-candidate-task" \
   "$WORKTREES_DIR/ready-conflict-task/features/ready-conflict-task" \
   "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task" \
@@ -916,6 +917,18 @@ cat > "$WORKTREES_DIR/ready-stale-task/features/ready-stale-task/.ready-result.j
 }
 EOF
 
+cat > "$WORKTREES_DIR/merged-done-task/features/merged-done-task/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "queueState": "ready-stale"
+  }
+}
+EOF
+
 cat > "$WORKTREES_DIR/merge-candidate-task/features/merge-candidate-task/.ready-result.json" <<'EOF'
 {
   "stage": "ready",
@@ -1027,6 +1040,14 @@ cat > "$STATE_FILE_READY_QUEUE" <<EOF
       "status": "",
       "phase": "ready",
       "pr": "tracked"
+    },
+    "HOK-1313": {
+      "slug": "merged-done-task",
+      "branch": "task/merged-done-task",
+      "worktree": "$WORKTREES_DIR/merged-done-task",
+      "status": "merged",
+      "phase": "ready",
+      "pr": "tracked"
     }
   }
 }
@@ -1038,7 +1059,8 @@ cat > "$BEHAVIOR_READY_QUEUE" <<'EOF'
   "pane": {
     "HOK-1310-ready-complete-task": "15",
     "HOK-1311-ready-stale-task": "16",
-    "HOK-1312-merge-candidate-task": "17"
+    "HOK-1312-merge-candidate-task": "17",
+    "HOK-1313-merged-done-task": "18"
   },
   "hook": {},
   "reported": {},
@@ -1046,12 +1068,14 @@ cat > "$BEHAVIOR_READY_QUEUE" <<'EOF'
   "pr": {
     "task/ready-complete-task": "421|OPEN",
     "task/ready-stale-task": "422|OPEN",
-    "task/merge-candidate-task": "423|OPEN"
+    "task/merge-candidate-task": "423|OPEN",
+    "task/merged-done-task": "424|MERGED"
   },
   "checks": {
     "task/ready-complete-task": "pass",
     "task/ready-stale-task": "pass",
-    "task/merge-candidate-task": "pass"
+    "task/merge-candidate-task": "pass",
+    "task/merged-done-task": "pass"
   }
 }
 EOF
@@ -1065,6 +1089,13 @@ if grep -q 'HOK-1310.*🚦 ready' "$OUTPUT_READY_QUEUE" \
   pass "renders ready queue states distinctly"
 else
   fail "ready queue state labels are missing"
+fi
+
+if grep -q 'HOK-1313.*✓ done.*✓ merged.*#424 MERGED' "$OUTPUT_READY_QUEUE" \
+  && ! grep -q 'HOK-1313.*ready-stale' "$OUTPUT_READY_QUEUE"; then
+  pass "merged tasks override stale ready queue labels"
+else
+  fail "merged task should not display stale ready queue label"
 fi
 
 STATE_FILE_READY_WATCHDOG="$TMP_DIR/state-ready-watchdog.json"

@@ -689,7 +689,10 @@ render_task_row() {
     esac
   fi
 
-  case "$task_phase" in
+  if [[ "$task_status" == "merged" ]]; then
+    phase_str="${G}✓ done${N}"
+  else
+    case "$task_phase" in
     planning)
       plan_status=""
       [[ -n "$worktree" && -n "$slug" ]] && plan_status=$(get_planning_display_status "$worktree" "$slug")
@@ -745,7 +748,8 @@ render_task_row() {
       fi
       ;;
     *)         phase_str="${D}$task_phase${N}" ;;
-  esac
+    esac
+  fi
 
   ds="$slug"
   (( ${#ds} > 22 )) && ds="${ds:0:19}..."
