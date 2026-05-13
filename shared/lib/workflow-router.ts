@@ -85,6 +85,7 @@ export interface WorkflowRouteDecision {
   capabilityFilterApplied?: boolean;
   capabilityFilterFallback?: boolean;
   capabilityConstraints?: CapabilityConstraints;
+  constraintsRejectedBy?: Record<string, string[]>;
 }
 
 export interface RouteWorkflowOptions {
@@ -240,15 +241,14 @@ function deriveCapabilityConstraints(
 
   const constraints: CapabilityConstraints = {};
 
-  // Derive context window requirement from depth and role
+  // Derive context window requirement from depth and role.
+  // REQ-F10: planner leaves capability constraints empty by default.
   const depthTokens =
-    role === 'planner'
-      ? PLAN_TOKENS[depth as PlanDepth]
-      : role === 'coder'
-        ? CODE_TOKENS[depth as CodeDepth]
-        : depth !== 'none'
-          ? REVIEW_TOKENS[depth as Exclude<ReviewMode, 'none'>]
-          : undefined;
+    role === 'coder'
+      ? CODE_TOKENS[depth as CodeDepth]
+      : role === 'reviewer' && depth !== 'none'
+        ? REVIEW_TOKENS[depth as Exclude<ReviewMode, 'none'>]
+        : undefined;
 
   if (depthTokens) {
     // Conservative estimate: input + cache creation + some headroom
@@ -1454,18 +1454,22 @@ export function tryPolicyResolution(
     ? deriveCapabilityConstraints('reviewer', prompt, reviewRecommended, options)
     : undefined;
 
-  const plannerModel = topViableCandidate(
+  const poolSet = new Set(pool);
+
+  const plannerCandidates = resolveModel(
     { ...basePolicy, taskType: 'planning', capabilityConstraints: plannerConstraints },
-    pool,
   );
-  const coderModel = topViableCandidate(
+  const plannerModel = plannerCandidates.find((c) => c.viable && poolSet.has(c.modelId))?.modelId ?? null;
+
+  const coderCandidates = resolveModel(
     { ...basePolicy, taskType: 'coding', capabilityConstraints: coderConstraints },
-    pool,
   );
-  const reviewerModel = topViableCandidate(
+  const coderModel = coderCandidates.find((c) => c.viable && poolSet.has(c.modelId))?.modelId ?? null;
+
+  const reviewerCandidates = resolveModel(
     { ...basePolicy, taskType: 'review', capabilityConstraints: reviewerConstraints },
-    pool,
   );
+  const reviewerModel = reviewerCandidates.find((c) => c.viable && poolSet.has(c.modelId))?.modelId ?? null;
 
   if (!plannerModel || !coderModel || !reviewerModel) {
     console.warn(
@@ -1473,6 +1477,17 @@ export function tryPolicyResolution(
     );
     return null;
   }
+
+  // Build REQ-F12 decision metadata from candidate inspection
+  const allCandidates = [...plannerCandidates, ...coderCandidates, ...reviewerCandidates];
+  const rejectedByConstraints = allCandidates.filter(
+    (c) => c.capabilityRejectedReasons && c.capabilityRejectedReasons.length > 0,
+  );
+  const constraintsRejectedBy = rejectedByConstraints.length > 0
+    ? Object.fromEntries(rejectedByConstraints.map((c) => [c.modelId, c.capabilityRejectedReasons!]))
+    : undefined;
+  // Fallback: a candidate has capability rejection reasons yet remains viable (filter fell back)
+  const capabilityFilterFallback = rejectedByConstraints.some((c) => c.viable);
 
   logPolicyAdjustment('planning', plannerModel, pool, quotaState, repoDir);
   logPolicyAdjustment('coding', coderModel, pool, quotaState, repoDir);
@@ -1536,7 +1551,9 @@ export function tryPolicyResolution(
     capabilityFilterApplied: capabilityAwareRouting && (
       !!plannerConstraints || !!coderConstraints || !!reviewerConstraints
     ),
+    capabilityFilterFallback: capabilityFilterFallback || undefined,
     capabilityConstraints: options?.capabilityConstraints,
+    constraintsRejectedBy,
   };
 }
 

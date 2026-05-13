@@ -912,6 +912,17 @@ export function routeStageAwareWithContext(
   if (options.maxCostUsd !== undefined) {
     decision.constraints = { maxCostUsd: options.maxCostUsd };
   }
+  if (capabilityAwareRouting) {
+    decision.capabilityFilterApplied = !!(
+      options.plannerCapabilityConstraints ||
+      options.coderCapabilityConstraints ||
+      options.reviewerCapabilityConstraints ||
+      options.capabilityConstraints
+    );
+    if (options.capabilityConstraints) {
+      decision.capabilityConstraints = options.capabilityConstraints;
+    }
+  }
 
   // When neighbors lack model diversity, use neighbor data for stage calibration
   // (depth, review mode, cost estimates) but mark the decision as partial so the
