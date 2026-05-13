@@ -53,18 +53,25 @@ function renderPreview(queuePlan: QueuePlan, records: BacklogRecord[]): string {
 async function loadBacklogFromLinear(projectName?: string): Promise<BacklogRecord[]> {
   const blockers = (issue: LinearIssue) =>
     (issue.inverseRelations?.nodes ?? [])
-      .filter((relation) => relation.type === 'blocks' && relation.issue?.identifier)
+      .filter(
+        (relation) =>
+          relation.type === 'blocks' &&
+          relation.issue?.identifier &&
+          relation.issue.completedAt == null &&
+          relation.issue.canceledAt == null,
+      )
       .map((relation) => relation.issue!.identifier)
       .sort(compareTaskIds);
   const blockingRelationIds = (issue: LinearIssue) =>
-    [
-      ...(issue.relations?.nodes ?? [])
-        .filter((relation) => relation.type === 'blocks' && relation.relatedIssue?.identifier)
-        .map((relation) => relation.relatedIssue!.identifier),
-      ...(issue.inverseRelations?.nodes ?? [])
-        .filter((relation) => relation.type === 'blocks' && relation.issue?.identifier)
-        .map((relation) => relation.issue!.identifier),
-    ]
+    (issue.relations?.nodes ?? [])
+      .filter(
+        (relation) =>
+          relation.type === 'blocks' &&
+          relation.relatedIssue?.identifier &&
+          relation.relatedIssue.completedAt == null &&
+          relation.relatedIssue.canceledAt == null,
+      )
+      .map((relation) => relation.relatedIssue!.identifier)
       .sort(compareTaskIds)
       .filter((identifier, index, all) => identifier !== all[index - 1]);
 
@@ -74,8 +81,11 @@ async function loadBacklogFromLinear(projectName?: string): Promise<BacklogRecor
     description: issue.description,
     labels: issue.labels.nodes.map((label) => label.name).sort((a, b) => a.localeCompare(b)),
     priority: issue.priority ?? null,
+    priorityLabel: issue.priorityLabel ?? null,
     estimate: issue.estimate ?? null,
     state: issue.state.name,
+    dueDate: issue.dueDate ?? null,
+    projectMilestone: issue.projectMilestone ?? null,
     blocks: blockingRelationIds(issue),
     dependsOn: blockers(issue),
   }));
@@ -101,6 +111,8 @@ function toCacheTask(record: BacklogRecord): FingerprintableTask {
     priority: record.priority,
     estimate: record.estimate,
     state: record.state,
+    dueDate: record.dueDate,
+    projectMilestone: record.projectMilestone,
     blocks: record.blocks,
   };
 }
@@ -140,6 +152,7 @@ runTool({
     project: { type: 'string', description: 'Fetch backlog from Linear project name' },
     'cache-key': { type: 'string', description: 'Cache key slug for file/stdin backlog modes' },
     'no-cache': { type: 'boolean', description: 'Disable task dependency cache reads and writes' },
+    'refresh-missing-cache': { type: 'boolean', description: 'Run queue analysis when the cache has no fingerprints yet' },
     json: { type: 'boolean', description: 'Emit queuePlan JSON' },
     preview: { type: 'boolean', description: 'Emit human-readable preview' },
   },
@@ -152,7 +165,11 @@ runTool({
     const sources = [args['backlog-file'], args.stdin, args.project].filter(Boolean);
     if (sources.length !== 1) throw new Error('Usage: provide exactly one input source: --backlog-file <path>, --stdin, or --project <name>');
 
-    const cacheKey = args.project ? toKebabCase(args.project) : args['cache-key'];
+    const cacheKey = args.project
+      ? toKebabCase(args.project)
+      : typeof args['cache-key'] === 'string'
+      ? toKebabCase(args['cache-key'])
+      : args['cache-key'];
     const shouldUseCache = !args['no-cache'] && typeof cacheKey === 'string' && cacheKey.length > 0;
     const records = args['backlog-file']
       ? readBacklogFile(args['backlog-file'])
@@ -172,6 +189,11 @@ runTool({
     const cacheAfterPrune = cacheBeforePrune ? pruneCache(cacheBeforePrune, fingerprintTasks) : undefined;
     const explicitEdges = extractEdgesFromBacklog(records);
     const backlogDiff = cacheBeforePrune ? computeBacklogDiff(cacheBeforePrune.fingerprints, fingerprintTasks) : undefined;
+    const shouldRunInitialRefresh =
+      args['refresh-missing-cache'] === true &&
+      cacheBeforePrune !== undefined &&
+      Object.keys(cacheBeforePrune.fingerprints).length === 0 &&
+      records.length > 0;
     const shouldRunPartialRefresh =
       cacheBeforePrune !== undefined &&
       Object.keys(cacheBeforePrune.fingerprints).length > 0 &&
@@ -182,10 +204,16 @@ runTool({
     let cacheToSave = cacheAfterPrune;
     let inferredEdges: DependencyEdge[] = cacheAfterPrune ? cachedEdgesToDependencyEdges(cacheAfterPrune.edges) : [];
 
-    if (shouldRunPartialRefresh && cacheAfterPrune && backlogDiff) {
-      const changedTaskIds = new Set([...backlogDiff.added, ...backlogDiff.changed]);
-      const removedTaskIds = new Set([...backlogDiff.completed, ...backlogDiff.removed]);
-      const contextTaskIds = assembleNearbyContext({ changedTaskIds, allBacklog: records });
+    if ((shouldRunInitialRefresh || shouldRunPartialRefresh) && cacheAfterPrune && backlogDiff) {
+      const changedTaskIds = shouldRunInitialRefresh
+        ? new Set(records.map((record) => record.id))
+        : new Set([...backlogDiff.added, ...backlogDiff.changed]);
+      const removedTaskIds = shouldRunInitialRefresh
+        ? new Set<string>()
+        : new Set([...backlogDiff.completed, ...backlogDiff.removed]);
+      const contextTaskIds = shouldRunInitialRefresh
+        ? records.map((record) => record.id).sort(compareTaskIds)
+        : assembleNearbyContext({ changedTaskIds, allBacklog: records });
       const taskById = new Map(records.map((record) => [record.id, record]));
       const contextTasks = contextTaskIds
         .map((taskId) => taskById.get(taskId))
@@ -213,7 +241,11 @@ runTool({
           fingerprints: currentFingerprints,
         };
       } catch (error) {
-        process.stderr.write(`plan-queue: partial refresh failed, falling back to cached edges: ${(error as Error).message}\n`);
+        const refreshKind = shouldRunInitialRefresh ? 'initial refresh' : 'partial refresh';
+        process.stderr.write(`plan-queue: ${refreshKind} failed, falling back to cached edges: ${(error as Error).message}\n`);
+        if (shouldRunInitialRefresh) {
+          cacheToSave = undefined;
+        }
       }
     }
 
