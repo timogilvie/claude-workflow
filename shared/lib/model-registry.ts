@@ -223,6 +223,7 @@ export type ModelSelector =
   | { kind: 'inherit' };
 
 export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | 'policy';
+export type FallbackReason = 'quota-exhausted' | 'disabled-by-policy' | 'unavailable';
 
 export interface ResolvedModel {
   requested: ModelSelector;
@@ -231,6 +232,7 @@ export interface ResolvedModel {
   channel: Channel;
   familyChannel?: string;
   parentContextId?: string;
+  fallbackReason?: FallbackReason;
 }
 
 export interface ResolutionContext {

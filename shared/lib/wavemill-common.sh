@@ -348,7 +348,10 @@ wavemill_backlog_compute_budget() {
   fi
 
   if [[ "$pane_height" =~ ^[0-9]+$ ]]; then
-    budget=$((pane_height - 4))
+    # The grouped renderer receives only the task-list body budget. The mill
+    # pane frame adds "Next tasks:", a blank separator, and a long prompt that
+    # commonly wraps, so reserve enough rows for that fixed chrome.
+    budget=$((pane_height - 8))
     (( budget < 10 )) && budget=10
     printf '%s\n' "$budget"
     return 0

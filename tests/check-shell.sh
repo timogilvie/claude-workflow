@@ -286,6 +286,7 @@ else
       launch_task is_task_packet
       cleanup_dashboard_pane
       save_migration_reservation
+      run_linear_retry_drain_tick
     )
 
     for func in "${CRITICAL_FUNCTIONS[@]}"; do
