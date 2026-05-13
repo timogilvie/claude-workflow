@@ -992,9 +992,14 @@ linear_is_completed() {
 pick_candidates() {
   local backlog_json="$1"
   local show_limit=30
+  local focus_milestones_json="[]"
+
+  if [[ -n "${REPO_DIR:-}" ]] && declare -F wavemill_load_config >/dev/null 2>&1; then
+    focus_milestones_json="$(wavemill_load_config "$REPO_DIR" | jq -c '.backlog.focusMilestones // []' 2>/dev/null || printf '[]')"
+  fi
 
   # Use shared scoring function; strip has_detailed_plan (field 6), keep blocked_by_count (field 7→6)
-  score_and_rank_issues "$backlog_json" "$show_limit" | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}'
+  score_and_rank_issues "$backlog_json" "$show_limit" "$focus_milestones_json" | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}'
 }
 
 
@@ -5983,7 +5988,11 @@ refresh_backlog_cache() {
   # Use shared scoring function from wavemill-common.sh (eliminates duplication)
   # Strip has_detailed_plan (field 6) to match pick_candidates() 6-field format:
   # identifier|slug|title|area|score|blocked_by_count
-  BACKLOG_CACHE=$(score_and_rank_issues "$backlog_json" 30 | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}')
+  local focus_milestones_json="[]"
+  if [[ -n "${REPO_DIR:-}" ]] && declare -F wavemill_load_config >/dev/null 2>&1; then
+    focus_milestones_json="$(wavemill_load_config "$REPO_DIR" | jq -c '.backlog.focusMilestones // []' 2>/dev/null || printf '[]')"
+  fi
+  BACKLOG_CACHE=$(score_and_rank_issues "$backlog_json" 30 "$focus_milestones_json" | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}')
   LAST_BACKLOG_FETCH=$now
   return 0
 }
@@ -6046,7 +6055,7 @@ log_fetch_queue_plan_failure() {
 
 build_queue_plan_once() {
   local backlog_json="$1"
-  local plan_input queue_plan tmp_stderr stderr_text
+  local plan_input queue_plan tmp_stderr stderr_text cache_key
 
   tmp_stderr="$(mktemp -t wavemill-fqp-stderr.XXXXXX)" || {
     record_fetch_queue_plan_failure "diagnostics_setup_failed" "mktemp failed"
@@ -6057,10 +6066,23 @@ build_queue_plan_once() {
     map({
       id: .identifier,
       title: .title,
+      description: .description,
+      labels: ((.labels.nodes // []) | map(.name) | sort),
+      priority: (.priority // null),
+      priorityLabel: (.priorityLabel // null),
+      estimate: (.estimate // null),
+      state: (.state.name // null),
+      dueDate: (.dueDate // null),
+      projectMilestone: (.projectMilestone // null),
+      blocks: (
+        (.relations.nodes // [])
+        | map(select(.type == "blocks" and .relatedIssue.identifier != null and .relatedIssue.completedAt == null and .relatedIssue.canceledAt == null) | .relatedIssue.identifier)
+        | sort
+      ),
       sharedSurface: ((.sharedSurface // []) | sort),
       dependsOn: (
         (.inverseRelations.nodes // [])
-        | map(select(.type == "blocks" and .issue.identifier != null) | .issue.identifier)
+        | map(select(.type == "blocks" and .issue.identifier != null and .issue.completedAt == null and .issue.canceledAt == null) | .issue.identifier)
         | sort
       )
     })
@@ -6072,12 +6094,22 @@ build_queue_plan_once() {
   }
 
   : > "$tmp_stderr"
-  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
-    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-    rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
-    return 1
-  }
+  if [[ -n "${PROJECT_NAME:-}" ]]; then
+    cache_key="$PROJECT_NAME"
+    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 60 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json --cache-key "$cache_key" --refresh-missing-cache 2>"$tmp_stderr") || {
+      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+      rm -f "$tmp_stderr"
+      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+      return 1
+    }
+  else
+    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
+      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+      rm -f "$tmp_stderr"
+      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+      return 1
+    }
+  fi
 
   : > "$tmp_stderr"
   jq -e 'has("availableNow")' >/dev/null 2>"$tmp_stderr" <<<"$queue_plan" || {
@@ -6210,6 +6242,21 @@ render_grouped_task_list() {
     queued_entries=("${on_deck_queued[@]+"${on_deck_queued[@]}"}" "${off_deck_queued[@]+"${off_deck_queued[@]}"}")
   else
     queued_entries=("${on_deck_queued[@]+"${on_deck_queued[@]}"}")
+  fi
+
+  if (( ${#available_entries[@]} > 1 )); then
+    local -a sorted_available_entries=()
+    while IFS= read -r rec; do
+      [[ -n "$rec" ]] && sorted_available_entries+=("$rec")
+    done < <(printf '%s\n' "${available_entries[@]}" | sort -t'|' -k5,5nr -k1,1)
+    available_entries=("${sorted_available_entries[@]}")
+  fi
+  if (( ${#queued_entries[@]} > 1 )); then
+    local -a sorted_queued_entries=()
+    while IFS= read -r rec; do
+      [[ -n "$rec" ]] && sorted_queued_entries+=("$rec")
+    done < <(printf '%s\n' "${queued_entries[@]}" | sort -t'|' -k5,5nr -k1,1)
+    queued_entries=("${sorted_queued_entries[@]}")
   fi
 
   available_section_lines=0

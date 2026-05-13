@@ -109,6 +109,8 @@ export interface LinearProject {
 export interface LinearProjectMilestone {
   id: string;
   name: string;
+  targetDate?: string | null;
+  sortOrder?: number;
 }
 
 /**
@@ -162,8 +164,11 @@ export interface LinearIssue {
     nodes: LinearLabel[];
   };
   project?: LinearProject;
+  projectMilestone?: LinearProjectMilestone | null;
   priority?: number;
+  priorityLabel?: string;
   estimate?: number;
+  dueDate?: string | null;
   assignee?: LinearUser;
   creator?: LinearUser;
   team: LinearTeam;
@@ -567,8 +572,11 @@ export async function getBacklog(projectName?: string): Promise<LinearIssue[]> {
           state { name id }
           labels { nodes { name } }
           project { id name }
+          projectMilestone { id name targetDate sortOrder }
           estimate
           priority
+          priorityLabel
+          dueDate
           parent {
             id
             identifier
@@ -629,8 +637,11 @@ export async function getBacklogForScoring(projectName?: string): Promise<Linear
           description
           state { name }
           labels { nodes { name } }
+          projectMilestone { id name targetDate sortOrder }
           estimate
           priority
+          priorityLabel
+          dueDate
           relations {
             nodes {
               type

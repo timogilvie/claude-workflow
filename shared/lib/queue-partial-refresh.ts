@@ -7,6 +7,8 @@ export interface QueueRefreshTask {
   labels?: string[];
   priority?: number | null;
   state?: string | { name?: string | null } | null;
+  dueDate?: string | null;
+  projectMilestone?: { name?: string | null; targetDate?: string | null } | null;
   blocks?: string[];
   dependsOn?: string[];
 }
@@ -47,11 +49,16 @@ function normalizeStateName(state: QueueRefreshTask['state']): string {
 
 function formatTask(task: QueueRefreshTask): string {
   const description = typeof task.description === 'string' ? task.description.trim() : '';
+  const milestone = task.projectMilestone?.name
+    ? `${task.projectMilestone.name}${task.projectMilestone.targetDate ? ` (${task.projectMilestone.targetDate})` : ''}`
+    : 'null';
   return [
     `- id: ${task.id}`,
     `  title: ${task.title ?? ''}`,
     `  state: ${normalizeStateName(task.state)}`,
     `  priority: ${task.priority ?? 'null'}`,
+    `  dueDate: ${task.dueDate ?? 'null'}`,
+    `  projectMilestone: ${milestone}`,
     `  labels: ${JSON.stringify((task.labels ?? []).slice().sort((a, b) => a.localeCompare(b)))}`,
     `  dependsOn: ${JSON.stringify((task.dependsOn ?? []).slice().sort(compareTaskIds))}`,
     `  blocks: ${JSON.stringify((task.blocks ?? []).slice().sort(compareTaskIds))}`,
