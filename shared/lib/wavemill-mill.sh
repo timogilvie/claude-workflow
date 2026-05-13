@@ -7813,6 +7813,19 @@ process_deferred_monitor_commands() {
   REMAINING_FREE_SLOTS="$free_slots"
 }
 
+normalize_prompt_command_reply() {
+  local event="$1"
+  case "$event" in
+    enter) printf '%s\n' "enter" ;;
+    select\ *) printf '%s\n' "${event#select }" ;;
+    more) printf '%s\n' "m" ;;
+    quit) printf '%s\n' "q" ;;
+    advance\ *) printf '%s\n' "$event" ;;
+    unknown\ *) printf '%s\n' "unknown ${event#unknown }" ;;
+    *) printf '%s\n' "" ;;
+  esac
+}
+
 poll_sleep() {
   local secs="${1:-$POLL_SECONDS}" elapsed
   if ! [[ "$secs" =~ ^[0-9]+$ ]]; then
@@ -9537,14 +9550,7 @@ while :; do
         MONITOR_PHASE_C_REPLY_OFFSET=""
         if consume_next_command; then
           MONITOR_PHASE_C_REPLY_OFFSET="${REPLY_OFFSET:-}"
-          case "$REPLY" in
-            enter) ;;
-            select\ *) REPLY="${REPLY#select }" ;;
-            more) REPLY="m" ;;
-            quit) REPLY="q" ;;
-            unknown\ *) REPLY="unknown ${REPLY#unknown }" ;;
-            *) REPLY="" ;;
-          esac
+          REPLY="$(normalize_prompt_command_reply "$REPLY")"
         fi
 
         if [[ "$REPLY" =~ ^[Qq]$ ]]; then
@@ -9586,6 +9592,9 @@ while :; do
               '.depsExpanded = (if (.depsExpanded // false) then false else true end) | .updated = (now | todate)'
             LAST_DISPLAY=""
           fi
+        elif [[ "$REPLY" == advance\ * ]]; then
+          execute_or_defer_monitor_command "new" "$REPLY" "$MONITOR_PHASE_C_REPLY_OFFSET" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked" "$select_from"
+          MONITOR_PHASE_C_REPLY_OFFSET=""
         elif [[ "$REPLY" =~ ^unknown\  ]]; then
           log_warn "Unknown input: ${REPLY#unknown }"
         elif [[ "$REPLY" == "enter" ]]; then
