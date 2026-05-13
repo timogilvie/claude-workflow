@@ -1013,6 +1013,27 @@
               "type": "string",
               "enum": ["max_success", "min_cost", "balanced"],
               "description": "Routing objective (maximize success, minimize cost, or balanced)."
+            },
+            "capability_constraints": {
+              "type": "object",
+              "description": "Optional capability-aware routing constraints.",
+              "properties": {
+                "minContextWindow": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "requiresTools": {
+                  "type": "boolean"
+                },
+                "requiresMultimodal": {
+                  "type": "boolean"
+                },
+                "maxLatencyTier": {
+                  "type": "string",
+                  "enum": ["fast", "standard", "slow"]
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": ["models_available", "objective"],

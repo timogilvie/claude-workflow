@@ -1,14 +1,19 @@
 import {
   CLASS_RANK,
+  evaluateCapabilityConstraints,
   getEffectiveRegistry,
   getLadder,
+  hasCapabilityConstraints,
   type ModelClass,
   type ModelRegistry,
   type RegistryTaskType,
+  type CapabilityConstraintName,
+  type CapabilityConstraints,
 } from './model-registry.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
 import { type QuotaSnapshot, type QuotaStatus } from './quota-state.ts';
 import { getAllowedModelFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
+import { isRouterCapabilityFilteringEnabled } from './config.ts';
 
 export interface RoutingPolicy {
   taskType: RegistryTaskType;
@@ -17,6 +22,7 @@ export interface RoutingPolicy {
   minQualityScore?: number;
   maxCostTier?: ModelClass;
   repoDir?: string;
+  capabilityConstraints?: CapabilityConstraints;
 }
 
 export type ExclusionReason =
@@ -24,7 +30,8 @@ export type ExclusionReason =
   | 'below-difficulty-floor'
   | 'below-quality-threshold'
   | 'exceeds-cost-tier'
-  | 'below-frontier-substitute';
+  | 'below-frontier-substitute'
+  | 'missing-capability';
 
 export interface RankedCandidate {
   modelId: string;
@@ -34,6 +41,12 @@ export interface RankedCandidate {
   viable: boolean;
   exclusionReason?: ExclusionReason;
   quotaStatus?: QuotaStatus;
+  capabilityFailures?: CapabilityConstraintName[];
+}
+
+export interface ViableCandidatePool {
+  modelIds: string[];
+  capabilityFallbackUsed: boolean;
 }
 
 const DEGRADING_SCORE_PENALTY = 0.85;
@@ -170,11 +183,17 @@ export function resolveModel(
       policy.maxCostTier,
     )
   );
+  const capabilityFilteringEnabled = isRouterCapabilityFilteringEnabled(policy.repoDir);
+  const shouldApplyCapabilityFiltering =
+    capabilityFilteringEnabled && hasCapabilityConstraints(policy.capabilityConstraints);
 
   const candidates = Object.entries(registry.models).map(([modelId, capabilities]) => {
     const qualityScore = capabilities.qualityScores[policy.taskType] ?? 0;
     const status = getQuotaStatus(policy.quotaState, modelId);
     const adjustedScore = computeAdjustedScore(qualityScore, status);
+    const capabilityResult = shouldApplyCapabilityFiltering
+      ? evaluateCapabilityConstraints(capabilities, policy.capabilityConstraints)
+      : { satisfied: true, failedConstraints: [] };
     const exclusionReason = (() => {
       if (status === 'exhausted') {
         return 'quota-exhausted' satisfies ExclusionReason;
@@ -201,6 +220,10 @@ export function resolveModel(
         return 'below-quality-threshold' satisfies ExclusionReason;
       }
 
+      if (!capabilityResult.satisfied) {
+        return 'missing-capability' satisfies ExclusionReason;
+      }
+
       return undefined;
     })();
 
@@ -212,10 +235,49 @@ export function resolveModel(
       viable: exclusionReason === undefined,
       exclusionReason,
       quotaStatus: status,
+      capabilityFailures: capabilityResult.failedConstraints,
     } satisfies RankedCandidate;
   });
 
   return candidates.sort(compareCandidates);
+}
+
+export function viableCandidatesInPool(
+  policy: RoutingPolicy,
+  pool: string[],
+  registryOverride?: ModelRegistry,
+): ViableCandidatePool {
+  const poolSet = new Set(pool);
+  const ranked = resolveModel(policy, registryOverride);
+  const constrainedModelIds = ranked
+    .filter((candidate) => candidate.viable && poolSet.has(candidate.modelId))
+    .map((candidate) => candidate.modelId);
+
+  if (constrainedModelIds.length > 0) {
+    return {
+      modelIds: constrainedModelIds,
+      capabilityFallbackUsed: false,
+    };
+  }
+
+  if (!isRouterCapabilityFilteringEnabled(policy.repoDir) || !hasCapabilityConstraints(policy.capabilityConstraints)) {
+    return {
+      modelIds: constrainedModelIds,
+      capabilityFallbackUsed: false,
+    };
+  }
+
+  const fallbackModelIds = resolveModel(
+    { ...policy, capabilityConstraints: undefined },
+    registryOverride,
+  )
+    .filter((candidate) => candidate.viable && poolSet.has(candidate.modelId))
+    .map((candidate) => candidate.modelId);
+
+  return {
+    modelIds: fallbackModelIds,
+    capabilityFallbackUsed: fallbackModelIds.length > 0,
+  };
 }
 
 export function topViableCandidate(
@@ -223,9 +285,5 @@ export function topViableCandidate(
   pool: string[],
   registryOverride?: ModelRegistry,
 ): string | null {
-  const poolSet = new Set(pool);
-  const hit = resolveModel(policy, registryOverride).find(
-    (candidate) => candidate.viable && poolSet.has(candidate.modelId),
-  );
-  return hit?.modelId ?? null;
+  return viableCandidatesInPool(policy, pool, registryOverride).modelIds[0] ?? null;
 }

@@ -245,6 +245,10 @@ describe('task-descriptor-builder', () => {
         objective: 'max_success',
         maxCostUsd: 10.0,
         maxTimeMinutes: 30,
+        capabilityConstraints: {
+          minContextWindow: 200_000,
+          requiresTools: true,
+        },
       };
 
       const descriptor = buildTaskDescriptor(input);
@@ -257,6 +261,10 @@ describe('task-descriptor-builder', () => {
       assert.equal(constraints.objective, 'max_success');
       assert.equal(constraints.max_cost_usd, 10.0);
       assert.equal(constraints.max_time_minutes, 30);
+      assert.deepEqual(constraints.capability_constraints, {
+        minContextWindow: 200_000,
+        requiresTools: true,
+      });
     });
 
     it('should derive per-stage descriptors from routing complete', () => {
