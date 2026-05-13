@@ -42,6 +42,7 @@ import {
   getModelRegistryConfig,
   getMintEligibilityConfig,
   getEvalContextUpdatesConfig,
+  isRouterCapabilityFilteringEnabled,
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
 } from './config.ts';
@@ -1113,6 +1114,64 @@ test('getRouterConfig returns router section', () => {
     const routerConfig = getRouterConfig(tmp);
     assert.equal(routerConfig.enabled, true);
     assert.equal(routerConfig.defaultModel, 'claude-sonnet-4-5-20250929');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getRouterConfig accepts router.capabilityFiltering.enabled', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: {
+        capabilityFiltering: {
+          enabled: true,
+        },
+      },
+    }));
+
+    const routerConfig = getRouterConfig(tmp);
+    assert.equal(routerConfig.capabilityFiltering?.enabled, true);
+    assert.equal(isRouterCapabilityFilteringEnabled(tmp), true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('router capability filtering defaults to disabled when omitted', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: {
+        enabled: true,
+      },
+    }));
+
+    assert.equal(isRouterCapabilityFilteringEnabled(tmp), false);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('router capability filtering rejects unexpected nested properties', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: {
+        capabilityFiltering: {
+          enabled: true,
+          mode: 'strict',
+        },
+      },
+    }));
+
+    assert.throws(
+      () => loadWavemillConfig(tmp),
+      /capabilityFiltering/,
+    );
   } finally {
     cleanUp(tmp);
   }

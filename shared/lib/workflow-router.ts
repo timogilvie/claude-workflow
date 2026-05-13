@@ -9,13 +9,13 @@
 
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
-import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig } from './config.ts';
+import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled } from './config.ts';
 import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
-import { getEffectiveRegistry, getLadder, type RegistryTaskType } from './model-registry.ts';
+import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
-import { resolveModel, topViableCandidate } from './routing-policy.ts';
+import { resolveModel, viableCandidatesInPool } from './routing-policy.ts';
 import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
 import { loadConfiguredPricingTable } from './workflow-cost.ts';
@@ -90,7 +90,12 @@ export interface RouteWorkflowOptions {
   plannerModelsAvailable?: string[];
   coderModelsAvailable?: string[];
   reviewerModelsAvailable?: string[];
+  capabilityConstraints?: CapabilityConstraints;
+  plannerCapabilityConstraints?: CapabilityConstraints;
+  coderCapabilityConstraints?: CapabilityConstraints;
+  reviewerCapabilityConstraints?: CapabilityConstraints;
   maxCostUsd?: number;
+  maxTimeMinutes?: number;
   taskDifficulty?: RoutingDifficulty;
   taskTitle?: string;
   taskDescription?: string;
@@ -219,6 +224,12 @@ export const REVIEW_TOKENS: Record<Exclude<ReviewMode, 'none'>, StageTokenProfil
   'static+llm': { inputTokens: 180_000, cacheCreationTokens: 40_000, cacheReadTokens: 160_000, outputTokens: 12_000 },
 };
 
+interface StageCapabilityConstraintSet {
+  planner?: CapabilityConstraints;
+  coder?: CapabilityConstraints;
+  reviewer?: CapabilityConstraints;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -251,6 +262,164 @@ function roundMoney(value: number): number {
 
 function countMatches(prompt: string, patterns: RegExp[]): number {
   return patterns.reduce((sum, pattern) => sum + (pattern.test(prompt) ? 1 : 0), 0);
+}
+
+function mergeCapabilityConstraints(
+  base?: CapabilityConstraints,
+  override?: CapabilityConstraints,
+): CapabilityConstraints | undefined {
+  const merged: CapabilityConstraints = {};
+
+  const minContextWindow = [base?.minContextWindow, override?.minContextWindow]
+    .filter((value): value is number => value !== undefined)
+    .reduce<number | undefined>((max, value) => max === undefined ? value : Math.max(max, value), undefined);
+  if (minContextWindow !== undefined) {
+    merged.minContextWindow = minContextWindow;
+  }
+
+  if (base?.requiresTools === true || override?.requiresTools === true) {
+    merged.requiresTools = true;
+  }
+
+  if (base?.requiresMultimodal === true || override?.requiresMultimodal === true) {
+    merged.requiresMultimodal = true;
+  }
+
+  const latencyTiers = [base?.maxLatencyTier, override?.maxLatencyTier]
+    .filter((value): value is LatencyTier => value !== undefined);
+  if (latencyTiers.length > 0) {
+    merged.maxLatencyTier = latencyTiers.reduce((strictest, tier) =>
+      compareLatencyTier(tier, strictest) < 0 ? tier : strictest
+    );
+  }
+
+  return hasCapabilityConstraints(merged) ? merged : undefined;
+}
+
+function combineStageCapabilityConstraints(
+  constraints: StageCapabilityConstraintSet,
+): CapabilityConstraints | undefined {
+  const all = [constraints.planner, constraints.coder, constraints.reviewer].filter(hasCapabilityConstraints);
+  if (all.length === 0) {
+    return undefined;
+  }
+
+  let maxLatencyTier: LatencyTier | undefined;
+  for (const entry of all) {
+    if (!entry.maxLatencyTier) {
+      continue;
+    }
+
+    if (!maxLatencyTier || compareLatencyTier(entry.maxLatencyTier, maxLatencyTier) < 0) {
+      maxLatencyTier = entry.maxLatencyTier;
+    }
+  }
+
+  const minContextWindow = all.reduce<number | undefined>((max, entry) => {
+    if (entry.minContextWindow === undefined) {
+      return max;
+    }
+    return max === undefined ? entry.minContextWindow : Math.max(max, entry.minContextWindow);
+  }, undefined);
+
+  return {
+    ...(minContextWindow !== undefined ? { minContextWindow } : {}),
+    ...(all.some((entry) => entry.requiresTools === true) ? { requiresTools: true } : {}),
+    ...(all.some((entry) => entry.requiresMultimodal === true) ? { requiresMultimodal: true } : {}),
+    ...(maxLatencyTier !== undefined ? { maxLatencyTier } : {}),
+  };
+}
+
+function getStageContextWindowRequirement(profile: StageTokenProfile): number | undefined {
+  if (profile.inputTokens >= 1_000_000) {
+    return 1_000_000;
+  }
+  if (profile.inputTokens >= 250_000) {
+    return 400_000;
+  }
+  if (profile.inputTokens >= 150_000) {
+    return 200_000;
+  }
+
+  return undefined;
+}
+
+function buildCapabilityPromptText(prompt: string, options?: RouteWorkflowOptions): string {
+  return [
+    prompt,
+    options?.taskTitle,
+    options?.taskDescription,
+    options?.packetContent,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join('\n');
+}
+
+function promptSuggestsTooling(promptText: string): boolean {
+  return /\b(test|tool|shell|command|terminal|cli|run|execute|lint|build|compile|apply_patch|edit|code change)\b/i.test(promptText);
+}
+
+function promptSuggestsMultimodal(promptText: string): boolean {
+  return /\b(image|images|screenshot|screenshots|figma|mockup|visual|diagram|photo|pdf)\b/i.test(promptText);
+}
+
+function deriveLatencyConstraint(
+  role: 'planner' | 'coder' | 'reviewer',
+  options: RouteWorkflowOptions | undefined,
+  promptText: string,
+): LatencyTier | undefined {
+  const explicitFast = /\b(urgent|asap|immediately|fast|quick|low latency|latency budget)\b/i.test(promptText);
+  if (explicitFast || (typeof options?.maxTimeMinutes === 'number' && options.maxTimeMinutes <= 15)) {
+    return role === 'reviewer' ? 'fast' : 'standard';
+  }
+  if (typeof options?.maxTimeMinutes === 'number' && options.maxTimeMinutes <= 30) {
+    return 'standard';
+  }
+
+  return undefined;
+}
+
+function buildStageCapabilityConstraints(
+  prompt: string,
+  options: RouteWorkflowOptions | undefined,
+  planDepth: PlanDepth,
+  codeDepth: CodeDepth,
+  reviewRecommended: ReviewMode,
+): StageCapabilityConstraintSet {
+  if (!isRouterCapabilityFilteringEnabled(options?.repoDir)) {
+    return {};
+  }
+
+  const promptText = buildCapabilityPromptText(prompt, options);
+  const needsMultimodal = promptSuggestsMultimodal(promptText);
+  const toolingSignal = promptSuggestsTooling(promptText);
+
+  const planner = mergeCapabilityConstraints(options?.capabilityConstraints, {
+    minContextWindow: getStageContextWindowRequirement(PLAN_TOKENS[planDepth]),
+    ...(toolingSignal ? { requiresTools: true } : {}),
+    ...(needsMultimodal ? { requiresMultimodal: true } : {}),
+    ...(deriveLatencyConstraint('planner', options, promptText) ? { maxLatencyTier: deriveLatencyConstraint('planner', options, promptText) } : {}),
+  });
+  const coder = mergeCapabilityConstraints(options?.capabilityConstraints, {
+    minContextWindow: getStageContextWindowRequirement(CODE_TOKENS[codeDepth]),
+    requiresTools: true,
+    ...(needsMultimodal ? { requiresMultimodal: true } : {}),
+    ...(deriveLatencyConstraint('coder', options, promptText) ? { maxLatencyTier: deriveLatencyConstraint('coder', options, promptText) } : {}),
+  });
+  const reviewer = mergeCapabilityConstraints(options?.capabilityConstraints, {
+    minContextWindow: reviewRecommended === 'none'
+      ? undefined
+      : getStageContextWindowRequirement(REVIEW_TOKENS[reviewRecommended]),
+    ...(toolingSignal ? { requiresTools: true } : {}),
+    ...(needsMultimodal ? { requiresMultimodal: true } : {}),
+    ...(deriveLatencyConstraint('reviewer', options, promptText) ? { maxLatencyTier: deriveLatencyConstraint('reviewer', options, promptText) } : {}),
+  });
+
+  return {
+    planner: mergeCapabilityConstraints(planner, options?.plannerCapabilityConstraints),
+    coder: mergeCapabilityConstraints(coder, options?.coderCapabilityConstraints),
+    reviewer: mergeCapabilityConstraints(reviewer, options?.reviewerCapabilityConstraints),
+  };
 }
 
 function mergePoolWarnings(...results: DeepSeekPoolFilterResult[]): string[] {
@@ -396,8 +565,14 @@ function readRoutingQuotaState(repoDir?: string): QuotaSnapshot | null {
 }
 
 function resolvePolicyStagePools(
+  prompt: string,
   options: RouteWorkflowOptions,
-): { taskDifficulty: RoutingDifficulty; quotaState: QuotaSnapshot; policyStagePools: ReturnType<typeof buildPolicyStagePools> } | null {
+): {
+  taskDifficulty: RoutingDifficulty;
+  quotaState: QuotaSnapshot;
+  policyStagePools: ReturnType<typeof buildPolicyStagePools>;
+  stageCapabilityConstraints: StageCapabilityConstraintSet;
+} | null {
   const repoDir = options.repoDir;
   const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
   if (!taskDifficulty) {
@@ -410,9 +585,24 @@ function resolvePolicyStagePools(
   }
 
   const pool = getModelPool(repoDir).models;
-  const policyStagePools = buildPolicyStagePools({ difficulty: taskDifficulty, quotaState, pool, repoDir });
+  const characteristics = analyzePrompt(prompt);
+  const riskScore = computeRiskScore(prompt, characteristics);
+  const stageCapabilityConstraints = buildStageCapabilityConstraints(
+    prompt,
+    options,
+    choosePlanDepth(characteristics, riskScore),
+    chooseCodeDepth(characteristics, riskScore),
+    chooseReviewMode(characteristics, riskScore),
+  );
+  const policyStagePools = buildPolicyStagePools({
+    difficulty: taskDifficulty,
+    quotaState,
+    pool,
+    repoDir,
+    capabilityConstraints: stageCapabilityConstraints,
+  });
 
-  return { taskDifficulty, quotaState, policyStagePools };
+  return { taskDifficulty, quotaState, policyStagePools, stageCapabilityConstraints };
 }
 
 function buildPolicyStagePools(params: {
@@ -420,6 +610,7 @@ function buildPolicyStagePools(params: {
   pool: string[];
   quotaState: QuotaSnapshot;
   repoDir?: string;
+  capabilityConstraints?: StageCapabilityConstraintSet;
 }): { plannerModels: string[]; coderModels: string[]; reviewerModels: string[] } {
   const basePolicy = {
     difficulty: params.difficulty,
@@ -432,9 +623,15 @@ function buildPolicyStagePools(params: {
   // when top-of-ladder frontier is degrading/exhausted and a healthy frontier sibling exists,
   // non-frontier models are excluded from viable candidates
   const toPoolModels = (taskType: 'planning' | 'coding' | 'review'): string[] =>
-    resolveModel({ ...basePolicy, taskType })
-      .filter((candidate) => candidate.viable && poolSet.has(candidate.modelId))
-      .map((candidate) => candidate.modelId);
+    viableCandidatesInPool({
+      ...basePolicy,
+      taskType,
+      capabilityConstraints: taskType === 'planning'
+        ? params.capabilityConstraints?.planner
+        : taskType === 'coding'
+          ? params.capabilityConstraints?.coder
+          : params.capabilityConstraints?.reviewer,
+    }, [...poolSet]).modelIds;
 
   return {
     plannerModels: toPoolModels('planning'),
@@ -853,7 +1050,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
 
   const routerConfig = getRouterConfig(repoDir);
   const modelRouterConfig = loadRouterConfig(repoDir);
-  const policyResolution = resolvePolicyStagePools(options || {});
+  const policyResolution = resolvePolicyStagePools(prompt, options || {});
   const plannerPoolResolution = resolveStagePool('planner', pool, routerConfig, options, policyResolution?.policyStagePools.plannerModels);
   const coderPoolResolution = resolveStagePool('coder', pool, routerConfig, options, policyResolution?.policyStagePools.coderModels);
   const reviewerPoolResolution = resolveStagePool('reviewer', pool, routerConfig, options, policyResolution?.policyStagePools.reviewerModels);
@@ -1053,7 +1250,7 @@ function routeWorkflowStageAwareInternal(
 
   // Resolve difficulty and policy pools before stage-aware routing
   // so both KNN selection and difficulty floor application respect frontier substitution
-  const policyResolution = resolvePolicyStagePools(options || {});
+  const policyResolution = resolvePolicyStagePools(prompt, options || {});
   const taskDifficulty = policyResolution?.taskDifficulty || resolveTaskDifficulty(options || {}, repoDir);
 
   let stageAwareDecision;
@@ -1064,8 +1261,14 @@ function routeWorkflowStageAwareInternal(
       plannerModelsAvailable: policyResolution?.policyStagePools.plannerModels,
       coderModelsAvailable: policyResolution?.policyStagePools.coderModels,
       reviewerModelsAvailable: policyResolution?.policyStagePools.reviewerModels,
+      plannerCapabilityConstraints: policyResolution?.stageCapabilityConstraints.planner,
+      coderCapabilityConstraints: policyResolution?.stageCapabilityConstraints.coder,
+      reviewerCapabilityConstraints: policyResolution?.stageCapabilityConstraints.reviewer,
       maxCostUsd: options?.maxCostUsd,
       additionalEvalsPaths: options?.additionalEvalsPaths,
+      queryInput: {
+        capabilityConstraints: combineStageCapabilityConstraints(policyResolution?.stageCapabilityConstraints || {}),
+      },
     };
     stageAwareDecision = stageAwareContext
       ? routeStageAwareWithContext(prompt, stageAwareContext, stageAwareOptions)
@@ -1335,10 +1538,31 @@ export function tryPolicyResolution(
     quotaState,
     repoDir,
   } as const;
-
-  const plannerModel = topViableCandidate({ ...basePolicy, taskType: 'planning' }, pool);
-  const coderModel = topViableCandidate({ ...basePolicy, taskType: 'coding' }, pool);
-  const reviewerModel = topViableCandidate({ ...basePolicy, taskType: 'review' }, pool);
+  const stageCapabilityConstraints = buildStageCapabilityConstraints(
+    prompt,
+    options,
+    planDepth,
+    codeDepth,
+    reviewRecommended,
+  );
+  const plannerCandidates = viableCandidatesInPool({
+    ...basePolicy,
+    taskType: 'planning',
+    capabilityConstraints: stageCapabilityConstraints.planner,
+  }, pool);
+  const coderCandidates = viableCandidatesInPool({
+    ...basePolicy,
+    taskType: 'coding',
+    capabilityConstraints: stageCapabilityConstraints.coder,
+  }, pool);
+  const reviewerCandidates = viableCandidatesInPool({
+    ...basePolicy,
+    taskType: 'review',
+    capabilityConstraints: stageCapabilityConstraints.reviewer,
+  }, pool);
+  const plannerModel = plannerCandidates.modelIds[0] ?? null;
+  const coderModel = coderCandidates.modelIds[0] ?? null;
+  const reviewerModel = reviewerCandidates.modelIds[0] ?? null;
 
   if (!plannerModel || !coderModel || !reviewerModel) {
     console.warn(
@@ -1389,6 +1613,9 @@ export function tryPolicyResolution(
       'Policy resolver selected models using registry capability scores and quota state.',
       `Task difficulty ${taskDifficulty} applied the routing floor before ranking candidates.`,
       `Planner=${plannerModel}, coder=${coderModel}, reviewer=${reviewerModel} are the top viable in-pool candidates.`,
+      ...(plannerCandidates.capabilityFallbackUsed || coderCandidates.capabilityFallbackUsed || reviewerCandidates.capabilityFallbackUsed
+        ? ['Capability constraints filtered every in-pool policy candidate for at least one stage, so Layer 3 fell back to the unfiltered viable pool.']
+        : []),
       `Risk score ${riskScore} from complexity, scope, and repo-surface keywords.`,
     ],
     signals: {
@@ -1414,7 +1641,7 @@ export async function routeWorkflowHokusai(
   options?: RouteWorkflowOptions,
 ): Promise<StageAwareDecision> {
   const repoDir = options?.repoDir;
-  const policyResolution = resolvePolicyStagePools(options || {});
+  const policyResolution = resolvePolicyStagePools(prompt, options || {});
   const taskDifficulty = policyResolution?.taskDifficulty || resolveTaskDifficulty(options || {}, repoDir);
   const decision = await routeViaHokusai(prompt, {
     ...options,

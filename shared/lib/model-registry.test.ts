@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import {
+  compareLatencyTier,
+  evaluateCapabilityConstraints,
   FAMILY_ALIASES,
   getConfiguredModelsForDescriptor,
   getConfiguredModelsForDescriptorStage,
@@ -19,6 +21,7 @@ import {
   parseModelSelector,
   rankCandidates,
   resolveSelector,
+  satisfiesCapabilities,
   validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
@@ -441,6 +444,64 @@ describe('model-registry', () => {
     assert.equal(economy.reasoningTier, 'basic');
     assert.equal(economy.costPerMillionInputTokensUsd, 0.8);
     assert.equal(economy.costPerMillionOutputTokensUsd, 4);
+  });
+
+  it('treats empty capability constraints as satisfied', () => {
+    const model = DEFAULT_MODEL_REGISTRY.models['gpt-5.5'];
+
+    assert.equal(satisfiesCapabilities(model), true);
+    assert.deepEqual(evaluateCapabilityConstraints(model, {}).failedConstraints, []);
+  });
+
+  it('checks minimum context window constraints', () => {
+    const model = DEFAULT_MODEL_REGISTRY.models['gpt-5.5'];
+
+    assert.equal(satisfiesCapabilities(model, { minContextWindow: 128_000 }), true);
+    assert.equal(satisfiesCapabilities(model, { minContextWindow: 500_000 }), false);
+    assert.deepEqual(
+      evaluateCapabilityConstraints(model, { minContextWindow: 500_000 }).failedConstraints,
+      ['minContextWindow'],
+    );
+  });
+
+  it('checks tool support constraints', () => {
+    assert.equal(satisfiesCapabilities(makeCapabilities({ toolSupport: 'none' }), { requiresTools: true }), false);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ toolSupport: 'basic' }), { requiresTools: true }), true);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ toolSupport: 'full' }), { requiresTools: true }), true);
+  });
+
+  it('checks multimodal image constraints', () => {
+    assert.equal(
+      satisfiesCapabilities(makeCapabilities({ multimodal: { text: true, image: true } }), { requiresMultimodal: true }),
+      true,
+    );
+    assert.equal(
+      satisfiesCapabilities(makeCapabilities({ multimodal: { text: true, image: false } }), { requiresMultimodal: true }),
+      false,
+    );
+  });
+
+  it('orders latency tiers from fast to slow', () => {
+    assert.ok(compareLatencyTier('fast', 'standard') < 0);
+    assert.ok(compareLatencyTier('standard', 'slow') < 0);
+    assert.ok(compareLatencyTier('slow', 'fast') > 0);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ latencyTier: 'fast' }), { maxLatencyTier: 'standard' }), true);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ latencyTier: 'slow' }), { maxLatencyTier: 'standard' }), false);
+  });
+
+  it('fails closed when a required capability field is missing', () => {
+    const partialModel = {
+      contextWindowTokens: 200_000,
+      toolSupport: 'basic',
+    } as Partial<ModelRegistry['models'][string]>;
+
+    assert.deepEqual(
+      evaluateCapabilityConstraints(partialModel, {
+        requiresMultimodal: true,
+        maxLatencyTier: 'standard',
+      }).failedConstraints,
+      ['requiresMultimodal', 'maxLatencyTier'],
+    );
   });
 
   it('recognizes configured DeepSeek IDs and validates bracket syntax', () => {

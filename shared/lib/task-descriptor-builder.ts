@@ -24,6 +24,7 @@ import type {
   InterventionRecord,
   RubricEval,
 } from './eval-schema.ts';
+import type { CapabilityConstraints } from './model-registry.ts';
 import type { RoutingCompleteData } from './eval-context-gatherer.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -94,6 +95,8 @@ export interface TaskDescriptorInput {
   maxCostUsd?: number;
   /** Maximum time budget in minutes */
   maxTimeMinutes?: number;
+  /** Optional capability-aware routing constraints */
+  capabilityConstraints?: CapabilityConstraints;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -449,6 +452,7 @@ function deriveConstraints(input: TaskDescriptorInput): DescriptorConstraints {
     max_time_minutes: input.maxTimeMinutes,
     models_available: input.modelsAvailable || [],
     objective: input.objective || 'balanced',
+    capability_constraints: input.capabilityConstraints,
   };
 }
 
