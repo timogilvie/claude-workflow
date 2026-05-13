@@ -937,6 +937,17 @@ export interface DescriptorConstraints {
   models_available: string[];
   /** Routing objective (maximize success, minimize cost, or balanced) */
   objective: 'max_success' | 'min_cost' | 'balanced';
+  /** Optional capability constraints for routing (added in schema 1.0, optional for backward compatibility) */
+  capability_constraints?: {
+    /** Minimum context window size in tokens */
+    min_context_window?: number;
+    /** Whether task requires tool support */
+    requires_tools?: boolean;
+    /** Whether task requires multimodal (image) capabilities */
+    requires_multimodal?: boolean;
+    /** Maximum acceptable latency tier */
+    max_latency_tier?: 'fast' | 'standard' | 'slow';
+  };
 }
 
 /**

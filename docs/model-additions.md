@@ -93,3 +93,50 @@ export type ResolutionSource = 'alias' | 'pinned' | 'inherited' | 'fallback' | '
 - `alias` selector: throws `ModelResolutionError` if `selector.family` is not in `FAMILY_ALIASES`.
 - `pinned` selector: throws `ModelResolutionError` (via `validateModelId`) if the model ID is malformed.
 - `inherit` selector: throws `ModelResolutionError` if `context?.parent` is absent.
+
+## Capability-Aware Routing
+
+Capability-aware routing is an opt-in feature that filters model candidates based on task-specific requirements for context window, tool support, multimodal capabilities, and latency.
+
+### Configuration
+
+Enable in `.wavemill-config.json`:
+
+```json
+{
+  "router": {
+    "capabilityAwareRouting": true
+  }
+}
+```
+
+**Default**: `false` (disabled). When disabled, routing ignores capability constraints.
+
+### How It Works
+
+When enabled, the router applies capability constraints during Layer 3 (policy/availability) filtering:
+
+1. **Layer 1**: Explicit pinned model IDs bypass capability filtering entirely
+2. **Layer 2**: Family/role resolution remains unchanged
+3. **Layer 3**: Capability filtering applies alongside quota, difficulty, cost tier, and stage allowlists
+
+### Constraint Types
+
+- `minContextWindow` — Excludes models with `contextWindowTokens` below the requirement
+- `requiresTools` — Excludes models with `toolSupport: 'none'` (only when `true`)
+- `requiresMultimodal` — Excludes models without `multimodal.image` support (only when `true`)
+- `maxLatencyTier` — Excludes models exceeding the latency budget (`fast < standard < slow`)
+
+### Fallback Behavior
+
+If all candidates are rejected by capability constraints, the router falls back to the original unfiltered candidate list and emits fallback diagnostics. This prevents capability filtering from blocking workflows when constraints are impossible to satisfy.
+
+### Automatic Constraint Derivation
+
+The workflow router automatically derives conservative per-role constraints:
+
+- **Planner**: Context window from depth/task size
+- **Coder**: `requiresTools: true` + context window from depth
+- **Reviewer**: `requiresMultimodal: true` for UI tasks + context window
+
+Constraints can also be provided explicitly via `RouteWorkflowOptions.capabilityConstraints`.
