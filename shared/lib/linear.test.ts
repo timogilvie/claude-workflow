@@ -192,6 +192,40 @@ test('setIssuesState reports a generic error when Linear returns success false',
   }
 });
 
+test('setIssuesState reports malformed mutation responses per issue', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+
+  const restore = installFetchMock((payload) => {
+    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+      return {
+        issues: {
+          nodes: [
+            { id: 'bad-id', identifier: 'HOK-503', team: { id: 't5' } },
+          ],
+        },
+      };
+    }
+    if (payload.query.includes('query($teamId: String!)')) {
+      return { team: { states: { nodes: [{ id: 'state-t5', name: 'In Progress' }] } } };
+    }
+    if (payload.query.includes('mutation($issueId: String!, $input: IssueUpdateInput!)')) {
+      return {};
+    }
+    throw new Error(`Unhandled query: ${payload.query}`);
+  });
+
+  try {
+    const result = await setIssuesState(['HOK-503'], 'In Progress');
+    assert.deepEqual(result.updated, []);
+    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed[0].issueId, 'HOK-503');
+    assert.equal(result.failed[0].error, 'Linear API response missing issueUpdate result');
+    assert.equal(result.failed[0].category, 'graphql');
+  } finally {
+    restore();
+  }
+});
+
 test('updateIssue mutation does not request userErrors', async () => {
   process.env.LINEAR_API_KEY = 'test';
   let capturedQuery = '';
