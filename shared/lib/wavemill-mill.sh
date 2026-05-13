@@ -91,7 +91,6 @@ MERGE_QUEUE_SELECTION_FILE="${STATE_DIR}/merge-queue-selection.json"
 EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
 # Persists queue plan for launch-plan JSON emission (set during task selection).
 LAUNCH_QUEUE_PLAN=""
-LINEAR_RETRY_DRAIN_STAMP_FILE="${STATE_DIR}/linear-retry-drain.last-run"
 
 trim_outer_whitespace() {
   local value="${1-}"
@@ -128,23 +127,6 @@ _update_effective_max_parallel() {
 }
 
 _update_effective_max_parallel
-
-run_linear_retry_drain_tick() {
-  [[ "$DRY_RUN" == "true" ]] && return 0
-
-  local now last_run=0
-  now="$(date +%s)"
-  if [[ -f "$LINEAR_RETRY_DRAIN_STAMP_FILE" ]]; then
-    last_run="$(cat "$LINEAR_RETRY_DRAIN_STAMP_FILE" 2>/dev/null || echo 0)"
-  fi
-
-  if (( now - last_run < 60 )); then
-    return 0
-  fi
-
-  printf '%s\n' "$now" > "$LINEAR_RETRY_DRAIN_STAMP_FILE"
-  npx tsx "$TOOLS_DIR/linear-retry-drain.ts" drain --max-entries 10 >/dev/null 2>&1 || true
-}
 
 FORCE_MODEL="$(trim_outer_whitespace "${FORCE_MODEL:-}")"
 if [[ -z "$FORCE_MODEL" ]]; then
@@ -2066,6 +2048,24 @@ set -Eeuo pipefail
 
 # Import environment from env file
 source "$1"
+
+run_linear_retry_drain_tick() {
+  [[ "$DRY_RUN" == "true" ]] && return 0
+
+  local stamp_file="${STATE_DIR}/linear-retry-drain.last-run"
+  local now last_run=0
+  now="$(date +%s)"
+  if [[ -f "$stamp_file" ]]; then
+    last_run="$(cat "$stamp_file" 2>/dev/null || echo 0)"
+  fi
+
+  if (( now - last_run < 60 )); then
+    return 0
+  fi
+
+  printf '%s\n' "$now" > "$stamp_file"
+  npx tsx "$TOOLS_DIR/linear-retry-drain.ts" drain --max-entries 10 >/dev/null 2>&1 || true
+}
 
 # Logging functions - defined early so they're available for all error handling
 _log_level_num() {
@@ -6186,15 +6186,15 @@ render_grouped_task_list() {
 
   for line in "${queued_entries[@]}"; do
     IFS=$'\t' read -r rec blockers <<<"$line"
-    local is_on_deck=false blocker bkey
+    local is_on_deck=true blocker bkey
     if [[ -z "$blockers" ]]; then
       is_on_deck=true
     else
       while IFS= read -r blocker; do
         [[ -n "$blocker" ]] || continue
         bkey="$(printf '%s' "${blocker// /}" | tr '[:lower:]' '[:upper:]')"
-        if [[ -n "${on_deck_set[$bkey]:-}" ]]; then
-          is_on_deck=true
+        if [[ -z "${on_deck_set[$bkey]:-}" ]]; then
+          is_on_deck=false
           break
         fi
       done < <(printf '%s\n' "$blockers" | tr ',' '\n')

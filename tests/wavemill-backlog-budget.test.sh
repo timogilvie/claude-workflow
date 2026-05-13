@@ -213,6 +213,9 @@ test_budget_computation_paths() {
   output="$(budget_case '{}' 8)"
   check_equals "pane height subtracts frame overhead and clamps" "${output##*$'\n'}" "10"
 
+  output="$(budget_case '{}' 23)"
+  check_equals "typical mill pane reserves frame rows" "${output##*$'\n'}" "15"
+
   output="$(budget_case '{}' '')"
   check_contains "fallback warns once" "$output" "WARN:Backlog pane height unavailable; using fallback budget 20"
   check_equals "fallback returns 20" "${output##*$'\n'}" "20"
