@@ -28,6 +28,54 @@ while [[ $# -gt 0 ]]; do
       export WAVEMILL_NO_PROGRESS=1
       shift
       ;;
+    --model)
+      if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+        echo "Error: --model requires a non-empty model selector value" >&2
+        exit 1
+      fi
+      _CLI_FORCE_MODEL="${2}"
+      shift 2
+      ;;
+    --model=*)
+      _CLI_FORCE_MODEL="${1#--model=}"
+      shift
+      ;;
+    --planner-model)
+      if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+        echo "Error: --planner-model requires a non-empty model selector value" >&2
+        exit 1
+      fi
+      _CLI_FORCE_PLANNER_MODEL="${2}"
+      shift 2
+      ;;
+    --planner-model=*)
+      _CLI_FORCE_PLANNER_MODEL="${1#--planner-model=}"
+      shift
+      ;;
+    --coder-model)
+      if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+        echo "Error: --coder-model requires a non-empty model selector value" >&2
+        exit 1
+      fi
+      _CLI_FORCE_CODER_MODEL="${2}"
+      shift 2
+      ;;
+    --coder-model=*)
+      _CLI_FORCE_CODER_MODEL="${1#--coder-model=}"
+      shift
+      ;;
+    --reviewer-model)
+      if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+        echo "Error: --reviewer-model requires a non-empty model selector value" >&2
+        exit 1
+      fi
+      _CLI_FORCE_REVIEWER_MODEL="${2}"
+      shift 2
+      ;;
+    --reviewer-model=*)
+      _CLI_FORCE_REVIEWER_MODEL="${1#--reviewer-model=}"
+      shift
+      ;;
     *)
       break
       ;;
@@ -99,6 +147,37 @@ trim_outer_whitespace() {
   printf '%s' "$value"
 }
 
+# Validate a model selector token (alias, inherit, or pinned model ID).
+# Uses validate-model-token.ts for selector-aware parsing.
+# Args: $1 = flag/variable name (for error messages), $2 = raw token value
+# Stdout: normalized token on success
+# Exits non-zero (and prints to stderr) on failure.
+validate_model_token() {
+  local flag_name="$1" value="$2"
+
+  if [[ -z "$value" ]]; then
+    printf 'Error: %s requires a non-empty model selector\n' "$flag_name" >&2
+    printf '  Accepted: family alias (opus, sonnet, haiku), inherit, or pinned model ID\n' >&2
+    exit 1
+  fi
+
+  local tmp_stderr normalized
+  tmp_stderr="$(mktemp)"
+  if ! normalized="$(npx tsx "$TOOLS_DIR/validate-model-token.ts" --repo-dir "$REPO_DIR" "$value" 2>"$tmp_stderr")"; then
+    local err_msg
+    err_msg="$(cat "$tmp_stderr" 2>/dev/null || true)"
+    rm -f "$tmp_stderr"
+    printf 'Error: %s value '"'"'%s'"'"' is not a valid model selector\n' "$flag_name" "$value" >&2
+    if [[ -n "$err_msg" ]]; then
+      printf '  %s\n' "$err_msg" >&2
+    fi
+    printf '  Accepted: family alias (opus, sonnet, haiku), inherit, or pinned model ID\n' >&2
+    exit 1
+  fi
+  rm -f "$tmp_stderr"
+  printf '%s' "$normalized"
+}
+
 _global_operating_mode() {
   npx tsx "$TOOLS_DIR/get-operating-mode.ts" global --repo-dir "$REPO_DIR" 2>/dev/null || echo "normal"
 }
@@ -128,9 +207,42 @@ _update_effective_max_parallel() {
 
 _update_effective_max_parallel
 
-FORCE_MODEL="$(trim_outer_whitespace "${FORCE_MODEL:-}")"
-if [[ -z "$FORCE_MODEL" ]]; then
+# ── Model selector validation and merging ────────────────────────────────────
+# CLI flags take precedence over env vars. All accepted selectors (family alias,
+# inherit, pinned model ID) are validated via validate-model-token.ts and
+# normalized before any task launch side effects occur.
+
+if [[ -n "${_CLI_FORCE_MODEL:-}" ]]; then
+  FORCE_MODEL="$(validate_model_token "--model" "$_CLI_FORCE_MODEL")"
+else
+  FORCE_MODEL="$(trim_outer_whitespace "${FORCE_MODEL:-}")"
+fi
+if [[ -z "${FORCE_MODEL:-}" ]]; then
   unset FORCE_MODEL
+fi
+
+FORCE_PLANNER_MODEL="$(trim_outer_whitespace "${FORCE_PLANNER_MODEL:-}")"
+if [[ -n "${_CLI_FORCE_PLANNER_MODEL:-}" ]]; then
+  FORCE_PLANNER_MODEL="$(validate_model_token "--planner-model" "$_CLI_FORCE_PLANNER_MODEL")"
+fi
+if [[ -z "${FORCE_PLANNER_MODEL:-}" ]]; then
+  unset FORCE_PLANNER_MODEL
+fi
+
+FORCE_CODER_MODEL="$(trim_outer_whitespace "${FORCE_CODER_MODEL:-}")"
+if [[ -n "${_CLI_FORCE_CODER_MODEL:-}" ]]; then
+  FORCE_CODER_MODEL="$(validate_model_token "--coder-model" "$_CLI_FORCE_CODER_MODEL")"
+fi
+if [[ -z "${FORCE_CODER_MODEL:-}" ]]; then
+  unset FORCE_CODER_MODEL
+fi
+
+FORCE_REVIEWER_MODEL="$(trim_outer_whitespace "${FORCE_REVIEWER_MODEL:-}")"
+if [[ -n "${_CLI_FORCE_REVIEWER_MODEL:-}" ]]; then
+  FORCE_REVIEWER_MODEL="$(validate_model_token "--reviewer-model" "$_CLI_FORCE_REVIEWER_MODEL")"
+fi
+if [[ -z "${FORCE_REVIEWER_MODEL:-}" ]]; then
+  unset FORCE_REVIEWER_MODEL
 fi
 
 
@@ -443,6 +555,9 @@ write_launch_plan() {
     --arg agentCmd "$AGENT_CMD" \
     --arg agentCmdExplicit "${AGENT_CMD_EXPLICIT:-}" \
     --arg forceModel "${FORCE_MODEL:-}" \
+    --arg forcePlannerModel "${FORCE_PLANNER_MODEL:-}" \
+    --arg forceCoderModel "${FORCE_CODER_MODEL:-}" \
+    --arg forceReviewerModel "${FORCE_REVIEWER_MODEL:-}" \
     --arg routerEnabled "${ROUTER_ENABLED:-true}" \
     --arg maxParallel "$MAX_PARALLEL" \
     --arg stateDir "$STATE_DIR" \
@@ -474,6 +589,9 @@ write_launch_plan() {
       agentCmd: $agentCmd,
       agentCmdExplicit: ($agentCmdExplicit == "true"),
       forceModel: (if $forceModel == "" then null else $forceModel end),
+      forcePlannerModel: (if $forcePlannerModel == "" then null else $forcePlannerModel end),
+      forceCoderModel: (if $forceCoderModel == "" then null else $forceCoderModel end),
+      forceReviewerModel: (if $forceReviewerModel == "" then null else $forceReviewerModel end),
       routerEnabled: ($routerEnabled == "true"),
       maxParallel: ($maxParallel | tonumber),
       stateDir: $stateDir,
@@ -1775,11 +1893,21 @@ done
 # ── Phase 4: Stage-aware model routing ─────────────────────────────────
 if [[ -n "${FORCE_MODEL:-}" ]]; then
   if ! agent_validate_model "$FORCE_MODEL" "$REPO_DIR"; then
-    log_error "Invalid FORCE_MODEL: $FORCE_MODEL"
-    log_error "Run 'wavemill mill' without FORCE_MODEL to use the router, or fix the model name."
+    log_error "Invalid FORCE_MODEL / --model: '$FORCE_MODEL'"
+    log_error "Accepted: family alias (opus, sonnet, haiku), inherit, or pinned model ID."
+    log_error "Use --planner-model / --coder-model / --reviewer-model for per-stage overrides."
     exit 1
   fi
   log "info" "FORCE_MODEL=$FORCE_MODEL - skipping router"
+  if [[ -n "${FORCE_PLANNER_MODEL:-}" ]]; then
+    log "info" "  --planner-model=$FORCE_PLANNER_MODEL (overrides planner stage)"
+  fi
+  if [[ -n "${FORCE_CODER_MODEL:-}" ]]; then
+    log "info" "  --coder-model=$FORCE_CODER_MODEL (overrides coder stage)"
+  fi
+  if [[ -n "${FORCE_REVIEWER_MODEL:-}" ]]; then
+    log "info" "  --reviewer-model=$FORCE_REVIEWER_MODEL (overrides reviewer stage)"
+  fi
 elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
   ROUTE_TOOL="$TOOLS_DIR/route-task.ts"
   ROUTE_BATCH_TOOL="$TOOLS_DIR/route-tasks.ts"
@@ -1955,13 +2083,26 @@ for t in "${TASKS[@]}"; do
     fi
   fi
 
+  # Apply per-stage model overrides from CLI flags (--planner-model, --coder-model, --reviewer-model).
+  # These override the base values from FORCE_MODEL or the router for specific stages only.
+  if [[ -n "${FORCE_PLANNER_MODEL:-}" ]]; then
+    route_planner="$FORCE_PLANNER_MODEL"
+  fi
+  if [[ -n "${FORCE_CODER_MODEL:-}" ]]; then
+    rec_model="$FORCE_CODER_MODEL"
+    rec_agent="$(agent_resolve_from_model "$FORCE_CODER_MODEL")"
+  fi
+  if [[ -n "${FORCE_REVIEWER_MODEL:-}" ]]; then
+    route_reviewer="$FORCE_REVIEWER_MODEL"
+  fi
+
   # Challengers are free overhead (don't consume a slot), so always pass
   # remaining-slots >= 2 as long as the primary slot is available.
   challenge_mode="single"
   challenge_reason=""
-  if [[ -n "${FORCE_MODEL:-}" ]]; then
+  if [[ -n "${FORCE_MODEL:-}" ]] || [[ -n "${FORCE_CODER_MODEL:-}" ]]; then
     challenge_reason="forced_model"
-    log "debug" "  $ISSUE: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
+    log "debug" "  $ISSUE: Challenge skipped because ${FORCE_MODEL:+FORCE_MODEL }${FORCE_CODER_MODEL:+FORCE_CODER_MODEL }is set"
   else
     _rs=$((STARTUP_SLOT_LIMIT - slots_used))
     (( _rs < 2 )) && _rs=2
@@ -6797,6 +6938,23 @@ EOF
     fi
   fi
 
+  # Apply per-stage model overrides (--planner-model, --coder-model, --reviewer-model).
+  # Not applied when this is a pre-scheduled challenge entry — the challenge model is fixed.
+  if [[ -z "$challenge_model" ]]; then
+    if [[ -n "${FORCE_PLANNER_MODEL:-}" ]]; then
+      planner_model="$FORCE_PLANNER_MODEL"
+      planner_agent="$(agent_resolve_from_model "$FORCE_PLANNER_MODEL")"
+    fi
+    if [[ -n "${FORCE_CODER_MODEL:-}" ]]; then
+      task_model="$FORCE_CODER_MODEL"
+      task_agent_cmd="$(agent_resolve_from_model "$FORCE_CODER_MODEL")"
+    fi
+    if [[ -n "${FORCE_REVIEWER_MODEL:-}" ]]; then
+      reviewer_model="$FORCE_REVIEWER_MODEL"
+      reviewer_agent="$(agent_resolve_from_model "$FORCE_REVIEWER_MODEL")"
+    fi
+  fi
+
   # Validate the selected agent exists
   if ! agent_validate "$task_agent_cmd"; then
     log_warn "  Agent '$task_agent_cmd' not found, falling back to '$AGENT_CMD'"
@@ -6821,9 +6979,9 @@ EOF
     # Challengers are free overhead — always pass remaining-slots >= 2
     challenge_mode="single"
     challenge_reason=""
-    if [[ -n "${FORCE_MODEL:-}" ]]; then
+    if [[ -n "${FORCE_MODEL:-}" ]] || [[ -n "${FORCE_CODER_MODEL:-}" ]]; then
       challenge_reason="forced_model"
-      log "debug" "  $issue: Challenge skipped because FORCE_MODEL is set ($FORCE_MODEL)"
+      log "debug" "  $issue: Challenge skipped because ${FORCE_MODEL:+FORCE_MODEL }${FORCE_CODER_MODEL:+FORCE_CODER_MODEL }is set"
     else
       local _dyn_rs=$remaining_slots
       (( _dyn_rs < 2 )) && _dyn_rs=2
@@ -8094,6 +8252,11 @@ monitor_issue_state() {
                 review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
               fi
 
+              # Per-stage overrides take precedence over FORCE_MODEL and router values
+              if [[ -n "${FORCE_PLANNER_MODEL:-}" ]]; then planner_model="$FORCE_PLANNER_MODEL"; fi
+              if [[ -n "${FORCE_CODER_MODEL:-}" ]]; then coder_model="$FORCE_CODER_MODEL"; fi
+              if [[ -n "${FORCE_REVIEWER_MODEL:-}" ]]; then reviewer_model="$FORCE_REVIEWER_MODEL"; fi
+
               planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-4-6")"
               coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
               reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
@@ -8322,6 +8485,10 @@ monitor_issue_state() {
                 coder_model="$challenge_coder"
               fi
             fi
+            # Per-stage override for coder: applies when no challenge is active, takes precedence over FORCE_MODEL
+            if [[ -n "${FORCE_CODER_MODEL:-}" ]] && [[ -z "${challenge_coder:-}" ]]; then
+              coder_model="$FORCE_CODER_MODEL"
+            fi
             coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
             code_depth=$(read_phase_config "$FEATURE_DIR" "coding" "depth")
             [[ -z "$code_depth" ]] && code_depth=$(get_task_meta "$ISSUE" "codeDepth")
@@ -8461,6 +8628,8 @@ monitor_issue_state() {
               reviewer_model=$(read_phase_config "$FEATURE_DIR" "review" "model")
               [[ -z "$reviewer_model" ]] && reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
             fi
+            # Per-stage override for reviewer
+            if [[ -n "${FORCE_REVIEWER_MODEL:-}" ]]; then reviewer_model="$FORCE_REVIEWER_MODEL"; fi
             reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
             review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
             [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")

@@ -1103,7 +1103,7 @@
                 "defaultModel": {
                     "type": "string",
                     "default": "claude-sonnet-4-6",
-                    "description": "Fallback model when insufficient eval data exists for routing."
+                    "description": "Fallback model when insufficient eval data exists for routing. Accepts a pinned model ID (e.g. 'claude-sonnet-4-6'), a family alias (e.g. 'opus', 'sonnet', 'haiku'), or a channel alias (e.g. 'opus:preview'). See shared/lib/model-registry.ts for supported families."
                 },
                 "minRecords": {
                     "type": "integer",
@@ -1123,32 +1123,32 @@
                         "type": "string"
                     },
                     "default": [],
-                    "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data."
+                    "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data. Each entry is a pinned model ID (e.g. 'claude-sonnet-4-6')."
                 },
                 "availableModels": {
                     "type": "object",
-                    "description": "Per-stage model availability lists. Stages without a list fall back to router.models.",
+                    "description": "Per-stage model availability lists. Stages without a list fall back to router.models. Each entry is a pinned model ID. Note: the --model/--planner-model/--coder-model/--reviewer-model CLI flags accept a wider selector vocabulary (family aliases, inherit) at runtime.",
                     "properties": {
                         "planner": {
                             "type": "array",
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Models available for the planning stage."
+                            "description": "Models available for the planning stage. Use pinned model IDs (e.g. 'claude-sonnet-4-6')."
                         },
                         "coder": {
                             "type": "array",
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Models available for the coding stage."
+                            "description": "Models available for the coding stage. Use pinned model IDs (e.g. 'claude-opus-4-7')."
                         },
                         "reviewer": {
                             "type": "array",
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Models available for the review stage."
+                            "description": "Models available for the review stage. Use pinned model IDs (e.g. 'claude-sonnet-4-6')."
                         }
                     },
                     "additionalProperties": false

@@ -382,6 +382,44 @@ The loop is:
 
 Challenge mode can also run head-to-head comparisons to generate stronger routing data over time. For the broader model-selection story and Hokusai opt-in, see [Routing & Hokusai](routing-and-hokusai.md).
 
+### Model Override Flags
+
+You can override the routed model from the CLI. All four flags accept a family alias, `inherit`, or a pinned model ID:
+
+| Flag | Description |
+|------|-------------|
+| `--model <selector>` | Override all stages (planner, coder, reviewer). Skips the router entirely. |
+| `--planner-model <selector>` | Override the planning stage only. Router still sets coder and reviewer. |
+| `--coder-model <selector>` | Override the coding stage only. |
+| `--reviewer-model <selector>` | Override the review stage only. |
+
+**Accepted selector forms:**
+
+- Family alias: `opus`, `sonnet`, `haiku`
+- Channel alias: `opus:preview`
+- Literal `inherit` (resolved at launch from the parent stage context)
+- Pinned model ID: `claude-sonnet-4-6`, `claude-opus-4-7`
+
+**Precedence (highest to lowest):**
+
+1. `--model` (global override, all stages)
+2. `--planner-model` / `--coder-model` / `--reviewer-model` (per-stage; override `--model` for that stage)
+3. Router or saved phase config
+4. Built-in fallback defaults
+
+```bash
+# Force all stages to use opus
+wavemill mill --model opus
+
+# Use sonnet for planning, let router pick coder and reviewer
+wavemill mill --planner-model sonnet
+
+# Use a pinned ID for the coder only
+wavemill mill --coder-model claude-opus-4-7
+```
+
+Unknown aliases (e.g. `mystral`) and malformed tokens are rejected at startup before any agents are launched.
+
 When quota pressure changes a routing decision, the control pane replays a single transparency line from the router or fallback path:
 
 ```text

@@ -27,6 +27,9 @@ fi
 AGENT_CMD="$(jq -r '.agentCmd' "$PLAN_FILE")"
 AGENT_CMD_EXPLICIT="$(jq -r '.agentCmdExplicit // false' "$PLAN_FILE")"
 FORCE_MODEL="$(jq -r '.forceModel // empty' "$PLAN_FILE")"
+FORCE_PLANNER_MODEL="$(jq -r '.forcePlannerModel // empty' "$PLAN_FILE")"
+FORCE_CODER_MODEL="$(jq -r '.forceCoderModel // empty' "$PLAN_FILE")"
+FORCE_REVIEWER_MODEL="$(jq -r '.forceReviewerModel // empty' "$PLAN_FILE")"
 ROUTER_ENABLED="$(jq -r '.routerEnabled // true' "$PLAN_FILE")"
 MAX_PARALLEL="$(jq -r '.maxParallel // 0' "$PLAN_FILE")"
 STATE_DIR="$(jq -r '.stateDir' "$PLAN_FILE")"
@@ -62,7 +65,8 @@ DASHBOARD_PID=""
 LAUNCH_QUEUE_PLAN="$(jq -c '.queuePlan // empty' "$PLAN_FILE" 2>/dev/null || true)"
 
 export SESSION REPO_DIR BASE_BRANCH WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
-export FORCE_MODEL ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
+export FORCE_MODEL FORCE_PLANNER_MODEL FORCE_CODER_MODEL FORCE_REVIEWER_MODEL
+export ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
 export POLL_SECONDS REQUIRE_CONFIRM DRY_RUN PROJECT_NAME AUTO_EVAL ENTER_LAUNCHES_WAVE DASHBOARD_VERBOSITY
 export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
 
@@ -350,6 +354,9 @@ write_monitor_env() {
     write_shell_assignment "AGENT_CMD" "$AGENT_CMD"
     write_shell_assignment "AGENT_CMD_EXPLICIT" "$AGENT_CMD_EXPLICIT"
     write_shell_assignment "ROUTER_ENABLED" "$ROUTER_ENABLED"
+    write_shell_assignment "FORCE_PLANNER_MODEL" "${FORCE_PLANNER_MODEL:-}"
+    write_shell_assignment "FORCE_CODER_MODEL" "${FORCE_CODER_MODEL:-}"
+    write_shell_assignment "FORCE_REVIEWER_MODEL" "${FORCE_REVIEWER_MODEL:-}"
     write_shell_assignment "MAX_PARALLEL" "$MAX_PARALLEL"
     write_shell_assignment "AUTO_EVAL" "$AUTO_EVAL"
     write_shell_assignment "ENTER_LAUNCHES_WAVE" "$ENTER_LAUNCHES_WAVE"

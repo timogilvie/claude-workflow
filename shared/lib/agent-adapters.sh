@@ -40,9 +40,10 @@ agent_binary_for_cmd() {
 # MODEL VALIDATION
 # ============================================================================
 
-# Validate a model ID exists in config (pricing or agentMap).
-# Args: $1 = model ID, $2 = repo directory (optional)
+# Validate a model selector (family alias, inherit, or pinned model ID).
+# Args: $1 = model selector, $2 = repo directory (optional)
 # Returns: 0 if valid, 1 if invalid (prints error to stderr)
+# Accepts: family aliases (opus, sonnet, haiku), inherit, pinned model IDs.
 # Note: Uses TOOLS_DIR when set, otherwise infers paths from the repo argument.
 agent_validate_model() {
   local model="$1"
@@ -51,14 +52,22 @@ agent_validate_model() {
   # Convert to absolute path
   repo_dir="$(cd "$repo_dir" 2>/dev/null && pwd || echo "$repo_dir")"
 
-  # Derive lib directory from TOOLS_DIR (TOOLS_DIR = repo/tools, LIB_DIR = repo/shared/lib)
-  # and fall back to the repo argument when the adapter is sourced directly.
   local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local selector_validator="$tools_dir/validate-model-token.ts"
+
+  # Use selector-aware validator when available (accepts aliases + inherit + pinned IDs).
+  # Fall back to pinned-only model-validator.ts for backwards compatibility during upgrades.
+  if [[ -f "$selector_validator" ]]; then
+    if npx tsx "$selector_validator" --repo-dir "$repo_dir" "$model" >/dev/null 2>&1; then
+      return 0
+    else
+      return 1
+    fi
+  fi
+
+  # Legacy path: pinned model IDs only
   local lib_dir="${tools_dir%/tools}/shared/lib"
   local validator="model-validator.ts"
-
-  # Call TypeScript validator (cd to lib_dir first for imports to work)
-  # Exits 0 if valid, 1 if invalid with error message
   if (cd "$lib_dir" && npx tsx "$validator" "$model" "$repo_dir" 2>&1); then
     return 0
   else

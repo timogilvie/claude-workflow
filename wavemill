@@ -46,6 +46,17 @@ ${GREEN}Commands:${NC}
                                Read backlog JSON from a fixture file
                ${CYAN}--dry-run-plan-out <file>${NC}
                                Write the launch plan JSON to a chosen path
+               ${CYAN}--model <selector>${NC}
+                               Override model for all stages (planner, coder, reviewer).
+                               Accepted: family alias (opus, sonnet, haiku), inherit,
+                               or pinned model ID (claude-sonnet-4-6).
+                               Skips the router for all stages.
+               ${CYAN}--planner-model <selector>${NC}
+                               Override model for the planning stage only.
+               ${CYAN}--coder-model <selector>${NC}
+                               Override model for the coding stage only.
+               ${CYAN}--reviewer-model <selector>${NC}
+                               Override model for the review stage only.
 
   ${CYAN}expand${NC}    Expand Linear issues into task packets
              - No args: shows ranked backlog candidates
