@@ -109,3 +109,15 @@ Precedence:
 - `"inherit"` falls through to the next layer, including parent context when present.
 
 Invalid values fail loudly during config or plan validation with an error that names the failing path and explains the accepted forms.
+
+## Cross-Process Inheritance
+
+`"inherit"` is resolved in one place: [`shared/lib/model-resolution.ts`](../shared/lib/model-resolution.ts). Shell launchers only forward context; they do not implement selector logic themselves.
+
+`WAVEMILL_RESOLVED_MODEL` carries the parent agent's concrete resolved model ID across process and worktree boundaries. The launchers set and re-export it before spawning child agents so nested `inherit` selectors stay tied to the parent chain even during parallel execution.
+
+Resolution order for `"inherit"`:
+- Use the in-memory parent context when the caller already has one.
+- Otherwise use an explicit `parentResolvedModel` value when the batch or launch plan provides one.
+- Otherwise use `WAVEMILL_RESOLVED_MODEL` from the environment.
+- Otherwise fall back to the normal configured default model for that repo.

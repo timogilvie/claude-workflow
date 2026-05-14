@@ -90,11 +90,7 @@ agent_resolve_model() {
     return 1
   fi
 
-  if ! cd "$lib_dir"; then
-    return 1
-  fi
-
-  if resolved_model="$(npx tsx "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
+  if resolved_model="$(cd "$lib_dir" 2>/dev/null && npx tsx "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
     printf '%s\n' "$resolved_model"
     return 0
   fi
@@ -1375,6 +1371,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
 # Resolve credentials at runtime (not embedded in script)
 tools_dir='$tools_dir'
 lib_dir='$lib_dir'
@@ -1417,6 +1414,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 provider_root='$provider_root'
 provider_home='$provider_home'
 xdg_config_home='$xdg_config_home'
@@ -1449,7 +1447,7 @@ LAUNCHEOF
         tmux send-keys -t "$session:$window" -l -- "$launcher"
         tmux send-keys -t "$session:$window" C-m
       else
-        tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$window'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
+        tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$window' WAVEMILL_RESOLVED_MODEL='$model'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
       fi
       ;;
     codex)
@@ -1461,6 +1459,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1492,9 +1491,9 @@ LAUNCHEOF
         rm -f "$exit_file" 2>/dev/null || true
       fi
       if [[ -n "$exit_file" ]]; then
-        tmux send-keys -t "$session:$window" "$agent_cmd${model_flag}; rc=\$?; printf '%s\n' \"\$rc\" > '$exit_file'" C-m
+        tmux send-keys -t "$session:$window" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}; rc=\$?; printf '%s\n' \"\$rc\" > '$exit_file'" C-m
       else
-        tmux send-keys -t "$session:$window" "$agent_cmd${model_flag}" C-m
+        tmux send-keys -t "$session:$window" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}" C-m
       fi
       sleep 0.3
       local pane_pid=""
@@ -1710,6 +1709,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1747,6 +1747,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 provider_root='$provider_root'
 provider_home='$provider_home'
 xdg_config_home='$xdg_config_home'
@@ -1782,6 +1783,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1797,6 +1799,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1811,6 +1814,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi

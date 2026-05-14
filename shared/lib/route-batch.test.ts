@@ -341,6 +341,7 @@ await test('tasksFromPlan preserves task model as workspaceSelector', async () =
           issue: 'HOK-1635',
           taskPacketFile: packetPath,
           model: 'haiku',
+          parentResolvedModel: 'claude-opus-4-7',
         },
         {
           issue: 'HOK-1636',
@@ -350,8 +351,53 @@ await test('tasksFromPlan preserves task model as workspaceSelector', async () =
     });
 
     assert.equal(tasks[0]?.workspaceSelector, 'haiku');
+    assert.equal(tasks[0]?.parentResolvedModel, 'claude-opus-4-7');
     assert.equal(tasks[0]?.file, packetPath);
     assert.equal(tasks[1]?.workspaceSelector, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('routeBatch resolves inherit selectors from the parentResolvedModel option', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  try {
+    const [result] = await routeBatch([
+      {
+        issueId: 'HOK-1634',
+        prompt: 'Preserve inherited routing across nested subagents',
+        modelSelector: 'inherit',
+      },
+    ], {
+      repoDir,
+      mode: 'auto',
+      parentResolvedModel: 'claude-haiku-4-5-20251001',
+      additionalEvalsPaths: [],
+    });
+
+    assert.equal(result.decision.coder, 'claude-haiku-4-5-20251001');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('routeBatch keeps explicit per-task selectors over inherited parent models', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  try {
+    const [result] = await routeBatch([
+      {
+        issueId: 'HOK-1635',
+        prompt: 'Preserve explicit routing in batch tasks',
+        modelSelector: 'opus',
+      },
+    ], {
+      repoDir,
+      mode: 'auto',
+      parentResolvedModel: 'claude-haiku-4-5-20251001',
+      additionalEvalsPaths: [],
+    });
+
+    assert.equal(result.decision.coder, 'claude-opus-4-7');
   } finally {
     cleanup();
   }

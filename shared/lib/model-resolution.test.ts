@@ -341,4 +341,75 @@ describe('resolveEffectiveModel', () => {
       },
     );
   });
+
+  it('inherits from an explicit parentResolvedModelId when the workspace selector is inherit', () => {
+    const result = resolveEffectiveModel({
+      workspaceSelector: 'inherit',
+      parentResolvedModelId: 'claude-haiku-4-5-20251001',
+      policyContext: makePolicyContext(),
+    });
+
+    assert.equal(result.resolutionLayer, 'parent');
+    assert.deepEqual(result.requested, { kind: 'inherit' });
+    assert.equal(result.resolved, 'claude-haiku-4-5-20251001');
+    assert.equal(result.source, 'inherited');
+  });
+
+  it('inherits from WAVEMILL_RESOLVED_MODEL when parent context is absent', () => {
+    const previous = process.env.WAVEMILL_RESOLVED_MODEL;
+    process.env.WAVEMILL_RESOLVED_MODEL = 'claude-haiku-4-5-20251001';
+
+    try {
+      const result = resolveEffectiveModel({
+        workspaceSelector: 'inherit',
+        policyContext: makePolicyContext(),
+      });
+
+      assert.equal(result.resolutionLayer, 'parent');
+      assert.deepEqual(result.requested, { kind: 'inherit' });
+      assert.equal(result.resolved, 'claude-haiku-4-5-20251001');
+      assert.equal(result.source, 'inherited');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.WAVEMILL_RESOLVED_MODEL;
+      } else {
+        process.env.WAVEMILL_RESOLVED_MODEL = previous;
+      }
+    }
+  });
+
+  it('ignores parentResolvedModelId for explicit selectors', () => {
+    const result = resolveEffectiveModel({
+      workspaceSelector: 'opus',
+      parentResolvedModelId: 'claude-haiku-4-5-20251001',
+      policyContext: makePolicyContext(),
+    });
+
+    assert.equal(result.resolutionLayer, 'workspace');
+    assert.deepEqual(result.requested, { kind: 'alias', family: 'opus', channel: 'stable' });
+    assert.equal(result.resolved, 'claude-opus-4-7');
+    assert.equal(result.source, 'alias');
+  });
+
+  it('supports transitive inherit chains mixing explicit pins and aliases', () => {
+    const root = resolveEffectiveModel({
+      workspaceSelector: 'opus',
+      policyContext: makePolicyContext(),
+    });
+    const child = resolveEffectiveModel({
+      workspaceSelector: 'claude-haiku-4-5-20251001',
+      parentResolvedModelId: root.resolved,
+      policyContext: makePolicyContext(),
+    });
+    const grandchild = resolveEffectiveModel({
+      workspaceSelector: 'inherit',
+      parentResolvedModelId: child.resolved,
+      policyContext: makePolicyContext(),
+    });
+
+    assert.equal(root.resolved, 'claude-opus-4-7');
+    assert.equal(child.resolved, 'claude-haiku-4-5-20251001');
+    assert.equal(grandchild.resolved, 'claude-haiku-4-5-20251001');
+    assert.equal(grandchild.source, 'inherited');
+  });
 });

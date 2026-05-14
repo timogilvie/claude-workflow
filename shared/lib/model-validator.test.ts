@@ -281,5 +281,20 @@ describe('model-validator', () => {
       assert.equal(resolved.token, 'inherit');
       assert.equal(resolved.kind, 'inherit');
     });
+
+    it('resolves inherit from WAVEMILL_RESOLVED_MODEL before falling back to defaults', () => {
+      const previous = process.env.WAVEMILL_RESOLVED_MODEL;
+      process.env.WAVEMILL_RESOLVED_MODEL = 'claude-haiku-4-5-20251001';
+      try {
+        const resolved = resolveModelSelectorTokenOrThrow('inherit', 'coder', '.');
+        assert.equal(resolved.resolvedModelId, 'claude-haiku-4-5-20251001');
+      } finally {
+        if (previous === undefined) {
+          delete process.env.WAVEMILL_RESOLVED_MODEL;
+        } else {
+          process.env.WAVEMILL_RESOLVED_MODEL = previous;
+        }
+      }
+    });
   });
 });

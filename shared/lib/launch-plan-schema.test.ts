@@ -42,6 +42,11 @@ describe('launch-plan schema', () => {
     assert.equal(valid, true, JSON.stringify(validate.errors));
   });
 
+  it('accepts parentResolvedModel as a string', () => {
+    const valid = validate(makePlan({ parentResolvedModel: 'claude-opus-4-7' }));
+    assert.equal(valid, true, JSON.stringify(validate.errors));
+  });
+
   it('rejects non-string model values', () => {
     const valid = validate(makePlan({ model: null }));
     assert.equal(valid, false);
