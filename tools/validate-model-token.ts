@@ -36,10 +36,10 @@ function parseArgs(argv: string[]): { token: string; repoDir: string } {
         'Usage: npx tsx tools/validate-model-token.ts [--repo-dir <dir>] <token>\n' +
         '\n' +
         'Validates a model selector token. Accepted forms:\n' +
-        '  family alias: opus, sonnet, haiku, gpt-5.5\n' +
+        '  family alias: opus, sonnet, haiku\n' +
         '  alias with channel: opus:preview\n' +
         '  inherit\n' +
-        '  pinned model ID: claude-sonnet-4-6, gpt-5.4\n' +
+        '  pinned model ID: claude-sonnet-4-6, claude-opus-4-7\n' +
         '\n' +
         'Prints the normalized token to stdout on success.\n',
       );

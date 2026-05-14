@@ -60,11 +60,6 @@ check "inherit accepted" "inherit" "$(run_validator "inherit")"
 check "pinned model ID accepted" "claude-sonnet-4-6" "$(run_validator "claude-sonnet-4-6")"
 
 # Invalid inputs
-validator_exit() {
-  npx tsx "$TOOLS_DIR/validate-model-token.ts" --repo-dir "$REPO_DIR" "$1" >/dev/null 2>&1
-  echo $?
-}
-
 unknown_exit=$(npx tsx "$TOOLS_DIR/validate-model-token.ts" --repo-dir "$REPO_DIR" "mystral" >/dev/null 2>&1; echo $?) || true
 check "unknown family exits non-zero" "1" "$unknown_exit"
 
