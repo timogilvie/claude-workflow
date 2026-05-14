@@ -235,10 +235,36 @@ else
   fail "inbox rows are missing expected state details"
 fi
 
+if grep -q 'planner: model resolution unavailable' "$OUTPUT_ONE" \
+  && grep -q 'coder: model resolution unavailable' "$OUTPUT_ONE" \
+  && grep -q 'reviewer: model resolution unavailable' "$OUTPUT_ONE"; then
+  pass "awaiting approval renders unavailable model routing when records are absent"
+else
+  fail "missing routing records do not render unavailable placeholders"
+fi
+
 if grep -q 'HOK-1222.*active-task.*🔨 executing.*● running.*#45 ✓' "$OUTPUT_ONE"; then
   pass "shows active task PR and running status"
 else
   fail "active row is missing expected PR or status details"
+fi
+
+cat > "$WORKTREES_DIR/plan-task/features/plan-task/routing.jsonl" <<'EOF'
+{"role":"planner","requested":"opus","resolved":"claude-opus-4-7"}
+{"role":"coder","requested":"inherit","resolved":"claude-opus-4-7","inheritedFrom":"planner"}
+{"role":"reviewer","requested":"sonnet","resolved":"claude-sonnet-4-6","fallback":"claude-haiku-4-5","fallbackReason":"quota-exhausted"}
+EOF
+
+OUTPUT_ROUTING="$TMP_DIR/output-routing.txt"
+run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ROUTING"
+
+if grep -q 'planner: requested=opus → resolved=claude-opus-4-7' "$OUTPUT_ROUTING" \
+  && grep -q 'coder: requested=inherit (from planner) → resolved=claude-opus-4-7' "$OUTPUT_ROUTING" \
+  && grep -q 'reviewer: requested=sonnet → resolved=claude-sonnet-4-6' "$OUTPUT_ROUTING" \
+  && grep -q 'fallback=claude-haiku-4-5 (reason: quota-exhausted)' "$OUTPUT_ROUTING"; then
+  pass "awaiting approval renders alias, inherit, and fallback routing details"
+else
+  fail "routing details are missing from awaiting approval output"
 fi
 
 cat > "$WORKTREES_DIR/rejected-plan-task/features/rejected-plan-task/.planning-rejected.json" <<'EOF'
@@ -537,7 +563,7 @@ if grep -q '└─.*\.\.\.' "$OUTPUT_LONG"; then
   # Find the detail line and check its length
   detail_line=$(grep '└─' "$OUTPUT_LONG" | head -1)
   line_len=${#detail_line}
-  if (( line_len <= 85 )); then
+  if (( line_len <= 98 )); then
     pass "truncates very long detail strings to prevent overflow"
   else
     fail "truncated detail line is still too long ($line_len chars)"

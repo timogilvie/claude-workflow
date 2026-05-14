@@ -55,6 +55,9 @@ DEFAULT_TIP_REFRESH=60
 MAX_TIP_REFRESH=3600
 PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 PR_TTL=15
+WAVEMILL_STATUS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WAVEMILL_REPO_DIR="$(cd "$WAVEMILL_STATUS_DIR/../.." && pwd)"
+declare -Ag WAVEMILL_ROUTING_DISPLAY_CACHE=()
 
 # Colors
 G='\033[32m'; Y='\033[33m'; R='\033[31m'; D='\033[90m'; B='\033[1m'; N='\033[0m'
@@ -339,6 +342,72 @@ plan_waiting_for_review() {
   return 0
 }
 
+render_plan_model_routing() {
+  local worktree="$1" slug="$2"
+  local routing_file="" candidate records_json cache_key mtime rendered
+
+  for candidate in \
+    "$worktree/features/$slug/routing.jsonl" \
+    "$worktree/bugs/$slug/routing.jsonl"
+  do
+    if [[ -f "$candidate" ]]; then
+      routing_file="$candidate"
+      break
+    fi
+  done
+
+  if [[ -n "$routing_file" ]]; then
+    mtime=$(stat -f %m "$routing_file" 2>/dev/null || echo 0)
+    cache_key="${routing_file}:${mtime}"
+    if [[ -v WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"] ]]; then
+      printf '%s' "${WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]}"
+      return 0
+    fi
+    records_json="$(
+      jq -Rcs '
+        split("\n")
+        | map(select(length > 0) | fromjson?)
+        | reduce .[] as $item ({};
+            if (($item.role // null) | type) == "string" then
+              .[$item.role] = $item
+            else
+              .
+            end
+          )
+        | [
+            {"role":"planner"} + (.planner // {}),
+            {"role":"coder"} + (.coder // {}),
+            {"role":"reviewer"} + (.reviewer // {})
+          ]
+      ' "$routing_file" 2>/dev/null
+    )"
+    [[ -n "$records_json" ]] || records_json='[{"role":"planner"},{"role":"coder"},{"role":"reviewer"}]'
+  else
+    cache_key="missing:${worktree}:${slug}"
+    if [[ -v WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"] ]]; then
+      printf '%s' "${WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]}"
+      return 0
+    fi
+    records_json='[{"role":"planner"},{"role":"coder"},{"role":"reviewer"}]'
+  fi
+
+  rendered="$(
+    MODEL_RESOLUTION_DISPLAY_INPUT="$records_json" \
+    MODEL_RESOLUTION_DISPLAY_MODULE="$WAVEMILL_REPO_DIR/shared/lib/model-resolution-display.ts" \
+    npx tsx -e '
+      (async () => {
+        const modulePath = process.env.MODEL_RESOLUTION_DISPLAY_MODULE;
+        const records = JSON.parse(process.env.MODEL_RESOLUTION_DISPLAY_INPUT ?? "[]");
+        const { formatAllSubagentModelDisplayText } = await import(modulePath);
+        process.stdout.write(formatAllSubagentModelDisplayText(records));
+      })().catch(() => process.exit(1));
+    ' 2>/dev/null || true
+  )"
+
+  WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]="$rendered"
+  printf '%s' "$rendered"
+}
+
 # ── Elapsed time from directory birth ─────────────────────────────────────
 
 elapsed() {
@@ -446,15 +515,30 @@ is_active() {
 }
 
 # Truncate detail string to fit within available terminal width.
-# Format "%-10s  %4s  └─ %s" uses ~20 chars of prefix, leaving ~60 for content on 80-char terminal.
+# Format "%-10s  %4s  └─ %s" uses ~20 chars of prefix. Leave enough room for
+# per-subagent requested/resolved/fallback routing details while still
+# truncating long freeform status messages.
 truncate_detail() {
   local detail="$1"
-  local max_len=55
+  local max_len=68
   if (( ${#detail} > max_len )); then
-    echo "${detail:0:52}..."
+    echo "${detail:0:$((max_len - 3))}..."
   else
     echo "$detail"
   fi
+}
+
+render_task_detail_lines() {
+  local detail_block="${1:-}"
+  local line
+
+  [[ -n "$detail_block" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    line=$(truncate_detail "$line")
+    printf "${D}%10s  %4s  └─ %s${N}${EL}\n" "" "" "$line" >> "$FRAME"
+  done <<< "$detail_block"
 }
 
 truncate_cell() {
@@ -804,8 +888,11 @@ render_task_row() {
     working|waiting|done) reported="" ;;
   esac
   if [[ -n "$reported" ]]; then
-    reported=$(truncate_detail "$reported")
-    printf "${D}%10s  %4s  └─ %s${N}${EL}\n" "" "" "$reported" >> "$FRAME"
+    render_task_detail_lines "$reported"
+  fi
+
+  if [[ "$task_phase" == "planning" ]] && plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
+    render_task_detail_lines "$(render_plan_model_routing "$worktree" "$slug")"
   fi
 }
 

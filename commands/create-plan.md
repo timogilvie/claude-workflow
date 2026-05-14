@@ -124,9 +124,15 @@ Create a structured implementation plan with:
 
 ## Phase 5: Plan Review
 1. Present plan structure to user
-2. Get feedback and refine
-3. Save final plan to `features/<feature-name>/plan.md`
-4. Ask user to approve before proceeding to implementation
+2. If `features/<feature-name>/routing.jsonl` or `bugs/<feature-name>/routing.jsonl` exists, include a `## Model Routing` section before asking for approval.
+   Read the latest planner/coder/reviewer records from that file and format them with `shared/lib/model-resolution-display.ts`.
+   Show the requested selector, resolved runtime model ID, and fallback model on a distinct second line when present.
+   For `inherit`, preserve the inheritance annotation from the record.
+   If a role is missing or malformed, render `model resolution unavailable` for that role instead of re-resolving.
+3. If no routing records exist yet, still show `## Model Routing` with planner/coder/reviewer listed as `model resolution unavailable`.
+4. Get feedback and refine
+5. Save final plan to `features/<feature-name>/plan.md`
+6. Ask user to approve before proceeding to implementation
 
 ## Key Principles
 - Be skeptical of requirements - ask "why" to understand true needs
