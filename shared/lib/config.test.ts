@@ -45,6 +45,7 @@ import {
   isRouterCapabilityFilteringEnabled,
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
+  getAgentsConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -2475,6 +2476,87 @@ test('malformed local overlay throws a clear parse error', () => {
     assert.throws(() => {
       loadWavemillConfig(tmp);
     }, /Failed to parse.*\.wavemill-config\.local\.json/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
+// Agents Config Tests
+// ────────────────────────────────────────────────────────────────
+
+console.log('\n--- Agents Config Tests ---\n');
+
+test('agents section with model selectors validates and is surfaced', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ agents: { coder: { model: 'opus' } } }));
+    const loaded = loadWavemillConfig(tmp);
+    assert.equal(loaded.agents?.coder?.model, 'opus');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents section with inherit validates', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ agents: { planner: { model: 'inherit' }, reviewer: { model: 'sonnet' } } }));
+    const loaded = loadWavemillConfig(tmp);
+    assert.equal(loaded.agents?.planner?.model, 'inherit');
+    assert.equal(loaded.agents?.reviewer?.model, 'sonnet');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents section with pinned model ID validates', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ agents: { coder: { model: 'claude-opus-4-7' } } }));
+    const loaded = loadWavemillConfig(tmp);
+    assert.equal(loaded.agents?.coder?.model, 'claude-opus-4-7');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents section with empty string model fails validation', () => {
+  if (!hasAjv) {
+    console.log('        SKIP  Ajv not installed');
+    return;
+  }
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ agents: { coder: { model: '' } } }));
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('config without agents section still loads', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ router: { enabled: true } }));
+    const loaded = loadWavemillConfig(tmp);
+    assert.equal(loaded.agents, undefined);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getAgentsConfig returns empty object when absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+    assert.deepEqual(getAgentsConfig(tmp), {});
   } finally {
     cleanUp(tmp);
   }

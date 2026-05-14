@@ -26,6 +26,8 @@ export interface PlanIssue {
   dependencies: number[];
   /** Priority level (P0-P3) */
   priority: string;
+  /** Optional model selector for this issue (inherit | alias | pinned ID). */
+  model?: string;
 }
 
 /**

@@ -408,6 +408,16 @@ export interface ResourcesConfig {
   runtimeSelection?: RuntimeResourceSelectionConfig;
 }
 
+export interface AgentPhaseConfig {
+  model?: string;
+}
+
+export interface AgentsConfig {
+  planner?: AgentPhaseConfig;
+  coder?: AgentPhaseConfig;
+  reviewer?: AgentPhaseConfig;
+}
+
 export interface VerificationMandatoryChecksConfig {
   typecheck?: boolean;
   lint?: boolean;
@@ -472,6 +482,7 @@ export interface WavemillConfig {
   budget?: BudgetConfig;
   registry?: RegistryConfig;
   resources?: ResourcesConfig;
+  agents?: AgentsConfig;
 }
 
 export const INTEGRATION_DEFAULTS: IntegrationConfig = {
@@ -1160,4 +1171,12 @@ export function getRuntimeResourceSelectionConfig(repoDir?: string): Required<Om
     canaryRate: config.canaryRate ?? 0,
     surfaces: config.surfaces ?? {},
   };
+}
+
+/**
+ * Get the agents config section (per-phase checked-in model defaults).
+ * Returns empty object if not configured.
+ */
+export function getAgentsConfig(repoDir?: string): AgentsConfig {
+  return loadWavemillConfig(repoDir).agents || {};
 }

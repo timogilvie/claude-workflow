@@ -1846,9 +1846,45 @@
                 }
             },
             "additionalProperties": false
+        },
+        "agents": {
+            "type": "object",
+            "description": "Checked-in per-phase agent model defaults. Declares model selectors that version-control routing decisions; values feed the layered model-resolution pipeline (shared/lib/model-resolution-policy.ts). Absent phases fall back to runtime routing as before.",
+            "properties": {
+                "planner": {
+                    "type": "object",
+                    "description": "Model selector for the planning phase agent.",
+                    "properties": {
+                        "model": { "$ref": "#/definitions/modelSelector" }
+                    },
+                    "additionalProperties": false
+                },
+                "coder": {
+                    "type": "object",
+                    "description": "Model selector for the coding phase agent.",
+                    "properties": {
+                        "model": { "$ref": "#/definitions/modelSelector" }
+                    },
+                    "additionalProperties": false
+                },
+                "reviewer": {
+                    "type": "object",
+                    "description": "Model selector for the review phase agent.",
+                    "properties": {
+                        "model": { "$ref": "#/definitions/modelSelector" }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
         }
     },
     "definitions": {
+        "modelSelector": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Model selector for checked-in routing defaults. Allowed forms: \"inherit\" (use parent context/runtime default), a family alias (e.g. \"opus\", \"sonnet\", \"haiku\", \"gpt-5.5\", \"gemini-pro\"), or a pinned model ID (e.g. \"claude-opus-4-7\"). See shared/lib/model-registry.ts for the canonical alias list. Semantic validation of unknown aliases/IDs is the responsibility of the resolution pipeline."
+        },
         "runtimeSurfaceConfig": {
             "type": "object",
             "properties": {

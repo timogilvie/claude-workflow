@@ -5,6 +5,13 @@
   "type": "object",
   "required": ["session", "repoDir", "baseBranch", "worktreeRoot", "agentCmd", "tasks"],
   "additionalProperties": true,
+  "$defs": {
+    "modelSelector": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Model selector for this task entry. Allowed forms: \"inherit\", a family alias (e.g. \"opus\", \"sonnet\", \"haiku\"), or a pinned model ID (e.g. \"claude-opus-4-7\"). See shared/lib/model-registry.ts."
+    }
+  },
   "properties": {
     "session": {
       "type": "string",
@@ -74,6 +81,10 @@
                 "type": "string"
               }
             }
+          },
+          "model": {
+            "$ref": "#/$defs/modelSelector",
+            "description": "Checked-in model selector for this task. When set, tooling can resolve and apply this as a phase-default before runtime routing overrides."
           }
         }
       }

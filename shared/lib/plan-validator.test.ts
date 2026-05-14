@@ -200,6 +200,41 @@ describe('validatePlanOutput', () => {
     expect(validatePlanOutput(plan)).toBe(true);
   });
 
+  test('accepts plan issue with model field', () => {
+    const plan = {
+      epic_summary: 'Test epic',
+      milestones: [{
+        name: 'M1',
+        issues: [{
+          title: 'T1',
+          user_story: 'As a user',
+          description: 'Desc',
+          dependencies: [],
+          priority: 'P1',
+          model: 'sonnet',
+        }],
+      }],
+    };
+    expect(validatePlanOutput(plan)).toBe(true);
+  });
+
+  test('accepts plan issue without model field (backward compat)', () => {
+    const plan = {
+      epic_summary: 'Test epic',
+      milestones: [{
+        name: 'M1',
+        issues: [{
+          title: 'T1',
+          user_story: 'As a user',
+          description: 'Desc',
+          dependencies: [],
+          priority: 'P1',
+        }],
+      }],
+    };
+    expect(validatePlanOutput(plan)).toBe(true);
+  });
+
   test('accepts multiple milestones and issues', () => {
     const plan = {
       epic_summary: 'Summary',
