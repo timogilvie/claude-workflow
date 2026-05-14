@@ -34,6 +34,7 @@ import {
   getProjectContextConfig,
   getDeepSeekProviderConfig,
   getDeepSeekLauncherConfig,
+  getAgentsConfig,
   getHokusaiSubmissionConfig,
   getProvidersConfig,
   getReadyConfig,
@@ -2358,6 +2359,97 @@ test('eval success threshold rejects non-numeric values', () => {
         loadWavemillConfig(tmp);
       });
     }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents config accepts family alias, pinned ID, and inherit selectors', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      agents: {
+        planner: { model: 'claude-opus-4-7' },
+        coder: { model: 'opus' },
+        reviewer: { model: 'inherit' },
+      },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.equal(config.agents?.planner?.model, 'claude-opus-4-7');
+    assert.equal(config.agents?.coder?.model, 'opus');
+    assert.equal(config.agents?.reviewer?.model, 'inherit');
+    assert.deepEqual(getAgentsConfig(tmp), config.agents);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents config rejects invalid model selector strings with path context', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      agents: {
+        coder: { model: 'not a valid selector' },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /\/agents\/coder\/model[\s\S]*not a valid selector[\s\S]*valid model selector/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents config rejects empty model selectors', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      agents: {
+        coder: { model: '' },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /\/agents\/coder\/model[\s\S]*not a valid model selector/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents config still enforces string shape validation', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      agents: {
+        coder: { model: 123 },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /\/agents\/coder\/model: must be string/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getAgentsConfig returns empty object when agents config is absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: { maxParallel: 3 },
+    }));
+
+    assert.deepEqual(getAgentsConfig(tmp), {});
   } finally {
     cleanUp(tmp);
   }
