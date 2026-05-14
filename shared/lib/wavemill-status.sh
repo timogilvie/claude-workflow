@@ -51,6 +51,8 @@ trap 'WAVEMILL_REDRAW=1' USR1
 
 DEFAULT_REFRESH=2
 MAX_REFRESH=10
+DEFAULT_TIP_REFRESH=60
+MAX_TIP_REFRESH=3600
 PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 PR_TTL=15
 
@@ -77,7 +79,27 @@ resolve_dashboard_refresh_seconds() {
   printf '%s\n' "$DEFAULT_REFRESH"
 }
 
+resolve_tip_refresh_seconds() {
+  local raw="${WAVEMILL_TIP_REFRESH_SECONDS:-$DEFAULT_TIP_REFRESH}"
+
+  if [[ "$raw" =~ ^[0-9]+$ ]] && (( raw >= 1 && raw <= MAX_TIP_REFRESH )); then
+    printf '%s\n' "$raw"
+    return 0
+  fi
+
+  if [[ "${WAVEMILL_TIP_REFRESH_WARNED:-0}" -eq 0 ]]; then
+    printf 'wavemill: invalid WAVEMILL_TIP_REFRESH_SECONDS=%s, using default %s\n' \
+      "$raw" "$DEFAULT_TIP_REFRESH" >&2
+    WAVEMILL_TIP_REFRESH_WARNED=1
+  fi
+
+  printf '%s\n' "$DEFAULT_TIP_REFRESH"
+}
+
 REFRESH="$(resolve_dashboard_refresh_seconds)"
+TIP_REFRESH="$(resolve_tip_refresh_seconds)"
+_CURRENT_TIP=""
+_LAST_TIP_REFRESH_AT=0
 
 # Hide cursor during rendering
 tput civis 2>/dev/null || true
@@ -989,7 +1011,13 @@ render_dashboard() {
   render_active_section
   render_project_context_suggestion
 
-  usage_tip="$(wavemill_pick_usage_tip)"
+  local now_ts
+  now_ts="$(date +%s)"
+  if (( _LAST_TIP_REFRESH_AT == 0 || now_ts - _LAST_TIP_REFRESH_AT >= TIP_REFRESH )); then
+    _CURRENT_TIP="$(wavemill_pick_usage_tip)"
+    _LAST_TIP_REFRESH_AT="$now_ts"
+  fi
+  usage_tip="$_CURRENT_TIP"
   printf "${EL}\n${D}Refreshes every ${REFRESH}s │ %s${N}${EL}\n" "$usage_tip" >> "$FRAME"
 }
 
