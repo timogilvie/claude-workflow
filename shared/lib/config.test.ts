@@ -2013,6 +2013,7 @@ test('getIntegrationConfig returns a full valid integration block', () => {
     enabled: true,
     integrationBranch: 'auto/staging',
     promotionBranch: 'release',
+    autoUpdatePromotionBranch: true,
     mergeMethod: 'rebase' as const,
     deleteBranchAfterMerge: false,
     haltOnRed: false,
@@ -2085,6 +2086,30 @@ test('invalid integration enabled type throws validation error', () => {
     writeConfig(tmp, JSON.stringify({
       integration: {
         enabled: 'yes',
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid integration autoUpdatePromotionBranch type throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: {
+        autoUpdatePromotionBranch: 'yes',
       },
     }));
 
