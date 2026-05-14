@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
 import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
 import type { QuotaSnapshot, QuotaStatus } from './quota-state.ts';
-import { resolveModel } from './routing-policy.ts';
+import { resolveModel, viableCandidatesInPool } from './routing-policy.ts';
 import { routeWorkflowAuto, tryPolicyResolution } from './workflow-router.ts';
 
 function makeSnapshot(statuses: Partial<Record<string, QuotaStatus>> = {}): QuotaSnapshot {
@@ -748,6 +748,148 @@ describe('routing-policy integration', () => {
       assert.equal(decision.signals.taskDifficulty, 'critical');
     } finally {
       globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
+
+  it('leaves policy selection unchanged when capability filtering is disabled', () => {
+    const ranked = resolveModel({
+      taskType: 'coding',
+      difficulty: 'moderate',
+      quotaState: makeSnapshot(),
+      capabilityConstraints: {
+        minContextWindow: 1_000_000,
+      },
+    });
+
+    assert.equal(ranked[0].modelId, 'gpt-5.5');
+    assert.equal(ranked[0].exclusionReason, undefined);
+  });
+
+  it('filters candidates by capability constraints when enabled', () => {
+    const { repoDir, cleanup } = makeRepo({
+      router: {
+        ...baseConfig().router,
+        capabilityFiltering: {
+          enabled: true,
+        },
+      },
+    });
+
+    const registry = {
+      models: {
+        'slow-no-tools': {
+          ...DEFAULT_MODEL_REGISTRY.models['claude-sonnet-4-6'],
+          qualityScores: { routing: 70, planning: 90, coding: 95, review: 82, classify: 60 },
+          contextWindowTokens: 128_000,
+          toolSupport: 'none' as const,
+          multimodal: { text: true, image: false },
+          latencyTier: 'slow' as const,
+        },
+        'fast-tools-mm': {
+          ...DEFAULT_MODEL_REGISTRY.models['gpt-5.4'],
+          qualityScores: { routing: 68, planning: 85, coding: 88, review: 80, classify: 60 },
+          contextWindowTokens: 1_000_000,
+          toolSupport: 'full' as const,
+          multimodal: { text: true, image: true },
+          latencyTier: 'fast' as const,
+        },
+      },
+      ladders: {
+        coding: ['slow-no-tools', 'fast-tools-mm'],
+      },
+    };
+
+    try {
+      const ranked = resolveModel({
+        taskType: 'coding',
+        difficulty: 'moderate',
+        quotaState: makeSnapshotWithCustomModels(['slow-no-tools', 'fast-tools-mm']),
+        repoDir,
+        capabilityConstraints: {
+          minContextWindow: 200_000,
+          requiresTools: true,
+          requiresMultimodal: true,
+          maxLatencyTier: 'standard',
+        },
+      }, registry);
+
+      assert.equal(ranked[0].modelId, 'fast-tools-mm');
+      assert.equal(ranked[0].viable, true);
+      const filtered = ranked.find((candidate) => candidate.modelId === 'slow-no-tools');
+      assert.ok(filtered);
+      assert.equal(filtered.exclusionReason, 'missing-capability');
+      assert.deepEqual(filtered.capabilityFailures, [
+        'minContextWindow',
+        'requiresTools',
+        'requiresMultimodal',
+        'maxLatencyTier',
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('ANDs combined constraints after quota and difficulty checks', () => {
+    const { repoDir, cleanup } = makeRepo({
+      router: {
+        ...baseConfig().router,
+        capabilityFiltering: {
+          enabled: true,
+        },
+      },
+    });
+
+    try {
+      const ranked = resolveModel({
+        taskType: 'coding',
+        difficulty: 'critical',
+        quotaState: makeSnapshot({
+          'gpt-5.4': 'exhausted',
+        }),
+        repoDir,
+        capabilityConstraints: {
+          minContextWindow: 1_000_000,
+          requiresTools: true,
+        },
+      });
+
+      const exhausted = ranked.find((candidate) => candidate.modelId === 'gpt-5.4');
+      assert.ok(exhausted);
+      assert.equal(exhausted.exclusionReason, 'quota-exhausted');
+      const haiku = ranked.find((candidate) => candidate.modelId === 'claude-haiku-4-5-20251001');
+      assert.ok(haiku);
+      assert.equal(haiku.exclusionReason, 'below-difficulty-floor');
+      assert.ok(ranked.some((candidate) => candidate.exclusionReason === 'missing-capability'));
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('falls back to the unfiltered viable pool when capability filters empty the pool', () => {
+    const { repoDir, cleanup } = makeRepo({
+      router: {
+        ...baseConfig().router,
+        capabilityFiltering: {
+          enabled: true,
+        },
+      },
+    });
+
+    try {
+      const result = viableCandidatesInPool({
+        taskType: 'coding',
+        difficulty: 'moderate',
+        quotaState: makeSnapshot(),
+        repoDir,
+        capabilityConstraints: {
+          minContextWindow: 2_000_000,
+        },
+      }, ['gpt-5.5', 'gpt-5.4']);
+
+      assert.equal(result.capabilityFallbackUsed, true);
+      assert.deepEqual(result.modelIds, ['gpt-5.5', 'gpt-5.4']);
+    } finally {
       cleanup();
     }
   });

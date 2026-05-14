@@ -9,6 +9,7 @@ export type MillJobStatus = 'running' | 'succeeded' | 'failed' | 'timeout';
 export interface MillJob {
   id: string;
   kind: MillJobKind;
+  session?: string;
   issueId?: string;
   side?: string;
   pairId?: string;

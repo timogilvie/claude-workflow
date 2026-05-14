@@ -742,6 +742,92 @@ test('Rejects record with invalid schemaVersion format', () => {
   );
 });
 
+console.log('\n--- Prompt Size Diagnostic Field Tests (HOK-1706) ---\n');
+
+function validPromptSizeDiagnostic() {
+  return {
+    totalBytes: 1200,
+    limitBytes: 9437184,
+    perComponentBytes: {
+      taskPrompt: 100,
+      prReviewOutput: 200,
+      interventionMetadata: 50,
+      taskPacket: 150,
+      planContent: 120,
+      selfReviewSummary: 80,
+      templateScaffold: 500,
+    },
+    policy: 'fail',
+    action: 'pass',
+  };
+}
+
+test('SCHEMA_VERSION is bumped for prompt size diagnostics', () => {
+  assert.equal(SCHEMA_VERSION, '1.24.0');
+});
+
+test('Record without prompt size fields still validates', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  assert.ok(!('failureReason' in record));
+  assert.ok(!('promptSizeDiagnostic' in record));
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with eval_prompt_too_large failureReason validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    failureReason: 'eval_prompt_too_large',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with promptSizeDiagnostic validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    promptSizeDiagnostic: {
+      ...validPromptSizeDiagnostic(),
+      policy: 'truncate',
+      action: 'truncated',
+      truncatedComponents: [
+        {
+          name: 'prReviewOutput',
+          originalBytes: 5000,
+          finalBytes: 1000,
+          removedBytes: 4000,
+        },
+      ],
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Rejects invalid failureReason', () => {
+  const bad = {
+    ...scenarios[0].record,
+    failureReason: 'eval_not_persisted',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(result.errors.some((e) => e.includes('failureReason')));
+});
+
+test('Rejects malformed promptSizeDiagnostic', () => {
+  const bad = {
+    ...scenarios[0].record,
+    promptSizeDiagnostic: {
+      ...validPromptSizeDiagnostic(),
+      totalBytes: -1,
+      action: 'compressed',
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(result.errors.some((e) => e.includes('promptSizeDiagnostic')));
+});
+
 console.log('\n--- Cost Field Tests ---\n');
 
 test('Record with tokenUsage and estimatedCost validates', () => {
@@ -1122,6 +1208,48 @@ test('Record without fallbackEvent still validates and parses unchanged', () => 
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
+test('TaskDescriptor constraints accept capability_constraints', () => {
+  const record = {
+    ...scenarios[0].record,
+    taskDescriptor: {
+      schema_version: '1.0',
+      signals: {
+        heuristic: {
+          task_type: 'feature',
+          languages: ['typescript'],
+          framework_tags: [],
+          files_touched: 3,
+          repo_size_loc: 1000,
+          description_tokens: 120,
+          is_greenfield: false,
+          has_migration: false,
+          has_ui: false,
+          has_tests: true,
+          cross_service: false,
+        },
+        learned: {
+          complexity: 3,
+          domain: 'backend',
+          risk_flags: [],
+        },
+      },
+      constraints: {
+        models_available: ['gpt-5.3-codex'],
+        objective: 'balanced',
+        capability_constraints: {
+          minContextWindow: 200000,
+          requiresTools: true,
+          maxLatencyTier: 'standard',
+        },
+      },
+      stages: {},
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
 console.log('\n--- RubricEval Field Tests (HOK-1406) ---\n');
 
 const validRubricEval = {
@@ -1451,8 +1579,41 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.23.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.23.0');
+test('Schema version constant is 1.24.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.24.0');
+});
+
+test('Record with resolved-model routing validates', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.24.0',
+    routing: {
+      planner: {
+        role: 'planner',
+        requestedSelector: { kind: 'pinned', modelId: 'gpt-5.5' },
+        resolvedModelId: 'gpt-5.5',
+        sourceLayer: 'user',
+      },
+    },
+  };
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with invalid resolved-model routing is rejected', () => {
+  const record = {
+    ...scenarios[0].record,
+    schemaVersion: '1.24.0',
+    routing: {
+      coder: {
+        role: 'coder',
+        requestedSelector: { kind: 'pinned', modelId: 'gpt-5.4' },
+        sourceLayer: 'policy',
+      },
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(!result.valid, 'Should be invalid');
 });
 
 test('Legacy rows still validate without nonRewardReason', () => {

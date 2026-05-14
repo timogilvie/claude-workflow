@@ -30,7 +30,9 @@ import type {
   FallbackEventMetadata,
   TaskDescriptor,
   EvalConstraints,
+  EvalRouting,
   ManifestRef,
+  PromptSizeDiagnostic,
   RoutingDecision,
   RubricCriterion,
 } from './eval-schema.ts';
@@ -88,6 +90,8 @@ export interface EvalRecordMetadata {
   constraints?: EvalConstraints | null;
   /** Structured rubric criteria evaluation (HOK-1406) */
   rubricEval?: RubricEval | null;
+  /** Resolved-model routing decisions emitted during execution. */
+  routing?: EvalRouting | null;
 }
 
 /** Richer eval metadata attachment used by training-facing eval entrypoints. */
@@ -123,6 +127,46 @@ export function attachChallengePairId(record: EvalRecord, challengePairId?: stri
   if (challengePairId) {
     record.challengePairId = challengePairId;
   }
+}
+
+function finiteNonNegative(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
+
+export function attachPromptSizeDiagnostic(
+  record: EvalRecord,
+  diagnostic?: PromptSizeDiagnostic | null,
+): void {
+  if (!diagnostic) {
+    return;
+  }
+
+  const perComponentBytes = Object.fromEntries(
+    Object.entries(diagnostic.perComponentBytes).map(([name, bytes]) => [
+      name,
+      finiteNonNegative(bytes),
+    ]),
+  ) as PromptSizeDiagnostic['perComponentBytes'];
+
+  record.promptSizeDiagnostic = {
+    totalBytes: finiteNonNegative(diagnostic.totalBytes),
+    limitBytes: finiteNonNegative(diagnostic.limitBytes),
+    perComponentBytes,
+    policy: diagnostic.policy,
+    action: diagnostic.action,
+    ...(diagnostic.truncatedComponents
+      ? {
+          truncatedComponents: diagnostic.truncatedComponents.map((component) => ({
+            name: component.name,
+            originalBytes: finiteNonNegative(component.originalBytes),
+            finalBytes: finiteNonNegative(component.finalBytes),
+            removedBytes: finiteNonNegative(component.removedBytes),
+          })),
+        }
+      : {}),
+  };
 }
 
 function toEvalChallengeRouteContext(
@@ -421,6 +465,16 @@ export function attachRoutePrediction(
   if (hasObjectValues(normalized as Record<string, unknown>)) {
     record.routePrediction = normalized;
   }
+}
+
+export function attachRoutingDecisions(
+  record: EvalRecord,
+  routing: EvalRouting | null | undefined,
+): void {
+  if (!routing || Object.keys(routing).length === 0) {
+    return;
+  }
+  record.routing = routing;
 }
 
 export function attachRouteCalibration(
@@ -1003,6 +1057,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
+  attachRoutingDecisions(record, metadata.routing);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
   attachRouteCalibration(record, computeRouteCalibration(record, record.routePrediction));
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
@@ -1045,6 +1100,7 @@ export function enrichTrainingMetadata(
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
+  attachRoutingDecisions(record, metadata.routing);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
   attachRouteCalibration(record, computeRouteCalibration(record, record.routePrediction));
   attachTaskDescriptor(record, metadata.taskDescriptor || null);

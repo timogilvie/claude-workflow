@@ -4,6 +4,9 @@
 # scripts don't need to know how each agent CLI works.
 #
 # Adding a new agent: add a case block in each function below.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$script_dir/routing-emitter.sh"
 
 # ============================================================================
 # AGENT RESOLUTION
@@ -11,11 +14,13 @@
 
 # Resolve the agent CLI command for a given model ID using prefix heuristics.
 # Mirrors the logic in shared/lib/model-router.ts resolveAgent().
-# Args: $1 = model ID (e.g. "claude-opus-4-6", "gpt-5.3-codex")
+# Args: $1 = model selector or model ID (e.g. "opus", "claude-opus-4-6", "gpt-5.5")
 # Prints: agent command name (e.g. "claude", "codex")
 agent_resolve_from_model() {
   local model="$1"
   case "$model" in
+    opus|sonnet|haiku|opus-*|sonnet-*|haiku-*) echo "claude" ;;
+    gpt-5.5|gpt-5.5-*|gemini-pro|gemini-pro-*) echo "codex" ;;
     claude-*) echo "claude" ;;
     deepseek-*) echo "claude" ;;
     gpt-*|o[0-9]*) echo "codex" ;;
@@ -37,8 +42,8 @@ agent_binary_for_cmd() {
 # MODEL VALIDATION
 # ============================================================================
 
-# Validate a model ID exists in config (pricing or agentMap).
-# Args: $1 = model ID, $2 = repo directory (optional)
+# Validate a model selector token accepted by the shared resolver.
+# Args: $1 = selector token, $2 = repo directory (optional)
 # Returns: 0 if valid, 1 if invalid (prints error to stderr)
 # Note: Uses TOOLS_DIR when set, otherwise infers paths from the repo argument.
 agent_validate_model() {
@@ -54,13 +59,43 @@ agent_validate_model() {
   local lib_dir="${tools_dir%/tools}/shared/lib"
   local validator="model-validator.ts"
 
+  if ! agent_model_helper_available; then
+    echo "error: model validation requires tsx or npx -- install Node.js tooling to use model selectors" >&2
+    return 1
+  fi
+
   # Call TypeScript validator (cd to lib_dir first for imports to work)
   # Exits 0 if valid, 1 if invalid with error message
-  if (cd "$lib_dir" && npx tsx "$validator" "$model" "$repo_dir" 2>&1); then
+  if (cd "$lib_dir" && npx tsx "$validator" --selector-token "$model" "$repo_dir" >/dev/null); then
     return 0
   else
     return 1
   fi
+}
+
+agent_resolve_model() {
+  local role="$1"
+  local model="$2"
+  local repo_dir="${3:-$(pwd)}"
+  local resolved_model=""
+
+  repo_dir="$(cd "$repo_dir" 2>/dev/null && pwd || echo "$repo_dir")"
+
+  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local lib_dir="${tools_dir%/tools}/shared/lib"
+  local validator="model-validator.ts"
+
+  if ! agent_model_helper_available; then
+    echo "error: model resolution requires tsx or npx -- install Node.js tooling to use model selectors" >&2
+    return 1
+  fi
+
+  if resolved_model="$(cd "$lib_dir" 2>/dev/null && npx tsx "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
+    printf '%s\n' "$resolved_model"
+    return 0
+  fi
+
+  return 1
 }
 
 agent_model_looks_like_depth_tag() {
@@ -99,6 +134,10 @@ agent_runtime_resource_selection_enabled() {
   # shell path aligned so baseline prompt rendering does not depend on npx/tsx.
   # Reads through wavemill_load_config so .wavemill-config.local.json overrides
   # take effect.
+  if ! declare -F wavemill_load_config >/dev/null 2>&1; then
+    return 1
+  fi
+
   if command -v jq >/dev/null 2>&1; then
     wavemill_load_config "$repo_dir" | jq -e --arg surface "$surface" '
       (.resources.runtimeSelection.enabled == true)
@@ -122,6 +161,11 @@ agent_run_tsx_tool() {
     npx tsx "$tool" "$@"
   fi
 }
+
+agent_model_helper_available() {
+  command -v tsx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
+}
+
 
 agent_model_is_deepseek() {
   local model="${1:-}"
@@ -937,6 +981,31 @@ Before creating .coding-complete, verify ALL of these are true:
 - Changes are committed to git
 If ANY item is false, continue working. Do NOT create the marker.
 
+### When Verification Is Blocked
+
+Write "$feature_dir/.coding-blocked-completion.json" only when ALL of these are true:
+- Scoped implementation is complete.
+- Relevant changes are committed.
+- Targeted/scoped verification passed.
+- Remaining verification blockers are clearly unrelated, pre-existing, or environmental.
+- You are not comfortable creating .coding-complete.
+
+Use this compact JSON shape:
+
+    {
+      "stage": "coding",
+      "implementationComplete": true,
+      "committed": true,
+      "commit": "abc1234",
+      "passingChecks": ["targeted test command"],
+      "blockingChecks": ["repo-level command that failed"],
+      "blockingReason": "baseline_tests_failing",
+      "evidence": "Short summary of why the failure is unrelated.",
+      "recommendedAction": "advance_to_review"
+    }
+
+.coding-complete remains the preferred signal when full verification passes. The blocked-completion artifact is not a substitute for incomplete implementation, uncommitted work, or skipped scoped verification.
+
 After implementation is complete and tests pass, create "$feature_dir/.coding-complete", then $coding_completion_text
 _WVML_PROMPT_
 }
@@ -1241,6 +1310,21 @@ agent_launch_autonomous() {
   hooks_dir="$(agent_hooks_dir)"
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
   local repo_dir="${REPO_DIR:-$(pwd)}"
+  local role feature_dir
+  role="$(routing_role_from_window "$window" 2>/dev/null || true)"
+  feature_dir="${WAVEMILL_FEATURE_DIR:-}"
+  if [[ -z "$feature_dir" && -n "${WAVEMILL_FEATURE_SLUG:-}" ]]; then
+    feature_dir="$repo_dir/features/$WAVEMILL_FEATURE_SLUG"
+  fi
+
+  if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
+    echo "Error: invalid model selector '$model' for $agent_cmd" >&2
+    return 1
+  fi
+
+  if [[ -n "$model" ]]; then
+    model="$(agent_resolve_model "${role:-coder}" "$model" "$repo_dir")"
+  fi
 
   local model_flag=""
   if [[ -n "$model" ]]; then
@@ -1248,6 +1332,9 @@ agent_launch_autonomous() {
   fi
 
   agent_write_initial_status "$session" "$issue"
+  if [[ -n "$role" && -n "$model" ]]; then
+    routing_emit_phase "$role" "$model" "$repo_dir" "$feature_dir" || true
+  fi
 
   # Wrap agent command so exit status is visible and the shell survives
   case "$agent_cmd" in
@@ -1284,6 +1371,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
 # Resolve credentials at runtime (not embedded in script)
 tools_dir='$tools_dir'
 lib_dir='$lib_dir'
@@ -1326,6 +1414,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 provider_root='$provider_root'
 provider_home='$provider_home'
 xdg_config_home='$xdg_config_home'
@@ -1358,7 +1447,7 @@ LAUNCHEOF
         tmux send-keys -t "$session:$window" -l -- "$launcher"
         tmux send-keys -t "$session:$window" C-m
       else
-        tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$window'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
+        tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$window' WAVEMILL_RESOLVED_MODEL='$model'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
       fi
       ;;
     codex)
@@ -1370,6 +1459,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1401,9 +1491,9 @@ LAUNCHEOF
         rm -f "$exit_file" 2>/dev/null || true
       fi
       if [[ -n "$exit_file" ]]; then
-        tmux send-keys -t "$session:$window" "$agent_cmd${model_flag}; rc=\$?; printf '%s\n' \"\$rc\" > '$exit_file'" C-m
+        tmux send-keys -t "$session:$window" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}; rc=\$?; printf '%s\n' \"\$rc\" > '$exit_file'" C-m
       else
-        tmux send-keys -t "$session:$window" "$agent_cmd${model_flag}" C-m
+        tmux send-keys -t "$session:$window" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}" C-m
       fi
       sleep 0.3
       local pane_pid=""
@@ -1508,6 +1598,12 @@ agent_launch_interactive() {
   local dashboard_pid
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
   local repo_dir="${REPO_DIR:-$(pwd)}"
+  local role feature_dir
+  role="$(routing_role_from_window "$window" 2>/dev/null || true)"
+  feature_dir="${WAVEMILL_FEATURE_DIR:-}"
+  if [[ -z "$feature_dir" && -n "${WAVEMILL_FEATURE_SLUG:-}" ]]; then
+    feature_dir="$repo_dir/features/$WAVEMILL_FEATURE_SLUG"
+  fi
 
   if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
     local fallback_model=""
@@ -1530,6 +1626,16 @@ agent_launch_interactive() {
       _agent_log_warn "Launching without explicit --model override"
       model=""
     fi
+  fi
+
+  if [[ -n "$model" ]]; then
+    local requested_model="$model"
+    local resolved_model=""
+    if ! resolved_model="$(agent_resolve_model "${role:-coder}" "$requested_model" "$repo_dir" 2>/dev/null)"; then
+      _agent_log_warn "Failed to resolve model selector '$requested_model' for $agent_cmd"
+      return 1
+    fi
+    model="$resolved_model"
   fi
 
   if [[ -n "$model" ]] && agent_model_is_deepseek "$model"; then
@@ -1561,6 +1667,9 @@ agent_launch_interactive() {
   local launcher_cmd=""
 
   agent_write_initial_status "$session" "$issue"
+  if [[ -n "$role" && -n "$model" ]]; then
+    routing_emit_phase "$role" "$model" "$repo_dir" "$feature_dir" || true
+  fi
 
   # Don't use exec — keep the shell alive so the window persists after agent exit
   case "$agent_cmd" in
@@ -1600,6 +1709,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1637,6 +1747,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 provider_root='$provider_root'
 provider_home='$provider_home'
 xdg_config_home='$xdg_config_home'
@@ -1672,6 +1783,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1687,6 +1799,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
@@ -1701,6 +1814,7 @@ export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi

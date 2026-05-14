@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guard against being sourced by lifecycle-scenarios.test.sh
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 READER="$REPO_DIR/shared/lib/wavemill-input-reader.sh"
@@ -14,6 +17,7 @@ trap cleanup EXIT
 
 cat <<'IN' | WAVEMILL_INPUT_PENDING_SLEEP=0 WAVEMILL_SESSION="$SESSION" "$READER" >/dev/null
 1 3
+advance HOK-1639
 m
 more
 q
@@ -26,6 +30,7 @@ IN
 
 expected="$(cat <<'OUT'
 select 1 3
+advance HOK-1639
 more
 more
 quit

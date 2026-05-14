@@ -55,6 +55,10 @@ The implementation is complete. Your job is to review and create a PR.
    - A "## Changes" section listing the key files/modules modified
    - A "## Test plan" section describing how the changes were validated
    - A "## Self-review" section noting the review verdict and iterations run
+   - A "## Routing" section when `{{FEATURE_DIR}}/routing.jsonl` exists.
+     Read routing decisions from `{{FEATURE_DIR}}/routing.jsonl` (ignore malformed lines).
+     Include planner/coder/reviewer requested selector, resolved model ID, source layer,
+     and fallback reason when present.
    - A Wavemill metadata block at the end of the body:
      <!-- wavemill-meta
      task: {{ISSUE}}

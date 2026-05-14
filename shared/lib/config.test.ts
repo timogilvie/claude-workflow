@@ -34,6 +34,7 @@ import {
   getProjectContextConfig,
   getDeepSeekProviderConfig,
   getDeepSeekLauncherConfig,
+  getAgentsConfig,
   getHokusaiSubmissionConfig,
   getProvidersConfig,
   getReadyConfig,
@@ -42,6 +43,7 @@ import {
   getModelRegistryConfig,
   getMintEligibilityConfig,
   getEvalContextUpdatesConfig,
+  isRouterCapabilityFilteringEnabled,
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
 } from './config.ts';
@@ -166,6 +168,15 @@ test('valid config passes validation', () => {
             },
             defaultLadderEligible: false,
             contextWindowTokens: 1000000,
+            toolSupport: 'basic',
+            multimodal: {
+              text: true,
+              image: false,
+            },
+            latencyTier: 'standard',
+            reasoningTier: 'advanced',
+            costPerMillionInputTokensUsd: 0.435,
+            costPerMillionOutputTokensUsd: 0.87,
             agent: 'claude',
           },
         },
@@ -226,6 +237,12 @@ test('valid config passes validation', () => {
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.pricing?.inputCostPerMTok, 0.435);
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.defaultLadderEligible, false);
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.contextWindowTokens, 1000000);
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.toolSupport, 'basic');
+    assert.deepEqual(config.modelRegistry?.models?.['deepseek-v4-pro']?.multimodal, { text: true, image: false });
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.latencyTier, 'standard');
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.reasoningTier, 'advanced');
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.costPerMillionInputTokensUsd, 0.435);
+    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.costPerMillionOutputTokensUsd, 0.87);
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.agent, 'claude');
     assert.deepEqual(config.modelRegistry?.ladders?.review, ['claude-opus-4-7', 'claude-sonnet-4-6']);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
@@ -233,6 +250,62 @@ test('valid config passes validation', () => {
     assert.deepEqual(config.router?.availableModels?.planner, ['claude-sonnet-4-5-20250929']);
     assert.deepEqual(config.router?.availableModels?.coder, ['gpt-5.4']);
     assert.equal(config.resources?.runtimeSelection?.defaultVariant, 'optimized');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('eval prompt size config loads through getEvalConfig', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: {
+        evalsDir: '.wavemill/evals',
+        maxPromptBytes: 1234567,
+        oversizePolicy: 'truncate',
+      },
+    }));
+
+    const evalConfig = getEvalConfig(tmp);
+    assert.equal(evalConfig.maxPromptBytes, 1234567);
+    assert.equal(evalConfig.oversizePolicy, 'truncate');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid eval oversizePolicy is rejected by schema validation', () => {
+  if (!hasAjv) {
+    console.log('        SKIP  Ajv not installed');
+    return;
+  }
+
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: { oversizePolicy: 'compress' },
+    }));
+    assert.throws(() => loadWavemillConfig(tmp), /Config validation failed/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('too-small eval maxPromptBytes is rejected by schema validation', () => {
+  if (!hasAjv) {
+    console.log('        SKIP  Ajv not installed');
+    return;
+  }
+
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: { maxPromptBytes: 512 },
+    }));
+    assert.throws(() => loadWavemillConfig(tmp), /Config validation failed/);
   } finally {
     cleanUp(tmp);
   }
@@ -415,6 +488,113 @@ test('invalid model registry shape throws validation error', () => {
       assert.throws(() => {
         loadWavemillConfig(tmp);
       }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('minimal model registry override remains valid', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            strengths: ['speed', 'triage'],
+          },
+        },
+      },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.deepEqual(config.modelRegistry?.models?.['claude-sonnet-4-6'], {
+      strengths: ['speed', 'triage'],
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid model registry capability enum fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            latencyTier: 'instant',
+          },
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /latencyTier|validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid model registry multimodal shape fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            multimodal: 'image',
+          },
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /multimodal|validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid model registry negative normalized cost fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            costPerMillionInputTokensUsd: -1,
+          },
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /costPerMillionInputTokensUsd|validation failed/);
     } else {
       assert.doesNotThrow(() => {
         loadWavemillConfig(tmp);
@@ -763,6 +943,11 @@ test('getModelRegistryConfig returns configured overrides', () => {
         models: {
           'claude-haiku-4-5-20251001': {
             strengths: ['speed', 'triage'],
+            toolSupport: 'full',
+            multimodal: {
+              text: true,
+              image: true,
+            },
           },
         },
         ladders: {
@@ -775,6 +960,11 @@ test('getModelRegistryConfig returns configured overrides', () => {
       models: {
         'claude-haiku-4-5-20251001': {
           strengths: ['speed', 'triage'],
+          toolSupport: 'full',
+          multimodal: {
+            text: true,
+            image: true,
+          },
         },
       },
       ladders: {
@@ -986,6 +1176,64 @@ test('getRouterConfig returns router section', () => {
   }
 });
 
+test('getRouterConfig accepts router.capabilityFiltering.enabled', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: {
+        capabilityFiltering: {
+          enabled: true,
+        },
+      },
+    }));
+
+    const routerConfig = getRouterConfig(tmp);
+    assert.equal(routerConfig.capabilityFiltering?.enabled, true);
+    assert.equal(isRouterCapabilityFilteringEnabled(tmp), true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('router capability filtering defaults to disabled when omitted', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: {
+        enabled: true,
+      },
+    }));
+
+    assert.equal(isRouterCapabilityFilteringEnabled(tmp), false);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('router capability filtering rejects unexpected nested properties', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: {
+        capabilityFiltering: {
+          enabled: true,
+          mode: 'strict',
+        },
+      },
+    }));
+
+    assert.throws(
+      () => loadWavemillConfig(tmp),
+      /capabilityFiltering/,
+    );
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('getAvailableModelsForStage prefers stage-specific models over router.models', () => {
   const routerConfig = {
     models: ['shared-model'],
@@ -1107,7 +1355,10 @@ test('getExpansionHandshakeConfig defaults to recover when section absent', () =
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({ mill: { maxParallel: 5 } }));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'recover',
+      timeoutSeconds: 300,
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -1118,7 +1369,10 @@ test('getExpansionHandshakeConfig defaults to recover when mill absent', () => {
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({}));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'recover',
+      timeoutSeconds: 300,
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -1135,7 +1389,10 @@ test('getExpansionHandshakeConfig returns recover when configured', () => {
         },
       },
     }));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'recover' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'recover',
+      timeoutSeconds: 300,
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -1152,7 +1409,31 @@ test('getExpansionHandshakeConfig returns warn when configured', () => {
         },
       },
     }));
-    assert.deepEqual(getExpansionHandshakeConfig(tmp), { policy: 'warn' });
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'warn',
+      timeoutSeconds: 300,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getExpansionHandshakeConfig returns configured recovery timeout', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: {
+        expansionHandshake: {
+          policy: 'recover',
+          timeoutSeconds: 180,
+        },
+      },
+    }));
+    assert.deepEqual(getExpansionHandshakeConfig(tmp), {
+      policy: 'recover',
+      timeoutSeconds: 180,
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -1166,6 +1447,32 @@ test('invalid expansionHandshake policy fails validation', () => {
       mill: {
         expansionHandshake: {
           policy: 'silent',
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid expansionHandshake timeout fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: {
+        expansionHandshake: {
+          timeoutSeconds: 0,
         },
       },
     }));
@@ -1763,6 +2070,7 @@ test('getIntegrationConfig returns a full valid integration block', () => {
     enabled: true,
     integrationBranch: 'auto/staging',
     promotionBranch: 'release',
+    autoUpdatePromotionBranch: true,
     mergeMethod: 'rebase' as const,
     deleteBranchAfterMerge: false,
     haltOnRed: false,
@@ -1835,6 +2143,30 @@ test('invalid integration enabled type throws validation error', () => {
     writeConfig(tmp, JSON.stringify({
       integration: {
         enabled: 'yes',
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid integration autoUpdatePromotionBranch type throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      integration: {
+        autoUpdatePromotionBranch: 'yes',
       },
     }));
 
@@ -2027,6 +2359,97 @@ test('eval success threshold rejects non-numeric values', () => {
         loadWavemillConfig(tmp);
       });
     }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents config accepts family alias, pinned ID, and inherit selectors', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      agents: {
+        planner: { model: 'claude-opus-4-7' },
+        coder: { model: 'opus' },
+        reviewer: { model: 'inherit' },
+      },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.equal(config.agents?.planner?.model, 'claude-opus-4-7');
+    assert.equal(config.agents?.coder?.model, 'opus');
+    assert.equal(config.agents?.reviewer?.model, 'inherit');
+    assert.deepEqual(getAgentsConfig(tmp), config.agents);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents config rejects invalid model selector strings with path context', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      agents: {
+        coder: { model: 'not a valid selector' },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /\/agents\/coder\/model[\s\S]*not a valid selector[\s\S]*valid model selector/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents config rejects empty model selectors', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      agents: {
+        coder: { model: '' },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /\/agents\/coder\/model[\s\S]*not a valid model selector/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('agents config still enforces string shape validation', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      agents: {
+        coder: { model: 123 },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /\/agents\/coder\/model: must be string/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getAgentsConfig returns empty object when agents config is absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: { maxParallel: 3 },
+    }));
+
+    assert.deepEqual(getAgentsConfig(tmp), {});
   } finally {
     cleanUp(tmp);
   }

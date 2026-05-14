@@ -232,6 +232,7 @@ cp "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/wavemill-common.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/wavemill-input-reader.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/agent-adapters.sh" "$TEST_REPO/shared/lib/"
+cp "$REPO_DIR/shared/lib/routing-emitter.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/startup-progress.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/model-validator.ts" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/wavemill-status.sh" "$TEST_REPO/shared/lib/"
@@ -398,10 +399,10 @@ else
   fail "startup runner did not write the monitor env"
 fi
 
-if grep -q "respawn-pane -k -t startup-success:control.0" "$MOCK_TMUX_LOG"; then
+if grep -q "respawn-pane -k -t startup-success:mill.0" "$MOCK_TMUX_LOG"; then
   pass "startup runner hands control-pane startup off to the monitor"
 else
-  fail "startup runner did not launch the monitor in the control pane"
+  fail "startup runner did not launch the monitor in the mill pane"
 fi
 
 printf '{"session":"startup-test","started":"2026-04-12T00:00:00Z","tasks":{}}\n' > "$STATE_FILE"
@@ -453,7 +454,7 @@ else
   fail "startup runner did not report resume-only startup"
 fi
 
-if grep -q "respawn-pane -k -t startup-empty:control.0" "$MOCK_TMUX_LOG"; then
+if grep -q "respawn-pane -k -t startup-empty:mill.0" "$MOCK_TMUX_LOG"; then
   pass "startup runner still launches the monitor for resume-only startup"
 else
   fail "startup runner did not launch the monitor for resume-only startup"
@@ -495,7 +496,7 @@ else
   fail "startup failure logging is missing from the control-pane output"
 fi
 
-if grep -q "respawn-pane -k -t startup-failure:control.0" "$MOCK_TMUX_LOG"; then
+if grep -q "respawn-pane -k -t startup-failure:mill.0" "$MOCK_TMUX_LOG"; then
   pass "startup runner still launches the monitor after partial startup failure"
 else
   fail "startup runner did not hand off to the monitor after partial startup failure"

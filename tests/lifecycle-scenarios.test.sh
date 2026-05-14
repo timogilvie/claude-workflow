@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+COMMON_LIB="$REPO_DIR/shared/lib/wavemill-common.sh"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures/lifecycle"
 
 PASS=0
@@ -98,6 +99,14 @@ MONITOR_FUNC_FILE="$TEST_TMP/lifecycle-controller-functions.sh"
 for fn in \
   approve_plan \
   validate_planning_phase_output \
+  planning_rejection_files_summary \
+  write_planning_rejection_artifact \
+  notify_planning_rejection_agent \
+  blocked_completion_announce_marker \
+  blocked_completion_should_announce \
+  mark_blocked_completion_announced \
+  emit_blocked_completion_attention \
+  handle_planning_overreach_rejection \
   check_stage_aborted \
   check_stage_complete \
   check_stage_awaiting_user \
@@ -119,6 +128,14 @@ for fn in \
   ready_remediation_launch_head \
   inject_depends_on_pr_block \
   dispatch_queued_children_for_parent \
+  clear_transient_mergeability_state \
+  reroute_expanded_packets_for_coding_handoff \
+  recover_missing_expansion_artifact \
+  resolve_stage_result_model \
+  ready_queue_state \
+  merge_queue_enabled \
+  mark_ready_stale \
+  write_ready_queue_artifacts \
   monitor_issue_state
 do
   extract_function "$MILL_SCRIPT" "$fn" >> "$MONITOR_FUNC_FILE"
@@ -138,9 +155,11 @@ run_lifecycle_scenario() {
   SCENARIO_NAME="$scenario_name" \
   SCENARIO_DIR="$scenario_dir" \
   MONITOR_FUNC_FILE="$MONITOR_FUNC_FILE" \
+  COMMON_LIB="$COMMON_LIB" \
   FIXTURE_DIR="$FIXTURE_DIR" \
   bash -c '
     set -euo pipefail
+    source "$COMMON_LIB"
     source "$MONITOR_FUNC_FILE"
     register_lifecycle_scenario() { :; }
     for scenario_file in "$FIXTURE_DIR"/*.sh; do
@@ -201,9 +220,9 @@ run_lifecycle_scenario() {
       SET_PHASE_CALLS=""
       READY_LAUNCH_COUNT=0
       READY_LAUNCH_ARGS=""
-      GH_PR_VIEW_CALLS=0
       GH_PR_VIEW_MERGEABLE=""
       GH_PR_VIEW_MERGE_STATE=""
+      > "$SCENARIO_DIR/.gh_pr_view_count"
       MAIN_SHA_RETURN=""
       CODING_LAUNCH_COUNT=0
       REVIEW_LAUNCH_COUNT=0
@@ -255,6 +274,8 @@ run_lifecycle_scenario() {
     log_task() { local level="$1" task_id="$2"; shift 2; log "$level" "$(wavemill_task_log_message "$task_id" "$*")"; }
     log_warn() { printf -v LOG_OUTPUT "%sWARN:%s\n" "$LOG_OUTPUT" "$*"; }
     log_error() { printf -v LOG_OUTPUT "%sERROR:%s\n" "$LOG_OUTPUT" "$*"; }
+    log_route_lifecycle() { :; }
+    router_log_verbose_enabled() { return 1; }
 
     read_state_value() {
       local default="${1:-}"
@@ -308,9 +329,9 @@ run_lifecycle_scenario() {
     _with_timeout() { shift; "$@"; }
     gh() {
       if [[ "${1:-}" == "pr" && "${2:-}" == "view" ]]; then
-        GH_PR_VIEW_CALLS=$((GH_PR_VIEW_CALLS + 1))
+        printf '1' >> "$SCENARIO_DIR/.gh_pr_view_count"
         if [[ -n "${GH_PR_VIEW_MERGEABLE:-}" || -n "${GH_PR_VIEW_MERGE_STATE:-}" ]]; then
-          printf '{"mergeable":"%s","mergeStateStatus":"%s"}\n' \
+          printf "{\"mergeable\":\"%s\",\"mergeStateStatus\":\"%s\"}\n" \
             "${GH_PR_VIEW_MERGEABLE:-}" \
             "${GH_PR_VIEW_MERGE_STATE:-}"
           return 0
@@ -427,6 +448,7 @@ JSON
     linear_summary=$(printf "%s" "$LINEAR_CALLS" | tr "\n" ";")
     eval_summary=$(printf "%s" "$POST_MERGE_EVAL_CALLS" | tr "\n" ";")
     migration_summary=$(printf "%s" "$SAVE_MIGRATION_CALLS" | tr "\n" ";")
+    gh_view_count=$(wc -c < "$SCENARIO_DIR/.gh_pr_view_count" 2>/dev/null | tr -d " " || printf "0")
     printf "scenario=%s\nscenario_dir=%s\nwt_dir=%s\nfeature_dir=%s\nphase=%s\nattention=%s\nactive_count=%s\nstage_calls=%s\nphase_calls=%s\ncoding_launches=%s\nreview_launches=%s\nready_launches=%s\ngh_pr_view_calls=%s\ncleanup_count=%s\ncleanup_calls=%s\nlinear_calls=%s\npost_merge_eval_calls=%s\nsave_migration_calls=%s\nlogs=%s\n" \
       "$SCENARIO_NAME" \
       "$SCENARIO_DIR" \
@@ -440,7 +462,7 @@ JSON
       "$CODING_LAUNCH_COUNT" \
       "$REVIEW_LAUNCH_COUNT" \
       "$READY_LAUNCH_COUNT" \
-      "$GH_PR_VIEW_CALLS" \
+      "$gh_view_count" \
       "$CLEANUP_COUNT" \
       "$cleanup_summary" \
       "$linear_summary" \

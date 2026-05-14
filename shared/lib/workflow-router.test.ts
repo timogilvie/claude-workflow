@@ -787,6 +787,36 @@ await test('policy routing logs class downgrade without same-class metadata', as
   }
 });
 
+await test('tryPolicyResolution records capability fallback rationale when constraints over-filter Layer 3', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+      capabilityFiltering: {
+        enabled: true,
+      },
+    },
+  });
+
+  writeQuotaState(repoDir, {});
+
+  try {
+    const decision = tryPolicyResolution('Implement a backend feature with tests and review.', {
+      repoDir,
+      taskDifficulty: 'moderate',
+      skipDifficultyClassification: true,
+      capabilityConstraints: {
+        minContextWindow: 2_000_000,
+      },
+    });
+
+    assert.equal(decision?.routingMode, 'policy');
+    assert.ok(decision?.reasoning.some((line) => line.includes('Capability constraints filtered every in-pool policy candidate')));
+  } finally {
+    cleanup();
+  }
+});
+
 await test('auto mode logs frontier substitution without constrained banner when healthy sibling exists', async () => {
   const { repoDir, cleanup } = makeRepo({
     ...frontierSiblingConfig(),

@@ -10,6 +10,45 @@ const LINEAR_ENDPOINT = 'https://api.linear.app/graphql';
 const REQUEST_TIMEOUT_MS = 15_000;
 const teamStateCache = new Map<string, Map<string, string>>();
 
+export type ErrorCategory =
+  | 'network'
+  | 'rate_limit'
+  | 'auth'
+  | 'graphql'
+  | 'server'
+  | 'client'
+  | 'unknown';
+
+export interface ClassifiedLinearError {
+  category: ErrorCategory;
+  httpStatus: number | null;
+  graphqlErrors: string[];
+  isRetryable: boolean;
+  message: string;
+}
+
+export class LinearApiError extends Error {
+  readonly httpStatus: number | null;
+  readonly graphqlErrors: string[];
+  readonly category: ErrorCategory;
+
+  constructor(
+    message: string,
+    opts: {
+      httpStatus?: number | null;
+      graphqlErrors?: string[];
+      category?: ErrorCategory;
+      cause?: unknown;
+    } = {},
+  ) {
+    super(message, opts.cause !== undefined ? { cause: opts.cause } : undefined);
+    this.name = 'LinearApiError';
+    this.httpStatus = opts.httpStatus ?? null;
+    this.graphqlErrors = opts.graphqlErrors ?? [];
+    this.category = opts.category ?? classifyHttpStatus(this.httpStatus);
+  }
+}
+
 // ────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────
@@ -70,6 +109,8 @@ export interface LinearProject {
 export interface LinearProjectMilestone {
   id: string;
   name: string;
+  targetDate?: string | null;
+  sortOrder?: number;
 }
 
 /**
@@ -123,8 +164,11 @@ export interface LinearIssue {
     nodes: LinearLabel[];
   };
   project?: LinearProject;
+  projectMilestone?: LinearProjectMilestone | null;
   priority?: number;
+  priorityLabel?: string;
   estimate?: number;
+  dueDate?: string | null;
   assignee?: LinearUser;
   creator?: LinearUser;
   team: LinearTeam;
@@ -234,6 +278,15 @@ interface GraphQLData {
   [key: string]: unknown;
 }
 
+export interface LinearBatchFailure extends ClassifiedLinearError {
+  issueId: string;
+  error: string;
+}
+
+interface GraphQLErrorShape {
+  message?: string;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Internal Helpers
 // ────────────────────────────────────────────────────────────────
@@ -243,22 +296,130 @@ const headers = (): Record<string, string> => ({
   'Content-Type': 'application/json',
 });
 
+function classifyHttpStatus(httpStatus: number | null | undefined): ErrorCategory {
+  if (httpStatus === 401 || httpStatus === 403) {
+    return 'auth';
+  }
+  if (httpStatus === 429) {
+    return 'rate_limit';
+  }
+  if (typeof httpStatus === 'number' && httpStatus >= 500) {
+    return 'server';
+  }
+  if (typeof httpStatus === 'number' && httpStatus >= 400) {
+    return 'client';
+  }
+  return 'unknown';
+}
+
+function isNetworkError(error: Error): boolean {
+  return error.name === 'AbortError' || error.name === 'TimeoutError' || error instanceof TypeError;
+}
+
+export function classifyLinearError(error: unknown, httpStatus?: number): ClassifiedLinearError {
+  if (error instanceof LinearApiError) {
+    const status = error.httpStatus ?? httpStatus ?? null;
+    const category = error.category ?? classifyHttpStatus(status);
+    return {
+      category,
+      httpStatus: status,
+      graphqlErrors: [...error.graphqlErrors],
+      isRetryable: category === 'network' || category === 'rate_limit' || category === 'server',
+      message: error.message,
+    };
+  }
+
+  if (error instanceof Error && isNetworkError(error)) {
+    return {
+      category: 'network',
+      httpStatus: httpStatus ?? null,
+      graphqlErrors: [],
+      isRetryable: true,
+      message: error.message,
+    };
+  }
+
+  const category = classifyHttpStatus(httpStatus ?? null);
+  return {
+    category,
+    httpStatus: httpStatus ?? null,
+    graphqlErrors: [],
+    isRetryable: category === 'rate_limit' || category === 'server',
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
 async function request(query: string, variables?: Record<string, unknown>): Promise<GraphQLData> {
   if (!process.env.LINEAR_API_KEY) {
     throw new Error('LINEAR_API_KEY is not set. Export it in your shell or add it to .env');
   }
 
-  const res = await fetch(LINEAR_ENDPOINT, {
-    method: 'POST',
-    headers: headers(),
-    body: JSON.stringify({ query, variables }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-
-  const data = await res.json() as { data?: GraphQLData; errors?: Array<{ message: string }> };
-  if (data.errors) {
-    throw new Error(`Linear API error: ${JSON.stringify(data.errors)}`);
+  let res: Response;
+  try {
+    res = await fetch(LINEAR_ENDPOINT, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const classified = classifyLinearError(error);
+    throw new LinearApiError(classified.message, {
+      category: classified.category,
+      cause: error,
+    });
   }
+
+  let payloadText = '';
+  try {
+    payloadText = await res.text();
+  } catch {
+    payloadText = '';
+  }
+
+  let data: { data?: GraphQLData; errors?: GraphQLErrorShape[] } = {};
+  if (payloadText.trim()) {
+    try {
+      data = JSON.parse(payloadText) as { data?: GraphQLData; errors?: GraphQLErrorShape[] };
+    } catch (error) {
+      throw new LinearApiError(
+        `Linear API returned invalid JSON (HTTP ${res.status})`,
+        {
+          httpStatus: res.status,
+          category: classifyHttpStatus(res.status),
+          cause: error,
+        },
+      );
+    }
+  }
+
+  const graphqlErrors = (data.errors || [])
+    .map((item) => item.message?.trim() || '')
+    .filter(Boolean);
+
+  if (!res.ok) {
+    const fallback = payloadText.trim() || `HTTP ${res.status}`;
+    throw new LinearApiError(
+      `Linear API request failed with HTTP ${res.status}: ${graphqlErrors.join('; ') || fallback}`,
+      {
+        httpStatus: res.status,
+        graphqlErrors,
+        category: classifyHttpStatus(res.status),
+      },
+    );
+  }
+
+  if (graphqlErrors.length > 0) {
+    throw new LinearApiError(
+      `Linear API error: ${graphqlErrors.join('; ')}`,
+      {
+        httpStatus: res.status,
+        graphqlErrors,
+        category: 'graphql',
+      },
+    );
+  }
+
   return data.data || {};
 }
 
@@ -411,8 +572,11 @@ export async function getBacklog(projectName?: string): Promise<LinearIssue[]> {
           state { name id }
           labels { nodes { name } }
           project { id name }
+          projectMilestone { id name targetDate sortOrder }
           estimate
           priority
+          priorityLabel
+          dueDate
           parent {
             id
             identifier
@@ -473,8 +637,11 @@ export async function getBacklogForScoring(projectName?: string): Promise<Linear
           description
           state { name }
           labels { nodes { name } }
+          projectMilestone { id name targetDate sortOrder }
           estimate
           priority
+          priorityLabel
+          dueDate
           relations {
             nodes {
               type
@@ -529,16 +696,27 @@ type LinearIssueUpdateResult = {
 export async function setIssuesState(
   identifiers: string[],
   stateName: string,
-): Promise<{ updated: string[]; failed: Array<{ issueId: string; error: string }> }> {
+): Promise<{ updated: string[]; failed: LinearBatchFailure[] }> {
   if (identifiers.length === 0) {
     return { updated: [], failed: [] };
   }
 
-  const failed: Array<{ issueId: string; error: string }> = [];
+  const failed: LinearBatchFailure[] = [];
   const updated: string[] = [];
   const PAGE_SIZE = 250;
   const fetchedIdentifiers = new Set<string>();
   const allNodes: Array<{ id: string; identifier: string; team: { id: string } }> = [];
+  const pushFailure = (issueId: string, detail: { error: string } & Partial<ClassifiedLinearError>) => {
+    failed.push({
+      issueId,
+      error: detail.error,
+      category: detail.category ?? 'unknown',
+      httpStatus: detail.httpStatus ?? null,
+      graphqlErrors: detail.graphqlErrors ?? [],
+      isRetryable: detail.isRetryable ?? false,
+      message: detail.message ?? detail.error,
+    });
+  };
 
   // Fetch in pages to avoid the 250-node GraphQL limit
   for (let offset = 0; offset < identifiers.length; offset += PAGE_SIZE) {
@@ -562,9 +740,12 @@ export async function setIssuesState(
         { identifiers: chunk },
       );
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      const classified = classifyLinearError(err);
       for (const identifier of chunk) {
-        failed.push({ issueId: identifier, error: `Failed to fetch issue: ${error}` });
+        pushFailure(identifier, {
+          error: `Failed to fetch issue: ${classified.message}`,
+          ...classified,
+        });
         fetchedIdentifiers.add(identifier);
       }
       continue;
@@ -583,21 +764,47 @@ export async function setIssuesState(
   // Any identifier not returned by the API (and not already in failed) was not found
   const missing = identifiers.filter((id) => !fetchedIdentifiers.has(id));
   for (const identifier of missing) {
-    failed.push({ issueId: identifier, error: `Issue not found: ${identifier}` });
+    pushFailure(identifier, {
+      error: `Issue not found: ${identifier}`,
+      message: `Issue not found: ${identifier}`,
+      category: 'client',
+      httpStatus: null,
+      graphqlErrors: [],
+      isRetryable: false,
+    });
   }
 
   const statesByTeam = new Map<string, Map<string, string>>();
   const teamIds = [...new Set(issues.map((issue) => issue.team.id))];
+  const failedTeams = new Set<string>();
   await Promise.all(teamIds.map(async (teamId) => {
-    statesByTeam.set(teamId, await getTeamWorkflowStates(teamId));
+    try {
+      statesByTeam.set(teamId, await getTeamWorkflowStates(teamId));
+    } catch (err) {
+      const classified = classifyLinearError(err);
+      failedTeams.add(teamId);
+      for (const issue of issues.filter((item) => item.team.id === teamId)) {
+        pushFailure(issue.identifier, {
+          error: `Failed to load workflow states for team ${teamId}: ${classified.message}`,
+          ...classified,
+        });
+      }
+    }
   }));
 
   const planned = issues.map((issue) => {
+    if (failedTeams.has(issue.team.id)) {
+      return null;
+    }
     const stateId = statesByTeam.get(issue.team.id)?.get(stateName.toLowerCase());
     if (!stateId) {
-      failed.push({
-        issueId: issue.identifier,
+      pushFailure(issue.identifier, {
         error: `State "${stateName}" not found for team ${issue.team.id}`,
+        message: `State "${stateName}" not found for team ${issue.team.id}`,
+        category: 'client',
+        httpStatus: null,
+        graphqlErrors: [],
+        isRetryable: false,
       });
       return null;
     }
@@ -614,14 +821,20 @@ export async function setIssuesState(
     if (result.status === 'fulfilled' && result.value.success) {
       updated.push(issue.identifier);
     } else if (result.status === 'fulfilled') {
-      failed.push({
-        issueId: issue.identifier,
+      pushFailure(issue.identifier, {
         error: 'Failed to update issue state',
+        message: 'Failed to update issue state',
+        category: 'unknown',
+        httpStatus: null,
+        graphqlErrors: [],
+        isRetryable: false,
       });
     } else {
+      const classified = classifyLinearError(result.reason);
       failed.push({
         issueId: issue.identifier,
-        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        error: classified.message,
+        ...classified,
       });
     }
   }
@@ -909,7 +1122,13 @@ export async function updateIssue(issueId: string, input: IssueUpdateInput): Pro
     { issueId, input },
   );
 
-  const result = data.issueUpdate as LinearIssueUpdateResult;
+  const result = data.issueUpdate as Partial<LinearIssueUpdateResult> | undefined;
+  if (!result || typeof result.success !== 'boolean') {
+    throw new LinearApiError('Linear API response missing issueUpdate result', {
+      category: 'graphql',
+    });
+  }
+
   return result;
 }
 

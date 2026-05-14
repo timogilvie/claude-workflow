@@ -133,6 +133,21 @@ if [[ -z "$FORCE_MODEL" ]]; then
   unset FORCE_MODEL
 fi
 
+WAVEMILL_PLANNER_MODEL="$(trim_outer_whitespace "${WAVEMILL_PLANNER_MODEL:-}")"
+if [[ -z "$WAVEMILL_PLANNER_MODEL" ]]; then
+  unset WAVEMILL_PLANNER_MODEL
+fi
+
+WAVEMILL_CODER_MODEL="$(trim_outer_whitespace "${WAVEMILL_CODER_MODEL:-}")"
+if [[ -z "$WAVEMILL_CODER_MODEL" ]]; then
+  unset WAVEMILL_CODER_MODEL
+fi
+
+WAVEMILL_REVIEWER_MODEL="$(trim_outer_whitespace "${WAVEMILL_REVIEWER_MODEL:-}")"
+if [[ -z "$WAVEMILL_REVIEWER_MODEL" ]]; then
+  unset WAVEMILL_REVIEWER_MODEL
+fi
+
 
 command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq)"; exit 1; }
 command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
@@ -145,6 +160,11 @@ fi
 
 # Check agent authentication before launching tasks
 if [[ "$DRY_RUN" != "true" ]] && ! agent_check_auth "$AGENT_CMD"; then
+  exit 1
+fi
+
+if [[ -n "${FORCE_MODEL:-}" && (-n "${WAVEMILL_PLANNER_MODEL:-}" || -n "${WAVEMILL_CODER_MODEL:-}" || -n "${WAVEMILL_REVIEWER_MODEL:-}") ]]; then
+  log_error "FORCE_MODEL cannot be combined with planner/coder/reviewer model overrides"
   exit 1
 fi
 
@@ -302,17 +322,17 @@ create_tmux_session() {
     tmux kill-session -t "$SESSION" 2>/dev/null || true
   fi
 
-  tmux -f "$tmux_conf" new-session -d -s "$SESSION" -c "$REPO_DIR" -n control
-  # Prevent control panes from being destroyed if their process crashes.
+  tmux -f "$tmux_conf" new-session -d -s "$SESSION" -c "$REPO_DIR" -n "$WAVEMILL_WINDOW_MILL"
+  # Prevent mill panes from being destroyed if their process crashes.
   # Without this, a dashboard crash collapses the entire control layout.
-  tmux set-option -t "$SESSION:control" remain-on-exit on 2>/dev/null || true
+  tmux set-option -t "$SESSION:$WAVEMILL_WINDOW_MILL" remain-on-exit on 2>/dev/null || true
   tmux set-environment -t "$SESSION" REPO_DIR "$REPO_DIR"
   tmux set-environment -t "$SESSION" WAVEMILL_MILL_ACTIVE "$REPO_DIR"
   [[ -n "${WAVEMILL_NO_PROGRESS:-}" ]] && tmux set-environment -t "$SESSION" WAVEMILL_NO_PROGRESS "$WAVEMILL_NO_PROGRESS"
   if [[ -x "$next_done_script" ]]; then
     tmux bind-key -T prefix N run-shell "WAVEMILL_SESSION='#{session_name}' '$next_done_script'"
   fi
-  tmux send-keys -t "$SESSION:control" "echo 'Control window for $SESSION'" C-m
+  tmux send-keys -t "$SESSION:$WAVEMILL_WINDOW_MILL" "echo 'Mill window for $SESSION'" C-m
 }
 
 # Write the launch plan JSON for startup runner consumption.
@@ -358,6 +378,16 @@ write_launch_plan() {
     challenge_model="${TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]:-}"
     migration_number="$(jq -r --arg issue "$issue" '.migrationReservations[$issue] // empty' "$STATE_FILE" 2>/dev/null || echo "")"
     task_agent="${TASK_AGENT_BY_ISSUE[$issue]:-$AGENT_CMD}"
+
+    if [[ -n "${FORCE_MODEL:-}" ]]; then
+      route_planner="$FORCE_MODEL"
+      route_coder="$FORCE_MODEL"
+      route_reviewer="$FORCE_MODEL"
+    else
+      [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && route_planner="$WAVEMILL_PLANNER_MODEL"
+      [[ -n "${WAVEMILL_CODER_MODEL:-}" ]] && route_coder="$WAVEMILL_CODER_MODEL"
+      [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && route_reviewer="$WAVEMILL_REVIEWER_MODEL"
+    fi
     # Extract per-task queue metadata when queue plan is available (HOK-1532)
     depends_on="[]"
     base_from_task="null"
@@ -601,6 +631,7 @@ init_state_ledger() {
   if [[ ! -f "$STATE_FILE" ]]; then
     echo '{"session":"'$SESSION'","started":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","tasks":{}}' > "$STATE_FILE"
   fi
+  cleanup_background_jobs_startup
 }
 
 
@@ -991,9 +1022,14 @@ linear_is_completed() {
 pick_candidates() {
   local backlog_json="$1"
   local show_limit=30
+  local focus_milestones_json="[]"
+
+  if [[ -n "${REPO_DIR:-}" ]] && declare -F wavemill_load_config >/dev/null 2>&1; then
+    focus_milestones_json="$(wavemill_load_config "$REPO_DIR" | jq -c '.backlog.focusMilestones // []' 2>/dev/null || printf '[]')"
+  fi
 
   # Use shared scoring function; strip has_detailed_plan (field 6), keep blocked_by_count (field 7→6)
-  score_and_rank_issues "$backlog_json" "$show_limit" | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}'
+  score_and_rank_issues "$backlog_json" "$show_limit" "$focus_milestones_json" | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}'
 }
 
 
@@ -1139,6 +1175,8 @@ cleanup_on_exit() {
       [[ -n "$issue" ]] && ISSUES_IN_PROGRESS+=("$issue")
     done < <(sort -u "$launched_issue_file" 2>/dev/null || true)
   fi
+
+  cleanup_background_jobs_shutdown 2>/dev/null || true
 
   if [[ ${#ISSUES_IN_PROGRESS[@]} -gt 0 ]]; then
     log_warn "Interrupted - resetting Linear state for unfinished tasks..."
@@ -1773,6 +1811,18 @@ if [[ -n "${FORCE_MODEL:-}" ]]; then
   fi
   log "info" "FORCE_MODEL=$FORCE_MODEL - skipping router"
 elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
+  if [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && ! agent_validate_model "$WAVEMILL_PLANNER_MODEL" "$REPO_DIR"; then
+    log_error "Invalid WAVEMILL_PLANNER_MODEL: $WAVEMILL_PLANNER_MODEL"
+    exit 1
+  fi
+  if [[ -n "${WAVEMILL_CODER_MODEL:-}" ]] && ! agent_validate_model "$WAVEMILL_CODER_MODEL" "$REPO_DIR"; then
+    log_error "Invalid WAVEMILL_CODER_MODEL: $WAVEMILL_CODER_MODEL"
+    exit 1
+  fi
+  if [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && ! agent_validate_model "$WAVEMILL_REVIEWER_MODEL" "$REPO_DIR"; then
+    log_error "Invalid WAVEMILL_REVIEWER_MODEL: $WAVEMILL_REVIEWER_MODEL"
+    exit 1
+  fi
   ROUTE_TOOL="$TOOLS_DIR/route-task.ts"
   ROUTE_BATCH_TOOL="$TOOLS_DIR/route-tasks.ts"
   if [[ -f "$ROUTE_TOOL" ]]; then
@@ -2034,7 +2084,7 @@ done
 
 LAUNCH_ARGS=("${FINAL_LAUNCH_ARGS[@]}")
 # Create monitoring script that will run in tmux
-STATUS_LOG_FILE="/tmp/${SESSION}-control-status.log"
+STATUS_LOG_FILE="/tmp/${SESSION}-mill-status.log"
 MONITOR_ENV="/tmp/${SESSION}-monitor.env"
 MONITOR_SCRIPT="/tmp/${SESSION}-monitor.sh"
 LAUNCHED_ISSUES_FILE="/tmp/${SESSION}-launched-issues.txt"
@@ -2045,6 +2095,24 @@ set -Eeuo pipefail
 
 # Import environment from env file
 source "$1"
+
+run_linear_retry_drain_tick() {
+  [[ "$DRY_RUN" == "true" ]] && return 0
+
+  local stamp_file="${STATE_DIR}/linear-retry-drain.last-run"
+  local now last_run=0
+  now="$(date +%s)"
+  if [[ -f "$stamp_file" ]]; then
+    last_run="$(cat "$stamp_file" 2>/dev/null || echo 0)"
+  fi
+
+  if (( now - last_run < 60 )); then
+    return 0
+  fi
+
+  printf '%s\n' "$now" > "$stamp_file"
+  npx tsx "$TOOLS_DIR/linear-retry-drain.ts" drain --max-entries 10 >/dev/null 2>&1 || true
+}
 
 # Logging functions - defined early so they're available for all error handling
 _log_level_num() {
@@ -2441,8 +2509,8 @@ cleanup_dashboard_pane() {
   _AUX_PANES_CLEANED=1
 
   for pane in 1 2; do
-    tmux list-panes -t "$SESSION:control.$pane" >/dev/null 2>&1 || continue
-    tmux kill-pane -t "$SESSION:control.$pane" >/dev/null 2>&1 || true
+    tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL.$pane" >/dev/null 2>&1 || continue
+    tmux kill-pane -t "$SESSION:$WAVEMILL_WINDOW_MILL.$pane" >/dev/null 2>&1 || true
   done
 }
 trap cleanup_dashboard_pane EXIT INT TERM
@@ -3090,7 +3158,7 @@ approve_plan() {
 
 resolve_stage_result_model() {
   local feature_dir="$1" stage="$2" fallback="${3:-}"
-  local model=""
+  local model="" launch_model=""
 
   case "$stage" in
     coding)
@@ -3098,19 +3166,25 @@ resolve_stage_result_model() {
       [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "coderModel")
       [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.coding-result.json" 2>/dev/null || echo "")
       model="$(resolve_phase_model "coding" "$model" "${fallback:-claude-opus-4-7}")"
+      if declare -F agent_resolve_model >/dev/null 2>&1; then
+        launch_model="$(agent_resolve_model "coder" "$model" "$REPO_DIR" 2>/dev/null || true)"
+      fi
       ;;
     review)
       model=$(read_phase_config "$feature_dir" "review" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "reviewerModel")
       [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.review-result.json" 2>/dev/null || echo "")
       model="$(resolve_phase_model "review" "$model" "${fallback:-claude-sonnet-4-6}")"
+      if declare -F agent_resolve_model >/dev/null 2>&1; then
+        launch_model="$(agent_resolve_model "reviewer" "$model" "$REPO_DIR" 2>/dev/null || true)"
+      fi
       ;;
     *)
       model="$fallback"
       ;;
   esac
 
-  printf '%s\n' "$model"
+  printf '%s\n' "${launch_model:-$model}"
 }
 
 # Validate that planning stayed within its phase boundary before coding starts.
@@ -3123,6 +3197,8 @@ validate_planning_phase_output() {
   local -a out_of_scope_files=()
   local -a tracked_out_of_scope=()
   local -a untracked_out_of_scope=()
+
+  VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES=()
 
   [[ -d "$wt_dir/.git" || -f "$wt_dir/.git" ]] || return 0
 
@@ -3152,6 +3228,7 @@ validate_planning_phase_output() {
     return 0
   fi
 
+  VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES=("${out_of_scope_files[@]}")
   log_warn "WARNING: Planning phase modified source code files: ${out_of_scope_files[*]}"
 
   local cleanup_failed=0
@@ -3193,6 +3270,151 @@ validate_planning_phase_output() {
 
   rm -f "$feature_dir/.plan-approved"
   return 1
+}
+
+planning_rejection_files_summary() {
+  local -a files=("$@")
+  local joined=""
+  local file
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    printf 'out-of-scope files'
+    return 0
+  fi
+
+  for file in "${files[@]:0:3}"; do
+    if [[ -n "$joined" ]]; then
+      joined+=", "
+    fi
+    joined+="$file"
+  done
+
+  if (( ${#files[@]} > 3 )); then
+    joined+=" (+$(( ${#files[@]} - 3 )) more)"
+  fi
+
+  printf '%s' "$joined"
+}
+
+write_planning_rejection_artifact() {
+  local issue="$1" feature_dir="$2"
+  shift 2
+  local -a files=("$@")
+  local artifact="$feature_dir/.planning-rejected.json"
+  local files_json created_at
+
+  mkdir -p "$feature_dir"
+  if (( ${#files[@]} == 0 )); then
+    files_json='[]'
+  else
+    files_json=$(printf '%s\n' "${files[@]}" | jq -R . | jq -s . 2>/dev/null || printf '[]')
+  fi
+  created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  jq -n \
+    --arg issue "$issue" \
+    --arg stage "planning" \
+    --arg status "awaiting_user" \
+    --arg reason "planning_modified_out_of_scope_files" \
+    --arg createdAt "$created_at" \
+    --arg recommendedAction "Review plan.md and re-approve the plan. Planning may only write feature artifacts." \
+    --argjson outOfScopeFiles "$files_json" \
+    '{issue: $issue, stage: $stage, status: $status, reason: $reason, outOfScopeFiles: $outOfScopeFiles, reverted: true, approvalMarkerRemoved: true, recommendedAction: $recommendedAction, createdAt: $createdAt}' > "$artifact"
+}
+
+notify_planning_rejection_agent() {
+  local feature_dir="$1" win="$2"
+  shift 2
+  local -a files=("$@")
+  local artifact="$feature_dir/.planning-rejected.json"
+  local slug files_summary notified tmp message
+
+  [[ -n "${SESSION:-}" && -n "$win" && -f "$artifact" ]] || return 0
+
+  notified=$(jq -r '.notifiedAt // empty' "$artifact" 2>/dev/null || true)
+  [[ -z "$notified" ]] || return 0
+
+  if command -v _pane_is_dead_or_idle >/dev/null 2>&1 && _pane_is_dead_or_idle "$SESSION:$win"; then
+    return 0
+  fi
+
+  if [[ "$(tmux list-panes -t "$SESSION:$win" -F '#{pane_dead}' 2>/dev/null | head -1)" == "1" ]]; then
+    return 0
+  fi
+
+  slug="$(basename "$feature_dir")"
+  files_summary="$(planning_rejection_files_summary "${files[@]}")"
+  message="Planning approval was rejected because planning modified out-of-scope files: $files_summary. Those changes were reverted and .plan-approved was removed. Do not edit source/config files during planning. Update only features/$slug/plan.md if needed, then wait for user approval again."
+
+  tmux send-keys -t "$SESSION:$win" "$message" C-m 2>/dev/null || return 0
+
+  tmp=$(mktemp "${artifact}.tmp.XXXXXX" 2>/dev/null) || return 0
+  jq --arg notifiedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '.notifiedAt = $notifiedAt' "$artifact" > "$tmp" 2>/dev/null \
+    && mv "$tmp" "$artifact" 2>/dev/null \
+    || rm -f "$tmp"
+}
+
+blocked_completion_announce_marker() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.blocked-completion-announced"
+}
+
+blocked_completion_should_announce() {
+  local feature_dir="$1" artifact_mtime="${2:-}"
+  local marker last_announced effective_mtime
+
+  # Use UNKNOWN sentinel when stat is unavailable so dedupe still works
+  effective_mtime="${artifact_mtime:-UNKNOWN}"
+  marker="$(blocked_completion_announce_marker "$feature_dir")"
+  [[ -f "$marker" ]] || return 0
+
+  last_announced="$(head -1 "$marker" 2>/dev/null | tr -d '\r')"
+  [[ "$last_announced" != "$effective_mtime" ]]
+}
+
+mark_blocked_completion_announced() {
+  local feature_dir="$1" artifact_mtime="${2:-}"
+  local marker tmp_file effective_mtime
+
+  # Use UNKNOWN sentinel when stat is unavailable so dedupe still works
+  effective_mtime="${artifact_mtime:-UNKNOWN}"
+  marker="$(blocked_completion_announce_marker "$feature_dir")"
+  tmp_file="$(mktemp "$feature_dir/.blocked-completion-announced.tmp.XXXXXX" 2>/dev/null)" || return 0
+  printf '%s\n' "$effective_mtime" > "$tmp_file" && mv "$tmp_file" "$marker" 2>/dev/null || rm -f "$tmp_file"
+}
+
+emit_blocked_completion_attention() {
+  local issue="$1" feature_dir="$2"
+  local artifact_record summary reason artifact_mtime slug win
+
+  artifact_record="$(read_blocked_completion "$feature_dir")"
+  [[ -n "$artifact_record" ]] || return 1
+
+  IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
+  slug="$(basename "$feature_dir")"
+  win="$issue-$slug"
+
+  if blocked_completion_should_announce "$feature_dir" "$artifact_mtime"; then
+    log "status" "$issue needs attention: $summary. Type \"advance $issue\" to launch review."
+    mark_blocked_completion_announced "$feature_dir" "$artifact_mtime"
+  fi
+
+  set_window_attention_state "$win" "needs-user"
+  active_count=$((active_count + 1))
+  return 0
+}
+
+handle_planning_overreach_rejection() {
+  local issue="$1" feature_dir="$2" win="$3" current_agent="${4:-}"
+  local -a files=("${VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES[@]:-}")
+  local files_summary
+
+  files_summary="$(planning_rejection_files_summary "${files[@]}")"
+  write_planning_rejection_artifact "$issue" "$feature_dir" "${files[@]}"
+  log_warn "$issue needs attention: planning edited $files_summary. Reverted. Review plan.md and re-approve to continue."
+  write_stage_result "$feature_dir" "planning" "awaiting_user" "$current_agent" "" "Planning edited $files_summary. Reverted and awaiting re-approval"
+  notify_planning_rejection_agent "$feature_dir" "$win" "${files[@]}"
+  set_window_attention_state "$win" "needs-user"
 }
 
 # Warn if coding already created a PR before the review phase can run.
@@ -3501,6 +3723,9 @@ _restore_inflight_task_window_if_missing() {
       model=$(read_phase_config "$feature_dir" "planning" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$issue" "plannerModel")
       model="$(resolve_phase_model "planning" "$model" "claude-sonnet-4-6")"
+      if declare -F agent_resolve_model >/dev/null 2>&1; then
+        model="$(agent_resolve_model "planner" "$model" "$REPO_DIR")" || return 1
+      fi
       depth=$(read_phase_config "$feature_dir" "planning" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "planDepth")
       [[ -z "$depth" ]] && depth="light"
@@ -3530,6 +3755,9 @@ _restore_inflight_task_window_if_missing() {
       model=$(read_phase_config "$feature_dir" "coding" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$issue" "coderModel")
       model="$(resolve_phase_model "coding" "$model" "claude-opus-4-7")"
+      if declare -F agent_resolve_model >/dev/null 2>&1; then
+        model="$(agent_resolve_model "coder" "$model" "$REPO_DIR")" || return 1
+      fi
       depth=$(read_phase_config "$feature_dir" "coding" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "codeDepth")
       [[ -z "$depth" ]] && depth="medium"
@@ -3574,11 +3802,12 @@ _launch_agent_in_pane() {
   local window="${target#*:}"
   local agent_flags=""
   local abort_check_cmd=""
+  local feature_dir=""
   local esc_session esc_issue esc_slug
 
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
-    local feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
+    feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
     abort_check_cmd="check_stage_aborted '$feature_dir'"
   fi
 
@@ -3587,7 +3816,10 @@ _launch_agent_in_pane() {
   esc_issue=${issue//\'/\'\\\'\'}
   esc_slug=${slug//\'/\'\\\'\'}
   tmux send-keys -t "$target" \
-    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_SLUG='$esc_slug'" C-m
+    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir'" C-m
+
+  export WAVEMILL_FEATURE_SLUG="$slug"
+  export WAVEMILL_FEATURE_DIR="$feature_dir"
 
   agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd"
 }
@@ -4828,6 +5060,7 @@ launch_tracked_job() {
   [[ -n "$issue_id" ]] && args+=(--issue-id "$issue_id")
   [[ -n "$side" ]] && args+=(--side "$side")
   [[ -n "$pair_id" ]] && args+=(--pair-id "$pair_id")
+  [[ -n "${SESSION:-}" ]] && args+=(--session "$SESSION")
   npx tsx "$TOOLS_DIR/job-tracker.ts" "${args[@]}" >/dev/null
 }
 
@@ -5216,6 +5449,10 @@ archive_stage_artifacts() {
       else
         log_warn "  Skipping invalid route artifact archive: $feature_dir/.post-expansion-route.json"
       fi
+    fi
+
+    if [[ -f "$feature_dir/routing.jsonl" ]]; then
+      cp "$feature_dir/routing.jsonl" "$archive_dir/routing.jsonl" 2>/dev/null || true
     fi
   fi
 
@@ -5691,6 +5928,7 @@ recover_missing_expansion_artifact() {
   local route_file="$feature_dir/.post-expansion-route.json"
   local recovery_log_dir="$REPO_DIR/.wavemill/logs"
   local recovery_log_file="$recovery_log_dir/expansion-recovery-${issue}.log"
+  local recovery_timeout=""
   local packet_content="" detail="" rc=0
 
   if expansion_recovery_already_attempted "$feature_dir"; then
@@ -5712,13 +5950,22 @@ recover_missing_expansion_artifact() {
     return 1
   fi
 
-  if _with_timeout "$API_TIMEOUT" npx tsx "$expand_tool" "$issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
+  recovery_timeout="$(get_expansion_handshake_timeout_seconds "$REPO_DIR")"
+  if _with_timeout "$recovery_timeout" npx tsx "$expand_tool" "$issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
     :
   else
     rc=$?
-    detail="expand-issue-exited-non-zero"
+    if [[ "$rc" == "124" || "$rc" == "143" ]]; then
+      detail="expand-issue-timed-out"
+    else
+      detail="expand-issue-exited-non-zero"
+    fi
     expansion_recovery_mark_result "$feature_dir" "$issue" "failed" "$detail" "$rc" || true
-    log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail exit=$rc log=\"$recovery_log_file\""
+    if [[ "$detail" == "expand-issue-timed-out" ]]; then
+      log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail timeoutSeconds=$recovery_timeout exit=$rc log=\"$recovery_log_file\""
+    else
+      log "warn" "[expansion-handshake] RECOVERY_FAILED issue=$issue detail=$detail exit=$rc log=\"$recovery_log_file\""
+    fi
     return 1
   fi
 
@@ -5803,7 +6050,11 @@ refresh_backlog_cache() {
   # Use shared scoring function from wavemill-common.sh (eliminates duplication)
   # Strip has_detailed_plan (field 6) to match pick_candidates() 6-field format:
   # identifier|slug|title|area|score|blocked_by_count
-  BACKLOG_CACHE=$(score_and_rank_issues "$backlog_json" 30 | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}')
+  local focus_milestones_json="[]"
+  if [[ -n "${REPO_DIR:-}" ]] && declare -F wavemill_load_config >/dev/null 2>&1; then
+    focus_milestones_json="$(wavemill_load_config "$REPO_DIR" | jq -c '.backlog.focusMilestones // []' 2>/dev/null || printf '[]')"
+  fi
+  BACKLOG_CACHE=$(score_and_rank_issues "$backlog_json" 30 "$focus_milestones_json" | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}')
   LAST_BACKLOG_FETCH=$now
   return 0
 }
@@ -5866,7 +6117,7 @@ log_fetch_queue_plan_failure() {
 
 build_queue_plan_once() {
   local backlog_json="$1"
-  local plan_input queue_plan tmp_stderr stderr_text
+  local plan_input queue_plan tmp_stderr stderr_text cache_key
 
   tmp_stderr="$(mktemp -t wavemill-fqp-stderr.XXXXXX)" || {
     record_fetch_queue_plan_failure "diagnostics_setup_failed" "mktemp failed"
@@ -5877,10 +6128,23 @@ build_queue_plan_once() {
     map({
       id: .identifier,
       title: .title,
+      description: .description,
+      labels: ((.labels.nodes // []) | map(.name) | sort),
+      priority: (.priority // null),
+      priorityLabel: (.priorityLabel // null),
+      estimate: (.estimate // null),
+      state: (.state.name // null),
+      dueDate: (.dueDate // null),
+      projectMilestone: (.projectMilestone // null),
+      blocks: (
+        (.relations.nodes // [])
+        | map(select(.type == "blocks" and .relatedIssue.identifier != null and .relatedIssue.completedAt == null and .relatedIssue.canceledAt == null) | .relatedIssue.identifier)
+        | sort
+      ),
       sharedSurface: ((.sharedSurface // []) | sort),
       dependsOn: (
         (.inverseRelations.nodes // [])
-        | map(select(.type == "blocks" and .issue.identifier != null) | .issue.identifier)
+        | map(select(.type == "blocks" and .issue.identifier != null and .issue.completedAt == null and .issue.canceledAt == null) | .issue.identifier)
         | sort
       )
     })
@@ -5892,12 +6156,22 @@ build_queue_plan_once() {
   }
 
   : > "$tmp_stderr"
-  queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
-    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-    rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
-    return 1
-  }
+  if [[ -n "${PROJECT_NAME:-}" ]]; then
+    cache_key="$PROJECT_NAME"
+    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 60 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json --cache-key "$cache_key" --refresh-missing-cache 2>"$tmp_stderr") || {
+      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+      rm -f "$tmp_stderr"
+      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+      return 1
+    }
+  else
+    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
+      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
+      rm -f "$tmp_stderr"
+      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+      return 1
+    }
+  fi
 
   : > "$tmp_stderr"
   jq -e 'has("availableNow")' >/dev/null 2>"$tmp_stderr" <<<"$queue_plan" || {
@@ -5931,13 +6205,34 @@ invoke_first_wave_helper() {
   printf '%s\n' "$input_json" | _with_timeout 10 npx tsx "$TOOLS_DIR/select-wave.ts" 2>/dev/null
 }
 
+BACKLOG_LAST_TIER=""
+BACKLOG_DEFAULT_AVAILABLE_CAP=12
+
 render_grouped_task_list() {
-  local queue_plan="$1" available="$2"
+  local queue_plan="$1" available="$2" budget="${3:-999}" expanded="${4:-false}"
+  local deps_expanded="${5:-false}" active_issue_ids="${6:-}"
   local counter=0 output="" select_lines="" section_body="" line rec group_index task_id blockers triage_id task_key
+  local backlog_cap="${BACKLOG_DEFAULT_AVAILABLE_CAP:-12}"
+  local tier=0 hidden_count=0 config_max="" indicator_label="expand"
+  local deps_hidden_count=0 available_limit=0 queued_line_budget=0 max_queued_entries=0
+  local -a available_entries=() queued_entries=() on_deck_queued=() off_deck_queued=()
+  local available_section_lines=0 queued_section_lines=0 total_lines=0
   declare -A id_to_record=()
   declare -A rendered_ids=()
+  declare -A on_deck_set=()
 
   jq -e . >/dev/null 2>&1 <<<"$queue_plan" || return 1
+
+  if [[ -n "${REPO_DIR:-}" ]] && declare -F wavemill_load_config >/dev/null 2>&1; then
+    backlog_cap="$(wavemill_load_config "$REPO_DIR" | jq -r '.backlog.defaultAvailableNowCap // 12' 2>/dev/null || printf '12')"
+    config_max="$(wavemill_load_config "$REPO_DIR" | jq -r '.backlog.maxLines // empty' 2>/dev/null || true)"
+  fi
+  if ! [[ "$backlog_cap" =~ ^[0-9]+$ ]] || (( backlog_cap < 1 )); then
+    backlog_cap=12
+  fi
+  if ! [[ "$budget" =~ ^[0-9]+$ ]]; then
+    budget=999
+  fi
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
@@ -5957,15 +6252,9 @@ render_grouped_task_list() {
     rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
-    counter=$((counter + 1))
-    section_body+="$(printf '  %s. %s - %s' "$counter" "$task_id" "$title")"$'\n'
-    select_lines+="${rec}"$'\n'
+    available_entries+=("$rec")
     rendered_ids["$task_key"]=1
   done < <(jq -r '.availableNow[]?' <<<"$queue_plan" 2>/dev/null)
-  if [[ -n "$section_body" ]]; then
-    output+="Available Now - Parallel Wave 1"$'\n'
-    output+="${section_body}"
-  fi
 
   section_body=""
   while IFS=$'\t' read -r task_id blockers; do
@@ -5975,15 +6264,137 @@ render_grouped_task_list() {
     rec="${id_to_record[$task_id]:-${id_to_record[$task_key]:-}}"
     [[ -n "$rec" ]] || continue
     IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
-    counter=$((counter + 1))
-    section_body+="$(printf '  %s. %s - %s (blocked by: %s)' "$counter" "$task_id" "$title" "$blockers")"$'\n'
-    select_lines+="${rec}"$'\n'
+    queued_entries+=("${rec}"$'\t'"$blockers")
     rendered_ids["$task_key"]=1
   done < <(jq -r '.queuedAfterDependencies[]? | [.taskId, (.ancestors | join(", "))] | @tsv' <<<"$queue_plan" 2>/dev/null)
-  if [[ -n "$section_body" ]]; then
+
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    local avail_id="${line%%|*}"
+    [[ -n "$avail_id" ]] && on_deck_set["$(printf '%s' "$avail_id" | tr '[:lower:]' '[:upper:]')"]=1
+  done <<<"$available"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    on_deck_set["$(printf '%s' "$line" | tr '[:lower:]' '[:upper:]')"]=1
+  done <<<"$active_issue_ids"
+
+  for line in "${queued_entries[@]}"; do
+    IFS=$'\t' read -r rec blockers <<<"$line"
+    local is_on_deck=true blocker bkey
+    if [[ -z "$blockers" ]]; then
+      is_on_deck=true
+    else
+      while IFS= read -r blocker; do
+        [[ -n "$blocker" ]] || continue
+        bkey="$(printf '%s' "${blocker// /}" | tr '[:lower:]' '[:upper:]')"
+        if [[ -z "${on_deck_set[$bkey]:-}" ]]; then
+          is_on_deck=false
+          break
+        fi
+      done < <(printf '%s\n' "$blockers" | tr ',' '\n')
+    fi
+    if [[ "$is_on_deck" == "true" ]]; then
+      on_deck_queued+=("$line")
+    else
+      off_deck_queued+=("$line")
+    fi
+  done
+  deps_hidden_count=${#off_deck_queued[@]}
+  if [[ "$deps_expanded" == "true" ]]; then
+    queued_entries=("${on_deck_queued[@]+"${on_deck_queued[@]}"}" "${off_deck_queued[@]+"${off_deck_queued[@]}"}")
+  else
+    queued_entries=("${on_deck_queued[@]+"${on_deck_queued[@]}"}")
+  fi
+
+  if (( ${#available_entries[@]} > 1 )); then
+    local -a sorted_available_entries=()
+    while IFS= read -r rec; do
+      [[ -n "$rec" ]] && sorted_available_entries+=("$rec")
+    done < <(printf '%s\n' "${available_entries[@]}" | sort -t'|' -k5,5nr -k1,1)
+    available_entries=("${sorted_available_entries[@]}")
+  fi
+  if (( ${#queued_entries[@]} > 1 )); then
+    local -a sorted_queued_entries=()
+    while IFS= read -r rec; do
+      [[ -n "$rec" ]] && sorted_queued_entries+=("$rec")
+    done < <(printf '%s\n' "${queued_entries[@]}" | sort -t'|' -k5,5nr -k1,1)
+    queued_entries=("${sorted_queued_entries[@]}")
+  fi
+
+  available_section_lines=0
+  if (( ${#available_entries[@]} > 0 )); then
+    available_section_lines=$((1 + ${#available_entries[@]}))
+  fi
+  queued_section_lines=0
+  if (( ${#queued_entries[@]} > 0 )); then
+    queued_section_lines=$((2 + ${#queued_entries[@]} * 2))
+  fi
+  total_lines=$((available_section_lines + queued_section_lines))
+
+  if [[ "$expanded" != "true" ]] && (( total_lines > budget )); then
+    if (( ${#queued_entries[@]} > 0 )); then
+      queued_line_budget=$((budget - available_section_lines - 2))
+      max_queued_entries=$((queued_line_budget / 2))
+      if (( max_queued_entries > 0 )); then
+        tier=1
+        if (( max_queued_entries < ${#queued_entries[@]} )); then
+          hidden_count=$((hidden_count + ${#queued_entries[@]} - max_queued_entries))
+          queued_entries=("${queued_entries[@]:0:max_queued_entries}")
+        else
+          tier=0
+        fi
+      else
+        hidden_count=$((hidden_count + ${#queued_entries[@]}))
+        queued_entries=()
+        tier=2
+      fi
+    fi
+
+    if (( available_section_lines > budget )); then
+      tier=3
+      hidden_count=$((hidden_count + ${#queued_entries[@]}))
+      queued_entries=()
+      local min_visible=$((budget - 1))
+      (( min_visible < 10 )) && min_visible=10
+      available_limit=$min_visible
+      if (( backlog_cap < available_limit )); then
+        available_limit=$backlog_cap
+      fi
+      if (( available_limit > budget - 1 )); then
+        available_limit=$((budget - 1))
+      fi
+      if (( ${#available_entries[@]} > available_limit )); then
+        hidden_count=$((hidden_count + ${#available_entries[@]} - available_limit))
+        available_entries=("${available_entries[@]:0:available_limit}")
+      fi
+    fi
+  fi
+
+  if (( ${#available_entries[@]} > 0 )); then
+    output+="Available Now - Parallel Wave 1"$'\n'
+    for rec in "${available_entries[@]}"; do
+      IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
+      counter=$((counter + 1))
+      output+="$(printf '  %s. %s - %s' "$counter" "$task_id" "$title")"$'\n'
+      select_lines+="${rec}"$'\n'
+    done
+  fi
+
+  if (( ${#queued_entries[@]} > 0 )); then
     [[ -n "$output" ]] && output+=$'\n'
     output+="Queued After Dependencies"$'\n'
-    output+="${section_body}"
+    for line in "${queued_entries[@]}"; do
+      IFS=$'\t' read -r rec blockers <<<"$line"
+      IFS='|' read -r task_id _slug title _area _score _blocked <<<"$rec"
+      counter=$((counter + 1))
+      output+="$(printf '  %s. %s - %s (blocked by: %s)' "$counter" "$task_id" "$title" "$blockers")"$'\n'
+      select_lines+="${rec}"$'\n'
+    done
+    if [[ "$deps_expanded" != "true" ]] && (( deps_hidden_count > 0 )); then
+      output+="$(printf '  +%s hidden - d to expand' "$deps_hidden_count")"$'\n'
+    elif [[ "$deps_expanded" == "true" ]] && (( deps_hidden_count > 0 )); then
+      output+="  (d to collapse)"$'\n'
+    fi
   fi
 
   section_body=""
@@ -6034,7 +6445,23 @@ render_grouped_task_list() {
     output+="${section_body}"
   fi
 
+  if [[ "$expanded" != "true" ]] && (( tier > 0 )) && (( hidden_count > 0 )); then
+    output+="$(printf '... %s tasks hidden (m to expand)' "$hidden_count")"$'\n'
+  elif [[ "$expanded" == "true" ]] && (( total_lines > budget )); then
+    output+="(m to collapse)"$'\n'
+    indicator_label="collapse"
+  fi
+
   (( counter > 0 )) || return 1
+
+  if [[ "$tier" != "${BACKLOG_LAST_TIER:-}" ]] && declare -F log >/dev/null 2>&1; then
+    local backlog_annotation=" (backlog.maxLines=${config_max:-auto})"
+    if declare -F wavemill_config_annotation >/dev/null 2>&1; then
+      backlog_annotation="$(wavemill_config_annotation "backlog.maxLines" "${config_max:-auto}")"
+    fi
+    log "status" "[backlog] tier=$tier budget=$budget${backlog_annotation}"
+    BACKLOG_LAST_TIER="$tier"
+  fi
 
   GROUPED_SELECT_FROM="${select_lines%$'\n'}"
   GROUPED_DISPLAY="${output%$'\n'}"
@@ -6501,6 +6928,22 @@ EOF
     fi
   fi
 
+  if [[ -z "${FORCE_MODEL:-}" ]]; then
+    [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && planner_model="$WAVEMILL_PLANNER_MODEL"
+    [[ -n "${WAVEMILL_CODER_MODEL:-}" ]] && task_model="$WAVEMILL_CODER_MODEL"
+    [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
+  fi
+
+  if [[ -n "$planner_model" ]]; then
+    planner_agent="$(agent_resolve_from_model "$planner_model")"
+  fi
+  if [[ -n "$task_model" ]]; then
+    task_agent_cmd="$(agent_resolve_from_model "$task_model")"
+  fi
+  if [[ -n "$reviewer_model" ]]; then
+    reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+  fi
+
   # Save to state ledger (after routing so agent is known)
   local initial_phase="planning"
   # If this task was already marked as a challenge participant (e.g. challenger
@@ -6715,21 +7158,25 @@ Implement from the issue description plus direct codebase analysis."
   fi
 
   # Launch planning phase directly with the routed model (skip routing agent)
-  local resolved_planner_agent
-  resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")"
+  local planner_launch_model resolved_planner_agent
+  planner_launch_model="${planner_model:-claude-sonnet-4-6}"
+  if declare -F agent_resolve_model >/dev/null 2>&1; then
+    planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-4-6}" "$REPO_DIR")" || return 1
+  fi
+  resolved_planner_agent="$(agent_resolve_from_model "$planner_launch_model")"
 
   # Record planning stage as running before the first launch so the monitor
   # keeps the task active even before any planning artifacts exist.
-  write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"
+  write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "$planner_launch_model"
 
   launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-    "${planner_model:-claude-sonnet-4-6}" "$resolved_planner_agent" "${plan_depth:-light}"
+    "$planner_launch_model" "$resolved_planner_agent" "${plan_depth:-light}"
   local launch_rc=$?
   if ! handle_phase_launch_result "$issue" "$feature_dir" "planning" "routing" "$launch_rc" "$win" \
-    "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
+    "$resolved_planner_agent" "$planner_launch_model"; then
     return 0
   fi
-  log "status" "Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
+  log "status" "Routing complete (direct), launched planning with $planner_launch_model"
 
   log "status" "$issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
   [[ -n "$planner_model" ]] && log "info" "Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
@@ -6795,6 +7242,7 @@ _active_count_prev=0
 LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
+READY_STALE_MERGE_LANE_LOG_KEYS=$'\n'
 TASK_LIST_RENDERED=0  # track task list cursor region in control pane
 SELECT_SHOW_ALL=false
 USING_GROUPED_VIEW=false
@@ -6811,6 +7259,19 @@ clear_task_list_display() {
     tput ed 2>/dev/null || printf '\033[J'
     TASK_LIST_RENDERED=0
   fi
+}
+
+log_ready_stale_merge_lane_once() {
+  local issue="$1" pr="$2" stored_base_sha="$3" current_main_sha="$4"
+  local key="${issue}|${pr}|${stored_base_sha}|${current_main_sha}"
+  local logged_keys="${READY_STALE_MERGE_LANE_LOG_KEYS:-$'\n'}"
+
+  if [[ "$logged_keys" == *$'\n'"$key"$'\n'* ]]; then
+    return 0
+  fi
+
+  READY_STALE_MERGE_LANE_LOG_KEYS="${logged_keys}${key}"$'\n'
+  log "status" "⚠ $issue → Ready marked stale; waiting for merge lane (PR #$pr)"
 }
 
 monitor_command_timestamp() {
@@ -7213,6 +7674,149 @@ handle_select_command() {
   fi
 }
 
+handle_advance_command() {
+  local event="$1"
+  local payload issue slug worktree feature_dir current_phase artifact_path artifact_rel_path
+  local marker_path audit_path audit_tmp audit_timestamp task_phase
+  local artifact_json artifact_status artifact_stage artifact_agent artifact_model artifact_notes artifact_keys_json
+
+  MONITOR_COMMAND_STATUS="noop"
+  MONITOR_COMMAND_DEFER_EVENT=""
+  MONITOR_COMMAND_DEFER_REASON=""
+
+  payload="${event#advance }"
+  if [[ "$payload" == "$event" ]]; then
+    log_warn "usage: advance <issue-id>"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  set -- $payload
+  if (( $# != 1 )); then
+    log_warn "usage: advance <issue-id>"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+  issue="$1"
+
+  if [[ ! "$issue" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
+    log_warn "usage: advance <issue-id>"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  slug=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].slug // empty')
+  worktree=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].worktree // empty')
+  if [[ -z "$slug" || -z "$worktree" ]]; then
+    log_warn "$issue is not tracked"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  feature_dir="$worktree/features/$slug"
+  if [[ ! -d "$feature_dir" ]]; then
+    log_warn "$issue is not tracked (missing feature dir: $feature_dir)"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  current_phase=$(resolve_phase "$feature_dir")
+  task_phase=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].phase // empty')
+  if [[ "$current_phase" != "coding" ]]; then
+    if [[ -n "$task_phase" && "$task_phase" != "$current_phase" ]]; then
+      log_warn "$issue is in phase $current_phase (state: $task_phase); advance only works for coding tasks"
+    else
+      log_warn "$issue is in phase $current_phase; advance only works for coding tasks"
+    fi
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  artifact_path="$feature_dir/.coding-result.json"
+  artifact_rel_path="features/$slug/.coding-result.json"
+  if [[ ! -f "$artifact_path" ]]; then
+    log_warn "$issue has no valid blocked-completion artifact at $artifact_rel_path"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  if ! jq empty "$artifact_path" >/dev/null 2>&1; then
+    log_warn "$issue has no valid blocked-completion artifact at $artifact_rel_path"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  artifact_json=$(cat "$artifact_path")
+  artifact_status=$(printf '%s' "$artifact_json" | jq -r '.status // empty' 2>/dev/null || echo "")
+  artifact_stage=$(printf '%s' "$artifact_json" | jq -r '.stage // "coding"' 2>/dev/null || echo "coding")
+  if [[ "$artifact_status" != "running" || "$artifact_stage" != "coding" ]]; then
+    log_warn "$issue has no valid blocked-completion artifact at $artifact_rel_path"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  artifact_agent=$(printf '%s' "$artifact_json" | jq -r '.agent // empty' 2>/dev/null || echo "")
+  artifact_model=$(printf '%s' "$artifact_json" | jq -r '.model // empty' 2>/dev/null || echo "")
+  artifact_notes=$(printf '%s' "$artifact_json" | jq -r '.notes // empty' 2>/dev/null || echo "")
+  artifact_keys_json=$(printf '%s' "$artifact_json" | jq -c '(.artifacts // {}) | if type == "object" then keys else [] end' 2>/dev/null || echo '[]')
+
+  audit_path="$feature_dir/.coding-advance-override.json"
+  audit_timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  audit_tmp="$(mktemp "$feature_dir/.coding-advance-override.json.tmp.XXXXXX")" || {
+    log_warn "$issue advance failed: could not create audit artifact"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  }
+
+  if ! jq -n \
+    --arg timestamp "$audit_timestamp" \
+    --arg issue "$issue" \
+    --arg reason "manual advance via mill input" \
+    --arg path "$artifact_rel_path" \
+    --arg stage "$artifact_stage" \
+    --arg status "$artifact_status" \
+    --arg agent "$artifact_agent" \
+    --arg model "$artifact_model" \
+    --arg notes "$artifact_notes" \
+    --argjson artifactKeys "$artifact_keys_json" \
+    '{
+      timestamp: $timestamp,
+      issue: $issue,
+      reason: $reason,
+      artifact_summary: {
+        path: $path,
+        stage: $stage,
+        status: $status,
+        agent: $agent,
+        model: $model,
+        notes: $notes,
+        artifact_keys: $artifactKeys
+      }
+    }' > "$audit_tmp"; then
+    rm -f "$audit_tmp"
+    log_warn "$issue advance failed: could not write audit artifact"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  if ! mv "$audit_tmp" "$audit_path"; then
+    rm -f "$audit_tmp"
+    log_warn "$issue advance failed: could not finalize audit artifact"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  marker_path="$feature_dir/.coding-complete"
+  if ! touch "$marker_path"; then
+    log_warn "$issue advance failed: could not create $marker_path"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  log "status" "$issue -> advance recorded; review will launch on the next monitor tick"
+  MONITOR_COMMAND_STATUS="handled"
+}
+
 execute_or_defer_monitor_command() {
   local source="$1" event="$2" event_offset="$3" free_slots="$4" queue_plan_json="$5" avail_unblocked="$6" avail_blocked="$7" select_from="$8"
 
@@ -7233,6 +7837,9 @@ execute_or_defer_monitor_command() {
       ;;
     enter)
       handle_enter_command "$event" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked"
+      ;;
+    advance|advance\ *)
+      handle_advance_command "$event"
       ;;
     select\ *)
       handle_select_command "$event" "$free_slots" "$select_from"
@@ -7286,6 +7893,19 @@ process_deferred_monitor_commands() {
   done < <(jq -r '.[].event // empty' <<<"$deferred_json" 2>/dev/null)
 
   REMAINING_FREE_SLOTS="$free_slots"
+}
+
+normalize_prompt_command_reply() {
+  local event="$1"
+  case "$event" in
+    enter) printf '%s\n' "enter" ;;
+    select\ *) printf '%s\n' "${event#select }" ;;
+    more) printf '%s\n' "m" ;;
+    quit) printf '%s\n' "q" ;;
+    advance\ *) printf '%s\n' "$event" ;;
+    unknown\ *) printf '%s\n' "unknown ${event#unknown }" ;;
+    *) printf '%s\n' "" ;;
+  esac
 }
 
 poll_sleep() {
@@ -7552,6 +8172,12 @@ monitor_issue_state() {
               coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
               reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
 
+              if [[ -z "${FORCE_MODEL:-}" ]]; then
+                [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && planner_model="$WAVEMILL_PLANNER_MODEL"
+                [[ -n "${WAVEMILL_CODER_MODEL:-}" ]] && coder_model="$WAVEMILL_CODER_MODEL"
+                [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
+              fi
+
               # Save routing results to state
               current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
               linear_issue=$(get_linear_issue_id "$ISSUE")
@@ -7562,7 +8188,11 @@ monitor_issue_state() {
 
               # Transition to planning phase
               set_task_phase "$ISSUE" "planning"
-              planner_agent="$(agent_resolve_from_model "$planner_model")"
+              planner_launch_model="$planner_model"
+              if declare -F agent_resolve_model >/dev/null 2>&1; then
+                planner_launch_model="$(agent_resolve_model "planner" "$planner_model" "$REPO_DIR")" || return 1
+              fi
+              planner_agent="$(agent_resolve_from_model "$planner_launch_model")"
 
               # Get title from state or Linear
               title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -7572,11 +8202,11 @@ monitor_issue_state() {
               fi
 
               # Record planning stage as running (HOK-1177)
-              write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_model"
+              write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_launch_model"
 
-              launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth"
+              launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_launch_model" "$planner_agent" "$plan_depth"
               local launch_rc=$?
-              if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "planning" "routing" "$launch_rc" "$WIN" "$planner_agent" "$planner_model"; then
+              if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "planning" "routing" "$launch_rc" "$WIN" "$planner_agent" "$planner_launch_model"; then
                 return 0
               fi
               set_window_attention_state "$WIN" "clear"
@@ -7655,9 +8285,7 @@ monitor_issue_state() {
             unset "$approval_wait_var" 2>/dev/null || true
             # Before launching coding, validate planning did not overreach.
             if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
-              log_warn "$ISSUE → Planning phase modified source code, reverted changes and blocked transition"
-              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Planning modified files outside features/, reverted and awaiting re-approval"
-              set_window_attention_state "$WIN" "needs-user"
+              handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
               active_count=$((active_count + 1))
               return 0
             fi
@@ -7779,13 +8407,18 @@ monitor_issue_state() {
               fi
             fi
             coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
+            [[ -n "${WAVEMILL_CODER_MODEL:-}" && -z "${FORCE_MODEL:-}" ]] && coder_model="$WAVEMILL_CODER_MODEL"
             code_depth=$(read_phase_config "$FEATURE_DIR" "coding" "depth")
             [[ -z "$code_depth" ]] && code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
 
             # Transition to coding phase
             set_task_phase "$ISSUE" "coding"
-            coder_agent="$(agent_resolve_from_model "$coder_model")"
+            coder_launch_model="$coder_model"
+            if declare -F agent_resolve_model >/dev/null 2>&1; then
+              coder_launch_model="$(agent_resolve_model "coder" "$coder_model" "$REPO_DIR")" || return 1
+            fi
+            coder_agent="$(agent_resolve_from_model "$coder_launch_model")"
 
             # Get title
             title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -7795,11 +8428,11 @@ monitor_issue_state() {
             fi
 
             # Record coding stage as running (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_model"
+            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model"
 
-            launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth"
+            launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
-            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "coding" "planning" "$launch_rc" "$WIN" "$coder_agent" "$coder_model"; then
+            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "coding" "planning" "$launch_rc" "$WIN" "$coder_agent" "$coder_launch_model"; then
                 return 0
             fi
             set_window_attention_state "$WIN" "clear"
@@ -7817,9 +8450,7 @@ monitor_issue_state() {
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
               if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
-                log_warn "$ISSUE → Planning phase modified source code, reverted changes and blocked transition"
-                write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Planning modified files outside features/, reverted and awaiting re-approval"
-                set_window_attention_state "$WIN" "needs-user"
+                handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
                 active_count=$((active_count + 1))
                 return 0
               fi
@@ -7849,9 +8480,7 @@ monitor_issue_state() {
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
               if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
-                log_warn "$ISSUE → Planning phase modified source code, reverted changes and blocked transition"
-                write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Planning modified files outside features/, reverted and awaiting re-approval"
-                set_window_attention_state "$WIN" "needs-user"
+                handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
                 active_count=$((active_count + 1))
                 return 0
               fi
@@ -7922,13 +8551,18 @@ monitor_issue_state() {
               [[ -z "$reviewer_model" ]] && reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
             fi
             reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
+            [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" && -z "${FORCE_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
             review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
             [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")
             [[ -z "$review_mode" ]] && review_mode="static"
 
             # Transition to review phase
             set_task_phase "$ISSUE" "review"
-            reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+            reviewer_launch_model="$reviewer_model"
+            if declare -F agent_resolve_model >/dev/null 2>&1; then
+              reviewer_launch_model="$(agent_resolve_model "reviewer" "$reviewer_model" "$REPO_DIR")" || return 1
+            fi
+            reviewer_agent="$(agent_resolve_from_model "$reviewer_launch_model")"
 
             # Get title
             title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -7938,11 +8572,11 @@ monitor_issue_state() {
             fi
 
             # Record review stage as running (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "review" "running" "$reviewer_agent" "$reviewer_model"
+            write_stage_result "$FEATURE_DIR" "review" "running" "$reviewer_agent" "$reviewer_launch_model"
 
-            launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
+            launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_launch_model" "$reviewer_agent" "$review_mode"
             local launch_rc=$?
-            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "review" "coding" "$launch_rc" "$WIN" "$reviewer_agent" "$reviewer_model"; then
+            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "review" "coding" "$launch_rc" "$WIN" "$reviewer_agent" "$reviewer_launch_model"; then
               return 0
             fi
             set_window_attention_state "$WIN" "clear"
@@ -7963,6 +8597,9 @@ monitor_issue_state() {
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
+              return 0
+            fi
+            if emit_blocked_completion_attention "$ISSUE" "$FEATURE_DIR"; then
               return 0
             fi
             log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"
@@ -8452,7 +9089,8 @@ monitor_issue_state() {
     fi
   elif [[ "$current_phase" == "ready" ]]; then
     local resolved_phase ready_state_dir_path ready_status ready_verdict
-    local launch_head current_head title launch_rc
+    local launch_head current_head title launch_rc _conflict_cleared
+    _conflict_cleared=false
     resolved_phase=$(resolve_phase "$FEATURE_DIR")
     if [[ "$resolved_phase" == "aborted" ]]; then
       log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during ready phase"
@@ -8480,6 +9118,7 @@ monitor_issue_state() {
         if [[ -n "$attention_head" && -n "$current_head" && "$attention_head" == "$current_head" ]]; then
           if ready_conflict_recheck_due "$ready_state_dir_path" && ready_conflict_pr_is_clean "$ready_state_dir_path" "$PR" "$ISSUE"; then
             clear_ready_conflict_markers "$ready_state_dir_path"
+            _conflict_cleared=true
           else
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -8525,7 +9164,11 @@ monitor_issue_state() {
         fi
 
         log "status" "$ISSUE → Conflict remediation complete, ready checks rerun"
-        set_window_attention_state "$WIN" "needs-user"
+        if [[ "$_conflict_cleared" == "true" ]]; then
+          set_window_attention_state "$WIN" "clear"
+        else
+          set_window_attention_state "$WIN" "needs-user"
+        fi
         return 0
       fi
     fi
@@ -8554,7 +9197,7 @@ monitor_issue_state() {
         if merge_queue_enabled; then
           if [[ "$queue_state" != "merge-candidate" ]]; then
             mark_ready_stale "$ISSUE" "$ready_state_dir_path" "$stored_base_sha" "$current_main_sha"
-            log "status" "⚠ $ISSUE → Ready marked stale; waiting for merge lane (PR #$PR)"
+            log_ready_stale_merge_lane_once "$ISSUE" "$PR" "$stored_base_sha" "$current_main_sha"
             set_window_attention_state "$WIN" "clear"
             active_count=$((active_count + 1))
             return 0
@@ -8712,20 +9355,20 @@ monitor_issue_state() {
 }
 
 # ── Control pane health watchdog ──────────────────────────────────────
-# Respawns dead control panes (dashboard, log) to prevent layout collapse.
+# Respawns dead mill panes (dashboard, log) to prevent layout collapse.
 # Called each monitor cycle. Relies on remain-on-exit keeping dead panes
 # visible so we can detect and respawn them without losing the layout.
 LAST_DASHBOARD_HEALTH_CHECK=0
 DASHBOARD_HEALTH_INTERVAL=30  # seconds between checks
 
-check_control_pane_health() {
+check_mill_pane_health() {
   local now
   now=$(date +%s)
   (( now - LAST_DASHBOARD_HEALTH_CHECK < DASHBOARD_HEALTH_INTERVAL )) && return 0
   LAST_DASHBOARD_HEALTH_CHECK=$now
 
   local pane_count
-  pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
+  pane_count=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
 
   # If panes were destroyed (layout collapsed), rebuild from scratch.
   if (( pane_count < 3 )); then
@@ -8734,34 +9377,34 @@ check_control_pane_health() {
 
     if (( pane_count == 1 )); then
       # Single pane remaining — recreate both missing panes
-      tmux split-window -t "$SESSION:control.0" -hb -p 50 "exec bash" 2>/dev/null || true
-      tmux split-window -t "$SESSION:control.0" -v -p 65 "exec bash" 2>/dev/null || true
+      tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" -hb -p 50 "exec bash" 2>/dev/null || true
+      tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" -v -p 65 "exec bash" 2>/dev/null || true
     elif (( pane_count == 2 )); then
       # Two panes — add the missing one
-      tmux split-window -t "$SESSION:control.0" -v -p 65 "exec bash" 2>/dev/null || true
+      tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" -v -p 65 "exec bash" 2>/dev/null || true
     fi
 
     # Re-count after splits
-    pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
+    pane_count=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL" -F '#{pane_index}' 2>/dev/null | wc -l | tr -d ' ')
     if (( pane_count >= 3 )); then
       # Respawn dashboard (pane 1) and log (pane 2)
-      tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
-      tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
+      tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
+      tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
       # Update dashboard PID
       sleep 0.3
       local new_pid
-      new_pid=$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)
+      new_pid=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" -F '#{pane_pid}' 2>/dev/null || true)
       [[ -n "$new_pid" ]] && tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$new_pid" 2>/dev/null || true
       log "status" "Control panes rebuilt successfully"
     else
-      log_warn "Failed to rebuild control panes (got $pane_count)"
+      log_warn "Failed to rebuild mill panes (got $pane_count)"
     fi
     return 0
   fi
 
   # All 3 panes exist — check for dead ones and respawn in place.
   local dead_panes
-  dead_panes=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index} #{pane_dead}' 2>/dev/null || true)
+  dead_panes=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL" -F '#{pane_index} #{pane_dead}' 2>/dev/null || true)
 
   while IFS=' ' read -r idx is_dead; do
     [[ "$is_dead" == "1" ]] || continue
@@ -8769,16 +9412,16 @@ check_control_pane_health() {
       1)
         log_warn "Dashboard pane (control.1) is dead. Respawning..."
         local status_script="$LIB_DIR/wavemill-status.sh"
-        tmux respawn-pane -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
+        tmux respawn-pane -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'" 2>/dev/null || true
         sleep 0.3
         local new_pid
-        new_pid=$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)
+        new_pid=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" -F '#{pane_pid}' 2>/dev/null || true)
         [[ -n "$new_pid" ]] && tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$new_pid" 2>/dev/null || true
         log "status" "Dashboard pane respawned"
         ;;
       2)
         log_warn "Log pane (control.2) is dead. Respawning..."
-        tmux respawn-pane -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
+        tmux respawn-pane -t "$SESSION:$WAVEMILL_WINDOW_MILL.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\"" 2>/dev/null || true
         log "status" "Log pane respawned"
         ;;
     esac
@@ -8788,6 +9431,7 @@ check_control_pane_health() {
 while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
   _update_effective_max_parallel
+  run_linear_retry_drain_tick
   drain_command_events
   while consume_next_command; do
     case "$REPLY" in
@@ -8809,7 +9453,7 @@ while :; do
   done
   poll_challenge_jobs
   run_ready_watchdog_tick
-  check_control_pane_health
+  check_mill_pane_health
   wavemill_pr_cache_refresh
   refresh_ready_merge_queue_tick
   active_count=0
@@ -8863,6 +9507,42 @@ while :; do
   free_slots=$((EFFECTIVE_MAX_PARALLEL - (active_count - active_challenger_count)))
   update_free_slots_state "$free_slots"
 
+  if (( free_slots <= 0 )); then
+    refresh_backlog_cache
+    candidates=$(print_cached_candidates)
+    available=""
+    [[ -n "$candidates" ]] && available=$(filter_active_issues "$candidates")
+
+    display_fingerprint="slots-full|${active_count}|${available}"
+    if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
+      _task_frame="Next tasks (slots full):"$'\n'
+      if [[ -n "$available" ]]; then
+        _task_frame+="$(echo "$available" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}')"
+      elif [[ -n "$candidates" ]]; then
+        _task_frame+="  (all listed backlog tasks are already active)"$'\n'
+      else
+        _task_frame+="  (backlog empty)"$'\n'
+      fi
+      _task_frame+=$'\n'"0 slots available; waiting for active tasks to finish. Press 'q' to quit or wait ${POLL_SECONDS}s to refresh."$'\n'
+
+      if (( TASK_LIST_RENDERED == 1 )); then
+        tput rc 2>/dev/null || true
+      else
+        echo ""
+        tput sc 2>/dev/null || true
+      fi
+      wavemill_pane_repaint "$_task_frame"
+
+      LAST_DISPLAY="$display_fingerprint"
+      LAST_ACTIVE_COUNT=$active_count
+      LAST_WAITING_MSG=""
+      TASK_LIST_RENDERED=1
+    fi
+
+    poll_sleep "$POLL_SECONDS"
+    continue
+  fi
+
   if (( free_slots > 0 )); then
     refresh_backlog_cache
     candidates=$(print_cached_candidates)
@@ -8880,17 +9560,11 @@ while :; do
 
         # Only re-render the prompt when the display would actually change
         queue_fp="${QUEUE_PLAN_CACHE:0:50}"
-        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}"
+        display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}|${_backlog_budget:-}|${_backlog_expanded:-}|${_deps_expanded:-}"
         if [[ "$display_fingerprint" != "$LAST_DISPLAY" ]] || (( active_count != LAST_ACTIVE_COUNT )); then
           SELECT_SHOW_ALL=false
-          if (( TASK_LIST_RENDERED == 1 )); then
-            tput rc 2>/dev/null || true
-            tput ed 2>/dev/null || printf '\033[J'
-          else
-            echo ""
-            tput sc 2>/dev/null || true
-          fi
-          echo "Next tasks:"
+
+          # Gather data first so old content stays visible during queue analysis.
           queue_plan_json=""
           queue_plan_diag_file=""
           queue_plan_diag_previous="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
@@ -8898,14 +9572,22 @@ while :; do
           FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_file"
           GROUPED_DISPLAY=""
           GROUPED_SELECT_FROM=""
+          _backlog_default_expanded="$(wavemill_load_config "$REPO_DIR" | jq -r '.backlog.defaultExpanded // false' 2>/dev/null || echo "false")"
+          _backlog_expanded="$(jq -r --arg def "$_backlog_default_expanded" '.backlogExpanded // $def' "$STATE_FILE" 2>/dev/null || echo "$_backlog_default_expanded")"
+          _deps_expanded="$(jq -r --arg def "false" '.depsExpanded // $def' "$STATE_FILE" 2>/dev/null || echo "false")"
+          _backlog_budget="$(wavemill_backlog_compute_budget "$SESSION" "$WAVEMILL_WINDOW_MILL.0" "$REPO_DIR/.wavemill-config.json" 2>/dev/null || echo 20)"
+          _active_issue_ids=""
+          for _ai in "${!BRANCH_BY_ISSUE[@]}"; do
+            [[ -n "${CLEANED[$_ai]:-}" ]] && continue
+            _active_issue_ids+="${_ai}"$'\n'
+          done
           if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
             if [[ -n "$queue_plan_json" ]]; then
               QUEUE_PLAN_CACHE="$queue_plan_json"
               LAST_QUEUE_PLAN_FETCH=$(date +%s)
             fi
-            render_grouped_task_list "$queue_plan_json" "$available"
+            render_grouped_task_list "$queue_plan_json" "$available" "$_backlog_budget" "$_backlog_expanded" "$_deps_expanded" "$_active_issue_ids"
             if [[ -n "$GROUPED_DISPLAY" ]]; then
-              echo "$GROUPED_DISPLAY"
               select_from="$GROUPED_SELECT_FROM"
               USING_GROUPED_VIEW=true
             fi
@@ -8916,28 +9598,42 @@ while :; do
               log_warn "queue analysis unavailable, falling back to flat list"
               [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
             fi
-            if [[ -n "$avail_unblocked" ]]; then
-              echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'
-            else
-              echo "  (no unblocked tasks)"
-            fi
-            if (( avail_blocked_count > 0 )); then
-              echo ""
-              echo "  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"
-            fi
           fi
           queue_fp="${queue_plan_json:0:50}"
-          display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}"
+          display_fingerprint="${free_slots}|${avail_unblocked}|${avail_blocked_count}|${queue_fp}|${_backlog_budget}|${_backlog_expanded}|${_deps_expanded}"
           rm -f "$queue_plan_diag_file"
           FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE="$queue_plan_diag_previous"
-          echo ""
-          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
-            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
-          elif (( avail_blocked_count > 0 )); then
-            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+
+          _task_frame="Next tasks:"$'\n'
+          if [[ -n "$GROUPED_DISPLAY" ]]; then
+            _task_frame+="${GROUPED_DISPLAY}"$'\n'
           else
-            echo "Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            if [[ -n "$avail_unblocked" ]]; then
+              _task_frame+="$(echo "$avail_unblocked" | head -9 | awk -F'|' '{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}')"
+            else
+              _task_frame+="  (no unblocked tasks)"$'\n'
+            fi
+            if (( avail_blocked_count > 0 )); then
+              _task_frame+=$'\n'"  ($avail_blocked_count blocked task(s) hidden — enter 'm' to show all)"$'\n'
+            fi
           fi
+          _task_frame+=$'\n'
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'd' for deps, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
+          elif (( avail_blocked_count > 0 )); then
+            _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'm' for more, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
+          else
+            _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
+          fi
+
+          if (( TASK_LIST_RENDERED == 1 )); then
+            tput rc 2>/dev/null || true
+          else
+            echo ""
+            tput sc 2>/dev/null || true
+          fi
+          wavemill_pane_repaint "$_task_frame"
+
           LAST_DISPLAY="$display_fingerprint"
           LAST_ACTIVE_COUNT=$active_count
           LAST_WAITING_MSG=""  # Clear waiting state when tasks are available
@@ -8956,14 +9652,7 @@ while :; do
         MONITOR_PHASE_C_REPLY_OFFSET=""
         if consume_next_command; then
           MONITOR_PHASE_C_REPLY_OFFSET="${REPLY_OFFSET:-}"
-          case "$REPLY" in
-            enter) ;;
-            select\ *) REPLY="${REPLY#select }" ;;
-            more) REPLY="m" ;;
-            quit) REPLY="q" ;;
-            unknown\ *) REPLY="unknown ${REPLY#unknown }" ;;
-            *) REPLY="" ;;
-          esac
+          REPLY="$(normalize_prompt_command_reply "$REPLY")"
         fi
 
         if [[ "$REPLY" =~ ^[Qq]$ ]]; then
@@ -8977,7 +9666,9 @@ while :; do
           fi
         elif [[ "$REPLY" =~ ^[mM]$ ]]; then
           if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
-            :
+            state_mutate "$STATE_FILE" \
+              '.backlogExpanded = (if (.backlogExpanded // false) then false else true end) | .updated = (now | todate)'
+            LAST_DISPLAY=""
           else
             clear_task_list_display
             all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
@@ -8997,6 +9688,15 @@ while :; do
             echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
             SELECT_SHOW_ALL=true
           fi
+        elif [[ "$REPLY" =~ ^[dD]$ ]]; then
+          if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
+            state_mutate "$STATE_FILE" \
+              '.depsExpanded = (if (.depsExpanded // false) then false else true end) | .updated = (now | todate)'
+            LAST_DISPLAY=""
+          fi
+        elif [[ "$REPLY" == advance\ * ]]; then
+          execute_or_defer_monitor_command "new" "$REPLY" "$MONITOR_PHASE_C_REPLY_OFFSET" "$free_slots" "$queue_plan_json" "$avail_unblocked" "$avail_blocked" "$select_from"
+          MONITOR_PHASE_C_REPLY_OFFSET=""
         elif [[ "$REPLY" =~ ^unknown\  ]]; then
           log_warn "Unknown input: ${REPLY#unknown }"
         elif [[ "$REPLY" == "enter" ]]; then
@@ -9156,7 +9856,7 @@ MONITOR_EOF
 # 1. ✓ Ran `bash -n shared/lib/wavemill-mill.sh` → PASS (no syntax errors found)
 # 2. ✓ Ran `bash -n` on the extracted monitor heredoc content → PASS
 # 3. ✓ Examined the reported lines: `sleep "$POLL_SECONDS"` and
-#      `log "info" "  Type 'q' in control window to quit"` are syntactically correct
+#      `log "info" "  Type 'q' in mill window to quit"` are syntactically correct
 # 4. ✓ Checked git history: No missing quote fix exists between the report and current HEAD
 # 5. ✓ Searched for invalid 'local' keywords outside function context → NONE FOUND
 #    (Previous bugs: fc198c8, d45ea00 fixed similar runtime errors with 'local')
@@ -9241,14 +9941,14 @@ create_tmux_session
 
 printf -v STARTUP_CMD '%q %q' "$STARTUP_RUNNER" "$LAUNCH_PLAN_FILE"
 STARTUP_CMD="/opt/homebrew/bin/bash $STARTUP_CMD"
-tmux respawn-pane -k -t "$SESSION:control.0" "$STARTUP_CMD"
+tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" "$STARTUP_CMD"
 
 
 # Now attach to the session
 log "status" "Attaching to session: $SESSION"
 log "info" "  Ctrl+B then W to switch windows"
 log "info" "  Ctrl+B then D to detach"
-log "info" "  Type 'q' in control window to quit"
+log "info" "  Type 'q' in mill window to quit"
 log "info" "  Or: touch $STATE_DIR/.stop-loop"
 echo ""
 sleep 1

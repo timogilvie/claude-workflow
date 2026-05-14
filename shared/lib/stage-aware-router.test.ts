@@ -388,6 +388,56 @@ test('rankModelsPerStage gives runtime flat allowlist precedence over per-stage 
   assert.equal(constrained.selection?.reviewer.modelId, 'claude-haiku-4-5-20251001');
 });
 
+test('rankModelsPerStage applies per-role capability filters without affecting other roles', () => {
+  const neighbors = [
+    { record: makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.95, implementation: 0.82, review: 0.93 }), descriptor: makeDescriptor(), similarity: 0.99 },
+    { record: makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
+    { record: makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.65, implementation: 0.6, review: 0.94 }), descriptor: makeDescriptor(), similarity: 0.97 },
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData([]);
+
+  try {
+    const constrained = rankModelsPerStage(neighbors, {
+      coderCapabilityConstraints: {
+        requiresTools: true,
+        minContextWindow: 1_000_000,
+      },
+      reviewerCapabilityConstraints: {
+        maxLatencyTier: 'fast',
+      },
+    }, 0.3, 0, repoDir);
+
+    assert.equal(constrained.selection?.planner.modelId, 'claude-opus-4-6');
+    assert.equal(constrained.selection?.coder.modelId, 'gpt-5.3-codex');
+    assert.equal(constrained.selection?.reviewer.modelId, 'claude-haiku-4-5-20251001');
+  } finally {
+    cleanup();
+  }
+});
+
+test('rankModelsPerStage falls back when capability filtering empties a role', () => {
+  const neighbors = [
+    { record: makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.95, implementation: 0.82, review: 0.93 }), descriptor: makeDescriptor(), similarity: 0.99 },
+    { record: makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData([]);
+
+  try {
+    const constrained = rankModelsPerStage(neighbors, {
+      reviewerCapabilityConstraints: {
+        minContextWindow: 2_000_000,
+      },
+    }, 0.3, 0, repoDir);
+
+    const reviewerRanking = constrained.rankings.find((ranking) => ranking.role === 'reviewer');
+    assert.ok(reviewerRanking);
+    assert.equal(reviewerRanking?.capabilityFallbackUsed, true);
+    assert.equal(constrained.selection?.reviewer.modelId, 'claude-opus-4-6');
+  } finally {
+    cleanup();
+  }
+});
+
 test('routeStageAware returns a stage-aware decision from backfilled evals', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
@@ -406,6 +456,35 @@ test('routeStageAware returns a stage-aware decision from backfilled evals', () 
     assert.equal(decision?.neighborCount, 3);
     assert.ok((decision?.expectedCost || 0) > 0);
     assert.ok((decision?.confidence || 0) >= 0.6);
+  } finally {
+    cleanup();
+  }
+});
+
+test('routeStageAware records capability fallback reasoning when a role filter empties out', () => {
+  const records = [
+    makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
+    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
+    router: {
+      ...makeRouterConfigWithRubricAware({ mode: 'off' }).router,
+      capabilityFiltering: {
+        enabled: true,
+      },
+    },
+  });
+
+  try {
+    const decision = routeStageAware('Review the screenshot-backed UI change quickly.', {
+      repoDir,
+      reviewerCapabilityConstraints: {
+        minContextWindow: 2_000_000,
+      },
+    });
+
+    assert.ok(decision);
+    assert.match(decision?.reasoning[0] || '', /capability-filter-empty-fallback/);
   } finally {
     cleanup();
   }

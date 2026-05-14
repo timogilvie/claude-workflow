@@ -15,7 +15,8 @@
                     "type": "string",
                     "description": "Linear project name for backlog queries. Empty string means all projects."
                 }
-            }
+            },
+            "additionalProperties": false
         },
         "git": {
             "type": "object",
@@ -123,6 +124,12 @@
                             ],
                             "default": "recover",
                             "description": "recover (default): attempt one missing-artifact recovery, then fall back to the bootstrap route if recovery fails. block: halt transition. warn: proceed with a warning log line and skip recovery."
+                        },
+                        "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 300,
+                            "description": "Timeout in seconds for missing expansion artifact recovery. This runs the LLM-backed issue expander and should be longer than short GitHub/Linear API timeouts."
                         }
                     },
                     "additionalProperties": false
@@ -165,7 +172,7 @@
                 "model": {
                     "type": "string",
                     "default": "claude-opus-4-7",
-                    "description": "Claude model to use for plan decomposition and research. Can be overridden with PLAN_MODEL env var."
+                    "description": "Model selector for plan decomposition and research. Accepts a family alias such as 'opus', 'inherit', or a pinned model ID such as 'claude-opus-4-7'. Can be overridden with PLAN_MODEL env var."
                 },
                 "interactive": {
                     "type": "boolean",
@@ -178,6 +185,43 @@
                     "description": "Timeout in milliseconds for plan decomposition and research. Default: 600000 (10 min) for interactive mode, 120000 (2 min) for non-interactive. Can be overridden with PLAN_TIMEOUT env var."
                 }
             }
+        },
+        "agents": {
+            "type": "object",
+            "description": "Per-phase model selectors for workspace-level routing declarations.",
+            "properties": {
+                "planner": {
+                    "type": "object",
+                    "properties": {
+                        "model": {
+                            "type": "string",
+                            "description": "Model selector for the planning phase. Accepts 'inherit', a family alias (e.g. 'opus'), or a pinned model ID."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "coder": {
+                    "type": "object",
+                    "properties": {
+                        "model": {
+                            "type": "string",
+                            "description": "Model selector for the coding phase. Accepts 'inherit', a family alias (e.g. 'sonnet'), or a pinned model ID."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "reviewer": {
+                    "type": "object",
+                    "properties": {
+                        "model": {
+                            "type": "string",
+                            "description": "Model selector for the review phase. Accepts 'inherit', a family alias (e.g. 'haiku'), or a pinned model ID."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
         },
         "dashboard": {
             "type": "object",
@@ -210,6 +254,39 @@
                     "type": "boolean",
                     "default": true,
                     "description": "When true, pressing Enter launches the planner's first dependency-safe parallel wave instead of the top scored tasks."
+                }
+            },
+            "additionalProperties": false
+        },
+        "backlog": {
+            "type": "object",
+            "description": "Controls backlog rendering in the mill control pane.",
+            "properties": {
+                "maxLines": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 200,
+                    "description": "Maximum number of backlog lines to render before truncation rules apply. When omitted, Wavemill derives the budget from the tmux pane height."
+                },
+                "defaultAvailableNowCap": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 12,
+                    "description": "Default cap for Available Now tasks when the backlog must be condensed."
+                },
+                "defaultExpanded": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether grouped backlog rendering starts expanded when truncation would otherwise hide tasks."
+                },
+                "focusMilestones": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "default": [],
+                    "description": "Linear project milestone names to boost in backlog scoring."
                 }
             },
             "additionalProperties": false
@@ -381,6 +458,21 @@
                     "maximum": 1,
                     "description": "Canonical score threshold used when eval outcomes.success is missing. Defaults to 0.8 when omitted."
                 },
+                "maxPromptBytes": {
+                    "type": "integer",
+                    "minimum": 1024,
+                    "default": 9437184,
+                    "description": "Maximum UTF-8 byte size for an eval judge prompt before failing fast or truncating."
+                },
+                "oversizePolicy": {
+                    "type": "string",
+                    "enum": [
+                        "fail",
+                        "truncate"
+                    ],
+                    "default": "fail",
+                    "description": "How eval handles prompts larger than maxPromptBytes."
+                },
                 "mintEligibility": {
                     "type": "object",
                     "description": "Coverage gates for minting Wavemill router benchmark results into downstream eligibility-sensitive flows.",
@@ -480,7 +572,7 @@
                     "description": "Probability that a selected mill task becomes a challenge task."
                 },
                 "models": {
-                    "description": "Pool of models eligible for challenge. Null means use router.models.",
+                    "description": "Pool of model selectors eligible for challenge. Entries may be family aliases, 'inherit', or pinned model IDs. Null means use router.models.",
                     "oneOf": [
                         {
                             "type": "array",
@@ -504,7 +596,7 @@
                     "type": "string",
                     "default": "claude-opus-4-7",
                     "minLength": 1,
-                    "description": "Model used as the LLM judge for challenge PR comparison."
+                    "description": "Model selector used as the LLM judge for challenge PR comparison. Accepts a family alias such as 'opus', 'inherit', or a pinned model ID such as 'claude-opus-4-7'."
                 },
                 "autoMergeWinner": {
                     "type": "boolean",
@@ -949,6 +1041,45 @@
                                 "type": "integer",
                                 "minimum": 1
                             },
+                            "toolSupport": {
+                                "type": "string",
+                                "enum": ["none", "basic", "full"]
+                            },
+                            "multimodal": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "boolean"
+                                    },
+                                    "image": {
+                                        "type": "boolean"
+                                    },
+                                    "audio": {
+                                        "type": "boolean"
+                                    },
+                                    "video": {
+                                        "type": "boolean"
+                                    }
+                                },
+                                "required": ["text", "image"],
+                                "additionalProperties": false
+                            },
+                            "latencyTier": {
+                                "type": "string",
+                                "enum": ["fast", "standard", "slow"]
+                            },
+                            "reasoningTier": {
+                                "type": "string",
+                                "enum": ["basic", "standard", "advanced"]
+                            },
+                            "costPerMillionInputTokensUsd": {
+                                "type": "number",
+                                "minimum": 0
+                            },
+                            "costPerMillionOutputTokensUsd": {
+                                "type": "number",
+                                "minimum": 0
+                            },
                             "agent": {
                                 "type": "string",
                                 "minLength": 1
@@ -1009,7 +1140,7 @@
                 "defaultModel": {
                     "type": "string",
                     "default": "claude-sonnet-4-6",
-                    "description": "Fallback model when insufficient eval data exists for routing."
+                    "description": "Fallback model selector when insufficient eval data exists for routing. Accepts a family alias such as 'sonnet', 'inherit', or a pinned model ID such as 'claude-sonnet-4-6'."
                 },
                 "minRecords": {
                     "type": "integer",
@@ -1029,7 +1160,7 @@
                         "type": "string"
                     },
                     "default": [],
-                    "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data."
+                    "description": "Candidate model selectors the router may recommend. Entries may be family aliases, 'inherit', or pinned model IDs. Empty array means all models found in eval data."
                 },
                 "availableModels": {
                     "type": "object",
@@ -1040,21 +1171,21 @@
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Models available for the planning stage."
+                            "description": "Model selectors available for the planning stage. Entries may be family aliases, 'inherit', or pinned model IDs."
                         },
                         "coder": {
                             "type": "array",
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Models available for the coding stage."
+                            "description": "Model selectors available for the coding stage. Entries may be family aliases, 'inherit', or pinned model IDs."
                         },
                         "reviewer": {
                             "type": "array",
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Models available for the review stage."
+                            "description": "Model selectors available for the review stage. Entries may be family aliases, 'inherit', or pinned model IDs."
                         }
                     },
                     "additionalProperties": false
@@ -1150,6 +1281,17 @@
                     },
                     "additionalProperties": false
                 },
+                "capabilityFiltering": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable capability-aware candidate filtering inside Layer 3 policy and stage-aware routing."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "hokusai": {
                     "type": "object",
                     "description": "Hokusai API configuration for ML-based workflow routing. Hokusai is only available via API.",
@@ -1237,7 +1379,7 @@
                         "model": {
                             "type": "string",
                             "default": "claude-haiku-4-5-20251001",
-                            "description": "LLM model to use for task packet review. Should be fast and cheap (Haiku recommended)."
+                            "description": "Model selector to use for task packet review. Accepts a family alias such as 'haiku', 'inherit', or a pinned model ID such as 'claude-haiku-4-5-20251001'. Should be fast and cheap."
                         },
                         "provider": {
                             "type": "string",
@@ -1366,6 +1508,11 @@
                     "type": "string",
                     "default": "main",
                     "description": "The target branch for promotion after integration validation passes."
+                },
+                "autoUpdatePromotionBranch": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, Wavemill may merge the latest remote promotion branch into the integration branch before promotion, but only when conflict prediction says the update is clean."
                 },
                 "mergeMethod": {
                     "type": "string",

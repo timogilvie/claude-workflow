@@ -1,4 +1,5 @@
 import { writeFileSync } from 'fs';
+import { confirm } from './cli-prompt.ts';
 import { getIntegrationConfig } from './config.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import { errorMessage } from './error-utils.ts';
@@ -12,9 +13,11 @@ import {
 } from './tend-controller.ts';
 
 export interface PromotionResult {
-  status: 'opened' | 'updated' | 'noop';
+  status: 'opened' | 'updated' | 'noop' | 'blocked';
   prUrl?: string;
   checkSummary?: string;
+  blockReason?: 'base-behind' | 'base-behind-conflicts' | 'base-unknown';
+  blockSummary?: string;
 }
 
 export interface PromotionOptions {
@@ -22,6 +25,8 @@ export interface PromotionOptions {
   dryRun?: boolean;
   shellRunner?: (cmd: string, opts?: { encoding?: string; cwd?: string }) => string;
   healthChecker?: HealthChecker;
+  confirmUpdate?: (message: string) => Promise<boolean>;
+  interactive?: boolean;
 }
 
 type ShellRunner = NonNullable<PromotionOptions['shellRunner']>;
@@ -40,6 +45,27 @@ interface MergedPrSummary {
   labels?: Array<{ name: string }>;
 }
 
+type PromotionBlockReason = NonNullable<PromotionResult['blockReason']>;
+
+interface PromotionBaseState {
+  remoteRef: string;
+  tip: string;
+}
+
+interface BaseContainment {
+  status: 'up-to-date' | 'behind';
+}
+
+interface MergePrediction {
+  status: 'clean' | 'conflicts' | 'unknown';
+  detail?: string;
+}
+
+export interface BranchBaseUpdateResult {
+  status: 'success' | 'conflict' | 'push-failed' | 'fetch-failed' | 'dirty-worktree' | 'unknown-failed';
+  detail: string;
+}
+
 const PROMOTION_SECTION_BEGIN = '<!-- wavemill-promote:begin -->';
 const PROMOTION_SECTION_END = '<!-- wavemill-promote:end -->';
 const RECENT_PR_LIMIT = 10;
@@ -51,11 +77,37 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
   const config = getIntegrationConfig(options.repoDir);
   const integrationBranch = config.integrationBranch;
   const promotionBranch = config.promotionBranch;
+  const interactive = options.interactive ?? process.stdin.isTTY === true;
+  const confirmUpdate = options.confirmUpdate ?? ((message: string) => confirm(message));
 
+  const currentPr = findExistingPromotionPr(integrationBranch, promotionBranch, options.repoDir, shellRunner);
+  let promotionBase: PromotionBaseState;
+  try {
+    promotionBase = fetchPromotionBase(promotionBranch, options.repoDir, shellRunner);
+  } catch (error) {
+    return buildBlockedPromotionResult({
+      blockReason: 'base-unknown',
+      blockSummary: formatBaseBehindSummary(
+        'base-unknown',
+        integrationBranch,
+        remoteBranchRef(promotionBranch),
+        errorMessage(error),
+      ),
+      prUrl: currentPr?.url,
+      checkSummary: currentPr
+        ? formatCheckSummary(await waitForChecks(
+          currentPr.number,
+          options.repoDir,
+          shellRunner,
+          { timeoutMs: 0, requiredChecks: config.requiredChecks },
+        ))
+        : undefined,
+    });
+  }
   let integrationTip = resolveBranchTip(integrationBranch, options.repoDir, shellRunner);
-  const promotionTip = resolveBranchTip(promotionBranch, options.repoDir, shellRunner);
-  const promotionTipIsIntegrated = isAncestor(promotionTip, integrationTip, options.repoDir, shellRunner);
+  const promotionTip = promotionBase.tip;
   const promotionTree = resolveCommitTree(promotionTip, options.repoDir, shellRunner);
+  const promotionTipIsIntegrated = isAncestor(promotionTip, integrationTip, options.repoDir, shellRunner);
   const matchingPromotionTreeCommit = promotionTipIsIntegrated
     ? null
     : findIntegrationCommitWithTree(
@@ -64,14 +116,43 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
       options.repoDir,
       shellRunner,
     );
+  const baseContainment = classifyBaseContainment(
+    promotionTip,
+    integrationTip,
+    options.repoDir,
+    shellRunner,
+  );
+
+  if (baseContainment.status === 'behind' && !matchingPromotionTreeCommit) {
+    const blockedResult = await handleBaseBehind({
+      config,
+      integrationBranch,
+      promotionBranch,
+      promotionBase,
+      integrationTip,
+      repoDir: options.repoDir,
+      shellRunner,
+      currentPr,
+      interactive,
+      dryRun: options.dryRun,
+      confirmUpdate,
+    });
+
+    if (blockedResult) {
+      return blockedResult;
+    }
+
+    integrationTip = resolveBranchTip(integrationBranch, options.repoDir, shellRunner);
+  }
+
   const comparisonBase =
     matchingPromotionTreeCommit && matchingPromotionTreeCommit !== integrationTip
       ? matchingPromotionTreeCommit
-      : promotionBranch;
+      : promotionBase.remoteRef;
 
   integrationTip = reconcileSquashMergedPromotion({
     integrationBranch,
-    promotionBranch,
+    promotionBranch: promotionBase.remoteRef,
     integrationTip,
     promotionTip,
     promotionTree,
@@ -81,7 +162,7 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
     dryRun: options.dryRun,
   });
 
-  if (isAlreadyPromoted(integrationTip, promotionBranch, options.repoDir, shellRunner)) {
+  if (isAlreadyPromoted(integrationTip, promotionBase.remoteRef, options.repoDir, shellRunner)) {
     return { status: 'noop' };
   }
 
@@ -99,7 +180,6 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
     options.repoDir,
     shellRunner,
   );
-  const currentPr = findExistingPromotionPr(integrationBranch, promotionBranch, options.repoDir, shellRunner);
   const nextBody = updatePromotionSection(
     currentPr?.body ?? '',
     renderPromotionSection({
@@ -158,6 +238,35 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
   };
 }
 
+function fetchPromotionBase(
+  promotionBranch: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): PromotionBaseState {
+  try {
+    shellRunner(
+      `git fetch --quiet origin ${escapeShellArg(promotionBranch)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+  } catch (error) {
+    throw new Error(`promote: failed to fetch origin/${promotionBranch}: ${errorMessage(error)}`);
+  }
+
+  const remoteRef = remoteBranchRef(promotionBranch);
+  try {
+    return {
+      remoteRef,
+      tip: resolveBranchTip(remoteRef, repoDir, shellRunner),
+    };
+  } catch {
+    throw new Error(`promote: remote promotion branch not found: ${remoteRef}`);
+  }
+}
+
+function remoteBranchRef(branch: string): string {
+  return `origin/${branch}`;
+}
+
 function resolveBranchTip(
   branch: string,
   repoDir: string,
@@ -171,6 +280,17 @@ function resolveBranchTip(
   } catch {
     throw new Error(`promote: branch not found: ${branch}`);
   }
+}
+
+function classifyBaseContainment(
+  promotionTip: string,
+  integrationTip: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): BaseContainment {
+  return isAncestor(promotionTip, integrationTip, repoDir, shellRunner)
+    ? { status: 'up-to-date' }
+    : { status: 'behind' };
 }
 
 function isAlreadyPromoted(
@@ -234,7 +354,15 @@ function reconcileSquashMergedPromotion(input: {
       `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(input.promotionTip)} ${escapeShellArg(input.integrationTip)}`,
       { encoding: 'utf-8', cwd: input.repoDir },
     );
-    pushBranchRef(branchRef, input.integrationTip, input.repoDir, input.shellRunner);
+    pushBranchRefWithLocalRollback({
+      branchRef,
+      localTipBeforePush: input.promotionTip,
+      restoreTip: input.integrationTip,
+      expectedRemoteTip: input.integrationTip,
+      repoDir: input.repoDir,
+      shellRunner: input.shellRunner,
+      integrationBranch: input.integrationBranch,
+    });
     return input.promotionTip;
   }
 
@@ -264,8 +392,248 @@ function reconcileSquashMergedPromotion(input: {
     `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(reconciledTip)} ${escapeShellArg(input.integrationTip)}`,
     { encoding: 'utf-8', cwd: input.repoDir },
   );
-  pushBranchRef(branchRef, input.integrationTip, input.repoDir, input.shellRunner);
+  pushBranchRefWithLocalRollback({
+    branchRef,
+    localTipBeforePush: reconciledTip,
+    restoreTip: input.integrationTip,
+    expectedRemoteTip: input.integrationTip,
+    repoDir: input.repoDir,
+    shellRunner: input.shellRunner,
+    integrationBranch: input.integrationBranch,
+  });
   return reconciledTip;
+}
+
+async function handleBaseBehind(input: {
+  config: ReturnType<typeof getIntegrationConfig>;
+  integrationBranch: string;
+  promotionBranch: string;
+  promotionBase: PromotionBaseState;
+  integrationTip: string;
+  repoDir: string;
+  shellRunner: ShellRunner;
+  currentPr: PromotionPr | null;
+  interactive: boolean;
+  dryRun?: boolean;
+  confirmUpdate: (message: string) => Promise<boolean>;
+}): Promise<PromotionResult | null> {
+  const prediction = predictPromotionBaseMerge(
+    input.integrationBranch,
+    input.promotionBase.remoteRef,
+    input.repoDir,
+    input.shellRunner,
+  );
+
+  if (!input.dryRun && prediction.status === 'clean') {
+    const shouldUpdate =
+      input.config.autoUpdatePromotionBranch ||
+      (input.interactive && await input.confirmUpdate(formatBaseBehindPrompt(
+        input.integrationBranch,
+        input.promotionBase.remoteRef,
+      )));
+
+    if (shouldUpdate) {
+      try {
+        updateIntegrationWithPromotionBase(
+          input.integrationBranch,
+          input.promotionBranch,
+          input.repoDir,
+          input.shellRunner,
+        );
+        return null;
+      } catch (error) {
+        return buildBlockedPromotionResult({
+          blockReason: 'base-unknown',
+          blockSummary: formatBaseBehindSummary(
+            'base-unknown',
+            input.integrationBranch,
+            input.promotionBase.remoteRef,
+            errorMessage(error),
+          ),
+          prUrl: input.currentPr?.url,
+          checkSummary: input.currentPr
+            ? formatCheckSummary(await waitForChecks(
+              input.currentPr.number,
+              input.repoDir,
+              input.shellRunner,
+              { timeoutMs: 0, requiredChecks: input.config.requiredChecks },
+            ))
+            : undefined,
+        });
+      }
+    }
+  }
+
+  let blockReason: PromotionBlockReason = 'base-behind';
+  if (prediction.status === 'conflicts') {
+    blockReason = 'base-behind-conflicts';
+  } else if (prediction.status === 'unknown') {
+    blockReason = 'base-unknown';
+  }
+
+  return buildBlockedPromotionResult({
+    blockReason,
+    blockSummary: formatBaseBehindSummary(
+      blockReason,
+      input.integrationBranch,
+      input.promotionBase.remoteRef,
+      prediction.detail,
+    ),
+    prUrl: input.currentPr?.url,
+    checkSummary: input.currentPr
+      ? formatCheckSummary(await waitForChecks(
+        input.currentPr.number,
+        input.repoDir,
+        input.shellRunner,
+        { timeoutMs: 0, requiredChecks: input.config.requiredChecks },
+      ))
+      : undefined,
+  });
+}
+
+function predictPromotionBaseMerge(
+  integrationBranch: string,
+  promotionRemoteRef: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): MergePrediction {
+  try {
+    shellRunner(
+      `git merge-tree --write-tree ${escapeShellArg(integrationBranch)} ${escapeShellArg(promotionRemoteRef)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    return { status: 'clean' };
+  } catch (error) {
+    const message = errorMessage(error);
+    if (/conflict/i.test(message)) {
+      return { status: 'conflicts', detail: message };
+    }
+    return { status: 'unknown', detail: message };
+  }
+}
+
+export function updateBranchWithBase(
+  branch: string,
+  baseBranch: string,
+  repoDir: string,
+  shellRunner: ShellRunner = (cmd, opts) => String(execShellCommand(cmd, opts)),
+): BranchBaseUpdateResult {
+  const dirtyState = String(shellRunner(
+    'git status --porcelain',
+    { encoding: 'utf-8', cwd: repoDir },
+  )).trim();
+  if (dirtyState) {
+    return {
+      status: 'dirty-worktree',
+      detail: `refusing to update ${branch} because the worktree has uncommitted changes`,
+    };
+  }
+
+  try {
+    shellRunner(
+      `git fetch --quiet origin ${escapeShellArg(baseBranch)} ${escapeShellArg(branch)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+  } catch (error) {
+    return {
+      status: 'fetch-failed',
+      detail: `failed to fetch origin/${baseBranch}: ${errorMessage(error)}`,
+    };
+  }
+
+  try {
+    shellRunner(
+      `git switch ${escapeShellArg(branch)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    shellRunner(
+      `git merge-tree --write-tree ${escapeShellArg(branch)} ${escapeShellArg(remoteBranchRef(baseBranch))}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    shellRunner(
+      `git merge --no-edit ${escapeShellArg(remoteBranchRef(baseBranch))}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+  } catch (error) {
+    const detail = errorMessage(error);
+    try {
+      shellRunner('git merge --abort', { encoding: 'utf-8', cwd: repoDir });
+    } catch {
+      // Best-effort cleanup if merge started.
+    }
+
+    return {
+      status: /conflict/i.test(detail) ? 'conflict' : 'unknown-failed',
+      detail,
+    };
+  }
+
+  try {
+    shellRunner(
+      `git push origin ${escapeShellArg(branch)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    return {
+      status: 'success',
+      detail: `updated ${branch} with origin/${baseBranch} and pushed successfully`,
+    };
+  } catch (error) {
+    return {
+      status: 'push-failed',
+      detail: errorMessage(error),
+    };
+  }
+}
+
+function updateIntegrationWithPromotionBase(
+  integrationBranch: string,
+  promotionBranch: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): void {
+  const result = updateBranchWithBase(integrationBranch, promotionBranch, repoDir, shellRunner);
+  if (result.status !== 'success') {
+    throw new Error(`promote: ${result.detail}`);
+  }
+}
+
+function formatBaseBehindPrompt(
+  integrationBranch: string,
+  promotionRemoteRef: string,
+): string {
+  return `Promotion is blocked because ${integrationBranch} is behind protected base ${promotionRemoteRef}. Merge and push the latest base now?`;
+}
+
+function formatBaseBehindSummary(
+  reason: PromotionBlockReason,
+  integrationBranch: string,
+  promotionRemoteRef: string,
+  detail?: string,
+): string {
+  if (reason === 'base-behind-conflicts') {
+    return `branch behind protected base; merging ${promotionRemoteRef} into ${integrationBranch} is expected to conflict`;
+  }
+  if (reason === 'base-unknown') {
+    return detail
+      ? `unable to verify or update protected base ${promotionRemoteRef}: ${detail}`
+      : `unable to verify protected base ${promotionRemoteRef}`;
+  }
+  return `branch behind protected base; merge ${promotionRemoteRef} into ${integrationBranch} and push before promoting`;
+}
+
+function buildBlockedPromotionResult(input: {
+  blockReason: PromotionBlockReason;
+  blockSummary: string;
+  prUrl?: string;
+  checkSummary?: string;
+}): PromotionResult {
+  return {
+    status: 'blocked',
+    blockReason: input.blockReason,
+    blockSummary: input.blockSummary,
+    prUrl: input.prUrl,
+    checkSummary: input.checkSummary,
+  };
 }
 
 function resolveCommitTree(
@@ -315,6 +683,65 @@ function pushBranchRef(
     ].join(' '),
     { encoding: 'utf-8', cwd: repoDir },
   );
+}
+
+function pushBranchRefWithLocalRollback(input: {
+  branchRef: string;
+  localTipBeforePush: string;
+  restoreTip: string;
+  expectedRemoteTip: string;
+  repoDir: string;
+  shellRunner: ShellRunner;
+  integrationBranch: string;
+}): void {
+  try {
+    pushBranchRef(input.branchRef, input.expectedRemoteTip, input.repoDir, input.shellRunner);
+  } catch (error) {
+    try {
+      input.shellRunner(
+        `git update-ref ${escapeShellArg(input.branchRef)} ${escapeShellArg(input.restoreTip)} ${escapeShellArg(input.localTipBeforePush)}`,
+        { encoding: 'utf-8', cwd: input.repoDir },
+      );
+    } catch (rollbackError) {
+      throw new Error(formatProtectedBranchPushFailure(input.integrationBranch, error, rollbackError));
+    }
+    throw new Error(formatProtectedBranchPushFailure(input.integrationBranch, error));
+  }
+}
+
+function formatProtectedBranchPushFailure(
+  integrationBranch: string,
+  pushError: unknown,
+  rollbackError?: unknown,
+): string {
+  const message = errorMessage(pushError);
+  const likelyProtectedBranch =
+    message.includes('GH006') ||
+    message.includes('Protected branch update failed') ||
+    message.includes('Cannot force-push');
+  const rollbackNote = rollbackError
+    ? `\n\nAlso failed to restore the local branch ref: ${errorMessage(rollbackError)}`
+    : '\n\nThe local branch ref was restored to its pre-promote tip.';
+
+  if (!likelyProtectedBranch) {
+    return `promote: failed to push reconciled integration branch: ${message}${rollbackNote}`;
+  }
+
+  return [
+    `promote: GitHub rejected the required reconciliation push to protected branch \`${integrationBranch}\`.`,
+    '',
+    'Why: the promotion branch appears to already contain an earlier squash-merged snapshot, so Wavemill tried to rewrite the integration branch onto the current promotion branch before opening/updating the promotion PR. GitHub branch protection blocked that force push.',
+    '',
+    'What to do: allow Wavemill/automation to force-push this integration branch, or have an admin temporarily unprotect/reset the integration branch before running `wavemill promote` again.',
+    '',
+    'Cleanup if your checkout still looks diverged and you have no local commits to keep:',
+    `  git fetch origin ${integrationBranch}`,
+    `  git switch ${integrationBranch}`,
+    `  git reset --hard origin/${integrationBranch}`,
+    rollbackNote.trimStart(),
+    '',
+    `Original push error: ${message}`,
+  ].join('\n');
 }
 
 function listRecentMergedWavemillPrs(

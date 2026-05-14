@@ -9,13 +9,16 @@ import {
 } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
+import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-controller.ts';
 import { mutateJsonState } from './state-mutex.ts';
 import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResult } from './stage-result.ts';
 
 const execFileAsync = promisify(execFile);
+const MAX_AUTO_UPDATE_ATTEMPTS = 3;
 
 export type ReadyWatchdogClassificationKind =
   | 'fresh'
+  | 'auto-update'
   | 'stuck'
   | 'waiting-on-ci'
   | 'waiting-on-eval-comparison'
@@ -94,6 +97,11 @@ export interface ReadyWatchdogStateEntry {
   updatedAt: string;
   idleMinutes: number | null;
   lastProgressAt: string | null;
+  prStateKey?: string;
+  detailFingerprint?: string;
+  autoUpdateAttempts?: number;
+  lastAutoUpdateError?: string;
+  lastReportedAction?: string;
 }
 
 export interface ReadyWatchdogStateFile {
@@ -110,6 +118,11 @@ export interface ReadyWatchdogDeps {
   readWorkflowState: (stateFile: string) => Promise<WorkflowStateLike>;
   fetchGitHubTruth: (prNumber: number, repoDir: string) => Promise<GitHubPRTruth>;
   getCurrentHead: (worktree: string) => Promise<string | null>;
+  updateBehindBranch: (
+    snapshot: ReadyTaskSnapshot,
+    githubTruth: GitHubPRTruth,
+    repoDir: string,
+  ) => Promise<BranchBaseUpdateResult>;
   now: () => Date;
 }
 
@@ -177,6 +190,18 @@ const defaultDeps: ReadyWatchdogDeps = {
       return null;
     }
   },
+  async updateBehindBranch(snapshot, githubTruth) {
+    const branch = githubTruth.headRefName || snapshot.branch;
+    const baseBranch = githubTruth.baseRefName;
+    if (!baseBranch) {
+      return {
+        status: 'unknown-failed',
+        detail: `cannot determine the base branch for PR #${snapshot.prNumber}`,
+      };
+    }
+
+    return updateBranchWithBase(branch, baseBranch, snapshot.worktree);
+  },
   now: () => new Date(),
 };
 
@@ -227,6 +252,7 @@ function summarizeChecks(checks: NormalizedCheckSummary[]): {
 }
 
 function displayLabel(kind: Exclude<ReadyWatchdogClassificationKind, 'fresh'>): string {
+  if (kind === 'auto-update') return 'auto update';
   if (kind === 'waiting-on-ci') return 'waiting on CI';
   if (kind === 'waiting-on-eval-comparison') return 'waiting on eval/comparison';
   if (kind === 'needs-user') return 'needs user';
@@ -309,6 +335,26 @@ function isCleanMergeState(githubTruth: GitHubPRTruth): boolean {
     && ['CLEAN', 'HAS_HOOKS'].includes(githubTruth.mergeStateStatus);
 }
 
+function isBehindMergeState(githubTruth: GitHubPRTruth): boolean {
+  return githubTruth.state === 'OPEN'
+    && githubTruth.mergeable === 'MERGEABLE'
+    && githubTruth.mergeStateStatus === 'BEHIND';
+}
+
+function buildPrStateKey(githubTruth: GitHubPRTruth | null): string | undefined {
+  if (!githubTruth) {
+    return undefined;
+  }
+
+  return [githubTruth.state, githubTruth.mergeable, githubTruth.mergeStateStatus]
+    .map((value) => String(value || '').trim().toUpperCase())
+    .join('|');
+}
+
+function normalizeDetailFingerprint(detail: string): string {
+  return detail.trim().replace(/\s+/g, ' ');
+}
+
 function makeRecoveryCommand(repoDir: string, stateFile: string, issueId: string): string {
   return `npx tsx ${path.join(repoDir, 'tools/ready-watchdog.ts')} --repo-dir ${repoDir} --state-file ${stateFile} --recover ${issueId} --json`;
 }
@@ -368,6 +414,13 @@ export function classifyReadyTask(
     return {
       kind: 'needs-user',
       detail: `GitHub mergeability for PR #${snapshot.prNumber} is still unknown.`,
+    };
+  }
+
+  if (isBehindMergeState(githubTruth)) {
+    return {
+      kind: 'auto-update',
+      detail: `PR #${snapshot.prNumber} is mergeable but behind ${githubTruth.baseRefName ?? 'its base branch'}.`,
     };
   }
 
@@ -486,6 +539,7 @@ async function recoverReadyState(
   githubTruth: GitHubPRTruth,
   stateFile: string,
   deps: ReadyWatchdogDeps,
+  note = 'Ready watchdog cleared stale local state and queued a re-check.',
 ): Promise<void> {
   await rm(path.join(snapshot.readyStateDir, '.needs-attention'), { force: true });
   await rm(path.join(snapshot.readyStateDir, '.conflict-detected'), { force: true });
@@ -507,7 +561,7 @@ async function recoverReadyState(
     finishedAt: null,
     agent: snapshot.currentAgent,
     model: snapshot.currentModel,
-    notes: 'Ready watchdog cleared stale local state and queued a re-check.',
+    notes: note,
     artifacts: nextArtifacts,
   });
 
@@ -561,6 +615,76 @@ async function writeStateFile(repoDir: string, findings: ReadyWatchdogStateEntry
   );
 }
 
+function materiallyChanged(
+  prior: ReadyWatchdogStateEntry | undefined,
+  next: ReadyWatchdogStateEntry,
+): boolean {
+  if (!prior) {
+    return true;
+  }
+
+  return prior.classification !== next.classification
+    || prior.detailFingerprint !== next.detailFingerprint
+    || prior.prStateKey !== next.prStateKey
+    || prior.autoUpdateAttempts !== next.autoUpdateAttempts
+    || prior.lastAutoUpdateError !== next.lastAutoUpdateError
+    || prior.lastReportedAction !== next.lastReportedAction
+    || prior.recoveryCommand !== next.recoveryCommand;
+}
+
+function buildFindingEntry(input: {
+  issueId: string;
+  snapshot: ReadyTaskSnapshot;
+  classification: Exclude<ReadyWatchdogClassificationKind, 'fresh'>;
+  detail: string;
+  action: string;
+  now: Date;
+  recoveryCommand?: string;
+  githubTruth?: GitHubPRTruth | null;
+  autoUpdateAttempts?: number;
+  lastAutoUpdateError?: string;
+}): ReadyWatchdogStateEntry {
+  return {
+    issueId: input.issueId,
+    slug: input.snapshot.slug,
+    prNumber: input.snapshot.prNumber,
+    classification: input.classification,
+    displayLabel: displayLabel(input.classification),
+    detail: input.detail,
+    action: input.action,
+    recoveryCommand: input.recoveryCommand,
+    updatedAt: input.now.toISOString(),
+    idleMinutes: input.snapshot.idleMinutes,
+    lastProgressAt: input.snapshot.lastProgressAt,
+    prStateKey: buildPrStateKey(input.githubTruth ?? null),
+    detailFingerprint: normalizeDetailFingerprint(input.detail),
+    autoUpdateAttempts: input.autoUpdateAttempts,
+    lastAutoUpdateError: input.lastAutoUpdateError,
+    lastReportedAction: input.action,
+  };
+}
+
+function buildExhaustedAutoUpdateEntry(
+  issueId: string,
+  snapshot: ReadyTaskSnapshot,
+  githubTruth: GitHubPRTruth,
+  attempts: number,
+  lastError: string,
+  now: Date,
+): ReadyWatchdogStateEntry {
+  return buildFindingEntry({
+    issueId,
+    snapshot,
+    classification: 'needs-user',
+    detail: `Auto-update exhausted after ${attempts} attempts: ${lastError}`,
+    action: 'needs-user',
+    now,
+    githubTruth,
+    autoUpdateAttempts: attempts,
+    lastAutoUpdateError: lastError,
+  });
+}
+
 export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Promise<TickReadyWatchdogResult> {
   const deps: ReadyWatchdogDeps = {
     ...defaultDeps,
@@ -571,33 +695,44 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     ...getReadyWatchdogConfig(options.repoDir),
     ...(options.config ?? {}),
   };
-  const allFindings: ReadyWatchdogStateEntry[] = [];
   const newFindings: ReadyWatchdogStateEntry[] = [];
 
   if (!config.enabled && !options.forceRecover) {
-    await writeStateFile(options.repoDir, allFindings, now);
+    await writeStateFile(options.repoDir, [], now);
     return { updatedAt: now.toISOString(), findings: newFindings };
   }
 
   const priorState = await loadPriorWatchdogState(options.repoDir);
+  const priorTasks = priorState?.tasks ?? {};
+  const nextTasks = { ...priorTasks };
   const workflowState = await deps.readWorkflowState(options.stateFile);
   const tasks = workflowState.tasks ?? {};
   const jobs = normalizeJobs(workflowState);
+  const activeReadyIssueIds = new Set<string>();
 
   for (const [issueId, rawTask] of Object.entries(tasks)) {
     const task = rawTask as WorkflowTaskRecord;
     if (task.phase !== 'ready') {
+      if (!options.issueFilter) {
+        delete nextTasks[issueId];
+      }
       continue;
     }
     if (task.status === 'merged' || task.status === 'completed-external') {
+      if (!options.issueFilter) {
+        delete nextTasks[issueId];
+      }
       continue;
     }
     if (options.issueFilter && issueId !== options.issueFilter) {
       continue;
     }
 
+    activeReadyIssueIds.add(issueId);
+
     const snapshot = await buildSnapshot(issueId, task, jobs, now, deps);
     if (!snapshot) {
+      delete nextTasks[issueId];
       continue;
     }
 
@@ -615,63 +750,135 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       };
     }
 
+    const prior = priorTasks[issueId];
     if (classification.kind === 'fresh') {
       continue;
     }
 
-    let action = 'reported';
-    let recoveryCommand = classification.recoveryCommand;
-    if (classification.kind === 'stuck') {
-      recoveryCommand = makeRecoveryCommand(options.repoDir, options.stateFile, issueId);
-      const canRecover = (options.forceRecover || config.autoRecover)
-        && classification.autoRecoverable
-        && githubTruth !== null;
+    let entry: ReadyWatchdogStateEntry | null = null;
 
-      if (canRecover && githubTruth) {
-        await recoverReadyState(snapshot, githubTruth, options.stateFile, deps);
-        action = options.forceRecover ? 'manual-recovery' : 'auto-recovered';
+    if (classification.kind === 'auto-update' && githubTruth) {
+      const attempts = prior?.autoUpdateAttempts ?? 0;
+      const lastError = prior?.lastAutoUpdateError;
+
+      if (attempts >= MAX_AUTO_UPDATE_ATTEMPTS && lastError) {
+        entry = buildExhaustedAutoUpdateEntry(
+          issueId,
+          snapshot,
+          githubTruth,
+          attempts,
+          lastError,
+          now,
+        );
       } else {
-        action = 'recovery-command';
+        const updateResult = await deps.updateBehindBranch(snapshot, githubTruth, options.repoDir);
+        if (updateResult.status === 'success') {
+          await recoverReadyState(
+            snapshot,
+            githubTruth,
+            options.stateFile,
+            deps,
+            'Ready watchdog updated the PR branch with the latest base and queued a re-check.',
+          );
+          delete nextTasks[issueId];
+          continue;
+        }
+
+        const nextAttempts = attempts + 1;
+        if (updateResult.status === 'conflict' || updateResult.status === 'dirty-worktree') {
+          entry = buildFindingEntry({
+            issueId,
+            snapshot,
+            classification: 'needs-user',
+            detail: `Auto-update could not proceed for PR #${snapshot.prNumber}: ${updateResult.detail}`,
+            action: 'needs-user',
+            now,
+            githubTruth,
+            autoUpdateAttempts: nextAttempts,
+            lastAutoUpdateError: updateResult.detail,
+          });
+        } else if (nextAttempts >= MAX_AUTO_UPDATE_ATTEMPTS) {
+          entry = buildExhaustedAutoUpdateEntry(
+            issueId,
+            snapshot,
+            githubTruth,
+            nextAttempts,
+            updateResult.detail,
+            now,
+          );
+        } else {
+          entry = buildFindingEntry({
+            issueId,
+            snapshot,
+            classification: 'auto-update',
+            detail: `Auto-update attempt ${nextAttempts}/${MAX_AUTO_UPDATE_ATTEMPTS} failed for PR #${snapshot.prNumber}: ${updateResult.detail}`,
+            action: 'auto-update-failed',
+            now,
+            githubTruth,
+            autoUpdateAttempts: nextAttempts,
+            lastAutoUpdateError: updateResult.detail,
+          });
+        }
       }
+    } else {
+      let action = 'reported';
+      let recoveryCommand = classification.recoveryCommand;
+      if (classification.kind === 'stuck') {
+        recoveryCommand = makeRecoveryCommand(options.repoDir, options.stateFile, issueId);
+        const canRecover = (options.forceRecover || config.autoRecover)
+          && classification.autoRecoverable
+          && githubTruth !== null;
+
+        if (canRecover && githubTruth) {
+          await recoverReadyState(snapshot, githubTruth, options.stateFile, deps);
+          action = options.forceRecover ? 'manual-recovery' : 'auto-recovered';
+        } else {
+          action = 'recovery-command';
+        }
+      }
+
+      entry = buildFindingEntry({
+        issueId,
+        snapshot,
+        classification: classification.kind,
+        detail: classification.detail,
+        action,
+        now,
+        recoveryCommand,
+        githubTruth,
+      });
     }
 
-    const entry: ReadyWatchdogStateEntry = {
-      issueId,
-      slug: snapshot.slug,
-      prNumber: snapshot.prNumber,
-      classification: classification.kind,
-      displayLabel: displayLabel(classification.kind),
-      detail: classification.detail,
-      action,
-      recoveryCommand,
-      updatedAt: now.toISOString(),
-      idleMinutes: snapshot.idleMinutes,
-      lastProgressAt: snapshot.lastProgressAt,
-    };
-    allFindings.push(entry);
+    if (!entry) {
+      continue;
+    }
 
-    const prior = priorState?.tasks[issueId];
-    const isRepeat = prior
-      && prior.classification === entry.classification
-      && prior.detail === entry.detail;
-
-    if (!isRepeat) {
+    nextTasks[issueId] = entry;
+    if (materiallyChanged(prior, entry)) {
       newFindings.push(entry);
       await writeAuditRecord(options.repoDir, {
         timestamp: now.toISOString(),
         taskId: issueId,
         slug: snapshot.slug,
         prNumber: snapshot.prNumber,
-        classification: classification.kind,
-        action,
-        detail: classification.detail,
-        recoveryCommand,
+        classification: entry.classification,
+        action: entry.action,
+        detail: entry.detail,
+        recoveryCommand: entry.recoveryCommand,
         error: fetchError,
       });
     }
   }
 
-  await writeStateFile(options.repoDir, allFindings, now);
+  if (!options.issueFilter) {
+    for (const issueId of Object.keys(nextTasks)) {
+      if (!activeReadyIssueIds.has(issueId)) {
+        delete nextTasks[issueId];
+      }
+    }
+  }
+
+  await writeStateFile(options.repoDir, Object.values(nextTasks), now);
   return {
     updatedAt: now.toISOString(),
     findings: newFindings,

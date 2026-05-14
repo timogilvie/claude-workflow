@@ -25,4 +25,7 @@ assert_planning_rejects_source_edit() {
   check_contains "source edit logs boundary warning" "$output" "modified source code"
   check_file_absent "source overreach is reverted" "$wt_dir/src/new-feature.ts"
   check_file_absent "approval marker removed after source edit" "$feature_dir/.plan-approved"
+  check_file_exists "planning rejection artifact is written" "$feature_dir/.planning-rejected.json"
+  check_eq "planning rejection reason is explicit" "planning_modified_out_of_scope_files" "$(jq -r '.reason' "$feature_dir/.planning-rejected.json")"
+  check_eq "planning rejection records edited file" "src/new-feature.ts" "$(jq -r '.outOfScopeFiles[0]' "$feature_dir/.planning-rejected.json")"
 }

@@ -32,5 +32,8 @@ runTool({
     if (result.checkSummary) {
       console.log(`checks: ${result.checkSummary}`);
     }
+    if (result.status === 'blocked' && result.blockSummary) {
+      console.log(`blocked: ${result.blockSummary}`);
+    }
   },
 });

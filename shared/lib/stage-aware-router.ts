@@ -17,7 +17,13 @@ import { computeModelCost, loadPricingTable } from './workflow-cost.ts';
 import type { WorkflowRouteDecision, PlanDepth, CodeDepth, ReviewMode } from './workflow-router.ts';
 import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
-import { getConfiguredModelsForDescriptor } from './model-registry.ts';
+import {
+  evaluateCapabilityConstraints,
+  getConfiguredModelsForDescriptor,
+  getEffectiveRegistry,
+  hasCapabilityConstraints,
+  type CapabilityConstraints,
+} from './model-registry.ts';
 import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 
 export interface StageAwareConstraints {
@@ -25,6 +31,10 @@ export interface StageAwareConstraints {
   plannerModelsAvailable?: string[];
   coderModelsAvailable?: string[];
   reviewerModelsAvailable?: string[];
+  capabilityConstraints?: CapabilityConstraints;
+  plannerCapabilityConstraints?: CapabilityConstraints;
+  coderCapabilityConstraints?: CapabilityConstraints;
+  reviewerCapabilityConstraints?: CapabilityConstraints;
   maxCostUsd?: number;
 }
 
@@ -71,6 +81,7 @@ interface RoleRanking {
   role: 'planner' | 'coder' | 'reviewer';
   stageKey: 'plan' | 'implementation' | 'review';
   candidates: ModelStageStats[];
+  capabilityFallbackUsed?: boolean;
 }
 
 interface CombinationDecision {
@@ -503,6 +514,24 @@ function resolveModelsForRole(
   return null;
 }
 
+function resolveCapabilityConstraintsForRole(
+  constraints: StageAwareConstraints,
+  role: 'planner' | 'coder' | 'reviewer',
+): CapabilityConstraints | undefined {
+  const roleConstraints = role === 'planner'
+    ? constraints.plannerCapabilityConstraints
+    : role === 'coder'
+      ? constraints.coderCapabilityConstraints
+      : constraints.reviewerCapabilityConstraints;
+
+  const merged = {
+    ...constraints.capabilityConstraints,
+    ...roleConstraints,
+  };
+
+  return hasCapabilityConstraints(merged) ? merged : undefined;
+}
+
 function aggregateRoleRanking(
   neighbors: ScoredNeighbor[],
   role: 'planner' | 'coder' | 'reviewer',
@@ -510,9 +539,9 @@ function aggregateRoleRanking(
   constraints: StageAwareConstraints,
   stageBlendWeight: number,
   rubricWeight: number,
+  repoDir?: string,
 ): RoleRanking {
   const allowedModels = resolveModelsForRole(constraints, role);
-
   const byModel = new Map<string, { scoreWeight: number; weightedScore: number; costWeight: number; weightedCost: number; support: number }>();
 
   for (const neighbor of neighbors) {
@@ -561,7 +590,27 @@ function aggregateRoleRanking(
       return right.support - left.support;
     });
 
-  return { role, stageKey, candidates };
+  const capabilityConstraints = resolveCapabilityConstraintsForRole(constraints, role);
+  if (!capabilityConstraints || candidates.length === 0) {
+    return { role, stageKey, candidates };
+  }
+
+  const registry = getEffectiveRegistry(repoDir);
+  const constrainedCandidates = candidates.filter((candidate) => {
+    const capabilities = registry.models[candidate.modelId];
+    return capabilities && evaluateCapabilityConstraints(capabilities, capabilityConstraints).satisfied;
+  });
+
+  if (constrainedCandidates.length > 0) {
+    return { role, stageKey, candidates: constrainedCandidates };
+  }
+
+  return {
+    role,
+    stageKey,
+    candidates,
+    capabilityFallbackUsed: true,
+  };
 }
 
 function pickBestCombination(rankings: RoleRanking[], maxCostUsd?: number): CombinationDecision | null {
@@ -614,15 +663,16 @@ export function rankModelsPerStage(
   constraints: StageAwareConstraints = {},
   stageBlendWeight = DEFAULT_STAGE_BLEND_WEIGHT,
   rubricWeight = 0,
+  repoDir?: string,
 ): {
   rankings: RoleRanking[];
   selection: CombinationDecision | null;
 } {
   const boundedRubricWeight = clamp(rubricWeight, 0, 1);
   const rankings = [
-    aggregateRoleRanking(neighbors, 'planner', 'plan', constraints, stageBlendWeight, boundedRubricWeight),
-    aggregateRoleRanking(neighbors, 'coder', 'implementation', constraints, stageBlendWeight, boundedRubricWeight),
-    aggregateRoleRanking(neighbors, 'reviewer', 'review', constraints, stageBlendWeight, boundedRubricWeight),
+    aggregateRoleRanking(neighbors, 'planner', 'plan', constraints, stageBlendWeight, boundedRubricWeight, repoDir),
+    aggregateRoleRanking(neighbors, 'coder', 'implementation', constraints, stageBlendWeight, boundedRubricWeight, repoDir),
+    aggregateRoleRanking(neighbors, 'reviewer', 'review', constraints, stageBlendWeight, boundedRubricWeight, repoDir),
   ];
 
   return {
@@ -709,6 +759,24 @@ function buildStageAwareDecision(
 
 function prependRubricReasoning(decision: StageAwareDecision, message: string): StageAwareDecision {
   decision.reasoning = [message, ...decision.reasoning];
+  return decision;
+}
+
+function prependCapabilityFallbackReasoning(
+  decision: StageAwareDecision,
+  rankings: RoleRanking[],
+): StageAwareDecision {
+  const fallbackRoles = rankings
+    .filter((ranking) => ranking.capabilityFallbackUsed)
+    .map((ranking) => ranking.role);
+  if (fallbackRoles.length === 0) {
+    return decision;
+  }
+
+  decision.reasoning = [
+    `capability-filter-empty-fallback: ${fallbackRoles.join(', ')} reverted to the unfiltered stage-aware ranking.`,
+    ...decision.reasoning,
+  ];
   return decision;
 }
 
@@ -806,13 +874,18 @@ export function routeStageAwareWithContext(
   const rubricHasSufficientCoverage = rubricCoverage >= rubricAwareMinCoverage;
   const rubricScoringWeight = rubricAwareMode === 'on' && rubricHasSufficientCoverage ? rubricAwareWeight : 0;
 
-  const { selection } = rankModelsPerStage(neighbors, {
+  const constrainedRanking = rankModelsPerStage(neighbors, {
     modelsAvailable: filteredModelsAvailable,
     plannerModelsAvailable: filteredPlannerOptions.length > 0 ? filteredPlannerOptions : plannerModels,
     coderModelsAvailable: filteredCoderOptions.length > 0 ? filteredCoderOptions : coderModels,
     reviewerModelsAvailable: filteredReviewerOptions.length > 0 ? filteredReviewerOptions : reviewerModels,
+    capabilityConstraints: options.capabilityConstraints,
+    plannerCapabilityConstraints: options.plannerCapabilityConstraints,
+    coderCapabilityConstraints: options.coderCapabilityConstraints,
+    reviewerCapabilityConstraints: options.reviewerCapabilityConstraints,
     maxCostUsd: options.maxCostUsd,
-  }, stageBlendWeight, rubricScoringWeight);
+  }, stageBlendWeight, rubricScoringWeight, repoDir);
+  const { rankings, selection } = constrainedRanking;
 
   if (!selection) {
     const hasModelConstraints =
@@ -831,7 +904,7 @@ export function routeStageAwareWithContext(
     // model allowlist filters every neighbor out of stage selection.
     const { selection: unconstrainedSelection } = rankModelsPerStage(neighbors, {
       maxCostUsd: options.maxCostUsd,
-    }, stageBlendWeight, rubricScoringWeight);
+    }, stageBlendWeight, rubricScoringWeight, repoDir);
     if (!unconstrainedSelection) {
       return null;
     }
@@ -847,6 +920,7 @@ export function routeStageAwareWithContext(
     }
     partialDecision.routingMode = 'stage-aware-partial';
     partialDecision.confidence = Number((clamp(partialDecision.confidence * 0.8, 0.1, 0.95)).toFixed(2));
+    prependCapabilityFallbackReasoning(partialDecision, rankings);
     if (rubricAwareMode === 'on' || rubricAwareMode === 'shadow') {
       prependRubricReasoning(
         partialDecision,
@@ -856,7 +930,7 @@ export function routeStageAwareWithContext(
         if (rubricHasSufficientCoverage) {
           const { selection: shadowUnconstrainedSelection } = rankModelsPerStage(neighbors, {
             maxCostUsd: options.maxCostUsd,
-          }, stageBlendWeight, rubricAwareWeight);
+          }, stageBlendWeight, rubricAwareWeight, repoDir);
           partialDecision.shadowDecision = shadowUnconstrainedSelection
             ? buildStageAwareDecision(shadowUnconstrainedSelection, neighbors, kNeighbors, repoDir)
             : null;
@@ -872,6 +946,7 @@ export function routeStageAwareWithContext(
   if (options.maxCostUsd !== undefined) {
     decision.constraints = { maxCostUsd: options.maxCostUsd };
   }
+  prependCapabilityFallbackReasoning(decision, rankings);
 
   // When neighbors lack model diversity, use neighbor data for stage calibration
   // (depth, review mode, cost estimates) but mark the decision as partial so the
@@ -893,8 +968,12 @@ export function routeStageAwareWithContext(
           plannerModelsAvailable: filteredPlannerOptions.length > 0 ? filteredPlannerOptions : plannerModels,
           coderModelsAvailable: filteredCoderOptions.length > 0 ? filteredCoderOptions : coderModels,
           reviewerModelsAvailable: filteredReviewerOptions.length > 0 ? filteredReviewerOptions : reviewerModels,
+          capabilityConstraints: options.capabilityConstraints,
+          plannerCapabilityConstraints: options.plannerCapabilityConstraints,
+          coderCapabilityConstraints: options.coderCapabilityConstraints,
+          reviewerCapabilityConstraints: options.reviewerCapabilityConstraints,
           maxCostUsd: options.maxCostUsd,
-        }, stageBlendWeight, rubricAwareWeight);
+        }, stageBlendWeight, rubricAwareWeight, repoDir);
         decision.shadowDecision = shadowSelection
           ? buildStageAwareDecision(shadowSelection, neighbors, kNeighbors, repoDir)
           : null;

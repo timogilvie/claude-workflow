@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guard against being sourced by lifecycle-scenarios.test.sh
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
+
 if ! command -v tmux >/dev/null 2>&1; then
   echo "SKIP: tmux unavailable"
   exit 0
@@ -57,14 +60,14 @@ startup_log() {
 source "$REPO_ROOT/shared/lib/wavemill-common.sh"
 eval "$(extract_spawn_function)"
 
-tmux new-session -d -s "$SESSION" -n control -c "$REPO_DIR" 'sleep 300'
+tmux new-session -d -s "$SESSION" -n mill -c "$REPO_DIR" 'sleep 300'
 spawn_integration_window
 sleep 0.2
 
-if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx 'integration'; then
-  echo "FAIL: integration window should not be created"
+if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx 'backstage'; then
+  echo "FAIL: backstage window should not be created"
   exit 1
 fi
 
-echo "PASS: integration window stays disabled"
+echo "PASS: backstage window stays disabled"
 exit 0

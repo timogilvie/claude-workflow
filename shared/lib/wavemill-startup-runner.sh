@@ -224,23 +224,47 @@ linear_set_state() {
   npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1
 }
 
+linear_enqueue_retry() {
+  local state="$1"
+  local issues_csv="$2"
+  local category="${3:-unknown}"
+  local http="${4:-none}"
+  local message="${5:-Queued from startup batch retry path}"
+  [[ "$DRY_RUN" == "true" ]] && return 0
+  [[ -z "$issues_csv" ]] && return 0
+  npx tsx "$TOOLS_DIR/linear-retry-drain.ts" enqueue \
+    --state "$state" \
+    --issues "$issues_csv" \
+    --category "$category" \
+    --http "$http" \
+    --message "$message" >/dev/null 2>&1 || true
+}
+
 linear_batch_set_state() {
   local state="$1"
   shift || true
   local -a issues=("$@")
-  local output exit_code=0
+  local output exit_code=0 stderr_tmp stderr_output retryable_issues_csv retry_category retry_http retry_message
   [[ "$DRY_RUN" == "true" ]] && return 0
   [[ "${#issues[@]}" -eq 0 ]] && return 0
 
-  output="$(npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" 2>/dev/null)" || exit_code=$?
+  stderr_tmp="$(mktemp -t wavemill-linear-batch-stderr.XXXXXX)"
+  output="$(npx tsx "$TOOLS_DIR/set-issues-state.ts" --state "$state" "${issues[@]}" 2>"$stderr_tmp")" || exit_code=$?
+  stderr_output="$(cat "$stderr_tmp" 2>/dev/null || true)"
 
   if jq -e '.failed | length > 0' >/dev/null 2>&1 <<<"$output"; then
     while IFS= read -r failure; do
       startup_log "WARN: Linear state update to '$state' failed for $failure"
-    done < <(jq -r '.failed[] | "\(.issueId): \(.error)"' <<<"$output")
+    done < <(jq -r '.failed[] | "\(.issueId): \(.error) [category=\(.category // "unknown"), http=\((.httpStatus // "none") | tostring), retryable=\(.isRetryable // false)]"' <<<"$output")
+    retryable_issues_csv="$(jq -r '[.failed[] | select(.isRetryable == true) | .issueId] | unique | join(",")' <<<"$output")"
+    retry_category="$(jq -r '([.failed[] | select(.isRetryable == true) | .category] | first) // "unknown"' <<<"$output")"
+    retry_http="$(jq -r '([.failed[] | select(.isRetryable == true) | .httpStatus] | map(select(. != null)) | first // "none") | tostring' <<<"$output")"
+    retry_message="$(jq -r '([.failed[] | select(.isRetryable == true) | .error] | first) // "Queued from startup batch retry path"' <<<"$output")"
+    linear_enqueue_retry "$state" "$retryable_issues_csv" "$retry_category" "$retry_http" "$retry_message"
   elif [[ "$exit_code" -ne 0 ]]; then
-    startup_log "WARN: Batch Linear state update to '$state' failed for ${#issues[@]} issue(s)"
+    startup_log "WARN: Batch Linear state update to '$state' failed for ${#issues[@]} issue(s) [category=unknown, http=none, retryable=false, details=${stderr_output:-none}]"
   fi
+  rm -f "$stderr_tmp"
   return 0
 }
 
@@ -336,6 +360,7 @@ write_monitor_env() {
     write_shell_assignment "STATUS_LOG_FILE" "$STATUS_LOG_FILE"
     write_shell_assignment "TASKS_FILE" "$tasks_file"
     write_shell_assignment "CHALLENGE_AUTO_MERGE" "${CHALLENGE_AUTO_MERGE:-false}"
+    write_shell_assignment "WAVEMILL_WINDOW_MILL" "$WAVEMILL_WINDOW_MILL"
   } > "$MONITOR_ENV"
 }
 
@@ -343,23 +368,23 @@ setup_control_dashboard() {
   [[ "${DRY_RUN:-false}" == "true" ]] && return 0
   local status_script="$LIB_DIR/wavemill-status.sh"
   local pane_count
-  pane_count=$(tmux list-panes -t "$SESSION:control" -F '#{pane_index}' | wc -l | tr -d ' ')
+  pane_count=$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL" -F '#{pane_index}' | wc -l | tr -d ' ')
   if [[ "$pane_count" -eq 1 ]]; then
     # Split 1: vertical split — top-left (pane 0, 35%) / bottom-left (pane 1, 65%)
-    tmux split-window -t "$SESSION:control.0" -v -p 65
+    tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" -v -p 65
     # Split 2: full-height horizontal — right pane (pane 2, 50%) spans full window height
-    tmux split-window -t "$SESSION:control.0" -h -f -p 50
+    tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" -h -f -p 50
   elif [[ "$pane_count" -eq 2 ]]; then
-    tmux split-window -t "$SESSION:control.0" -h -f -p 50
+    tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" -h -f -p 50
   fi
   # Pane 0 = top-left (monitor, set later in main)
   # Pane 1 = bottom-left (dashboard)
   # Pane 2 = right full-height (status log)
-  tmux respawn-pane -k -t "$SESSION:control.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'"
+  tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" "'$status_script' '$SESSION' '$WORKTREE_ROOT' '$STATE_FILE'"
 
   WAVEMILL_DASHBOARD_PID=""
   for attempt in {1..10}; do
-    WAVEMILL_DASHBOARD_PID="$(tmux list-panes -t "$SESSION:control.1" -F '#{pane_pid}' 2>/dev/null || true)"
+    WAVEMILL_DASHBOARD_PID="$(tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_MILL.1" -F '#{pane_pid}' 2>/dev/null || true)"
     [[ -n "$WAVEMILL_DASHBOARD_PID" ]] && break
     sleep 0.1
   done
@@ -368,13 +393,13 @@ setup_control_dashboard() {
     tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$WAVEMILL_DASHBOARD_PID"
   fi
 
-  tmux respawn-pane -k -t "$SESSION:control.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
-  tmux select-pane -t "$SESSION:control.0"
+  tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
+  tmux select-pane -t "$SESSION:$WAVEMILL_WINDOW_MILL.0"
 }
 
 spawn_integration_window() {
   [[ "${DRY_RUN:-false}" == "true" ]] && return 0
-  local merged enabled use_mill_session integration_cmd
+  local merged enabled use_mill_session integration_cmd status_script jobs_cmd queue_cmd right_top_pane right_bottom_pane
 
   merged="$(wavemill_load_config "$REPO_DIR")"
   enabled="$(printf '%s' "$merged" | jq -r '.integration.enabled // false' 2>/dev/null || echo false)"
@@ -384,14 +409,23 @@ spawn_integration_window() {
     return 0
   fi
 
-  startup_log "Starting integration window (tend loop)..."
+  startup_log "Starting backstage window (tend loop + background status)..."
   printf -v integration_cmd 'exec env WAVEMILL_SESSION=%q WAVEMILL_ISSUE=%q npx tsx %q --loop --repo-dir %q' \
     "$SESSION" "integration" "$TOOLS_DIR/tend.ts" "$REPO_DIR"
-  tmux new-window -d -t "$SESSION" -n integration -c "$REPO_DIR" "$integration_cmd" >/dev/null
-  tmux set-window-option -u -t "$SESSION:integration" window-status-style >/dev/null 2>&1 || true
-  tmux set-window-option -u -t "$SESSION:integration" window-status-current-style >/dev/null 2>&1 || true
-  tmux set-option -t "$SESSION:integration" remain-on-exit off >/dev/null 2>&1 || true
-  startup_log "✓ Integration window running."
+  tmux new-window -d -t "$SESSION" -n "$WAVEMILL_WINDOW_BACKSTAGE" -c "$REPO_DIR" "$integration_cmd" >/dev/null
+  right_top_pane="$(tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" -h -p 40 -P -F '#{pane_id}')"
+  right_bottom_pane="$(tmux split-window -t "$right_top_pane" -v -p 50 -P -F '#{pane_id}')"
+
+  status_script="${LIB_DIR:-$REPO_DIR/shared/lib}/wavemill-status.sh"
+  printf -v jobs_cmd "'%s' --pane=jobs '%s' '%s' '%s'" "$status_script" "$SESSION" "$WORKTREE_ROOT" "$STATE_FILE"
+  printf -v queue_cmd "'%s' --pane=queued-pending '%s' '%s' '%s'" "$status_script" "$SESSION" "$WORKTREE_ROOT" "$STATE_FILE"
+  tmux respawn-pane -k -t "$right_top_pane" "$jobs_cmd"
+  tmux respawn-pane -k -t "$right_bottom_pane" "$queue_cmd"
+
+  tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-style >/dev/null 2>&1 || true
+  tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-current-style >/dev/null 2>&1 || true
+  tmux set-option -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" remain-on-exit off >/dev/null 2>&1 || true
+  startup_log "✓ Backstage window running."
 }
 
 should_update_linear_for_task() {
@@ -474,7 +508,7 @@ startup_run_task_phases() {
   local challenge challenge_pair challenge_role challenge_model task_agent win
   local depends_on base_from_task
   local packet_content issue_json issue_description issue_context details_context labels_json
-  local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false
+  local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false planner_launch_model
 
   local startup_id
   startup_id="$(echo "$task_json" | jq -r '.startupId // empty')"
@@ -746,6 +780,13 @@ $details_context"
   planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
   build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$planning_prompt"
+  if ! planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-4-6}" "$wt_dir" 2>/dev/null)"; then
+    planner_launch_model="${planner_model:-claude-sonnet-4-6}"
+  fi
+  export WAVEMILL_RESOLVED_MODEL="$planner_launch_model"
+  tmux set-environment -t "$SESSION" WAVEMILL_RESOLVED_MODEL "$planner_launch_model" 2>/dev/null || true
+  export WAVEMILL_FEATURE_SLUG="$slug"
+  export WAVEMILL_FEATURE_DIR="$feature_dir"
   if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
@@ -866,6 +907,7 @@ main() {
   local -a linear_batch_ids=()
 
   ensure_state_file
+  cleanup_background_jobs_startup
   seed_queued_tasks_from_plan "$PLAN_FILE"
   : > "$STATUS_LOG_FILE"
   : > "$LAUNCHED_ISSUES_FILE"
@@ -931,16 +973,16 @@ main() {
 
   if [[ "$launched_count" -eq 0 && "${resumed_count:-0}" -eq 0 ]]; then
     startup_log ""
-    startup_log "No tasks launched. Keeping startup diagnostics visible in control window."
+    startup_log "No tasks launched. Keeping startup diagnostics visible in mill window."
     [[ "$DRY_RUN" == "true" ]] && return 0
-    tmux respawn-pane -k -t "$SESSION:control.0" "bash -lc \"clear; cat '$STATUS_LOG_FILE'; printf '\\nPress Ctrl+B then D to detach.\\n'; tail -f /dev/null\""
+    tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" "bash -lc \"clear; cat '$STATUS_LOG_FILE'; printf '\\nPress Ctrl+B then D to detach.\\n'; tail -f /dev/null\""
     return 0
   fi
 
   startup_log ""
-  startup_log "Starting monitor in control window..."
+  startup_log "Starting monitor in mill window..."
   if [[ "$DRY_RUN" == "true" ]]; then
-    startup_log "[DRY-RUN] Skipping control dashboard, integration window, and monitor startup."
+    startup_log "[DRY-RUN] Skipping mill dashboard, backstage window, and monitor startup."
     return 0
   fi
   local input_reader_script cmd_file offset_file
@@ -949,7 +991,7 @@ main() {
   offset_file="$(wavemill_command_offset_path "$SESSION")"
   printf -v monitor_cmd '%q -lc %q' "/opt/homebrew/bin/bash" \
     "clear; : > $(printf '%q' "$cmd_file"); printf '0\\n' > $(printf '%q' "$offset_file"); $(printf '%q %q' "$MONITOR_SCRIPT" "$MONITOR_ENV") </dev/null & monitor_pid=\$!; trap 'kill \"\$monitor_pid\" >/dev/null 2>&1 || true' EXIT INT TERM; exec env WAVEMILL_SESSION=$(printf '%q' "$SESSION") $(printf '%q %q' "$input_reader_script" "$SESSION")"
-  tmux respawn-pane -k -t "$SESSION:control.0" "$monitor_cmd"
+  tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" "$monitor_cmd"
 }
 
 main "$@"

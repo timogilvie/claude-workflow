@@ -14,7 +14,14 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
-import type { RegistryTaskType } from './model-registry.ts';
+import { parseModelSelector } from './model-registry.ts';
+import type {
+  LatencyTier,
+  MultimodalSupport,
+  ReasoningTier,
+  RegistryTaskType,
+  ToolSupport,
+} from './model-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // TypeScript Types (matching wavemill-config.schema.json)
@@ -24,7 +31,7 @@ import type { RegistryTaskType } from './model-registry.ts';
  * Current config format version.
  * Increment when making breaking changes to config structure.
  */
-export const CURRENT_CONFIG_VERSION = '1.3.0';
+export const CURRENT_CONFIG_VERSION = '1.4.0';
 
 export interface MillConfig {
   session?: string;
@@ -44,6 +51,7 @@ export interface MillConfig {
 
 export interface ExpansionHandshakeConfig {
   policy?: 'recover' | 'block' | 'warn';
+  timeoutSeconds?: number;
 }
 
 export interface GitConfig {
@@ -61,6 +69,16 @@ export interface PlanConfig {
   model?: string;
   interactive?: boolean;
   timeout?: number;
+}
+
+export interface AgentStageConfig {
+  model?: string;
+}
+
+export interface AgentsConfig {
+  planner?: AgentStageConfig;
+  coder?: AgentStageConfig;
+  reviewer?: AgentStageConfig;
 }
 
 export interface DashboardConfig {
@@ -122,6 +140,12 @@ export interface ModelCapabilitiesOverride {
   pricing?: PricingEntry;
   defaultLadderEligible?: boolean;
   contextWindowTokens?: number;
+  toolSupport?: ToolSupport;
+  multimodal?: MultimodalSupport;
+  latencyTier?: LatencyTier;
+  reasoningTier?: ReasoningTier;
+  costPerMillionInputTokensUsd?: number;
+  costPerMillionOutputTokensUsd?: number;
   agent?: string;
 }
 
@@ -157,6 +181,8 @@ export interface EvalConfig {
   interventionPenalties?: InterventionPenaltiesConfig;
   successThreshold?: number;
   mintEligibility?: MintEligibilityConfig;
+  maxPromptBytes?: number;
+  oversizePolicy?: 'fail' | 'truncate';
 }
 
 export interface EvalContextUpdatesConfig {
@@ -191,6 +217,9 @@ export interface RouterConfig {
     mode?: 'off' | 'shadow' | 'on';
     minCoverage?: number;
     weight?: number;
+  };
+  capabilityFiltering?: {
+    enabled?: boolean;
   };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
@@ -278,6 +307,7 @@ export interface IntegrationConfig {
   enabled: boolean;
   integrationBranch: string;
   promotionBranch: string;
+  autoUpdatePromotionBranch: boolean;
   mergeMethod: 'merge' | 'squash' | 'rebase';
   deleteBranchAfterMerge: boolean;
   haltOnRed: boolean;
@@ -427,6 +457,7 @@ export interface WavemillConfig {
   mill?: MillConfig;
   expand?: ExpandConfig;
   plan?: PlanConfig;
+  agents?: AgentsConfig;
   dashboard?: DashboardConfig;
   taskSelection?: TaskSelectionConfig;
   projectContext?: ProjectContextConfig;
@@ -459,6 +490,7 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
   enabled: false,
   integrationBranch: 'auto/integration',
   promotionBranch: 'main',
+  autoUpdatePromotionBranch: false,
   mergeMethod: 'squash',
   deleteBranchAfterMerge: true,
   haltOnRed: true,
@@ -600,6 +632,7 @@ function validateConfig(config: unknown): asserts config is WavemillConfig {
   }
 
   validateReadyPolicySubset(config);
+  validateAgentsModelSelectors(config);
 }
 
 function canonicalizeReadyCheckName(name: string): string {
@@ -635,6 +668,37 @@ function validateReadyPolicySubset(config: unknown): void {
         `Check .wavemill-config.json against wavemill-config.schema.json`
       );
     }
+  }
+}
+
+function validateAgentsModelSelectors(config: unknown): void {
+  if (typeof config !== 'object' || config === null) {
+    return;
+  }
+
+  const agents = (config as WavemillConfig).agents;
+  if (!agents) {
+    return;
+  }
+
+  const phases = ['planner', 'coder', 'reviewer'] as const;
+  for (const phase of phases) {
+    const model = agents[phase]?.model;
+    if (model === undefined) {
+      continue;
+    }
+
+    const parsed = parseModelSelector(model);
+    if (parsed.ok) {
+      continue;
+    }
+
+    throw new Error(
+      `Config validation failed:\n` +
+      `  /agents/${phase}/model: "${model}" is not a valid model selector.\n` +
+      `  Valid forms: "inherit", a family alias (e.g. "opus", "sonnet", "haiku"), or a pinned model ID (e.g. "claude-opus-4-7").\n` +
+      `  Parse error: ${parsed.error.message}`
+    );
   }
 }
 
@@ -804,6 +868,10 @@ export function clearConfigCache(repoDir?: string): void {
  */
 export function getRouterConfig(repoDir?: string): RouterConfig {
   return loadWavemillConfig(repoDir).router || {};
+}
+
+export function isRouterCapabilityFilteringEnabled(repoDir?: string): boolean {
+  return getRouterConfig(repoDir).capabilityFiltering?.enabled === true;
 }
 
 /**
@@ -983,9 +1051,12 @@ export function getMillConfig(repoDir?: string): MillConfig {
   return loadWavemillConfig(repoDir).mill || {};
 }
 
-export function getExpansionHandshakeConfig(repoDir?: string): { policy: 'recover' | 'block' | 'warn' } {
-  const policy = loadWavemillConfig(repoDir).mill?.expansionHandshake?.policy;
-  return { policy: policy ?? 'recover' };
+export function getExpansionHandshakeConfig(repoDir?: string): { policy: 'recover' | 'block' | 'warn'; timeoutSeconds: number } {
+  const config = loadWavemillConfig(repoDir).mill?.expansionHandshake ?? {};
+  return {
+    policy: config.policy ?? 'recover',
+    timeoutSeconds: config.timeoutSeconds ?? 300,
+  };
 }
 
 /**
@@ -1018,6 +1089,10 @@ export function getValidationConfig(repoDir?: string): ValidationConfig {
  */
 export function getPlanConfig(repoDir?: string): PlanConfig {
   return loadWavemillConfig(repoDir).plan || {};
+}
+
+export function getAgentsConfig(repoDir?: string): AgentsConfig {
+  return loadWavemillConfig(repoDir).agents || {};
 }
 
 /**

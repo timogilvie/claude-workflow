@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guard against being sourced by lifecycle-scenarios.test.sh
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
+
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tend-fixture-lib.sh"
 
 require_tend_runtime
