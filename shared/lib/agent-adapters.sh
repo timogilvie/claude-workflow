@@ -90,11 +90,7 @@ agent_resolve_model() {
     return 1
   fi
 
-  if ! cd "$lib_dir"; then
-    return 1
-  fi
-
-  if resolved_model="$(npx tsx "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
+  if resolved_model="$(cd "$lib_dir" 2>/dev/null && npx tsx "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
     printf '%s\n' "$resolved_model"
     return 0
   fi
