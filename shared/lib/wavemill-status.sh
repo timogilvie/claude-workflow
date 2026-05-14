@@ -404,6 +404,9 @@ render_plan_model_routing() {
     ' 2>/dev/null || true
   )"
 
+  if [[ -z "$rendered" ]]; then
+    rendered="  planner: model resolution unavailable"$'\n'"  coder:   model resolution unavailable"$'\n'"  reviewer: model resolution unavailable"
+  fi
   WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]="$rendered"
   printf '%s' "$rendered"
 }

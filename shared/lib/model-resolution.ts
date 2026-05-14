@@ -53,6 +53,9 @@ function normalizeParentResolvedModelId(modelId: string | undefined): string | u
   try {
     validateModelId(trimmed);
   } catch {
+    process.stderr.write(
+      `[model-resolution] WARN: WAVEMILL_RESOLVED_MODEL='${trimmed}' is not a recognized model ID — ignoring and falling back to configured default.\n`
+    );
     return undefined;
   }
 

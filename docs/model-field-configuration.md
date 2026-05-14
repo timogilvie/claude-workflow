@@ -112,7 +112,7 @@ Invalid values fail loudly during config or plan validation with an error that n
 
 ## Cross-Process Inheritance
 
-`"inherit"` is resolved in one place: [`shared/lib/model-resolution.ts`](/Users/timothyogilvie/Dropbox/wavemill/worktrees/preserve-per-subagent-model-declarations-across-parallel-and-nested-execution/shared/lib/model-resolution.ts). Shell launchers only forward context; they do not implement selector logic themselves.
+`"inherit"` is resolved in one place: [`shared/lib/model-resolution.ts`](../shared/lib/model-resolution.ts). Shell launchers only forward context; they do not implement selector logic themselves.
 
 `WAVEMILL_RESOLVED_MODEL` carries the parent agent's concrete resolved model ID across process and worktree boundaries. The launchers set and re-export it before spawning child agents so nested `inherit` selectors stay tied to the parent chain even during parallel execution.
 
