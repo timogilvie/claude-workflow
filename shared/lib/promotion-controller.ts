@@ -61,6 +61,11 @@ interface MergePrediction {
   detail?: string;
 }
 
+export interface BranchBaseUpdateResult {
+  status: 'success' | 'conflict' | 'push-failed' | 'fetch-failed' | 'dirty-worktree' | 'unknown-failed';
+  detail: string;
+}
+
 const PROMOTION_SECTION_BEGIN = '<!-- wavemill-promote:begin -->';
 const PROMOTION_SECTION_END = '<!-- wavemill-promote:end -->';
 const RECENT_PR_LIMIT = 10;
@@ -507,38 +512,89 @@ function predictPromotionBaseMerge(
   }
 }
 
+export function updateBranchWithBase(
+  branch: string,
+  baseBranch: string,
+  repoDir: string,
+  shellRunner: ShellRunner = (cmd, opts) => String(execShellCommand(cmd, opts)),
+): BranchBaseUpdateResult {
+  const dirtyState = String(shellRunner(
+    'git status --porcelain',
+    { encoding: 'utf-8', cwd: repoDir },
+  )).trim();
+  if (dirtyState) {
+    return {
+      status: 'dirty-worktree',
+      detail: `refusing to update ${branch} because the worktree has uncommitted changes`,
+    };
+  }
+
+  try {
+    shellRunner(
+      `git fetch --quiet origin ${escapeShellArg(baseBranch)} ${escapeShellArg(branch)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+  } catch (error) {
+    return {
+      status: 'fetch-failed',
+      detail: `failed to fetch origin/${baseBranch}: ${errorMessage(error)}`,
+    };
+  }
+
+  try {
+    shellRunner(
+      `git switch ${escapeShellArg(branch)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    shellRunner(
+      `git merge-tree --write-tree ${escapeShellArg(branch)} ${escapeShellArg(remoteBranchRef(baseBranch))}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    shellRunner(
+      `git merge --no-edit ${escapeShellArg(remoteBranchRef(baseBranch))}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+  } catch (error) {
+    const detail = errorMessage(error);
+    try {
+      shellRunner('git merge --abort', { encoding: 'utf-8', cwd: repoDir });
+    } catch {
+      // Best-effort cleanup if merge started.
+    }
+
+    return {
+      status: /conflict/i.test(detail) ? 'conflict' : 'unknown-failed',
+      detail,
+    };
+  }
+
+  try {
+    shellRunner(
+      `git push origin ${escapeShellArg(branch)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    return {
+      status: 'success',
+      detail: `updated ${branch} with origin/${baseBranch} and pushed successfully`,
+    };
+  } catch (error) {
+    return {
+      status: 'push-failed',
+      detail: errorMessage(error),
+    };
+  }
+}
+
 function updateIntegrationWithPromotionBase(
   integrationBranch: string,
   promotionBranch: string,
   repoDir: string,
   shellRunner: ShellRunner,
 ): void {
-  const dirtyState = String(shellRunner(
-    'git status --porcelain',
-    { encoding: 'utf-8', cwd: repoDir },
-  )).trim();
-  if (dirtyState) {
-    throw new Error(
-      `promote: refusing to update ${integrationBranch} because the worktree has uncommitted changes`,
-    );
+  const result = updateBranchWithBase(integrationBranch, promotionBranch, repoDir, shellRunner);
+  if (result.status !== 'success') {
+    throw new Error(`promote: ${result.detail}`);
   }
-
-  shellRunner(
-    `git fetch --quiet origin ${escapeShellArg(promotionBranch)} ${escapeShellArg(integrationBranch)}`,
-    { encoding: 'utf-8', cwd: repoDir },
-  );
-  shellRunner(
-    `git switch ${escapeShellArg(integrationBranch)}`,
-    { encoding: 'utf-8', cwd: repoDir },
-  );
-  shellRunner(
-    `git merge --no-edit ${escapeShellArg(remoteBranchRef(promotionBranch))}`,
-    { encoding: 'utf-8', cwd: repoDir },
-  );
-  shellRunner(
-    `git push origin ${escapeShellArg(integrationBranch)}`,
-    { encoding: 'utf-8', cwd: repoDir },
-  );
 }
 
 function formatBaseBehindPrompt(
