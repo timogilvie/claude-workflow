@@ -170,6 +170,8 @@ export interface EvalConfig {
   interventionPenalties?: InterventionPenaltiesConfig;
   successThreshold?: number;
   mintEligibility?: MintEligibilityConfig;
+  maxPromptBytes?: number;
+  oversizePolicy?: 'fail' | 'truncate';
 }
 
 export interface EvalContextUpdatesConfig {

@@ -842,4 +842,99 @@ describe('evaluateTask', () => {
       'filled prompt hash should be deterministic for same inputs'
     );
   });
+
+  it('fast-fails oversized prompts without calling the judge', async () => {
+    const callFn = mockCallFn(JSON.stringify({
+      score: 1,
+      rationale: 'Should not be called.',
+      interventionFlags: [],
+    }));
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const result = await evaluateTask(
+        {
+          taskPrompt: 'Oversized eval prompt task',
+          prReviewOutput: 'x'.repeat(30_000),
+          issueId: 'HOK-1706',
+        },
+        undefined,
+        {
+          _callFn: callFn,
+          _promptSizeConfig: { maxPromptBytes: 25_000, oversizePolicy: 'fail' },
+        }
+      );
+
+      assert.equal(callFn.mock.callCount(), 0);
+      assert.equal(result.score, 0);
+      assert.equal(result.scoreBand, 'Failure');
+      assert.equal(result.failureReason, 'eval_prompt_too_large');
+      assert.equal(result.promptSizeDiagnostic.action, 'rejected');
+      assert.equal(result.promptSizeDiagnostic.policy, 'fail');
+      assert.ok(result.promptSizeDiagnostic.perComponentBytes.prReviewOutput >= 30_000);
+    } finally {
+      warn.mock.restore();
+    }
+  });
+
+  it('truncates oversized prompts before calling the judge when configured', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.8,
+      rationale: 'Prompt was truncated and evaluated.',
+      interventionFlags: [],
+    });
+    const callFn = mockCallFn(validResponse);
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const result = await evaluateTask(
+        {
+          taskPrompt: 'Truncate oversized eval prompt',
+          prReviewOutput: 'x'.repeat(30_000),
+        },
+        undefined,
+        {
+          _callFn: callFn,
+          _promptSizeConfig: { maxPromptBytes: 25_000, oversizePolicy: 'truncate' },
+        }
+      );
+
+      assert.equal(callFn.mock.callCount(), 1);
+      const sentPrompt = callFn.mock.calls[0].arguments[0];
+      assert.ok(Buffer.byteLength(sentPrompt, 'utf8') <= 25_000);
+      assert.match(sentPrompt, /TRUNCATED \d+ bytes from prReviewOutput/);
+      assert.equal(result.promptSizeDiagnostic.action, 'truncated');
+      assert.equal(result.failureReason, undefined);
+    } finally {
+      warn.mock.restore();
+    }
+  });
+
+  it('attaches pass diagnostics for under-limit prompts and logs the size', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.9,
+      rationale: 'Under limit.',
+      interventionFlags: [],
+    });
+    const callFn = mockCallFn(validResponse);
+    const log = mock.method(console, 'log', () => {});
+    try {
+      const result = await evaluateTask(
+        {
+          taskPrompt: 'Small eval prompt',
+          prReviewOutput: 'Clean diff',
+        },
+        undefined,
+        {
+          _callFn: callFn,
+          _promptSizeConfig: { maxPromptBytes: 80_000, oversizePolicy: 'fail' },
+        }
+      );
+
+      assert.equal(callFn.mock.callCount(), 1);
+      assert.equal(result.promptSizeDiagnostic.action, 'pass');
+      assert.equal(log.mock.callCount(), 1);
+      assert.match(log.mock.calls[0].arguments[0], /^\[eval\] prompt_size /);
+    } finally {
+      log.mock.restore();
+    }
+  });
 });

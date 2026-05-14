@@ -76,6 +76,9 @@
  * - **1.23.0**: Added optional `routePrediction` and `routeCalibration`
  *   fields plus router calibration diagnostics (HOK-1553) so eval artifacts
  *   can compare router expectations to actual workflow outcomes
+ * - **1.24.0**: Added optional `failureReason` and `promptSizeDiagnostic`
+ *   fields so oversized eval prompts can fail fast before judge invocation
+ *   with component byte-size diagnostics.
  *
  * @module eval-schema
  */
@@ -85,7 +88,7 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.23.0';
+export const SCHEMA_VERSION = '1.24.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -257,6 +260,34 @@ export type EligibilityErrorCode =
   | 'missing_outcome'
   | 'missing_task_descriptor'
   | 'missing_model_identity';
+
+export type EvalFailureReason = 'eval_prompt_too_large';
+
+export type EvalPromptComponentName =
+  | 'taskPrompt'
+  | 'prReviewOutput'
+  | 'interventionMetadata'
+  | 'taskPacket'
+  | 'planContent'
+  | 'selfReviewSummary'
+  | 'templateScaffold';
+
+export type EvalOversizePolicy = 'fail' | 'truncate';
+export type PromptSizeAction = 'pass' | 'truncated' | 'rejected';
+
+export interface PromptSizeDiagnostic {
+  totalBytes: number;
+  limitBytes: number;
+  perComponentBytes: Record<EvalPromptComponentName, number>;
+  policy: EvalOversizePolicy;
+  action: PromptSizeAction;
+  truncatedComponents?: {
+    name: EvalPromptComponentName;
+    originalBytes: number;
+    finalBytes: number;
+    removedBytes: number;
+  }[];
+}
 
 export const BUDGET_MISSING: EligibilityErrorCode = 'missing_budget';
 
@@ -1297,6 +1328,12 @@ export interface EvalRecord {
     code: string;
     message: string;
   };
+
+  /** Stable machine-readable eval failure reason for fast-fail records. */
+  failureReason?: EvalFailureReason;
+
+  /** Byte-size diagnostic for the eval prompt submitted or rejected. */
+  promptSizeDiagnostic?: PromptSizeDiagnostic;
 
   /** Per-model token usage breakdown from the workflow sessions */
   workflowTokenUsage?: Record<

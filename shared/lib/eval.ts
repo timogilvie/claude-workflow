@@ -32,6 +32,13 @@ import { createPromptArtifact, type PromptArtifact } from './prompt-hash.ts';
 import { errorMessage } from './error-utils.ts';
 import { getLatestSession } from './session.ts';
 import { attachEligibility, attachManifestRef } from './eval-record-builder.ts';
+import { attachPromptSizeDiagnostic } from './eval-record-builder.ts';
+import {
+  enforcePromptSizeLimit,
+  resolveEvalPromptSizeConfig,
+  type EvalOversizePolicy,
+  type PromptComponents,
+} from './eval-prompt-size.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -150,6 +157,8 @@ interface PricingEntry {
 export interface EvaluateTaskOptions {
   /** Override for the LLM call function (testing) */
   _callFn?: (prompt: string, model: string) => Promise<LLMCallResult>;
+  /** Override prompt size guard config (testing) */
+  _promptSizeConfig?: { maxPromptBytes?: number; oversizePolicy?: EvalOversizePolicy };
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -191,36 +200,67 @@ async function loadPromptTemplate(): Promise<string> {
   return _promptTemplate;
 }
 
-function buildJudgePrompt(
-  template: string,
-  taskPrompt: string,
-  prReviewOutput: string,
+function buildInterventionText(
   interventions: InterventionMeta[],
   interventionText?: string,
-  taskPacket?: string,
-  planContent?: string,
-  selfReviewSummary?: string
 ): string {
-  let finalInterventionText: string;
   if (interventionText) {
     // Use pre-formatted structured intervention text (from intervention-detector)
-    finalInterventionText = interventionText;
-  } else if (interventions && interventions.length > 0) {
-    // Fall back to legacy flat list format
-    finalInterventionText = interventions
-      .map((i, idx) => `${idx + 1}. [${i.severity || 'unknown'}] ${i.description}`)
-      .join('\n');
-  } else {
-    finalInterventionText = 'No interventions recorded.';
+    return interventionText;
   }
 
+  if (interventions && interventions.length > 0) {
+    // Fall back to legacy flat list format
+    return interventions
+      .map((i, idx) => `${idx + 1}. [${i.severity || 'unknown'}] ${i.description}`)
+      .join('\n');
+  }
+
+  return 'No interventions recorded.';
+}
+
+function buildPromptComponents(
+  template: string,
+  input: {
+    taskPrompt: string;
+    prReviewOutput: string;
+    interventionText: string;
+    taskPacket?: string;
+    planContent?: string;
+    selfReviewSummary?: string;
+  },
+): PromptComponents {
+  const insertedComponents: PromptComponents = {
+    taskPrompt: input.taskPrompt,
+    prReviewOutput: input.prReviewOutput,
+    interventionMetadata: input.interventionText,
+    taskPacket: input.taskPacket || 'Not available for this workflow.',
+    planContent: input.planContent || 'Not available for this workflow.',
+    selfReviewSummary: input.selfReviewSummary || 'Not available for this workflow.',
+  };
+  const templateScaffold = fillJudgePrompt(template, {
+    taskPrompt: '',
+    prReviewOutput: '',
+    interventionMetadata: '',
+    taskPacket: '',
+    planContent: '',
+    selfReviewSummary: '',
+  });
+
+  return {
+    ...insertedComponents,
+    templateScaffold,
+  };
+}
+
+function fillJudgePrompt(template: string, components: PromptComponents): string {
   return template
-    .replace('{{TASK_PROMPT}}', taskPrompt)
-    .replace('{{PR_REVIEW_OUTPUT}}', prReviewOutput)
-    .replace('{{INTERVENTION_METADATA}}', finalInterventionText)
-    .replace('{{TASK_PACKET}}', taskPacket || 'Not available for this workflow.')
-    .replace('{{PLAN_CONTENT}}', planContent || 'Not available for this workflow.')
-    .replace('{{SELF_REVIEW_SUMMARY}}', selfReviewSummary || 'Not available for this workflow.');
+    .replace('{{TASK_PROMPT}}', components.taskPrompt ?? '')
+    .replace('{{PR_REVIEW_OUTPUT}}', components.prReviewOutput ?? '')
+    .replace('{{INTERVENTION_METADATA}}', components.interventionMetadata ?? '')
+    .replace('{{TASK_PACKET}}', components.taskPacket ?? '')
+    .replace('{{PLAN_CONTENT}}', components.planContent ?? '')
+    .replace('{{SELF_REVIEW_SUMMARY}}', components.selfReviewSummary ?? '');
 }
 
 async function callClaudeWithRetry(prompt: string, model: string): Promise<LLMCallResult> {
@@ -526,7 +566,7 @@ export async function evaluateTask(
   outcomes: Outcomes | undefined = undefined,
   options: EvaluateTaskOptions = {}
 ): Promise<EvalRecord> {
-  const { _callFn } = options;
+  const { _callFn, _promptSizeConfig } = options;
   const {
     taskPrompt,
     prReviewOutput,
@@ -558,15 +598,32 @@ export async function evaluateTask(
   const pricingTable = loadPricingTable();
 
   const template = await loadPromptTemplate();
-  const prompt = buildJudgePrompt(
-    template,
+  const finalInterventionText = buildInterventionText(interventions, interventionText);
+  const rawComponents = buildPromptComponents(template, {
     taskPrompt,
     prReviewOutput,
-    interventions,
-    interventionText,
+    interventionText: finalInterventionText,
     taskPacket,
     planContent,
-    selfReviewSummary
+    selfReviewSummary,
+  });
+  const { limitBytes, policy } = resolveEvalPromptSizeConfig(_promptSizeConfig ?? getEvalConfig());
+  const enforcement = enforcePromptSizeLimit({
+    components: rawComponents,
+    limitBytes,
+    policy,
+  });
+  let prompt = fillJudgePrompt(template, enforcement.components);
+  const finalPromptBytes = Buffer.byteLength(prompt, 'utf8');
+  if (finalPromptBytes !== enforcement.diagnostic.totalBytes) {
+    enforcement.diagnostic.totalBytes = finalPromptBytes;
+  }
+  if (finalPromptBytes > limitBytes) {
+    enforcement.diagnostic.action = 'rejected';
+    enforcement.action = 'rejected';
+  }
+  console[enforcement.action === 'pass' ? 'log' : 'warn'](
+    `[eval] prompt_size ${JSON.stringify(enforcement.diagnostic)}`,
   );
 
   // Capture prompt artifact for GEPA training (HOK-1003)
@@ -578,6 +635,45 @@ export async function evaluateTask(
     promptArtifacts = [promptArtifact];
   } catch (err) {
     console.warn(`[eval] Failed to capture prompt artifact: ${errorMessage(err)}`);
+  }
+
+  const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
+
+  if (enforcement.action === 'rejected') {
+    const record: EvalRecord = {
+      id: randomUUID(),
+      schemaVersion: SCHEMA_VERSION,
+      originalPrompt: taskPrompt,
+      modelId: model,
+      modelVersion: model,
+      judgeModel: model,
+      judgeProvider: provider,
+      score: 0,
+      scoreBand: 'Failure',
+      timeSeconds,
+      timestamp: new Date().toISOString(),
+      interventionRequired: interventionCount > 0,
+      interventionCount,
+      interventionDetails: hasStructuredInterventions
+        ? interventionRecords.map((i) => i.note)
+        : interventions.map((i) => i.description),
+      ...(hasStructuredInterventions && { interventions: interventionRecords }),
+      rationale: `Eval prompt exceeded configured byte limit before judge invocation (${enforcement.diagnostic.totalBytes} > ${limitBytes}).`,
+      failureReason: 'eval_prompt_too_large',
+      ...(issueId && { issueId }),
+      ...(prUrl && { prUrl }),
+      ...(outcomes && { outcomes }),
+      ...(routingDecision && { routingDecision }),
+      ...(promptArtifacts.length > 0 && { promptArtifacts }),
+      metadata: {
+        ...metadata,
+        interventionFlags: [],
+      },
+    };
+    attachPromptSizeDiagnostic(record, enforcement.diagnostic);
+    attachManifestRef(record, activeSessionId);
+    attachEligibility(record);
+    return record;
   }
 
   const callFn = _callFn || callClaudeWithRetry;
@@ -629,7 +725,7 @@ export async function evaluateTask(
       ...(planCritique && { planCritique }),
     },
   };
-  const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
+  attachPromptSizeDiagnostic(record, enforcement.diagnostic);
   attachManifestRef(record, activeSessionId);
   attachEligibility(record);
   return record;
