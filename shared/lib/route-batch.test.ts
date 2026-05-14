@@ -7,7 +7,7 @@ import {
   getStageAwareRouterDebugState,
   resetStageAwareRouterDebugState,
 } from './stage-aware-router.ts';
-import { routeBatch, routeExpandedPackets } from './route-batch.ts';
+import { routeBatch, routeExpandedPackets, tasksFromPlan } from './route-batch.ts';
 import { routeWorkflowAuto } from './workflow-router.ts';
 
 let passed = 0;
@@ -325,6 +325,33 @@ await test('file-based task includes provenance path/hash and stable hash', asyn
     assert.equal(first.decision.provenance?.inputPath, packetPath);
     assert.match(first.decision.provenance?.inputHash || '', /^[a-f0-9]{64}$/);
     assert.equal(first.decision.provenance?.inputHash, second.decision.provenance?.inputHash);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('tasksFromPlan preserves task model as workspaceSelector', async () => {
+  const { repoDir, cleanup } = makeRepo('auto');
+  const packetPath = join(repoDir, 'plan-task-packet.md');
+  writeFileSync(packetPath, 'Plan packet\n');
+  try {
+    const tasks = tasksFromPlan({
+      tasks: [
+        {
+          issue: 'HOK-1635',
+          taskPacketFile: packetPath,
+          model: 'haiku',
+        },
+        {
+          issue: 'HOK-1636',
+          prompt: 'Route inline task',
+        },
+      ],
+    });
+
+    assert.equal(tasks[0]?.workspaceSelector, 'haiku');
+    assert.equal(tasks[0]?.file, packetPath);
+    assert.equal(tasks[1]?.workspaceSelector, undefined);
   } finally {
     cleanup();
   }

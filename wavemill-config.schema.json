@@ -186,6 +186,43 @@
                 }
             }
         },
+        "agents": {
+            "type": "object",
+            "description": "Per-phase model selectors for workspace-level routing declarations.",
+            "properties": {
+                "planner": {
+                    "type": "object",
+                    "properties": {
+                        "model": {
+                            "type": "string",
+                            "description": "Model selector for the planning phase. Accepts 'inherit', a family alias (e.g. 'opus'), or a pinned model ID."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "coder": {
+                    "type": "object",
+                    "properties": {
+                        "model": {
+                            "type": "string",
+                            "description": "Model selector for the coding phase. Accepts 'inherit', a family alias (e.g. 'sonnet'), or a pinned model ID."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "reviewer": {
+                    "type": "object",
+                    "properties": {
+                        "model": {
+                            "type": "string",
+                            "description": "Model selector for the review phase. Accepts 'inherit', a family alias (e.g. 'haiku'), or a pinned model ID."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "dashboard": {
             "type": "object",
             "description": "Controls how much runtime activity is shown in the mill control pane. Lower verbosity reduces dashboard spam while all messages can still be written to a session log.",

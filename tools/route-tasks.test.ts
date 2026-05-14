@@ -186,6 +186,45 @@ describe('route-tasks CLI', () => {
     }
   });
 
+  it('accepts launch-plan task model fields and keeps routing output working', () => {
+    const repoDir = makeRepo();
+    try {
+      const packetA = join(repoDir, 'task-plan-a.md');
+      const planFile = join(repoDir, 'launch-plan.json');
+      writeFileSync(packetA, 'Route launch plan packet with explicit model selector\n');
+      writeFileSync(planFile, JSON.stringify({
+        session: 'session-1',
+        repoDir,
+        baseBranch: 'auto/integration',
+        worktreeRoot: join(repoDir, '..', 'worktrees'),
+        agentCmd: 'codex',
+        tasks: [
+          {
+            issue: 'HOK-300',
+            slug: 'route-plan-task',
+            branch: 'task/route-plan-task',
+            taskPacketFile: packetA,
+            model: 'sonnet',
+          },
+        ],
+      }));
+
+      const stdout = execFileSync('npx', ['tsx', routeTasksTool, '--plan', planFile, '--repo-dir', repoDir], {
+        encoding: 'utf-8',
+        cwd: resolve(__dirname, '..'),
+        env: { ...process.env },
+      });
+
+      const parsed = JSON.parse(stdout.trim());
+      assert.equal(parsed.issueId, 'HOK-300');
+      assert.ok(parsed.planner);
+      assert.ok(parsed.coder);
+      assert.ok(parsed.reviewer);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('suppresses expanded reroute success diagnostics by default and restores with verbose mode', () => {
     const repoDir = makeRepo();
     try {

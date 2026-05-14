@@ -36,6 +36,7 @@ export interface RouteBatchTask {
   file?: string;
   source?: RouteSource;
   inputKind?: RouteInputKind;
+  workspaceSelector?: string;
 }
 
 export interface RouteBatchPlanTask {
@@ -43,6 +44,7 @@ export interface RouteBatchPlanTask {
   issueId?: string;
   taskPacketFile?: string;
   prompt?: string;
+  model?: string;
 }
 
 export interface RouteBatchOptions extends RouteWorkflowOptions {
@@ -77,7 +79,7 @@ export interface ExpandedRouteTaskResult {
 
 export interface RouteExpandedPacketsOptions extends RouteBatchOptions {
   routeBatchImpl?: (
-    tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind }>,
+    tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind; workspaceSelector?: string }>,
     options?: RouteBatchOptions,
   ) => Promise<RouteBatchResult[]>;
 }
@@ -112,6 +114,7 @@ export function resolveRouteBatchTask(task: {
   file?: string;
   source?: RouteSource;
   inputKind?: RouteInputKind;
+  workspaceSelector?: string;
 }): RouteBatchTask {
   if (task.file) {
     return {
@@ -120,6 +123,7 @@ export function resolveRouteBatchTask(task: {
       prompt: readTaskPromptFromFile(task.file),
       source: task.source,
       inputKind: task.inputKind,
+      workspaceSelector: task.workspaceSelector,
     };
   }
 
@@ -129,6 +133,7 @@ export function resolveRouteBatchTask(task: {
       prompt: task.prompt,
       source: task.source,
       inputKind: task.inputKind,
+      workspaceSelector: task.workspaceSelector,
     };
   }
 
@@ -158,6 +163,7 @@ export function tasksFromPlan(plan: unknown): RouteBatchTask[] {
       file: planTask.taskPacketFile,
       source: 'expanded',
       inputKind: 'task-packet',
+      workspaceSelector: planTask.model,
     });
   });
 }
@@ -223,7 +229,7 @@ async function routeTaskInBatch(
 }
 
 export async function routeBatch(
-  tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind }>,
+  tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind; workspaceSelector?: string }>,
   options: RouteBatchOptions = {},
 ): Promise<RouteBatchResult[]> {
   const resolvedOptions = buildRouteBatchWorkflowOptions(options);
