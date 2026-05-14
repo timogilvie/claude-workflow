@@ -357,7 +357,7 @@ render_plan_model_routing() {
   done
 
   if [[ -n "$routing_file" ]]; then
-    mtime=$(stat -f %m "$routing_file" 2>/dev/null || echo 0)
+    mtime=$(stat -f %m "$routing_file" 2>/dev/null || stat -c %Y "$routing_file" 2>/dev/null || echo 0)
     cache_key="${routing_file}:${mtime}"
     if [[ -v WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"] ]]; then
       printf '%s' "${WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]}"
@@ -404,6 +404,9 @@ render_plan_model_routing() {
     ' 2>/dev/null || true
   )"
 
+  if [[ -z "$rendered" ]]; then
+    rendered="  planner: model resolution unavailable"$'\n'"  coder:   model resolution unavailable"$'\n'"  reviewer: model resolution unavailable"
+  fi
   WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]="$rendered"
   printf '%s' "$rendered"
 }

@@ -4,6 +4,7 @@ import {
   resolveSelector,
   type ResolvedModel,
   type ResolutionContext,
+  validateModelId,
 } from './model-registry.ts';
 import {
   ModelPolicyResolutionError,
@@ -33,6 +34,7 @@ export interface ResolveEffectiveModelInput {
   userOverride?: EffectiveModelSelectorInput;
   parent?: ResolvedModel;
   parentContextId?: string;
+  parentResolvedModelId?: string;
   policyContext: ResolveEffectiveModelPolicyContext;
 }
 
@@ -40,6 +42,37 @@ interface SelectedResolution {
   selector: ModelSelector;
   layer: Exclude<ResolutionLayer, 'policy'>;
   context?: ResolutionContext;
+}
+
+function normalizeParentResolvedModelId(modelId: string | undefined): string | undefined {
+  const trimmed = modelId?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    validateModelId(trimmed);
+  } catch {
+    process.stderr.write(
+      `[model-resolution] WARN: WAVEMILL_RESOLVED_MODEL='${trimmed}' is not a recognized model ID — ignoring and falling back to configured default.\n`
+    );
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+function parentFromResolvedModelId(modelId: string | undefined): ResolvedModel | undefined {
+  const normalized = normalizeParentResolvedModelId(modelId);
+  if (!normalized) {
+    return undefined;
+  }
+
+  return {
+    requested: { kind: 'pinned', modelId: normalized },
+    resolved: normalized,
+    source: 'pinned',
+  };
 }
 
 function normalizeSelector(input: EffectiveModelSelectorInput): ModelSelector | undefined {
@@ -96,8 +129,13 @@ function selectRequestedResolution(
   userOverride: ModelSelector | undefined,
   parent: ResolvedModel | undefined,
   parentContextId: string | undefined,
+  parentResolvedModelId: string | undefined,
   policyContext: ResolveEffectiveModelPolicyContext,
 ): SelectedResolution {
+  const inheritedParent = parent
+    ?? parentFromResolvedModelId(parentResolvedModelId)
+    ?? parentFromResolvedModelId(process.env.WAVEMILL_RESOLVED_MODEL);
+
   if (userOverride && userOverride.kind !== 'inherit') {
     return { selector: userOverride, layer: 'user' };
   }
@@ -106,15 +144,15 @@ function selectRequestedResolution(
     return { selector: workspaceSelector, layer: 'workspace' };
   }
 
-  if (workspaceSelector?.kind === 'inherit') {
-    // Parent inheritance only happens when the checked-in layer explicitly asks
-    // for it. An absent workspace selector falls through to deterministic defaulting.
-    if (parent) {
+  if (userOverride?.kind === 'inherit' || workspaceSelector?.kind === 'inherit') {
+    // An explicit inherit request uses parent context when available, regardless
+    // of whether it came from a checked-in selector or a caller override.
+    if (inheritedParent) {
       return {
         selector: { kind: 'inherit' },
         layer: 'parent',
         context: {
-          parent,
+          parent: inheritedParent,
           parentContextId,
         },
       };
@@ -153,6 +191,7 @@ export function resolveEffectiveModel(
     userOverride,
     input.parent,
     input.parentContextId,
+    input.parentResolvedModelId,
     input.policyContext,
   );
 
