@@ -133,6 +133,21 @@ if [[ -z "$FORCE_MODEL" ]]; then
   unset FORCE_MODEL
 fi
 
+WAVEMILL_PLANNER_MODEL="$(trim_outer_whitespace "${WAVEMILL_PLANNER_MODEL:-}")"
+if [[ -z "$WAVEMILL_PLANNER_MODEL" ]]; then
+  unset WAVEMILL_PLANNER_MODEL
+fi
+
+WAVEMILL_CODER_MODEL="$(trim_outer_whitespace "${WAVEMILL_CODER_MODEL:-}")"
+if [[ -z "$WAVEMILL_CODER_MODEL" ]]; then
+  unset WAVEMILL_CODER_MODEL
+fi
+
+WAVEMILL_REVIEWER_MODEL="$(trim_outer_whitespace "${WAVEMILL_REVIEWER_MODEL:-}")"
+if [[ -z "$WAVEMILL_REVIEWER_MODEL" ]]; then
+  unset WAVEMILL_REVIEWER_MODEL
+fi
+
 
 command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq)"; exit 1; }
 command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
@@ -145,6 +160,11 @@ fi
 
 # Check agent authentication before launching tasks
 if [[ "$DRY_RUN" != "true" ]] && ! agent_check_auth "$AGENT_CMD"; then
+  exit 1
+fi
+
+if [[ -n "${FORCE_MODEL:-}" && (-n "${WAVEMILL_PLANNER_MODEL:-}" || -n "${WAVEMILL_CODER_MODEL:-}" || -n "${WAVEMILL_REVIEWER_MODEL:-}") ]]; then
+  log_error "FORCE_MODEL cannot be combined with planner/coder/reviewer model overrides"
   exit 1
 fi
 
@@ -358,6 +378,16 @@ write_launch_plan() {
     challenge_model="${TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]:-}"
     migration_number="$(jq -r --arg issue "$issue" '.migrationReservations[$issue] // empty' "$STATE_FILE" 2>/dev/null || echo "")"
     task_agent="${TASK_AGENT_BY_ISSUE[$issue]:-$AGENT_CMD}"
+
+    if [[ -n "${FORCE_MODEL:-}" ]]; then
+      route_planner="$FORCE_MODEL"
+      route_coder="$FORCE_MODEL"
+      route_reviewer="$FORCE_MODEL"
+    else
+      [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && route_planner="$WAVEMILL_PLANNER_MODEL"
+      [[ -n "${WAVEMILL_CODER_MODEL:-}" ]] && route_coder="$WAVEMILL_CODER_MODEL"
+      [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && route_reviewer="$WAVEMILL_REVIEWER_MODEL"
+    fi
     # Extract per-task queue metadata when queue plan is available (HOK-1532)
     depends_on="[]"
     base_from_task="null"
@@ -1781,6 +1811,18 @@ if [[ -n "${FORCE_MODEL:-}" ]]; then
   fi
   log "info" "FORCE_MODEL=$FORCE_MODEL - skipping router"
 elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
+  if [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && ! agent_validate_model "$WAVEMILL_PLANNER_MODEL" "$REPO_DIR"; then
+    log_error "Invalid WAVEMILL_PLANNER_MODEL: $WAVEMILL_PLANNER_MODEL"
+    exit 1
+  fi
+  if [[ -n "${WAVEMILL_CODER_MODEL:-}" ]] && ! agent_validate_model "$WAVEMILL_CODER_MODEL" "$REPO_DIR"; then
+    log_error "Invalid WAVEMILL_CODER_MODEL: $WAVEMILL_CODER_MODEL"
+    exit 1
+  fi
+  if [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && ! agent_validate_model "$WAVEMILL_REVIEWER_MODEL" "$REPO_DIR"; then
+    log_error "Invalid WAVEMILL_REVIEWER_MODEL: $WAVEMILL_REVIEWER_MODEL"
+    exit 1
+  fi
   ROUTE_TOOL="$TOOLS_DIR/route-task.ts"
   ROUTE_BATCH_TOOL="$TOOLS_DIR/route-tasks.ts"
   if [[ -f "$ROUTE_TOOL" ]]; then
@@ -3116,7 +3158,7 @@ approve_plan() {
 
 resolve_stage_result_model() {
   local feature_dir="$1" stage="$2" fallback="${3:-}"
-  local model=""
+  local model="" launch_model=""
 
   case "$stage" in
     coding)
@@ -3124,19 +3166,25 @@ resolve_stage_result_model() {
       [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "coderModel")
       [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.coding-result.json" 2>/dev/null || echo "")
       model="$(resolve_phase_model "coding" "$model" "${fallback:-claude-opus-4-7}")"
+      if declare -F agent_resolve_model >/dev/null 2>&1; then
+        launch_model="$(agent_resolve_model "coder" "$model" "$REPO_DIR" 2>/dev/null || true)"
+      fi
       ;;
     review)
       model=$(read_phase_config "$feature_dir" "review" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "reviewerModel")
       [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.review-result.json" 2>/dev/null || echo "")
       model="$(resolve_phase_model "review" "$model" "${fallback:-claude-sonnet-4-6}")"
+      if declare -F agent_resolve_model >/dev/null 2>&1; then
+        launch_model="$(agent_resolve_model "reviewer" "$model" "$REPO_DIR" 2>/dev/null || true)"
+      fi
       ;;
     *)
       model="$fallback"
       ;;
   esac
 
-  printf '%s\n' "$model"
+  printf '%s\n' "${launch_model:-$model}"
 }
 
 # Validate that planning stayed within its phase boundary before coding starts.
@@ -3675,6 +3723,9 @@ _restore_inflight_task_window_if_missing() {
       model=$(read_phase_config "$feature_dir" "planning" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$issue" "plannerModel")
       model="$(resolve_phase_model "planning" "$model" "claude-sonnet-4-6")"
+      if declare -F agent_resolve_model >/dev/null 2>&1; then
+        model="$(agent_resolve_model "planner" "$model" "$REPO_DIR")" || return 1
+      fi
       depth=$(read_phase_config "$feature_dir" "planning" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "planDepth")
       [[ -z "$depth" ]] && depth="light"
@@ -3704,6 +3755,9 @@ _restore_inflight_task_window_if_missing() {
       model=$(read_phase_config "$feature_dir" "coding" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$issue" "coderModel")
       model="$(resolve_phase_model "coding" "$model" "claude-opus-4-7")"
+      if declare -F agent_resolve_model >/dev/null 2>&1; then
+        model="$(agent_resolve_model "coder" "$model" "$REPO_DIR")" || return 1
+      fi
       depth=$(read_phase_config "$feature_dir" "coding" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "codeDepth")
       [[ -z "$depth" ]] && depth="medium"
@@ -6874,6 +6928,22 @@ EOF
     fi
   fi
 
+  if [[ -z "${FORCE_MODEL:-}" ]]; then
+    [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && planner_model="$WAVEMILL_PLANNER_MODEL"
+    [[ -n "${WAVEMILL_CODER_MODEL:-}" ]] && task_model="$WAVEMILL_CODER_MODEL"
+    [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
+  fi
+
+  if [[ -n "$planner_model" ]]; then
+    planner_agent="$(agent_resolve_from_model "$planner_model")"
+  fi
+  if [[ -n "$task_model" ]]; then
+    task_agent_cmd="$(agent_resolve_from_model "$task_model")"
+  fi
+  if [[ -n "$reviewer_model" ]]; then
+    reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+  fi
+
   # Save to state ledger (after routing so agent is known)
   local initial_phase="planning"
   # If this task was already marked as a challenge participant (e.g. challenger
@@ -7088,21 +7158,25 @@ Implement from the issue description plus direct codebase analysis."
   fi
 
   # Launch planning phase directly with the routed model (skip routing agent)
-  local resolved_planner_agent
-  resolved_planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")"
+  local planner_launch_model resolved_planner_agent
+  planner_launch_model="${planner_model:-claude-sonnet-4-6}"
+  if declare -F agent_resolve_model >/dev/null 2>&1; then
+    planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-4-6}" "$REPO_DIR")" || return 1
+  fi
+  resolved_planner_agent="$(agent_resolve_from_model "$planner_launch_model")"
 
   # Record planning stage as running before the first launch so the monitor
   # keeps the task active even before any planning artifacts exist.
-  write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"
+  write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "$planner_launch_model"
 
   launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-    "${planner_model:-claude-sonnet-4-6}" "$resolved_planner_agent" "${plan_depth:-light}"
+    "$planner_launch_model" "$resolved_planner_agent" "${plan_depth:-light}"
   local launch_rc=$?
   if ! handle_phase_launch_result "$issue" "$feature_dir" "planning" "routing" "$launch_rc" "$win" \
-    "$resolved_planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
+    "$resolved_planner_agent" "$planner_launch_model"; then
     return 0
   fi
-  log "status" "Routing complete (direct), launched planning with ${planner_model:-claude-sonnet-4-6}"
+  log "status" "Routing complete (direct), launched planning with $planner_launch_model"
 
   log "status" "$issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
   [[ -n "$planner_model" ]] && log "info" "Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
@@ -8098,6 +8172,12 @@ monitor_issue_state() {
               coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
               reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
 
+              if [[ -z "${FORCE_MODEL:-}" ]]; then
+                [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && planner_model="$WAVEMILL_PLANNER_MODEL"
+                [[ -n "${WAVEMILL_CODER_MODEL:-}" ]] && coder_model="$WAVEMILL_CODER_MODEL"
+                [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
+              fi
+
               # Save routing results to state
               current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
               linear_issue=$(get_linear_issue_id "$ISSUE")
@@ -8108,7 +8188,11 @@ monitor_issue_state() {
 
               # Transition to planning phase
               set_task_phase "$ISSUE" "planning"
-              planner_agent="$(agent_resolve_from_model "$planner_model")"
+              planner_launch_model="$planner_model"
+              if declare -F agent_resolve_model >/dev/null 2>&1; then
+                planner_launch_model="$(agent_resolve_model "planner" "$planner_model" "$REPO_DIR")" || return 1
+              fi
+              planner_agent="$(agent_resolve_from_model "$planner_launch_model")"
 
               # Get title from state or Linear
               title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -8118,11 +8202,11 @@ monitor_issue_state() {
               fi
 
               # Record planning stage as running (HOK-1177)
-              write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_model"
+              write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_launch_model"
 
-              launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_model" "$planner_agent" "$plan_depth"
+              launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_launch_model" "$planner_agent" "$plan_depth"
               local launch_rc=$?
-              if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "planning" "routing" "$launch_rc" "$WIN" "$planner_agent" "$planner_model"; then
+              if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "planning" "routing" "$launch_rc" "$WIN" "$planner_agent" "$planner_launch_model"; then
                 return 0
               fi
               set_window_attention_state "$WIN" "clear"
@@ -8323,13 +8407,18 @@ monitor_issue_state() {
               fi
             fi
             coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
+            [[ -n "${WAVEMILL_CODER_MODEL:-}" && -z "${FORCE_MODEL:-}" ]] && coder_model="$WAVEMILL_CODER_MODEL"
             code_depth=$(read_phase_config "$FEATURE_DIR" "coding" "depth")
             [[ -z "$code_depth" ]] && code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
 
             # Transition to coding phase
             set_task_phase "$ISSUE" "coding"
-            coder_agent="$(agent_resolve_from_model "$coder_model")"
+            coder_launch_model="$coder_model"
+            if declare -F agent_resolve_model >/dev/null 2>&1; then
+              coder_launch_model="$(agent_resolve_model "coder" "$coder_model" "$REPO_DIR")" || return 1
+            fi
+            coder_agent="$(agent_resolve_from_model "$coder_launch_model")"
 
             # Get title
             title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -8339,11 +8428,11 @@ monitor_issue_state() {
             fi
 
             # Record coding stage as running (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_model"
+            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model"
 
-            launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_model" "$coder_agent" "$code_depth"
+            launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
-            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "coding" "planning" "$launch_rc" "$WIN" "$coder_agent" "$coder_model"; then
+            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "coding" "planning" "$launch_rc" "$WIN" "$coder_agent" "$coder_launch_model"; then
                 return 0
             fi
             set_window_attention_state "$WIN" "clear"
@@ -8462,13 +8551,18 @@ monitor_issue_state() {
               [[ -z "$reviewer_model" ]] && reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
             fi
             reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
+            [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" && -z "${FORCE_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
             review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
             [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")
             [[ -z "$review_mode" ]] && review_mode="static"
 
             # Transition to review phase
             set_task_phase "$ISSUE" "review"
-            reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+            reviewer_launch_model="$reviewer_model"
+            if declare -F agent_resolve_model >/dev/null 2>&1; then
+              reviewer_launch_model="$(agent_resolve_model "reviewer" "$reviewer_model" "$REPO_DIR")" || return 1
+            fi
+            reviewer_agent="$(agent_resolve_from_model "$reviewer_launch_model")"
 
             # Get title
             title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -8478,11 +8572,11 @@ monitor_issue_state() {
             fi
 
             # Record review stage as running (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "review" "running" "$reviewer_agent" "$reviewer_model"
+            write_stage_result "$FEATURE_DIR" "review" "running" "$reviewer_agent" "$reviewer_launch_model"
 
-            launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
+            launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_launch_model" "$reviewer_agent" "$review_mode"
             local launch_rc=$?
-            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "review" "coding" "$launch_rc" "$WIN" "$reviewer_agent" "$reviewer_model"; then
+            if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "review" "coding" "$launch_rc" "$WIN" "$reviewer_agent" "$reviewer_launch_model"; then
               return 0
             fi
             set_window_attention_state "$WIN" "clear"

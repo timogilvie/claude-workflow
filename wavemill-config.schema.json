@@ -172,7 +172,7 @@
                 "model": {
                     "type": "string",
                     "default": "claude-opus-4-7",
-                    "description": "Claude model to use for plan decomposition and research. Can be overridden with PLAN_MODEL env var."
+                    "description": "Model selector for plan decomposition and research. Accepts a family alias such as 'opus', 'inherit', or a pinned model ID such as 'claude-opus-4-7'. Can be overridden with PLAN_MODEL env var."
                 },
                 "interactive": {
                     "type": "boolean",
@@ -535,7 +535,7 @@
                     "description": "Probability that a selected mill task becomes a challenge task."
                 },
                 "models": {
-                    "description": "Pool of models eligible for challenge. Null means use router.models.",
+                    "description": "Pool of model selectors eligible for challenge. Entries may be family aliases, 'inherit', or pinned model IDs. Null means use router.models.",
                     "oneOf": [
                         {
                             "type": "array",
@@ -559,7 +559,7 @@
                     "type": "string",
                     "default": "claude-opus-4-7",
                     "minLength": 1,
-                    "description": "Model used as the LLM judge for challenge PR comparison."
+                    "description": "Model selector used as the LLM judge for challenge PR comparison. Accepts a family alias such as 'opus', 'inherit', or a pinned model ID such as 'claude-opus-4-7'."
                 },
                 "autoMergeWinner": {
                     "type": "boolean",
@@ -1103,7 +1103,7 @@
                 "defaultModel": {
                     "type": "string",
                     "default": "claude-sonnet-4-6",
-                    "description": "Fallback model when insufficient eval data exists for routing."
+                    "description": "Fallback model selector when insufficient eval data exists for routing. Accepts a family alias such as 'sonnet', 'inherit', or a pinned model ID such as 'claude-sonnet-4-6'."
                 },
                 "minRecords": {
                     "type": "integer",
@@ -1123,7 +1123,7 @@
                         "type": "string"
                     },
                     "default": [],
-                    "description": "Candidate model IDs the router may recommend. Empty array means all models found in eval data."
+                    "description": "Candidate model selectors the router may recommend. Entries may be family aliases, 'inherit', or pinned model IDs. Empty array means all models found in eval data."
                 },
                 "availableModels": {
                     "type": "object",
@@ -1134,21 +1134,21 @@
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Models available for the planning stage."
+                            "description": "Model selectors available for the planning stage. Entries may be family aliases, 'inherit', or pinned model IDs."
                         },
                         "coder": {
                             "type": "array",
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Models available for the coding stage."
+                            "description": "Model selectors available for the coding stage. Entries may be family aliases, 'inherit', or pinned model IDs."
                         },
                         "reviewer": {
                             "type": "array",
                             "items": {
                                 "type": "string"
                             },
-                            "description": "Models available for the review stage."
+                            "description": "Model selectors available for the review stage. Entries may be family aliases, 'inherit', or pinned model IDs."
                         }
                     },
                     "additionalProperties": false
@@ -1342,7 +1342,7 @@
                         "model": {
                             "type": "string",
                             "default": "claude-haiku-4-5-20251001",
-                            "description": "LLM model to use for task packet review. Should be fast and cheap (Haiku recommended)."
+                            "description": "Model selector to use for task packet review. Accepts a family alias such as 'haiku', 'inherit', or a pinned model ID such as 'claude-haiku-4-5-20251001'. Should be fast and cheap."
                         },
                         "provider": {
                             "type": "string",

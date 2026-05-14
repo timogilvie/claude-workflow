@@ -14,11 +14,13 @@ source "$script_dir/routing-emitter.sh"
 
 # Resolve the agent CLI command for a given model ID using prefix heuristics.
 # Mirrors the logic in shared/lib/model-router.ts resolveAgent().
-# Args: $1 = model ID (e.g. "claude-opus-4-6", "gpt-5.3-codex")
+# Args: $1 = model selector or model ID (e.g. "opus", "claude-opus-4-6", "gpt-5.5")
 # Prints: agent command name (e.g. "claude", "codex")
 agent_resolve_from_model() {
   local model="$1"
   case "$model" in
+    opus|sonnet|haiku|opus-*|sonnet-*|haiku-*) echo "claude" ;;
+    gpt-5.5|gpt-5.5-*|gemini-pro|gemini-pro-*) echo "codex" ;;
     claude-*) echo "claude" ;;
     deepseek-*) echo "claude" ;;
     gpt-*|o[0-9]*) echo "codex" ;;
@@ -40,8 +42,8 @@ agent_binary_for_cmd() {
 # MODEL VALIDATION
 # ============================================================================
 
-# Validate a model ID exists in config (pricing or agentMap).
-# Args: $1 = model ID, $2 = repo directory (optional)
+# Validate a model selector token accepted by the shared resolver.
+# Args: $1 = selector token, $2 = repo directory (optional)
 # Returns: 0 if valid, 1 if invalid (prints error to stderr)
 # Note: Uses TOOLS_DIR when set, otherwise infers paths from the repo argument.
 agent_validate_model() {
@@ -57,13 +59,47 @@ agent_validate_model() {
   local lib_dir="${tools_dir%/tools}/shared/lib"
   local validator="model-validator.ts"
 
+  if ! agent_model_helper_available; then
+    echo "error: model validation requires tsx or npx -- install Node.js tooling to use model selectors" >&2
+    return 1
+  fi
+
   # Call TypeScript validator (cd to lib_dir first for imports to work)
   # Exits 0 if valid, 1 if invalid with error message
-  if (cd "$lib_dir" && npx tsx "$validator" "$model" "$repo_dir" 2>&1); then
+  if (cd "$lib_dir" && npx tsx "$validator" --selector-token "$model" "$repo_dir" >/dev/null); then
     return 0
   else
     return 1
   fi
+}
+
+agent_resolve_model() {
+  local role="$1"
+  local model="$2"
+  local repo_dir="${3:-$(pwd)}"
+  local resolved_model=""
+
+  repo_dir="$(cd "$repo_dir" 2>/dev/null && pwd || echo "$repo_dir")"
+
+  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local lib_dir="${tools_dir%/tools}/shared/lib"
+  local validator="model-validator.ts"
+
+  if ! agent_model_helper_available; then
+    echo "error: model resolution requires tsx or npx -- install Node.js tooling to use model selectors" >&2
+    return 1
+  fi
+
+  if ! cd "$lib_dir"; then
+    return 1
+  fi
+
+  if resolved_model="$(npx tsx "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
+    printf '%s\n' "$resolved_model"
+    return 0
+  fi
+
+  return 1
 }
 
 agent_model_looks_like_depth_tag() {
@@ -102,6 +138,10 @@ agent_runtime_resource_selection_enabled() {
   # shell path aligned so baseline prompt rendering does not depend on npx/tsx.
   # Reads through wavemill_load_config so .wavemill-config.local.json overrides
   # take effect.
+  if ! declare -F wavemill_load_config >/dev/null 2>&1; then
+    return 1
+  fi
+
   if command -v jq >/dev/null 2>&1; then
     wavemill_load_config "$repo_dir" | jq -e --arg surface "$surface" '
       (.resources.runtimeSelection.enabled == true)
@@ -125,6 +165,11 @@ agent_run_tsx_tool() {
     npx tsx "$tool" "$@"
   fi
 }
+
+agent_model_helper_available() {
+  command -v tsx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
+}
+
 
 agent_model_is_deepseek() {
   local model="${1:-}"
@@ -1276,6 +1321,15 @@ agent_launch_autonomous() {
     feature_dir="$repo_dir/features/$WAVEMILL_FEATURE_SLUG"
   fi
 
+  if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
+    echo "Error: invalid model selector '$model' for $agent_cmd" >&2
+    return 1
+  fi
+
+  if [[ -n "$model" ]]; then
+    model="$(agent_resolve_model "${role:-coder}" "$model" "$repo_dir")"
+  fi
+
   local model_flag=""
   if [[ -n "$model" ]]; then
     model_flag=" --model $model"
@@ -1573,6 +1627,16 @@ agent_launch_interactive() {
       _agent_log_warn "Launching without explicit --model override"
       model=""
     fi
+  fi
+
+  if [[ -n "$model" ]]; then
+    local requested_model="$model"
+    local resolved_model=""
+    if ! resolved_model="$(agent_resolve_model "${role:-coder}" "$requested_model" "$repo_dir" 2>/dev/null)"; then
+      _agent_log_warn "Failed to resolve model selector '$requested_model' for $agent_cmd"
+      return 1
+    fi
+    model="$resolved_model"
   fi
 
   if [[ -n "$model" ]] && agent_model_is_deepseek "$model"; then

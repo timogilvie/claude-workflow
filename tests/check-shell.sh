@@ -38,6 +38,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-backlog-budget.test.sh \
   "$REPO_DIR"/tests/wavemill-dependency-queue-filter.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
+  "$REPO_DIR"/tests/wavemill-mill-model-flags.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
