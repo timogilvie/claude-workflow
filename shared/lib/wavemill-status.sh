@@ -79,6 +79,27 @@ resolve_dashboard_refresh_seconds() {
 
 REFRESH="$(resolve_dashboard_refresh_seconds)"
 
+DEFAULT_TIP_REFRESH=60
+MAX_TIP_REFRESH=3600
+
+resolve_tip_refresh_seconds() {
+  local raw="${WAVEMILL_TIP_REFRESH_SECONDS:-$DEFAULT_TIP_REFRESH}"
+  if [[ "$raw" =~ ^[0-9]+$ ]] && (( raw >= 1 && raw <= MAX_TIP_REFRESH )); then
+    printf '%s\n' "$raw"
+    return 0
+  fi
+  if [[ "${WAVEMILL_TIP_REFRESH_WARNED:-0}" -eq 0 ]]; then
+    printf 'wavemill: invalid WAVEMILL_TIP_REFRESH_SECONDS=%s, using default %s\n' \
+      "$raw" "$DEFAULT_TIP_REFRESH" >&2
+    WAVEMILL_TIP_REFRESH_WARNED=1
+  fi
+  printf '%s\n' "$DEFAULT_TIP_REFRESH"
+}
+
+TIP_REFRESH="$(resolve_tip_refresh_seconds)"
+_TIP_LAST_REFRESH=0
+_TIP_CACHED=""
+
 # Hide cursor during rendering
 tput civis 2>/dev/null || true
 trap 'tput cnorm 2>/dev/null || true' EXIT
@@ -989,8 +1010,13 @@ render_dashboard() {
   render_active_section
   render_project_context_suggestion
 
-  usage_tip="$(wavemill_pick_usage_tip)"
-  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ %s${N}${EL}\n" "$usage_tip" >> "$FRAME"
+  local now
+  now=$(date +%s)
+  if [[ -z "$_TIP_CACHED" ]] || (( now - _TIP_LAST_REFRESH >= TIP_REFRESH )); then
+    _TIP_CACHED="$(wavemill_pick_usage_tip)"
+    _TIP_LAST_REFRESH="$now"
+  fi
+  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ %s${N}${EL}\n" "$_TIP_CACHED" >> "$FRAME"
 }
 
 run_dashboard() {

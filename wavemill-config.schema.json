@@ -204,6 +204,12 @@
                     "type": "boolean",
                     "default": true,
                     "description": "When true, write all control-pane messages to a per-session log file in .wavemill/logs/ even if they are hidden by the current verbosity setting."
+                },
+                "tipRefreshSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3600,
+                    "description": "How often (in seconds) the dashboard footer tip cycles. Default: 60. Controls only tip rotation; does not affect the main dashboard poll interval."
                 }
             },
             "additionalProperties": false

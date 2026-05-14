@@ -16,6 +16,7 @@ declare -a WAVEMILL_USAGE_TIPS=(
   "wavemill tend --once: run one integration queue pass"
   "wavemill context init --force: refresh subsystem specs"
   "WAVEMILL_DASHBOARD_REFRESH_SECONDS=1..10: tune refresh"
+  "WAVEMILL_TIP_REFRESH_SECONDS=60: tune tip cadence"
   "Ctrl+B N: jump to the next done task"
   "challenge.autoMergeWinner=true: auto-merge challenge winners"
   "constraints.cleanupAfterMerge=true: clean merged constraints"
