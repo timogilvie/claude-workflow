@@ -1493,8 +1493,43 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.23.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.23.0');
+test('Prompt-size diagnostics validate and schema stays in parity', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.24.0',
+    score: 0,
+    scoreBand: 'Failure',
+    rationale: 'Prompt exceeded the configured hard limit before judge submission.',
+    failure_reason: 'eval_prompt_too_large',
+    prompt_bytes: 9_500_000,
+    prompt_component_bytes: {
+      task_prompt: 3200,
+      pr_review_output: 8_000_000,
+      template_static: 4000,
+    },
+    prompt_truncated: true,
+    prompt_truncation_summary: {
+      pr_review_output: 6_500_000,
+    },
+    prompt_size_limit_bytes: 9_437_184,
+    prompt_soft_limit_bytes: 6_291_456,
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.failure_reason?.type, 'string');
+  assert.equal(properties.prompt_bytes?.type, 'integer');
+  assert.equal(properties.prompt_component_bytes?.type, 'object');
+  assert.equal(properties.prompt_truncated?.type, 'boolean');
+  assert.equal(properties.prompt_truncation_summary?.type, 'object');
+  assert.equal(properties.prompt_size_limit_bytes?.type, 'integer');
+  assert.equal(properties.prompt_soft_limit_bytes?.type, 'integer');
+});
+
+test('Schema version constant is 1.24.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.24.0');
 });
 
 test('Legacy rows still validate without nonRewardReason', () => {

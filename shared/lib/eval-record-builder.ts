@@ -34,6 +34,7 @@ import type {
   RoutingDecision,
   RubricCriterion,
 } from './eval-schema.ts';
+import type { PromptSizeDiagnostics } from './eval-prompt-size.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
@@ -375,6 +376,34 @@ export function attachWorkflowCostMetadata(
       reason: failure.reason,
       ...failure.diagnostics,
     };
+  }
+}
+
+export function attachPromptSizeDiagnostics(
+  record: EvalRecord | null | undefined,
+  diagnostics?: PromptSizeDiagnostics | null,
+): void {
+  if (!record || !diagnostics) {
+    return;
+  }
+
+  if (typeof diagnostics.prompt_bytes === 'number') {
+    record.prompt_bytes = diagnostics.prompt_bytes;
+  }
+  if (diagnostics.prompt_component_bytes) {
+    record.prompt_component_bytes = { ...diagnostics.prompt_component_bytes };
+  }
+  if (typeof diagnostics.prompt_truncated === 'boolean') {
+    record.prompt_truncated = diagnostics.prompt_truncated;
+  }
+  if (diagnostics.prompt_truncation_summary) {
+    record.prompt_truncation_summary = { ...diagnostics.prompt_truncation_summary };
+  }
+  if (typeof diagnostics.prompt_size_limit_bytes === 'number') {
+    record.prompt_size_limit_bytes = diagnostics.prompt_size_limit_bytes;
+  }
+  if (typeof diagnostics.prompt_soft_limit_bytes === 'number') {
+    record.prompt_soft_limit_bytes = diagnostics.prompt_soft_limit_bytes;
   }
 }
 

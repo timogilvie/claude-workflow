@@ -31,7 +31,19 @@ import { loadPricingTable } from './workflow-cost.ts';
 import { createPromptArtifact, type PromptArtifact } from './prompt-hash.ts';
 import { errorMessage } from './error-utils.ts';
 import { getLatestSession } from './session.ts';
-import { attachEligibility, attachManifestRef } from './eval-record-builder.ts';
+import {
+  attachEligibility,
+  attachManifestRef,
+  attachPromptSizeDiagnostics,
+} from './eval-record-builder.ts';
+import {
+  byteLengthUtf8,
+  checkPromptSize,
+  measurePromptComponents,
+  truncatePromptComponents,
+  type PromptComponentId,
+  type PromptSizeDiagnostics,
+} from './eval-prompt-size.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -41,6 +53,9 @@ const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
 const MAX_RETRIES = 2;
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_PROMPT_SIZE_LIMIT_BYTES = 9 * 1024 * 1024;
+const DEFAULT_PROMPT_SOFT_LIMIT_BYTES = 6 * 1024 * 1024;
+const DEFAULT_PROMPT_PER_COMPONENT_MAX_BYTES = 2 * 1024 * 1024;
 
 function getEvalTimeoutMs(): number {
   const raw = process.env.EVAL_TIMEOUT_MS;
@@ -104,6 +119,13 @@ export interface EvalInput {
 interface JudgeConfig {
   model: string;
   provider: typeof SUPPORTED_PROVIDERS[number];
+}
+
+interface ResolvedPromptSizeConfig {
+  hardLimitBytes: number;
+  softLimitBytes: number;
+  perComponentMaxBytes: number;
+  truncationEnabled: boolean;
 }
 
 /**
@@ -191,7 +213,24 @@ async function loadPromptTemplate(): Promise<string> {
   return _promptTemplate;
 }
 
-function buildJudgePrompt(
+function formatInterventionText(
+  interventions: InterventionMeta[],
+  interventionText?: string,
+): string {
+  if (interventionText) {
+    return interventionText;
+  }
+
+  if (interventions && interventions.length > 0) {
+    return interventions
+      .map((i, idx) => `${idx + 1}. [${i.severity || 'unknown'}] ${i.description}`)
+      .join('\n');
+  }
+
+  return 'No interventions recorded.';
+}
+
+function buildJudgePromptComponents(
   template: string,
   taskPrompt: string,
   prReviewOutput: string,
@@ -199,28 +238,88 @@ function buildJudgePrompt(
   interventionText?: string,
   taskPacket?: string,
   planContent?: string,
-  selfReviewSummary?: string
-): string {
-  let finalInterventionText: string;
-  if (interventionText) {
-    // Use pre-formatted structured intervention text (from intervention-detector)
-    finalInterventionText = interventionText;
-  } else if (interventions && interventions.length > 0) {
-    // Fall back to legacy flat list format
-    finalInterventionText = interventions
-      .map((i, idx) => `${idx + 1}. [${i.severity || 'unknown'}] ${i.description}`)
-      .join('\n');
-  } else {
-    finalInterventionText = 'No interventions recorded.';
-  }
+  selfReviewSummary?: string,
+): Record<PromptComponentId, string> {
+  return {
+    task_prompt: taskPrompt,
+    pr_review_output: prReviewOutput,
+    intervention_metadata: formatInterventionText(interventions, interventionText),
+    task_packet: taskPacket || 'Not available for this workflow.',
+    plan_content: planContent || 'Not available for this workflow.',
+    self_review_summary: selfReviewSummary || 'Not available for this workflow.',
+    template_static: extractTemplateStaticText(template),
+  };
+}
 
+function renderJudgePrompt(
+  template: string,
+  components: Record<PromptComponentId, string>,
+): string {
   return template
-    .replace('{{TASK_PROMPT}}', taskPrompt)
-    .replace('{{PR_REVIEW_OUTPUT}}', prReviewOutput)
-    .replace('{{INTERVENTION_METADATA}}', finalInterventionText)
-    .replace('{{TASK_PACKET}}', taskPacket || 'Not available for this workflow.')
-    .replace('{{PLAN_CONTENT}}', planContent || 'Not available for this workflow.')
-    .replace('{{SELF_REVIEW_SUMMARY}}', selfReviewSummary || 'Not available for this workflow.');
+    .replace('{{TASK_PROMPT}}', components.task_prompt)
+    .replace('{{PR_REVIEW_OUTPUT}}', components.pr_review_output)
+    .replace('{{INTERVENTION_METADATA}}', components.intervention_metadata)
+    .replace('{{TASK_PACKET}}', components.task_packet)
+    .replace('{{PLAN_CONTENT}}', components.plan_content)
+    .replace('{{SELF_REVIEW_SUMMARY}}', components.self_review_summary);
+}
+
+function extractTemplateStaticText(template: string): string {
+  return template
+    .replace('{{TASK_PROMPT}}', '')
+    .replace('{{PR_REVIEW_OUTPUT}}', '')
+    .replace('{{INTERVENTION_METADATA}}', '')
+    .replace('{{TASK_PACKET}}', '')
+    .replace('{{PLAN_CONTENT}}', '')
+    .replace('{{SELF_REVIEW_SUMMARY}}', '');
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
+}
+
+function resolvePromptSizeConfig(): ResolvedPromptSizeConfig {
+  const evalConfig = getEvalConfig();
+  const hardLimitBytes = normalizePositiveInteger(
+    evalConfig.promptSizeLimitBytes,
+    DEFAULT_PROMPT_SIZE_LIMIT_BYTES,
+  );
+  const requestedSoftLimitBytes = normalizePositiveInteger(
+    evalConfig.promptTruncation?.softLimitBytes,
+    DEFAULT_PROMPT_SOFT_LIMIT_BYTES,
+  );
+  const softLimitBytes = Math.min(requestedSoftLimitBytes, hardLimitBytes);
+  const perComponentMaxBytes = normalizePositiveInteger(
+    evalConfig.promptTruncation?.perComponentMaxBytes,
+    DEFAULT_PROMPT_PER_COMPONENT_MAX_BYTES,
+  );
+
+  return {
+    hardLimitBytes,
+    softLimitBytes,
+    perComponentMaxBytes,
+    truncationEnabled: evalConfig.promptTruncation?.enabled !== false,
+  };
+}
+
+function toPromptSizeDiagnostics(
+  promptBytes: number,
+  componentBytes: Record<PromptComponentId, number>,
+  promptSizeConfig: ResolvedPromptSizeConfig,
+  truncationSummary?: Partial<Record<PromptComponentId, number>>,
+): PromptSizeDiagnostics {
+  return {
+    prompt_bytes: promptBytes,
+    prompt_component_bytes: { ...componentBytes },
+    prompt_truncated: Boolean(truncationSummary && Object.keys(truncationSummary).length > 0),
+    ...(truncationSummary && Object.keys(truncationSummary).length > 0
+      ? { prompt_truncation_summary: { ...truncationSummary } }
+      : {}),
+    prompt_size_limit_bytes: promptSizeConfig.hardLimitBytes,
+    prompt_soft_limit_bytes: promptSizeConfig.softLimitBytes,
+  };
 }
 
 async function callClaudeWithRetry(prompt: string, model: string): Promise<LLMCallResult> {
@@ -556,9 +655,10 @@ export async function evaluateTask(
   const model = process.env.EVAL_MODEL || judgeConfig.model;
   const provider = judgeConfig.provider;
   const pricingTable = loadPricingTable();
+  const promptSizeConfig = resolvePromptSizeConfig();
 
   const template = await loadPromptTemplate();
-  const prompt = buildJudgePrompt(
+  const initialPromptComponents = buildJudgePromptComponents(
     template,
     taskPrompt,
     prReviewOutput,
@@ -568,6 +668,44 @@ export async function evaluateTask(
     planContent,
     selfReviewSummary
   );
+  let promptComponents = initialPromptComponents;
+  let prompt = renderJudgePrompt(template, promptComponents);
+  let promptMeasurement = measurePromptComponents(promptComponents);
+  let promptBytes = byteLengthUtf8(prompt);
+  let promptDiagnostics: PromptSizeDiagnostics | undefined;
+
+  if (promptBytes > promptSizeConfig.softLimitBytes) {
+    console.warn('[eval] Judge prompt exceeded soft limit before submission.', {
+      promptBytes,
+      promptSoftLimitBytes: promptSizeConfig.softLimitBytes,
+      promptSizeLimitBytes: promptSizeConfig.hardLimitBytes,
+      promptTruncationEnabled: promptSizeConfig.truncationEnabled,
+      promptComponentBytes: promptMeasurement.componentBytes,
+    });
+
+    if (promptSizeConfig.truncationEnabled) {
+      const truncationResult = truncatePromptComponents(promptComponents, {
+        softLimitBytes: promptSizeConfig.softLimitBytes,
+        perComponentMaxBytes: promptSizeConfig.perComponentMaxBytes,
+      });
+      promptComponents = truncationResult.components;
+      promptMeasurement = truncationResult.measurement;
+      prompt = renderJudgePrompt(template, promptComponents);
+      promptBytes = byteLengthUtf8(prompt);
+      promptDiagnostics = toPromptSizeDiagnostics(
+        promptBytes,
+        promptMeasurement.componentBytes,
+        promptSizeConfig,
+        truncationResult.truncationSummary,
+      );
+    } else {
+      promptDiagnostics = toPromptSizeDiagnostics(
+        promptBytes,
+        promptMeasurement.componentBytes,
+        promptSizeConfig,
+      );
+    }
+  }
 
   // Capture prompt artifact for GEPA training (HOK-1003)
   // Gracefully handle missing template file - this is metadata and should not block evals
@@ -581,6 +719,48 @@ export async function evaluateTask(
   }
 
   const callFn = _callFn || callClaudeWithRetry;
+
+  if (checkPromptSize(promptBytes, promptSizeConfig.hardLimitBytes) === 'over_hard_limit') {
+    const record: EvalRecord = {
+      id: randomUUID(),
+      schemaVersion: SCHEMA_VERSION,
+      originalPrompt: taskPrompt,
+      modelId: model,
+      modelVersion: model,
+      judgeModel: model,
+      judgeProvider: provider,
+      score: 0,
+      scoreBand: 'Failure',
+      timeSeconds,
+      timestamp: new Date().toISOString(),
+      interventionRequired: interventionCount > 0,
+      interventionCount,
+      interventionDetails: hasStructuredInterventions
+        ? interventionRecords.map((i) => i.note)
+        : interventions.map((i) => i.description),
+      ...(hasStructuredInterventions && { interventions: interventionRecords }),
+      rationale: `Eval skipped before judge invocation: prompt size ${promptBytes} bytes exceeds the configured hard limit of ${promptSizeConfig.hardLimitBytes} bytes.`,
+      failure_reason: 'eval_prompt_too_large',
+      ...(issueId && { issueId }),
+      ...(prUrl && { prUrl }),
+      ...(outcomes && { outcomes }),
+      ...(routingDecision && { routingDecision }),
+      ...(promptArtifacts.length > 0 && { promptArtifacts }),
+      metadata: {
+        ...metadata,
+        interventionFlags: [],
+      },
+    };
+    attachPromptSizeDiagnostics(
+      record,
+      promptDiagnostics
+        ?? toPromptSizeDiagnostics(promptBytes, promptMeasurement.componentBytes, promptSizeConfig),
+    );
+    const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
+    attachManifestRef(record, activeSessionId);
+    attachEligibility(record);
+    return record;
+  }
 
   // Call Claude (with retry built-in)
   const response = await callFn(prompt, model);
@@ -629,6 +809,7 @@ export async function evaluateTask(
       ...(planCritique && { planCritique }),
     },
   };
+  attachPromptSizeDiagnostics(record, promptDiagnostics);
   const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
   attachManifestRef(record, activeSessionId);
   attachEligibility(record);

@@ -1,8 +1,12 @@
 import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { evaluateTask } from './eval.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { SCHEMA_VERSION } from './eval-schema.ts';
+import { clearConfigCache } from './config.ts';
 
 function mockCallFn(responseText, usage = null, costUsd = undefined) {
   return mock.fn(() => Promise.resolve({ text: responseText, usage, costUsd }));
@@ -19,6 +23,25 @@ async function withMockSession(fn) {
     } else {
       process.env.WAVEMILL_SESSION = previousSession;
     }
+  }
+}
+
+async function withTempEvalConfig(evalConfig, fn) {
+  const repoDir = mkdtempSync(join(tmpdir(), 'eval-config-'));
+  const previousCwd = process.cwd();
+  try {
+    writeFileSync(
+      join(repoDir, '.wavemill-config.json'),
+      JSON.stringify({ eval: evalConfig }),
+      'utf-8',
+    );
+    clearConfigCache();
+    process.chdir(repoDir);
+    return await fn(repoDir);
+  } finally {
+    process.chdir(previousCwd);
+    clearConfigCache();
+    rmSync(repoDir, { recursive: true, force: true });
   }
 }
 
@@ -85,6 +108,151 @@ describe('evaluateTask', () => {
     );
 
     assert.equal(result.scoreBand, 'Full Success');
+  });
+
+  it('passes the unmodified prompt through when under the soft limit', async () => {
+    const callFn = mockCallFn(
+      JSON.stringify({
+        score: 0.9,
+        rationale: 'Looks good.',
+        interventionFlags: [],
+      }),
+    );
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Small task',
+        prReviewOutput: 'Short diff summary',
+      },
+      undefined,
+      { _callFn: callFn },
+    );
+
+    assert.equal(callFn.mock.callCount(), 1);
+    assert.match(callFn.mock.calls[0].arguments[0], /Short diff summary/);
+    assert.equal(result.prompt_truncated, undefined);
+  });
+
+  it('truncates oversized prompt components before judge invocation', async () => {
+    await withTempEvalConfig(
+      {
+        promptSizeLimitBytes: 24000,
+        promptTruncation: {
+          enabled: true,
+          softLimitBytes: 22000,
+          perComponentMaxBytes: 300,
+        },
+      },
+      async () => {
+        const callFn = mockCallFn(
+          JSON.stringify({
+            score: 0.7,
+            rationale: 'Usable after truncation.',
+            interventionFlags: [],
+          }),
+        );
+
+        const result = await evaluateTask(
+          {
+            taskPrompt: 'Task prompt',
+            prReviewOutput: 'R'.repeat(2200),
+            taskPacket: 'Packet',
+            planContent: 'Plan',
+            selfReviewSummary: 'Summary',
+          },
+          undefined,
+          { _callFn: callFn },
+        );
+
+        assert.equal(callFn.mock.callCount(), 1);
+        assert.match(
+          callFn.mock.calls[0].arguments[0],
+          /\[TRUNCATED: \d+ bytes omitted from pr_review_output\]/,
+        );
+        assert.equal(result.prompt_truncated, true);
+        assert.equal(result.prompt_size_limit_bytes, 24000);
+        assert.equal(result.prompt_soft_limit_bytes, 22000);
+        assert.ok((result.prompt_component_bytes?.pr_review_output ?? 0) <= 300);
+        assert.ok((result.prompt_truncation_summary?.pr_review_output ?? 0) > 0);
+      },
+    );
+  });
+
+  it('fails fast when the prompt still exceeds the hard limit after truncation', async () => {
+    await withTempEvalConfig(
+      {
+        promptSizeLimitBytes: 800,
+        promptTruncation: {
+          enabled: true,
+          softLimitBytes: 600,
+          perComponentMaxBytes: 250,
+        },
+      },
+      async () => {
+        const callFn = mockCallFn(
+          JSON.stringify({
+            score: 1,
+            rationale: 'should not be used',
+            interventionFlags: [],
+          }),
+        );
+
+        const result = await evaluateTask(
+          {
+            taskPrompt: 'T'.repeat(700),
+            prReviewOutput: 'R'.repeat(700),
+            taskPacket: 'P'.repeat(700),
+            planContent: 'L'.repeat(700),
+            selfReviewSummary: 'S'.repeat(700),
+          },
+          undefined,
+          { _callFn: callFn },
+        );
+
+        assert.equal(callFn.mock.callCount(), 0);
+        assert.equal(result.failure_reason, 'eval_prompt_too_large');
+        assert.equal(result.score, 0);
+        assert.equal(result.scoreBand, 'Failure');
+        assert.equal(result.prompt_truncated, true);
+        assert.ok((result.prompt_bytes ?? 0) > 800);
+      },
+    );
+  });
+
+  it('fails fast without calling the judge when truncation is disabled', async () => {
+    await withTempEvalConfig(
+      {
+        promptSizeLimitBytes: 700,
+        promptTruncation: {
+          enabled: false,
+          softLimitBytes: 600,
+          perComponentMaxBytes: 300,
+        },
+      },
+      async () => {
+        const callFn = mockCallFn(
+          JSON.stringify({
+            score: 1,
+            rationale: 'should not be used',
+            interventionFlags: [],
+          }),
+        );
+
+        const result = await evaluateTask(
+          {
+            taskPrompt: 'Task',
+            prReviewOutput: 'R'.repeat(3000),
+          },
+          undefined,
+          { _callFn: callFn },
+        );
+
+        assert.equal(callFn.mock.callCount(), 0);
+        assert.equal(result.failure_reason, 'eval_prompt_too_large');
+        assert.equal(result.prompt_truncated, false);
+        assert.ok((result.prompt_bytes ?? 0) > 700);
+      },
+    );
   });
 
   it('passes intervention metadata through to the result', async () => {

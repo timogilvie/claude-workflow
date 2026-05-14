@@ -15,6 +15,7 @@ import {
   attachConstraints,
   attachDifficultyMetadata,
   attachFallbackEvent,
+  attachPromptSizeDiagnostics,
   attachRouteProvenance,
   attachRouterPolicyMetadata,
   attachProviderMetadata,
@@ -237,6 +238,43 @@ describe('eval-record-builder', () => {
     it('should not modify record when costOutcome is null', () => {
       const before = { ...baseRecord };
       attachWorkflowCostMetadata(baseRecord, null);
+      expect(baseRecord).toEqual(before);
+    });
+  });
+
+  describe('attachPromptSizeDiagnostics', () => {
+    it('attaches prompt-size diagnostics defensively', () => {
+      const componentBytes = { pr_review_output: 1200 };
+      const truncationSummary = { pr_review_output: 400 };
+
+      attachPromptSizeDiagnostics(baseRecord, {
+        prompt_bytes: 2048,
+        prompt_component_bytes: componentBytes,
+        prompt_truncated: true,
+        prompt_truncation_summary: truncationSummary,
+        prompt_size_limit_bytes: 4096,
+        prompt_soft_limit_bytes: 3072,
+      });
+
+      expect(baseRecord.prompt_bytes).toBe(2048);
+      expect(baseRecord.prompt_component_bytes).toEqual(componentBytes);
+      expect(baseRecord.prompt_truncated).toBe(true);
+      expect(baseRecord.prompt_truncation_summary).toEqual(truncationSummary);
+      expect(baseRecord.prompt_size_limit_bytes).toBe(4096);
+      expect(baseRecord.prompt_soft_limit_bytes).toBe(3072);
+
+      componentBytes.pr_review_output = 1;
+      truncationSummary.pr_review_output = 1;
+      expect(baseRecord.prompt_component_bytes?.pr_review_output).toBe(1200);
+      expect(baseRecord.prompt_truncation_summary?.pr_review_output).toBe(400);
+    });
+
+    it('no-ops when record or diagnostics are absent', () => {
+      const before = { ...baseRecord };
+      attachPromptSizeDiagnostics(baseRecord, undefined);
+      attachPromptSizeDiagnostics(null, {
+        prompt_bytes: 1,
+      });
       expect(baseRecord).toEqual(before);
     });
   });

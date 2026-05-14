@@ -249,6 +249,45 @@
         }
       }
     },
+    "failure_reason": {
+      "type": "string",
+      "description": "Stable machine-readable reason for eval execution failure or preflight skip."
+    },
+    "prompt_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Final eval judge prompt size in UTF-8 bytes."
+    },
+    "prompt_component_bytes": {
+      "type": "object",
+      "description": "Per-component prompt size breakdown in UTF-8 bytes.",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "prompt_truncated": {
+      "type": "boolean",
+      "description": "Whether prompt truncation ran before judge invocation."
+    },
+    "prompt_truncation_summary": {
+      "type": "object",
+      "description": "Bytes omitted per truncated prompt component.",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "prompt_size_limit_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Hard byte limit enforced before judge invocation."
+    },
+    "prompt_soft_limit_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Soft byte threshold that triggers prompt truncation."
+    },
     "workflowTokenUsage": {
       "type": "object",
       "description": "Per-model token usage breakdown from the workflow sessions.",

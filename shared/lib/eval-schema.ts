@@ -76,6 +76,9 @@
  * - **1.23.0**: Added optional `routePrediction` and `routeCalibration`
  *   fields plus router calibration diagnostics (HOK-1553) so eval artifacts
  *   can compare router expectations to actual workflow outcomes
+ * - **1.24.0**: Added optional prompt-size diagnostics and the
+ *   `eval_prompt_too_large` failure reason (HOK-1706) so evals can fail fast
+ *   before submitting oversized judge prompts
  *
  * @module eval-schema
  */
@@ -85,7 +88,7 @@ import type { RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.23.0';
+export const SCHEMA_VERSION = '1.24.0';
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -1298,6 +1301,9 @@ export interface EvalRecord {
     message: string;
   };
 
+  /** Stable machine-readable reason for eval execution failure or preflight skip. */
+  failure_reason?: 'eval_prompt_too_large' | string;
+
   /** Per-model token usage breakdown from the workflow sessions */
   workflowTokenUsage?: Record<
     string,
@@ -1371,6 +1377,24 @@ export interface EvalRecord {
     templateHash: string;
     filledPromptHash: string;
   }[];
+
+  /** Final eval judge prompt size in UTF-8 bytes. */
+  prompt_bytes?: number;
+
+  /** Per-component prompt size breakdown in UTF-8 bytes. */
+  prompt_component_bytes?: Record<string, number>;
+
+  /** Whether prompt truncation ran before judge invocation. */
+  prompt_truncated?: boolean;
+
+  /** Bytes omitted per truncated prompt component. */
+  prompt_truncation_summary?: Record<string, number>;
+
+  /** Hard byte limit enforced before judge invocation. */
+  prompt_size_limit_bytes?: number;
+
+  /** Soft byte threshold that triggers prompt truncation. */
+  prompt_soft_limit_bytes?: number;
 
   /** Runtime-governed resource variants used by this run. */
   resourceSelections?: RuntimeResourceSelection[];

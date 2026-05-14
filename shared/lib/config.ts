@@ -162,6 +162,12 @@ export interface MintEligibilityConfig {
   maxInvalidRouteRate?: number;
 }
 
+export interface EvalPromptTruncationConfig {
+  enabled?: boolean;
+  softLimitBytes?: number;
+  perComponentMaxBytes?: number;
+}
+
 export interface EvalConfig {
   aggregation?: AggregationConfig;
   evalsDir?: string;
@@ -170,6 +176,8 @@ export interface EvalConfig {
   interventionPenalties?: InterventionPenaltiesConfig;
   successThreshold?: number;
   mintEligibility?: MintEligibilityConfig;
+  promptSizeLimitBytes?: number;
+  promptTruncation?: EvalPromptTruncationConfig;
 }
 
 export interface EvalContextUpdatesConfig {

@@ -1238,13 +1238,23 @@ test('getEvalConfig returns eval section', () => {
     writeConfig(tmp, JSON.stringify({
       eval: {
         evalsDir: '.wavemill/evals',
-        judge: { model: 'claude-haiku-4-5-20251001' }
+        judge: { model: 'claude-haiku-4-5-20251001' },
+        promptSizeLimitBytes: 9437184,
+        promptTruncation: {
+          enabled: true,
+          softLimitBytes: 6291456,
+          perComponentMaxBytes: 2097152,
+        },
       }
     }));
 
     const evalConfig = getEvalConfig(tmp);
     assert.equal(evalConfig.evalsDir, '.wavemill/evals');
     assert.equal(evalConfig.judge?.model, 'claude-haiku-4-5-20251001');
+    assert.equal(evalConfig.promptSizeLimitBytes, 9437184);
+    assert.equal(evalConfig.promptTruncation?.enabled, true);
+    assert.equal(evalConfig.promptTruncation?.softLimitBytes, 6291456);
+    assert.equal(evalConfig.promptTruncation?.perComponentMaxBytes, 2097152);
   } finally {
     cleanUp(tmp);
   }
@@ -2205,6 +2215,34 @@ test('eval success threshold accepts values between 0 and 1', () => {
 
     const config = loadWavemillConfig(tmp);
     assert.equal(config.eval?.successThreshold, 0.65);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('eval prompt truncation rejects unknown keys', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: {
+        promptTruncation: {
+          enabled: true,
+          softLimitBytes: 1234,
+          unexpected: 1,
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
   } finally {
     cleanUp(tmp);
   }

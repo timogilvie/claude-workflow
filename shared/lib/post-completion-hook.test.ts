@@ -569,6 +569,64 @@ await test('runPostCompletionEval degrades to default outcomes when a collector 
   }
 });
 
+await test('runPostCompletionEval persists oversize diagnostic eval records through the normal append path', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-oversize-'));
+  makeEligibleRepo(repoDir, 'oversize-eval', 'HOK-1706');
+  clearConfigCache(repoDir);
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.evaluateTask = async (_input, outcomes) => ({
+        ...makeRecord(),
+        score: 0,
+        scoreBand: 'Failure',
+        rationale: 'Prompt exceeded the configured hard limit before judge submission.',
+        failure_reason: 'eval_prompt_too_large',
+        prompt_bytes: 9_900_000,
+        prompt_component_bytes: {
+          pr_review_output: 9_500_000,
+          template_static: 4_000,
+        },
+        prompt_truncated: true,
+        prompt_truncation_summary: {
+          pr_review_output: 7_000_000,
+        },
+        prompt_size_limit_bytes: 9_437_184,
+        prompt_soft_limit_bytes: 6_291_456,
+        workflowCost: 1.5,
+        workflowTokenUsage: {},
+        constraints: { maxCostUsd: 6.5 },
+        routingDecision: undefined,
+        outcomes,
+      });
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1706',
+        prNumber: '1706',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/oversize-eval',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    const evalsPath = join(repoDir, '.wavemill', 'evals', 'evals.jsonl');
+    const persistedLines = readFileSync(evalsPath, 'utf8').trim().split('\n');
+    const record = JSON.parse(persistedLines.at(-1) || '{}');
+
+    assert.equal(record.failure_reason, 'eval_prompt_too_large');
+    assert.equal(record.prompt_truncated, true);
+    assert.equal(record.prompt_size_limit_bytes, 9437184);
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 await test('runPostCompletionEval keeps eval persisted when context updates time out', async () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-timeout-'));
   makeContextUpdateRepo(repoDir, 'context-timeout', 'HOK-1577');

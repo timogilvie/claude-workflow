@@ -358,6 +358,36 @@
                         "additionalProperties": false
                     }
                 },
+                "promptSizeLimitBytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 9437184,
+                    "description": "Hard UTF-8 byte limit enforced before submitting the eval judge prompt."
+                },
+                "promptTruncation": {
+                    "type": "object",
+                    "description": "Deterministic truncation settings applied when the eval judge prompt exceeds the soft byte threshold.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "When true, truncate oversized eval prompt components before judge submission."
+                        },
+                        "softLimitBytes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 6291456,
+                            "description": "Soft UTF-8 byte threshold that triggers prompt truncation."
+                        },
+                        "perComponentMaxBytes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 2097152,
+                            "description": "Maximum UTF-8 bytes to retain per truncated prompt component."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "interventionPenalties": {
                     "type": "object",
                     "description": "Penalty weights per intervention type. Each value is the score penalty (0-1) applied per occurrence of that intervention type.",
