@@ -795,6 +795,21 @@ describe('eval-record-builder', () => {
       expect(baseRecord.constraints).toEqual({ maxCostUsd: 5 });
     });
 
+    it('attaches resolved-model routing decisions when provided', () => {
+      enrichEvalRecord(baseRecord, {
+        routing: {
+          reviewer: {
+            role: 'reviewer',
+            requestedSelector: { kind: 'pinned', modelId: 'claude-sonnet-4-6' },
+            resolvedModelId: 'claude-sonnet-4-6',
+            sourceLayer: 'user',
+          },
+        },
+      });
+
+      expect(baseRecord.routing?.reviewer?.resolvedModelId).toBe('claude-sonnet-4-6');
+    });
+
     it('should handle partial metadata gracefully', () => {
       const metadata = {
         agentType: 'claude',

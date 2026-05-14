@@ -76,16 +76,32 @@
  * - **1.23.0**: Added optional `routePrediction` and `routeCalibration`
  *   fields plus router calibration diagnostics (HOK-1553) so eval artifacts
  *   can compare router expectations to actual workflow outcomes
+ * - **1.24.0**: Added optional `routing` role-level resolved-model decisions
+ *   (HOK-1632) for planner/coder/reviewer launch attribution
  *
  * @module eval-schema
  */
 
 import type { ModelPricing } from './workflow-cost.ts';
-import type { RegistryTaskType } from './model-registry.ts';
+import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.23.0';
+export const SCHEMA_VERSION = '1.24.0';
+
+export type RoutingRole = 'planner' | 'coder' | 'reviewer';
+
+export interface ResolvedModelRoutingDecision {
+  role: RoutingRole;
+  requestedSelector: ModelSelector;
+  resolvedModelId: string;
+  sourceLayer: string;
+  resolutionSource?: string;
+  fallbackReason?: string;
+  timestamp?: string;
+}
+
+export type EvalRouting = Partial<Record<RoutingRole, ResolvedModelRoutingDecision>>;
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -1351,6 +1367,8 @@ export interface EvalRecord {
 
   /** Routing decision metadata (required if training routing models) */
   routingDecision?: RoutingDecision;
+  /** Resolved-model routing decisions for planner/coder/reviewer launches. */
+  routing?: EvalRouting;
 
   /**
    * Prompt artifacts used during workflow execution.

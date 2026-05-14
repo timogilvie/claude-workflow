@@ -780,6 +780,8 @@ $details_context"
   planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
   build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$planning_prompt"
+  export WAVEMILL_FEATURE_SLUG="$slug"
+  export WAVEMILL_FEATURE_DIR="$feature_dir"
   if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true

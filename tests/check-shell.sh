@@ -1364,6 +1364,14 @@ else
   fail "review prompt metadata block does not include issue ID"
 fi
 
+if grep -q '## Routing' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'routing.jsonl' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q "$REPO_DIR/features/test-slug/routing.jsonl" "$PROMPT_RENDER_DIR/review-claude.txt"; then
+  pass "review prompt includes routing.jsonl guidance"
+else
+  fail "review prompt is missing routing.jsonl guidance"
+fi
+
 if grep -q 'label "wavemill"' "$PROMPT_RENDER_DIR/review-claude.txt" \
   && grep -q 'label "wavemill"' "$PROMPT_RENDER_DIR/review-codex.txt"; then
   pass "review prompt instructs adding wavemill label"
@@ -2669,6 +2677,19 @@ if grep -q 'Workflow routing attempt \$route_attempt failed' "$MILL_SCRIPT"; the
   pass "routing attempts are logged with retry context"
 else
   fail "routing retry logging is missing"
+fi
+
+if grep -q 'source \"\$script_dir/routing-emitter.sh\"' "$REPO_DIR/shared/lib/agent-adapters.sh" \
+  && grep -q 'routing_emit_phase' "$REPO_DIR/shared/lib/agent-adapters.sh"; then
+  pass "agent adapter wires routing emission helper"
+else
+  fail "agent adapter routing emission wiring is missing"
+fi
+
+if grep -q 'wavemill_hook_write_routing' "$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh"; then
+  pass "hook protocol exposes routing writer"
+else
+  fail "hook protocol routing writer is missing"
 fi
 
 # ============================================================================

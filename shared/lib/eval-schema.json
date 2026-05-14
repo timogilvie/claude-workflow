@@ -105,7 +105,12 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["timestamp", "type", "severity", "note"],
+        "required": [
+          "timestamp",
+          "type",
+          "severity",
+          "note"
+        ],
         "additionalProperties": false,
         "properties": {
           "timestamp": {
@@ -128,7 +133,11 @@
           },
           "severity": {
             "type": "string",
-            "enum": ["low", "med", "high"],
+            "enum": [
+              "low",
+              "med",
+              "high"
+            ],
             "description": "Severity/impact of the intervention."
           },
           "note": {
@@ -181,7 +190,11 @@
           "description": "Total tokens (input + output)."
         }
       },
-      "required": ["inputTokens", "outputTokens", "totalTokens"],
+      "required": [
+        "inputTokens",
+        "outputTokens",
+        "totalTokens"
+      ],
       "additionalProperties": false
     },
     "estimatedCost": {
@@ -238,7 +251,10 @@
     "nonRewardReason": {
       "type": "object",
       "description": "Stable user-readable reason why the record is not reward eligible.",
-      "required": ["code", "message"],
+      "required": [
+        "code",
+        "message"
+      ],
       "additionalProperties": false,
       "properties": {
         "code": {
@@ -281,13 +297,26 @@
             "description": "Estimated cost in USD for this model."
           }
         },
-        "required": ["inputTokens", "cacheCreationTokens", "cacheReadTokens", "outputTokens", "costUsd"],
+        "required": [
+          "inputTokens",
+          "cacheCreationTokens",
+          "cacheReadTokens",
+          "outputTokens",
+          "costUsd"
+        ],
         "additionalProperties": false
       }
     },
     "workflowCostStatus": {
       "type": "string",
-      "enum": ["success", "no_sessions", "no_branch", "adapter_error", "missing_worktree", "skipped"],
+      "enum": [
+        "success",
+        "no_sessions",
+        "no_branch",
+        "adapter_error",
+        "missing_worktree",
+        "skipped"
+      ],
       "description": "Status of workflow cost computation."
     },
     "workflowCostDiagnostics": {
@@ -331,7 +360,9 @@
           "description": "Number of scanned turns rejected due to branch mismatch."
         }
       },
-      "required": ["reason"],
+      "required": [
+        "reason"
+      ],
       "additionalProperties": false
     },
     "enrichmentDiagnostics": {
@@ -368,13 +399,22 @@
             "description": "Cost in USD per million cache read input tokens."
           }
         },
-        "required": ["inputCostPerMTok", "outputCostPerMTok"],
+        "required": [
+          "inputCostPerMTok",
+          "outputCostPerMTok"
+        ],
         "additionalProperties": false
       }
     },
     "difficultyBand": {
       "type": "string",
-      "enum": ["trivial", "easy", "medium", "hard", "very_hard"],
+      "enum": [
+        "trivial",
+        "easy",
+        "medium",
+        "hard",
+        "very_hard"
+      ],
       "description": "Difficulty band classification derived from signals."
     },
     "difficultySignals": {
@@ -408,7 +448,10 @@
           "description": "Module hotspot score based on git history (optional)."
         }
       },
-      "required": ["locTouched", "filesTouched"],
+      "required": [
+        "locTouched",
+        "filesTouched"
+      ],
       "additionalProperties": false
     },
     "stratum": {
@@ -424,7 +467,10 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["agentType", "modelId"],
+            "required": [
+              "agentType",
+              "modelId"
+            ],
             "additionalProperties": false,
             "properties": {
               "agentType": {
@@ -455,7 +501,10 @@
           "oneOf": [
             {
               "type": "object",
-              "required": ["agentType", "modelId"],
+              "required": [
+                "agentType",
+                "modelId"
+              ],
               "additionalProperties": false,
               "properties": {
                 "agentType": {
@@ -510,21 +559,37 @@
         },
         "operatingModeDependency": {
           "type": "string",
-          "enum": ["normal", "constrained", "survival"],
+          "enum": [
+            "normal",
+            "constrained",
+            "survival"
+          ],
           "description": "Whether quota operating mode constrained the route independently of policy source."
         }
       },
-      "required": ["candidates", "chosen", "decisionPolicyVersion"],
+      "required": [
+        "candidates",
+        "chosen",
+        "decisionPolicyVersion"
+      ],
       "additionalProperties": false
     },
     "stageOutcomes": {
       "type": "object",
       "description": "Per-stage quality attribution for GEPA training.",
       "properties": {
-        "expansion": { "$ref": "#/$defs/StageScore" },
-        "plan": { "$ref": "#/$defs/StageScore" },
-        "implementation": { "$ref": "#/$defs/StageScore" },
-        "review": { "$ref": "#/$defs/StageScore" },
+        "expansion": {
+          "$ref": "#/$defs/StageScore"
+        },
+        "plan": {
+          "$ref": "#/$defs/StageScore"
+        },
+        "implementation": {
+          "$ref": "#/$defs/StageScore"
+        },
+        "review": {
+          "$ref": "#/$defs/StageScore"
+        },
         "routing": {
           "type": "object",
           "additionalProperties": true
@@ -538,12 +603,24 @@
       "properties": {
         "taskType": {
           "type": "string",
-          "enum": ["bugfix", "feature", "refactor", "chore", "docs", "test", "infra"],
+          "enum": [
+            "bugfix",
+            "feature",
+            "refactor",
+            "chore",
+            "docs",
+            "test",
+            "infra"
+          ],
           "description": "Type of task being performed."
         },
         "changeKind": {
           "type": "string",
-          "enum": ["modify_existing", "create_new", "mixed"],
+          "enum": [
+            "modify_existing",
+            "create_new",
+            "mixed"
+          ],
           "description": "Whether the task modifies existing code, creates new code, or both."
         },
         "complexity": {
@@ -556,7 +633,13 @@
             },
             {
               "type": "string",
-              "enum": ["xs", "s", "m", "l", "xl"],
+              "enum": [
+                "xs",
+                "s",
+                "m",
+                "l",
+                "xl"
+              ],
               "description": "Complexity band classification."
             }
           ],
@@ -609,7 +692,11 @@
           "description": "Domain-specific knowledge required."
         }
       },
-      "required": ["taskType", "changeKind", "complexity"],
+      "required": [
+        "taskType",
+        "changeKind",
+        "complexity"
+      ],
       "additionalProperties": false
     },
     "repoContext": {
@@ -622,7 +709,10 @@
         },
         "repoVisibility": {
           "type": "string",
-          "enum": ["oss", "private"],
+          "enum": [
+            "oss",
+            "private"
+          ],
           "description": "Whether the repository is open source or private."
         },
         "primaryLanguage": {
@@ -684,7 +774,11 @@
               "description": "Number of dependencies (approximate)."
             }
           },
-          "required": ["fileCount", "loc", "dependencyCount"],
+          "required": [
+            "fileCount",
+            "loc",
+            "dependencyCount"
+          ],
           "additionalProperties": false
         },
         "monorepo": {
@@ -692,7 +786,11 @@
           "description": "Whether the repository is a monorepo."
         }
       },
-      "required": ["repoId", "repoVisibility", "primaryLanguage"],
+      "required": [
+        "repoId",
+        "repoVisibility",
+        "primaryLanguage"
+      ],
       "additionalProperties": false
     },
     "constraints": {
@@ -739,7 +837,13 @@
                   },
                   "status": {
                     "type": "string",
-                    "enum": ["success", "failure", "pending", "skipped", "cancelled"],
+                    "enum": [
+                      "success",
+                      "failure",
+                      "pending",
+                      "skipped",
+                      "cancelled"
+                    ],
                     "description": "Check status."
                   },
                   "durationSeconds": {
@@ -748,12 +852,19 @@
                     "description": "Check duration in seconds (if available)."
                   }
                 },
-                "required": ["name", "status"],
+                "required": [
+                  "name",
+                  "status"
+                ],
                 "additionalProperties": false
               }
             }
           },
-          "required": ["ran", "passed", "checks"],
+          "required": [
+            "ran",
+            "passed",
+            "checks"
+          ],
           "additionalProperties": false
         },
         "tests": {
@@ -776,7 +887,9 @@
               "description": "Total test execution time in seconds, if available."
             }
           },
-          "required": ["added"],
+          "required": [
+            "added"
+          ],
           "additionalProperties": false
         },
         "staticAnalysis": {
@@ -822,7 +935,12 @@
               "description": "Number of change request reviews."
             }
           },
-          "required": ["humanReviewRequired", "rounds", "approvals", "changeRequests"],
+          "required": [
+            "humanReviewRequired",
+            "rounds",
+            "approvals",
+            "changeRequests"
+          ],
           "additionalProperties": false
         },
         "rework": {
@@ -840,7 +958,9 @@
               "description": "Number of tool/API call failures, if tracked."
             }
           },
-          "required": ["agentIterations"],
+          "required": [
+            "agentIterations"
+          ],
           "additionalProperties": false
         },
         "delivery": {
@@ -861,11 +981,19 @@
               "description": "Time from PR creation to merge in seconds, if merged."
             }
           },
-          "required": ["prCreated", "merged"],
+          "required": [
+            "prCreated",
+            "merged"
+          ],
           "additionalProperties": false
         }
       },
-      "required": ["success", "review", "rework", "delivery"],
+      "required": [
+        "success",
+        "review",
+        "rework",
+        "delivery"
+      ],
       "additionalProperties": false
     },
     "taskDescriptor": {
@@ -874,7 +1002,9 @@
       "properties": {
         "schema_version": {
           "type": "string",
-          "enum": ["1.0"],
+          "enum": [
+            "1.0"
+          ],
           "description": "Schema version for forward compatibility."
         },
         "signals": {
@@ -887,7 +1017,15 @@
               "properties": {
                 "task_type": {
                   "type": "string",
-                  "enum": ["bugfix", "feature", "refactor", "chore", "docs", "test", "infra"],
+                  "enum": [
+                    "bugfix",
+                    "feature",
+                    "refactor",
+                    "chore",
+                    "docs",
+                    "test",
+                    "infra"
+                  ],
                   "description": "Type of task being performed."
                 },
                 "languages": {
@@ -981,11 +1119,18 @@
                   "description": "Optional vector store reference for nearest-neighbor lookup."
                 }
               },
-              "required": ["complexity", "domain", "risk_flags"],
+              "required": [
+                "complexity",
+                "domain",
+                "risk_flags"
+              ],
               "additionalProperties": false
             }
           },
-          "required": ["heuristic", "learned"],
+          "required": [
+            "heuristic",
+            "learned"
+          ],
           "additionalProperties": false
         },
         "constraints": {
@@ -1011,7 +1156,11 @@
             },
             "objective": {
               "type": "string",
-              "enum": ["max_success", "min_cost", "balanced"],
+              "enum": [
+                "max_success",
+                "min_cost",
+                "balanced"
+              ],
               "description": "Routing objective (maximize success, minimize cost, or balanced)."
             },
             "capability_constraints": {
@@ -1030,19 +1179,26 @@
                 },
                 "maxLatencyTier": {
                   "type": "string",
-                  "enum": ["fast", "standard", "slow"]
+                  "enum": [
+                    "fast",
+                    "standard",
+                    "slow"
+                  ]
                 }
               },
               "additionalProperties": false
             }
           },
-          "required": ["models_available", "objective"],
+          "required": [
+            "models_available",
+            "objective"
+          ],
           "additionalProperties": false
         },
-    "stages": {
-      "type": "object",
-      "description": "Per-stage execution details.",
-      "additionalProperties": {
+        "stages": {
+          "type": "object",
+          "description": "Per-stage execution details.",
+          "additionalProperties": {
             "type": "object",
             "properties": {
               "model": {
@@ -1066,80 +1222,82 @@
                 "description": "Time spent on this stage in minutes."
               }
             },
-            "required": ["model"],
+            "required": [
+              "model"
+            ],
             "additionalProperties": false
           }
         },
-    "rubric": {
-      "type": "object",
-      "description": "Rubric-derived features for router training (HOK-1409). NN-ready: bounded numeric features only, no free text.",
-      "properties": {
-        "has_rubric": {
-          "type": "boolean"
-        },
-        "criterion_count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "mean_score": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "criteria_scores": {
+        "rubric": {
           "type": "object",
+          "description": "Rubric-derived features for router training (HOK-1409). NN-ready: bounded numeric features only, no free text.",
           "properties": {
-            "completeness": {
+            "has_rubric": {
+              "type": "boolean"
+            },
+            "criterion_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "mean_score": {
               "type": "number",
               "minimum": 0,
               "maximum": 1
             },
-            "correctness": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
+            "criteria_scores": {
+              "type": "object",
+              "properties": {
+                "completeness": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "correctness": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "code_quality": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "intervention_impact": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "autonomy": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "required": [
+                "completeness",
+                "correctness",
+                "code_quality",
+                "intervention_impact",
+                "autonomy"
+              ],
+              "additionalProperties": false
             },
-            "code_quality": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "intervention_impact": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "autonomy": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
+            "determinative_boundary": {
+              "type": "string"
             }
           },
           "required": [
-            "completeness",
-            "correctness",
-            "code_quality",
-            "intervention_impact",
-            "autonomy"
+            "has_rubric",
+            "criterion_count",
+            "mean_score",
+            "criteria_scores"
           ],
           "additionalProperties": false
         },
-        "determinative_boundary": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "has_rubric",
-        "criterion_count",
-        "mean_score",
-        "criteria_scores"
-      ],
-      "additionalProperties": false
-    },
-    "outcome": {
-      "type": "object",
-      "description": "Overall task outcome summary (null when used as router input pre-eval).",
-      "properties": {
+        "outcome": {
+          "type": "object",
+          "description": "Overall task outcome summary (null when used as router input pre-eval).",
+          "properties": {
             "overall_score": {
               "type": "number",
               "minimum": 0,
@@ -1169,11 +1327,20 @@
               "description": "Types of interventions that occurred."
             }
           },
-          "required": ["overall_score", "interventions", "intervention_types"],
+          "required": [
+            "overall_score",
+            "interventions",
+            "intervention_types"
+          ],
           "additionalProperties": false
         }
       },
-      "required": ["schema_version", "signals", "constraints", "stages"],
+      "required": [
+        "schema_version",
+        "signals",
+        "constraints",
+        "stages"
+      ],
       "additionalProperties": false
     },
     "fallbackEvent": {
@@ -1182,7 +1349,9 @@
       "properties": {
         "schema_version": {
           "type": "string",
-          "enum": ["1.0"],
+          "enum": [
+            "1.0"
+          ],
           "description": "Schema version for the fallback event payload."
         },
         "preferred_model": {
@@ -1190,17 +1359,40 @@
           "description": "Model preferred before any fallback occurred."
         },
         "fallback_model": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Model that ultimately produced the response, or null if none succeeded."
         },
         "task_type": {
-          "type": ["string", "null"],
-          "enum": ["routing", "planning", "coding", "review", "classify", null],
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "routing",
+            "planning",
+            "coding",
+            "review",
+            "classify",
+            null
+          ],
           "description": "Task type used to select the fallback ladder."
         },
         "difficulty": {
-          "type": ["string", "null"],
-          "enum": ["trivial", "easy", "medium", "hard", "very_hard", null],
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "trivial",
+            "easy",
+            "medium",
+            "hard",
+            "very_hard",
+            null
+          ],
           "description": "Difficulty classification supplied by the caller, when known."
         },
         "quota_snapshot": {
@@ -1220,15 +1412,25 @@
                 "properties": {
                   "status": {
                     "type": "string",
-                    "enum": ["healthy", "degrading", "exhausted"],
+                    "enum": [
+                      "healthy",
+                      "degrading",
+                      "exhausted"
+                    ],
                     "description": "Current quota status for the model."
                   },
                   "resetAt": {
-                    "type": ["string", "null"],
+                    "type": [
+                      "string",
+                      "null"
+                    ],
                     "description": "When quota is expected to recover, if known."
                   },
                   "remainingEstimate": {
-                    "type": ["number", "null"],
+                    "type": [
+                      "number",
+                      "null"
+                    ],
                     "description": "Estimated remaining capacity, if available."
                   },
                   "confidence": {
@@ -1238,12 +1440,20 @@
                     "description": "Confidence in the quota estimate."
                   }
                 },
-                "required": ["status", "resetAt", "remainingEstimate", "confidence"],
+                "required": [
+                  "status",
+                  "resetAt",
+                  "remainingEstimate",
+                  "confidence"
+                ],
                 "additionalProperties": false
               }
             }
           },
-          "required": ["snapshotAt", "models"],
+          "required": [
+            "snapshotAt",
+            "models"
+          ],
           "additionalProperties": false
         },
         "human_intervention": {
@@ -1252,7 +1462,11 @@
         },
         "outcome": {
           "type": "string",
-          "enum": ["success", "all_exhausted", "non_quota_error"],
+          "enum": [
+            "success",
+            "all_exhausted",
+            "non_quota_error"
+          ],
           "description": "Final outcome of the fallback sequence."
         },
         "latency_ms": {
@@ -1261,7 +1475,10 @@
           "description": "End-to-end wall-clock duration across the fallback sequence."
         },
         "cost_usd": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "minimum": 0,
           "description": "Observed cost in USD across the fallback sequence, if surfaced."
         },
@@ -1280,7 +1497,10 @@
                 "description": "Reason that the model was skipped or failed."
               }
             },
-            "required": ["model", "reason"],
+            "required": [
+              "model",
+              "reason"
+            ],
             "additionalProperties": false
           }
         }
@@ -1313,7 +1533,10 @@
           "type": "string"
         }
       },
-      "required": ["sessionId", "manifestDigest"],
+      "required": [
+        "sessionId",
+        "manifestDigest"
+      ],
       "additionalProperties": false
     },
     "resourceSelections": {
@@ -1323,23 +1546,45 @@
         "properties": {
           "surface": {
             "type": "string",
-            "enum": ["router", "planner", "reviewer"]
+            "enum": [
+              "router",
+              "planner",
+              "reviewer"
+            ]
           },
           "variant": {
             "type": "string",
-            "enum": ["baseline", "optimized", "canary"]
+            "enum": [
+              "baseline",
+              "optimized",
+              "canary"
+            ]
           },
           "requestedVariant": {
             "type": "string",
-            "enum": ["baseline", "optimized", "canary"]
+            "enum": [
+              "baseline",
+              "optimized",
+              "canary"
+            ]
           },
           "resourceRef": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "properties": {
-              "id": { "type": "string" },
-              "version": { "type": "string" }
+              "id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
             },
-            "required": ["id", "version"],
+            "required": [
+              "id",
+              "version"
+            ],
             "additionalProperties": false
           },
           "uri": {
@@ -1352,7 +1597,13 @@
             "type": "string"
           }
         },
-        "required": ["surface", "variant", "requestedVariant", "resourceRef", "fallbackApplied"],
+        "required": [
+          "surface",
+          "variant",
+          "requestedVariant",
+          "resourceRef",
+          "fallbackApplied"
+        ],
         "additionalProperties": false
       }
     },
@@ -1373,27 +1624,57 @@
           "type": "object",
           "description": "Per-criterion rubric scores.",
           "properties": {
-            "completeness": { "$ref": "#/$defs/RubricCriterionScore" },
-            "correctness": { "$ref": "#/$defs/RubricCriterionScore" },
-            "code_quality": { "$ref": "#/$defs/RubricCriterionScore" },
-            "intervention_impact": { "$ref": "#/$defs/RubricCriterionScore" },
-            "autonomy": { "$ref": "#/$defs/RubricCriterionScore" }
+            "completeness": {
+              "$ref": "#/$defs/RubricCriterionScore"
+            },
+            "correctness": {
+              "$ref": "#/$defs/RubricCriterionScore"
+            },
+            "code_quality": {
+              "$ref": "#/$defs/RubricCriterionScore"
+            },
+            "intervention_impact": {
+              "$ref": "#/$defs/RubricCriterionScore"
+            },
+            "autonomy": {
+              "$ref": "#/$defs/RubricCriterionScore"
+            }
           },
-          "required": ["completeness", "correctness", "code_quality", "intervention_impact", "autonomy"],
+          "required": [
+            "completeness",
+            "correctness",
+            "code_quality",
+            "intervention_impact",
+            "autonomy"
+          ],
           "additionalProperties": false
         },
         "determinative_boundary": {
           "type": "string",
-          "enum": ["no_interventions", "cosmetic_only", "functional_bug", "multiple_bugs", "heavy_intervention"],
+          "enum": [
+            "no_interventions",
+            "cosmetic_only",
+            "functional_bug",
+            "multiple_bugs",
+            "heavy_intervention"
+          ],
           "description": "Which scoring boundary was the binding constraint on the final score."
         }
       },
-      "required": ["schema_version", "rubric_version", "criteria"],
+      "required": [
+        "schema_version",
+        "rubric_version",
+        "criteria"
+      ],
       "additionalProperties": false
     },
     "rubric_provenance": {
       "type": "string",
-      "enum": ["judge", "backfill_derived", "legacy_absent"],
+      "enum": [
+        "judge",
+        "backfill_derived",
+        "legacy_absent"
+      ],
       "description": "Provenance of the rubric metadata attached to this eval record."
     },
     "challengeRouteContext": {
@@ -1402,7 +1683,11 @@
       "properties": {
         "decisionSource": {
           "type": "string",
-          "enum": ["bootstrap", "expanded", "preserved"]
+          "enum": [
+            "bootstrap",
+            "expanded",
+            "preserved"
+          ]
         },
         "bootstrapRoute": {
           "$ref": "#/$defs/ChallengeRouteArtifact"
@@ -1414,7 +1699,9 @@
           "type": "string"
         }
       },
-      "required": ["decisionSource"],
+      "required": [
+        "decisionSource"
+      ],
       "additionalProperties": false
     },
     "routeProvenance": {
@@ -1435,7 +1722,11 @@
         },
         "decisionSource": {
           "type": "string",
-          "enum": ["bootstrap", "expanded", "preserved"]
+          "enum": [
+            "bootstrap",
+            "expanded",
+            "preserved"
+          ]
         },
         "expandedCacheHit": {
           "type": "boolean"
@@ -1445,11 +1736,19 @@
         },
         "routeSource": {
           "type": "string",
-          "enum": ["batch", "single", "cache"]
+          "enum": [
+            "batch",
+            "single",
+            "cache"
+          ]
         },
         "routerMode": {
           "type": "string",
-          "enum": ["normal", "constrained", "survival"]
+          "enum": [
+            "normal",
+            "constrained",
+            "survival"
+          ]
         },
         "routingMode": {
           "type": "string"
@@ -1485,103 +1784,269 @@
       "type": "object",
       "additionalProperties": true,
       "description": "Optional extensibility bag for additional metadata."
+    },
+    "routing": {
+      "type": "object",
+      "description": "Resolved-model routing decisions for planner/coder/reviewer launches.",
+      "additionalProperties": false,
+      "properties": {
+        "planner": {
+          "$ref": "#/$defs/ResolvedModelRoutingDecision"
+        },
+        "coder": {
+          "$ref": "#/$defs/ResolvedModelRoutingDecision"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/ResolvedModelRoutingDecision"
+        }
+      }
     }
   },
   "$defs": {
     "ChallengeRouteArtifact": {
       "type": "object",
       "properties": {
-        "coder": { "type": "string" },
-        "codeDepth": { "type": "string" },
-        "reviewer": { "type": "string" },
-        "reviewMode": { "type": "string" },
-        "planner": { "type": "string" },
-        "planDepth": { "type": "string" },
-        "artifactPath": { "type": "string" },
-        "artifactHash": { "type": "string" },
-        "inputHash": { "type": "string" },
-        "source": { "type": "string" },
-        "cacheHit": { "type": "boolean" },
+        "coder": {
+          "type": "string"
+        },
+        "codeDepth": {
+          "type": "string"
+        },
+        "reviewer": {
+          "type": "string"
+        },
+        "reviewMode": {
+          "type": "string"
+        },
+        "planner": {
+          "type": "string"
+        },
+        "planDepth": {
+          "type": "string"
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "artifactHash": {
+          "type": "string"
+        },
+        "inputHash": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "cacheHit": {
+          "type": "boolean"
+        },
         "routeSource": {
           "type": "string",
-          "enum": ["batch", "single", "cache"]
+          "enum": [
+            "batch",
+            "single",
+            "cache"
+          ]
         },
         "routerMode": {
           "type": "string",
-          "enum": ["normal", "constrained", "survival"]
+          "enum": [
+            "normal",
+            "constrained",
+            "survival"
+          ]
         },
-        "routingMode": { "type": "string" },
+        "routingMode": {
+          "type": "string"
+        },
         "expectedMetrics": {
           "type": "object",
           "additionalProperties": true
         }
       },
-      "required": ["coder", "codeDepth", "reviewer", "reviewMode"],
+      "required": [
+        "coder",
+        "codeDepth",
+        "reviewer",
+        "reviewMode"
+      ],
       "additionalProperties": false
     },
     "RouteArtifact": {
       "type": "object",
       "properties": {
-        "coder": { "type": "string" },
-        "codeDepth": { "type": "string" },
-        "reviewer": { "type": "string" },
-        "reviewMode": { "type": "string" }
+        "coder": {
+          "type": "string"
+        },
+        "codeDepth": {
+          "type": "string"
+        },
+        "reviewer": {
+          "type": "string"
+        },
+        "reviewMode": {
+          "type": "string"
+        }
       },
-      "required": ["coder", "codeDepth", "reviewer", "reviewMode"],
+      "required": [
+        "coder",
+        "codeDepth",
+        "reviewer",
+        "reviewMode"
+      ],
       "additionalProperties": false
     },
     "RoutePrediction": {
       "type": "object",
       "properties": {
-        "expectedSuccess": { "type": "number", "minimum": 0, "maximum": 1 },
-        "expectedCostUsd": { "type": "number", "minimum": 0 },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-        "riskScore": { "type": "number", "minimum": 0 },
-        "taskType": { "type": "string" },
-        "taskDifficulty": { "type": "string" },
+        "expectedSuccess": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "expectedCostUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "riskScore": {
+          "type": "number",
+          "minimum": 0
+        },
+        "taskType": {
+          "type": "string"
+        },
+        "taskDifficulty": {
+          "type": "string"
+        },
         "topFeatures": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "maxItems": 5
         },
-        "rationaleSummary": { "type": "string", "maxLength": 280 }
+        "rationaleSummary": {
+          "type": "string",
+          "maxLength": 280
+        }
       },
       "additionalProperties": false
     },
     "RouteCalibration": {
       "type": "object",
       "properties": {
-        "costErrorUsd": { "type": "number" },
-        "successDelta": { "type": "number" },
-        "predictedSuccess": { "type": "number", "minimum": 0, "maximum": 1 },
-        "actualSuccess": { "type": "boolean" },
-        "predictedCostUsd": { "type": "number", "minimum": 0 },
-        "actualCostUsd": { "type": "number", "minimum": 0 },
-        "interventionCount": { "type": "integer", "minimum": 0 },
-        "durationMs": { "type": "number", "minimum": 0 }
+        "costErrorUsd": {
+          "type": "number"
+        },
+        "successDelta": {
+          "type": "number"
+        },
+        "predictedSuccess": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "actualSuccess": {
+          "type": "boolean"
+        },
+        "predictedCostUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "actualCostUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "interventionCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "durationMs": {
+          "type": "number",
+          "minimum": 0
+        }
       },
       "additionalProperties": false
     },
     "WavemillRouterDiagnostics": {
       "type": "object",
       "properties": {
-        "scoreable_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
-        "invalid_route_rate": { "type": "number", "minimum": 0, "maximum": 1 },
-        "budget_compliance_rate": { "type": "number", "minimum": 0, "maximum": 1 },
-        "completion_success_rate": { "type": "number", "minimum": 0, "maximum": 1 },
-        "total_cost_usd": { "type": "number", "minimum": 0 },
-        "timing_p50_ms": { "type": "number", "minimum": 0 },
-        "timing_p95_ms": { "type": "number", "minimum": 0 },
-        "intervention_rate": { "type": "number", "minimum": 0, "maximum": 1 },
-        "intervention_count": { "type": "integer", "minimum": 0 },
-        "total_records": { "type": "integer", "minimum": 0 },
-        "scoreable_records": { "type": "integer", "minimum": 0 },
-        "invalid_route_records": { "type": "integer", "minimum": 0 },
-        "prediction_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
-        "mean_cost_error_usd": { "type": "number" },
-        "mean_absolute_cost_error_usd": { "type": "number", "minimum": 0 },
-        "mean_success_delta": { "type": "number" },
-        "success_brier_score": { "type": "number", "minimum": 0 }
+        "scoreable_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "invalid_route_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "budget_compliance_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "completion_success_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "total_cost_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "timing_p50_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "timing_p95_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "intervention_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "intervention_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_records": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scoreable_records": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "invalid_route_records": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "prediction_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "mean_cost_error_usd": {
+          "type": "number"
+        },
+        "mean_absolute_cost_error_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "mean_success_delta": {
+          "type": "number"
+        },
+        "success_brier_score": {
+          "type": "number",
+          "minimum": 0
+        }
       },
       "required": [
         "scoreable_coverage",
@@ -1607,10 +2072,16 @@
         },
         "measurement_policy": {
           "type": "string",
-          "enum": ["replay_exact_match", "challenge_prospective"]
+          "enum": [
+            "replay_exact_match",
+            "challenge_prospective"
+          ]
         }
       },
-      "required": ["scorer_id", "measurement_policy"],
+      "required": [
+        "scorer_id",
+        "measurement_policy"
+      ],
       "additionalProperties": false
     },
     "RubricCriterion": {
@@ -1632,7 +2103,10 @@
           "description": "Optional brief explanation from the judge."
         }
       },
-      "required": ["criterion", "score"],
+      "required": [
+        "criterion",
+        "score"
+      ],
       "additionalProperties": false
     },
     "StageScore": {
@@ -1653,10 +2127,15 @@
         },
         "rubricCriteria": {
           "type": "array",
-          "items": { "$ref": "#/$defs/RubricCriterion" }
+          "items": {
+            "$ref": "#/$defs/RubricCriterion"
+          }
         }
       },
-      "required": ["score", "rationale"],
+      "required": [
+        "score",
+        "rationale"
+      ],
       "additionalProperties": false
     },
     "RubricCriterionScore": {
@@ -1674,8 +2153,99 @@
           "description": "1-sentence rationale from the judge."
         }
       },
-      "required": ["score", "rationale"],
+      "required": [
+        "score",
+        "rationale"
+      ],
       "additionalProperties": false
+    },
+    "ResolvedModelRoutingDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "planner",
+            "coder",
+            "reviewer"
+          ]
+        },
+        "requestedSelector": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "pinned",
+                "alias",
+                "inherit"
+              ]
+            },
+            "modelId": {
+              "type": "string"
+            },
+            "alias": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "pinned"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "modelId"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "alias"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "alias"
+                ]
+              }
+            }
+          ]
+        },
+        "resolvedModelId": {
+          "type": "string"
+        },
+        "sourceLayer": {
+          "type": "string"
+        },
+        "resolutionSource": {
+          "type": "string"
+        },
+        "fallbackReason": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "requestedSelector",
+        "resolvedModelId",
+        "sourceLayer"
+      ]
     }
   }
 }

@@ -4,6 +4,9 @@
 # scripts don't need to know how each agent CLI works.
 #
 # Adding a new agent: add a case block in each function below.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$script_dir/routing-emitter.sh"
 
 # ============================================================================
 # AGENT RESOLUTION
@@ -1266,6 +1269,12 @@ agent_launch_autonomous() {
   hooks_dir="$(agent_hooks_dir)"
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
   local repo_dir="${REPO_DIR:-$(pwd)}"
+  local role feature_dir
+  role="$(routing_role_from_window "$window" 2>/dev/null || true)"
+  feature_dir="${WAVEMILL_FEATURE_DIR:-}"
+  if [[ -z "$feature_dir" && -n "${WAVEMILL_FEATURE_SLUG:-}" ]]; then
+    feature_dir="$repo_dir/features/$WAVEMILL_FEATURE_SLUG"
+  fi
 
   local model_flag=""
   if [[ -n "$model" ]]; then
@@ -1273,6 +1282,9 @@ agent_launch_autonomous() {
   fi
 
   agent_write_initial_status "$session" "$issue"
+  if [[ -n "$role" && -n "$model" ]]; then
+    routing_emit_phase "$role" "$model" "$repo_dir" "$feature_dir" || true
+  fi
 
   # Wrap agent command so exit status is visible and the shell survives
   case "$agent_cmd" in
@@ -1533,6 +1545,12 @@ agent_launch_interactive() {
   local dashboard_pid
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
   local repo_dir="${REPO_DIR:-$(pwd)}"
+  local role feature_dir
+  role="$(routing_role_from_window "$window" 2>/dev/null || true)"
+  feature_dir="${WAVEMILL_FEATURE_DIR:-}"
+  if [[ -z "$feature_dir" && -n "${WAVEMILL_FEATURE_SLUG:-}" ]]; then
+    feature_dir="$repo_dir/features/$WAVEMILL_FEATURE_SLUG"
+  fi
 
   if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
     local fallback_model=""
@@ -1586,6 +1604,9 @@ agent_launch_interactive() {
   local launcher_cmd=""
 
   agent_write_initial_status "$session" "$issue"
+  if [[ -n "$role" && -n "$model" ]]; then
+    routing_emit_phase "$role" "$model" "$repo_dir" "$feature_dir" || true
+  fi
 
   # Don't use exec — keep the shell alive so the window persists after agent exit
   case "$agent_cmd" in
