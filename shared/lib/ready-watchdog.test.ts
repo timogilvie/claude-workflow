@@ -52,6 +52,51 @@ function makeTruth(overrides: Partial<GitHubPRTruth> = {}): GitHubPRTruth {
   };
 }
 
+function setupReadyTask(issueId = 'HOK-1579', prNumber = 528): {
+  repoDir: string;
+  stateDir: string;
+  stateFile: string;
+  worktree: string;
+  featureDir: string;
+} {
+  const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
+  const stateDir = path.join(repoDir, '.wavemill');
+  const worktree = path.join(repoDir, 'worktrees', 'ready-watchdog-task');
+  const featureDir = path.join(worktree, 'features', 'ready-watchdog-task');
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(featureDir, { recursive: true });
+
+  const stateFile = path.join(stateDir, 'workflow-state.json');
+  writeFileSync(stateFile, JSON.stringify({
+    tasks: {
+      [issueId]: {
+        slug: 'ready-watchdog-task',
+        branch: 'task/ready-watchdog-task',
+        worktree,
+        pr: prNumber,
+        phase: 'ready',
+        updated: '2026-05-05T12:00:00.000Z',
+        agent: 'codex',
+        model: 'gpt-5.5',
+      },
+    },
+    jobs: {},
+  }, null, 2));
+
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: null,
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pending', prNumber },
+  }, null, 2));
+
+  return { repoDir, stateDir, stateFile, worktree, featureDir };
+}
+
 test('classify clean green stale ready as stuck', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
@@ -158,6 +203,23 @@ test('classify real conflict as needs-user', () => {
 
   assert.equal(classification.kind, 'needs-user');
   assert.match(classification.detail, /merge conflicts/);
+});
+
+test('classify mergeable behind PR as auto-update eligible', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot(),
+    makeTruth({ mergeStateStatus: 'BEHIND', baseRefName: 'auto/integration' }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+    },
+  );
+
+  assert.equal(classification.kind, 'auto-update');
+  assert.match(classification.detail, /behind auto\/integration/);
 });
 
 test('tick auto-recovers stale local state for clean green PRs', async () => {
@@ -493,4 +555,321 @@ test('tick surfaces a manual recovery command when auto-recover is disabled', as
   assert.match(result.findings[0].recoveryCommand ?? '', /--recover HOK-1579/);
 
   await rm(repoDir, { recursive: true, force: true });
+});
+
+test('tick auto-updates mergeable behind PRs and resets ready state without reporting needs-user', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-1716', 716);
+  let updateCalls = 0;
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: true,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          mergeStateStatus: 'BEHIND',
+          headRefName: 'task/ready-watchdog-task',
+          baseRefName: 'auto/integration',
+        }),
+        getCurrentHead: async () => 'head',
+        updateBehindBranch: async () => {
+          updateCalls += 1;
+          return {
+            status: 'success',
+            detail: 'updated task/ready-watchdog-task with origin/auto/integration',
+          };
+        },
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(updateCalls, 1);
+    assert.equal(result.findings.length, 0);
+    const readyResult = JSON.parse(readFileSync(path.join(featureDir, '.ready-result.json'), 'utf-8')) as {
+      status: string;
+      notes: string;
+      artifacts: { verdict: string };
+    };
+    assert.equal(readyResult.status, 'running');
+    assert.equal(readyResult.artifacts.verdict, 'pending');
+    assert.match(readyResult.notes, /updated the PR branch/);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick escalates auto-update conflicts as needs-user with git output', async () => {
+  const { repoDir, stateFile } = setupReadyTask('HOK-1716', 716);
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: true,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          mergeStateStatus: 'BEHIND',
+          baseRefName: 'auto/integration',
+        }),
+        getCurrentHead: async () => 'head',
+        updateBehindBranch: async () => ({
+          status: 'conflict',
+          detail: 'CONFLICT (content): merge conflict in shared/lib/ready-watchdog.ts',
+        }),
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'needs-user');
+    assert.match(result.findings[0].detail, /CONFLICT \(content\)/);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick retries push failures, defaults missing attempts to zero, and exhausts after three attempts', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-1716', 716);
+  const watchdogStatePath = path.join(stateDir, 'ready-watchdog-state.json');
+  writeFileSync(watchdogStatePath, JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-1716': {
+        issueId: 'HOK-1716',
+        slug: 'ready-watchdog-task',
+        prNumber: 716,
+        classification: 'auto-update',
+        displayLabel: 'auto update',
+        detail: 'older failure',
+        action: 'auto-update-failed',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+      },
+    },
+  }, null, 2));
+
+  try {
+    const baseDeps = {
+      fetchGitHubTruth: async () => makeTruth({
+        mergeStateStatus: 'BEHIND',
+        baseRefName: 'auto/integration',
+      }),
+      getCurrentHead: async () => 'head',
+    };
+
+    const first = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: true,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        ...baseDeps,
+        updateBehindBranch: async () => ({ status: 'push-failed', detail: 'remote rejected push' }),
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+    assert.equal(first.findings.length, 1);
+    assert.equal(first.findings[0].classification, 'auto-update');
+    assert.equal(first.findings[0].autoUpdateAttempts, 1);
+
+    const second = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: true,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        ...baseDeps,
+        updateBehindBranch: async () => ({ status: 'push-failed', detail: 'remote rejected push' }),
+        now: () => new Date('2030-05-05T12:31:00.000Z'),
+      },
+    });
+    assert.equal(second.findings.length, 1);
+    assert.equal(second.findings[0].autoUpdateAttempts, 2);
+
+    const third = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: true,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        ...baseDeps,
+        updateBehindBranch: async () => ({ status: 'push-failed', detail: 'remote rejected push' }),
+        now: () => new Date('2030-05-05T12:32:00.000Z'),
+      },
+    });
+    assert.equal(third.findings.length, 1);
+    assert.equal(third.findings[0].classification, 'needs-user');
+    assert.match(third.findings[0].detail, /exhausted after 3 attempts/);
+
+    let calledAgain = false;
+    const fourth = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: true,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        ...baseDeps,
+        updateBehindBranch: async () => {
+          calledAgain = true;
+          return { status: 'push-failed', detail: 'remote rejected push' };
+        },
+        now: () => new Date('2030-05-05T12:33:00.000Z'),
+      },
+    });
+    assert.equal(calledAgain, false);
+    assert.equal(fourth.findings.length, 0);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick retains prior actionable findings across fresh ticks and suppresses repeat spam', async () => {
+  const { repoDir, stateFile } = setupReadyTask('HOK-1716', 716);
+
+  try {
+    const blockingTruth = makeTruth({ state: 'MERGED' });
+
+    const first = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: false,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        fetchGitHubTruth: async () => blockingTruth,
+        getCurrentHead: async () => 'head',
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+    assert.equal(first.findings.length, 1);
+
+    const second = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: false,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        fetchGitHubTruth: async () => blockingTruth,
+        getCurrentHead: async () => 'head',
+        now: () => new Date('2026-05-05T12:04:00.000Z'),
+      },
+    });
+    assert.equal(second.findings.length, 0);
+
+    const third = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: false,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        fetchGitHubTruth: async () => blockingTruth,
+        getCurrentHead: async () => 'head',
+        now: () => new Date('2030-05-05T12:40:00.000Z'),
+      },
+    });
+    assert.equal(third.findings.length, 0);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick prunes retained watchdog state when a task leaves ready', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-1716', 716);
+  const watchdogStatePath = path.join(stateDir, 'ready-watchdog-state.json');
+  writeFileSync(watchdogStatePath, JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-1716': {
+        issueId: 'HOK-1716',
+        slug: 'ready-watchdog-task',
+        prNumber: 716,
+        classification: 'needs-user',
+        displayLabel: 'needs user',
+        detail: 'persisted finding',
+        action: 'reported',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+      },
+    },
+  }, null, 2));
+
+  writeFileSync(stateFile, JSON.stringify({
+    tasks: {
+      'HOK-1716': {
+        slug: 'ready-watchdog-task',
+        branch: 'task/ready-watchdog-task',
+        worktree: path.join(repoDir, 'worktrees', 'ready-watchdog-task'),
+        pr: 716,
+        phase: 'review',
+        updated: '2026-05-05T12:00:00.000Z',
+      },
+    },
+    jobs: {},
+  }, null, 2));
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: false,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        fetchGitHubTruth: async () => makeTruth(),
+        getCurrentHead: async () => 'head',
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 0);
+    const watchdogState = JSON.parse(readFileSync(watchdogStatePath, 'utf-8')) as {
+      tasks: Record<string, unknown>;
+    };
+    assert.equal(watchdogState.tasks['HOK-1716'], undefined);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
 });
