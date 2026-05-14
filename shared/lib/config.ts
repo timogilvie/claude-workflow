@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
+import { parseModelSelector } from './model-registry.ts';
 import type {
   LatencyTier,
   MultimodalSupport,
@@ -30,7 +31,7 @@ import type {
  * Current config format version.
  * Increment when making breaking changes to config structure.
  */
-export const CURRENT_CONFIG_VERSION = '1.3.0';
+export const CURRENT_CONFIG_VERSION = '1.4.0';
 
 export interface MillConfig {
   session?: string;
@@ -68,6 +69,16 @@ export interface PlanConfig {
   model?: string;
   interactive?: boolean;
   timeout?: number;
+}
+
+export interface AgentStageConfig {
+  model?: string;
+}
+
+export interface AgentsConfig {
+  planner?: AgentStageConfig;
+  coder?: AgentStageConfig;
+  reviewer?: AgentStageConfig;
 }
 
 export interface DashboardConfig {
@@ -446,6 +457,7 @@ export interface WavemillConfig {
   mill?: MillConfig;
   expand?: ExpandConfig;
   plan?: PlanConfig;
+  agents?: AgentsConfig;
   dashboard?: DashboardConfig;
   taskSelection?: TaskSelectionConfig;
   projectContext?: ProjectContextConfig;
@@ -620,6 +632,7 @@ function validateConfig(config: unknown): asserts config is WavemillConfig {
   }
 
   validateReadyPolicySubset(config);
+  validateAgentsModelSelectors(config);
 }
 
 function canonicalizeReadyCheckName(name: string): string {
@@ -655,6 +668,37 @@ function validateReadyPolicySubset(config: unknown): void {
         `Check .wavemill-config.json against wavemill-config.schema.json`
       );
     }
+  }
+}
+
+function validateAgentsModelSelectors(config: unknown): void {
+  if (typeof config !== 'object' || config === null) {
+    return;
+  }
+
+  const agents = (config as WavemillConfig).agents;
+  if (!agents) {
+    return;
+  }
+
+  const phases = ['planner', 'coder', 'reviewer'] as const;
+  for (const phase of phases) {
+    const model = agents[phase]?.model;
+    if (model === undefined) {
+      continue;
+    }
+
+    const parsed = parseModelSelector(model);
+    if (parsed.ok) {
+      continue;
+    }
+
+    throw new Error(
+      `Config validation failed:\n` +
+      `  /agents/${phase}/model: "${model}" is not a valid model selector.\n` +
+      `  Valid forms: "inherit", a family alias (e.g. "opus", "sonnet", "haiku"), or a pinned model ID (e.g. "claude-opus-4-7").\n` +
+      `  Parse error: ${parsed.error.message}`
+    );
   }
 }
 
@@ -1045,6 +1089,10 @@ export function getValidationConfig(repoDir?: string): ValidationConfig {
  */
 export function getPlanConfig(repoDir?: string): PlanConfig {
   return loadWavemillConfig(repoDir).plan || {};
+}
+
+export function getAgentsConfig(repoDir?: string): AgentsConfig {
+  return loadWavemillConfig(repoDir).agents || {};
 }
 
 /**

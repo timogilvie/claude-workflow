@@ -54,6 +54,7 @@ function main() {
   const selector = parseRequestedSelector(args.selector ?? '');
   const repoDir = resolvePath(args['repo-dir'] ?? process.cwd());
   const resolved = resolveEffectiveModel({
+    workspaceSelector: args['workspace-selector'] || undefined,
     userOverride: selector,
     policyContext: {
       taskType: roleToTaskType(role),
