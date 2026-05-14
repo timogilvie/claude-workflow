@@ -31,6 +31,7 @@ import type {
   TaskDescriptor,
   EvalConstraints,
   ManifestRef,
+  PromptSizeDiagnostic,
   RoutingDecision,
   RubricCriterion,
 } from './eval-schema.ts';
@@ -123,6 +124,46 @@ export function attachChallengePairId(record: EvalRecord, challengePairId?: stri
   if (challengePairId) {
     record.challengePairId = challengePairId;
   }
+}
+
+function finiteNonNegative(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
+
+export function attachPromptSizeDiagnostic(
+  record: EvalRecord,
+  diagnostic?: PromptSizeDiagnostic | null,
+): void {
+  if (!diagnostic) {
+    return;
+  }
+
+  const perComponentBytes = Object.fromEntries(
+    Object.entries(diagnostic.perComponentBytes).map(([name, bytes]) => [
+      name,
+      finiteNonNegative(bytes),
+    ]),
+  ) as PromptSizeDiagnostic['perComponentBytes'];
+
+  record.promptSizeDiagnostic = {
+    totalBytes: finiteNonNegative(diagnostic.totalBytes),
+    limitBytes: finiteNonNegative(diagnostic.limitBytes),
+    perComponentBytes,
+    policy: diagnostic.policy,
+    action: diagnostic.action,
+    ...(diagnostic.truncatedComponents
+      ? {
+          truncatedComponents: diagnostic.truncatedComponents.map((component) => ({
+            name: component.name,
+            originalBytes: finiteNonNegative(component.originalBytes),
+            finalBytes: finiteNonNegative(component.finalBytes),
+            removedBytes: finiteNonNegative(component.removedBytes),
+          })),
+        }
+      : {}),
+  };
 }
 
 function toEvalChallengeRouteContext(
