@@ -165,6 +165,14 @@ describe('resolveEffectiveModel', () => {
       expectedSource: 'pinned',
     },
     {
+      name: 'defaults when workspace inherit has no parent and no user override',
+      workspaceSelector: 'inherit',
+      expectedLayer: 'default',
+      expectedRequested: { kind: 'pinned', modelId: 'claude-opus-4-7' },
+      expectedResolved: 'claude-opus-4-7',
+      expectedSource: 'pinned',
+    },
+    {
       name: 'inherits from parent when workspace selector is inherit and user override is absent',
       workspaceSelector: 'inherit',
       parent,
