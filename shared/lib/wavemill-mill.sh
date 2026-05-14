@@ -3748,11 +3748,12 @@ _launch_agent_in_pane() {
   local window="${target#*:}"
   local agent_flags=""
   local abort_check_cmd=""
+  local feature_dir=""
   local esc_session esc_issue esc_slug
 
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
-    local feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
+    feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
     abort_check_cmd="check_stage_aborted '$feature_dir'"
   fi
 
@@ -3761,7 +3762,10 @@ _launch_agent_in_pane() {
   esc_issue=${issue//\'/\'\\\'\'}
   esc_slug=${slug//\'/\'\\\'\'}
   tmux send-keys -t "$target" \
-    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_SLUG='$esc_slug'" C-m
+    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir'" C-m
+
+  export WAVEMILL_FEATURE_SLUG="$slug"
+  export WAVEMILL_FEATURE_DIR="$feature_dir"
 
   agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd"
 }
@@ -5391,6 +5395,10 @@ archive_stage_artifacts() {
       else
         log_warn "  Skipping invalid route artifact archive: $feature_dir/.post-expansion-route.json"
       fi
+    fi
+
+    if [[ -f "$feature_dir/routing.jsonl" ]]; then
+      cp "$feature_dir/routing.jsonl" "$archive_dir/routing.jsonl" 2>/dev/null || true
     fi
   fi
 

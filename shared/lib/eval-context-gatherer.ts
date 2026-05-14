@@ -18,7 +18,7 @@ import path from 'node:path';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadMetrics } from './review-metrics.ts';
-import type { RoutePrediction, RoutingDecision, RoutingCandidate } from './eval-schema.ts';
+import type { EvalRouting, RoutePrediction, RoutingDecision, RoutingCandidate } from './eval-schema.ts';
 import {
   POLICY_RESOLVER_VERSION,
   ROUTE_ARTIFACT_SCHEMA_VERSION,
@@ -508,6 +508,56 @@ function loadRoutingCompleteRawFromArchive(
   return parseRoutingCompleteData(content);
 }
 
+function loadResolvedModelRouting(
+  repoDir: string,
+  issueId: string,
+  slug?: string,
+  worktreePath?: string,
+): EvalRouting | undefined {
+  const candidates: string[] = [];
+  if (slug) {
+    if (worktreePath) {
+      candidates.push(path.join(worktreePath, 'features', slug, 'routing.jsonl'));
+      candidates.push(path.join(worktreePath, 'bugs', slug, 'routing.jsonl'));
+    }
+    candidates.push(path.join(repoDir, 'features', slug, 'routing.jsonl'));
+    candidates.push(path.join(repoDir, 'bugs', slug, 'routing.jsonl'));
+  }
+  candidates.push(path.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId, 'routing.jsonl'));
+
+  let content: string | undefined;
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    try {
+      content = readFileSync(candidate, 'utf-8');
+      break;
+    } catch {
+      continue;
+    }
+  }
+  if (!content) return undefined;
+
+  const latestByRole: EvalRouting = {};
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (
+        (parsed.role === 'planner' || parsed.role === 'coder' || parsed.role === 'reviewer')
+        && parsed.requestedSelector
+        && typeof parsed.resolvedModelId === 'string'
+        && typeof parsed.sourceLayer === 'string'
+      ) {
+        latestByRole[parsed.role] = parsed as EvalRouting['planner'];
+      }
+    } catch {
+      console.warn(`Skipping malformed routing.jsonl line for ${issueId}`);
+    }
+  }
+  return Object.keys(latestByRole).length > 0 ? latestByRole : undefined;
+}
+
 export function fetchRoutingCompleteRawWithArchive(
   repoDir: string,
   slug: string,
@@ -791,6 +841,7 @@ export function gatherStageArtifacts(
   planContent?: string;
   selfReviewSummary?: string;
   routingDecision?: RoutingDecision;
+  routing?: EvalRouting;
   routePrediction?: RoutePrediction;
   executionModel?: string;
 } {
@@ -803,6 +854,7 @@ export function gatherStageArtifacts(
       planContent: loadFromArchive(repoDir, issueId, 'plan.md'),
       selfReviewSummary: undefined,
       routingDecision: undefined,
+      routing: loadResolvedModelRouting(repoDir, issueId),
       routePrediction: buildRoutePrediction(loadRoutingCompleteRawFromArchive(repoDir, issueId) ?? undefined),
       executionModel: undefined,
     };
@@ -820,12 +872,14 @@ export function gatherStageArtifacts(
   const routingDecision = routingCompleteRaw
     ? convertToRoutingDecision(routingCompleteRaw)
     : undefined;
+  const routing = loadResolvedModelRouting(repoDir, issueId, slug, worktreePath);
 
   return {
     taskPacket,
     planContent,
     selfReviewSummary,
     routingDecision,
+    routing,
     routePrediction: buildRoutePrediction(routingCompleteRaw),
     executionModel: loadStageExecutionModel(repoDir, slug, worktreePath),
   };

@@ -30,6 +30,7 @@ import type {
   FallbackEventMetadata,
   TaskDescriptor,
   EvalConstraints,
+  EvalRouting,
   ManifestRef,
   PromptSizeDiagnostic,
   RoutingDecision,
@@ -89,6 +90,8 @@ export interface EvalRecordMetadata {
   constraints?: EvalConstraints | null;
   /** Structured rubric criteria evaluation (HOK-1406) */
   rubricEval?: RubricEval | null;
+  /** Resolved-model routing decisions emitted during execution. */
+  routing?: EvalRouting | null;
 }
 
 /** Richer eval metadata attachment used by training-facing eval entrypoints. */
@@ -462,6 +465,16 @@ export function attachRoutePrediction(
   if (hasObjectValues(normalized as Record<string, unknown>)) {
     record.routePrediction = normalized;
   }
+}
+
+export function attachRoutingDecisions(
+  record: EvalRecord,
+  routing: EvalRouting | null | undefined,
+): void {
+  if (!routing || Object.keys(routing).length === 0) {
+    return;
+  }
+  record.routing = routing;
 }
 
 export function attachRouteCalibration(
@@ -1044,6 +1057,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
+  attachRoutingDecisions(record, metadata.routing);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
   attachRouteCalibration(record, computeRouteCalibration(record, record.routePrediction));
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
@@ -1086,6 +1100,7 @@ export function enrichTrainingMetadata(
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
+  attachRoutingDecisions(record, metadata.routing);
   attachWorkflowCostMetadata(record, metadata.workflowCost || null);
   attachRouteCalibration(record, computeRouteCalibration(record, record.routePrediction));
   attachTaskDescriptor(record, metadata.taskDescriptor || null);
