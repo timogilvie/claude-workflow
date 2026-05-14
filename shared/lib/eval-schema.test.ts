@@ -1583,6 +1583,39 @@ test('Schema version constant is 1.24.0', () => {
   assert.equal(SCHEMA_VERSION, '1.24.0');
 });
 
+test('Record with resolved-model routing validates', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.24.0',
+    routing: {
+      planner: {
+        role: 'planner',
+        requestedSelector: { kind: 'pinned', modelId: 'gpt-5.5' },
+        resolvedModelId: 'gpt-5.5',
+        sourceLayer: 'user',
+      },
+    },
+  };
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with invalid resolved-model routing is rejected', () => {
+  const record = {
+    ...scenarios[0].record,
+    schemaVersion: '1.24.0',
+    routing: {
+      coder: {
+        role: 'coder',
+        requestedSelector: { kind: 'pinned', modelId: 'gpt-5.4' },
+        sourceLayer: 'policy',
+      },
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(!result.valid, 'Should be invalid');
+});
+
 test('Legacy rows still validate without nonRewardReason', () => {
   const result = validateAgainstSchema(scenarios[0].record as unknown as Record<string, unknown>);
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
