@@ -508,7 +508,7 @@ startup_run_task_phases() {
   local challenge challenge_pair challenge_role challenge_model task_agent win
   local depends_on base_from_task
   local packet_content issue_json issue_description issue_context details_context labels_json
-  local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false
+  local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false planner_launch_model
 
   local startup_id
   startup_id="$(echo "$task_json" | jq -r '.startupId // empty')"
@@ -780,6 +780,11 @@ $details_context"
   planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
   build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$planning_prompt"
+  if ! planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-4-6}" "$wt_dir" 2>/dev/null)"; then
+    planner_launch_model="${planner_model:-claude-sonnet-4-6}"
+  fi
+  export WAVEMILL_RESOLVED_MODEL="$planner_launch_model"
+  tmux set-environment -t "$SESSION" WAVEMILL_RESOLVED_MODEL "$planner_launch_model" 2>/dev/null || true
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
   if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then

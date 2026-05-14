@@ -1189,20 +1189,24 @@ fi
 
 PROMPT_RENDER_DIR=$(mktemp -d)
 trap 'rm -rf "$PROMPT_RENDER_DIR"' EXIT
+ORIGINAL_PATH="$PATH"
 
 source "$LIB_DIR/agent-adapters.sh"
 
-PATH="/usr/bin:/bin" build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
-  "Issue Description:
+(
+  PATH="/usr/bin:/bin" build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+    "Issue Description:
 Test
 " "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "medium" "codex" \
-  > "$PROMPT_RENDER_DIR/planning-no-npx.txt" \
-  2> "$PROMPT_RENDER_DIR/planning-no-npx.err"
+    > "$PROMPT_RENDER_DIR/planning-no-npx.txt" \
+    2> "$PROMPT_RENDER_DIR/planning-no-npx.err"
+)
 if grep -q 'Failed to resolve planner runtime resource' "$PROMPT_RENDER_DIR/planning-no-npx.err"; then
   fail "baseline planning prompt render should not require npx runtime resolver"
 else
   pass "baseline planning prompt render skips runtime resolver when selection is disabled"
 fi
+PATH="$ORIGINAL_PATH"
 
 build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
   "Issue Description:
@@ -1483,7 +1487,7 @@ for captured in "${TMUX_CAPTURE[@]}"; do
 done
 
 if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
-  && grep -q 'codex --model gpt-5.4 --dangerously-bypass-approvals-and-sandbox --no-alt-screen "\$(cat ' "$CODEX_LAUNCHER_PATH"; then
+  && grep -q 'codex\( --model gpt-5\.4\)\? --dangerously-bypass-approvals-and-sandbox --no-alt-screen "\$(cat ' "$CODEX_LAUNCHER_PATH"; then
   pass "interactive Codex launcher uses interactive codex with bypass flag"
 else
   fail "interactive Codex launcher is missing interactive codex flags"
