@@ -28,6 +28,7 @@ Common overrides:
 MAX_PARALLEL=5 wavemill mill
 AGENT_CMD=codex wavemill mill
 WAVEMILL_DASHBOARD_REFRESH_SECONDS=3 wavemill mill
+WAVEMILL_TIP_REFRESH_SECONDS=60 wavemill mill
 ```
 
 Dry-run launch-plan validation:
@@ -42,6 +43,7 @@ wavemill mill \
 This mode reuses the real startup planning pipeline, writes the generated launch plan to the requested path, and exits before creating tmux sessions, launching agents, opening PRs, or updating Linear. It is intended for fixture-backed validation, so supply backlog JSON explicitly with `--dry-run-backlog`.
 
 `WAVEMILL_DASHBOARD_REFRESH_SECONDS` accepts integer values from `1` through `10`. Invalid values fall back to the default `2` second dashboard refresh cadence.
+`WAVEMILL_TIP_REFRESH_SECONDS` accepts integer values from `1` through `3600`. Invalid values fall back to the default `60` second tip refresh cadence. This only controls the usage tip rotation and does not change any other dashboard refresh behavior.
 
 ## Startup Progress Table
 

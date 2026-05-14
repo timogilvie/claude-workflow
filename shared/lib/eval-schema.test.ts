@@ -742,6 +742,92 @@ test('Rejects record with invalid schemaVersion format', () => {
   );
 });
 
+console.log('\n--- Prompt Size Diagnostic Field Tests (HOK-1706) ---\n');
+
+function validPromptSizeDiagnostic() {
+  return {
+    totalBytes: 1200,
+    limitBytes: 9437184,
+    perComponentBytes: {
+      taskPrompt: 100,
+      prReviewOutput: 200,
+      interventionMetadata: 50,
+      taskPacket: 150,
+      planContent: 120,
+      selfReviewSummary: 80,
+      templateScaffold: 500,
+    },
+    policy: 'fail',
+    action: 'pass',
+  };
+}
+
+test('SCHEMA_VERSION is bumped for prompt size diagnostics', () => {
+  assert.equal(SCHEMA_VERSION, '1.24.0');
+});
+
+test('Record without prompt size fields still validates', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  assert.ok(!('failureReason' in record));
+  assert.ok(!('promptSizeDiagnostic' in record));
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with eval_prompt_too_large failureReason validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    failureReason: 'eval_prompt_too_large',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with promptSizeDiagnostic validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    promptSizeDiagnostic: {
+      ...validPromptSizeDiagnostic(),
+      policy: 'truncate',
+      action: 'truncated',
+      truncatedComponents: [
+        {
+          name: 'prReviewOutput',
+          originalBytes: 5000,
+          finalBytes: 1000,
+          removedBytes: 4000,
+        },
+      ],
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Rejects invalid failureReason', () => {
+  const bad = {
+    ...scenarios[0].record,
+    failureReason: 'eval_not_persisted',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(result.errors.some((e) => e.includes('failureReason')));
+});
+
+test('Rejects malformed promptSizeDiagnostic', () => {
+  const bad = {
+    ...scenarios[0].record,
+    promptSizeDiagnostic: {
+      ...validPromptSizeDiagnostic(),
+      totalBytes: -1,
+      action: 'compressed',
+    },
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(result.errors.some((e) => e.includes('promptSizeDiagnostic')));
+});
+
 console.log('\n--- Cost Field Tests ---\n');
 
 test('Record with tokenUsage and estimatedCost validates', () => {

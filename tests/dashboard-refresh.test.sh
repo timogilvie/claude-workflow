@@ -62,6 +62,102 @@ resolve_refresh_case() {
   rm -f "$err_file"
 }
 
+resolve_tip_refresh_case() {
+  local value="${1-}"
+  local output_var="$2"
+  local err_var="$3"
+  local refresh_output err_file
+
+  err_file="$(mktemp)"
+  if [[ -n "$value" ]]; then
+    refresh_output="$(
+      WAVEMILL_TIP_REFRESH_SECONDS="$value" bash -c '
+        set -euo pipefail
+        set -- test-session /tmp
+        tput() { :; }
+        source "'"$REPO_DIR"'/shared/lib/wavemill-status.sh"
+        printf "%s\n" "$TIP_REFRESH"
+      ' 2>"$err_file"
+    )"
+  else
+    refresh_output="$(
+      bash -c '
+        set -euo pipefail
+        set -- test-session /tmp
+        unset WAVEMILL_TIP_REFRESH_SECONDS
+        tput() { :; }
+        source "'"$REPO_DIR"'/shared/lib/wavemill-status.sh"
+        printf "%s\n" "$TIP_REFRESH"
+      ' 2>"$err_file"
+    )"
+  fi
+
+  printf -v "$output_var" '%s' "$refresh_output"
+  printf -v "$err_var" '%s' "$(cat "$err_file")"
+  rm -f "$err_file"
+}
+
+capture_tip_sequence() {
+  local output_var="$1"
+  local render_output
+  render_output="$(
+    WAVEMILL_DASHBOARD_REFRESH_SECONDS=2 \
+    WAVEMILL_TIP_REFRESH_SECONDS=60 \
+    bash -c '
+      set -euo pipefail
+      set -- test-session /tmp
+      tput() { :; }
+      source "'"$REPO_DIR"'/shared/lib/wavemill-status.sh"
+
+      refresh_pr_cache() { :; }
+      gather_tasks() { :; }
+      render_inbox_section() { :; }
+      render_active_section() { :; }
+      render_project_context_suggestion() { :; }
+
+      __tip_counter_file="$(mktemp)"
+      printf "0\n" > "$__tip_counter_file"
+      wavemill_pick_usage_tip() {
+        local counter
+        counter="$(cat "$__tip_counter_file")"
+        counter=$((counter + 1))
+        printf "%s\n" "$counter" > "$__tip_counter_file"
+        printf "tip-%s\n" "$counter"
+      }
+
+      __time_counter_file="$(mktemp)"
+      printf "0\n" > "$__time_counter_file"
+      date() {
+        if [[ "${1:-}" == "+%s" ]]; then
+          local idx
+          idx="$(cat "$__time_counter_file")"
+          case "$idx" in
+            0) printf "1000\n" ;;
+            1) printf "1010\n" ;;
+            *) printf "1070\n" ;;
+          esac
+          printf "%s\n" "$((idx + 1))" > "$__time_counter_file"
+          return 0
+        fi
+        command date "$@"
+      }
+
+      FRAME="$(mktemp)"
+      render_dashboard
+      printf "%s\n" "$_CURRENT_TIP"
+      render_dashboard
+      printf "%s\n" "$_CURRENT_TIP"
+      render_dashboard
+      printf "%s\n" "$_CURRENT_TIP"
+      rm -f "$__tip_counter_file"
+      rm -f "$__time_counter_file"
+      rm -f "$FRAME"
+    '
+  )"
+
+  printf -v "$output_var" '%s' "$render_output"
+}
+
 run_dashboard_probe() {
   local output_file="$1"
   local stop_file="$2"
@@ -165,6 +261,49 @@ for invalid_value in "0" "abc" "99"; do
     fail "invalid refresh value ${invalid_value} did not fall back with warning"
   fi
 done
+
+tip_refresh=""
+tip_stderr_output=""
+
+resolve_tip_refresh_case "" tip_refresh tip_stderr_output
+if [[ "$tip_refresh" == "60" && -z "$tip_stderr_output" ]]; then
+  pass "default tip refresh interval resolves to 60 seconds"
+else
+  fail "default tip refresh interval expected 60 without warning"
+fi
+
+resolve_tip_refresh_case "30" tip_refresh tip_stderr_output
+if [[ "$tip_refresh" == "30" && -z "$tip_stderr_output" ]]; then
+  pass "valid tip refresh override of 30 seconds is accepted"
+else
+  fail "valid tip refresh override of 30 seconds was not accepted"
+fi
+
+for invalid_tip_value in "abc" "0"; do
+  resolve_tip_refresh_case "$invalid_tip_value" tip_refresh tip_stderr_output
+  if [[ "$tip_refresh" == "60" ]] \
+    && grep -q "wavemill: invalid WAVEMILL_TIP_REFRESH_SECONDS=${invalid_tip_value}, using default 60" <<< "$tip_stderr_output"; then
+    pass "invalid tip refresh value ${invalid_tip_value} falls back to 60 with warning"
+  else
+    fail "invalid tip refresh value ${invalid_tip_value} did not fall back with warning"
+  fi
+done
+
+tip_sequence_output=""
+capture_tip_sequence tip_sequence_output
+first_tip="$(sed -n '1p' <<<"$tip_sequence_output")"
+second_tip="$(sed -n '2p' <<<"$tip_sequence_output")"
+third_tip="$(sed -n '3p' <<<"$tip_sequence_output")"
+if [[ "$first_tip" == "tip-1" && "$second_tip" == "tip-1" ]]; then
+  pass "tip text stays stable within tip refresh interval"
+else
+  fail "tip text changed before tip refresh interval elapsed"
+fi
+if [[ "$third_tip" == "tip-2" ]]; then
+  pass "tip text updates after tip refresh interval elapses"
+else
+  fail "tip text did not update after tip refresh interval elapsed"
+fi
 
 TMP_DIR="$(mktemp -d)"
 TIMESTAMPS_FILE="$TMP_DIR/dashboard-times.txt"

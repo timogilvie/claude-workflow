@@ -265,6 +265,82 @@
         }
       }
     },
+    "failureReason": {
+      "type": "string",
+      "enum": ["eval_prompt_too_large"],
+      "description": "Stable machine-readable eval failure reason for fast-fail records."
+    },
+    "promptSizeDiagnostic": {
+      "type": "object",
+      "description": "Byte-size diagnostic for the eval prompt submitted or rejected.",
+      "required": ["totalBytes", "limitBytes", "perComponentBytes", "policy", "action"],
+      "additionalProperties": false,
+      "properties": {
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limitBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "perComponentBytes": {
+          "type": "object",
+          "required": [
+            "taskPrompt",
+            "prReviewOutput",
+            "interventionMetadata",
+            "taskPacket",
+            "planContent",
+            "selfReviewSummary",
+            "templateScaffold"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "taskPrompt": { "type": "integer", "minimum": 0 },
+            "prReviewOutput": { "type": "integer", "minimum": 0 },
+            "interventionMetadata": { "type": "integer", "minimum": 0 },
+            "taskPacket": { "type": "integer", "minimum": 0 },
+            "planContent": { "type": "integer", "minimum": 0 },
+            "selfReviewSummary": { "type": "integer", "minimum": 0 },
+            "templateScaffold": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "policy": {
+          "type": "string",
+          "enum": ["fail", "truncate"]
+        },
+        "action": {
+          "type": "string",
+          "enum": ["pass", "truncated", "rejected"]
+        },
+        "truncatedComponents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "originalBytes", "finalBytes", "removedBytes"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "enum": [
+                  "taskPrompt",
+                  "prReviewOutput",
+                  "interventionMetadata",
+                  "taskPacket",
+                  "planContent",
+                  "selfReviewSummary",
+                  "templateScaffold"
+                ]
+              },
+              "originalBytes": { "type": "integer", "minimum": 0 },
+              "finalBytes": { "type": "integer", "minimum": 0 },
+              "removedBytes": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
     "workflowTokenUsage": {
       "type": "object",
       "description": "Per-model token usage breakdown from the workflow sessions.",

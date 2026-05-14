@@ -15,7 +15,8 @@
                     "type": "string",
                     "description": "Linear project name for backlog queries. Empty string means all projects."
                 }
-            }
+            },
+            "additionalProperties": false
         },
         "git": {
             "type": "object",
@@ -419,6 +420,21 @@
                     "minimum": 0,
                     "maximum": 1,
                     "description": "Canonical score threshold used when eval outcomes.success is missing. Defaults to 0.8 when omitted."
+                },
+                "maxPromptBytes": {
+                    "type": "integer",
+                    "minimum": 1024,
+                    "default": 9437184,
+                    "description": "Maximum UTF-8 byte size for an eval judge prompt before failing fast or truncating."
+                },
+                "oversizePolicy": {
+                    "type": "string",
+                    "enum": [
+                        "fail",
+                        "truncate"
+                    ],
+                    "default": "fail",
+                    "description": "How eval handles prompts larger than maxPromptBytes."
                 },
                 "mintEligibility": {
                     "type": "object",
