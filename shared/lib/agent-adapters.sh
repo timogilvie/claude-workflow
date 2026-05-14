@@ -60,8 +60,8 @@ agent_validate_model() {
   local validator="model-validator.ts"
 
   if ! agent_model_helper_available; then
-    agent_validate_model_shell_fallback "$model"
-    return $?
+    echo "error: model validation requires tsx or npx -- install Node.js tooling to use model selectors" >&2
+    return 1
   fi
 
   # Call TypeScript validator (cd to lib_dir first for imports to work)
@@ -69,8 +69,7 @@ agent_validate_model() {
   if (cd "$lib_dir" && npx tsx "$validator" --selector-token "$model" "$repo_dir" >/dev/null); then
     return 0
   else
-    agent_validate_model_shell_fallback "$model"
-    return $?
+    return 1
   fi
 }
 
@@ -87,8 +86,8 @@ agent_resolve_model() {
   local validator="model-validator.ts"
 
   if ! agent_model_helper_available; then
-    agent_resolve_model_shell_fallback "$role" "$model"
-    return 0
+    echo "error: model resolution requires tsx or npx -- install Node.js tooling to use model selectors" >&2
+    return 1
   fi
 
   if ! cd "$lib_dir"; then
@@ -100,7 +99,7 @@ agent_resolve_model() {
     return 0
   fi
 
-  agent_resolve_model_shell_fallback "$role" "$model"
+  return 1
 }
 
 agent_model_looks_like_depth_tag() {
@@ -171,40 +170,6 @@ agent_model_helper_available() {
   command -v tsx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
 }
 
-agent_validate_model_shell_fallback() {
-  local model="$1"
-  case "$model" in
-    inherit|opus|sonnet|haiku|gpt-5.5|gemini-pro|opus:stable|sonnet:stable|haiku:stable|gpt-5.5:stable|gemini-pro:stable|opus-stable|sonnet-stable|haiku-stable|gpt-5.5-stable|gemini-pro-stable)
-      return 0
-      ;;
-    claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6|claude-sonnet-4-5-20250929|claude-haiku-4-5-20251001|gpt-5.3-codex|gpt-5.4|gpt-5.5|deepseek-v4-pro|deepseek-v4-pro[1m]|deepseek-v4-flash|deepseek-chat|deepseek-reasoner|gemini-pro)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-agent_resolve_model_shell_fallback() {
-  local role="$1"
-  local model="$2"
-
-  case "$model" in
-    inherit)
-      case "$role" in
-        planner|reviewer) printf 'claude-sonnet-4-6\n' ;;
-        coder|*) printf 'claude-opus-4-7\n' ;;
-      esac
-      ;;
-    opus|opus:stable|opus-stable) printf 'claude-opus-4-7\n' ;;
-    sonnet|sonnet:stable|sonnet-stable) printf 'claude-sonnet-4-6\n' ;;
-    haiku|haiku:stable|haiku-stable) printf 'claude-haiku-4-5-20251001\n' ;;
-    gpt-5.5|gpt-5.5:stable|gpt-5.5-stable) printf 'gpt-5.5\n' ;;
-    gemini-pro|gemini-pro:stable|gemini-pro-stable) printf 'gemini-pro\n' ;;
-    *) printf '%s\n' "$model" ;;
-  esac
-}
 
 agent_model_is_deepseek() {
   local model="${1:-}"

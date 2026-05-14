@@ -291,7 +291,7 @@ export function validateModelSelectorTokenOrThrow(
   repoDir?: string,
 ): ValidatedModelSelectorToken {
   const token = input.trim();
-  const parsed = parseModelSelector(input);
+  const parsed = parseModelSelector(token);
   if (!parsed.ok) {
     throw normalizeSelectorValidationError(input, parsed.error);
   }
