@@ -1459,7 +1459,7 @@
                 "autoUpdatePromotionBranch": {
                     "type": "boolean",
                     "default": false,
-                    "description": "When true, Wavemill may fast-forward the integration branch onto the latest remote promotion branch before promotion, but only when conflict prediction says the update is clean."
+                    "description": "When true, Wavemill may merge the latest remote promotion branch into the integration branch before promotion, but only when conflict prediction says the update is clean."
                 },
                 "mergeMethod": {
                     "type": "string",
