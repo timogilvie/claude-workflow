@@ -32,6 +32,8 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 - `.wavemill-config.json`: Typed `policy` lookup role `wavemill-config`.
 - `commands/workflow.md`: Phase 4 defines the interactive `/workflow` self-review loop.
 - `commands/bugfix.md`: Phase 5 defines the bugfix self-review loop.
+- `commands/create-plan.md`: Phase 5 plan review must surface planner/coder/reviewer model routing via `shared/lib/model-resolution-display.ts` before approval.
+- `commands/plan.md`: Phase 5 verification must keep the plan-review routing block aligned with `/create-plan` when routing records are present.
 - `commands/implement-plan.md`: does not define self-review; that behavior is owned by `/workflow`.
 - `shared/lib/wavemill-startup-runner.sh`: active startup launch path used by `wavemill-mill.sh` to enter planning.
 - `docs/routing-contract.md`: bootstrap, expanded, and authoritative execution route lifecycle for mill-mode routing.
