@@ -42,6 +42,23 @@ wavemill mill \
 
 This mode reuses the real startup planning pipeline, writes the generated launch plan to the requested path, and exits before creating tmux sessions, launching agents, opening PRs, or updating Linear. It is intended for fixture-backed validation, so supply backlog JSON explicitly with `--dry-run-backlog`.
 
+## Model Overrides
+
+`wavemill mill` accepts stage model overrides on the CLI:
+
+```bash
+wavemill mill --model opus
+wavemill mill --planner-model sonnet --coder-model inherit --reviewer-model claude-haiku-4-5-20251001
+```
+
+Accepted selector forms are:
+
+- family aliases such as `opus`, `sonnet`, and `haiku`
+- `inherit`
+- pinned model IDs such as `claude-opus-4-7`
+
+`--model` applies the same selector to planning, coding, and review. Use the per-stage flags when you only want to override one stage.
+
 `WAVEMILL_DASHBOARD_REFRESH_SECONDS` accepts integer values from `1` through `10`. Invalid values fall back to the default `2` second dashboard refresh cadence.
 `WAVEMILL_TIP_REFRESH_SECONDS` accepts integer values from `1` through `3600`. Invalid values fall back to the default `60` second tip refresh cadence. This only controls the usage tip rotation and does not change any other dashboard refresh behavior.
 

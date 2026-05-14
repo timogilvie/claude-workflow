@@ -18,10 +18,71 @@ import {
   getEffectiveRegistry,
   isDeepSeekLikeModelId,
   isKnownModelId,
+  type ModelSelector,
+  ModelSelectorParseError,
   ModelValidationError,
+  parseModelSelector,
+  resolveSelector,
   validateModelId,
 } from './model-registry.ts';
+import { resolveEffectiveModel } from './model-resolution.ts';
 import { resolveAgent } from './model-router.ts';
+import { readQuotaSnapshot } from './quota-state.ts';
+
+const MODEL_SELECTOR_ACCEPTED_FORMS = 'family alias (for example "opus"), optional channel form (for example "opus:stable"), "inherit", or a pinned model ID (for example "claude-opus-4-7")';
+
+export type ValidatedModelSelectorKind = 'alias' | 'inherit' | 'pinned';
+
+export interface ValidatedModelSelectorToken {
+  token: string;
+  selector: ModelSelector;
+  kind: ValidatedModelSelectorKind;
+}
+
+export type SelectorResolutionRole = 'planner' | 'coder' | 'reviewer';
+
+export interface ResolvedModelSelectorToken extends ValidatedModelSelectorToken {
+  resolvedModelId: string;
+}
+
+function selectorKind(selector: ModelSelector): ValidatedModelSelectorKind {
+  if (selector.kind === 'alias' || selector.kind === 'inherit' || selector.kind === 'pinned') {
+    return selector.kind;
+  }
+
+  const exhaustive: never = selector;
+  throw new Error(`Unhandled selector kind: ${JSON.stringify(exhaustive)}`);
+}
+
+function formatSelectorValidationError(input: string, message: string): string {
+  const trimmed = input.trim();
+  const display = trimmed.length > 0 ? trimmed : input;
+  return `Error: Invalid model selector "${display}"\n\n${message}\n\nAccepted forms: ${MODEL_SELECTOR_ACCEPTED_FORMS}.`;
+}
+
+function mapRoleToTaskType(role: SelectorResolutionRole): 'planning' | 'coding' | 'review' {
+  switch (role) {
+    case 'planner':
+      return 'planning';
+    case 'coder':
+      return 'coding';
+    case 'reviewer':
+      return 'review';
+    default: {
+      const exhaustive: never = role;
+      throw new Error(`Unhandled selector resolution role: ${String(exhaustive)}`);
+    }
+  }
+}
+
+function normalizeSelectorValidationError(input: string, error: unknown): Error {
+  if (error instanceof ModelSelectorParseError) {
+    return new Error(formatSelectorValidationError(input, error.message));
+  }
+
+  const message = errorMessage(error);
+  return new Error(formatSelectorValidationError(input, message));
+}
 
 // ────────────────────────────────────────────────────────────────
 // Known Models Discovery
@@ -37,7 +98,12 @@ export interface KnownModelsResult {
  * Returns models grouped by agent for helpful error messages.
  */
 export function getKnownModels(repoDir?: string): KnownModelsResult {
-  const config = loadWavemillConfig(repoDir);
+  let config: ReturnType<typeof loadWavemillConfig>;
+  try {
+    config = loadWavemillConfig(repoDir);
+  } catch {
+    config = {};
+  }
   const registry = getEffectiveRegistry(repoDir);
 
   const modelSet = new Set<string>();
@@ -220,6 +286,126 @@ export function validateModelOrThrow(modelId: string, repoDir?: string): void {
   throw new ModelValidationError(modelId, message);
 }
 
+export function validateModelSelectorTokenOrThrow(
+  input: string,
+  repoDir?: string,
+): ValidatedModelSelectorToken {
+  const token = input.trim();
+  const parsed = parseModelSelector(input);
+  if (!parsed.ok) {
+    throw normalizeSelectorValidationError(input, parsed.error);
+  }
+
+  if (parsed.selector.kind === 'pinned') {
+    try {
+      validateModelOrThrow(parsed.selector.modelId, repoDir);
+    } catch (error) {
+      throw normalizeSelectorValidationError(input, error);
+    }
+  }
+
+  return {
+    token,
+    selector: parsed.selector,
+    kind: selectorKind(parsed.selector),
+  };
+}
+
+export function resolveModelSelectorTokenOrThrow(
+  input: string,
+  role: SelectorResolutionRole,
+  repoDir?: string,
+): ResolvedModelSelectorToken {
+  const validated = validateModelSelectorTokenOrThrow(input, repoDir);
+  const resolved = validated.selector.kind === 'inherit'
+    ? resolveEffectiveModel({
+      userOverride: validated.selector,
+      policyContext: {
+        taskType: mapRoleToTaskType(role),
+        difficulty: 'moderate',
+        quotaState: readQuotaSnapshot(repoDir),
+        repoDir,
+      },
+    })
+    : resolveSelector(validated.selector);
+
+  return {
+    ...validated,
+    resolvedModelId: resolved.resolved,
+  };
+}
+
+interface CliArgs {
+  mode: 'model' | 'selector' | 'resolve-selector';
+  modelOrToken: string;
+  repoDir: string;
+  role?: SelectorResolutionRole;
+}
+
+function parseCliArgs(argv: string[]): CliArgs {
+  if (argv.length <= 2) {
+    throw new Error(
+      'Usage: npx tsx model-validator.ts <model-id> [repo-dir]\n'
+      + '   or: npx tsx model-validator.ts --selector-token <selector> [repo-dir]\n'
+      + '   or: npx tsx model-validator.ts --resolve-selector-token <selector> --role <planner|coder|reviewer> [repo-dir]',
+    );
+  }
+
+  const first = argv[2];
+  if (first === '--selector-token') {
+    const token = argv[3];
+    if (!token) {
+      throw new Error('Usage: npx tsx model-validator.ts --selector-token <selector> [repo-dir]');
+    }
+    return {
+      mode: 'selector',
+      modelOrToken: token,
+      repoDir: argv[4] || process.cwd(),
+    };
+  }
+
+  if (first === '--resolve-selector-token') {
+    const token = argv[3];
+    if (!token) {
+      throw new Error('Usage: npx tsx model-validator.ts --resolve-selector-token <selector> --role <planner|coder|reviewer> [repo-dir]');
+    }
+
+    let role: SelectorResolutionRole | undefined;
+    let repoDir = process.cwd();
+    for (let index = 4; index < argv.length; index += 1) {
+      const current = argv[index];
+      if (current === '--role') {
+        const rawRole = argv[index + 1];
+        if (rawRole !== 'planner' && rawRole !== 'coder' && rawRole !== 'reviewer') {
+          throw new Error(`Invalid --role "${rawRole ?? ''}". Expected planner, coder, or reviewer.`);
+        }
+        role = rawRole;
+        index += 1;
+        continue;
+      }
+
+      repoDir = current;
+    }
+
+    if (!role) {
+      throw new Error('Usage: npx tsx model-validator.ts --resolve-selector-token <selector> --role <planner|coder|reviewer> [repo-dir]');
+    }
+
+    return {
+      mode: 'resolve-selector',
+      modelOrToken: token,
+      role,
+      repoDir,
+    };
+  }
+
+  return {
+    mode: 'model',
+    modelOrToken: first,
+    repoDir: argv[3] || process.cwd(),
+  };
+}
+
 // ────────────────────────────────────────────────────────────────
 // CLI Mode (for bash integration)
 // ────────────────────────────────────────────────────────────────
@@ -230,16 +416,17 @@ export function validateModelOrThrow(modelId: string, repoDir?: string): void {
  * Exits 0 if valid, 1 if invalid (with error message on stderr)
  */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const modelId = process.argv[2];
-  const repoDir = process.argv[3] || process.cwd();
-
-  if (!modelId) {
-    console.error('Usage: npx tsx model-validator.ts <model-id> [repo-dir]');
-    process.exit(1);
-  }
-
   try {
-    validateModelOrThrow(modelId, repoDir);
+    const cli = parseCliArgs(process.argv);
+    if (cli.mode === 'model') {
+      validateModelOrThrow(cli.modelOrToken, cli.repoDir);
+    } else if (cli.mode === 'selector') {
+      const validated = validateModelSelectorTokenOrThrow(cli.modelOrToken, cli.repoDir);
+      process.stdout.write(`${validated.token}\n`);
+    } else {
+      const resolved = resolveModelSelectorTokenOrThrow(cli.modelOrToken, cli.role!, cli.repoDir);
+      process.stdout.write(`${resolved.resolvedModelId}\n`);
+    }
     process.exit(0);
   } catch (err) {
     const message = errorMessage(err);
