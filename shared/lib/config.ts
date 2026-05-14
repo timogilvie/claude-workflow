@@ -294,6 +294,7 @@ export interface IntegrationConfig {
   enabled: boolean;
   integrationBranch: string;
   promotionBranch: string;
+  autoUpdatePromotionBranch: boolean;
   mergeMethod: 'merge' | 'squash' | 'rebase';
   deleteBranchAfterMerge: boolean;
   haltOnRed: boolean;
@@ -475,6 +476,7 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
   enabled: false,
   integrationBranch: 'auto/integration',
   promotionBranch: 'main',
+  autoUpdatePromotionBranch: false,
   mergeMethod: 'squash',
   deleteBranchAfterMerge: true,
   haltOnRed: true,
