@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "wavemill-hello-world",
+  "version": "0.1.0",
+  "description": "Minimal test plugin for --plugin-dir validation in wavemill."
+}

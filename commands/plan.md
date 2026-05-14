@@ -47,5 +47,8 @@ Verify all sub-issues:
 - [ ] Dependencies noted correctly
 - [ ] Story points assigned
 - [ ] Tagged with epic milestone
+- [ ] When a generated plan object includes planner/coder/reviewer routing records, the review output includes a `## Model Routing` section formatted via `shared/lib/model-resolution-display.ts`
+- [ ] The routing section shows requested selector, resolved runtime model ID, and a fallback line when present, without re-resolving missing data
+- [ ] Missing or malformed role records render `model resolution unavailable`
 
 Each sub-issue will be detailed enough to complete independently in a single PR.

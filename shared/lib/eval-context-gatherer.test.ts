@@ -698,5 +698,45 @@ describe('eval-context-gatherer', () => {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
     });
+
+    it('loads latest per-role resolved-model routing from archived routing.jsonl', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-1632';
+      const branch = 'task/emit-routing';
+      const archiveDir = nodePath.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId);
+      fs.mkdirSync(archiveDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(archiveDir, 'routing.jsonl'),
+        [
+          JSON.stringify({
+            role: 'planner',
+            requestedSelector: { kind: 'pinned', modelId: 'gpt-5.5' },
+            resolvedModelId: 'gpt-5.5',
+            sourceLayer: 'user',
+          }),
+          JSON.stringify({
+            role: 'planner',
+            requestedSelector: { kind: 'pinned', modelId: 'gpt-5.4' },
+            resolvedModelId: 'gpt-5.4',
+            sourceLayer: 'policy',
+          }),
+          'not json',
+          JSON.stringify({
+            role: 'reviewer',
+            requestedSelector: { kind: 'pinned', modelId: 'claude-sonnet-4-6' },
+            resolvedModelId: 'claude-sonnet-4-6',
+            sourceLayer: 'user',
+          }),
+        ].join('\n'),
+      );
+
+      try {
+        const result = gatherStageArtifacts(repoDir, issueId, branch);
+        expect(result.routing?.planner?.resolvedModelId).toBe('gpt-5.4');
+        expect(result.routing?.reviewer?.resolvedModelId).toBe('claude-sonnet-4-6');
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
   });
 });

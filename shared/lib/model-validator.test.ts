@@ -8,7 +8,9 @@ import { errorMessage } from './error-utils.ts';
 import {
   getKnownModels,
   isValidModel,
+  resolveModelSelectorTokenOrThrow,
   suggestModel,
+  validateModelSelectorTokenOrThrow,
   validateModelOrThrow,
 } from './model-validator.ts';
 
@@ -199,6 +201,99 @@ describe('model-validator', () => {
           message.includes('gpt-5.3-codex'),
           'Error should list specific models'
         );
+      }
+    });
+  });
+
+  describe('validateModelSelectorTokenOrThrow', () => {
+    it('accepts family aliases, inherit, and pinned IDs', () => {
+      assert.deepEqual(validateModelSelectorTokenOrThrow('opus', '.'), {
+        token: 'opus',
+        selector: { kind: 'alias', family: 'opus', channel: 'stable' },
+        kind: 'alias',
+      });
+      assert.deepEqual(validateModelSelectorTokenOrThrow(' inherit ', '.'), {
+        token: 'inherit',
+        selector: { kind: 'inherit' },
+        kind: 'inherit',
+      });
+      assert.deepEqual(validateModelSelectorTokenOrThrow('claude-opus-4-7', '.'), {
+        token: 'claude-opus-4-7',
+        selector: { kind: 'pinned', modelId: 'claude-opus-4-7' },
+        kind: 'pinned',
+      });
+    });
+
+    it('accepts explicit channels supported by the parser', () => {
+      assert.deepEqual(validateModelSelectorTokenOrThrow('opus:stable', '.'), {
+        token: 'opus:stable',
+        selector: { kind: 'alias', family: 'opus', channel: 'stable' },
+        kind: 'alias',
+      });
+    });
+
+    it('rejects unknown aliases with accepted forms guidance', () => {
+      assert.throws(
+        () => validateModelSelectorTokenOrThrow('bogus', '.'),
+        /Accepted forms: family alias/,
+      );
+      assert.throws(
+        () => validateModelSelectorTokenOrThrow('bogus', '.'),
+        /Unknown model family "bogus"/,
+      );
+    });
+
+    it('rejects unknown pinned-looking IDs with accepted forms guidance', () => {
+      assert.throws(
+        () => validateModelSelectorTokenOrThrow('gpt-4', '.'),
+        /Unknown model "gpt-4"/,
+      );
+      assert.throws(
+        () => validateModelSelectorTokenOrThrow('gpt-4', '.'),
+        /Accepted forms: family alias/,
+      );
+    });
+
+    it('rejects empty or whitespace-only selector tokens', () => {
+      assert.throws(
+        () => validateModelSelectorTokenOrThrow('   ', '.'),
+        /Invalid model selector/,
+      );
+      assert.throws(
+        () => validateModelSelectorTokenOrThrow('', '.'),
+        /must not be empty/,
+      );
+    });
+  });
+
+  describe('resolveModelSelectorTokenOrThrow', () => {
+    it('resolves aliases to concrete model IDs for launch', () => {
+      const resolved = resolveModelSelectorTokenOrThrow('opus', 'reviewer', '.');
+      assert.equal(resolved.resolvedModelId, 'claude-opus-4-7');
+      assert.equal(resolved.token, 'opus');
+      assert.equal(resolved.kind, 'alias');
+    });
+
+    it('resolves inherit to a concrete stage model before launch', () => {
+      const resolved = resolveModelSelectorTokenOrThrow('inherit', 'coder', '.');
+      assert.equal(typeof resolved.resolvedModelId, 'string');
+      assert.ok(resolved.resolvedModelId.length > 0);
+      assert.equal(resolved.token, 'inherit');
+      assert.equal(resolved.kind, 'inherit');
+    });
+
+    it('resolves inherit from WAVEMILL_RESOLVED_MODEL before falling back to defaults', () => {
+      const previous = process.env.WAVEMILL_RESOLVED_MODEL;
+      process.env.WAVEMILL_RESOLVED_MODEL = 'claude-haiku-4-5-20251001';
+      try {
+        const resolved = resolveModelSelectorTokenOrThrow('inherit', 'coder', '.');
+        assert.equal(resolved.resolvedModelId, 'claude-haiku-4-5-20251001');
+      } finally {
+        if (previous === undefined) {
+          delete process.env.WAVEMILL_RESOLVED_MODEL;
+        } else {
+          process.env.WAVEMILL_RESOLVED_MODEL = previous;
+        }
       }
     });
   });

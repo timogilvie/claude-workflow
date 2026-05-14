@@ -28,6 +28,7 @@ Common overrides:
 MAX_PARALLEL=5 wavemill mill
 AGENT_CMD=codex wavemill mill
 WAVEMILL_DASHBOARD_REFRESH_SECONDS=3 wavemill mill
+WAVEMILL_TIP_REFRESH_SECONDS=60 wavemill mill
 ```
 
 Dry-run launch-plan validation:
@@ -41,7 +42,25 @@ wavemill mill \
 
 This mode reuses the real startup planning pipeline, writes the generated launch plan to the requested path, and exits before creating tmux sessions, launching agents, opening PRs, or updating Linear. It is intended for fixture-backed validation, so supply backlog JSON explicitly with `--dry-run-backlog`.
 
+## Model Overrides
+
+`wavemill mill` accepts stage model overrides on the CLI:
+
+```bash
+wavemill mill --model opus
+wavemill mill --planner-model sonnet --coder-model inherit --reviewer-model claude-haiku-4-5-20251001
+```
+
+Accepted selector forms are:
+
+- family aliases such as `opus`, `sonnet`, and `haiku`
+- `inherit`
+- pinned model IDs such as `claude-opus-4-7`
+
+`--model` applies the same selector to planning, coding, and review. Use the per-stage flags when you only want to override one stage.
+
 `WAVEMILL_DASHBOARD_REFRESH_SECONDS` accepts integer values from `1` through `10`. Invalid values fall back to the default `2` second dashboard refresh cadence.
+`WAVEMILL_TIP_REFRESH_SECONDS` accepts integer values from `1` through `3600`. Invalid values fall back to the default `60` second tip refresh cadence. This only controls the usage tip rotation and does not change any other dashboard refresh behavior.
 
 ## Startup Progress Table
 
@@ -109,12 +128,15 @@ When the base branch advances after one merge, mill marks the other completed re
 
 The ready watchdog runs once per monitor tick for `phase=ready` tasks. After `ready.watchdog.thresholdMinutes` of no local progress, it compares controller state with GitHub truth and classifies the task as one of:
 
+- `auto update`
 - `stuck`
 - `waiting on CI`
 - `waiting on eval/comparison`
 - `needs user`
 
-When GitHub says the PR is open, mergeable, and green, the watchdog only performs local recovery. It never mutates the PR itself. Safe recovery is limited to clearing stale local ready markers and resetting the controller-owned ready result back to a pending rerun. If auto-recovery is disabled or unsafe, the watchdog prints an explicit `tools/ready-watchdog.ts --recover <ISSUE>` command instead.
+When GitHub says the PR is `MERGEABLE` but `BEHIND`, the watchdog treats that as a mechanically recoverable branch-update path. It fetches the latest base, merges it into the PR branch, pushes the branch, and then resets the controller-owned ready result back to a pending rerun. If the auto-update conflicts, the push fails repeatedly, or the local worktree is not safe to mutate, the watchdog escalates to `needs user` with the real failure detail.
+
+When GitHub says the PR is open, mergeable, and green, the watchdog still performs local recovery for stale controller state. That path is limited to clearing stale local ready markers and resetting the ready result. If auto-recovery is disabled or unsafe, the watchdog prints an explicit `tools/ready-watchdog.ts --recover <ISSUE>` command instead.
 
 Configuration lives under `ready.watchdog`:
 
@@ -135,7 +157,7 @@ Configuration lives under `ready.watchdog`:
 
 Runtime artifacts:
 
-- `.wavemill/ready-watchdog-state.json`: latest per-issue classification for the dashboard
+- `.wavemill/ready-watchdog-state.json`: retained last actionable per-issue finding for the dashboard and dedupe state
 - `.wavemill/ready-watchdog.jsonl`: append-only audit trail of stale-task detections and recovery decisions
 
 For operator details, see [Ready Stage](ready-stage.md).
@@ -178,10 +200,11 @@ Configuration (`.wavemill-config.json`):
 ## Control Layout And Input
 
 - Mill keeps the same three visible control panes:
-- `control.0` monitor + command input (`1 3`, `m`, `q`)
-- `control.1` dashboard
-- `control.2` status log
+- `mill.0` monitor + command input (`1 3`, `advance HOK-1639`, `m`, `d`, `q`)
+- `mill.1` dashboard
+- `mill.2` status log
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
+- `advance <issue-id>` records a manual coding override for a tracked coding task with a valid running `.coding-result.json`, writes `features/<slug>/.coding-advance-override.json`, and creates `features/<slug>/.coding-complete` so review launches on the next monitor tick.
 
 ## When to Prefer Mill Mode
 
@@ -219,7 +242,7 @@ The four pipeline stages are:
 - `tend`: runs the integration queue, rebases the selected PR onto `auto/integration`, waits for PR checks, reruns ready-policy enforcement, and merges one candidate at a time.
 - `promote`: opens or refreshes the `auto/integration -> main` promotion PR and reports whether that release PR is green.
 
-When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `integration` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
+When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `backstage` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
 
 ### Dependent Task Auto-Dispatch
 
@@ -233,6 +256,8 @@ When the monitor loop detects that a parent task has opened a PR, mill automatic
 ## Dependency-Aware Task Queue
 
 The dependency-aware queue extends startup planning and monitor dispatch into an eight-stage flow that keeps blocked work visible without launching it too early.
+
+In the grouped backlog pane, mill shows queued dependency items by default only when they are on-deck: either immediately unblocked by an active task or unblockable by an item currently in the backlog. Press `d` to expand suppressed dependency rows or collapse them again.
 
 | Stage | What happens | Source files | Observable signals |
 | --- | --- | --- | --- |

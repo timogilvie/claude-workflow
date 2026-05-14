@@ -72,3 +72,40 @@ wavemill_hook_write() {
 
   return 0
 }
+
+wavemill_hook_write_routing() {
+  local role="$1"
+  local routing_json="$2"
+
+  case "$role" in
+    planner|coder|reviewer) ;;
+    *) return 0 ;;
+  esac
+
+  [[ -n "${WAVEMILL_SESSION:-}" ]] || return 0
+  [[ -n "${WAVEMILL_ISSUE:-}" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
+  local tmp_file="${hook_file}.tmp.$$"
+  local base_json="{}"
+
+  if [[ -f "$hook_file" ]] && jq -e . "$hook_file" >/dev/null 2>&1; then
+    base_json="$(cat "$hook_file")"
+  fi
+
+  if jq -n \
+    --argjson base "$base_json" \
+    --arg role "$role" \
+    --argjson routing "$routing_json" \
+    '$base + {routing: (($base.routing // {}) + {($role): $routing})}' > "$tmp_file" 2>/dev/null; then
+    if mv "$tmp_file" "$hook_file" 2>/dev/null; then
+      wavemill_hook_notify
+    else
+      rm -f "$tmp_file"
+    fi
+  else
+    rm -f "$tmp_file"
+  fi
+  return 0
+}

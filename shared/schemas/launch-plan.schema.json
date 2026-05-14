@@ -46,6 +46,14 @@
             "type": "string",
             "description": "Git branch name"
           },
+          "model": {
+            "type": "string",
+            "description": "Workspace-declared model selector for this task. Accepts 'inherit', a family alias (e.g. 'opus'), or a pinned model ID. Validated by the loader; absent means defer to routing defaults."
+          },
+          "parentResolvedModel": {
+            "type": "string",
+            "description": "Concrete resolved model ID from the parent context, used to resolve 'inherit' selectors for this task across worktree or process boundaries."
+          },
           "dependsOn": {
             "type": "array",
             "description": "Task IDs this task depends on (HOK-1532)",

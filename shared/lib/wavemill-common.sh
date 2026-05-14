@@ -2,6 +2,42 @@
 # Wavemill Common Library
 # Shared functions used across wavemill-mill.sh and wavemill-expand.sh
 
+# Default tmux window names for mill mode surfaces.
+WAVEMILL_WINDOW_MILL="${WAVEMILL_WINDOW_MILL:-mill}"
+WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
+
+# Dashboard footer tips should stay short enough to fit on one line with the
+# stable refresh prefix.
+declare -a WAVEMILL_USAGE_TIPS=(
+  "wavemill expand HOK-1234: build a task packet from Linear"
+  "wavemill plan: split large work into scoped issues"
+  "wavemill eval: inspect workflow results and export data"
+  "wavemill ready 42: check if a PR can merge"
+  "wavemill tend --once: run one integration queue pass"
+  "wavemill context init --force: refresh subsystem specs"
+  "WAVEMILL_DASHBOARD_REFRESH_SECONDS=1..10: tune refresh"
+  "Ctrl+B N: jump to the next done task"
+  "challenge.autoMergeWinner=true: auto-merge challenge winners"
+  "constraints.cleanupAfterMerge=true: clean merged constraints"
+)
+
+wavemill_pick_usage_tip() {
+  local tip_count="${#WAVEMILL_USAGE_TIPS[@]}"
+  local tip_index="${WAVEMILL_TIP_INDEX:-}"
+
+  if (( tip_count == 0 )); then
+    printf 'Ctrl+B N: next done\n'
+    return 0
+  fi
+
+  if [[ "$tip_index" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${WAVEMILL_USAGE_TIPS[tip_index % tip_count]}"
+    return 0
+  fi
+
+  printf '%s\n' "${WAVEMILL_USAGE_TIPS[RANDOM % tip_count]}"
+}
+
 # ============================================================================
 # LAYERED CONFIGURATION LOADING
 # ============================================================================
@@ -285,6 +321,48 @@ wavemill_config_annotation() {
   local value="${2:-}"
 
   printf ' (%s=%s)' "$path" "$value"
+}
+
+BACKLOG_BUDGET_WARNED=false
+
+wavemill_backlog_compute_budget() {
+  local session="${1:-}"
+  local window_pane="${2:-}"
+  local config_file="${3:-}"
+  local budget=""
+
+  if [[ -n "$config_file" && -f "$config_file" ]]; then
+    budget="$(jq -r '.backlog.maxLines // empty' "$config_file" 2>/dev/null || true)"
+  elif [[ -n "${REPO_DIR:-}" ]]; then
+    budget="$(wavemill_load_config "$REPO_DIR" | jq -r '.backlog.maxLines // empty' 2>/dev/null || true)"
+  fi
+
+  if [[ "$budget" =~ ^[0-9]+$ ]] && (( budget >= 10 && budget <= 200 )); then
+    printf '%s\n' "$budget"
+    return 0
+  fi
+
+  local pane_height=""
+  if [[ -n "$session" && -n "$window_pane" ]]; then
+    pane_height="$(tmux display-message -t "$session:$window_pane" -p "#{pane_height}" 2>/dev/null || true)"
+  fi
+
+  if [[ "$pane_height" =~ ^[0-9]+$ ]]; then
+    # The grouped renderer receives only the task-list body budget. The mill
+    # pane frame adds "Next tasks:", a blank separator, and a long prompt that
+    # commonly wraps, so reserve enough rows for that fixed chrome.
+    budget=$((pane_height - 8))
+    (( budget < 10 )) && budget=10
+    printf '%s\n' "$budget"
+    return 0
+  fi
+
+  if [[ "${BACKLOG_BUDGET_WARNED:-false}" != "true" ]]; then
+    log_warn "Backlog pane height unavailable; using fallback budget 20"
+    BACKLOG_BUDGET_WARNED=true
+  fi
+  printf '20\n'
+  return 0
 }
 
 ready_debug_log_file() {
@@ -700,6 +778,18 @@ get_expansion_handshake_policy() {
       printf 'recover\n'
       ;;
   esac
+}
+
+get_expansion_handshake_timeout_seconds() {
+  local repo_dir="$1"
+  local cfg_timeout=""
+
+  cfg_timeout=$(wavemill_load_config "$repo_dir" | jq -r '.mill.expansionHandshake.timeoutSeconds // 300' 2>/dev/null || echo "300")
+  if [[ "$cfg_timeout" =~ ^[0-9]+$ ]] && (( cfg_timeout >= 1 )); then
+    printf '%s\n' "$cfg_timeout"
+  else
+    printf '300\n'
+  fi
 }
 
 validate_expanded_route_artifact() {
@@ -1229,8 +1319,29 @@ is_task_packet() {
 score_and_rank_issues() {
   local backlog_json="$1"
   local show_limit="${2:-9}"
+  local focus_milestones_json="${3:-[]}"
+  local today="${WAVEMILL_BACKLOG_SCORE_TODAY:-$(date +%F)}"
 
-  echo "$backlog_json" | jq -r --argjson show_limit "$show_limit" '
+  printf '%s\n' "$backlog_json" | jq -r \
+    --argjson show_limit "$show_limit" \
+    --argjson focus_milestones "$focus_milestones_json" \
+    --arg today "$today" '
+    def epoch_ymd:
+      try (strptime("%Y-%m-%d") | mktime) catch null;
+    def days_until:
+      . as $date
+      | ($date | epoch_ymd) as $target
+      | ($today | epoch_ymd) as $now
+      | if $target == null or $now == null then null else (($target - $now) / 86400 | floor) end;
+    def date_urgency($days):
+      if $days == null then 0
+      elif $days < 0 then 55
+      elif $days <= 3 then 45
+      elif $days <= 7 then 30
+      elif $days <= 14 then 15
+      else 0
+      end;
+
     # Filter to backlog/todo only
     map(select((.state.name|ascii_downcase) == "todo" or (.state.name|ascii_downcase) == "backlog"))
 
@@ -1269,7 +1380,30 @@ score_and_rank_issues() {
           (.inverseRelations.nodes // [])
           | map(select(.type == "blocks" and .issue.completedAt == null and .issue.canceledAt == null))
           | length
-        )
+        ),
+
+        is_focus_milestone: (
+          (.projectMilestone.name // "") as $milestone
+          | ((($focus_milestones // []) | length) > 0 and (($focus_milestones // []) | index($milestone)) != null)
+        ),
+
+        milestone_days_until: (.projectMilestone.targetDate // null | days_until),
+        due_days_until: (.dueDate // null | days_until)
+      })
+
+    | map(. + {
+        milestone_urgency: (
+          if .is_focus_milestone then 80
+          else date_urgency(.milestone_days_until)
+          end
+        ),
+        due_urgency: date_urgency(.due_days_until)
+      })
+
+    | map(. + {
+        # Prefer work on earlier dated milestones when score is otherwise close.
+        milestone_sort_date: (.projectMilestone.targetDate // "9999-12-31"),
+        due_sort_date: (.dueDate // "9999-12-31")
       })
 
     # Calculate composite priority score (higher = higher priority)
@@ -1293,6 +1427,10 @@ score_and_rank_issues() {
           # Boost: Unblocked work is ready to go (+15 points)
           + (if .blocked_by_count == 0 then 15 else 0 end)
 
+          # Boost: User-configured focus milestones, near milestone targets, and due dates
+          + .milestone_urgency
+          + .due_urgency
+
           # Penalty: Blocked by other work (-20 per blocker, harder penalty)
           - (.blocked_by_count * 20)
 
@@ -1302,7 +1440,7 @@ score_and_rank_issues() {
       })
 
     # Sort by score descending (higher score = higher priority)
-    | sort_by(-.score)
+    | sort_by(-.score, .milestone_sort_date, .due_sort_date, .identifier)
 
     # Take top candidates for display
     | .[0:$show_limit]
@@ -1767,6 +1905,31 @@ state_mutate() {
   return "$mutate_status"
 }
 
+cleanup_background_jobs_startup() {
+  # Keep only jobs created by the current session; older or pre-session jobs
+  # are stale once a new session starts.
+  [[ -n "${SESSION:-}" ]] || return 0
+  [[ -r "${STATE_FILE:-}" && -s "${STATE_FILE:-}" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.jobs = ((.jobs // {}) | with_entries(select(.value.session? == $session)))' \
+    --arg session "${SESSION:-}"
+}
+
+cleanup_background_jobs_shutdown() {
+  # Drop completed+settled current-session jobs on exit so the next session
+  # starts from a clean slate. Running or unsettled jobs are preserved so
+  # detached background processes (eval, comparison) can still be reaped.
+  [[ -n "${SESSION:-}" ]] || return 0
+  [[ -r "${STATE_FILE:-}" && -s "${STATE_FILE:-}" ]] || return 0
+  state_mutate "$STATE_FILE" \
+    '.jobs = ((.jobs // {}) | with_entries(select(
+      .value.session? != $session
+      or .value.status? == "running"
+      or (.value.settled? != true)
+    )))' \
+    --arg session "${SESSION:-}"
+}
+
 get_file_size_bytes() {
   local path="$1"
   if stat -f%z "$path" 2>/dev/null; then
@@ -1776,6 +1939,69 @@ get_file_size_bytes() {
     return 0
   fi
   return 1
+}
+
+portable_file_mtime_epoch() {
+  local path="$1"
+  [[ -n "$path" && -e "$path" ]] || return 1
+
+  # Try GNU stat (Linux) first; stat -f on Linux returns mount point, not mtime
+  if stat -c %Y "$path" 2>/dev/null; then
+    return 0
+  fi
+  # Fall back to BSD stat (macOS)
+  if stat -f %m "$path" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+blocked_completion_artifact_path() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-blocked-completion.json"
+}
+
+blocked_completion_default_summary() {
+  printf 'coding done; verification blocked\n'
+}
+
+sanitize_blocked_completion_text() {
+  local raw="${1-}"
+  printf '%s' "$raw" \
+    | tr '\r\n' '  ' \
+    | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
+    | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+read_blocked_completion() {
+  local feature_dir="$1"
+  local artifact mtime summary reason summary_raw reason_raw
+  local separator=$'\001'
+
+  artifact="$(blocked_completion_artifact_path "$feature_dir")"
+  [[ -f "$artifact" ]] || return 0
+
+  mtime="$(portable_file_mtime_epoch "$artifact" 2>/dev/null || echo "")"
+  summary="$(blocked_completion_default_summary)"
+  summary="$(sanitize_blocked_completion_text "$summary")"
+  reason=""
+
+  if [[ ! -s "$artifact" ]] || ! command -v jq >/dev/null 2>&1 || ! jq empty "$artifact" >/dev/null 2>&1; then
+    printf '%s%s%s%s%s\n' "$summary" "$separator" "$reason" "$separator" "$mtime"
+    return 0
+  fi
+
+  summary_raw="$(jq -r '.summary // empty' "$artifact" 2>/dev/null || true)"
+  reason_raw="$(jq -r '.reason // empty' "$artifact" 2>/dev/null || true)"
+  summary_raw="$(sanitize_blocked_completion_text "$summary_raw")"
+  reason_raw="$(sanitize_blocked_completion_text "$reason_raw")"
+
+  if [[ -z "$summary_raw" ]]; then
+    printf '%s%s%s%s%s\n' "$summary" "$separator" "$reason_raw" "$separator" "$mtime"
+    return 0
+  fi
+
+  printf '%s%s%s%s%s\n' "$summary_raw" "$separator" "$reason_raw" "$separator" "$mtime"
 }
 
 project_context_suggestion_set() {
@@ -1936,4 +2162,13 @@ queue_mark_waiting() {
     '.queued_tasks = ((.queued_tasks // []) | map(if .issue_id == $issue then (.waiting_reason = $reason) else . end))' \
     --arg issue "$child_issue" \
     --arg reason "$reason"
+}
+
+wavemill_pane_repaint() {
+  local content="${1-}" line frame_bytes=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    frame_bytes+="${line}"$'\033[K\n'
+  done <<< "$content"
+  frame_bytes+=$'\033[J'
+  printf '%s' "$frame_bytes"
 }

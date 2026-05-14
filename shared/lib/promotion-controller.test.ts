@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { runPromotion } from './promotion-controller.ts';
+import { runPromotion, updateBranchWithBase } from './promotion-controller.ts';
 
 function makeRepo(config: Record<string, unknown> = {}): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-promote-'));
@@ -25,19 +25,26 @@ function makeRepo(config: Record<string, unknown> = {}): { repoDir: string; clea
 }
 
 function shellHarness(overrides: {
-  isAncestor?: boolean;
+  baseIntegrated?: boolean;
+  alreadyPromoted?: boolean;
   openPrs?: Array<{ number: number; url: string; body?: string }>;
   mergedPrs?: Array<{ number: number; title: string; labels?: Array<{ name: string }> }>;
   checks?: Array<{ name: string; state?: string; conclusion?: string | null; bucket?: string | null }>;
   integrationTreeLog?: string;
   integrationTree?: string;
   promotionTree?: string;
+  pushError?: string;
+  fetchError?: string;
+  mergeTreeResult?: 'clean' | 'conflicts' | 'unknown';
+  statusPorcelain?: string;
 } = {}): {
   shellRunner: (cmd: string, opts?: { encoding?: string; cwd?: string }) => string;
   calls: string[];
 } {
   const calls: string[] = [];
   let tempFileCount = 0;
+  let integrationTip = 'integration-sha';
+  let remoteBaseMerged = overrides.baseIntegrated ?? true;
 
   return {
     calls,
@@ -49,17 +56,71 @@ function shellHarness(overrides: {
         return tempFileCount === 1 ? '/tmp/promotion-body.txt' : `/tmp/promotion-body-${tempFileCount}.txt`;
       }
 
-      if (cmd === "git rev-parse 'auto/integration' 2>/dev/null") return 'integration-sha\n';
-      if (cmd === "git rev-parse 'main' 2>/dev/null") return 'main-sha\n';
-      if (cmd === "git rev-parse 'integration-sha^{tree}'") return `${overrides.integrationTree ?? 'integration-tree'}\n`;
-      if (cmd === "git rev-parse 'main-sha^{tree}'") return `${overrides.promotionTree ?? 'main-tree'}\n`;
-      if (cmd === "git log --format='%H %T' 'auto/integration'") {
-        return overrides.integrationTreeLog ?? 'integration-sha integration-tree\nold-sha old-tree\n';
+      if (cmd === "git fetch --quiet origin 'main'") {
+        if (overrides.fetchError) throw new Error(overrides.fetchError);
+        return '';
+      }
+      if (cmd === "git fetch --quiet origin 'main' 'auto/integration'") {
+        if (overrides.fetchError) throw new Error(overrides.fetchError);
+        return '';
+      }
+      if (cmd === 'git status --porcelain') return `${overrides.statusPorcelain ?? ''}`;
+      if (cmd === "git switch 'auto/integration'") return '';
+      if (cmd === "git merge --no-edit 'origin/main'") {
+        remoteBaseMerged = true;
+        integrationTip = 'updated-integration-sha';
+        return '';
+      }
+      if (cmd === "git push origin 'auto/integration'") {
+        if (overrides.pushError) throw new Error(overrides.pushError);
+        return '';
       }
 
-      if (cmd.includes('git merge-base --is-ancestor')) {
-        if (overrides.isAncestor) return '';
+      if (cmd === "git rev-parse 'auto/integration' 2>/dev/null") return `${integrationTip}\n`;
+      if (cmd === "git rev-parse 'main' 2>/dev/null") return 'main-sha\n';
+      if (cmd === "git rev-parse 'origin/main' 2>/dev/null") return 'origin-main-sha\n';
+      if (cmd === "git rev-parse 'integration-sha^{tree}'") return `${overrides.integrationTree ?? 'integration-tree'}\n`;
+      if (cmd === "git rev-parse 'updated-integration-sha^{tree}'") return `${overrides.integrationTree ?? 'integration-tree'}\n`;
+      if (cmd === "git rev-parse 'main-sha^{tree}'") return `${overrides.promotionTree ?? 'main-tree'}\n`;
+      if (cmd === "git rev-parse 'origin-main-sha^{tree}'") return `${overrides.promotionTree ?? 'main-tree'}\n`;
+      if (cmd === "git log --format='%H %T' 'auto/integration'") {
+        const defaultLog = `${integrationTip} ${overrides.integrationTree ?? 'integration-tree'}\nold-sha old-tree\n`;
+        return overrides.integrationTreeLog ?? defaultLog;
+      }
+
+      if (cmd === "git merge-base --is-ancestor 'origin-main-sha' 'integration-sha'") {
+        if (remoteBaseMerged) return '';
         throw new Error('not ancestor');
+      }
+      if (cmd === "git merge-base --is-ancestor 'origin-main-sha' 'updated-integration-sha'") {
+        if (remoteBaseMerged) return '';
+        throw new Error('not ancestor');
+      }
+      if (cmd === "git merge-base --is-ancestor 'integration-sha' 'origin/main'") {
+        if (overrides.alreadyPromoted) return '';
+        throw new Error('not ancestor');
+      }
+      if (cmd === "git merge-base --is-ancestor 'updated-integration-sha' 'origin/main'") {
+        if (overrides.alreadyPromoted) return '';
+        throw new Error('not ancestor');
+      }
+      if (cmd === "git merge-base --is-ancestor 'origin-main-sha' 'main-sha'") {
+        if (overrides.baseIntegrated ?? true) return '';
+        throw new Error('not ancestor');
+      }
+      if (cmd === "git merge-base --is-ancestor 'origin-main-sha' 'reconciled-sha'") {
+        if (overrides.baseIntegrated ?? true) return '';
+        throw new Error('not ancestor');
+      }
+      if (cmd.includes('git merge-base --is-ancestor')) {
+        if (overrides.alreadyPromoted || overrides.baseIntegrated) return '';
+        throw new Error('not ancestor');
+      }
+
+      if (cmd === "git merge-tree --write-tree 'auto/integration' 'origin/main'") {
+        if (overrides.mergeTreeResult === 'conflicts') throw new Error('merge-tree conflict');
+        if (overrides.mergeTreeResult === 'unknown') throw new Error('merge-tree unavailable');
+        return 'merged-tree-sha\n';
       }
 
       if (cmd.includes('gh pr list --state merged')) {
@@ -68,7 +129,7 @@ function shellHarness(overrides: {
         ]);
       }
 
-      if (cmd.includes("git log --first-parent --oneline -n 10 'main..auto/integration'")) {
+      if (cmd.includes("git log --first-parent --oneline -n 10 'origin/main..auto/integration'")) {
         return 'abc123 Add release guardrails (#101)\n';
       }
 
@@ -86,12 +147,21 @@ function shellHarness(overrides: {
       if (cmd.includes("rm -f '/tmp/promotion-body.txt'")) return '';
       if (cmd.includes("rm -f '/tmp/promotion-body-")) return '';
       if (cmd.includes("git commit-tree 'integration-sha^{tree}'")) return 'reconciled-sha\n';
-      if (cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'") return '';
-      if (cmd === "git update-ref 'refs/heads/auto/integration' 'main-sha' 'integration-sha'") return '';
+      if (cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'") {
+        integrationTip = 'reconciled-sha';
+        return '';
+      }
+      if (cmd === "git update-ref 'refs/heads/auto/integration' 'integration-sha' 'reconciled-sha'") return '';
+      if (cmd === "git update-ref 'refs/heads/auto/integration' 'origin-main-sha' 'integration-sha'") {
+        integrationTip = 'origin-main-sha';
+        return '';
+      }
+      if (cmd === "git update-ref 'refs/heads/auto/integration' 'integration-sha' 'main-sha'") return '';
       if (
         cmd ===
         "git push --force-with-lease='refs/heads/auto/integration:integration-sha' origin 'refs/heads/auto/integration:refs/heads/auto/integration'"
       ) {
+        if (overrides.pushError) throw new Error(overrides.pushError);
         return '';
       }
 
@@ -107,6 +177,131 @@ function shellHarness(overrides: {
 }
 
 describe('runPromotion', () => {
+  it('updates a branch with its base in fetch switch merge push order', () => {
+    const repo = makeRepo();
+    const shell = shellHarness();
+
+    try {
+      const result = updateBranchWithBase('auto/integration', 'main', repo.repoDir, shell.shellRunner);
+      assert.equal(result.status, 'success');
+      assert.deepEqual(
+        shell.calls.slice(0, 5),
+        [
+          'git status --porcelain',
+          "git fetch --quiet origin 'main' 'auto/integration'",
+          "git switch 'auto/integration'",
+          "git merge-tree --write-tree 'auto/integration' 'origin/main'",
+          "git merge --no-edit 'origin/main'",
+        ],
+      );
+      assert(shell.calls.includes("git push origin 'auto/integration'"));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('returns conflict when merge-tree predicts conflicts and does not push', () => {
+    const repo = makeRepo();
+    const shell = shellHarness({ mergeTreeResult: 'conflicts' });
+
+    try {
+      const result = updateBranchWithBase('auto/integration', 'main', repo.repoDir, shell.shellRunner);
+      assert.equal(result.status, 'conflict');
+      assert(shell.calls.includes("git merge-tree --write-tree 'auto/integration' 'origin/main'"));
+      assert(!shell.calls.some((cmd) => cmd === "git merge --no-edit 'origin/main'"));
+      assert(!shell.calls.some((cmd) => cmd === "git push origin 'auto/integration'"));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('aborts merge and returns conflict when merge reports conflicts', () => {
+    const repo = makeRepo();
+    const shell = shellHarness();
+    const shellRunner = (cmd: string, opts?: { encoding?: string; cwd?: string }) => {
+      if (cmd === "git merge --no-edit 'origin/main'") {
+        shell.calls.push(cmd);
+        throw new Error('CONFLICT (content): merge conflict');
+      }
+      if (cmd === 'git merge --abort') {
+        shell.calls.push(cmd);
+        return '';
+      }
+      return shell.shellRunner(cmd, opts);
+    };
+
+    try {
+      const result = updateBranchWithBase('auto/integration', 'main', repo.repoDir, shellRunner);
+      assert.equal(result.status, 'conflict');
+      assert(shell.calls.includes('git merge --abort'));
+      assert(!shell.calls.some((cmd) => cmd === "git push origin 'auto/integration'"));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('returns push-failed with the original push error', () => {
+    const repo = makeRepo();
+    const shell = shellHarness({ pushError: 'remote rejected push' });
+
+    try {
+      const result = updateBranchWithBase('auto/integration', 'main', repo.repoDir, shell.shellRunner);
+      assert.equal(result.status, 'push-failed');
+      assert.match(result.detail, /remote rejected push/);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('refuses to update when the worktree is dirty', () => {
+    const repo = makeRepo();
+    const shell = shellHarness({ statusPorcelain: ' M shared/lib/ready-watchdog.ts' });
+
+    try {
+      const result = updateBranchWithBase('auto/integration', 'main', repo.repoDir, shell.shellRunner);
+      assert.equal(result.status, 'dirty-worktree');
+      assert.equal(shell.calls.length, 1);
+      assert.equal(shell.calls[0], 'git status --porcelain');
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('returns fetch-failed when the initial fetch fails', () => {
+    const repo = makeRepo();
+    const shell = shellHarness({ fetchError: 'fatal: no such remote' });
+
+    try {
+      const result = updateBranchWithBase('auto/integration', 'main', repo.repoDir, shell.shellRunner);
+      assert.equal(result.status, 'fetch-failed');
+      assert.match(result.detail, /fatal: no such remote/);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('escapes branch and base names in all shell commands', () => {
+    const repo = makeRepo();
+    const calls: string[] = [];
+    const shellRunner = (cmd: string) => {
+      calls.push(cmd);
+      if (cmd === 'git status --porcelain') return '';
+      return '';
+    };
+
+    try {
+      const result = updateBranchWithBase("topic/it's", "main branch", repo.repoDir, shellRunner);
+      assert.equal(result.status, 'success');
+      assert(calls.some((cmd) => cmd.includes("git fetch --quiet origin 'main branch'") && cmd.includes("'topic/it'\\''s'")));
+      assert(calls.includes("git switch 'topic/it'\\''s'"));
+      assert(calls.includes("git merge-tree --write-tree 'topic/it'\\''s' 'origin/main branch'"));
+      assert(calls.includes("git merge --no-edit 'origin/main branch'"));
+      assert(calls.includes("git push origin 'topic/it'\\''s'"));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
   it('updates the existing promotion PR body with a fresh summary', async () => {
     const repo = makeRepo();
     const shell = shellHarness({
@@ -137,7 +332,7 @@ describe('runPromotion', () => {
 
   it('returns noop when promotion branch already contains integration', async () => {
     const repo = makeRepo();
-    const shell = shellHarness({ isAncestor: true });
+    const shell = shellHarness({ alreadyPromoted: true });
 
     try {
       const result = await runPromotion({
@@ -156,6 +351,7 @@ describe('runPromotion', () => {
   it('rewrites integration onto main when a prior squash promotion is present by tree', async () => {
     const repo = makeRepo();
     const shell = shellHarness({
+      baseIntegrated: false,
       integrationTree: 'current-integration-tree',
       promotionTree: 'promoted-tree',
       integrationTreeLog: [
@@ -174,10 +370,225 @@ describe('runPromotion', () => {
       });
 
       assert.equal(result.status, 'updated');
-      assert(shell.calls.some((cmd) => cmd.includes("git commit-tree 'integration-sha^{tree}' -p 'main-sha'")));
+      assert(shell.calls.some((cmd) => cmd.includes("git commit-tree 'integration-sha^{tree}' -p 'origin-main-sha'")));
       assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
       assert(shell.calls.some((cmd) => cmd.includes("git push --force-with-lease='refs/heads/auto/integration:integration-sha'")));
-      assert(shell.calls.some((cmd) => cmd.includes("git merge-base --is-ancestor 'reconciled-sha' 'main'")));
+      assert(shell.calls.some((cmd) => cmd.includes("git merge-base --is-ancestor 'reconciled-sha' 'origin/main'")));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('blocks when the integration branch is behind the fetched remote promotion base', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      baseIntegrated: false,
+      openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        interactive: false,
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'base-behind');
+      assert.match(result.blockSummary ?? '', /behind protected base/);
+      assert.equal(result.prUrl, 'https://github.com/example/repo/pull/77');
+      assert.match(result.checkSummary ?? '', /^passing:/);
+      assert(shell.calls.includes("git fetch --quiet origin 'main'"));
+      assert(shell.calls.includes("git rev-parse 'origin/main' 2>/dev/null"));
+      assert(!shell.calls.some((cmd) => cmd.includes("git rev-parse 'main' 2>/dev/null")));
+      assert(!shell.calls.some((cmd) => cmd.includes('gh api --method PATCH')));
+      assert(!shell.calls.some((cmd) => cmd.includes('gh pr create')));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('blocks with base-unknown when fetching the remote promotion branch fails', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      fetchError: 'fatal: no such remote',
+      openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        interactive: false,
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'base-unknown');
+      assert.match(result.blockSummary ?? '', /failed to fetch origin\/main/);
+      assert(!shell.calls.some((cmd) => cmd.includes("git rev-parse 'main' 2>/dev/null")));
+      assert(!shell.calls.some((cmd) => cmd.includes("git merge-base --is-ancestor 'main-sha'")));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('does not update the integration branch when the user declines a clean base update', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({ baseIntegrated: false });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        interactive: true,
+        confirmUpdate: async () => false,
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'base-behind');
+      assert(shell.calls.includes("git merge-tree --write-tree 'auto/integration' 'origin/main'"));
+      assert(!shell.calls.some((cmd) => cmd === "git switch 'auto/integration'"));
+      assert(!shell.calls.some((cmd) => cmd === "git push origin 'auto/integration'"));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('updates the integration branch when the user accepts a clean base update', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      baseIntegrated: false,
+      openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        healthChecker: async () => ({ state: 'healthy' }),
+        interactive: true,
+        confirmUpdate: async () => true,
+      });
+
+      assert.equal(result.status, 'updated');
+      assert(shell.calls.includes("git fetch --quiet origin 'main' 'auto/integration'"));
+      assert(shell.calls.includes("git switch 'auto/integration'"));
+      assert(shell.calls.includes("git merge --no-edit 'origin/main'"));
+      assert(shell.calls.includes("git push origin 'auto/integration'"));
+      assert(shell.calls.filter((cmd) => cmd === "git rev-parse 'auto/integration' 2>/dev/null").length >= 2);
+      assert(shell.calls.some((cmd) => cmd.includes("gh api --method PATCH 'repos/example/repo/pulls/77' --input")));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('auto-updates the integration branch in non-interactive mode when configured and clean', async () => {
+    const repo = makeRepo({
+      integration: {
+        integrationBranch: 'auto/integration',
+        promotionBranch: 'main',
+        autoUpdatePromotionBranch: true,
+      },
+    });
+    const shell = shellHarness({
+      baseIntegrated: false,
+      openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        healthChecker: async () => ({ state: 'healthy' }),
+        interactive: false,
+      });
+
+      assert.equal(result.status, 'updated');
+      assert(shell.calls.includes("git fetch --quiet origin 'main' 'auto/integration'"));
+      assert(shell.calls.includes("git merge --no-edit 'origin/main'"));
+      assert(shell.calls.includes("git push origin 'auto/integration'"));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('blocks with conflict guidance when merging the protected base would conflict', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      baseIntegrated: false,
+      mergeTreeResult: 'conflicts',
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        interactive: true,
+        confirmUpdate: async () => true,
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'base-behind-conflicts');
+      assert.match(result.blockSummary ?? '', /expected to conflict/);
+      assert(!shell.calls.some((cmd) => cmd === "git switch 'auto/integration'"));
+      assert(!shell.calls.some((cmd) => cmd === "git push origin 'auto/integration'"));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('blocks with base-unknown when merge prediction is unavailable', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      baseIntegrated: false,
+      mergeTreeResult: 'unknown',
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        interactive: false,
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'base-unknown');
+      assert.match(result.blockSummary ?? '', /merge-tree unavailable/);
+      assert(!shell.calls.some((cmd) => cmd === "git switch 'auto/integration'"));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('restores local integration ref and explains protected branch rejection', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      baseIntegrated: false,
+      integrationTree: 'current-integration-tree',
+      promotionTree: 'promoted-tree',
+      integrationTreeLog: [
+        'integration-sha current-integration-tree',
+        'previous-integration-sha promoted-tree',
+        'older-sha old-tree',
+      ].join('\n'),
+      pushError: [
+        'remote: error: GH006: Protected branch update failed for refs/heads/auto/integration.',
+        'remote: - Cannot force-push to this branch',
+      ].join('\n'),
+    });
+
+    try {
+      await assert.rejects(
+        runPromotion({
+          repoDir: repo.repoDir,
+          shellRunner: shell.shellRunner,
+          healthChecker: async () => ({ state: 'healthy' }),
+        }),
+        /GitHub rejected the required reconciliation push to protected branch `auto\/integration`/,
+      );
+      assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
+      assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'integration-sha' 'reconciled-sha'"));
+      assert(!shell.calls.some((cmd) => cmd.includes('gh pr create')));
     } finally {
       repo.cleanup();
     }

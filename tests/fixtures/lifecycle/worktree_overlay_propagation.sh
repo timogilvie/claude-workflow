@@ -6,6 +6,9 @@
 # silently miss developer overrides.
 set -euo pipefail
 
+# Guard against being sourced by lifecycle-scenarios.test.sh
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RUNNER="$REPO_ROOT/shared/lib/wavemill-startup-runner.sh"

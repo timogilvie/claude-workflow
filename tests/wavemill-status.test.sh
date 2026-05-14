@@ -23,9 +23,15 @@ run_render() {
   local workspace_root="$2"
   local behavior_file="$3"
   local output_file="$4"
+  local pane_mode="${5:-}"
 
   (
-    set -- test-session "$workspace_root" "$state_file"
+    export WAVEMILL_TIP_INDEX=0
+    if [[ -n "$pane_mode" ]]; then
+      set -- "--pane=$pane_mode" test-session "$workspace_root" "$state_file"
+    else
+      set -- test-session "$workspace_root" "$state_file"
+    fi
     source "$REPO_DIR/shared/lib/wavemill-status.sh"
 
     refresh_pr_cache() { :; }
@@ -36,6 +42,7 @@ run_render() {
       local dir="$1"
       case "$(basename "$dir")" in
         plan-task) echo "12m" ;;
+        rejected-plan-task) echo "10m" ;;
         waiting-task) echo "7m" ;;
         active-task) echo "3m" ;;
         stale-task) echo "9m" ;;
@@ -51,6 +58,7 @@ run_render() {
     agent_status() {
       case "$1" in
         HOK-1220-plan-task) echo "exited" ;;
+        HOK-1230-rejected-plan-task) echo "running" ;;
         HOK-1221-waiting-task) echo "waiting" ;;
         HOK-1222-active-task) echo "running" ;;
         *) echo "running" ;;
@@ -87,10 +95,26 @@ run_render() {
       jq -r --arg branch "$branch" '.checks[$branch] // empty' "$behavior_file"
     }
 
-    render_dashboard
+    case "$pane_mode" in
+      jobs) render_jobs_pane ;;
+      queued-pending) render_queued_pending_pane ;;
+      *) render_dashboard ;;
+    esac
     cp "$FRAME" "${output_file}.raw"
     strip_ansi < "$FRAME" > "$output_file"
   )
+}
+
+run_blocked_detail() {
+  local workspace_root="$1"
+  local issue="$2"
+  local slug="$3"
+
+  (
+    set -- test-session "$workspace_root"
+    source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+    coding_blocked_completion_detail "$workspace_root/$slug" "$slug" "$issue"
+  ) | strip_ansi | head -1
 }
 
 echo "=== wavemill-status inbox renderer ==="
@@ -101,12 +125,14 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 WORKTREES_DIR="$TMP_DIR/worktrees"
 mkdir -p \
   "$WORKTREES_DIR/plan-task/features/plan-task" \
+  "$WORKTREES_DIR/rejected-plan-task/features/rejected-plan-task" \
   "$WORKTREES_DIR/waiting-task/features/waiting-task" \
   "$WORKTREES_DIR/active-task/features/active-task" \
   "$WORKTREES_DIR/coding-task/features/coding-task" \
   "$WORKTREES_DIR/review-task/features/review-task" \
   "$WORKTREES_DIR/ready-task/features/ready-task" \
   "$WORKTREES_DIR/ready-stale-task/features/ready-stale-task" \
+  "$WORKTREES_DIR/merged-done-task/features/merged-done-task" \
   "$WORKTREES_DIR/merge-candidate-task/features/merge-candidate-task" \
   "$WORKTREES_DIR/ready-conflict-task/features/ready-conflict-task" \
   "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task" \
@@ -209,10 +235,193 @@ else
   fail "inbox rows are missing expected state details"
 fi
 
+if grep -q 'planner: model resolution unavailable' "$OUTPUT_ONE" \
+  && grep -q 'coder: model resolution unavailable' "$OUTPUT_ONE" \
+  && grep -q 'reviewer: model resolution unavailable' "$OUTPUT_ONE"; then
+  pass "awaiting approval renders unavailable model routing when records are absent"
+else
+  fail "missing routing records do not render unavailable placeholders"
+fi
+
 if grep -q 'HOK-1222.*active-task.*🔨 executing.*● running.*#45 ✓' "$OUTPUT_ONE"; then
   pass "shows active task PR and running status"
 else
   fail "active row is missing expected PR or status details"
+fi
+
+cat > "$WORKTREES_DIR/plan-task/features/plan-task/routing.jsonl" <<'EOF'
+{"role":"planner","requested":"opus","resolved":"claude-opus-4-7"}
+{"role":"coder","requested":"inherit","resolved":"claude-opus-4-7","inheritedFrom":"planner"}
+{"role":"reviewer","requested":"sonnet","resolved":"claude-sonnet-4-6","fallback":"claude-haiku-4-5","fallbackReason":"quota-exhausted"}
+EOF
+
+OUTPUT_ROUTING="$TMP_DIR/output-routing.txt"
+run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ROUTING"
+
+if grep -q 'planner: requested=opus → resolved=claude-opus-4-7' "$OUTPUT_ROUTING" \
+  && grep -q 'coder: requested=inherit (from planner) → resolved=claude-opus-4-7' "$OUTPUT_ROUTING" \
+  && grep -q 'reviewer: requested=sonnet → resolved=claude-sonnet-4-6' "$OUTPUT_ROUTING" \
+  && grep -q 'fallback=claude-haiku-4-5 (reason: quota-exhausted)' "$OUTPUT_ROUTING"; then
+  pass "awaiting approval renders alias, inherit, and fallback routing details"
+else
+  fail "routing details are missing from awaiting approval output"
+fi
+
+cat > "$WORKTREES_DIR/rejected-plan-task/features/rejected-plan-task/.planning-rejected.json" <<'EOF'
+{
+  "reason": "planning_modified_out_of_scope_files",
+  "outOfScopeFiles": ["src/new-feature.ts"],
+  "reverted": true
+}
+EOF
+
+STATE_FILE_PLANNING_REJECTED="$TMP_DIR/state-planning-rejected.json"
+cat > "$STATE_FILE_PLANNING_REJECTED" <<EOF
+{
+  "freeSlots": 2,
+  "tasks": {
+    "HOK-1230": {
+      "slug": "rejected-plan-task",
+      "branch": "task/rejected-plan-task",
+      "worktree": "$WORKTREES_DIR/rejected-plan-task",
+      "status": "",
+      "phase": "planning",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_PLANNING_REJECTED="$TMP_DIR/behavior-planning-rejected.json"
+cat > "$BEHAVIOR_PLANNING_REJECTED" <<'EOF'
+{
+  "hook": {},
+  "pane": {
+    "HOK-1230-rejected-plan-task": "9"
+  },
+  "reported": {},
+  "planning": {
+    "rejected-plan-task": "awaiting_approval"
+  },
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_PLANNING_REJECTED="$TMP_DIR/output-planning-rejected.txt"
+run_render "$STATE_FILE_PLANNING_REJECTED" "$WORKTREES_DIR" "$BEHAVIOR_PLANNING_REJECTED" "$OUTPUT_PLANNING_REJECTED"
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_PLANNING_REJECTED" \
+  && grep -q 'HOK-1230.*rejected-plan-task.*⚠ planning' "$OUTPUT_PLANNING_REJECTED" \
+  && grep -q 'Planning needs attention: edited src/new-feature.ts' "$OUTPUT_PLANNING_REJECTED"; then
+  pass "surfaces planning rejection artifact as actionable needs-attention row"
+else
+  fail "planning rejection artifact is not surfaced as actionable dashboard detail"
+fi
+
+cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json" <<'EOF'
+{
+  "summary": "coding done; full verification blocked by Docker and baseline tests",
+  "reason": "The task is ready for review, but local verification cannot finish in this environment."
+}
+EOF
+
+CODING_DETAIL_OUTPUT="$(run_blocked_detail "$WORKTREES_DIR" "HOK-1642" "coding-task")"
+if [[ "$CODING_DETAIL_OUTPUT" == 'HOK-1642 needs attention: coding done; full verification blocked by Docker and baseline tests. Type "advance HOK-1642" to launch review.' ]]; then
+  pass "formats coding blocked-completion detail with advance guidance"
+else
+  fail "coding blocked-completion detail formatting is incorrect"
+fi
+
+STATE_FILE_CODING_BLOCKED="$TMP_DIR/state-coding-blocked.json"
+cat > "$STATE_FILE_CODING_BLOCKED" <<EOF
+{
+  "tasks": {
+    "HOK-1642": {
+      "slug": "coding-task",
+      "branch": "task/coding-task",
+      "worktree": "$WORKTREES_DIR/coding-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    },
+    "HOK-1222": {
+      "slug": "active-task",
+      "branch": "task/active-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "executing",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+BEHAVIOR_CODING_BLOCKED="$TMP_DIR/behavior-coding-blocked.json"
+cat > "$BEHAVIOR_CODING_BLOCKED" <<'EOF'
+{
+  "hook": {},
+  "pane": {
+    "HOK-1642-coding-task": "5",
+    "HOK-1222-active-task": "12"
+  },
+  "reported": {
+    "HOK-1642": "still running tests"
+  },
+  "planning": {},
+  "pr": {
+    "task/active-task": "45|OPEN"
+  },
+  "checks": {
+    "task/active-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_CODING_BLOCKED="$TMP_DIR/output-coding-blocked.txt"
+run_render "$STATE_FILE_CODING_BLOCKED" "$WORKTREES_DIR" "$BEHAVIOR_CODING_BLOCKED" "$OUTPUT_CODING_BLOCKED"
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_CODING_BLOCKED" \
+  && grep -q '⚡ ACTIVE (1)' "$OUTPUT_CODING_BLOCKED" \
+  && grep -q 'HOK-1642.*coding-task.*⚠ coding.*● running' "$OUTPUT_CODING_BLOCKED" \
+  && grep -q 'HOK-1642 needs attention: coding done; full verifica' "$OUTPUT_CODING_BLOCKED"; then
+  pass "coding blocked-completion renders as actionable coding row with detail precedence"
+else
+  fail "coding blocked-completion row did not move to inbox or show attention detail"
+fi
+
+printf '{"summary":"%s"}\n' "$(perl -e 'print "x" x 120')" > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json"
+
+LONG_CODING_DETAIL_OUTPUT="$(run_blocked_detail "$WORKTREES_DIR" "HOK-1642" "coding-task")"
+if [[ "$LONG_CODING_DETAIL_OUTPUT" == *'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...'* ]]; then
+  pass "coding blocked-completion summary truncates in detail helper"
+else
+  fail "coding blocked-completion summary was not truncated"
+fi
+
+cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json" <<'EOF'
+{
+  "reason": "No summary was written."
+}
+EOF
+
+FALLBACK_CODING_DETAIL_OUTPUT="$(run_blocked_detail "$WORKTREES_DIR" "HOK-1642" "coding-task")"
+if [[ "$FALLBACK_CODING_DETAIL_OUTPUT" == 'HOK-1642 needs attention: coding done; verification blocked. Type "advance HOK-1642" to launch review.' ]]; then
+  pass "coding blocked-completion falls back when summary is missing"
+else
+  fail "coding blocked-completion did not use the generic fallback summary"
+fi
+
+rm -f "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json"
+
+OUTPUT_CODING_NORMAL="$TMP_DIR/output-coding-normal.txt"
+run_render "$STATE_FILE_CODING_BLOCKED" "$WORKTREES_DIR" "$BEHAVIOR_CODING_BLOCKED" "$OUTPUT_CODING_NORMAL"
+
+if grep -q 'HOK-1642.*coding-task.*💻 coding.*● running' "$OUTPUT_CODING_NORMAL" \
+  && ! grep -q 'needs attention:' "$OUTPUT_CODING_NORMAL"; then
+  pass "coding row stays unchanged when blocked-completion artifact is absent"
+else
+  fail "coding row changed without a blocked-completion artifact"
 fi
 
 STATE_FILE_SKIPPED="$TMP_DIR/state-skipped.json"
@@ -287,24 +496,30 @@ EOF
 OUTPUT_MONITOR_QUEUE="$TMP_DIR/output-monitor-queue.txt"
 run_render "$STATE_FILE_MONITOR_QUEUE" "$WORKTREES_DIR" "$BEHAVIOR_MONITOR_QUEUE" "$OUTPUT_MONITOR_QUEUE"
 
-if grep -q '⌛ QUEUED COMMANDS (1)' "$OUTPUT_MONITOR_QUEUE" \
-  && grep -q 'select 1 2' "$OUTPUT_MONITOR_QUEUE" \
-  && grep -q 'no slots available' "$OUTPUT_MONITOR_QUEUE"; then
-  pass "renders queued monitor commands when selections are deferred"
+if ! grep -q '⌛ QUEUED COMMANDS' "$OUTPUT_MONITOR_QUEUE" \
+  && ! grep -q '🛠 JOBS' "$OUTPUT_MONITOR_QUEUE" \
+  && grep -q '⚡ ACTIVE' "$OUTPUT_MONITOR_QUEUE" \
+  && grep -q 'No active tasks' "$OUTPUT_MONITOR_QUEUE"; then
+  pass "dashboard omits queued and jobs informational sections"
 else
-  fail "queued monitor command section is missing expected content"
+  fail "dashboard still renders queued or jobs sections"
 fi
 
-if ! grep -q '⌛ QUEUED COMMANDS' "$OUTPUT_ONE"; then
-  pass "omits queued monitor command section when empty"
+OUTPUT_QUEUED_PANE="$TMP_DIR/output-queued-pane.txt"
+run_render "$STATE_FILE_MONITOR_QUEUE" "$WORKTREES_DIR" "$BEHAVIOR_MONITOR_QUEUE" "$OUTPUT_QUEUED_PANE" "queued-pending"
+
+if grep -q '⌛ QUEUED COMMANDS (1)' "$OUTPUT_QUEUED_PANE" \
+  && grep -q 'select 1 2' "$OUTPUT_QUEUED_PANE" \
+  && grep -q 'no slots available' "$OUTPUT_QUEUED_PANE"; then
+  pass "queued/pending pane renders queued monitor commands"
 else
-  fail "queued monitor command section should be hidden when empty"
+  fail "queued/pending pane is missing queued monitor commands"
 fi
 
-if grep -q 'Ctrl+B <PANE>: switch task' "$OUTPUT_ONE"; then
-  pass "footer advertises pane-number switching"
+if grep -q 'Refreshes every 2s │ wavemill expand HOK-1234: build a task packet from Linear' "$OUTPUT_ONE"; then
+  pass "footer renders stable refresh prefix with selected usage tip"
 else
-  fail "footer is missing pane-number switching hint"
+  fail "footer is missing expected selected usage tip"
 fi
 
 # Test truncation of long detail strings
@@ -348,7 +563,7 @@ if grep -q '└─.*\.\.\.' "$OUTPUT_LONG"; then
   # Find the detail line and check its length
   detail_line=$(grep '└─' "$OUTPUT_LONG" | head -1)
   line_len=${#detail_line}
-  if (( line_len <= 85 )); then
+  if (( line_len <= 98 )); then
     pass "truncates very long detail strings to prevent overflow"
   else
     fail "truncated detail line is still too long ($line_len chars)"
@@ -428,6 +643,7 @@ cat > "$STATE_FILE_PHASES" <<EOF
     "eval-HOK-1564-primary-101": {
       "id": "eval-HOK-1564-primary-101",
       "kind": "eval",
+      "session": "test-session",
       "issueId": "HOK-1564",
       "side": "primary",
       "pairId": "HOK-1564",
@@ -447,6 +663,7 @@ cat > "$STATE_FILE_PHASES" <<EOF
     "comparison-HOK-1564-101-102": {
       "id": "comparison-HOK-1564-101-102",
       "kind": "comparison",
+      "session": "test-session",
       "pairId": "HOK-1564",
       "prNumbers": [101, 102],
       "pid": 124,
@@ -513,14 +730,22 @@ else
   fail "review phase row is missing emoji"
 fi
 
-if grep -q '🛠 JOBS' "$OUTPUT_PHASES" \
-  && grep -q 'Tracked background jobs (2)' "$OUTPUT_PHASES" \
-  && grep -q 'eval-HOK-1564-primary-101.log' "$OUTPUT_PHASES" \
-  && grep -q 'comparison-HOK-1564-101-102.log' "$OUTPUT_PHASES" \
-  && grep -q 'Missing eval records for challenge pair HOK-1564' "$OUTPUT_PHASES"; then
-  pass "renders tracked challenge jobs and failure excerpts"
+if ! grep -q '🛠 JOBS' "$OUTPUT_PHASES" \
+  && ! grep -q '⌛ QUEUED COMMANDS' "$OUTPUT_PHASES"; then
+  pass "default dashboard excludes background jobs/queue sections"
 else
-  fail "dashboard is missing tracked challenge jobs section"
+  fail "default dashboard still includes background sections"
+fi
+
+OUTPUT_JOBS_PANE="$TMP_DIR/output-jobs-pane.txt"
+run_render "$STATE_FILE_PHASES" "$WORKTREES_DIR" "$BEHAVIOR_PHASES" "$OUTPUT_JOBS_PANE" "jobs"
+
+if grep -q '🛠 JOBS' "$OUTPUT_JOBS_PANE" \
+  && grep -q 'Tracked background jobs (2)' "$OUTPUT_JOBS_PANE" \
+  && grep -q 'Missing eval records for challenge pair HOK-1564' "$OUTPUT_JOBS_PANE"; then
+  pass "jobs pane renders jobs details"
+else
+  fail "jobs pane is missing expected job details"
 fi
 
 STATE_FILE_RUNNING="$TMP_DIR/state-running.json"
@@ -718,6 +943,18 @@ cat > "$WORKTREES_DIR/ready-stale-task/features/ready-stale-task/.ready-result.j
 }
 EOF
 
+cat > "$WORKTREES_DIR/merged-done-task/features/merged-done-task/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "queueState": "ready-stale"
+  }
+}
+EOF
+
 cat > "$WORKTREES_DIR/merge-candidate-task/features/merge-candidate-task/.ready-result.json" <<'EOF'
 {
   "stage": "ready",
@@ -829,6 +1066,14 @@ cat > "$STATE_FILE_READY_QUEUE" <<EOF
       "status": "",
       "phase": "ready",
       "pr": "tracked"
+    },
+    "HOK-1313": {
+      "slug": "merged-done-task",
+      "branch": "task/merged-done-task",
+      "worktree": "$WORKTREES_DIR/merged-done-task",
+      "status": "merged",
+      "phase": "ready",
+      "pr": "tracked"
     }
   }
 }
@@ -840,7 +1085,8 @@ cat > "$BEHAVIOR_READY_QUEUE" <<'EOF'
   "pane": {
     "HOK-1310-ready-complete-task": "15",
     "HOK-1311-ready-stale-task": "16",
-    "HOK-1312-merge-candidate-task": "17"
+    "HOK-1312-merge-candidate-task": "17",
+    "HOK-1313-merged-done-task": "18"
   },
   "hook": {},
   "reported": {},
@@ -848,12 +1094,14 @@ cat > "$BEHAVIOR_READY_QUEUE" <<'EOF'
   "pr": {
     "task/ready-complete-task": "421|OPEN",
     "task/ready-stale-task": "422|OPEN",
-    "task/merge-candidate-task": "423|OPEN"
+    "task/merge-candidate-task": "423|OPEN",
+    "task/merged-done-task": "424|MERGED"
   },
   "checks": {
     "task/ready-complete-task": "pass",
     "task/ready-stale-task": "pass",
-    "task/merge-candidate-task": "pass"
+    "task/merge-candidate-task": "pass",
+    "task/merged-done-task": "pass"
   }
 }
 EOF
@@ -867,6 +1115,13 @@ if grep -q 'HOK-1310.*🚦 ready' "$OUTPUT_READY_QUEUE" \
   pass "renders ready queue states distinctly"
 else
   fail "ready queue state labels are missing"
+fi
+
+if grep -q 'HOK-1313.*✓ done.*✓ merged.*#424 MERGED' "$OUTPUT_READY_QUEUE" \
+  && ! grep -q 'HOK-1313.*ready-stale' "$OUTPUT_READY_QUEUE"; then
+  pass "merged tasks override stale ready queue labels"
+else
+  fail "merged task should not display stale ready queue label"
 fi
 
 STATE_FILE_READY_WATCHDOG="$TMP_DIR/state-ready-watchdog.json"

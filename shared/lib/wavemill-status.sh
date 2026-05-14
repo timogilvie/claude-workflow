@@ -1,7 +1,7 @@
 #!/opt/homebrew/bin/bash
 # Wavemill Status Dashboard - Real-time task status for tmux control panel
 #
-# Usage: wavemill-status.sh <session> <worktree_root> [state_file]
+# Usage: wavemill-status.sh [--pane=jobs|--pane=queued-pending] <session> <worktree_root> [state_file]
 #
 # Displays a compact per-task summary refreshing every 2 seconds by default
 # (override with WAVEMILL_DASHBOARD_REFRESH_SECONDS=1..10):
@@ -11,9 +11,39 @@
 
 set -euo pipefail
 
-SESSION="${1:?Usage: wavemill-status.sh <session> <worktree_root> [state_file]}"
-WORKTREE_ROOT="${2:?Usage: wavemill-status.sh <session> <worktree_root> [state_file]}"
+if ! declare -f wavemill_pick_usage_tip >/dev/null 2>&1; then
+  _wss_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || true
+  if [[ -f "${_wss_dir}/wavemill-common.sh" ]]; then
+    # shellcheck source=wavemill-common.sh
+    source "${_wss_dir}/wavemill-common.sh"
+  fi
+  unset _wss_dir
+fi
+
+PANE_MODE=""
+if [[ "${1:-}" == --pane=* ]]; then
+  PANE_MODE="${1#--pane=}"
+  shift
+fi
+
+if [[ "$#" -lt 2 ]]; then
+  echo "Usage: wavemill-status.sh [--pane=jobs|--pane=queued-pending] <session> <worktree_root> [state_file]" >&2
+  exit 1
+fi
+
+SESSION="$1"
+WORKTREE_ROOT="$2"
 STATE_FILE="${3:-}"
+
+if [[ -n "$PANE_MODE" ]]; then
+  case "$PANE_MODE" in
+    jobs|queued-pending) ;;
+    *)
+      echo "wavemill-status.sh: unsupported pane mode '$PANE_MODE'" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 # Signal-driven refresh uses USR1 for fast updates and polling as fallback.
 WAVEMILL_REDRAW=0
@@ -21,8 +51,13 @@ trap 'WAVEMILL_REDRAW=1' USR1
 
 DEFAULT_REFRESH=2
 MAX_REFRESH=10
+DEFAULT_TIP_REFRESH=60
+MAX_TIP_REFRESH=3600
 PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 PR_TTL=15
+WAVEMILL_STATUS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WAVEMILL_REPO_DIR="$(cd "$WAVEMILL_STATUS_DIR/../.." && pwd)"
+declare -Ag WAVEMILL_ROUTING_DISPLAY_CACHE=()
 
 # Colors
 G='\033[32m'; Y='\033[33m'; R='\033[31m'; D='\033[90m'; B='\033[1m'; N='\033[0m'
@@ -47,7 +82,27 @@ resolve_dashboard_refresh_seconds() {
   printf '%s\n' "$DEFAULT_REFRESH"
 }
 
+resolve_tip_refresh_seconds() {
+  local raw="${WAVEMILL_TIP_REFRESH_SECONDS:-$DEFAULT_TIP_REFRESH}"
+
+  if [[ "$raw" =~ ^[0-9]+$ ]] && (( raw >= 1 && raw <= MAX_TIP_REFRESH )); then
+    printf '%s\n' "$raw"
+    return 0
+  fi
+
+  if [[ "${WAVEMILL_TIP_REFRESH_WARNED:-0}" -eq 0 ]]; then
+    printf 'wavemill: invalid WAVEMILL_TIP_REFRESH_SECONDS=%s, using default %s\n' \
+      "$raw" "$DEFAULT_TIP_REFRESH" >&2
+    WAVEMILL_TIP_REFRESH_WARNED=1
+  fi
+
+  printf '%s\n' "$DEFAULT_TIP_REFRESH"
+}
+
 REFRESH="$(resolve_dashboard_refresh_seconds)"
+TIP_REFRESH="$(resolve_tip_refresh_seconds)"
+_CURRENT_TIP=""
+_LAST_TIP_REFRESH_AT=0
 
 # Hide cursor during rendering
 tput civis 2>/dev/null || true
@@ -214,6 +269,45 @@ ready_attention_detail() {
   head -1 "$attention_file" 2>/dev/null | tr -d '\r'
 }
 
+truncate_blocked_completion_summary() {
+  local summary="${1:-}"
+  local max_len=80
+
+  if (( ${#summary} > max_len )); then
+    printf '%s...\n' "${summary:0:77}"
+  else
+    printf '%s\n' "$summary"
+  fi
+}
+
+coding_blocked_completion_detail() {
+  local worktree="$1" slug="$2" issue="$3"
+  local feature_dir="$worktree/features/$slug"
+  local artifact_record summary reason artifact_mtime
+
+  artifact_record="$(read_blocked_completion "$feature_dir" "$issue")"
+  [[ -n "$artifact_record" ]] || return 0
+
+  IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
+  summary="$(truncate_blocked_completion_summary "$summary")"
+  printf '%s needs attention: %s. Type "advance %s" to launch review.\n' "$issue" "$summary" "$issue"
+}
+
+planning_rejection_detail() {
+  local worktree="$1" slug="$2"
+  local feature_dir="$worktree/features/$slug"
+  local artifact="$feature_dir/.planning-rejected.json"
+  local reason files
+
+  [[ -f "$artifact" ]] || return 0
+  reason=$(jq -r '.reason // empty' "$artifact" 2>/dev/null || true)
+  [[ "$reason" == "planning_modified_out_of_scope_files" ]] || return 0
+
+  files=$(jq -r '(.outOfScopeFiles // []) | join(", ")' "$artifact" 2>/dev/null || true)
+  [[ -n "$files" ]] || files="out-of-scope files"
+  printf 'Planning needs attention: edited %s; reverted. Review plan.md and re-approve.\n' "$files"
+}
+
 ready_watchdog_state_file() {
   [[ -n "$STATE_FILE" ]] || return 0
   printf '%s\n' "$(dirname "$STATE_FILE")/ready-watchdog-state.json"
@@ -246,6 +340,75 @@ plan_waiting_for_review() {
   # an exited agent as waiting for review until the monitor persists the stage update.
   [[ "$agent_state" == "exited" ]] || return 1
   return 0
+}
+
+render_plan_model_routing() {
+  local worktree="$1" slug="$2"
+  local routing_file="" candidate records_json cache_key mtime rendered
+
+  for candidate in \
+    "$worktree/features/$slug/routing.jsonl" \
+    "$worktree/bugs/$slug/routing.jsonl"
+  do
+    if [[ -f "$candidate" ]]; then
+      routing_file="$candidate"
+      break
+    fi
+  done
+
+  if [[ -n "$routing_file" ]]; then
+    mtime=$(stat -f %m "$routing_file" 2>/dev/null || stat -c %Y "$routing_file" 2>/dev/null || echo 0)
+    cache_key="${routing_file}:${mtime}"
+    if [[ -v WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"] ]]; then
+      printf '%s' "${WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]}"
+      return 0
+    fi
+    records_json="$(
+      jq -Rcs '
+        split("\n")
+        | map(select(length > 0) | fromjson?)
+        | reduce .[] as $item ({};
+            if (($item.role // null) | type) == "string" then
+              .[$item.role] = $item
+            else
+              .
+            end
+          )
+        | [
+            {"role":"planner"} + (.planner // {}),
+            {"role":"coder"} + (.coder // {}),
+            {"role":"reviewer"} + (.reviewer // {})
+          ]
+      ' "$routing_file" 2>/dev/null
+    )"
+    [[ -n "$records_json" ]] || records_json='[{"role":"planner"},{"role":"coder"},{"role":"reviewer"}]'
+  else
+    cache_key="missing:${worktree}:${slug}"
+    if [[ -v WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"] ]]; then
+      printf '%s' "${WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]}"
+      return 0
+    fi
+    records_json='[{"role":"planner"},{"role":"coder"},{"role":"reviewer"}]'
+  fi
+
+  rendered="$(
+    MODEL_RESOLUTION_DISPLAY_INPUT="$records_json" \
+    MODEL_RESOLUTION_DISPLAY_MODULE="$WAVEMILL_REPO_DIR/shared/lib/model-resolution-display.ts" \
+    npx tsx -e '
+      (async () => {
+        const modulePath = process.env.MODEL_RESOLUTION_DISPLAY_MODULE;
+        const records = JSON.parse(process.env.MODEL_RESOLUTION_DISPLAY_INPUT ?? "[]");
+        const { formatAllSubagentModelDisplayText } = await import(modulePath);
+        process.stdout.write(formatAllSubagentModelDisplayText(records));
+      })().catch(() => process.exit(1));
+    ' 2>/dev/null || true
+  )"
+
+  if [[ -z "$rendered" ]]; then
+    rendered="  planner: model resolution unavailable"$'\n'"  coder:   model resolution unavailable"$'\n'"  reviewer: model resolution unavailable"
+  fi
+  WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]="$rendered"
+  printf '%s' "$rendered"
 }
 
 # ── Elapsed time from directory birth ─────────────────────────────────────
@@ -324,10 +487,10 @@ gather_tasks() {
 
 gather_jobs() {
   [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
-  jq -r '
+  jq -r --arg session "$SESSION" '
     (.jobs // {}) |
     if type == "array" then .[] else (to_entries[] | .value) end |
-    select(.kind == "eval" or .kind == "comparison") |
+    select((.kind == "eval" or .kind == "comparison") and .session? == $session) |
     [
       .id,
       .kind,
@@ -355,15 +518,50 @@ is_active() {
 }
 
 # Truncate detail string to fit within available terminal width.
-# Format "%-10s  %4s  └─ %s" uses ~20 chars of prefix, leaving ~60 for content on 80-char terminal.
+# Format "%-10s  %4s  └─ %s" uses ~20 chars of prefix. Leave enough room for
+# per-subagent requested/resolved/fallback routing details while still
+# truncating long freeform status messages.
 truncate_detail() {
   local detail="$1"
-  local max_len=55
+  local max_len=68
   if (( ${#detail} > max_len )); then
-    echo "${detail:0:52}..."
+    echo "${detail:0:$((max_len - 3))}..."
   else
     echo "$detail"
   fi
+}
+
+render_task_detail_lines() {
+  local detail_block="${1:-}"
+  local line
+
+  [[ -n "$detail_block" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    line=$(truncate_detail "$line")
+    printf "${D}%10s  %4s  └─ %s${N}${EL}\n" "" "" "$line" >> "$FRAME"
+  done <<< "$detail_block"
+}
+
+truncate_cell() {
+  local text="${1:-}" max_len="${2:-0}"
+  if (( max_len <= 0 )); then
+    printf ''
+    return 0
+  fi
+
+  if (( ${#text} <= max_len )); then
+    printf '%s' "$text"
+    return 0
+  fi
+
+  if (( max_len <= 3 )); then
+    printf '%.*s' "$max_len" "$text"
+    return 0
+  fi
+
+  printf '%.*s...' "$((max_len - 3))" "$text"
 }
 
 format_job_elapsed() {
@@ -470,7 +668,21 @@ is_actionable_state() {
   local worktree="${3:-}"
   local slug="${4:-}"
   local issue="${5:-}"
-  local ready_status attention_detail watchdog_classification
+  local ready_status attention_detail planning_detail watchdog_classification coding_detail
+
+  if [[ "$task_phase" == "coding" ]]; then
+    coding_detail=$(coding_blocked_completion_detail "$worktree" "$slug" "$issue")
+    if [[ -n "$coding_detail" ]]; then
+      echo "actionable"
+      return
+    fi
+  fi
+
+  planning_detail=$(planning_rejection_detail "$worktree" "$slug")
+  if [[ -n "$planning_detail" ]]; then
+    echo "actionable"
+    return
+  fi
 
   attention_detail=$(ready_attention_detail "$worktree" "$slug")
   if [[ -n "$attention_detail" ]]; then
@@ -533,12 +745,13 @@ render_section_header() {
 render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
-  local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail reported ds pane watchdog_classification watchdog_detail running_detail
+  local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail planning_detail reported ds pane watchdog_classification watchdog_detail running_detail coding_blocked_detail
 
   t=$(elapsed "$worktree")
   reported=""
   watchdog_classification=""
   watchdog_detail=""
+  coding_blocked_detail=""
 
   if [[ "$task_status" == "merged" ]]; then
     st_str="${G}✓ merged${N}"
@@ -585,19 +798,36 @@ render_task_row() {
     esac
   fi
 
-  case "$task_phase" in
+  if [[ "$task_status" == "merged" ]]; then
+    phase_str="${G}✓ done${N}"
+  else
+    case "$task_phase" in
     planning)
       plan_status=""
       [[ -n "$worktree" && -n "$slug" ]] && plan_status=$(get_planning_display_status "$worktree" "$slug")
+      planning_detail=$(planning_rejection_detail "$worktree" "$slug")
       case "$plan_status" in
-        awaiting_approval) phase_str="${Y}⏳ awaiting${N}" ;;
+        awaiting_approval)
+          if [[ -n "$planning_detail" ]]; then
+            phase_str="${R}⚠ planning${N}"
+          else
+            phase_str="${Y}⏳ awaiting${N}"
+          fi
+          ;;
         approved)          phase_str="${G}✅ approved${N}" ;;
         rejected)          phase_str="${R}❌ rejected${N}" ;;
         *)                 phase_str="${Y}📋 planning${N}" ;;
       esac
       ;;
     executing) phase_str="${G}🔨 executing${N}" ;;
-    coding)    phase_str="${G}💻 coding${N}" ;;
+    coding)
+      coding_blocked_detail=$(coding_blocked_completion_detail "$worktree" "$slug" "$issue")
+      if [[ -n "$coding_blocked_detail" ]]; then
+        phase_str="${R}⚠ coding${N}"
+      else
+        phase_str="${G}💻 coding${N}"
+      fi
+      ;;
     review)    phase_str="${Y}🔍 review${N}" ;;
     ready)
       watchdog_classification=$(ready_watchdog_field "$issue" "classification")
@@ -627,7 +857,8 @@ render_task_row() {
       fi
       ;;
     *)         phase_str="${D}$task_phase${N}" ;;
-  esac
+    esac
+  fi
 
   ds="$slug"
   (( ${#ds} > 22 )) && ds="${ds:0:19}..."
@@ -636,7 +867,13 @@ render_task_row() {
   printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
     "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
-  if plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
+  if [[ -n "$coding_blocked_detail" ]]; then
+    reported="$coding_blocked_detail"
+  fi
+  planning_detail=$(planning_rejection_detail "$worktree" "$slug")
+  if [[ -z "$reported" && -n "$planning_detail" ]]; then
+    reported="$planning_detail"
+  elif [[ -z "$reported" ]] && plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
     reported="Plan ready — waiting for approval"
   fi
   attention_detail=$(ready_attention_detail "$worktree" "$slug")
@@ -654,8 +891,11 @@ render_task_row() {
     working|waiting|done) reported="" ;;
   esac
   if [[ -n "$reported" ]]; then
-    reported=$(truncate_detail "$reported")
-    printf "${D}%10s  %4s  └─ %s${N}${EL}\n" "" "" "$reported" >> "$FRAME"
+    render_task_detail_lines "$reported"
+  fi
+
+  if [[ "$task_phase" == "planning" ]] && plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
+    render_task_detail_lines "$(render_plan_model_routing "$worktree" "$slug")"
   fi
 }
 
@@ -738,12 +978,15 @@ render_jobs_section() {
       *) status_str="${R}${job_status}${N}" ;;
     esac
 
-    printf "%-10s  %-18s  %6s  %b  %s${EL}\n" "$label" "$target" "$elapsed" "$status_str" "$(basename "$log_path")" >> "$FRAME"
+    label="$(truncate_cell "$label" 8)"
+    target="$(truncate_cell "$target" 12)"
+    elapsed="$(truncate_cell "$elapsed" 5)"
+    printf "%-8s %-12s %5s %b${EL}\n" "$label" "$target" "$elapsed" "$status_str" >> "$FRAME"
     if [[ "$job_status" == "failed" || "$job_status" == "timeout" ]]; then
       detail="$excerpt"
       [[ -z "$detail" ]] && detail="$log_path"
       detail=$(truncate_detail "$detail")
-      printf "${D}%10s  %18s  %6s  └─ %s${N}${EL}\n" "" "" "" "$detail" >> "$FRAME"
+      printf "${D}%8s %12s %5s └─ %s${N}${EL}\n" "" "" "" "$detail" >> "$FRAME"
     fi
   done <<<"$jobs"
 }
@@ -806,7 +1049,7 @@ redraw_dashboard_frame() {
 
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
-  local win agent_state classification task_data free_slots
+  local win agent_state classification task_data free_slots usage_tip
   declare -ga inbox_tasks=()
   declare -ga active_tasks=()
 
@@ -856,12 +1099,16 @@ render_dashboard() {
 
   render_inbox_section
   render_active_section
-  render_jobs_section
-  render_queued_section
-  render_monitor_command_queue_section
   render_project_context_suggestion
 
-  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ Ctrl+B <PANE>: switch task │ Ctrl+B N: next done${N}${EL}\n" >> "$FRAME"
+  local now_ts
+  now_ts="$(date +%s)"
+  if (( _LAST_TIP_REFRESH_AT == 0 || now_ts - _LAST_TIP_REFRESH_AT >= TIP_REFRESH )); then
+    _CURRENT_TIP="$(wavemill_pick_usage_tip)"
+    _LAST_TIP_REFRESH_AT="$now_ts"
+  fi
+  usage_tip="$_CURRENT_TIP"
+  printf "${EL}\n${D}Refreshes every ${REFRESH}s │ %s${N}${EL}\n" "$usage_tip" >> "$FRAME"
 }
 
 run_dashboard() {
@@ -893,11 +1140,46 @@ run_dashboard() {
   done
 }
 
+render_jobs_pane() {
+  : > "$FRAME"
+  printf "${B}Wavemill Jobs${N}  ${D}%s${N}${EL}\n" "$(date '+%H:%M:%S')" >> "$FRAME"
+  render_jobs_section
+  printf "${EL}\n${D}Refreshes every ${REFRESH}s${N}${EL}\n" >> "$FRAME"
+}
+
+render_queued_pending_pane() {
+  : > "$FRAME"
+  printf "${B}Wavemill Pending + Queue${N}  ${D}%s${N}${EL}\n" "$(date '+%H:%M:%S')" >> "$FRAME"
+  render_queued_section
+  render_monitor_command_queue_section
+  printf "${EL}\n${D}Refreshes every ${REFRESH}s${N}${EL}\n" >> "$FRAME"
+}
+
+run_pane_loop() {
+  local render_fn="$1"
+  set +e
+  while true; do
+    trap '' USR1
+    clear_dashboard_scrollback
+    "$render_fn"
+    redraw_dashboard_frame "$FRAME"
+    trap 'WAVEMILL_REDRAW=1' USR1
+    WAVEMILL_REDRAW=0
+    sleep "$REFRESH" &
+    SLEEP_PID=$!
+    wait "$SLEEP_PID" 2>/dev/null || true
+  done
+}
+
 # ── Main render loop ─────────────────────────────────────────────────────
 
 FRAME=$(mktemp)
 trap 'tput cnorm 2>/dev/null || true; rm -f "$FRAME"' EXIT INT TERM
 
 if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
-  run_dashboard
+  case "$PANE_MODE" in
+    jobs) run_pane_loop render_jobs_pane ;;
+    queued-pending) run_pane_loop render_queued_pending_pane ;;
+    *) run_dashboard ;;
+  esac
 fi

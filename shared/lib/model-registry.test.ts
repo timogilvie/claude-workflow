@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import {
+  CHANNELS,
+  compareLatencyTier,
+  evaluateCapabilityConstraints,
+  FAMILY_ALIASES,
   getConfiguredModelsForDescriptor,
   getConfiguredModelsForDescriptorStage,
   configuredDeepSeekModelIds,
@@ -14,12 +18,28 @@ import {
   getModel,
   isKnownModelId,
   mergeModelRegistry,
+  ModelResolutionError,
+  parseModelSelector,
   rankCandidates,
+  resolveSelector,
+  satisfiesCapabilities,
   validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
+import {
+  ModelPolicyResolutionError,
+  resolveSelectorWithPolicy,
+} from './model-resolution-policy.ts';
+import type { QuotaSnapshot, QuotaStatus } from './quota-state.ts';
 
 type TaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
+type ToolSupport = 'none' | 'basic' | 'full';
+type LatencyTier = 'fast' | 'standard' | 'slow';
+type ReasoningTier = 'basic' | 'standard' | 'advanced';
+
+const TOOL_SUPPORT_VALUES = new Set<ToolSupport>(['none', 'basic', 'full']);
+const LATENCY_TIER_VALUES = new Set<LatencyTier>(['fast', 'standard', 'slow']);
+const REASONING_TIER_VALUES = new Set<ReasoningTier>(['basic', 'standard', 'advanced']);
 
 function makeTempRepo(): string {
   return mkdtempSync(join(tmpdir(), 'model-registry-test-'));
@@ -41,6 +61,76 @@ function makeScores(value: number): Record<TaskType, number> {
     review: value,
     classify: value,
   };
+}
+
+function makeCapabilities(
+  overrides: Partial<ModelRegistry['models'][string]> & {
+    qualityScores?: Partial<Record<TaskType, number>>;
+  } = {},
+): ModelRegistry['models'][string] {
+  return {
+    vendor: overrides.vendor ?? 'test',
+    class: overrides.class ?? 'strong_generalist',
+    strengths: overrides.strengths ? [...overrides.strengths] : ['balanced'],
+    weaknesses: overrides.weaknesses ? [...overrides.weaknesses] : ['none'],
+    qualityScores: {
+      ...makeScores(0),
+      ...overrides.qualityScores,
+    },
+    pricing: overrides.pricing ? { ...overrides.pricing } : undefined,
+    defaultLadderEligible: overrides.defaultLadderEligible ?? true,
+    contextWindowTokens: overrides.contextWindowTokens ?? 128_000,
+    toolSupport: overrides.toolSupport ?? 'full',
+    multimodal: overrides.multimodal ? { ...overrides.multimodal } : { text: true, image: false },
+    latencyTier: overrides.latencyTier ?? 'standard',
+    reasoningTier: overrides.reasoningTier ?? 'standard',
+    costPerMillionInputTokensUsd: overrides.costPerMillionInputTokensUsd ?? 1,
+    costPerMillionOutputTokensUsd: overrides.costPerMillionOutputTokensUsd ?? 2,
+    agent: overrides.agent,
+  };
+}
+
+function makeQuotaSnapshot(
+  registry: ModelRegistry,
+  statuses: Partial<Record<string, QuotaStatus>> = {},
+): QuotaSnapshot {
+  return {
+    models: Object.fromEntries(
+      Object.keys(registry.models).map((modelId) => [
+        modelId,
+        {
+          status: statuses[modelId] ?? 'healthy',
+          remainingEstimate: null,
+          resetAt: null,
+          confidence: 1,
+          lastLimitErrorAt: null,
+          lastSuccessAt: null,
+          lastReason: null,
+        },
+      ]),
+    ),
+    snapshotAt: new Date().toISOString(),
+  };
+}
+
+function assertCapabilityMetadata(modelId: string, model: ModelRegistry['models'][string]): void {
+  assert.ok(Number.isFinite(model.contextWindowTokens));
+  assert.ok(model.contextWindowTokens > 0, `${modelId} should have a positive context window`);
+  assert.ok(TOOL_SUPPORT_VALUES.has(model.toolSupport), `${modelId} should have a valid tool support tier`);
+  assert.equal(typeof model.multimodal.text, 'boolean');
+  assert.equal(typeof model.multimodal.image, 'boolean');
+  if (model.multimodal.audio !== undefined) {
+    assert.equal(typeof model.multimodal.audio, 'boolean');
+  }
+  if (model.multimodal.video !== undefined) {
+    assert.equal(typeof model.multimodal.video, 'boolean');
+  }
+  assert.ok(LATENCY_TIER_VALUES.has(model.latencyTier), `${modelId} should have a valid latency tier`);
+  assert.ok(REASONING_TIER_VALUES.has(model.reasoningTier), `${modelId} should have a valid reasoning tier`);
+  assert.ok(Number.isFinite(model.costPerMillionInputTokensUsd));
+  assert.ok(model.costPerMillionInputTokensUsd >= 0, `${modelId} should have non-negative input cost`);
+  assert.ok(Number.isFinite(model.costPerMillionOutputTokensUsd));
+  assert.ok(model.costPerMillionOutputTokensUsd >= 0, `${modelId} should have non-negative output cost`);
 }
 
 describe('model-registry', () => {
@@ -67,6 +157,7 @@ describe('model-registry', () => {
       assert.ok(model.vendor.length > 0);
       assert.ok(model.strengths.length > 0);
       assert.ok(model.weaknesses.length > 0);
+      assertCapabilityMetadata(modelId, model);
 
       for (const taskType of ['routing', 'planning', 'coding', 'review', 'classify'] as TaskType[]) {
         assert.equal(typeof model.qualityScores[taskType], 'number');
@@ -107,27 +198,9 @@ describe('model-registry', () => {
   it('getLadder derives a deterministic fallback order from scores', () => {
     const registry: ModelRegistry = {
       models: {
-        A: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), review: 90 },
-        },
-        B: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), review: 80 },
-        },
-        C: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), review: 70 },
-        },
+        A: makeCapabilities({ qualityScores: { review: 90 } }),
+        B: makeCapabilities({ qualityScores: { review: 80 } }),
+        C: makeCapabilities({ qualityScores: { review: 70 } }),
       },
       ladders: {},
     };
@@ -142,20 +215,18 @@ describe('model-registry', () => {
   it('getLadder breaks score ties by model class', () => {
     const registry: ModelRegistry = {
       models: {
-        economy: {
-          vendor: 'test',
+        economy: makeCapabilities({
           class: 'fast_economy',
           strengths: ['speed'],
           weaknesses: ['depth'],
-          qualityScores: { ...makeScores(0), planning: 90 },
-        },
-        frontier: {
-          vendor: 'test',
+          qualityScores: { planning: 90 },
+        }),
+        frontier: makeCapabilities({
           class: 'frontier',
           strengths: ['depth'],
           weaknesses: ['cost'],
-          qualityScores: { ...makeScores(0), planning: 90 },
-        },
+          qualityScores: { planning: 90 },
+        }),
       },
       ladders: {},
     };
@@ -166,20 +237,8 @@ describe('model-registry', () => {
   it('getLadder breaks remaining ties by model ID', () => {
     const registry: ModelRegistry = {
       models: {
-        zebra: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), coding: 88 },
-        },
-        alpha: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: { ...makeScores(0), coding: 88 },
-        },
+        zebra: makeCapabilities({ qualityScores: { coding: 88 } }),
+        alpha: makeCapabilities({ qualityScores: { coding: 88 } }),
       },
       ladders: {},
     };
@@ -190,13 +249,7 @@ describe('model-registry', () => {
   it('getLadder returns an empty derived ladder when no model has a positive score', () => {
     const registry: ModelRegistry = {
       models: {
-        alpha: {
-          vendor: 'test',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: ['none'],
-          qualityScores: makeScores(0),
-        },
+        alpha: makeCapabilities(),
       },
       ladders: {},
     };
@@ -316,12 +369,44 @@ describe('model-registry', () => {
             review: 87,
             classify: 70,
           },
+          contextWindowTokens: 400_000,
+          toolSupport: 'full',
+          multimodal: { text: true, image: true },
+          latencyTier: 'standard',
+          reasoningTier: 'advanced',
+          costPerMillionInputTokensUsd: 6,
+          costPerMillionOutputTokensUsd: 36,
         },
       },
     });
 
     assert.equal(merged.models['gpt-5.6'].vendor, 'openai');
     assert.equal(merged.models['gpt-5.6'].qualityScores.planning, 90);
+  });
+
+  it('mergeModelRegistry merges and clones capability metadata overrides', () => {
+    const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
+      models: {
+        'claude-opus-4-7': {
+          contextWindowTokens: 250_000,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'advanced',
+          costPerMillionInputTokensUsd: 6,
+          costPerMillionOutputTokensUsd: 26,
+        },
+      },
+    });
+
+    assert.equal(merged.models['claude-opus-4-7'].contextWindowTokens, 250_000);
+    assert.equal(merged.models['claude-opus-4-7'].toolSupport, 'basic');
+    assert.deepEqual(merged.models['claude-opus-4-7'].multimodal, { text: true, image: false });
+    assert.equal(merged.models['claude-opus-4-7'].latencyTier, 'standard');
+    assert.equal(merged.models['claude-opus-4-7'].reasoningTier, 'advanced');
+    assert.equal(merged.models['claude-opus-4-7'].costPerMillionInputTokensUsd, 6);
+    assert.equal(merged.models['claude-opus-4-7'].costPerMillionOutputTokensUsd, 26);
+    assert.deepEqual(DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7'].multimodal, { text: true, image: true });
   });
 
   it('exposes DeepSeek metadata in the default registry', () => {
@@ -333,12 +418,91 @@ describe('model-registry', () => {
     assert.equal(pro.class, 'strong_generalist');
     assert.equal(pro.defaultLadderEligible, false);
     assert.equal(pro.contextWindowTokens, 1_000_000);
+    assert.equal(pro.toolSupport, 'basic');
+    assert.deepEqual(pro.multimodal, { text: true, image: false });
+    assert.equal(pro.reasoningTier, 'advanced');
+    assert.equal(pro.costPerMillionInputTokensUsd, 0.435);
     assert.equal(pro.agent, 'claude');
     assert.equal(pro.pricing?.inputCostPerMTok, 0.435);
     assert.equal(pro.pricing?.outputCostPerMTok, 0.87);
     assert.equal(flash.class, 'fast_economy');
+    assert.equal(flash.latencyTier, 'fast');
     assert.equal(flash.pricing?.inputCostPerMTok, 0.14);
     assert.equal(oneMillion.contextWindowTokens, 1_000_000);
+  });
+
+  it('exposes normalized capability metadata for frontier and economy models', () => {
+    const frontier = DEFAULT_MODEL_REGISTRY.models['gpt-5.5'];
+    const economy = DEFAULT_MODEL_REGISTRY.models['claude-haiku-4-5-20251001'];
+
+    assert.equal(frontier.contextWindowTokens, 400_000);
+    assert.equal(frontier.toolSupport, 'full');
+    assert.equal(frontier.reasoningTier, 'advanced');
+    assert.equal(frontier.costPerMillionInputTokensUsd, 5);
+    assert.equal(frontier.costPerMillionOutputTokensUsd, 30);
+
+    assert.equal(economy.latencyTier, 'fast');
+    assert.equal(economy.reasoningTier, 'basic');
+    assert.equal(economy.costPerMillionInputTokensUsd, 0.8);
+    assert.equal(economy.costPerMillionOutputTokensUsd, 4);
+  });
+
+  it('treats empty capability constraints as satisfied', () => {
+    const model = DEFAULT_MODEL_REGISTRY.models['gpt-5.5'];
+
+    assert.equal(satisfiesCapabilities(model), true);
+    assert.deepEqual(evaluateCapabilityConstraints(model, {}).failedConstraints, []);
+  });
+
+  it('checks minimum context window constraints', () => {
+    const model = DEFAULT_MODEL_REGISTRY.models['gpt-5.5'];
+
+    assert.equal(satisfiesCapabilities(model, { minContextWindow: 128_000 }), true);
+    assert.equal(satisfiesCapabilities(model, { minContextWindow: 500_000 }), false);
+    assert.deepEqual(
+      evaluateCapabilityConstraints(model, { minContextWindow: 500_000 }).failedConstraints,
+      ['minContextWindow'],
+    );
+  });
+
+  it('checks tool support constraints', () => {
+    assert.equal(satisfiesCapabilities(makeCapabilities({ toolSupport: 'none' }), { requiresTools: true }), false);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ toolSupport: 'basic' }), { requiresTools: true }), true);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ toolSupport: 'full' }), { requiresTools: true }), true);
+  });
+
+  it('checks multimodal image constraints', () => {
+    assert.equal(
+      satisfiesCapabilities(makeCapabilities({ multimodal: { text: true, image: true } }), { requiresMultimodal: true }),
+      true,
+    );
+    assert.equal(
+      satisfiesCapabilities(makeCapabilities({ multimodal: { text: true, image: false } }), { requiresMultimodal: true }),
+      false,
+    );
+  });
+
+  it('orders latency tiers from fast to slow', () => {
+    assert.ok(compareLatencyTier('fast', 'standard') < 0);
+    assert.ok(compareLatencyTier('standard', 'slow') < 0);
+    assert.ok(compareLatencyTier('slow', 'fast') > 0);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ latencyTier: 'fast' }), { maxLatencyTier: 'standard' }), true);
+    assert.equal(satisfiesCapabilities(makeCapabilities({ latencyTier: 'slow' }), { maxLatencyTier: 'standard' }), false);
+  });
+
+  it('fails closed when a required capability field is missing', () => {
+    const partialModel = {
+      contextWindowTokens: 200_000,
+      toolSupport: 'basic',
+    } as Partial<ModelRegistry['models'][string]>;
+
+    assert.deepEqual(
+      evaluateCapabilityConstraints(partialModel, {
+        requiresMultimodal: true,
+        maxLatencyTier: 'standard',
+      }).failedConstraints,
+      ['requiresMultimodal', 'maxLatencyTier'],
+    );
   });
 
   it('recognizes configured DeepSeek IDs and validates bracket syntax', () => {
@@ -427,6 +591,13 @@ describe('model-registry', () => {
               strengths: ['coding'],
               weaknesses: ['none'],
               qualityScores: { coding: 89 },
+              contextWindowTokens: 128_000,
+              toolSupport: 'full',
+              multimodal: { text: true, image: false },
+              latencyTier: 'standard',
+              reasoningTier: 'standard',
+              costPerMillionInputTokensUsd: 1.75,
+              costPerMillionOutputTokensUsd: 14,
               agent: 'codex',
             },
           },
@@ -535,5 +706,509 @@ describe('model-registry', () => {
       clearConfigCache(repoDir);
       cleanUp(repoDir);
     }
+  });
+});
+
+function serializeSelector(input: string): string {
+  const parsed = parseModelSelector(input);
+  assert.equal(parsed.ok, true);
+
+  const { selector } = parsed;
+  if (selector.kind === 'inherit') {
+    return 'inherit';
+  }
+  if (selector.kind === 'pinned') {
+    return selector.modelId;
+  }
+  return `${selector.family}:${selector.channel ?? 'stable'}`;
+}
+
+describe('parseModelSelector', () => {
+  it('exports the supported channels as a frozen list', () => {
+    assert.deepEqual(CHANNELS, ['stable', 'preview', 'experimental']);
+    assert.equal(Object.isFrozen(CHANNELS), true);
+  });
+
+  it('exports the required family aliases as a frozen registry', () => {
+    assert.equal(Object.isFrozen(FAMILY_ALIASES), true);
+
+    for (const family of ['opus', 'sonnet', 'haiku', 'gpt-5.5', 'gemini-pro']) {
+      assert.ok(Object.hasOwn(FAMILY_ALIASES, family));
+      assert.ok(Object.isFrozen(FAMILY_ALIASES[family].channels));
+      assert.ok(FAMILY_ALIASES[family].channels.stable?.length);
+    }
+  });
+
+  it('keeps the existing stable pins in the channel registry', () => {
+    assert.equal(FAMILY_ALIASES.opus.channels.stable, 'claude-opus-4-7');
+    assert.equal(FAMILY_ALIASES.sonnet.channels.stable, 'claude-sonnet-4-6');
+    assert.equal(FAMILY_ALIASES.haiku.channels.stable, 'claude-haiku-4-5-20251001');
+    assert.equal(FAMILY_ALIASES['gpt-5.5'].channels.stable, 'gpt-5.5');
+    assert.equal(FAMILY_ALIASES['gemini-pro'].channels.stable, 'gemini-pro');
+  });
+
+  it('parses bare family aliases', () => {
+    assert.deepEqual(parseModelSelector('opus'), {
+      ok: true,
+      selector: { kind: 'alias', family: 'opus', channel: 'stable' },
+    });
+  });
+
+  it('parses family aliases with channels', () => {
+    assert.deepEqual(parseModelSelector('opus:preview'), {
+      ok: true,
+      selector: { kind: 'alias', family: 'opus', channel: 'preview' },
+    });
+    assert.deepEqual(parseModelSelector('opus-preview'), {
+      ok: true,
+      selector: { kind: 'alias', family: 'opus', channel: 'preview' },
+    });
+    assert.deepEqual(parseModelSelector('gpt-5.5-preview'), {
+      ok: true,
+      selector: { kind: 'alias', family: 'gpt-5.5', channel: 'preview' },
+    });
+  });
+
+  it('rejects empty alias channels as malformed selector syntax', () => {
+    const parsed = parseModelSelector('opus:');
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error.code, 'malformed_pinned_id');
+    assert.equal(parsed.error.input, 'opus:');
+    assert.match(parsed.error.message, /Invalid model selector/);
+  });
+
+  it('parses pinned model IDs', () => {
+    assert.deepEqual(parseModelSelector('claude-opus-4-7'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'claude-opus-4-7' },
+    });
+    assert.deepEqual(parseModelSelector('deepseek-v4-pro[1m]'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'deepseek-v4-pro[1m]' },
+    });
+    assert.deepEqual(parseModelSelector('deepseek-chat'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'deepseek-chat' },
+    });
+    assert.deepEqual(parseModelSelector('deepseek-reasoner'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'deepseek-reasoner' },
+    });
+  });
+
+  it('parses inherit and trims whitespace on successful selectors', () => {
+    assert.deepEqual(parseModelSelector('inherit'), {
+      ok: true,
+      selector: { kind: 'inherit' },
+    });
+    assert.deepEqual(parseModelSelector('  haiku  '), {
+      ok: true,
+      selector: { kind: 'alias', family: 'haiku', channel: 'stable' },
+    });
+    assert.deepEqual(parseModelSelector(' inherit '), {
+      ok: true,
+      selector: { kind: 'inherit' },
+    });
+  });
+
+  it('returns typed unknown channel errors for unsupported alias channels', () => {
+    for (const input of ['opus:bogus', 'opus-bogus']) {
+      const parsed = parseModelSelector(input);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'unknown_channel');
+      assert.equal(parsed.error.input, input);
+      assert.match(parsed.error.message, /Known channels: stable, preview, experimental/);
+    }
+  });
+
+  it('returns typed empty input errors', () => {
+    for (const input of ['', '   ']) {
+      const parsed = parseModelSelector(input);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'empty_input');
+      assert.equal(parsed.error.input, input);
+      assert.match(parsed.error.message, /must not be empty/);
+    }
+  });
+
+  it('returns typed unknown family errors for unsupported aliases', () => {
+    for (const input of ['unknown-family', 'mystral', 'Opus', 'INHERIT', 'Opus-Preview']) {
+      const parsed = parseModelSelector(input);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'unknown_family');
+      assert.equal(parsed.error.input, input);
+      assert.match(parsed.error.message, /Unknown model family/);
+    }
+  });
+
+  it('returns typed malformed pinned ID errors for invalid syntax', () => {
+    for (const input of ['!!bad!!', 'claude_opus']) {
+      const parsed = parseModelSelector(input);
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error.code, 'malformed_pinned_id');
+      assert.equal(parsed.error.input, input);
+      assert.match(parsed.error.message, /Invalid/);
+    }
+  });
+
+  it('round-trips canonical selector forms', () => {
+    const inputs = [
+      'opus',
+      'opus:preview',
+      'claude-opus-4-7',
+      'deepseek-v4-pro[1m]',
+      'inherit',
+      'haiku',
+    ];
+    assert.deepEqual(inputs.map((input) => serializeSelector(input)), [
+      'opus:stable',
+      'opus:preview',
+      'claude-opus-4-7',
+      'deepseek-v4-pro[1m]',
+      'inherit',
+      'haiku:stable',
+    ]);
+  });
+});
+
+describe('resolveSelector', () => {
+  it('resolves aliases without a channel', () => {
+    assert.deepEqual(resolveSelector({ kind: 'alias', family: 'opus' }), {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: FAMILY_ALIASES.opus.channels.stable!,
+      source: 'alias',
+      familyChannel: 'stable',
+    });
+  });
+
+  it('resolves explicit stable alias channels with resolution metadata', () => {
+    assert.deepEqual(resolveSelector({ kind: 'alias', family: 'opus', channel: 'stable' }), {
+      requested: { kind: 'alias', family: 'opus', channel: 'stable' },
+      resolved: FAMILY_ALIASES.opus.channels.stable!,
+      source: 'alias',
+      familyChannel: 'stable',
+    });
+  });
+
+  it('resolves every known family alias to its recommended model ID', () => {
+    for (const [family, entry] of Object.entries(FAMILY_ALIASES)) {
+      const resolved = resolveSelector({ kind: 'alias', family });
+      assert.equal(resolved.resolved, entry.channels.stable);
+      assert.equal(resolved.source, 'alias');
+      assert.equal(resolved.familyChannel, 'stable');
+    }
+  });
+
+  it('throws a typed error for unpinned alias channels', () => {
+    assert.throws(
+      () => resolveSelector({ kind: 'alias', family: 'opus', channel: 'preview' }),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelResolutionError);
+        assert.equal(error.code, 'channel_unpinned');
+        assert.deepEqual(error.selector, { kind: 'alias', family: 'opus', channel: 'preview' });
+        assert.match(error.message, /No pin registered for family "opus" channel "preview"/);
+        return true;
+      },
+    );
+  });
+
+  it('passes through valid pinned model IDs', () => {
+    assert.deepEqual(resolveSelector({ kind: 'pinned', modelId: 'deepseek-v4-pro[1m]' }), {
+      requested: { kind: 'pinned', modelId: 'deepseek-v4-pro[1m]' },
+      resolved: 'deepseek-v4-pro[1m]',
+      source: 'pinned',
+    });
+  });
+
+  it('does not populate familyChannel for pinned or inherited selectors', () => {
+    const pinned = resolveSelector({ kind: 'pinned', modelId: 'deepseek-v4-pro[1m]' });
+    assert.equal(pinned.familyChannel, undefined);
+
+    const inherited = resolveSelector(
+      { kind: 'inherit' },
+      {
+        parent: {
+          requested: { kind: 'alias', family: 'sonnet', channel: 'stable' },
+          resolved: 'claude-sonnet-4-6',
+          source: 'alias',
+          familyChannel: 'stable',
+        },
+      },
+    );
+    assert.equal(inherited.familyChannel, undefined);
+  });
+
+  it('rejects invalid pinned model IDs', () => {
+    assert.throws(() => resolveSelector({ kind: 'pinned', modelId: 'DEEPSEEK-V4-PRO' }), /Invalid model ID/);
+  });
+
+  it('throws a typed error for unknown alias families', () => {
+    assert.throws(
+      () => resolveSelector({ kind: 'alias', family: 'nonexistent-family' }),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelResolutionError);
+        assert.equal(error.code, 'unknown_alias');
+        assert.equal(error.selector.kind, 'alias');
+        assert.match(error.message, /Unknown model family alias/);
+        return true;
+      },
+    );
+  });
+
+  it('inherits a resolved model from the parent context', () => {
+    assert.deepEqual(
+      resolveSelector(
+        { kind: 'inherit' },
+        {
+          parent: {
+            requested: { kind: 'alias', family: 'sonnet' },
+            resolved: 'claude-sonnet-4-6',
+            source: 'alias',
+          },
+        },
+      ),
+      {
+        requested: { kind: 'inherit' },
+        resolved: 'claude-sonnet-4-6',
+        source: 'inherited',
+      },
+    );
+  });
+
+  it('includes the parent context ID when provided', () => {
+    assert.deepEqual(
+      resolveSelector(
+        { kind: 'inherit' },
+        {
+          parent: {
+            requested: { kind: 'pinned', modelId: 'gpt-5.5' },
+            resolved: 'gpt-5.5',
+            source: 'pinned',
+          },
+          parentContextId: 'agent-123',
+        },
+      ),
+      {
+        requested: { kind: 'inherit' },
+        resolved: 'gpt-5.5',
+        source: 'inherited',
+        parentContextId: 'agent-123',
+      },
+    );
+  });
+
+  it('throws a typed error when inherit has no parent in context', () => {
+    assert.throws(
+      () => resolveSelector({ kind: 'inherit' }, { parentContextId: 'agent-123' }),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelResolutionError);
+        assert.equal(error.selector.kind, 'inherit');
+        assert.match(error.message, /Cannot resolve "inherit" selector/);
+        return true;
+      },
+    );
+  });
+
+  it('throws a typed error when inherit has no context', () => {
+    assert.throws(
+      () => resolveSelector({ kind: 'inherit' }),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelResolutionError);
+        assert.equal(error.selector.kind, 'inherit');
+        assert.match(error.message, /Cannot resolve "inherit" selector/);
+        return true;
+      },
+    );
+  });
+});
+
+describe('resolveSelectorWithPolicy', () => {
+  it('passes through a healthy eligible alias without fallback metadata', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.deepEqual(resolved, {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: 'claude-opus-4-7',
+      source: 'alias',
+      familyChannel: 'stable',
+    });
+  });
+
+  it('falls back to sonnet when opus quota is exhausted', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-7': 'exhausted',
+        }),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.deepEqual(resolved, {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: 'claude-sonnet-4-6',
+      source: 'fallback',
+      familyChannel: 'stable',
+      fallbackReason: 'quota-exhausted',
+    });
+  });
+
+  it('returns a policy downgrade when cost policy blocks the requested model', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        maxCostTier: 'strong_generalist',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.deepEqual(resolved, {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: 'claude-sonnet-4-6',
+      source: 'policy',
+      familyChannel: 'stable',
+      fallbackReason: 'disabled-by-policy',
+    });
+  });
+
+  it('treats an alias target missing from the registry as unavailable', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'claude-sonnet-4-6': DEFAULT_MODEL_REGISTRY.models['claude-sonnet-4-6'],
+        'gpt-5.5': DEFAULT_MODEL_REGISTRY.models['gpt-5.5'],
+      },
+      ladders: {
+        review: ['claude-sonnet-4-6', 'gpt-5.5'],
+      },
+    };
+
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(registry),
+        registryOverride: registry,
+      },
+    );
+
+    assert.deepEqual(resolved, {
+      requested: { kind: 'alias', family: 'opus' },
+      resolved: 'claude-sonnet-4-6',
+      source: 'fallback',
+      familyChannel: 'stable',
+      fallbackReason: 'unavailable',
+    });
+  });
+
+  it('preserves the original alias family and channel during fallback', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus', channel: 'stable' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-7': 'exhausted',
+        }),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.equal(resolved.requested.kind, 'alias');
+    assert.equal(resolved.requested.family, 'opus');
+    assert.equal(resolved.familyChannel, 'stable');
+    assert.equal(resolved.fallbackReason, 'quota-exhausted');
+  });
+
+  it('throws a typed error when no viable substitute exists', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'claude-opus-4-7': DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7'],
+        'gpt-5.5': DEFAULT_MODEL_REGISTRY.models['gpt-5.5'],
+      },
+      ladders: {
+        review: ['claude-opus-4-7', 'gpt-5.5'],
+      },
+    };
+
+    assert.throws(
+      () =>
+        resolveSelectorWithPolicy(
+          { kind: 'alias', family: 'opus' },
+          undefined,
+          {
+            taskType: 'review',
+            difficulty: 'moderate',
+            maxCostTier: 'strong_generalist',
+            quotaState: makeQuotaSnapshot(registry, {
+              'claude-opus-4-7': 'exhausted',
+              'gpt-5.5': 'exhausted',
+            }),
+            registryOverride: registry,
+          },
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof ModelPolicyResolutionError);
+        assert.equal(error.code, 'no_viable_substitute');
+        assert.equal(error.reason, 'quota-exhausted');
+        assert.match(error.message, /No viable substitute/);
+        return true;
+      },
+    );
+  });
+
+  it('prefers the quota outcome when quota and policy both block the request', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        maxCostTier: 'strong_generalist',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-7': 'exhausted',
+        }),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.equal(resolved.source, 'fallback');
+    assert.equal(resolved.fallbackReason, 'quota-exhausted');
+  });
+
+  it('prefers a same-vendor nearest downgrade over a higher-ranked cross-vendor fallback', () => {
+    const resolved = resolveSelectorWithPolicy(
+      { kind: 'alias', family: 'opus' },
+      undefined,
+      {
+        taskType: 'review',
+        difficulty: 'moderate',
+        quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-7': 'exhausted',
+        }),
+        registryOverride: DEFAULT_MODEL_REGISTRY,
+      },
+    );
+
+    assert.equal(resolved.resolved, 'claude-sonnet-4-6');
   });
 });

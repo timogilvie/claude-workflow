@@ -104,6 +104,7 @@ create_test_repo() {
   cp "$REPO_DIR/shared/lib/wavemill-common.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-input-reader.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/agent-adapters.sh" "$repo_dir/shared/lib/"
+  cp "$REPO_DIR/shared/lib/routing-emitter.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/model-validator.ts" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-status.sh" "$repo_dir/shared/lib/"
 }
@@ -214,7 +215,7 @@ wait_for_success() {
 }
 
 list_control_panes() {
-  tmux list-panes -t "$TEST_SESSION:control" \
+  tmux list-panes -t "$TEST_SESSION:mill" \
     -F '#{pane_index}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}|#{pane_current_command}'
 }
 
@@ -240,7 +241,7 @@ wait_for_pane_layout() {
 
 capture_pane() {
   local pane_index="$1"
-  tmux capture-pane -pt "$TEST_SESSION:control.$pane_index" -S -120
+  tmux capture-pane -pt "$TEST_SESSION:mill.$pane_index" -S -120
 }
 
 wait_for_pane_content() {
@@ -321,12 +322,12 @@ run_layout_case() {
   touch "$MOCK_GIT_LOG" "$MOCK_NPX_LOG" "$MOCK_LINEAR_LOG"
 
   tmux new-session -d -s "$TEST_SESSION" -x 200 -y 50
-  tmux rename-window -t "$TEST_SESSION:0" control
+  tmux rename-window -t "$TEST_SESSION:0" mill
 
   bash "$RUNNER_SCRIPT" "$plan_file" > "$output_file" 2>&1
 
   if ! panes_output="$(wait_for_pane_layout 30 0.2)"; then
-    fail "$case_name: timed out waiting for three control panes"
+    fail "$case_name: timed out waiting for three mill panes"
     [[ -f "$output_file" ]] && sed 's/^/    /' "$output_file"
     tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
     TEST_SESSION=""
@@ -352,9 +353,9 @@ run_layout_case() {
   done <<< "$panes_output"
 
   if [[ "$(printf '%s\n' "$panes_output" | wc -l | tr -d ' ')" -eq 3 ]]; then
-    pass "$case_name: control window has exactly 3 panes"
+    pass "$case_name: mill window has exactly 3 panes"
   else
-    fail "$case_name: control window does not have exactly 3 panes"
+    fail "$case_name: mill window does not have exactly 3 panes"
   fi
 
   if [[ "$left_zero_count" -eq 2 ]]; then
@@ -370,9 +371,9 @@ run_layout_case() {
   fi
 
   if [[ -n "$top_left" ]]; then
-    pass "$case_name: control pane is at left=0 top=0"
+    pass "$case_name: mill pane is at left=0 top=0"
   else
-    fail "$case_name: missing top-left control pane"
+    fail "$case_name: missing top-left mill pane"
   fi
 
   if [[ -n "$bottom_left" ]]; then
@@ -407,9 +408,9 @@ run_layout_case() {
   assert_contains "$dashboard_capture" "$dashboard_marker" "$case_name: dashboard pane shows task table content"
   assert_contains "$log_capture" "Wavemill Status Log" "$case_name: log pane shows the status log header"
   if [[ "$control_capture" == *"$control_marker"* || "$control_capture" == *"mill>"* ]]; then
-    pass "$case_name: control pane shows startup text"
+    pass "$case_name: mill pane shows startup text"
   else
-    fail "$case_name: control pane shows startup text"
+    fail "$case_name: mill pane shows startup text"
   fi
 
   tmux kill-session -t "$TEST_SESSION"

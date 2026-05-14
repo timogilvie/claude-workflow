@@ -1,7 +1,7 @@
 # Router
 
-**Last updated:** 2026-05-01T00:00:00.000Z
-**Files touched:** 5 files in last 30 days
+**Last updated:** 2026-05-13T00:00:00.000Z
+**Files touched:** 7 files in last 30 days
 
 ## Purpose
 
@@ -62,6 +62,16 @@ This is a normal-mode policy adjustment, not degraded routing. `workflow-router.
 
 Individual command behavior now changes based on operating mode. In `constrained` mode, routing restricts to sonnet/haiku candidates and skips LLM-based difficulty classification. In `survival` mode, routing uses haiku only and relies on stage-aware KNN signals instead of open-ended LLM reasoning.
 
+## Capability Filtering
+
+Capability-aware filtering is an opt-in Layer 3 refinement behind `router.capabilityFiltering.enabled`.
+
+- It only applies inside policy/stage-aware candidate filtering after provider availability, quota state, difficulty floors, and other policy guards have already run.
+- It never overrides an explicit pinned selector resolution path in `model-registry.ts`.
+- The active constraint shape is derived from `ModelCapabilities` metadata and currently supports `minContextWindow`, `requiresTools`, `requiresMultimodal`, and `maxLatencyTier`.
+- Missing capability metadata fails closed only for the field being checked. Empty or omitted constraints are treated as satisfied.
+- If capability filtering removes every otherwise-viable candidate for a role/stage, routing falls back to the unfiltered viable pool and records `capability-filter-empty-fallback` reasoning rather than failing the route outright.
+
 ## Expanded Packet Reroute
 
 Expanded-packet reroute now reuses the same `routeBatch()` pipeline as bootstrap routing:
@@ -121,6 +131,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Treat constrained and survival as aggregate-across-frontier states, not single-model triggers
 - Prefer a healthy frontier sibling over non-frontier fallbacks when the top-of-ladder frontier is degrading in normal mode
 - Respect `modelsAvailable` option in routing functions to allow test injection
+- Keep capability-aware filtering inside Layer 3 policy/stage-aware candidate selection and behind `router.capabilityFiltering.enabled`
 - Skip LLM-based difficulty classification in constrained and survival modes
 - Fall back to full model pool if no degraded candidates exist (with warning)
 - Register agent configurations and DSPy artifacts as resources when they are used in routing decisions
@@ -135,6 +146,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Skip cross-frontier substitution and fall back to non-frontier models while a healthy frontier sibling is available
 - Use frontier models (opus) in constrained or survival mode
 - Use LLM reasoning for candidate selection in degraded modes
+- Let capability constraints override explicit pinned model selector resolution
 - Assume model registry will have preferred classes available
 - Overwrite `.initial-route.json` after bootstrap routing has been persisted
 
@@ -147,6 +159,8 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 | A non-frontier model is selected while a healthy frontier sibling is available | Frontier-sibling substitution was skipped, or `below-frontier-substitute` exclusions were not applied | Verify `findHealthyFrontierSibling()` can see the current quota snapshot and `resolveModel()` is excluding non-frontier candidates in the mixed-frontier path |
 | No policy-adjustment line appears for a frontier-to-frontier swap | The route never passed through `logPolicyAdjustment()` or `logFinalFrontierSubstitution()` for that path | Confirm routing stayed out of degraded mode and note that `routingMode === 'policy'` intentionally skips the final frontier-substitution log |
 | `heuristic-fallback, neighbors=0` appears in degraded mode despite populated `evals.jsonl` | The degraded `modelsAvailable` allowlist filters every k-nearest neighbor before stage selection, so `routeStageAware()` returns `null` and the caller reports zero neighbors | Retry `rankModelsPerStage()` without model constraints when filtering caused the null, return `stage-aware-partial`, and let the caller overlay degraded model selection while preserving the real neighbor count |
+| Capability-aware routing appears ignored | `router.capabilityFiltering.enabled` is unset/false, so capability constraints are not applied | Enable `router.capabilityFiltering.enabled` and verify the route went through Layer 3 policy or stage-aware selection instead of explicit pinned resolution |
+| Capability-aware route falls back unexpectedly | Every in-pool candidate failed one or more capability checks, so the empty-filter fallback restored the unfiltered viable pool | Inspect decision reasoning for `capability-filter-empty-fallback` and either loosen the task constraints or expand the configured model pool |
 | Route artifacts are missing provenance or still marked as cache/live incorrectly | Route JSON write sites did not stamp or refresh `provenance` fields on reuse | Ensure route persistence paths always write/merge `provenance` and refresh source on cache recovery |
 | Rubric-aware mode is enabled but scalar routing still wins | Rubric coverage in the nearest-neighbor window is below `router.rubricAware.minCoverage` | Check decision reasoning for `rubric-aware fallback`; lower `minCoverage` only after validating mixed-dataset behavior |
 
@@ -182,6 +196,10 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 ### 2026-05-01T00:00:00.000Z - HOK-1514: Batch and cache expanded reroute
 **Changed:** Expanded reroute now routes approved task packets through a shared batch path, persists decisions in `.wavemill/state/expanded-route-cache.json`, and tags expanded artifacts with `cache_hit`, `route_source`, and `packet_hash`.
 **Impact:** Multi-task planning-to-coding handoffs avoid repeated config/eval loads where batching is possible, unchanged packets skip reroute safely on resume/retry, and operators can distinguish cache hits from fresh expanded routing in logs and artifacts.
+
+### 2026-05-13T00:00:00.000Z - HOK-1638: Capability-aware Layer 3 filtering
+**Changed:** Policy and stage-aware routing can now honor context-window, tooling, multimodal, and latency constraints derived from task metadata when `router.capabilityFiltering.enabled` is true. The router applies those checks only inside Layer 3 candidate filtering and falls back to the unfiltered viable pool when every candidate is excluded.
+**Impact:** Task-specific capability requirements can influence family-ladder selection without breaking explicit pinned resolution or making routes impossible when capability metadata is incomplete or overly restrictive.
 
 ### 2026-04-27T00:00:00.000Z - HOK-1410: Rubric-aware stage labels in stage-aware routing
 **Changed:** Stage-aware routing can now blend per-record rubric mean scores with scalar stage scores behind `router.rubricAware`. The default remains `off`; `shadow` records a side-channel decision while preserving scalar routing, and `on` uses rubric-aware scoring when nearest-neighbor coverage meets the configured threshold.

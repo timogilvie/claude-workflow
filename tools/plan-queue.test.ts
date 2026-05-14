@@ -11,11 +11,11 @@ const repoDir = resolve(__dirname, '..');
 const planQueueTool = resolve(__dirname, 'plan-queue.ts');
 const fixture = resolve(repoDir, 'fixtures/plan-queue/backlog-basic.json');
 
-function runPlanQueue(args: string[], input?: string, cwd = repoDir) {
+function runPlanQueue(args: string[], input?: string, cwd = repoDir, env: NodeJS.ProcessEnv = {}) {
   return spawnSync('npx', ['tsx', planQueueTool, ...args], {
     cwd,
     encoding: 'utf-8',
-    env: { ...process.env },
+    env: { ...process.env, ...env },
     input,
   });
 }
@@ -186,6 +186,38 @@ describe('plan-queue CLI', () => {
       assert.equal(result.status, 0);
       assert.equal(existsSync(join(tempDir, '.wavemill', 'cache', 'task-dependency-plans', 'disabled-test.json')), false);
       assert.doesNotMatch(result.stderr, /cache: hits=/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads queue-analysis prompt from wavemill root when cwd is a target repo', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'plan-queue-prompt-root-test-'));
+    try {
+      const backlogPath = join(tempDir, 'backlog.json');
+      writeFileSync(
+        backlogPath,
+        `${JSON.stringify(
+          [
+            { id: 'HOK-1', title: 'First', state: 'Todo', labels: [], blocks: [] },
+            { id: 'HOK-2', title: 'Second', state: 'Todo', labels: [], blocks: [] },
+          ],
+          null,
+          2,
+        )}\n`,
+        'utf8',
+      );
+
+      const result = runPlanQueue(
+        ['--backlog-file', backlogPath, '--cache-key', 'prompt-root', '--refresh-missing-cache', '--json'],
+        undefined,
+        tempDir,
+        { CLAUDE_CMD: '/definitely/missing/claude' },
+      );
+
+      assert.equal(result.status, 0);
+      assert.doesNotThrow(() => parseJson(result.stdout));
+      assert.doesNotMatch(result.stderr, /ENOENT: no such file or directory, open 'tools\/prompts\/queue-analysis\.md'/);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

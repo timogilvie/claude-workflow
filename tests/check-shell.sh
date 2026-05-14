@@ -32,7 +32,15 @@ for f in \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
   "$REPO_DIR"/tests/project-context-suggestion.test.sh \
+  "$REPO_DIR"/tests/wavemill-usage-tips.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
+  "$REPO_DIR"/tests/wavemill-mill-advance.test.sh \
+  "$REPO_DIR"/tests/wavemill-backlog-budget.test.sh \
+  "$REPO_DIR"/tests/wavemill-dependency-queue-filter.test.sh \
+  "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
+  "$REPO_DIR"/tests/wavemill-mill-model-flags.test.sh \
+  "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
+  "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -92,6 +100,30 @@ else
 fi
 
 echo ""
+echo "=== Backlog Budget ==="
+
+backlog_budget_output="$(bash "$REPO_DIR/tests/wavemill-backlog-budget.test.sh" 2>&1)" || backlog_budget_status=$?
+backlog_budget_status="${backlog_budget_status:-0}"
+if [[ "$backlog_budget_status" -eq 0 ]]; then
+  pass "backlog budget rendering behavior"
+else
+  fail "backlog budget rendering behavior: $backlog_budget_output"
+fi
+unset backlog_budget_status
+
+echo ""
+echo "=== Dependency Queue Filter ==="
+
+dependency_queue_output="$(bash "$REPO_DIR/tests/wavemill-dependency-queue-filter.test.sh" 2>&1)" || dependency_queue_status=$?
+dependency_queue_status="${dependency_queue_status:-0}"
+if [[ "$dependency_queue_status" -eq 0 ]]; then
+  pass "dependency queue filter behavior"
+else
+  fail "dependency queue filter behavior: $dependency_queue_output"
+fi
+unset dependency_queue_status
+
+echo ""
 echo "=== Dependent Launch ==="
 
 dependent_launch_output="$(bash "$REPO_DIR/tests/wavemill-dependent-launch.test.sh" 2>&1)" || dependent_launch_status=$?
@@ -126,6 +158,18 @@ else
   fail "project context suggestion lifecycle: $project_context_suggestion_output"
 fi
 unset project_context_suggestion_status
+
+echo ""
+echo "=== Background Jobs Cleanup ==="
+
+background_jobs_cleanup_output="$(bash "$REPO_DIR/tests/wavemill-background-jobs-cleanup.test.sh" 2>&1)" || background_jobs_cleanup_status=$?
+background_jobs_cleanup_status="${background_jobs_cleanup_status:-0}"
+if [[ "$background_jobs_cleanup_status" -eq 0 ]]; then
+  pass "background jobs cleanup lifecycle"
+else
+  fail "background jobs cleanup lifecycle: $background_jobs_cleanup_output"
+fi
+unset background_jobs_cleanup_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check
@@ -212,6 +256,7 @@ else
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
       | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling|tostring)$' \
       | grep -vE '^(bad|internal|marking|rate|reduce|service|timed|too|using|wavemill|waiting)$' \
+      | grep -vE '^(advance|review)$' \
       | grep -vE '^(a|already|available|blocked_by_count|break|coding|cp|debug|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
 
     # Check which called names look like they could be custom functions
@@ -243,6 +288,7 @@ else
       launch_task is_task_packet
       cleanup_dashboard_pane
       save_migration_reservation
+      run_linear_retry_drain_tick
     )
 
     for func in "${CRITICAL_FUNCTIONS[@]}"; do
@@ -554,6 +600,14 @@ else
     in_fn { print }
     in_fn && /^\}/ { exit }
   ' <<< "$HEREDOC_CONTENT")
+  if grep -qF 'READY_STALE_MERGE_LANE_LOG_KEYS' <<< "$HEREDOC_CONTENT" \
+    && grep -qE '^log_ready_stale_merge_lane_once\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && grep -qF 'log_ready_stale_merge_lane_once "$ISSUE" "$PR" "$stored_base_sha" "$current_main_sha"' <<< "$MONITOR_ISSUE_BLOCK"; then
+    pass "monitor de-duplicates stale ready merge-lane notices"
+  else
+    fail "monitor can repeatedly log stale ready merge-lane notices"
+  fi
+
   # HOK-1194: Phase resolution refactored to use resolve_phase() with controller-owned state priority
   RESOLVE_PHASE_LINE=$(grep -Fn 'resolved_phase=$(resolve_phase "$FEATURE_DIR")' <<< "$MONITOR_ISSUE_BLOCK" | head -n1 | cut -d: -f1 || true)
   PANE_EARLY_RETURN_LINE=$(grep -n 'Not completed externally - keep controller-owned running stages active' <<< "$MONITOR_ISSUE_BLOCK" | head -n1 | cut -d: -f1 || true)
@@ -575,11 +629,13 @@ else
   fi
 
   if grep -qE '^validate_planning_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && grep -qE '^handle_planning_overreach_rejection\(\) \{' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.claude/settings.local.json) ;;' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' <<< "$MONITOR_ISSUE_BLOCK" \
-    && grep -Fq 'Planning phase modified source code, reverted changes and blocked transition' <<< "$MONITOR_ISSUE_BLOCK" \
-    && grep -Fq 'write_stage_result "$FEATURE_DIR" "planning" "awaiting_user"' <<< "$MONITOR_ISSUE_BLOCK"; then
+    && grep -Fq 'handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq '.planning-rejected.json' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq 'write_stage_result "$feature_dir" "planning" "awaiting_user"' <<< "$HEREDOC_CONTENT"; then
     pass "monitor validates planning output before coding transition"
   else
     fail "monitor is missing planning phase-boundary validation"
@@ -961,22 +1017,22 @@ else
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
-  && grep -q 'split-window -t "\$SESSION:control.0" -h -f -p 50' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'split-window -t "\$SESSION:control.0" -v -p 65' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'respawn-pane -k -t "\$SESSION:control.1" .*\$status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'respawn-pane -k -t "\$SESSION:control.2" .*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
-  pass "startup runner builds task, dashboard, and log control panes"
+  && grep -q 'split-window -t "\$SESSION:\$WAVEMILL_WINDOW_MILL.0" -h -f -p 50' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'split-window -t "\$SESSION:\$WAVEMILL_WINDOW_MILL.0" -v -p 65' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\$SESSION:\$WAVEMILL_WINDOW_MILL.1" .*\$status_script' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'respawn-pane -k -t "\$SESSION:\$WAVEMILL_WINDOW_MILL.2" .*tail -n 200 -f' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  pass "startup runner builds task, dashboard, and log mill panes"
 else
-  fail "startup runner is missing the 3-pane control layout wiring"
+  fail "startup runner is missing the 3-pane mill layout wiring"
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
   && grep -q 'WAVEMILL_SESSION=' "$LIB_DIR/wavemill-startup-runner.sh" \
   && grep -q 'wavemill-input-reader.sh' "$LIB_DIR/wavemill-startup-runner.sh" \
   && grep -q '</dev/null &' "$LIB_DIR/wavemill-startup-runner.sh"; then
-  pass "control.0 launches monitor non-interactively plus input reader"
+  pass "mill.0 launches monitor non-interactively plus input reader"
 else
-  fail "control.0 does not launch the monitor/input-reader wrapper"
+  fail "mill.0 does not launch the monitor/input-reader wrapper"
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
@@ -1134,20 +1190,24 @@ fi
 
 PROMPT_RENDER_DIR=$(mktemp -d)
 trap 'rm -rf "$PROMPT_RENDER_DIR"' EXIT
+ORIGINAL_PATH="$PATH"
 
 source "$LIB_DIR/agent-adapters.sh"
 
-PATH="/usr/bin:/bin" build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
-  "Issue Description:
+(
+  PATH="/usr/bin:/bin" build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
+    "Issue Description:
 Test
 " "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "medium" "codex" \
-  > "$PROMPT_RENDER_DIR/planning-no-npx.txt" \
-  2> "$PROMPT_RENDER_DIR/planning-no-npx.err"
+    > "$PROMPT_RENDER_DIR/planning-no-npx.txt" \
+    2> "$PROMPT_RENDER_DIR/planning-no-npx.err"
+)
 if grep -q 'Failed to resolve planner runtime resource' "$PROMPT_RENDER_DIR/planning-no-npx.err"; then
   fail "baseline planning prompt render should not require npx runtime resolver"
 else
   pass "baseline planning prompt render skips runtime resolver when selection is disabled"
 fi
+PATH="$ORIGINAL_PATH"
 
 build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
   "Issue Description:
@@ -1310,6 +1370,14 @@ else
   fail "review prompt metadata block does not include issue ID"
 fi
 
+if grep -q '## Routing' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'routing.jsonl' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q "$REPO_DIR/features/test-slug/routing.jsonl" "$PROMPT_RENDER_DIR/review-claude.txt"; then
+  pass "review prompt includes routing.jsonl guidance"
+else
+  fail "review prompt is missing routing.jsonl guidance"
+fi
+
 if grep -q 'label "wavemill"' "$PROMPT_RENDER_DIR/review-claude.txt" \
   && grep -q 'label "wavemill"' "$PROMPT_RENDER_DIR/review-codex.txt"; then
   pass "review prompt instructs adding wavemill label"
@@ -1420,7 +1488,7 @@ for captured in "${TMUX_CAPTURE[@]}"; do
 done
 
 if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
-  && grep -q 'codex --model gpt-5.4 --dangerously-bypass-approvals-and-sandbox --no-alt-screen "\$(cat ' "$CODEX_LAUNCHER_PATH"; then
+  && grep -q 'codex\( --model gpt-5\.4\)\? --dangerously-bypass-approvals-and-sandbox --no-alt-screen "\$(cat ' "$CODEX_LAUNCHER_PATH"; then
   pass "interactive Codex launcher uses interactive codex with bypass flag"
 else
   fail "interactive Codex launcher is missing interactive codex flags"
@@ -1648,7 +1716,7 @@ if [[ ! -f "$MILL_SCRIPT" ]]; then
   fail "wavemill-mill.sh not found for log filtering checks"
 else
   if ! grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT" \
-    && grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" \
+    && (grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" || grep -Fq '_task_frame="Next tasks:"' "$MILL_SCRIPT") \
     && grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT" \
     && ! grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" \
     && ! grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT"; then
@@ -2357,11 +2425,28 @@ EOF
     fail "mill session setup is missing the next done keybinding"
   fi
 
-  if grep -q "Ctrl+B <PANE>: switch task" "$REPO_DIR/shared/lib/wavemill-status.sh" \
-    && grep -q "Ctrl+B N: next done" "$REPO_DIR/shared/lib/wavemill-status.sh"; then
-    pass "dashboard footer advertises pane switching and next done keybindings"
+  if grep -q '^declare -a WAVEMILL_USAGE_TIPS=' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+    pass "wavemill-common.sh defines shared usage tip array"
   else
-    fail "dashboard footer is missing pane switching or next done hint"
+    fail "wavemill-common.sh is missing shared usage tip array"
+  fi
+
+  if grep -q '^wavemill_pick_usage_tip()' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+    pass "wavemill-common.sh defines usage tip picker"
+  else
+    fail "wavemill-common.sh is missing usage tip picker"
+  fi
+
+  if grep -q 'wavemill_pick_usage_tip' "$REPO_DIR/shared/lib/wavemill-status.sh"; then
+    pass "dashboard footer uses shared usage tip picker"
+  else
+    fail "dashboard footer is missing shared usage tip picker call"
+  fi
+
+  if grep -q 'Ctrl+B N: next done' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+    pass "usage tip source preserves next done discoverability"
+  else
+    fail "usage tip source is missing next done discoverability"
   fi
 fi
 
@@ -2600,6 +2685,19 @@ else
   fail "routing retry logging is missing"
 fi
 
+if grep -q 'source \"\$script_dir/routing-emitter.sh\"' "$REPO_DIR/shared/lib/agent-adapters.sh" \
+  && grep -q 'routing_emit_phase' "$REPO_DIR/shared/lib/agent-adapters.sh"; then
+  pass "agent adapter wires routing emission helper"
+else
+  fail "agent adapter routing emission wiring is missing"
+fi
+
+if grep -q 'wavemill_hook_write_routing' "$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh"; then
+  pass "hook protocol exposes routing writer"
+else
+  fail "hook protocol routing writer is missing"
+fi
+
 # ============================================================================
 # TEST 13: Integration window lifecycle fixtures
 # ============================================================================
@@ -2825,6 +2923,18 @@ if grep -qE '^render_monitor_command_queue_section\(\) \{' "$STATUS_SCRIPT" 2>/d
 else
   fail "wavemill-status.sh is missing render_monitor_command_queue_section"
 fi
+
+echo ""
+echo "=== Advance Command ==="
+
+advance_command_output="$(bash "$REPO_DIR/tests/wavemill-mill-advance.test.sh" 2>&1)" || advance_command_status=$?
+advance_command_status="${advance_command_status:-0}"
+if [[ "$advance_command_status" -eq 0 ]]; then
+  pass "advance command lifecycle"
+else
+  fail "advance command lifecycle: $advance_command_output"
+fi
+unset advance_command_status
 
 # ============================================================================
 # RESULTS

@@ -40,6 +40,15 @@ ${GREEN}Commands:${NC}
              - Continuously prompts for next batch
              Options:
                ${CYAN}--agent <name>${NC}  Agent CLI to use (claude, codex, ...)
+               ${CYAN}--model <selector>${NC}
+                               Override all stage models with a family alias,
+                               ${CYAN}inherit${NC}, or a pinned model ID
+               ${CYAN}--planner-model <selector>${NC}
+                               Override only the planning-stage model
+               ${CYAN}--coder-model <selector>${NC}
+                               Override only the coding-stage model
+               ${CYAN}--reviewer-model <selector>${NC}
+                               Override only the review-stage model
                ${CYAN}--no-progress${NC}   Use legacy startup status lines
                ${CYAN}--dry-run${NC}       Build a launch plan without tmux or agents
                ${CYAN}--dry-run-backlog <file>${NC}
@@ -448,7 +457,7 @@ run_init() {
   # Create config file
   cat > "$target" <<'INIT_EOF'
 {
-  "configVersion": "1.3.0",
+  "configVersion": "1.4.0",
   "linear": {
     "project": ""
   },
@@ -901,12 +910,84 @@ case "${1:-}" in
     run_preflight_checks
     shift
     # Parse mill-specific flags before delegating
+    mill_force_model=""
+    mill_planner_model=""
+    mill_coder_model=""
+    mill_reviewer_model=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --help|-h)
+          show_help
+          exit 0
+          ;;
         --agent)
           export AGENT_CMD="$2"
           export AGENT_CMD_EXPLICIT=true
           shift 2
+          ;;
+        --model)
+          if [[ $# -lt 2 || -z "${2}" ]]; then
+            echo -e "${RED}Error:${NC} --model requires a value" >&2
+            exit 1
+          fi
+          mill_force_model="$2"
+          shift 2
+          ;;
+        --model=*)
+          if [[ -z "${1#*=}" ]]; then
+            echo -e "${RED}Error:${NC} --model requires a value" >&2
+            exit 1
+          fi
+          mill_force_model="${1#*=}"
+          shift
+          ;;
+        --planner-model)
+          if [[ $# -lt 2 || -z "${2}" ]]; then
+            echo -e "${RED}Error:${NC} --planner-model requires a value" >&2
+            exit 1
+          fi
+          mill_planner_model="$2"
+          shift 2
+          ;;
+        --planner-model=*)
+          if [[ -z "${1#*=}" ]]; then
+            echo -e "${RED}Error:${NC} --planner-model requires a value" >&2
+            exit 1
+          fi
+          mill_planner_model="${1#*=}"
+          shift
+          ;;
+        --coder-model)
+          if [[ $# -lt 2 || -z "${2}" ]]; then
+            echo -e "${RED}Error:${NC} --coder-model requires a value" >&2
+            exit 1
+          fi
+          mill_coder_model="$2"
+          shift 2
+          ;;
+        --coder-model=*)
+          if [[ -z "${1#*=}" ]]; then
+            echo -e "${RED}Error:${NC} --coder-model requires a value" >&2
+            exit 1
+          fi
+          mill_coder_model="${1#*=}"
+          shift
+          ;;
+        --reviewer-model)
+          if [[ $# -lt 2 || -z "${2}" ]]; then
+            echo -e "${RED}Error:${NC} --reviewer-model requires a value" >&2
+            exit 1
+          fi
+          mill_reviewer_model="$2"
+          shift 2
+          ;;
+        --reviewer-model=*)
+          if [[ -z "${1#*=}" ]]; then
+            echo -e "${RED}Error:${NC} --reviewer-model requires a value" >&2
+            exit 1
+          fi
+          mill_reviewer_model="${1#*=}"
+          shift
           ;;
         --no-progress)
           export WAVEMILL_NO_PROGRESS=1
@@ -938,6 +1019,14 @@ case "${1:-}" in
           ;;
       esac
     done
+    if [[ -n "$mill_force_model" ]] && [[ -n "$mill_planner_model$mill_coder_model$mill_reviewer_model" ]]; then
+      echo -e "${RED}Error:${NC} --model cannot be combined with --planner-model, --coder-model, or --reviewer-model" >&2
+      exit 1
+    fi
+    [[ -n "$mill_force_model" ]] && export FORCE_MODEL="$mill_force_model"
+    [[ -n "$mill_planner_model" ]] && export WAVEMILL_PLANNER_MODEL="$mill_planner_model"
+    [[ -n "$mill_coder_model" ]] && export WAVEMILL_CODER_MODEL="$mill_coder_model"
+    [[ -n "$mill_reviewer_model" ]] && export WAVEMILL_REVIEWER_MODEL="$mill_reviewer_model"
     run_mill "$@"
     ;;
   expand)

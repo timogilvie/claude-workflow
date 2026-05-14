@@ -76,16 +76,35 @@
  * - **1.23.0**: Added optional `routePrediction` and `routeCalibration`
  *   fields plus router calibration diagnostics (HOK-1553) so eval artifacts
  *   can compare router expectations to actual workflow outcomes
+ * - **1.24.0**: Added optional `routing` role-level resolved-model decisions
+ *   (HOK-1632) for planner/coder/reviewer launch attribution
+ * - **1.24.0**: Added optional `failureReason` and `promptSizeDiagnostic`
+ *   fields so oversized eval prompts can fail fast before judge invocation
+ *   with component byte-size diagnostics.
  *
  * @module eval-schema
  */
 
 import type { ModelPricing } from './workflow-cost.ts';
-import type { RegistryTaskType } from './model-registry.ts';
+import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.23.0';
+export const SCHEMA_VERSION = '1.24.0';
+
+export type RoutingRole = 'planner' | 'coder' | 'reviewer';
+
+export interface ResolvedModelRoutingDecision {
+  role: RoutingRole;
+  requestedSelector: ModelSelector;
+  resolvedModelId: string;
+  sourceLayer: string;
+  resolutionSource?: string;
+  fallbackReason?: string;
+  timestamp?: string;
+}
+
+export type EvalRouting = Partial<Record<RoutingRole, ResolvedModelRoutingDecision>>;
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -257,6 +276,34 @@ export type EligibilityErrorCode =
   | 'missing_outcome'
   | 'missing_task_descriptor'
   | 'missing_model_identity';
+
+export type EvalFailureReason = 'eval_prompt_too_large';
+
+export type EvalPromptComponentName =
+  | 'taskPrompt'
+  | 'prReviewOutput'
+  | 'interventionMetadata'
+  | 'taskPacket'
+  | 'planContent'
+  | 'selfReviewSummary'
+  | 'templateScaffold';
+
+export type EvalOversizePolicy = 'fail' | 'truncate';
+export type PromptSizeAction = 'pass' | 'truncated' | 'rejected';
+
+export interface PromptSizeDiagnostic {
+  totalBytes: number;
+  limitBytes: number;
+  perComponentBytes: Record<EvalPromptComponentName, number>;
+  policy: EvalOversizePolicy;
+  action: PromptSizeAction;
+  truncatedComponents?: {
+    name: EvalPromptComponentName;
+    originalBytes: number;
+    finalBytes: number;
+    removedBytes: number;
+  }[];
+}
 
 export const BUDGET_MISSING: EligibilityErrorCode = 'missing_budget';
 
@@ -937,6 +984,13 @@ export interface DescriptorConstraints {
   models_available: string[];
   /** Routing objective (maximize success, minimize cost, or balanced) */
   objective: 'max_success' | 'min_cost' | 'balanced';
+  /** Optional capability-aware routing constraints */
+  capability_constraints?: {
+    minContextWindow?: number;
+    requiresTools?: boolean;
+    requiresMultimodal?: boolean;
+    maxLatencyTier?: 'fast' | 'standard' | 'slow';
+  };
 }
 
 /**
@@ -1291,6 +1345,12 @@ export interface EvalRecord {
     message: string;
   };
 
+  /** Stable machine-readable eval failure reason for fast-fail records. */
+  failureReason?: EvalFailureReason;
+
+  /** Byte-size diagnostic for the eval prompt submitted or rejected. */
+  promptSizeDiagnostic?: PromptSizeDiagnostic;
+
   /** Per-model token usage breakdown from the workflow sessions */
   workflowTokenUsage?: Record<
     string,
@@ -1344,6 +1404,8 @@ export interface EvalRecord {
 
   /** Routing decision metadata (required if training routing models) */
   routingDecision?: RoutingDecision;
+  /** Resolved-model routing decisions for planner/coder/reviewer launches. */
+  routing?: EvalRouting;
 
   /**
    * Prompt artifacts used during workflow execution.

@@ -13,11 +13,13 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 
 ## Registry
 
-- `shared/lib/agent-adapters.sh`: `agent_launch_autonomous()` and `agent_launch_interactive()` define how mill mode launches agents in autonomous vs phase-launch flows. Codex launchers should use `codex exec ... --dangerously-bypass-approvals-and-sandbox - < prompt_file`, while Claude keeps its interactive CLI path. Active phase prompts are `build_planning_prompt`, `build_coding_prompt`, and `build_review_prompt`; `build_planning_prompt` and `build_review_prompt` call `tools/resolve-runtime-resource.ts` before loading prompt content while `build_coding_prompt` still reads `tools/prompts/coding-phase.md` directly. `build_autonomous_prompt` has been removed; `build_routing_prompt` and `build_interactive_prompt` remain legacy test-only render paths.
+- `shared/lib/agent-adapters.sh`: `agent_launch_autonomous()` and `agent_launch_interactive()` define how mill mode launches agents in autonomous vs phase-launch flows. Codex launchers should use `codex exec ... --dangerously-bypass-approvals-and-sandbox - < prompt_file`, while Claude keeps its interactive CLI path. Active phase prompts are `build_planning_prompt`, `build_coding_prompt`, and `build_review_prompt`; `build_planning_prompt` and `build_review_prompt` call `tools/resolve-runtime-resource.ts` before loading prompt content while `build_coding_prompt` still reads `tools/prompts/coding-phase.md` directly and appends the `.coding-blocked-completion.json` fallback guidance for coding-phase verification blockers. `build_autonomous_prompt` has been removed; `build_routing_prompt` and `build_interactive_prompt` remain legacy test-only render paths.
 - `tools/prompts/planning-phase.md`: Planning phase instructions (loaded by `build_planning_prompt`). GEPA-optimizable.
 - `tools/prompts/coding-phase.md`: Coding phase instructions (loaded by `build_coding_prompt`). GEPA-optimizable.
 - `tools/prompts/review-phase.md`: Review phase instructions (loaded by `build_review_prompt`). GEPA-optimizable.
 - `tools/resolve-runtime-resource.ts`: Shell-safe runtime resolver for planner/reviewer prompt content plus selection metadata.
+- `shared/lib/blocked-completion.ts`: Shared validation/read helper for the coding blocked-completion artifact contract.
+- `shared/schemas/blocked-completion.schema.json`: JSON Schema mirror for `.coding-blocked-completion.json`.
 - `tools/prompts/review-general.md`: Default general-purpose review persona prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `shared/lib/review-engine.ts` in normal operating mode).
 - `tools/prompts/review-general-scoped.md`: Degraded-mode scoped review persona prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `shared/lib/review-engine.ts` when operating mode is `constrained` or `survival`).
 - `tools/prompts/initiative-planner.md`: Standard initiative decomposition prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `tools/plan-initiative.ts` via `shared/lib/plan-prompt-selector.ts`). Used when operating mode is `normal`. GEPA-optimizable.
@@ -30,6 +32,8 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 - `.wavemill-config.json`: Typed `policy` lookup role `wavemill-config`.
 - `commands/workflow.md`: Phase 4 defines the interactive `/workflow` self-review loop.
 - `commands/bugfix.md`: Phase 5 defines the bugfix self-review loop.
+- `commands/create-plan.md`: Phase 5 plan review must surface planner/coder/reviewer model routing via `shared/lib/model-resolution-display.ts` before approval.
+- `commands/plan.md`: Phase 5 verification must keep the plan-review routing block aligned with `/create-plan` when routing records are present.
 - `commands/implement-plan.md`: does not define self-review; that behavior is owned by `/workflow`.
 - `shared/lib/wavemill-startup-runner.sh`: active startup launch path used by `wavemill-mill.sh` to enter planning.
 - `docs/routing-contract.md`: bootstrap, expanded, and authoritative execution route lifecycle for mill-mode routing.

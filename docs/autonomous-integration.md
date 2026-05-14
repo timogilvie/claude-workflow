@@ -82,7 +82,7 @@ Set `mill.baseBranch` to the same branch as `integration.integrationBranch`. Tha
 - `tend` merges at most one eligible PR into `auto/integration` per pass.
 - `promote` opens or refreshes the `auto/integration -> main` promotion PR.
 
-When `integration.useMillSession = true`, the tend loop runs in the `integration` tmux window inside the existing mill session.
+When `integration.useMillSession = true`, the tend loop runs in the `backstage` tmux window inside the existing mill session.
 
 ## Branch Protection
 

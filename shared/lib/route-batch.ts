@@ -9,6 +9,8 @@ import {
   type ExpandedPacketFiles,
 } from './expanded-route-cache.ts';
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
+import { resolveEffectiveModel } from './model-resolution.ts';
+import { readQuotaSnapshot } from './quota-state.ts';
 import {
   buildRouteProvenance,
   withExpandedRouteMetadata,
@@ -36,6 +38,9 @@ export interface RouteBatchTask {
   file?: string;
   source?: RouteSource;
   inputKind?: RouteInputKind;
+  modelSelector?: string;
+  parentResolvedModel?: string;
+  workspaceSelector?: string;
 }
 
 export interface RouteBatchPlanTask {
@@ -43,6 +48,8 @@ export interface RouteBatchPlanTask {
   issueId?: string;
   taskPacketFile?: string;
   prompt?: string;
+  model?: string;
+  parentResolvedModel?: string;
 }
 
 export interface RouteBatchOptions extends RouteWorkflowOptions {
@@ -51,6 +58,7 @@ export interface RouteBatchOptions extends RouteWorkflowOptions {
   operatingMode?: OperatingMode;
   source?: RouteSource;
   inputKind?: RouteInputKind;
+  parentResolvedModel?: string;
 }
 
 export interface RouteBatchResult {
@@ -77,7 +85,7 @@ export interface ExpandedRouteTaskResult {
 
 export interface RouteExpandedPacketsOptions extends RouteBatchOptions {
   routeBatchImpl?: (
-    tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind }>,
+    tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind; modelSelector?: string; workspaceSelector?: string }>,
     options?: RouteBatchOptions,
   ) => Promise<RouteBatchResult[]>;
 }
@@ -112,6 +120,9 @@ export function resolveRouteBatchTask(task: {
   file?: string;
   source?: RouteSource;
   inputKind?: RouteInputKind;
+  modelSelector?: string;
+  parentResolvedModel?: string;
+  workspaceSelector?: string;
 }): RouteBatchTask {
   if (task.file) {
     return {
@@ -120,6 +131,9 @@ export function resolveRouteBatchTask(task: {
       prompt: readTaskPromptFromFile(task.file),
       source: task.source,
       inputKind: task.inputKind,
+      modelSelector: task.modelSelector,
+      parentResolvedModel: task.parentResolvedModel,
+      workspaceSelector: task.workspaceSelector,
     };
   }
 
@@ -129,6 +143,9 @@ export function resolveRouteBatchTask(task: {
       prompt: task.prompt,
       source: task.source,
       inputKind: task.inputKind,
+      modelSelector: task.modelSelector,
+      parentResolvedModel: task.parentResolvedModel,
+      workspaceSelector: task.workspaceSelector,
     };
   }
 
@@ -158,6 +175,9 @@ export function tasksFromPlan(plan: unknown): RouteBatchTask[] {
       file: planTask.taskPacketFile,
       source: 'expanded',
       inputKind: 'task-packet',
+      modelSelector: planTask.model,
+      parentResolvedModel: planTask.parentResolvedModel,
+      workspaceSelector: planTask.model,
     });
   });
 }
@@ -223,7 +243,7 @@ async function routeTaskInBatch(
 }
 
 export async function routeBatch(
-  tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind }>,
+  tasks: Array<{ issueId?: string; prompt?: string; file?: string; source?: RouteSource; inputKind?: RouteInputKind; modelSelector?: string; parentResolvedModel?: string; workspaceSelector?: string }>,
   options: RouteBatchOptions = {},
 ): Promise<RouteBatchResult[]> {
   const resolvedOptions = buildRouteBatchWorkflowOptions(options);
@@ -243,10 +263,27 @@ export async function routeBatch(
   const results: RouteBatchResult[] = [];
   for (const task of resolvedTasks) {
     const routedDecision = await routeTaskInBatch(task.prompt, resolvedOptions, operatingMode, stageAwareContext);
-    const decision = withResolvedRouteBudget(routedDecision, {
+    let decision = withResolvedRouteBudget(routedDecision, {
       explicitMaxCostUsd: resolvedOptions.maxCostUsd,
       repoDir,
     });
+    const requestedModelSelector = task.modelSelector ?? task.workspaceSelector;
+    if (requestedModelSelector) {
+      const resolvedModel = resolveEffectiveModel({
+        workspaceSelector: requestedModelSelector,
+        parentResolvedModelId: task.parentResolvedModel ?? resolvedOptions.parentResolvedModel,
+        policyContext: {
+          taskType: 'coding',
+          difficulty: 'moderate',
+          quotaState: readQuotaSnapshot(repoDir),
+          repoDir,
+        },
+      });
+      decision = {
+        ...decision,
+        coder: resolvedModel.resolved,
+      };
+    }
     const source = task.source
       || resolvedOptions.source
       || (mode === 'heuristic' ? 'heuristic-fallback' : task.file ? 'expanded' : 'live');
