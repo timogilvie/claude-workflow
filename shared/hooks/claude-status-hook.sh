@@ -34,14 +34,15 @@ case "$event" in
     wavemill_hook_write "error" "$event" "$detail" "claude"
     ;;
   Notification)
-    detail=$(printf '%s' "$payload" | jq -r '.notification_type // .notificationType // .type // empty' 2>/dev/null || true)
-    case "$detail" in
-      permission_prompt|idle_prompt)
-        wavemill_hook_write "waiting" "$event" "$detail" "claude"
-        ;;
-      *)
-        ;;
-    esac
+    # Claude Code SDK sends Notification events with a free-form `.message`
+    # field when the agent asks the user a clarifying question or otherwise
+    # blocks on input. Older payload shapes used `.notification_type` for
+    # permission_prompt/idle_prompt — preserve those as fallbacks so legacy
+    # writers keep working.
+    detail=$(printf '%s' "$payload" | jq -r '.message // .notification_type // .notificationType // .type // empty' 2>/dev/null || true)
+    detail="${detail:0:120}"
+    [[ -z "$detail" ]] && detail="awaiting user input"
+    wavemill_hook_write "waiting" "$event" "$detail" "claude"
     ;;
   *)
     ;;

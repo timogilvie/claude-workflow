@@ -41,6 +41,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-mill-model-flags.test.sh \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
+  "$REPO_DIR"/tests/notification-waiting.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -190,6 +191,18 @@ else
   fail "background jobs cleanup lifecycle: $background_jobs_cleanup_output"
 fi
 unset background_jobs_cleanup_status
+
+echo ""
+echo "=== Notification → waiting (Claude hook adapter) ==="
+
+notification_waiting_output="$(bash "$REPO_DIR/tests/notification-waiting.test.sh" 2>&1)" || notification_waiting_status=$?
+notification_waiting_status="${notification_waiting_status:-0}"
+if [[ "$notification_waiting_status" -eq 0 ]]; then
+  pass "Claude Notification events map to waiting state"
+else
+  fail "Claude Notification → waiting behavior: $notification_waiting_output"
+fi
+unset notification_waiting_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check
