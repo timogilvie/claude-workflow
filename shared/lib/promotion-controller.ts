@@ -20,6 +20,8 @@ export interface PromotionResult {
     | 'base-behind'
     | 'base-behind-conflicts'
     | 'base-unknown'
+    | 'integration-diverged'
+    | 'integration-unknown'
     | 'protected-integration-reconciliation-required'
     | 'promotion-head-update-failed';
   blockSummary?: string;
@@ -62,6 +64,22 @@ interface PromotionBaseState {
 interface BaseContainment {
   status: 'up-to-date' | 'behind';
 }
+
+interface IntegrationBranchState {
+  localRef: string;
+  remoteRef: string;
+  localTip: string;
+  remoteTip: string;
+  status: 'up-to-date' | 'fast-forwarded';
+}
+
+type IntegrationBranchValidationResult =
+  | { status: 'ready'; state: IntegrationBranchState }
+  | {
+    status: 'blocked';
+    blockReason: Extract<PromotionBlockReason, 'integration-diverged' | 'integration-unknown'>;
+    blockSummary: string;
+  };
 
 interface MergePrediction {
   status: 'clean' | 'conflicts' | 'unknown';
@@ -136,11 +154,33 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
           options.repoDir,
           shellRunner,
           { timeoutMs: 0, requiredChecks: integrationConfig.requiredChecks },
+      ))
+        : undefined,
+    });
+  }
+  const integrationRefresh = refreshIntegrationBranch({
+    integrationBranch,
+    repoDir: options.repoDir,
+    shellRunner,
+    dryRun: options.dryRun,
+  });
+  if (integrationRefresh.status === 'blocked') {
+    return buildBlockedPromotionResult({
+      blockReason: integrationRefresh.blockReason,
+      blockSummary: integrationRefresh.blockSummary,
+      prUrl: currentPr?.url,
+      checkSummary: currentPr
+        ? formatCheckSummary(await waitForChecks(
+          currentPr.number,
+          options.repoDir,
+          shellRunner,
+          { timeoutMs: 0, requiredChecks: integrationConfig.requiredChecks },
         ))
         : undefined,
     });
   }
-  let integrationTip = resolveBranchTip(integrationBranch, options.repoDir, shellRunner);
+  let integrationTip = integrationRefresh.state.localTip;
+  const expectedRemoteIntegrationTip = integrationRefresh.state.remoteTip;
   const promotionTip = promotionBase.tip;
   const promotionTree = resolveCommitTree(promotionTip, options.repoDir, shellRunner);
   const promotionTipIsIntegrated = isAncestor(promotionTip, integrationTip, options.repoDir, shellRunner);
@@ -241,6 +281,7 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
       effectiveHeadTip = applyIntegrationReconciliationPlan({
         plan: reconciliationPlan,
         integrationBranch,
+        expectedRemoteTip: expectedRemoteIntegrationTip,
         repoDir: options.repoDir,
         shellRunner,
         dryRun: options.dryRun,
@@ -434,6 +475,125 @@ function classifyBaseContainment(
     : { status: 'behind' };
 }
 
+function refreshIntegrationBranch(input: {
+  integrationBranch: string;
+  repoDir: string;
+  shellRunner: ShellRunner;
+  dryRun?: boolean;
+}): IntegrationBranchValidationResult {
+  const remoteRef = remoteBranchRef(input.integrationBranch);
+  const localRef = `refs/heads/${input.integrationBranch}`;
+
+  try {
+    input.shellRunner(
+      `git fetch --quiet origin ${escapeShellArg(input.integrationBranch)}`,
+      { encoding: 'utf-8', cwd: input.repoDir },
+    );
+  } catch (error) {
+    return {
+      status: 'blocked',
+      blockReason: 'integration-unknown',
+      blockSummary: `failed to fetch ${remoteRef}: ${errorMessage(error)}`,
+    };
+  }
+
+  let remoteTip: string;
+  let localTip: string;
+  try {
+    remoteTip = resolveBranchTip(remoteRef, input.repoDir, input.shellRunner);
+  } catch (error) {
+    return {
+      status: 'blocked',
+      blockReason: 'integration-unknown',
+      blockSummary: `unable to resolve remote integration ref ${remoteRef}: ${errorMessage(error)}`,
+    };
+  }
+
+  try {
+    localTip = resolveBranchTip(input.integrationBranch, input.repoDir, input.shellRunner);
+  } catch (error) {
+    return {
+      status: 'blocked',
+      blockReason: 'integration-unknown',
+      blockSummary: `unable to resolve local integration ref ${input.integrationBranch}: ${errorMessage(error)}`,
+    };
+  }
+
+  if (localTip === remoteTip) {
+    return {
+      status: 'ready',
+      state: {
+        localRef,
+        remoteRef,
+        localTip,
+        remoteTip,
+        status: 'up-to-date',
+      },
+    };
+  }
+
+  const localBehindRemote = isAncestor(localTip, remoteTip, input.repoDir, input.shellRunner);
+  const remoteBehindLocal = isAncestor(remoteTip, localTip, input.repoDir, input.shellRunner);
+
+  if (localBehindRemote && !remoteBehindLocal) {
+    if (input.dryRun) {
+      return {
+        status: 'blocked',
+        blockReason: 'integration-unknown',
+        blockSummary: formatIntegrationBranchNeedsUpdateSummary(
+          input.integrationBranch,
+          localTip,
+          remoteTip,
+          true,
+        ),
+      };
+    }
+
+    const currentBranch = resolveCurrentBranch(input.repoDir, input.shellRunner);
+    try {
+      if (currentBranch === input.integrationBranch) {
+        input.shellRunner(
+          `git merge --ff-only ${escapeShellArg(remoteRef)}`,
+          { encoding: 'utf-8', cwd: input.repoDir },
+        );
+      } else {
+        input.shellRunner(
+          `git update-ref ${escapeShellArg(localRef)} ${escapeShellArg(remoteTip)} ${escapeShellArg(localTip)}`,
+          { encoding: 'utf-8', cwd: input.repoDir },
+        );
+      }
+    } catch (error) {
+      return {
+        status: 'blocked',
+        blockReason: 'integration-unknown',
+        blockSummary: `failed to fast-forward local integration ref ${input.integrationBranch} from ${localTip} to ${remoteTip}: ${errorMessage(error)}`,
+      };
+    }
+
+    return {
+      status: 'ready',
+      state: {
+        localRef,
+        remoteRef,
+        localTip: remoteTip,
+        remoteTip,
+        status: 'fast-forwarded',
+      },
+    };
+  }
+
+  return {
+    status: 'blocked',
+    blockReason: 'integration-diverged',
+    blockSummary: formatIntegrationBranchNeedsUpdateSummary(
+      input.integrationBranch,
+      localTip,
+      remoteTip,
+      false,
+    ),
+  };
+}
+
 function isAlreadyPromoted(
   integrationTip: string,
   promotionBranch: string,
@@ -507,6 +667,7 @@ function buildSquashReconciliationPlan(input: {
 function applyIntegrationReconciliationPlan(input: {
   plan: SquashReconciliationPlan;
   integrationBranch: string;
+  expectedRemoteTip: string;
   repoDir: string;
   shellRunner: ShellRunner;
   dryRun?: boolean;
@@ -531,7 +692,7 @@ function applyIntegrationReconciliationPlan(input: {
     branchRef,
     localTipBeforePush: targetTip,
     restoreTip: input.plan.integrationTip,
-    expectedRemoteTip: input.plan.integrationTip,
+    expectedRemoteTip: input.expectedRemoteTip,
     repoDir: input.repoDir,
     shellRunner: input.shellRunner,
     integrationBranch: input.integrationBranch,
@@ -797,6 +958,21 @@ function updateIntegrationWithPromotionBase(
   }
 }
 
+function resolveCurrentBranch(
+  repoDir: string,
+  shellRunner: ShellRunner,
+): string | null {
+  try {
+    const branch = String(shellRunner(
+      'git symbolic-ref --quiet --short HEAD',
+      { encoding: 'utf-8', cwd: repoDir },
+    )).trim();
+    return branch || null;
+  } catch {
+    return null;
+  }
+}
+
 function formatBaseBehindPrompt(
   integrationBranch: string,
   promotionRemoteRef: string,
@@ -819,6 +995,29 @@ function formatBaseBehindSummary(
       : `unable to verify protected base ${promotionRemoteRef}`;
   }
   return `branch behind protected base; merge ${promotionRemoteRef} into ${integrationBranch} and push before promoting`;
+}
+
+function formatIntegrationBranchNeedsUpdateSummary(
+  integrationBranch: string,
+  localTip: string,
+  remoteTip: string,
+  needsFastForward: boolean,
+): string {
+  const remediation = `git fetch origin && git branch -f ${integrationBranch} origin/${integrationBranch}`;
+  if (needsFastForward) {
+    return [
+      `local integration branch ${integrationBranch} is behind origin/${integrationBranch}`,
+      `local=${localTip}`,
+      `remote=${remoteTip}`,
+      `update the local integration ref before promoting: ${remediation}`,
+    ].join('; ');
+  }
+  return [
+    `local integration branch ${integrationBranch} diverged from origin/${integrationBranch}`,
+    `local=${localTip}`,
+    `remote=${remoteTip}`,
+    `update or discard the local integration ref before promoting: ${remediation}`,
+  ].join('; ');
 }
 
 function buildBlockedPromotionResult(input: {
