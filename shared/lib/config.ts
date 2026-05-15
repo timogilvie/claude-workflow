@@ -317,6 +317,16 @@ export interface IntegrationConfig {
   readyPolicy?: IntegrationReadyPolicyConfig;
 }
 
+export type PromotionProtectedIntegrationStrategy =
+  | 'skip-reconciliation'
+  | 'block'
+  | 'use-promotion-head';
+
+export interface PromotionConfig {
+  protectedIntegrationStrategy: PromotionProtectedIntegrationStrategy;
+  promotionHeadBranch: string;
+}
+
 export interface IntegrationReadyPolicyConfig {
   enabled?: boolean;
   integrationBranch?: string;
@@ -474,6 +484,7 @@ export interface WavemillConfig {
   review?: ReviewConfig;
   providers?: ProvidersConfig;
   integration?: Partial<IntegrationConfig>;
+  promotion?: Partial<PromotionConfig>;
   ready?: ReadyConfig;
   mergeQueue?: MergeQueueConfig;
   monitor?: MonitorConfig;
@@ -497,6 +508,11 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
   requiredChecks: [],
   highRiskPolicy: 'manual',
   useMillSession: true,
+};
+
+export const PROMOTION_DEFAULTS: PromotionConfig = {
+  protectedIntegrationStrategy: 'skip-reconciliation',
+  promotionHeadBranch: 'auto/promotion',
 };
 
 export const DEFAULT_READY_MIGRATION_PATTERNS = [
@@ -1018,6 +1034,14 @@ export function getMergeQueueConfig(repoDir?: string): Required<MergeQueueConfig
  */
 export function getIntegrationConfig(repoDir?: string): IntegrationConfig {
   return { ...INTEGRATION_DEFAULTS, ...(loadWavemillConfig(repoDir).integration ?? {}) };
+}
+
+/**
+ * Get the promotion config section.
+ * Returns defaults when not configured.
+ */
+export function getPromotionConfig(repoDir?: string): PromotionConfig {
+  return { ...PROMOTION_DEFAULTS, ...(loadWavemillConfig(repoDir).promotion ?? {}) };
 }
 
 /**

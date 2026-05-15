@@ -28,16 +28,25 @@ function shellHarness(overrides: {
   baseIntegrated?: boolean;
   alreadyPromoted?: boolean;
   openPrs?: Array<{ number: number; url: string; body?: string }>;
+  promotionHeadOpenPrs?: Array<{ number: number; url: string; body?: string }>;
   mergedPrs?: Array<{ number: number; title: string; labels?: Array<{ name: string }> }>;
   checks?: Array<{ name: string; state?: string; conclusion?: string | null; bucket?: string | null }>;
   integrationTreeLog?: string;
   integrationTree?: string;
   promotionTree?: string;
   pushError?: string;
+  promotionHeadPushError?: string;
   fetchError?: string;
   integrationFetchError?: string;
   mergeTreeResult?: 'clean' | 'conflicts' | 'unknown';
   statusPorcelain?: string;
+  branchProtection?:
+    | 'unprotected'
+    | 'force-push-disabled'
+    | 'required-status-checks'
+    | 'restricted-push'
+    | 'protected-no-details'
+    | 'unknown';
   localIntegrationTip?: string;
   remoteIntegrationTip?: string;
   integrationRelation?: 'equal' | 'behind' | 'ahead' | 'diverged';
@@ -193,8 +202,51 @@ function shellHarness(overrides: {
       if (cmd.includes("gh pr list --head 'auto/integration' --base 'main' --state open --json number,url,body")) {
         return JSON.stringify(overrides.openPrs ?? []);
       }
+      if (cmd.includes("gh pr list --head 'auto/promotion' --base 'main' --state open --json number,url,body")) {
+        return JSON.stringify(overrides.promotionHeadOpenPrs ?? []);
+      }
+      if (cmd.includes("gh pr list --head 'auto/release-transport' --base 'main' --state open --json number,url,body")) {
+        return JSON.stringify(overrides.promotionHeadOpenPrs ?? []);
+      }
 
       if (cmd === 'gh repo view --json nameWithOwner --jq .nameWithOwner') return 'example/repo\n';
+      if (cmd === "gh api 'repos/example/repo/branches/auto/integration'") {
+        switch (overrides.branchProtection) {
+          case 'force-push-disabled':
+            return JSON.stringify({
+              protected: true,
+              protection: {
+                allow_force_pushes: { enabled: false },
+                required_status_checks: null,
+                restrictions: null,
+              },
+            });
+          case 'required-status-checks':
+            return JSON.stringify({
+              protected: true,
+              protection: {
+                allow_force_pushes: { enabled: true },
+                required_status_checks: { contexts: ['ci'] },
+                restrictions: null,
+              },
+            });
+          case 'restricted-push':
+            return JSON.stringify({
+              protected: true,
+              protection: {
+                allow_force_pushes: { enabled: true },
+                required_status_checks: null,
+                restrictions: { users: [{ login: 'octocat' }], teams: [], apps: [] },
+              },
+            });
+          case 'protected-no-details':
+            return JSON.stringify({ protected: true });
+          case 'unknown':
+            throw new Error('HTTP 403: Resource not accessible by integration');
+          default:
+            return JSON.stringify({ protected: false });
+        }
+      }
       if (cmd.includes("gh api --method PATCH 'repos/example/repo/pulls/77' --input")) return '';
       if (cmd.includes('gh pr create')) return 'https://github.com/example/repo/pull/88\n';
       if (cmd.includes("rm -f '/tmp/promotion-body.txt'")) return '';
@@ -227,6 +279,16 @@ function shellHarness(overrides: {
       );
       if (pushLeaseMatch) {
         if (overrides.pushError) throw new Error(overrides.pushError);
+        return '';
+      }
+      if (cmd === "git update-ref 'refs/heads/auto/promotion' 'reconciled-sha'") return '';
+      if (cmd === "git update-ref 'refs/heads/auto/release-transport' 'reconciled-sha'") return '';
+      if (cmd === "git push origin 'refs/heads/auto/promotion:refs/heads/auto/promotion'") {
+        if (overrides.promotionHeadPushError) throw new Error(overrides.promotionHeadPushError);
+        return '';
+      }
+      if (cmd === "git push origin 'refs/heads/auto/release-transport:refs/heads/auto/release-transport'") {
+        if (overrides.promotionHeadPushError) throw new Error(overrides.promotionHeadPushError);
         return '';
       }
 
@@ -461,7 +523,9 @@ describe('runPromotion', () => {
       });
 
       assert.equal(result.status, 'updated');
+      assert.equal(result.headBranch, 'auto/integration');
       assert(shell.calls.some((cmd) => cmd.includes("git commit-tree 'integration-sha^{tree}' -p 'origin-main-sha'")));
+      assert(shell.calls.includes("gh api 'repos/example/repo/branches/auto/integration'"));
       assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
       assert(shell.calls.some((cmd) => cmd.includes("git push --force-with-lease='refs/heads/auto/integration:integration-sha'")));
       assert(shell.calls.some((cmd) => cmd.includes("git merge-base --is-ancestor 'reconciled-sha' 'origin/main'")));
@@ -765,7 +829,7 @@ describe('runPromotion', () => {
     }
   });
 
-  it('restores local integration ref and explains protected branch rejection', async () => {
+  it('skips reconciliation on a protected integration branch by default', async () => {
     const repo = makeRepo();
     const shell = shellHarness({
       baseIntegrated: false,
@@ -776,10 +840,179 @@ describe('runPromotion', () => {
         'previous-integration-sha promoted-tree',
         'older-sha old-tree',
       ].join('\n'),
-      pushError: [
-        'remote: error: GH006: Protected branch update failed for refs/heads/auto/integration.',
-        'remote: - Cannot force-push to this branch',
+      branchProtection: 'force-push-disabled',
+      openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        healthChecker: async () => ({ state: 'healthy' }),
+      });
+
+      assert.equal(result.status, 'updated');
+      assert.equal(result.headBranch, 'auto/integration');
+      assert.match(result.infoSummary ?? '', /skipped squash-snapshot reconciliation/);
+      assert(!shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
+      assert(!shell.calls.some((cmd) => cmd.includes("git push --force-with-lease='refs/heads/auto/integration:integration-sha'")));
+      assert(shell.calls.some((cmd) => cmd.includes("gh api --method PATCH 'repos/example/repo/pulls/77' --input")));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('blocks when protected-branch reconciliation policy is block', async () => {
+    const repo = makeRepo({
+      promotion: {
+        protectedIntegrationStrategy: 'block',
+      },
+    });
+    const shell = shellHarness({
+      baseIntegrated: false,
+      integrationTree: 'current-integration-tree',
+      promotionTree: 'promoted-tree',
+      integrationTreeLog: [
+        'integration-sha current-integration-tree',
+        'previous-integration-sha promoted-tree',
       ].join('\n'),
+      branchProtection: 'required-status-checks',
+      openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'protected-integration-reconciliation-required');
+      assert.match(result.blockSummary ?? '', /reason=required-status-checks/);
+      assert.match(result.blockSummary ?? '', /manual\/admin reconciliation required/);
+      assert.equal(result.prUrl, 'https://github.com/example/repo/pull/77');
+      assert(!shell.calls.some((cmd) => cmd.includes('git update-ref')));
+      assert(!shell.calls.some((cmd) => cmd.includes('--force-with-lease')));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('blocks when branch protection cannot be verified even if skip is configured', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      baseIntegrated: false,
+      integrationTree: 'current-integration-tree',
+      promotionTree: 'promoted-tree',
+      integrationTreeLog: [
+        'integration-sha current-integration-tree',
+        'previous-integration-sha promoted-tree',
+      ].join('\n'),
+      branchProtection: 'unknown',
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'protected-integration-reconciliation-required');
+      assert.match(result.blockSummary ?? '', /reason=protection-unknown/);
+      assert.match(result.blockSummary ?? '', /could not verify/);
+      assert(!shell.calls.some((cmd) => cmd.includes('git update-ref')));
+      assert(!shell.calls.some((cmd) => cmd.includes('--force-with-lease')));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('uses a dedicated promotion head when configured', async () => {
+    const repo = makeRepo({
+      promotion: {
+        protectedIntegrationStrategy: 'use-promotion-head',
+        promotionHeadBranch: 'auto/release-transport',
+      },
+    });
+    const shell = shellHarness({
+      baseIntegrated: false,
+      integrationTree: 'current-integration-tree',
+      promotionTree: 'promoted-tree',
+      integrationTreeLog: [
+        'integration-sha current-integration-tree',
+        'previous-integration-sha promoted-tree',
+      ].join('\n'),
+      branchProtection: 'restricted-push',
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        healthChecker: async () => ({ state: 'healthy' }),
+      });
+
+      assert.equal(result.status, 'opened');
+      assert.equal(result.headBranch, 'auto/release-transport');
+      assert.match(result.infoSummary ?? '', /using dedicated promotion head auto\/release-transport/);
+      assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/release-transport' 'reconciled-sha'"));
+      assert(shell.calls.some((cmd) => cmd === "git push origin 'refs/heads/auto/release-transport:refs/heads/auto/release-transport'"));
+      assert(!shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
+      assert(shell.calls.some((cmd) => cmd.includes("gh pr list --head 'auto/release-transport' --base 'main'")));
+      assert(shell.calls.some((cmd) => cmd.includes("gh pr create --head 'auto/release-transport' --base 'main'")));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('blocks with manual cleanup guidance when the promotion head push is non-fast-forward', async () => {
+    const repo = makeRepo({
+      promotion: {
+        protectedIntegrationStrategy: 'use-promotion-head',
+      },
+    });
+    const shell = shellHarness({
+      baseIntegrated: false,
+      integrationTree: 'current-integration-tree',
+      promotionTree: 'promoted-tree',
+      integrationTreeLog: [
+        'integration-sha current-integration-tree',
+        'previous-integration-sha promoted-tree',
+      ].join('\n'),
+      branchProtection: 'protected-no-details',
+      promotionHeadPushError: '[rejected] non-fast-forward',
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'promotion-head-update-failed');
+      assert.equal(result.headBranch, 'auto/promotion');
+      assert.match(result.blockSummary ?? '', /Resolve or delete origin\/auto\/promotion/);
+      assert(!shell.calls.some((cmd) => cmd.includes('gh pr create')));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('restores the local integration ref when an unprotected reconciliation push fails', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      baseIntegrated: false,
+      integrationTree: 'current-integration-tree',
+      promotionTree: 'promoted-tree',
+      integrationTreeLog: [
+        'integration-sha current-integration-tree',
+        'previous-integration-sha promoted-tree',
+        'older-sha old-tree',
+      ].join('\n'),
+      branchProtection: 'unprotected',
+      pushError: 'remote hung up unexpectedly',
     });
 
     try {
@@ -789,7 +1022,7 @@ describe('runPromotion', () => {
           shellRunner: shell.shellRunner,
           healthChecker: async () => ({ state: 'healthy' }),
         }),
-        /GitHub rejected the required reconciliation push to protected branch `auto\/integration`/,
+        /failed to push reconciled integration branch: remote hung up unexpectedly/,
       );
       assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
       assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'integration-sha' 'reconciled-sha'"));

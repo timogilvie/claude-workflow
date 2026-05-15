@@ -318,6 +318,18 @@ Behavior:
 - reuses the shared check waiter to report whether the promotion PR is passing, pending, or failing
 - leaves merge policy separate from task PR merge policy by never calling auto-merge here
 
+### Protected Integration Branches
+
+If `wavemill promote` detects that `main` already contains an earlier squash-merged snapshot of the integration branch, it may need to reconcile branch history before refreshing the promotion PR. Wavemill now checks GitHub branch protection before attempting that rewrite and will not require you to relax protection on `auto/integration` just to open or update the promotion PR.
+
+The top-level `promotion` config controls the fallback:
+
+- `protectedIntegrationStrategy: "skip-reconciliation"` is the default. Wavemill leaves the protected integration branch untouched and continues with the direct `integration -> promotion` PR.
+- `protectedIntegrationStrategy: "block"` returns a blocked result with manual/admin reconciliation guidance instead of attempting an unsafe rewrite.
+- `protectedIntegrationStrategy: "use-promotion-head"` pushes a dedicated unprotected branch such as `auto/promotion` and opens the PR from that branch instead.
+
+If Wavemill cannot verify branch protection status, it blocks rather than risk rewriting the branch blindly.
+
 For the broader controller design, see the [Autonomous Integration Merge Controller Plan](https://linear.app/hokusai/document/autonomous-integration-merge-controller-plan-79e27e27d690).
 
 ## Project Context Integration
