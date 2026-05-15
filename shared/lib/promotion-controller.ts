@@ -1,6 +1,6 @@
 import { writeFileSync } from 'fs';
 import { confirm } from './cli-prompt.ts';
-import { getIntegrationConfig } from './config.ts';
+import { getIntegrationConfig, getPromotionConfig } from './config.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import { errorMessage } from './error-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
@@ -16,8 +16,15 @@ export interface PromotionResult {
   status: 'opened' | 'updated' | 'noop' | 'blocked';
   prUrl?: string;
   checkSummary?: string;
-  blockReason?: 'base-behind' | 'base-behind-conflicts' | 'base-unknown';
+  blockReason?:
+    | 'base-behind'
+    | 'base-behind-conflicts'
+    | 'base-unknown'
+    | 'protected-integration-reconciliation-required'
+    | 'promotion-head-update-failed';
   blockSummary?: string;
+  infoSummary?: string;
+  headBranch?: string;
 }
 
 export interface PromotionOptions {
@@ -61,6 +68,34 @@ interface MergePrediction {
   detail?: string;
 }
 
+interface BranchProtectionStatus {
+  state: 'unprotected' | 'protected' | 'unknown';
+  allowsForcePush: boolean;
+  requiresStatusChecks: boolean;
+  restrictsDirectPush: boolean;
+  reasonCode?: ProtectedIntegrationReasonCode;
+}
+
+type ProtectedIntegrationReasonCode =
+  | 'protected'
+  | 'force-push-disabled'
+  | 'required-status-checks'
+  | 'restricted-push'
+  | 'protection-unknown';
+
+type SquashReconciliationPlan =
+  | {
+    kind: 'reset-to-promotion-tip';
+    integrationTip: string;
+    promotionTip: string;
+  }
+  | {
+    kind: 'synthetic-commit';
+    integrationTip: string;
+    promotionTip: string;
+    commitMessage: string;
+  };
+
 export interface BranchBaseUpdateResult {
   status: 'success' | 'conflict' | 'push-failed' | 'fetch-failed' | 'dirty-worktree' | 'unknown-failed';
   detail: string;
@@ -74,9 +109,10 @@ const RECENT_COMMIT_LIMIT = 10;
 export async function runPromotion(options: PromotionOptions): Promise<PromotionResult> {
   const shellRunner = options.shellRunner ?? ((cmd, opts) => String(execShellCommand(cmd, opts)));
   const healthChecker = options.healthChecker ?? defaultHealthChecker;
-  const config = getIntegrationConfig(options.repoDir);
-  const integrationBranch = config.integrationBranch;
-  const promotionBranch = config.promotionBranch;
+  const integrationConfig = getIntegrationConfig(options.repoDir);
+  const promotionConfig = getPromotionConfig(options.repoDir);
+  const integrationBranch = integrationConfig.integrationBranch;
+  const promotionBranch = integrationConfig.promotionBranch;
   const interactive = options.interactive ?? process.stdin.isTTY === true;
   const confirmUpdate = options.confirmUpdate ?? ((message: string) => confirm(message));
 
@@ -99,7 +135,7 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
           currentPr.number,
           options.repoDir,
           shellRunner,
-          { timeoutMs: 0, requiredChecks: config.requiredChecks },
+          { timeoutMs: 0, requiredChecks: integrationConfig.requiredChecks },
         ))
         : undefined,
     });
@@ -125,7 +161,7 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
 
   if (baseContainment.status === 'behind' && !matchingPromotionTreeCommit) {
     const blockedResult = await handleBaseBehind({
-      config,
+      config: integrationConfig,
       integrationBranch,
       promotionBranch,
       promotionBase,
@@ -150,19 +186,110 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
       ? matchingPromotionTreeCommit
       : promotionBase.remoteRef;
 
-  integrationTip = reconcileSquashMergedPromotion({
+  const reconciliationPlan = buildSquashReconciliationPlan({
     integrationBranch,
-    promotionBranch: promotionBase.remoteRef,
     integrationTip,
     promotionTip,
     promotionTree,
     matchingPromotionTreeCommit,
     repoDir: options.repoDir,
     shellRunner,
-    dryRun: options.dryRun,
   });
 
-  if (isAlreadyPromoted(integrationTip, promotionBase.remoteRef, options.repoDir, shellRunner)) {
+  let effectiveHeadBranch = integrationBranch;
+  let effectiveHeadTip = integrationTip;
+  let infoSummary: string | undefined;
+  let promotionNote: string | undefined;
+
+  if (reconciliationPlan) {
+    const protectionStatus = getBranchProtectionStatus(
+      integrationBranch,
+      options.repoDir,
+      shellRunner,
+    );
+
+    if (protectionStatus.state === 'unknown') {
+      return buildBlockedPromotionResult({
+        blockReason: 'protected-integration-reconciliation-required',
+        blockSummary: formatProtectedIntegrationBlockSummary({
+          integrationBranch,
+          promotionBranch,
+          reasonCode: protectionStatus.reasonCode ?? 'protection-unknown',
+          detail: 'Wavemill could not verify whether the integration branch allows the required reconciliation rewrite.',
+        }),
+        prUrl: currentPr?.url,
+        checkSummary: currentPr
+          ? formatCheckSummary(await waitForChecks(
+            currentPr.number,
+            options.repoDir,
+            shellRunner,
+            { timeoutMs: 0, requiredChecks: integrationConfig.requiredChecks },
+          ))
+          : undefined,
+      });
+    }
+
+    const reconciliationAllowed =
+      protectionStatus.state === 'unprotected' ||
+      (
+        protectionStatus.allowsForcePush &&
+        !protectionStatus.requiresStatusChecks &&
+        !protectionStatus.restrictsDirectPush
+      );
+
+    if (reconciliationAllowed) {
+      effectiveHeadTip = applyIntegrationReconciliationPlan({
+        plan: reconciliationPlan,
+        integrationBranch,
+        repoDir: options.repoDir,
+        shellRunner,
+        dryRun: options.dryRun,
+      });
+    } else if (promotionConfig.protectedIntegrationStrategy === 'block') {
+      return buildBlockedPromotionResult({
+        blockReason: 'protected-integration-reconciliation-required',
+        blockSummary: formatProtectedIntegrationBlockSummary({
+          integrationBranch,
+          promotionBranch,
+          reasonCode: protectionStatus.reasonCode ?? 'protected',
+        }),
+        prUrl: currentPr?.url,
+        checkSummary: currentPr
+          ? formatCheckSummary(await waitForChecks(
+            currentPr.number,
+            options.repoDir,
+            shellRunner,
+            { timeoutMs: 0, requiredChecks: integrationConfig.requiredChecks },
+          ))
+          : undefined,
+      });
+    } else if (promotionConfig.protectedIntegrationStrategy === 'use-promotion-head') {
+      effectiveHeadBranch = promotionConfig.promotionHeadBranch;
+      promotionNote =
+        `${integrationBranch} is protected, so this PR uses ${effectiveHeadBranch} as a dedicated promotion head.`;
+      infoSummary =
+        `${integrationBranch} is protected; using dedicated promotion head ${effectiveHeadBranch} instead of rewriting the integration branch.`;
+
+      const promotionHeadResult = applyPromotionHeadReconciliationPlan({
+        plan: reconciliationPlan,
+        promotionHeadBranch: effectiveHeadBranch,
+        repoDir: options.repoDir,
+        shellRunner,
+        dryRun: options.dryRun,
+      });
+
+      if (typeof promotionHeadResult !== 'string') {
+        return promotionHeadResult;
+      }
+
+      effectiveHeadTip = promotionHeadResult;
+    } else {
+      infoSummary =
+        `${integrationBranch} is protected; skipped squash-snapshot reconciliation and opened/updated the promotion PR as-is.`;
+    }
+  }
+
+  if (isAlreadyPromoted(effectiveHeadTip, promotionBase.remoteRef, options.repoDir, shellRunner)) {
     return { status: 'noop' };
   }
 
@@ -186,26 +313,33 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
       integrationBranch,
       promotionBranch,
       health,
+      promotionNote,
       recentPrs,
       recentCommits,
     }),
   );
 
-  const status: PromotionResult['status'] = currentPr ? 'updated' : 'opened';
+  const effectivePr = findExistingPromotionPr(
+    effectiveHeadBranch,
+    promotionBranch,
+    options.repoDir,
+    shellRunner,
+  );
+  const status: PromotionResult['status'] = effectivePr ? 'updated' : 'opened';
   if (!options.dryRun) {
-    if (currentPr) {
-      updatePromotionPrBody(currentPr.number, nextBody, shellRunner, options.repoDir);
+    if (effectivePr) {
+      updatePromotionPrBody(effectivePr.number, nextBody, shellRunner, options.repoDir);
     } else {
       const bodyFile = writeBodyToTempFile(nextBody, shellRunner, options.repoDir);
       try {
-        const title = `chore: promote ${integrationBranch} to ${promotionBranch}`;
+        const title = `chore: promote ${effectiveHeadBranch} to ${promotionBranch}`;
         shellRunner(
           [
             'gh',
             'pr',
             'create',
             '--head',
-            escapeShellArg(integrationBranch),
+            escapeShellArg(effectiveHeadBranch),
             '--base',
             escapeShellArg(promotionBranch),
             '--title',
@@ -221,13 +355,18 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
     }
   }
 
-  const promotionPr = currentPr ?? findExistingPromotionPr(integrationBranch, promotionBranch, options.repoDir, shellRunner);
+  const promotionPr = effectivePr ?? findExistingPromotionPr(
+    effectiveHeadBranch,
+    promotionBranch,
+    options.repoDir,
+    shellRunner,
+  );
   const checkSummary = promotionPr
     ? formatCheckSummary(await waitForChecks(
       promotionPr.number,
       options.repoDir,
       shellRunner,
-      { timeoutMs: 0, requiredChecks: config.requiredChecks },
+      { timeoutMs: 0, requiredChecks: integrationConfig.requiredChecks },
     ))
     : undefined;
 
@@ -235,6 +374,8 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
     status,
     prUrl: promotionPr?.url,
     checkSummary,
+    infoSummary,
+    headBranch: effectiveHeadBranch,
   };
 }
 
@@ -327,81 +468,140 @@ function isAncestor(
   }
 }
 
-function reconcileSquashMergedPromotion(input: {
+function buildSquashReconciliationPlan(input: {
   integrationBranch: string;
-  promotionBranch: string;
   integrationTip: string;
   promotionTip: string;
   promotionTree: string;
   matchingPromotionTreeCommit: string | null;
   repoDir: string;
   shellRunner: ShellRunner;
-  dryRun?: boolean;
-}): string {
+}): SquashReconciliationPlan | null {
   const integrationTree = resolveCommitTree(input.integrationTip, input.repoDir, input.shellRunner);
   const matchingIntegrationCommit = input.matchingPromotionTreeCommit;
 
   if (!matchingIntegrationCommit) {
-    return input.integrationTip;
+    return null;
   }
 
-  const branchRef = `refs/heads/${input.integrationBranch}`;
   if (integrationTree === input.promotionTree) {
-    if (input.dryRun) {
-      return input.integrationTip;
-    }
-    input.shellRunner(
-      `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(input.promotionTip)} ${escapeShellArg(input.integrationTip)}`,
-      { encoding: 'utf-8', cwd: input.repoDir },
-    );
-    pushBranchRefWithLocalRollback({
-      branchRef,
-      localTipBeforePush: input.promotionTip,
-      restoreTip: input.integrationTip,
-      expectedRemoteTip: input.integrationTip,
-      repoDir: input.repoDir,
-      shellRunner: input.shellRunner,
-      integrationBranch: input.integrationBranch,
-    });
-    return input.promotionTip;
+    return {
+      kind: 'reset-to-promotion-tip',
+      integrationTip: input.integrationTip,
+      promotionTip: input.promotionTip,
+    };
   }
 
   if (matchingIntegrationCommit === input.integrationTip) {
-    return input.integrationTip;
+    return null;
   }
+
+  return {
+    kind: 'synthetic-commit',
+    integrationTip: input.integrationTip,
+    promotionTip: input.promotionTip,
+    commitMessage: `chore: reconcile ${input.integrationBranch} after squash promotion`,
+  };
+}
+
+function applyIntegrationReconciliationPlan(input: {
+  plan: SquashReconciliationPlan;
+  integrationBranch: string;
+  repoDir: string;
+  shellRunner: ShellRunner;
+  dryRun?: boolean;
+}): string {
+  const targetTip = materializeReconciliationTarget(
+    input.plan,
+    input.repoDir,
+    input.shellRunner,
+    input.dryRun,
+  );
 
   if (input.dryRun) {
-    return input.integrationTip;
+    return targetTip;
   }
 
-  const message = `chore: reconcile ${input.integrationBranch} after squash promotion`;
-  const reconciledTip = String(input.shellRunner(
-    [
-      'git',
-      'commit-tree',
-      escapeShellArg(`${input.integrationTip}^{tree}`),
-      '-p',
-      escapeShellArg(input.promotionTip),
-      '-m',
-      escapeShellArg(message),
-    ].join(' '),
-    { encoding: 'utf-8', cwd: input.repoDir },
-  )).trim();
-
+  const branchRef = `refs/heads/${input.integrationBranch}`;
   input.shellRunner(
-    `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(reconciledTip)} ${escapeShellArg(input.integrationTip)}`,
+    `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(targetTip)} ${escapeShellArg(input.plan.integrationTip)}`,
     { encoding: 'utf-8', cwd: input.repoDir },
   );
   pushBranchRefWithLocalRollback({
     branchRef,
-    localTipBeforePush: reconciledTip,
-    restoreTip: input.integrationTip,
-    expectedRemoteTip: input.integrationTip,
+    localTipBeforePush: targetTip,
+    restoreTip: input.plan.integrationTip,
+    expectedRemoteTip: input.plan.integrationTip,
     repoDir: input.repoDir,
     shellRunner: input.shellRunner,
     integrationBranch: input.integrationBranch,
   });
-  return reconciledTip;
+  return targetTip;
+}
+
+function applyPromotionHeadReconciliationPlan(input: {
+  plan: SquashReconciliationPlan;
+  promotionHeadBranch: string;
+  repoDir: string;
+  shellRunner: ShellRunner;
+  dryRun?: boolean;
+}): string | PromotionResult {
+  const targetTip = materializeReconciliationTarget(
+    input.plan,
+    input.repoDir,
+    input.shellRunner,
+    input.dryRun,
+  );
+
+  if (input.dryRun) {
+    return targetTip;
+  }
+
+  const branchRef = `refs/heads/${input.promotionHeadBranch}`;
+  input.shellRunner(
+    `git update-ref ${escapeShellArg(branchRef)} ${escapeShellArg(targetTip)}`,
+    { encoding: 'utf-8', cwd: input.repoDir },
+  );
+
+  try {
+    pushBranchRefNormally(branchRef, input.repoDir, input.shellRunner);
+  } catch (error) {
+    return buildBlockedPromotionResult({
+      blockReason: 'promotion-head-update-failed',
+      blockSummary: formatPromotionHeadPushFailure(input.promotionHeadBranch, error),
+      headBranch: input.promotionHeadBranch,
+    });
+  }
+
+  return targetTip;
+}
+
+function materializeReconciliationTarget(
+  plan: SquashReconciliationPlan,
+  repoDir: string,
+  shellRunner: ShellRunner,
+  dryRun?: boolean,
+): string {
+  if (plan.kind === 'reset-to-promotion-tip') {
+    return plan.promotionTip;
+  }
+
+  if (dryRun) {
+    return plan.integrationTip;
+  }
+
+  return String(shellRunner(
+    [
+      'git',
+      'commit-tree',
+      escapeShellArg(`${plan.integrationTip}^{tree}`),
+      '-p',
+      escapeShellArg(plan.promotionTip),
+      '-m',
+      escapeShellArg(plan.commitMessage),
+    ].join(' '),
+    { encoding: 'utf-8', cwd: repoDir },
+  )).trim();
 }
 
 async function handleBaseBehind(input: {
@@ -626,6 +826,7 @@ function buildBlockedPromotionResult(input: {
   blockSummary: string;
   prUrl?: string;
   checkSummary?: string;
+  headBranch?: string;
 }): PromotionResult {
   return {
     status: 'blocked',
@@ -633,6 +834,7 @@ function buildBlockedPromotionResult(input: {
     blockSummary: input.blockSummary,
     prUrl: input.prUrl,
     checkSummary: input.checkSummary,
+    headBranch: input.headBranch,
   };
 }
 
@@ -678,6 +880,22 @@ function pushBranchRef(
       'git',
       'push',
       `--force-with-lease=${escapeShellArg(`${branchRef}:${expectedRemoteTip}`)}`,
+      'origin',
+      escapeShellArg(`${branchRef}:${branchRef}`),
+    ].join(' '),
+    { encoding: 'utf-8', cwd: repoDir },
+  );
+}
+
+function pushBranchRefNormally(
+  branchRef: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): void {
+  shellRunner(
+    [
+      'git',
+      'push',
       'origin',
       escapeShellArg(`${branchRef}:${branchRef}`),
     ].join(' '),
@@ -742,6 +960,156 @@ function formatProtectedBranchPushFailure(
     '',
     `Original push error: ${message}`,
   ].join('\n');
+}
+
+function getBranchProtectionStatus(
+  branch: string,
+  repoDir: string,
+  shellRunner: ShellRunner,
+): BranchProtectionStatus {
+  try {
+    const repo = getRepoName(repoDir, shellRunner);
+    const output = shellRunner(
+      `gh api ${escapeShellArg(`repos/${repo}/branches/${branch}`)}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    const parsed = JSON.parse(output) as unknown;
+
+    if (!isRecord(parsed) || typeof parsed.protected !== 'boolean') {
+      return {
+        state: 'unknown',
+        allowsForcePush: false,
+        requiresStatusChecks: false,
+        restrictsDirectPush: false,
+        reasonCode: 'protection-unknown',
+      };
+    }
+
+    if (!parsed.protected) {
+      return {
+        state: 'unprotected',
+        allowsForcePush: true,
+        requiresStatusChecks: false,
+        restrictsDirectPush: false,
+      };
+    }
+
+    const protection = isRecord(parsed.protection) ? parsed.protection : undefined;
+    const allowsForcePush = protectionAllowsForcePush(protection);
+    const requiresStatusChecks = protectionRequiresStatusChecks(protection);
+    const restrictsDirectPush = protectionRestrictsDirectPush(protection);
+
+    return {
+      state: 'protected',
+      allowsForcePush,
+      requiresStatusChecks,
+      restrictsDirectPush,
+      reasonCode: classifyProtectionReason({
+        allowsForcePush,
+        requiresStatusChecks,
+        restrictsDirectPush,
+      }),
+    };
+  } catch {
+    return {
+      state: 'unknown',
+      allowsForcePush: false,
+      requiresStatusChecks: false,
+      restrictsDirectPush: false,
+      reasonCode: 'protection-unknown',
+    };
+  }
+}
+
+function protectionAllowsForcePush(protection: Record<string, unknown> | undefined): boolean {
+  if (!protection) {
+    return false;
+  }
+  const allowForcePushes = isRecord(protection.allow_force_pushes) ? protection.allow_force_pushes : undefined;
+  return allowForcePushes?.enabled === true;
+}
+
+function protectionRequiresStatusChecks(protection: Record<string, unknown> | undefined): boolean {
+  if (!protection) {
+    return false;
+  }
+  const requiredStatusChecks = protection.required_status_checks;
+  return requiredStatusChecks !== null && requiredStatusChecks !== undefined;
+}
+
+function protectionRestrictsDirectPush(protection: Record<string, unknown> | undefined): boolean {
+  if (!protection) {
+    return false;
+  }
+  const restrictions = isRecord(protection.restrictions) ? protection.restrictions : undefined;
+  if (!restrictions) {
+    return false;
+  }
+
+  const users = Array.isArray(restrictions.users) ? restrictions.users : [];
+  const teams = Array.isArray(restrictions.teams) ? restrictions.teams : [];
+  const apps = Array.isArray(restrictions.apps) ? restrictions.apps : [];
+  return users.length > 0 || teams.length > 0 || apps.length > 0;
+}
+
+function classifyProtectionReason(input: {
+  allowsForcePush: boolean;
+  requiresStatusChecks: boolean;
+  restrictsDirectPush: boolean;
+}): ProtectedIntegrationReasonCode {
+  if (input.requiresStatusChecks) {
+    return 'required-status-checks';
+  }
+  if (input.restrictsDirectPush) {
+    return 'restricted-push';
+  }
+  if (!input.allowsForcePush) {
+    return 'force-push-disabled';
+  }
+  return 'protected';
+}
+
+function formatProtectedIntegrationBlockSummary(input: {
+  integrationBranch: string;
+  promotionBranch: string;
+  reasonCode: ProtectedIntegrationReasonCode;
+  detail?: string;
+}): string {
+  const reason = describeProtectionReason(input.reasonCode);
+  const detail = input.detail ? ` ${input.detail}` : '';
+  return [
+    `manual/admin reconciliation required before ${input.integrationBranch} can be rewritten for promotion to ${input.promotionBranch}; reason=${input.reasonCode} (${reason}).${detail}`,
+    `Open or merge the ${input.integrationBranch} -> ${input.promotionBranch} promotion PR as-is, or have an admin reconcile ${input.integrationBranch} outside wavemill promote.`,
+  ].join(' ');
+}
+
+function describeProtectionReason(reasonCode: ProtectedIntegrationReasonCode): string {
+  switch (reasonCode) {
+    case 'force-push-disabled':
+      return 'force pushes are not allowed';
+    case 'required-status-checks':
+      return 'required status checks block direct rewrites';
+    case 'restricted-push':
+      return 'direct pushes are restricted';
+    case 'protection-unknown':
+      return 'branch protection could not be verified';
+    default:
+      return 'branch protection is enabled';
+  }
+}
+
+function formatPromotionHeadPushFailure(
+  promotionHeadBranch: string,
+  pushError: unknown,
+): string {
+  return [
+    `unable to update dedicated promotion head ${promotionHeadBranch}: ${errorMessage(pushError)}`,
+    `Resolve or delete origin/${promotionHeadBranch} if it diverged, then rerun wavemill promote.`,
+  ].join(' ');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function listRecentMergedWavemillPrs(
@@ -814,7 +1182,7 @@ function extractPrNumbers(commits: string[]): Set<number> {
 }
 
 function findExistingPromotionPr(
-  integrationBranch: string,
+  headBranch: string,
   promotionBranch: string,
   repoDir: string,
   shellRunner: ShellRunner,
@@ -825,7 +1193,7 @@ function findExistingPromotionPr(
       'pr',
       'list',
       '--head',
-      escapeShellArg(integrationBranch),
+      escapeShellArg(headBranch),
       '--base',
       escapeShellArg(promotionBranch),
       '--state',
@@ -846,6 +1214,7 @@ function renderPromotionSection(input: {
   integrationBranch: string;
   promotionBranch: string;
   health: IntegrationHealth;
+  promotionNote?: string;
   recentPrs: MergedPrSummary[];
   recentCommits: string[];
 }): string {
@@ -858,6 +1227,11 @@ function renderPromotionSection(input: {
     `Branch health: ${formatHealth(input.health)}`,
     '',
   ];
+
+  if (input.promotionNote) {
+    lines.push(`Promotion path: ${input.promotionNote}`);
+    lines.push('');
+  }
 
   if (input.recentPrs.length > 0) {
     lines.push('Recently merged Wavemill PRs:');
@@ -935,10 +1309,7 @@ function updatePromotionPrBody(
   shellRunner: ShellRunner,
   repoDir: string,
 ): void {
-  const repo = String(shellRunner(
-    'gh repo view --json nameWithOwner --jq .nameWithOwner',
-    { encoding: 'utf-8', cwd: repoDir },
-  )).trim();
+  const repo = getRepoName(repoDir, shellRunner);
   const bodyJsonFile = writeBodyToTempFile(JSON.stringify({ body }), shellRunner, repoDir);
   try {
     shellRunner(
@@ -948,6 +1319,13 @@ function updatePromotionPrBody(
   } finally {
     shellRunner(`rm -f ${escapeShellArg(bodyJsonFile)}`, { encoding: 'utf-8', cwd: repoDir });
   }
+}
+
+function getRepoName(repoDir: string, shellRunner: ShellRunner): string {
+  return String(shellRunner(
+    'gh repo view --json nameWithOwner --jq .nameWithOwner',
+    { encoding: 'utf-8', cwd: repoDir },
+  )).trim();
 }
 
 function escapeRegExp(value: string): string {
