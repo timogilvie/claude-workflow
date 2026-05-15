@@ -344,7 +344,7 @@ plan_waiting_for_review() {
 
 render_plan_model_routing() {
   local worktree="$1" slug="$2"
-  local routing_file="" candidate records_json cache_key mtime rendered
+  local routing_file="" routing_format="" candidate records_json cache_key mtime rendered
 
   for candidate in \
     "$worktree/features/$slug/routing.jsonl" \
@@ -352,35 +352,74 @@ render_plan_model_routing() {
   do
     if [[ -f "$candidate" ]]; then
       routing_file="$candidate"
+      routing_format="jsonl"
       break
     fi
   done
 
+  if [[ -z "$routing_file" ]]; then
+    for candidate in \
+      "$worktree/features/$slug/.routing-complete" \
+      "$worktree/bugs/$slug/.routing-complete" \
+      "$worktree/features/$slug/.initial-route.json" \
+      "$worktree/bugs/$slug/.initial-route.json" \
+      "$worktree/features/$slug/.post-expansion-route.json" \
+      "$worktree/bugs/$slug/.post-expansion-route.json"
+    do
+      if [[ -f "$candidate" ]]; then
+        routing_file="$candidate"
+        routing_format="route-json"
+        break
+      fi
+    done
+  fi
+
   if [[ -n "$routing_file" ]]; then
     mtime=$(stat -f %m "$routing_file" 2>/dev/null || stat -c %Y "$routing_file" 2>/dev/null || echo 0)
-    cache_key="${routing_file}:${mtime}"
+    cache_key="${routing_file}:${mtime}:${routing_format}"
     if [[ -v WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"] ]]; then
       printf '%s' "${WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]}"
       return 0
     fi
-    records_json="$(
-      jq -Rcs '
-        split("\n")
-        | map(select(length > 0) | fromjson?)
-        | reduce .[] as $item ({};
-            if (($item.role // null) | type) == "string" then
-              .[$item.role] = $item
-            else
-              .
-            end
-          )
-        | [
-            {"role":"planner"} + (.planner // {}),
-            {"role":"coder"} + (.coder // {}),
-            {"role":"reviewer"} + (.reviewer // {})
+
+    if [[ "$routing_format" == "jsonl" ]]; then
+      records_json="$(
+        jq -Rcs '
+          split("\n")
+          | map(select(length > 0) | fromjson?)
+          | reduce .[] as $item ({};
+              if (($item.role // null) | type) == "string" then
+                .[$item.role] = $item
+              else
+                .
+              end
+            )
+          | [
+              {"role":"planner"} + (.planner // {}),
+              {"role":"coder"} + (.coder // {}),
+              {"role":"reviewer"} + (.reviewer // {})
+            ]
+        ' "$routing_file" 2>/dev/null
+      )"
+    else
+      records_json="$(
+        jq '
+          def role_record($role; $key):
+            {"role": $role}
+            + if ((.[$key] // null) | type) == "string" and (.[$key] != "") then
+                {"requested": .[$key], "resolved": .[$key]}
+              else
+                {}
+              end;
+          [
+            role_record("planner"; "planner"),
+            role_record("coder"; "coder"),
+            role_record("reviewer"; "reviewer")
           ]
-      ' "$routing_file" 2>/dev/null
-    )"
+        ' "$routing_file" 2>/dev/null
+      )"
+    fi
+
     [[ -n "$records_json" ]] || records_json='[{"role":"planner"},{"role":"coder"},{"role":"reviewer"}]'
   else
     cache_key="missing:${worktree}:${slug}"

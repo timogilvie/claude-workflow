@@ -64,6 +64,26 @@ for f in \
 done
 
 # ============================================================================
+# TEST 1A: Launcher attach shutdown handling
+# ============================================================================
+echo ""
+echo "=== Launcher Attach Shutdown ==="
+
+ATTACH_BLOCK=$(awk '
+  /^sleep 1$/ { in_block=1 }
+  in_block { print }
+  /Session ended\. Run/ { in_block=0 }
+' "$LIB_DIR/wavemill-mill.sh")
+if grep -q 'set +e' <<< "$ATTACH_BLOCK" \
+  && grep -q 'tmux attach -t "$SESSION"' <<< "$ATTACH_BLOCK" \
+  && grep -q 'attach_rc=$?' <<< "$ATTACH_BLOCK" \
+  && grep -q 'set -e' <<< "$ATTACH_BLOCK"; then
+  pass "launcher handles non-zero tmux attach during normal shutdown"
+else
+  fail "launcher tmux attach is not guarded against normal shutdown exit codes"
+fi
+
+# ============================================================================
 # TEST 1B: State mutation helper behavior
 # ============================================================================
 echo ""
