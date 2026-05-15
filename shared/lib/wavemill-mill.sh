@@ -7178,7 +7178,7 @@ Implement from the issue description plus direct codebase analysis."
   fi
   log "status" "Routing complete (direct), launched planning with $planner_launch_model"
 
-  log "status" "$issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
+  log "status" "$issue launched (phase: ${initial_phase}, agent: ${resolved_planner_agent}${planner_launch_model:+ --model $planner_launch_model})"
   [[ -n "$planner_model" ]] && log "info" "Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
 
   if [[ "$should_launch_challenger" == "true" ]]; then
@@ -9952,6 +9952,13 @@ log "info" "  Type 'q' in mill window to quit"
 log "info" "  Or: touch $STATE_DIR/.stop-loop"
 echo ""
 sleep 1
+set +e
 tmux attach -t "$SESSION"
+attach_rc=$?
+set -e
+
+if [[ "$attach_rc" -ne 0 && "$attach_rc" -ne 1 ]]; then
+  log_warn "tmux attach exited with status $attach_rc"
+fi
 
 log "status" "Session ended. Run 'git -C $REPO_DIR worktree prune' if needed."
