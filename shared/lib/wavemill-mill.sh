@@ -7178,7 +7178,7 @@ Implement from the issue description plus direct codebase analysis."
   fi
   log "status" "Routing complete (direct), launched planning with $planner_launch_model"
 
-  log "status" "$issue launched (phase: ${initial_phase}, agent: ${task_agent_cmd}${task_model:+ --model $task_model})"
+  log "status" "$issue launched (phase: ${initial_phase}, agent: ${resolved_planner_agent}${planner_launch_model:+ --model $planner_launch_model})"
   [[ -n "$planner_model" ]] && log "info" "Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
 
   if [[ "$should_launch_challenger" == "true" ]]; then
