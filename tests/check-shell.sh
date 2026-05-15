@@ -29,6 +29,7 @@ for f in \
   "$LIB_DIR"/agent-adapters.sh \
   "$REPO_DIR"/shared/hooks/*.sh \
   "$REPO_DIR"/tests/dashboard-refresh.test.sh \
+  "$REPO_DIR"/tests/claude-hook-notification.test.sh \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
   "$REPO_DIR"/tests/project-context-suggestion.test.sh \
@@ -190,6 +191,18 @@ else
   fail "background jobs cleanup lifecycle: $background_jobs_cleanup_output"
 fi
 unset background_jobs_cleanup_status
+
+echo ""
+echo "=== Claude Hook Notification ==="
+
+claude_hook_notification_output="$(bash "$REPO_DIR/tests/claude-hook-notification.test.sh" 2>&1)" || claude_hook_notification_status=$?
+claude_hook_notification_status="${claude_hook_notification_status:-0}"
+if [[ "$claude_hook_notification_status" -eq 0 ]]; then
+  pass "claude notification hook waiting-state behavior"
+else
+  fail "claude notification hook waiting-state behavior: $claude_hook_notification_output"
+fi
+unset claude_hook_notification_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check

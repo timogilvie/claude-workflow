@@ -34,14 +34,12 @@ case "$event" in
     wavemill_hook_write "error" "$event" "$detail" "claude"
     ;;
   Notification)
-    detail=$(printf '%s' "$payload" | jq -r '.notification_type // .notificationType // .type // empty' 2>/dev/null || true)
-    case "$detail" in
-      permission_prompt|idle_prompt)
-        wavemill_hook_write "waiting" "$event" "$detail" "claude"
-        ;;
-      *)
-        ;;
-    esac
+    detail=$(printf '%s' "$payload" | jq -r '.message // .notification_message // .text // .notification_type // .notificationType // .type // empty' 2>/dev/null || true)
+    if [[ -z "$detail" ]]; then
+      detail="awaiting user input"
+    fi
+    detail="${detail:0:120}"
+    wavemill_hook_write "waiting" "$event" "$detail" "claude"
     ;;
   *)
     ;;
