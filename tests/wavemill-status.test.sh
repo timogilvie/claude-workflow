@@ -267,6 +267,29 @@ else
   fail "routing details are missing from awaiting approval output"
 fi
 
+rm -f "$WORKTREES_DIR/plan-task/features/plan-task/routing.jsonl"
+cat > "$WORKTREES_DIR/plan-task/features/plan-task/.routing-complete" <<'EOF'
+{
+  "planner": "claude-sonnet-4-6",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-haiku-4-5-20251001",
+  "planDepth": "light",
+  "codeDepth": "medium",
+  "reviewMode": "static"
+}
+EOF
+
+OUTPUT_ROUTE_ARTIFACT="$TMP_DIR/output-route-artifact.txt"
+run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ROUTE_ARTIFACT"
+
+if grep -q 'planner: requested=claude-sonnet-4-6 → resolved=claude-sonnet-4-6' "$OUTPUT_ROUTE_ARTIFACT" \
+  && grep -q 'coder: requested=gpt-5.4 → resolved=gpt-5.4' "$OUTPUT_ROUTE_ARTIFACT" \
+  && grep -q 'reviewer: requested=claude-haiku-4-5-20251001 → resolved=claude-h' "$OUTPUT_ROUTE_ARTIFACT"; then
+  pass "awaiting approval renders model routing from .routing-complete"
+else
+  fail ".routing-complete route details are missing from awaiting approval output"
+fi
+
 cat > "$WORKTREES_DIR/rejected-plan-task/features/rejected-plan-task/.planning-rejected.json" <<'EOF'
 {
   "reason": "planning_modified_out_of_scope_files",
