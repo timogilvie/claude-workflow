@@ -1,5 +1,6 @@
 import type { Channel, ModelSelector } from './model-registry.ts';
 import type { ResolvedModelRoutingDecision, RoutingRole } from './eval-schema.ts';
+import { existsSync, readFileSync } from 'node:fs';
 
 export interface SubagentRoutingRecord extends Partial<ResolvedModelRoutingDecision> {
   requested?: string;
@@ -23,6 +24,36 @@ export interface SubagentModelDisplay {
   unavailable?: boolean;
 }
 
+export interface RouteLifecycleDisplayRoute {
+  planner?: string;
+  coder?: string;
+  reviewer?: string;
+}
+
+export interface ExecutedPlanningDisplay {
+  agent?: string;
+  model?: string;
+  status?: string;
+  unavailable?: boolean;
+}
+
+export interface RouteLifecycleDisplayInput {
+  bootstrapRoute?: RouteLifecycleDisplayRoute;
+  executedPlanning?: ExecutedPlanningDisplay;
+  expandedRoute?: RouteLifecycleDisplayRoute;
+  activeRoute?: RouteLifecycleDisplayRoute;
+  executionTelemetry?: unknown[];
+}
+
+export interface RouteLifecycleDisplayPaths {
+  planningResultPath?: string;
+  initialRoutePath?: string;
+  postExpansionRoutePath?: string;
+  routingCompletePath?: string;
+  phaseConfigPath?: string;
+  routingJsonlPath?: string;
+}
+
 export const PLAN_SUBAGENT_ROLES: readonly RoutingRole[] = ['planner', 'coder', 'reviewer'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,6 +67,41 @@ function readString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readJsonFile(path: string | undefined): unknown {
+  if (!path || !existsSync(path)) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8')) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function readJsonlFile(path: string | undefined): unknown[] | undefined {
+  if (!path || !existsSync(path)) {
+    return undefined;
+  }
+
+  try {
+    return readFileSync(path, 'utf-8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as unknown;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((record): record is unknown => typeof record !== 'undefined');
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeRole(value: unknown) {
@@ -110,6 +176,112 @@ function normalizeFallback(record: Record<string, unknown>, resolved: string | u
   );
 }
 
+function normalizeModelName(value: unknown): string | undefined {
+  const model = readString(value);
+  return model ? model.toLowerCase() : undefined;
+}
+
+function parseRouteArtifact(value: unknown): RouteLifecycleDisplayRoute | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const planner = readString(value.planner);
+  const coder = readString(value.coder);
+  const reviewer = readString(value.reviewer);
+
+  if (!planner && !coder && !reviewer) {
+    return undefined;
+  }
+
+  return {
+    ...(planner ? { planner } : {}),
+    ...(coder ? { coder } : {}),
+    ...(reviewer ? { reviewer } : {}),
+  };
+}
+
+function parsePlanningResult(value: unknown): ExecutedPlanningDisplay | undefined {
+  if (value === null) {
+    return { unavailable: true };
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const agent = readString(value.agent);
+  const model = readString(value.model);
+  const status = readString(value.status);
+
+  if (!agent && !model && !status) {
+    return { unavailable: true };
+  }
+
+  return {
+    ...(agent ? { agent } : {}),
+    ...(model ? { model } : {}),
+    ...(status ? { status } : {}),
+    ...(!model ? { unavailable: true } : {}),
+  };
+}
+
+function parsePhaseConfigActiveRoute(value: unknown): RouteLifecycleDisplayRoute | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const planning = isRecord(value.planning) ? value.planning : undefined;
+  const coding = isRecord(value.coding) ? value.coding : undefined;
+  const review = isRecord(value.review) ? value.review : undefined;
+
+  const planner = planning ? readString(planning.model) : undefined;
+  const coder = coding ? readString(coding.model) : undefined;
+  const reviewer = review ? readString(review.model) : undefined;
+
+  if (!planner && !coder && !reviewer) {
+    return undefined;
+  }
+
+  return {
+    ...(planner ? { planner } : {}),
+    ...(coder ? { coder } : {}),
+    ...(reviewer ? { reviewer } : {}),
+  };
+}
+
+function mergeRoutes(
+  primary: RouteLifecycleDisplayRoute | undefined,
+  fallback: RouteLifecycleDisplayRoute | undefined,
+): RouteLifecycleDisplayRoute | undefined {
+  if (!primary && !fallback) {
+    return undefined;
+  }
+
+  return {
+    planner: primary?.planner ?? fallback?.planner,
+    coder: primary?.coder ?? fallback?.coder,
+    reviewer: primary?.reviewer ?? fallback?.reviewer,
+  };
+}
+
+function routeDetails(
+  route: RouteLifecycleDisplayRoute | undefined,
+  roles: ReadonlyArray<'planner' | 'coder' | 'reviewer'>,
+): string | undefined {
+  if (!route) {
+    return undefined;
+  }
+
+  const pairs = roles
+    .map((role) => {
+      const value = route[role];
+      return value ? `${role[0]}=${value}` : undefined;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+
+  return pairs.length > 0 ? pairs.join(', ') : undefined;
+}
+
 export function formatSubagentModelResolution(record: unknown): SubagentModelDisplay {
   if (!isRecord(record)) {
     return {
@@ -180,4 +352,75 @@ export function formatAllSubagentModelDisplayText(records: unknown[]): string {
   return records
     .map((record) => formatSubagentModelDisplayText(formatSubagentModelResolution(record)))
     .join('\n');
+}
+
+export function loadRouteLifecycleDisplayInputFromPaths(
+  paths: RouteLifecycleDisplayPaths,
+): RouteLifecycleDisplayInput {
+  const bootstrapRoute = parseRouteArtifact(readJsonFile(paths.initialRoutePath));
+  const executedPlanning = parsePlanningResult(readJsonFile(paths.planningResultPath));
+  const expandedRoute = parseRouteArtifact(readJsonFile(paths.postExpansionRoutePath));
+  const activeRoute = mergeRoutes(
+    parseRouteArtifact(readJsonFile(paths.routingCompletePath)),
+    parsePhaseConfigActiveRoute(readJsonFile(paths.phaseConfigPath)),
+  );
+  const executionTelemetry = readJsonlFile(paths.routingJsonlPath);
+
+  return {
+    ...(bootstrapRoute ? { bootstrapRoute } : {}),
+    ...(executedPlanning ? { executedPlanning } : {}),
+    ...(expandedRoute ? { expandedRoute } : {}),
+    ...(activeRoute ? { activeRoute } : {}),
+    ...(executionTelemetry ? { executionTelemetry } : {}),
+  };
+}
+
+export function formatRouteLifecycleDisplayText(input: RouteLifecycleDisplayInput): string {
+  const lines: string[] = [];
+  const executedPlanning = input.executedPlanning;
+  const executedPlannerModel = executedPlanning?.model;
+  const expandedPlannerModel = input.expandedRoute?.planner;
+
+  if (executedPlanning?.unavailable) {
+    lines.push('executed planning: model resolution unavailable');
+  } else if (executedPlanning?.model || executedPlanning?.agent) {
+    lines.push(`executed planning: ${executedPlanning.agent ?? 'unknown'} / ${executedPlanning.model ?? 'unknown'}`);
+  } else {
+    lines.push('planning execution: pending');
+  }
+
+  const bootstrap = routeDetails(input.bootstrapRoute, ['planner', 'coder', 'reviewer']);
+  if (bootstrap) {
+    lines.push(`bootstrap route: ${bootstrap}`);
+  }
+
+  const expandedPlanner = routeDetails(input.expandedRoute, ['planner']);
+  if (
+    expandedPlanner
+    && (
+      !executedPlannerModel
+      || normalizeModelName(executedPlannerModel) !== normalizeModelName(expandedPlannerModel)
+    )
+  ) {
+    lines.push(`recommended after expansion: ${expandedPlanner}`);
+  }
+
+  const activeRoute = routeDetails(input.activeRoute, ['coder', 'reviewer']);
+  if (activeRoute) {
+    lines.push(`active remaining route: ${activeRoute}`);
+  }
+
+  if (Array.isArray(input.executionTelemetry) && input.executionTelemetry.length > 0) {
+    lines.push('execution telemetry:');
+    lines.push(...input.executionTelemetry.map((record) =>
+      formatSubagentModelDisplayText(formatSubagentModelResolution(record))));
+  }
+
+  return lines.join('\n');
+}
+
+export function formatRouteLifecycleDisplayTextFromPaths(
+  paths: RouteLifecycleDisplayPaths,
+): string {
+  return formatRouteLifecycleDisplayText(loadRouteLifecycleDisplayInputFromPaths(paths));
 }

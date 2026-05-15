@@ -521,6 +521,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     endpoint: providerMetadata?.endpoint,
     challengePairId,
     routeProvenance: deriveRouteProvenance(repoDir, branch, issueId, worktreePath),
+    executedPlanning: stageArtifacts.executedPlanning,
     routePrediction: stageArtifacts.routePrediction,
     routing: stageArtifacts.routing,
     difficulty: difficultyData,
