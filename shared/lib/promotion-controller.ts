@@ -1008,6 +1008,7 @@ function getBranchProtectionStatus(
         allowsForcePush,
         requiresStatusChecks,
         restrictsDirectPush,
+        protectionDetailsAvailable: protection !== undefined,
       }),
     };
   } catch {
@@ -1056,6 +1057,7 @@ function classifyProtectionReason(input: {
   allowsForcePush: boolean;
   requiresStatusChecks: boolean;
   restrictsDirectPush: boolean;
+  protectionDetailsAvailable: boolean;
 }): ProtectedIntegrationReasonCode {
   if (input.requiresStatusChecks) {
     return 'required-status-checks';
@@ -1063,7 +1065,7 @@ function classifyProtectionReason(input: {
   if (input.restrictsDirectPush) {
     return 'restricted-push';
   }
-  if (!input.allowsForcePush) {
+  if (!input.allowsForcePush && input.protectionDetailsAvailable) {
     return 'force-push-disabled';
   }
   return 'protected';
