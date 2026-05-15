@@ -55,10 +55,17 @@ The implementation is complete. Your job is to review and create a PR.
    - A "## Changes" section listing the key files/modules modified
    - A "## Test plan" section describing how the changes were validated
    - A "## Self-review" section noting the review verdict and iterations run
-   - A "## Routing" section when `{{FEATURE_DIR}}/routing.jsonl` exists.
-     Read routing decisions from `{{FEATURE_DIR}}/routing.jsonl` (ignore malformed lines).
-     Include planner/coder/reviewer requested selector, resolved model ID, source layer,
-     and fallback reason when present.
+   - A "## Routing" section when route artifacts or `{{FEATURE_DIR}}/routing.jsonl` exist.
+     Distinguish these concepts explicitly when the artifacts are available:
+     bootstrap route from `{{FEATURE_DIR}}/.initial-route.json`,
+     actual planning execution from `{{FEATURE_DIR}}/.planning-result.json`,
+     recommended after expansion from `{{FEATURE_DIR}}/.post-expansion-route.json`,
+     and active remaining route from `{{FEATURE_DIR}}/.routing-complete` or `{{FEATURE_DIR}}/.phase-config.json`.
+     If the expanded planner differs from the executed planning model, label it `Recommended after expansion`;
+     do not imply that planner actually ran.
+     When `{{FEATURE_DIR}}/routing.jsonl` exists, also include runtime execution telemetry:
+     planner/coder/reviewer requested selector, resolved model ID, source layer,
+     and fallback reason when present. Ignore malformed lines.
    - A Wavemill metadata block at the end of the body:
      <!-- wavemill-meta
      task: {{ISSUE}}
