@@ -18,7 +18,13 @@ import path from 'node:path';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadMetrics } from './review-metrics.ts';
-import type { EvalRouting, RoutePrediction, RoutingDecision, RoutingCandidate } from './eval-schema.ts';
+import type {
+  EvalExecutedPlanning,
+  EvalRouting,
+  RoutePrediction,
+  RoutingDecision,
+  RoutingCandidate,
+} from './eval-schema.ts';
 import {
   POLICY_RESOLVER_VERSION,
   ROUTE_ARTIFACT_SCHEMA_VERSION,
@@ -843,6 +849,7 @@ export function gatherStageArtifacts(
   routingDecision?: RoutingDecision;
   routing?: EvalRouting;
   routePrediction?: RoutePrediction;
+  executedPlanning?: EvalExecutedPlanning;
   executionModel?: string;
 } {
   // Derive feature slug
@@ -856,6 +863,7 @@ export function gatherStageArtifacts(
       routingDecision: undefined,
       routing: loadResolvedModelRouting(repoDir, issueId),
       routePrediction: buildRoutePrediction(loadRoutingCompleteRawFromArchive(repoDir, issueId) ?? undefined),
+      executedPlanning: undefined,
       executionModel: undefined,
     };
   }
@@ -881,8 +889,98 @@ export function gatherStageArtifacts(
     routingDecision,
     routing,
     routePrediction: buildRoutePrediction(routingCompleteRaw),
+    executedPlanning: loadExecutedPlanning(repoDir, slug, issueId, worktreePath),
     executionModel: loadStageExecutionModel(repoDir, slug, worktreePath),
   };
+}
+
+function loadExecutedPlanning(
+  repoDir: string,
+  slug: string,
+  issueId: string,
+  worktreePath?: string,
+): EvalExecutedPlanning | undefined {
+  const resultPaths = ['features', 'bugs'].flatMap((dir) => {
+    const paths: string[] = [];
+    if (worktreePath) {
+      paths.push(path.join(worktreePath, dir, slug, '.planning-result.json'));
+    }
+    paths.push(path.join(repoDir, dir, slug, '.planning-result.json'));
+    return paths;
+  });
+
+  for (const resultPath of resultPaths) {
+    if (!existsSync(resultPath)) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as Record<string, unknown>;
+      const model = typeof parsed.model === 'string' && parsed.model.trim().length > 0
+        ? parsed.model
+        : undefined;
+      const agent = typeof parsed.agent === 'string' && parsed.agent.trim().length > 0
+        ? parsed.agent
+        : undefined;
+      const status = (
+        parsed.status === 'running'
+        || parsed.status === 'awaiting_user'
+        || parsed.status === 'completed'
+        || parsed.status === 'aborted'
+        || parsed.status === 'failed'
+      )
+        ? parsed.status
+        : undefined;
+
+      if (!agent && !model && !status) {
+        return undefined;
+      }
+
+      return {
+        ...(agent ? { agent } : {}),
+        ...(model ? { model } : {}),
+        ...(status ? { status } : {}),
+        source: '.planning-result.json',
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  const archivedPlanning = loadFromArchive(repoDir, issueId, 'planning-result.json');
+  if (!archivedPlanning) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(archivedPlanning) as Record<string, unknown>;
+    const model = typeof parsed.model === 'string' && parsed.model.trim().length > 0
+      ? parsed.model
+      : undefined;
+    const agent = typeof parsed.agent === 'string' && parsed.agent.trim().length > 0
+      ? parsed.agent
+      : undefined;
+    const status = (
+      parsed.status === 'running'
+      || parsed.status === 'awaiting_user'
+      || parsed.status === 'completed'
+      || parsed.status === 'aborted'
+      || parsed.status === 'failed'
+    )
+      ? parsed.status
+      : undefined;
+
+    if (!agent && !model && !status) {
+      return undefined;
+    }
+
+    return {
+      ...(agent ? { agent } : {}),
+      ...(model ? { model } : {}),
+      ...(status ? { status } : {}),
+      source: '.planning-result.json',
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function loadStageExecutionModel(repoDir: string, slug: string, worktreePath?: string): string | undefined {
