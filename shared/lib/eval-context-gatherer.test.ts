@@ -630,7 +630,9 @@ describe('eval-context-gatherer', () => {
       const repoDir = makeTmpDir();
       const issueId = 'HOK-1494';
       const branch = 'task/fix-archived-routing';
+      const featureDir = nodePath.join(repoDir, 'features', 'fix-archived-routing');
       const archiveDir = nodePath.join(repoDir, '.wavemill', 'evals', 'artifacts', issueId);
+      fs.mkdirSync(featureDir, { recursive: true });
       fs.mkdirSync(archiveDir, { recursive: true });
       fs.writeFileSync(
         nodePath.join(archiveDir, 'routing-complete.json'),
@@ -649,6 +651,15 @@ describe('eval-context-gatherer', () => {
           },
           codeDepth: 'deep',
           reviewMode: 'static+llm',
+        }),
+      );
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.planning-result.json'),
+        JSON.stringify({
+          stage: 'planning',
+          status: 'completed',
+          agent: 'codex',
+          model: 'claude-sonnet-4-6',
         }),
       );
 
@@ -676,6 +687,12 @@ describe('eval-context-gatherer', () => {
           taskDifficulty: 'medium',
           topFeatures: ['repo risk', 'balanced route', 'taskType=feature', 'taskDifficulty=medium', 'riskScore=0.4'],
           rationaleSummary: 'repo risk balanced route',
+        });
+        expect(result.executedPlanning).toEqual({
+          agent: 'codex',
+          model: 'claude-sonnet-4-6',
+          status: 'completed',
+          source: '.planning-result.json',
         });
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
@@ -734,6 +751,22 @@ describe('eval-context-gatherer', () => {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
         expect(result.routing?.planner?.resolvedModelId).toBe('gpt-5.4');
         expect(result.routing?.reviewer?.resolvedModelId).toBe('claude-sonnet-4-6');
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('omits executed planning when planning-result is malformed', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-1728';
+      const branch = 'task/clarify-routing';
+      const featureDir = nodePath.join(repoDir, 'features', 'clarify-routing');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(nodePath.join(featureDir, '.planning-result.json'), 'not json');
+
+      try {
+        const result = gatherStageArtifacts(repoDir, issueId, branch);
+        expect(result.executedPlanning).toBeUndefined();
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }

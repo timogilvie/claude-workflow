@@ -16,6 +16,7 @@
 import { BUDGET_MISSING } from './eval-validator.ts';
 import type {
   EvalChallengeRouteContext,
+  EvalExecutedPlanning,
   EvalRouteArtifact,
   EvalRouteProvenance,
   RouteCalibration,
@@ -72,6 +73,8 @@ export interface EvalRecordMetadata {
   challengeRouteContext?: ChallengeRouteContext | null;
   /** General route provenance for all evals */
   routeProvenance?: EvalRouteProvenance | null;
+  /** Actual planning execution provenance from `.planning-result.json`. */
+  executedPlanning?: EvalExecutedPlanning | null;
   /** Compact router prediction metadata for calibration. */
   routePrediction?: RoutePrediction | null;
   /** Difficulty analysis results */
@@ -260,6 +263,15 @@ function toEvalRouteProvenance(routeProvenance: EvalRouteProvenance): EvalRouteP
   };
 }
 
+function toEvalExecutedPlanning(executedPlanning: EvalExecutedPlanning): EvalExecutedPlanning {
+  return {
+    ...(executedPlanning.agent ? { agent: executedPlanning.agent } : {}),
+    ...(executedPlanning.model ? { model: executedPlanning.model } : {}),
+    ...(executedPlanning.status ? { status: executedPlanning.status } : {}),
+    ...(executedPlanning.source ? { source: executedPlanning.source } : {}),
+  };
+}
+
 export function attachChallengeRouteContext(
   record: EvalRecord,
   challengeRouteContext?: ChallengeRouteContext | null,
@@ -278,6 +290,16 @@ export function attachRouteProvenance(
     return;
   }
   record.routeProvenance = toEvalRouteProvenance(routeProvenance);
+}
+
+export function attachExecutedPlanning(
+  record: EvalRecord,
+  executedPlanning?: EvalExecutedPlanning | null,
+): void {
+  if (!executedPlanning) {
+    return;
+  }
+  record.executedPlanning = toEvalExecutedPlanning(executedPlanning);
 }
 
 function pickFirstNonEmptyString(...values: Array<unknown>): string | undefined {
@@ -1052,6 +1074,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachChallengePairId(record, metadata.challengePairId);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
+  attachExecutedPlanning(record, metadata.executedPlanning);
   attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachRoutePrediction(record, metadata.routePrediction);
   attachDifficultyMetadata(record, metadata.difficulty || null);
@@ -1095,6 +1118,7 @@ export function enrichTrainingMetadata(
   attachChallengePairId(record, metadata.challengePairId);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
+  attachExecutedPlanning(record, metadata.executedPlanning);
   attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachRoutePrediction(record, metadata.routePrediction);
   attachDifficultyMetadata(record, metadata.difficulty || null);

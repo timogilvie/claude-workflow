@@ -1474,6 +1474,17 @@ else
   fail "rendered prompts still rely on cwd-relative feature paths"
 fi
 
+if grep -q 'Recommended after expansion' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q '\.planning-result.json' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q '\.post-expansion-route.json' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q 'runtime execution telemetry' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q 'Recommended after expansion' "$PROMPT_RENDER_DIR/review-codex.txt" \
+  && grep -q '\.planning-result.json' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "review prompt distinguishes executed planning from expanded recommendations"
+else
+  fail "review prompt is missing route provenance guidance"
+fi
+
 TMUX_CAPTURE=()
 tmux() {
   if [[ "${1:-}" == "send-keys" ]]; then

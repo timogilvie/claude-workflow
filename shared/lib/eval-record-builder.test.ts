@@ -14,6 +14,7 @@ import {
   attachChallengeRouteContext,
   attachConstraints,
   attachDifficultyMetadata,
+  attachExecutedPlanning,
   attachFallbackEvent,
   attachRouteProvenance,
   attachRouterPolicyMetadata,
@@ -1119,6 +1120,32 @@ describe('eval-record-builder', () => {
         routeMode: 'stage-aware',
         operatingModeDependency: 'survival',
       });
+    });
+  });
+
+  describe('attachExecutedPlanning (HOK-1728)', () => {
+    const executedPlanning = {
+      agent: 'codex',
+      model: 'claude-sonnet-4-6',
+      status: 'completed' as const,
+      source: '.planning-result.json' as const,
+    };
+
+    it('is a no-op when execution provenance is undefined', () => {
+      const before = { ...baseRecord };
+      attachExecutedPlanning(baseRecord, undefined);
+      expect(baseRecord.executedPlanning).toBeUndefined();
+      expect(baseRecord).toEqual(before);
+    });
+
+    it('attaches executed planning provenance when provided', () => {
+      attachExecutedPlanning(baseRecord, executedPlanning);
+      expect(baseRecord.executedPlanning).toEqual(executedPlanning);
+    });
+
+    it('attaches executed planning through enrichEvalRecord', () => {
+      enrichEvalRecord(baseRecord, { executedPlanning });
+      expect(baseRecord.executedPlanning).toEqual(executedPlanning);
     });
   });
 
