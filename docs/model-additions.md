@@ -3,6 +3,7 @@ title: Adding Models
 ---
 
 Wavemill model support is deliberately explicit. When adding a new model, update each surface that can select, launch, price, or evaluate it.
+Before finalizing defaults, use [Config Files](config-files.md) to decide whether each new model/router setting belongs in shared repo config, local override, or environment variables.
 
 ## Checklist
 

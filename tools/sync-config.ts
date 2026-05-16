@@ -18,26 +18,36 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 import { CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
 import { confirm } from '../shared/lib/cli-prompt.ts';
-import { prepareConfigSync } from '../shared/lib/config-sync.ts';
+import { findLocalPromotionConflicts, prepareConfigSync } from '../shared/lib/config-sync.ts';
 
 async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
   const repoDir = process.cwd();
+  const prepared = prepareConfigSync(repoDir);
   const {
     additions,
     alreadyCurrent,
     backupPath,
     configExists,
     configPath,
+    localConfigExists,
+    localConfigPath,
     currentConfig,
     mergedConfig,
-  } = prepareConfigSync(repoDir);
+    localOverrideClassifications,
+  } = prepared;
 
-  console.log('🔧 Wavemill Config Sync\n');
+  console.log('🔧 Wavemill Config Sync');
+  console.log('   Sync writes shared defaults to .wavemill-config.json only.\n');
 
   if (configExists) {
-    console.log(`✓ Found existing config at ${configPath}`);
+    console.log(`✓ Found existing .wavemill-config.json at ${configPath}`);
   } else {
-    console.log(`ℹ No existing config found. Will create new one.`);
+    console.log(`ℹ No existing .wavemill-config.json found. Will create new one.`);
+  }
+
+  if (localConfigExists) {
+    console.log(`ℹ Found .wavemill-config.local.json at ${localConfigPath}`);
+    console.log('  Local overrides are read at runtime and are never modified by sync.');
   }
 
   // Show summary
@@ -57,9 +67,31 @@ async function syncConfig(options: { yes?: boolean; dryRun?: boolean } = {}) {
 
   // Dry run mode
   if (options.dryRun) {
+    if (localConfigExists) {
+      console.log();
+      if (localOverrideClassifications.length > 0) {
+        console.log('🔎 Local override classification (missing from .wavemill-config.json):\n');
+        localOverrideClassifications.forEach(entry => {
+          console.log(`   - ${entry.path}: ${entry.label}`);
+          console.log(`     ${entry.reason}`);
+        });
+      } else {
+        console.log('ℹ No local-only missing fields found in .wavemill-config.local.json.');
+      }
+      console.log();
+    }
     console.log('📄 Merged config (dry-run, not written):\n');
     console.log(JSON.stringify(mergedConfig, null, 2));
     return;
+  }
+
+  const localPromotionConflicts = findLocalPromotionConflicts(prepared);
+  if (localPromotionConflicts.length > 0) {
+    const paths = localPromotionConflicts.map(entry => entry.path).join(', ');
+    throw new Error(
+      `Refusing to update .wavemill-config.json: local override path(s) require explicit decision (${paths}). ` +
+        'Review .wavemill-config.local.json and .wavemill-config.json, then set shared defaults manually.',
+    );
   }
 
   // Confirm
