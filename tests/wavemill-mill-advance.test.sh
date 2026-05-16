@@ -260,6 +260,22 @@ assert_eq "success audit stage running guardrail" "true" "$(jq -r '.guardrails.s
 assert_contains "success audit timestamp present" "T" "$(jq -r '.timestamp' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "backlog prompt preserves advance command" "advance HOK-1639" "$(normalize_prompt_command_reply "advance HOK-1639")"
 
+# Challenger success
+WORKTREE_CHALLENGER="$SCENARIO_DIR/worktree-challenger"
+FEATURE_CHALLENGER="$WORKTREE_CHALLENGER/features/challenger-slug"
+mkdir -p "$FEATURE_CHALLENGER"
+setup_git_worktree "$WORKTREE_CHALLENGER"
+write_task_state "HOK-1639_c" "challenger-slug" "$WORKTREE_CHALLENGER" "coding"
+write_coding_result "$FEATURE_CHALLENGER" "running"
+write_blocked_completion "$FEATURE_CHALLENGER" "$(git -C "$WORKTREE_CHALLENGER" rev-parse --short HEAD)"
+run_advance "advance HOK-1639_c"
+assert_eq "challenger success status" "handled" "$MONITOR_COMMAND_STATUS"
+assert_file_exists "challenger writes audit artifact" "$FEATURE_CHALLENGER/.coding-advance-override.json"
+assert_file_exists "challenger writes coding complete marker" "$FEATURE_CHALLENGER/.coding-complete"
+assert_contains "challenger success log message" "HOK-1639_c -> advance recorded; review will launch on the next monitor tick" "${log_lines[*]}"
+assert_eq "challenger audit issue" "HOK-1639_c" "$(jq -r '.issue' "$FEATURE_CHALLENGER/.coding-advance-override.json")"
+assert_eq "challenger prompt preserves advance command" "advance HOK-1639_c" "$(normalize_prompt_command_reply "advance HOK-1639_c")"
+
 # Unknown issue
 init_state "$STATE_FILE"
 run_advance "advance HOK-9999"
