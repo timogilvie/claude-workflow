@@ -1761,7 +1761,13 @@ wavemill_lock_run() {
   local attempts=0
   local max_retries="${WAVEMILL_LOCK_MAX_RETRIES:-300}"
   local sleep_seconds="${WAVEMILL_LOCK_SLEEP_SECONDS:-0.1}"
+  local stale_seconds="${WAVEMILL_LOCK_STALE_SECONDS:-120}"
   while ! mkdir "$lock_dir" 2>/dev/null; do
+    if wavemill_lock_dir_is_stale "$lock_dir" "$stale_seconds"; then
+      rm -f "$lock_dir/owner.pid" "$lock_dir/owner.command" 2>/dev/null || true
+      rmdir "$lock_dir" 2>/dev/null || true
+      continue
+    fi
     attempts=$((attempts + 1))
     if (( attempts >= max_retries )); then
       if declare -F startup_log >/dev/null 2>&1; then
@@ -1772,10 +1778,38 @@ wavemill_lock_run() {
     sleep "$sleep_seconds"
   done
 
+  printf '%s\n' "${BASHPID:-$$}" > "$lock_dir/owner.pid" 2>/dev/null || true
+  printf '%s\n' "$*" > "$lock_dir/owner.command" 2>/dev/null || true
   "$@"
   local rc=$?
+  rm -f "$lock_dir/owner.pid" "$lock_dir/owner.command" 2>/dev/null || true
   rmdir "$lock_dir" 2>/dev/null || true
   return "$rc"
+}
+
+wavemill_lock_dir_mtime_epoch() {
+  local path="$1"
+  stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null || echo 0
+}
+
+wavemill_lock_dir_is_stale() {
+  local lock_dir="$1" stale_seconds="$2"
+  local owner_pid mtime now
+
+  if [[ -f "$lock_dir/owner.pid" ]]; then
+    owner_pid="$(cat "$lock_dir/owner.pid" 2>/dev/null || true)"
+    if [[ "$owner_pid" =~ ^[0-9]+$ ]]; then
+      kill -0 "$owner_pid" 2>/dev/null && return 1
+      return 0
+    fi
+  fi
+
+  [[ "$stale_seconds" =~ ^[0-9]+$ ]] || stale_seconds=120
+  (( stale_seconds <= 0 )) && return 0
+  mtime="$(wavemill_lock_dir_mtime_epoch "$lock_dir")"
+  now="$(date +%s)"
+  [[ "$mtime" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ ]] || return 1
+  (( now - mtime >= stale_seconds ))
 }
 
 # Configure agent hooks for status tracking in a worktree-specific settings file.
