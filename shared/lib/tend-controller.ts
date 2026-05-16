@@ -136,10 +136,7 @@ export async function defaultHealthChecker(integrationBranch: string, repoDir: s
   try {
     validateIntegrationBranch(integrationBranch);
 
-    const sha = String(execShellCommand(
-      `git rev-parse ${escapeShellArg(integrationBranch)} 2>/dev/null`,
-      { encoding: 'utf-8', cwd: repoDir },
-    )).trim();
+    const sha = resolveIntegrationBranchSha(integrationBranch, repoDir);
     const repo = resolveOwnerRepoFromRemote(repoDir);
 
     if (!repo) {
@@ -163,6 +160,35 @@ export async function defaultHealthChecker(integrationBranch: string, repoDir: s
     return { state: 'healthy' };
   } catch (error) {
     return { state: 'unhealthy', reason: `health-check-error: ${errorMessage(error)}` };
+  }
+}
+
+function resolveIntegrationBranchSha(integrationBranch: string, repoDir: string): string {
+  const localSha = resolveRefSha(integrationBranch, repoDir);
+  if (localSha) {
+    return localSha;
+  }
+
+  const remoteTrackingRef = `refs/remotes/origin/${integrationBranch}`;
+  const remoteSha = resolveRefSha(remoteTrackingRef, repoDir);
+  if (remoteSha) {
+    return remoteSha;
+  }
+
+  throw new Error(
+    `unable to resolve integration branch ${escapeShellArg(integrationBranch)} locally or as ${remoteTrackingRef}`,
+  );
+}
+
+function resolveRefSha(ref: string, repoDir: string): string | null {
+  try {
+    const sha = String(execShellCommand(
+      `git rev-parse ${escapeShellArg(ref)} 2>/dev/null`,
+      { encoding: 'utf-8', cwd: repoDir },
+    )).trim();
+    return sha ? sha : null;
+  } catch {
+    return null;
   }
 }
 

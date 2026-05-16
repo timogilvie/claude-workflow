@@ -16,7 +16,9 @@ import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import {
   loadWavemillConfig,
+  loadWavemillBaseConfig,
   clearConfigCache,
+  CURRENT_CONFIG_VERSION,
   INTEGRATION_DEFAULTS,
   PROMOTION_DEFAULTS,
   getChallengeConfig,
@@ -1100,6 +1102,28 @@ test('clearConfigCache forces reload', () => {
   }
 });
 
+test('clearConfigCache forces reload for base-only config', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ router: { enabled: true } }));
+
+    const config1 = loadWavemillBaseConfig(tmp);
+    assert.equal(config1.router?.enabled, true);
+
+    writeConfig(tmp, JSON.stringify({ router: { enabled: false } }));
+
+    const config2 = loadWavemillBaseConfig(tmp);
+    assert.equal(config2.router?.enabled, true);
+
+    clearConfigCache(tmp);
+    const config3 = loadWavemillBaseConfig(tmp);
+    assert.equal(config3.router?.enabled, false);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('clearConfigCache() without args clears all caches', () => {
   const tmp1 = makeTempRepo();
   const tmp2 = makeTempRepo();
@@ -1122,6 +1146,32 @@ test('clearConfigCache() without args clears all caches', () => {
     // Should get new values
     const config1 = loadWavemillConfig(tmp1);
     const config2 = loadWavemillConfig(tmp2);
+    assert.equal(config1.router?.enabled, false);
+    assert.equal(config2.mill?.maxParallel, 10);
+  } finally {
+    cleanUp(tmp1);
+    cleanUp(tmp2);
+  }
+});
+
+test('clearConfigCache() without args clears base-only caches for all repos', () => {
+  const tmp1 = makeTempRepo();
+  const tmp2 = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp1, JSON.stringify({ router: { enabled: true } }));
+    writeConfig(tmp2, JSON.stringify({ mill: { maxParallel: 5 } }));
+
+    loadWavemillBaseConfig(tmp1);
+    loadWavemillBaseConfig(tmp2);
+
+    clearConfigCache();
+
+    writeConfig(tmp1, JSON.stringify({ router: { enabled: false } }));
+    writeConfig(tmp2, JSON.stringify({ mill: { maxParallel: 10 } }));
+
+    const config1 = loadWavemillBaseConfig(tmp1);
+    const config2 = loadWavemillBaseConfig(tmp2);
     assert.equal(config1.router?.enabled, false);
     assert.equal(config2.mill?.maxParallel, 10);
   } finally {
@@ -2561,6 +2611,35 @@ test('local overlay deep-merges objects onto base', () => {
   }
 });
 
+test('base-only loader ignores local overlay values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      configVersion: '1.3.0',
+      mill: { maxParallel: 5 },
+      router: { enabled: false },
+    }));
+    writeLocalConfig(tmp, JSON.stringify({
+      configVersion: '1.4.0',
+      mill: { maxParallel: 12 },
+      router: { enabled: true },
+    }));
+
+    const baseConfig = loadWavemillBaseConfig(tmp);
+    const runtimeConfig = loadWavemillConfig(tmp);
+
+    assert.equal(baseConfig.configVersion, '1.3.0');
+    assert.equal(baseConfig.mill?.maxParallel, 5);
+    assert.equal(baseConfig.router?.enabled, false);
+    assert.equal(runtimeConfig.configVersion, '1.4.0');
+    assert.equal(runtimeConfig.mill?.maxParallel, 12);
+    assert.equal(runtimeConfig.router?.enabled, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('local overlay deep-merges promotion config onto base', () => {
   const tmp = makeTempRepo();
   try {
@@ -2614,6 +2693,26 @@ test('local overlay alone (no base file) acts as the entire config', () => {
 
     const config = loadWavemillConfig(tmp);
     assert.equal(config.mill?.maxParallel, 3);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('base-only loader returns empty object when only local overlay exists', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeLocalConfig(tmp, JSON.stringify({
+      configVersion: CURRENT_CONFIG_VERSION,
+      mill: { maxParallel: 3 },
+    }));
+
+    const baseConfig = loadWavemillBaseConfig(tmp);
+    const runtimeConfig = loadWavemillConfig(tmp);
+
+    assert.deepEqual(baseConfig, {});
+    assert.equal(runtimeConfig.configVersion, CURRENT_CONFIG_VERSION);
+    assert.equal(runtimeConfig.mill?.maxParallel, 3);
   } finally {
     cleanUp(tmp);
   }

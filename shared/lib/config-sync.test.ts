@@ -34,6 +34,10 @@ function cleanUp(dir: string) {
   rmSync(dir, { recursive: true, force: true });
 }
 
+function writeLocalConfig(repoDir: string, config: Record<string, unknown>) {
+  writeFileSync(join(repoDir, '.wavemill-config.local.json'), JSON.stringify(config), 'utf-8');
+}
+
 console.log('\n--- config-sync tests ---\n');
 
 test('deepMergeConfig preserves user values while adding missing defaults', () => {
@@ -73,6 +77,108 @@ test('prepareConfigSync merges current config with canonical template', () => {
     assert.equal(prepared.mergedConfig.mill?.maxParallel, 7);
     assert.equal(prepared.mergedConfig.linear?.project, CANONICAL_CONFIG_TEMPLATE.linear?.project);
     assert.ok(prepared.additions.includes('linear'));
+  } finally {
+    cleanUp(repoDir);
+  }
+});
+
+test('prepareConfigSync alreadyCurrent ignores local overlay', () => {
+  const repoDir = makeTempRepo();
+  try {
+    writeFileSync(
+      join(repoDir, '.wavemill-config.json'),
+      JSON.stringify(CANONICAL_CONFIG_TEMPLATE),
+      'utf-8',
+    );
+    clearConfigCache(repoDir);
+    const withoutLocal = prepareConfigSync(repoDir);
+
+    writeLocalConfig(repoDir, {
+      configVersion: '9.9.9',
+      router: {
+        enabled: false,
+        defaultModel: 'gpt-5.5',
+      },
+      hokusai: {
+        dataSubmission: {
+          enabled: true,
+          endpoint: 'https://example.com/override',
+        },
+      },
+    });
+    clearConfigCache(repoDir);
+    const withLocal = prepareConfigSync(repoDir);
+
+    assert.equal(withoutLocal.alreadyCurrent, true);
+    assert.equal(withLocal.alreadyCurrent, true);
+    assert.deepEqual(withLocal.additions, withoutLocal.additions);
+  } finally {
+    cleanUp(repoDir);
+  }
+});
+
+test('prepareConfigSync reports additions from base even when local overlay has them', () => {
+  const repoDir = makeTempRepo();
+  try {
+    writeFileSync(
+      join(repoDir, '.wavemill-config.json'),
+      JSON.stringify({
+        configVersion: '1.3.0',
+        mill: { maxParallel: 7 },
+      }),
+      'utf-8',
+    );
+    writeLocalConfig(repoDir, {
+      configVersion: CURRENT_CONFIG_VERSION,
+      router: {
+        enabled: false,
+      },
+      hokusai: {
+        dataSubmission: {
+          enabled: true,
+          consentVersion: 'local',
+          endpoint: 'https://local.invalid/submit',
+        },
+      },
+    });
+    clearConfigCache(repoDir);
+
+    const prepared = prepareConfigSync(repoDir);
+
+    assert.equal(prepared.alreadyCurrent, false);
+    assert.ok(prepared.additions.includes('router'));
+    assert.ok(prepared.additions.includes('hokusai'));
+    assert.equal(prepared.mergedConfig.router?.enabled, CANONICAL_CONFIG_TEMPLATE.router?.enabled);
+    assert.equal(
+      prepared.mergedConfig.hokusai?.dataSubmission?.endpoint,
+      CANONICAL_CONFIG_TEMPLATE.hokusai?.dataSubmission?.endpoint,
+    );
+  } finally {
+    cleanUp(repoDir);
+  }
+});
+
+test('prepareConfigSync output is stable whether local overlay is absent or empty', () => {
+  const repoDir = makeTempRepo();
+  try {
+    writeFileSync(
+      join(repoDir, '.wavemill-config.json'),
+      JSON.stringify({
+        configVersion: '1.3.0',
+        mill: { maxParallel: 7 },
+      }),
+      'utf-8',
+    );
+    clearConfigCache(repoDir);
+    const withoutLocal = prepareConfigSync(repoDir);
+
+    writeLocalConfig(repoDir, {});
+    clearConfigCache(repoDir);
+    const withEmptyLocal = prepareConfigSync(repoDir);
+
+    assert.equal(withoutLocal.alreadyCurrent, withEmptyLocal.alreadyCurrent);
+    assert.deepEqual(withoutLocal.additions, withEmptyLocal.additions);
+    assert.deepEqual(withoutLocal.mergedConfig, withEmptyLocal.mergedConfig);
   } finally {
     cleanUp(repoDir);
   }
