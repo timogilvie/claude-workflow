@@ -90,4 +90,32 @@ command() {
 
 run_case "mkdir-fallback"
 
+run_stale_lock_case() {
+  local name="$1"
+  PLAN_FILE="$TMP_DIR/${name}-plan.json"
+  STATUS_LOG_FILE="$TMP_DIR/${name}-status.log"
+  STATE_WRITES_FILE="$TMP_DIR/${name}-state.txt"
+  export PLAN_FILE STATUS_LOG_FILE STATE_WRITES_FILE
+
+  jq -n '{tasks: [{issue: "HOK-1", slug: "task-1"}]}' > "$PLAN_FILE"
+  : > "$STATE_WRITES_FILE"
+
+  local lock_root="/tmp/wavemill-${SESSION}-locks"
+  rm -rf "$lock_root"
+  mkdir -p "$lock_root/state.lk"
+  printf '999999\n' > "$lock_root/state.lk/owner.pid"
+
+  WAVEMILL_LOCK_STALE_SECONDS=120 \
+    WAVEMILL_STARTUP_CONCURRENCY=1 \
+    launch_startup_concurrent 1
+
+  if [[ "$(cat "$STATE_WRITES_FILE")" != "HOK-1:ok" ]]; then
+    echo "FAIL: $name did not recover stale lock"
+    cat "$STATE_WRITES_FILE"
+    exit 1
+  fi
+}
+
+run_stale_lock_case "mkdir-fallback-stale-lock"
+
 echo "PASS: startup state writes are serialized"
