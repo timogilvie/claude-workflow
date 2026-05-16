@@ -112,6 +112,8 @@ If you want a different config than the one committed in `.wavemill-config.json`
 
 Merge rules: nested objects are recursively merged, arrays are replaced entirely (not concatenated), and primitive values from the local file win. The local file alone is also valid — if you have no committed config but a local one, it acts as the whole config.
 
+Ownership matters: `sync-config` writes `.wavemill-config.json` only and never edits `.wavemill-config.local.json`. Use the committed file for repo-wide defaults and the local file for developer-specific overrides. See [Config Files Guide](config-files.md) for ownership, precedence, and placement guidance.
+
 ### Config Versioning
 
 The config includes a `configVersion` field to track format compatibility. When running `wavemill mill`, `expand`, or `plan`, you'll be prompted to upgrade if your config is outdated.
@@ -120,6 +122,12 @@ To manually upgrade:
 
 ```bash
 npx tsx tools/sync-config.ts
+```
+
+To inspect which local-only fields would be candidates for repo defaults before writing anything:
+
+```bash
+npx tsx tools/sync-config.ts --dry-run
 ```
 
 To skip version checks:

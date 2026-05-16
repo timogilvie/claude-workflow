@@ -36,6 +36,8 @@ Permissions are configured in `.wavemill-config.json` in your repository root:
 }
 ```
 
+Shared permission patterns belong in `.wavemill-config.json` because they affect repo-wide agent behavior. If you need a personal-only experiment, keep it in `.wavemill-config.local.json` instead. See [Config Files Guide](./config-files.md) for file ownership and precedence.
+
 ### Schema
 
 The `permissions` section supports:

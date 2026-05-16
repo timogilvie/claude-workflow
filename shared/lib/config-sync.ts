@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { CURRENT_CONFIG_VERSION, loadWavemillConfig, type WavemillConfig } from './config.ts';
+import { isDeepStrictEqual } from 'node:util';
+import { CURRENT_CONFIG_VERSION, type WavemillConfig } from './config.ts';
 
 export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
   configVersion: CURRENT_CONFIG_VERSION,
@@ -169,11 +170,26 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
 export interface PreparedConfigSync {
   configPath: string;
   backupPath: string;
+  localConfigPath: string;
   configExists: boolean;
+  localConfigExists: boolean;
+  localConfigParseError?: string;
   currentConfig: Record<string, unknown>;
+  localConfig: Record<string, unknown> | null;
   mergedConfig: WavemillConfig;
   additions: string[];
   alreadyCurrent: boolean;
+}
+
+export type ConfigOverrideClassificationLabel =
+  | 'will add to repo default'
+  | 'already local-only'
+  | 'requires decision';
+
+export interface ConfigOverrideClassification {
+  path: string;
+  label: ConfigOverrideClassificationLabel;
+  reason: string;
 }
 
 export function deepMergeConfig(target: any, source: any): any {
@@ -221,15 +237,163 @@ export function identifyConfigAdditions(before: any, after: any, currentPath = '
   return additions;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function tryReadJsonObject(path: string): { value: Record<string, unknown> | null; parseError?: string } {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
+    if (!isPlainObject(parsed)) {
+      return { value: {}, parseError: `${path} must contain a JSON object at the top level.` };
+    }
+    return { value: parsed };
+  } catch (error) {
+    return {
+      value: null,
+      parseError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function collectLeafPaths(value: unknown, currentPath = ''): string[] {
+  if (!isPlainObject(value)) {
+    return currentPath ? [currentPath] : [];
+  }
+
+  const entries = Object.entries(value);
+  if (entries.length === 0) {
+    return currentPath ? [currentPath] : [];
+  }
+
+  const paths: string[] = [];
+  for (const [key, child] of entries) {
+    const nextPath = currentPath ? `${currentPath}.${key}` : key;
+    if (isPlainObject(child)) {
+      const childPaths = collectLeafPaths(child, nextPath);
+      if (childPaths.length === 0) {
+        paths.push(nextPath);
+      } else {
+        paths.push(...childPaths);
+      }
+      continue;
+    }
+    paths.push(nextPath);
+  }
+
+  return paths;
+}
+
+function getValueAtPath(value: unknown, path: string): unknown {
+  let current: unknown = value;
+  for (const segment of path.split('.')) {
+    if (!isPlainObject(current) || !Object.prototype.hasOwnProperty.call(current, segment)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function hasPath(value: unknown, path: string): boolean {
+  let current: unknown = value;
+  for (const segment of path.split('.')) {
+    if (!isPlainObject(current) || !Object.prototype.hasOwnProperty.call(current, segment)) {
+      return false;
+    }
+    current = current[segment];
+  }
+  return true;
+}
+
+function isSensitiveOrLocalPath(path: string, value: unknown): boolean {
+  const lowerPath = path.toLowerCase();
+  const sensitiveTokens = ['secret', 'token', 'apikey', 'password', 'credential', 'privatekey'];
+  if (sensitiveTokens.some(token => lowerPath.includes(token))) {
+    return true;
+  }
+
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  return (
+    value.startsWith('/Users/') ||
+    value.startsWith('/home/') ||
+    value.startsWith('~/') ||
+    value.includes('$HOME')
+  );
+}
+
+function getClassificationReason(label: ConfigOverrideClassificationLabel, path: string): string {
+  switch (label) {
+    case 'will add to repo default':
+      return `${path} is a canonical config field missing from .wavemill-config.json.`;
+    case 'already local-only':
+      return `${path} exists only in .wavemill-config.local.json and is not a canonical sync field.`;
+    case 'requires decision':
+      return `${path} looks sensitive, machine-local, or intentionally overridden.`;
+  }
+}
+
+export function classifyLocalOverridePaths(
+  baseConfig: Record<string, unknown>,
+  localConfig: Record<string, unknown> | null,
+  canonicalTemplate: Record<string, unknown> = CANONICAL_CONFIG_TEMPLATE as Record<string, unknown>,
+): ConfigOverrideClassification[] {
+  if (!localConfig) {
+    return [];
+  }
+
+  const localPaths = collectLeafPaths(localConfig);
+  if (localPaths.length === 0) {
+    return [];
+  }
+
+  const canonicalPaths = new Set(collectLeafPaths(canonicalTemplate));
+  const rows = new Map<string, ConfigOverrideClassification>();
+
+  for (const path of localPaths) {
+    const localValue = getValueAtPath(localConfig, path);
+    const baseHasPath = hasPath(baseConfig, path);
+    const canonical = canonicalPaths.has(path);
+
+    let label: ConfigOverrideClassificationLabel;
+    if (isSensitiveOrLocalPath(path, localValue)) {
+      label = 'requires decision';
+    } else if (baseHasPath) {
+      const baseValue = getValueAtPath(baseConfig, path);
+      label = isDeepStrictEqual(baseValue, localValue) ? 'already local-only' : 'requires decision';
+    } else if (canonical) {
+      label = 'will add to repo default';
+    } else {
+      label = 'already local-only';
+    }
+
+    rows.set(path, {
+      path,
+      label,
+      reason: getClassificationReason(label, path),
+    });
+  }
+
+  return [...rows.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
 export function prepareConfigSync(repoDir: string): PreparedConfigSync {
   const configPath = resolve(repoDir, '.wavemill-config.json');
   const backupPath = resolve(repoDir, '.wavemill-config.json.backup');
+  const localConfigPath = resolve(repoDir, '.wavemill-config.local.json');
   const configExists = existsSync(configPath);
+  const localConfigExists = existsSync(localConfigPath);
 
   let currentConfig: Record<string, unknown> = {};
   if (configExists) {
     currentConfig = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
   }
+
+  const localConfigResult = localConfigExists ? tryReadJsonObject(localConfigPath) : { value: null as Record<string, unknown> | null };
+  const localConfig = localConfigResult.value;
 
   const mergedConfig = deepMergeConfig(CANONICAL_CONFIG_TEMPLATE, currentConfig) as WavemillConfig;
   mergedConfig.configVersion = CURRENT_CONFIG_VERSION;
@@ -245,13 +409,17 @@ export function prepareConfigSync(repoDir: string): PreparedConfigSync {
     configExists &&
     currentConfig.configVersion === CURRENT_CONFIG_VERSION &&
     additions.length === 0 &&
-    JSON.stringify(loadWavemillConfig(repoDir)) === JSON.stringify(mergedConfig);
+    isDeepStrictEqual(currentConfig, mergedConfig);
 
   return {
     configPath,
     backupPath,
+    localConfigPath,
     configExists,
+    localConfigExists,
+    localConfigParseError: localConfigResult.parseError,
     currentConfig,
+    localConfig,
     mergedConfig,
     additions,
     alreadyCurrent,
