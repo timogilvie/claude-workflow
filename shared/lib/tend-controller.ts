@@ -553,7 +553,10 @@ function isRemoteIntegrationAncestorOfPrHead(
 }
 
 function shouldWarnOnAncestryCheckFailure(error: unknown): boolean {
-  return !/not ancestor/i.test(errorMessage(error));
+  // git merge-base --is-ancestor exits with code 1 (no output) when not an ancestor.
+  // execSync throws with no "not ancestor" text — detect via exit status instead.
+  const status = (error as Record<string, unknown>)?.status;
+  return status !== 1;
 }
 
 export async function waitForChecks(

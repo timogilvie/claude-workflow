@@ -114,7 +114,7 @@ function buildMergeTestOptions(overrides: {
     if (cmd.includes('gh pr list --label')) return '[]';
     if (cmd.includes('git rev-parse --git-common-dir')) return join(repoDir, '.git');
     if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
-    if (cmd.includes('git merge-base --is-ancestor')) throw new Error('not ancestor');
+    if (cmd.includes('git merge-base --is-ancestor')) { const e = new Error('Command failed: git merge-base --is-ancestor'); (e as unknown as Record<string, unknown>).status = 1; throw e; }
     if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
     return '';
   };
