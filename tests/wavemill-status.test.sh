@@ -11,7 +11,7 @@ pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 
 strip_ansi() {
-  perl -pe 's/\e\[[0-9;]*[A-Za-z]//g'
+  perl -pe 's/\e\[[0-9;?]*[A-Za-z]//g'
 }
 
 iso_at_offset() {
@@ -497,6 +497,33 @@ if [[ "$FALLBACK_CODING_DETAIL_OUTPUT" == 'HOK-1642 needs attention: coding done
 else
   fail "coding blocked-completion did not use the generic fallback summary"
 fi
+
+cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-auto-advance.json" <<'EOF'
+{
+  "reason": "automatic advance from valid blocked-completion artifact"
+}
+EOF
+
+AUTO_CODING_DETAIL_OUTPUT="$(run_blocked_detail "$WORKTREES_DIR" "HOK-1642" "coding-task")"
+if [[ -z "$AUTO_CODING_DETAIL_OUTPUT" ]]; then
+  pass "coding blocked-completion detail suppresses manual prompt after auto-advance"
+else
+  fail "coding blocked-completion detail still prompted after auto-advance"
+fi
+
+OUTPUT_CODING_AUTO="$TMP_DIR/output-coding-auto.txt"
+run_render "$STATE_FILE_CODING_BLOCKED" "$WORKTREES_DIR" "$BEHAVIOR_CODING_BLOCKED" "$OUTPUT_CODING_AUTO"
+
+if grep -q '⚡ ACTIVE (2)' "$OUTPUT_CODING_AUTO" \
+  && ! grep -q '📥 INBOX (1)' "$OUTPUT_CODING_AUTO" \
+  && grep -q 'HOK-1642.*coding-task.*auto review.*● running' "$OUTPUT_CODING_AUTO" \
+  && grep -q 'HOK-1642 auto-advanced coding to review from blocked completion.' "$OUTPUT_CODING_AUTO"; then
+  pass "coding auto-advance renders as active review handoff detail"
+else
+  fail "coding auto-advance row did not render with active auto-review detail"
+fi
+
+rm -f "$WORKTREES_DIR/coding-task/features/coding-task/.coding-auto-advance.json"
 
 rm -f "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json"
 
