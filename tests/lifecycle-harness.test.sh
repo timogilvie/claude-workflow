@@ -140,6 +140,12 @@ harness_extract_real_functions() {
     blocked_completion_announce_marker \
     blocked_completion_should_announce \
     mark_blocked_completion_announced \
+    blocked_completion_current_head \
+    blocked_completion_commit_matches_head \
+    blocked_completion_worktree_clean_for_auto \
+    blocked_completion_validate_for_advance \
+    complete_coding_advance \
+    auto_advance_blocked_completion \
     emit_blocked_completion_attention \
     handle_planning_overreach_rejection \
     validate_coding_phase_output \
@@ -1012,6 +1018,40 @@ EOF
   check_file_exists "blocked completion: dedupe marker written" "$repo/features/$slug/.blocked-completion-announced"
 }
 
+test_coding_blocked_completion_auto_advances_when_valid() {
+  local slug="coding-blocked-auto"
+  local issue="HOK-1642-AUTO"
+  local repo tick commit
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "auto blocked completion: phase remains coding for handoff" "coding" "$(kv_value "$tick" phase)"
+  check_eq "auto blocked completion: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "auto blocked completion: attention cleared" "clear" "$(kv_value "$tick" attention)"
+  check_eq "auto blocked completion: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_contains "auto blocked completion: auto-advance log emitted" "$(kv_value "$tick" log_output)" "[auto-advance] $issue advancing coding to review"
+  check_file_exists "auto blocked completion: audit artifact written" "$repo/features/$slug/.coding-auto-advance.json"
+  check_file_exists "auto blocked completion: coding complete marker written" "$repo/features/$slug/.coding-complete"
+  check_file_absent "auto blocked completion: no dedupe marker written" "$repo/features/$slug/.blocked-completion-announced"
+}
+
 test_coding_blocked_completion_dedupes_same_artifact() {
   local slug="coding-blocked-completion-dedupe"
   local issue="HOK-1642-DEDUP"
@@ -1094,6 +1134,121 @@ test_coding_blocked_completion_malformed_json_falls_back() {
   check_contains "malformed blocked completion: generic log emitted" "$(kv_value "$tick" log_output)" "needs attention: coding done; verification blocked"
 }
 
+test_coding_blocked_completion_missing_required_field_does_not_auto_advance() {
+  local slug="coding-blocked-missing-field"
+  local issue="HOK-1642-MISSINGFIELD"
+  local repo tick commit
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "missing field: stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "missing field: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_file_absent "missing field: no auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+}
+
+test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance() {
+  local slug="coding-blocked-empty-passing"
+  local issue="HOK-1642-EMPTYPASS"
+  local repo tick commit
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": [],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "empty passing checks: stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "empty passing checks: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_file_absent "empty passing checks: no auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+}
+
+test_coding_blocked_completion_stale_commit_does_not_auto_advance() {
+  local slug="coding-blocked-stale-commit"
+  local issue="HOK-1642-STALE"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<'EOF'
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "deadbee",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "stale commit: stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "stale commit: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_file_absent "stale commit: no auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+}
+
+test_coding_blocked_completion_dirty_worktree_does_not_auto_advance() {
+  local slug="coding-blocked-dirty-worktree"
+  local issue="HOK-1642-DIRTY"
+  local repo tick commit
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  printf 'dirty\n' >> "$repo/README.md"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "dirty worktree: stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "dirty worktree: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_file_absent "dirty worktree: no auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+}
+
 test_coding_blocked_completion_dedupes_when_stat_unavailable() {
   local slug="coding-blocked-completion-no-stat"
   local issue="HOK-1642-NOSTAT"
@@ -1136,10 +1291,15 @@ test_resume_uses_expanded_phase_config_over_stale_state
 test_merge_queue_marks_non_candidate_stale_without_rerun
 test_merge_queue_disabled_keeps_legacy_rerun
 test_coding_blocked_completion_needs_user_without_advancing
+test_coding_blocked_completion_auto_advances_when_valid
 test_coding_blocked_completion_dedupes_same_artifact
 test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
 test_coding_blocked_completion_malformed_json_falls_back
+test_coding_blocked_completion_missing_required_field_does_not_auto_advance
+test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance
+test_coding_blocked_completion_stale_commit_does_not_auto_advance
+test_coding_blocked_completion_dirty_worktree_does_not_auto_advance
 test_coding_blocked_completion_dedupes_when_stat_unavailable
 
 echo ""

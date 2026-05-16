@@ -566,6 +566,7 @@ const evalConfig = getEvalConfig(repoDir);
 - Validated against `wavemill-config.schema.json` at load time
 - All fields are optional (graceful degradation)
 - Use `clearConfigCache(repoDir)` to force reload in tests
+- Config ownership and precedence reference: `docs/config-files.md`
 
 **Implementation:**
 - Replaces ~7 independent `readFileSync` + `JSON.parse` blocks

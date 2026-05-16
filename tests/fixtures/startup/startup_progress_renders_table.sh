@@ -7,6 +7,10 @@ source "$REPO_DIR/shared/lib/startup-progress.sh"
 SESSION="startup-render-$$"
 export SESSION WAVEMILL_NO_PROGRESS=0
 
+stale_fifo="/tmp/wavemill-${SESSION}-startup-progress.XXXXXX.fifo"
+touch "$stale_fifo"
+trap 'rm -f "$stale_fifo"' EXIT
+
 out="$(mktemp)"
 progress_start 2 2>"$out"
 progress_update 1 issue HOK-1
@@ -44,8 +48,12 @@ if ! grep -q 'Startup: 1 done, 1 failed, 2 total' "$out"; then
   echo "missing final summary" >&2
   exit 1
 fi
+if [[ -e "${PROGRESS_FIFO_DIR:-}" ]]; then
+  echo "progress fifo directory was not cleaned up" >&2
+  exit 1
+fi
 
-rm -f "$out"
+rm -f "$out" "$stale_fifo"
 
 file_out="$(mktemp)"
 file_err="$(mktemp)"

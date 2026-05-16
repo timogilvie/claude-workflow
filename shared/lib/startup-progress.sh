@@ -170,13 +170,16 @@ _progress_render_reader() {
 progress_start() {
   local task_count="$1" output_file="${2:-${WAVEMILL_STARTUP_PROGRESS_FILE:-}}"
   [[ "${WAVEMILL_NO_PROGRESS:-0}" == "1" ]] && return 0
-  PROGRESS_FIFO="$(mktemp -u "/tmp/wavemill-${SESSION:-$$}-startup-progress.XXXXXX.fifo")"
-  rm -f "$PROGRESS_FIFO"
-  mkfifo "$PROGRESS_FIFO"
+  PROGRESS_FIFO_DIR="$(mktemp -d "/tmp/wavemill-${SESSION:-$$}-startup-progress.XXXXXX")" || return 1
+  PROGRESS_FIFO="$PROGRESS_FIFO_DIR/progress.fifo"
+  if ! mkfifo "$PROGRESS_FIFO"; then
+    rmdir "$PROGRESS_FIFO_DIR" 2>/dev/null || true
+    return 1
+  fi
   _progress_render_reader "$PROGRESS_FIFO" "$task_count" "$output_file" &
   PROGRESS_READER_PID=$!
   exec {_PROGRESS_FD}>"$PROGRESS_FIFO"
-  export PROGRESS_FIFO PROGRESS_READER_PID _PROGRESS_FD
+  export PROGRESS_FIFO PROGRESS_FIFO_DIR PROGRESS_READER_PID _PROGRESS_FD
 }
 
 progress_update() {
@@ -195,4 +198,5 @@ progress_finish() {
   fi
   [[ -n "${PROGRESS_READER_PID:-}" ]] && wait "$PROGRESS_READER_PID" 2>/dev/null || true
   [[ -n "${PROGRESS_FIFO:-}" ]] && rm -f "$PROGRESS_FIFO"
+  [[ -n "${PROGRESS_FIFO_DIR:-}" ]] && rmdir "$PROGRESS_FIFO_DIR" 2>/dev/null || true
 }
