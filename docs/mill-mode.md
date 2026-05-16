@@ -136,7 +136,7 @@ The ready watchdog runs once per monitor tick for `phase=ready` tasks. After `re
 
 When GitHub says the PR is `MERGEABLE` but `BEHIND`, the watchdog treats that as a mechanically recoverable branch-update path. It fetches the latest base, merges it into the PR branch, pushes the branch, and then resets the controller-owned ready result back to a pending rerun. If the auto-update conflicts, the push fails repeatedly, or the local worktree is not safe to mutate, the watchdog escalates to `needs user` with the real failure detail.
 
-When GitHub says the PR is open, mergeable, and green, the watchdog still performs local recovery for stale controller state. That path is limited to clearing stale local ready markers and resetting the ready result. If auto-recovery is disabled or unsafe, the watchdog prints an explicit `tools/ready-watchdog.ts --recover <ISSUE>` command instead.
+When GitHub says the PR is open, mergeable, and green, the watchdog still performs local recovery for stale controller state. That path is limited to clearing stale local ready markers and resetting the ready result. During the later merge-lane step, tend skips its pre-merge rebase when `origin/auto/integration` is already an ancestor of the PR head; otherwise it performs the rebase before merging. If auto-recovery is disabled or unsafe, the watchdog prints an explicit `tools/ready-watchdog.ts --recover <ISSUE>` command instead.
 
 Configuration lives under `ready.watchdog`:
 

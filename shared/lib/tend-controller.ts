@@ -496,9 +496,15 @@ function rebaseAndPush(
     cwd: worktreePath,
   })).trim();
 
+  const integrationRemoteRef = `origin/${integrationBranch}`;
+  if (isRemoteIntegrationAncestorOfPrHead(integrationRemoteRef, prBranchSha, worktreePath, shellRunner)) {
+    output.push(`tend: skipping pre-merge rebase because ${integrationRemoteRef} is already an ancestor of ${prBranchSha}`);
+    return output.join('\n');
+  }
+
   try {
     output.push(String(shellRunner(
-      `git rebase ${escapeShellArg(`origin/${integrationBranch}`)} 2>&1`,
+      `git rebase ${escapeShellArg(integrationRemoteRef)} 2>&1`,
       { encoding: 'utf-8', cwd: worktreePath },
     )));
   } catch (error) {
@@ -522,6 +528,35 @@ function rebaseAndPush(
   )));
 
   return output.join('\n');
+}
+
+function isRemoteIntegrationAncestorOfPrHead(
+  integrationRemoteRef: string,
+  prBranchSha: string,
+  worktreePath: string,
+  shellRunner: MergeExecutionDeps['shellRunner'],
+): boolean {
+  try {
+    shellRunner(
+      `git merge-base --is-ancestor ${escapeShellArg(integrationRemoteRef)} ${escapeShellArg(prBranchSha)}`,
+      { encoding: 'utf-8', cwd: worktreePath },
+    );
+    return true;
+  } catch (error) {
+    if (shouldWarnOnAncestryCheckFailure(error)) {
+      console.warn(
+        `tend: pre-merge ancestry check failed for ${integrationRemoteRef} at ${prBranchSha}; falling back to rebase: ${errorMessage(error)}`,
+      );
+    }
+    return false;
+  }
+}
+
+function shouldWarnOnAncestryCheckFailure(error: unknown): boolean {
+  // git merge-base --is-ancestor exits with code 1 (no output) when not an ancestor.
+  // execSync throws with no "not ancestor" text — detect via exit status instead.
+  const status = (error as Record<string, unknown>)?.status;
+  return status !== 1;
 }
 
 export async function waitForChecks(
