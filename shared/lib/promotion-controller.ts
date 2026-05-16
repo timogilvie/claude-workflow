@@ -16,6 +16,10 @@ export interface PromotionResult {
   status: 'opened' | 'updated' | 'noop' | 'blocked';
   prUrl?: string;
   checkSummary?: string;
+  squashRecovery?: {
+    status: 'not-needed' | 'applied-in-place' | 'applied-via-promotion-head' | 'blocked';
+    detail?: string;
+  };
   blockReason?:
     | 'base-behind'
     | 'base-behind-conflicts'
@@ -240,8 +244,13 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
   let effectiveHeadTip = integrationTip;
   let infoSummary: string | undefined;
   let promotionNote: string | undefined;
+  let squashRecovery: PromotionResult['squashRecovery'] = { status: 'not-needed' };
 
   if (reconciliationPlan) {
+    const recoveryDetail = formatSquashRecoveryDetail({
+      matchingPromotionTreeCommit,
+      integrationBranch,
+    });
     const protectionStatus = getBranchProtectionStatus(
       integrationBranch,
       options.repoDir,
@@ -257,6 +266,10 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
           reasonCode: protectionStatus.reasonCode ?? 'protection-unknown',
           detail: 'Wavemill could not verify whether the integration branch allows the required reconciliation rewrite.',
         }),
+        squashRecovery: {
+          status: 'blocked',
+          detail: recoveryDetail,
+        },
         prUrl: currentPr?.url,
         checkSummary: currentPr
           ? formatCheckSummary(await waitForChecks(
@@ -286,6 +299,12 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
         shellRunner,
         dryRun: options.dryRun,
       });
+      squashRecovery = {
+        status: 'applied-in-place',
+        detail: recoveryDetail,
+      };
+      promotionNote = `Squash reconciliation applied to ${integrationBranch} (${recoveryDetail}).`;
+      infoSummary = `Applied squash reconciliation to ${integrationBranch} before promoting (${recoveryDetail}).`;
     } else if (promotionConfig.protectedIntegrationStrategy === 'block') {
       return buildBlockedPromotionResult({
         blockReason: 'protected-integration-reconciliation-required',
@@ -294,6 +313,10 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
           promotionBranch,
           reasonCode: protectionStatus.reasonCode ?? 'protected',
         }),
+        squashRecovery: {
+          status: 'blocked',
+          detail: recoveryDetail,
+        },
         prUrl: currentPr?.url,
         checkSummary: currentPr
           ? formatCheckSummary(await waitForChecks(
@@ -307,9 +330,9 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
     } else if (promotionConfig.protectedIntegrationStrategy === 'use-promotion-head') {
       effectiveHeadBranch = promotionConfig.promotionHeadBranch;
       promotionNote =
-        `${integrationBranch} is protected, so this PR uses ${effectiveHeadBranch} as a dedicated promotion head.`;
+        `Squash reconciliation applied via dedicated promotion head ${effectiveHeadBranch} because ${integrationBranch} is protected (${recoveryDetail}).`;
       infoSummary =
-        `${integrationBranch} is protected; using dedicated promotion head ${effectiveHeadBranch} instead of rewriting the integration branch.`;
+        `${integrationBranch} is protected; using dedicated promotion head ${effectiveHeadBranch} for squash reconciliation (${recoveryDetail}).`;
 
       const promotionHeadResult = applyPromotionHeadReconciliationPlan({
         plan: reconciliationPlan,
@@ -324,9 +347,37 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
       }
 
       effectiveHeadTip = promotionHeadResult;
+      squashRecovery = {
+        status: 'applied-via-promotion-head',
+        detail: `${recoveryDetail}; head=${effectiveHeadBranch}`,
+      };
     } else {
-      infoSummary =
-        `${integrationBranch} is protected; skipped squash-snapshot reconciliation and opened/updated the promotion PR as-is.`;
+      return buildBlockedPromotionResult({
+        blockReason: 'protected-integration-reconciliation-required',
+        blockSummary: formatProtectedIntegrationBlockSummary({
+          integrationBranch,
+          promotionBranch,
+          reasonCode: protectionStatus.reasonCode ?? 'protected',
+          detail: [
+            `Detected a prior squash-merged snapshot (${recoveryDetail}), so updating the direct ${integrationBranch} -> ${promotionBranch} PR would be known-conflicted by ancestry.`,
+            'Configure promotion.protectedIntegrationStrategy="use-promotion-head", keep it on "block" for explicit manual handling, or have an admin reconcile the integration branch before rerunning.',
+          ].join(' '),
+        }),
+        squashRecovery: {
+          status: 'blocked',
+          detail: recoveryDetail,
+        },
+        prUrl: currentPr?.url,
+        checkSummary: currentPr
+          ? formatCheckSummary(await waitForChecks(
+            currentPr.number,
+            options.repoDir,
+            shellRunner,
+            { timeoutMs: 0, requiredChecks: integrationConfig.requiredChecks },
+          ))
+          : undefined,
+        headBranch: integrationBranch,
+      });
     }
   }
 
@@ -417,6 +468,7 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
     checkSummary,
     infoSummary,
     headBranch: effectiveHeadBranch,
+    squashRecovery,
   };
 }
 
@@ -1026,6 +1078,7 @@ function buildBlockedPromotionResult(input: {
   prUrl?: string;
   checkSummary?: string;
   headBranch?: string;
+  squashRecovery?: PromotionResult['squashRecovery'];
 }): PromotionResult {
   return {
     status: 'blocked',
@@ -1034,7 +1087,18 @@ function buildBlockedPromotionResult(input: {
     prUrl: input.prUrl,
     checkSummary: input.checkSummary,
     headBranch: input.headBranch,
+    squashRecovery: input.squashRecovery,
   };
+}
+
+function formatSquashRecoveryDetail(input: {
+  matchingPromotionTreeCommit: string | null;
+  integrationBranch: string;
+}): string {
+  if (!input.matchingPromotionTreeCommit) {
+    return `no matching promoted snapshot found on ${input.integrationBranch}`;
+  }
+  return `matched promoted snapshot ${input.matchingPromotionTreeCommit} on ${input.integrationBranch}`;
 }
 
 function resolveCommitTree(
@@ -1280,7 +1344,7 @@ function formatProtectedIntegrationBlockSummary(input: {
   const detail = input.detail ? ` ${input.detail}` : '';
   return [
     `manual/admin reconciliation required before ${input.integrationBranch} can be rewritten for promotion to ${input.promotionBranch}; reason=${input.reasonCode} (${reason}).${detail}`,
-    `Open or merge the ${input.integrationBranch} -> ${input.promotionBranch} promotion PR as-is, or have an admin reconcile ${input.integrationBranch} outside wavemill promote.`,
+    `Use a dedicated promotion head, keep the promotion blocked for explicit manual handling, or have an admin reconcile ${input.integrationBranch} outside wavemill promote.`,
   ].join(' ');
 }
 
