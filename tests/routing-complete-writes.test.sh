@@ -107,6 +107,12 @@ else
   fail "mill is missing expanded-route apply call sites"
 fi
 
+if grep -Fq 'agent: ${resolved_planner_agent}${planner_launch_model:+ --model $planner_launch_model}' "$MILL_SCRIPT"; then
+  pass "initial planning launch log reports planner agent and model"
+else
+  fail "initial planning launch log does not report planner agent and model"
+fi
+
 if grep -Fq 'reroute_expanded_packets_for_coding_handoff' "$MILL_SCRIPT" \
   && grep -Fq -- '--expanded-jsonl' "$MILL_SCRIPT"; then
   pass "mill batches expanded reroute through route-tasks expanded mode"

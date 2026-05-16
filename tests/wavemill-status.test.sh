@@ -235,12 +235,10 @@ else
   fail "inbox rows are missing expected state details"
 fi
 
-if grep -q 'planner: model resolution unavailable' "$OUTPUT_ONE" \
-  && grep -q 'coder: model resolution unavailable' "$OUTPUT_ONE" \
-  && grep -q 'reviewer: model resolution unavailable' "$OUTPUT_ONE"; then
-  pass "awaiting approval renders unavailable model routing when records are absent"
+if grep -q 'planning execution: pending' "$OUTPUT_ONE"; then
+  pass "awaiting approval renders pending planning execution when artifacts are absent"
 else
-  fail "missing routing records do not render unavailable placeholders"
+  fail "missing planning artifacts do not render pending execution detail"
 fi
 
 if grep -q 'HOK-1222.*active-task.*🔨 executing.*● running.*#45 ✓' "$OUTPUT_ONE"; then
@@ -259,12 +257,100 @@ OUTPUT_ROUTING="$TMP_DIR/output-routing.txt"
 run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ROUTING"
 
 if grep -q 'planner: requested=opus → resolved=claude-opus-4-7' "$OUTPUT_ROUTING" \
+  && grep -q 'execution telemetry:' "$OUTPUT_ROUTING" \
   && grep -q 'coder: requested=inherit (from planner) → resolved=claude-opus-4-7' "$OUTPUT_ROUTING" \
   && grep -q 'reviewer: requested=sonnet → resolved=claude-sonnet-4-6' "$OUTPUT_ROUTING" \
   && grep -q 'fallback=claude-haiku-4-5 (reason: quota-exhausted)' "$OUTPUT_ROUTING"; then
-  pass "awaiting approval renders alias, inherit, and fallback routing details"
+  pass "awaiting approval labels runtime routing as execution telemetry"
 else
   fail "routing details are missing from awaiting approval output"
+fi
+
+rm -f "$WORKTREES_DIR/plan-task/features/plan-task/routing.jsonl"
+cat > "$WORKTREES_DIR/plan-task/features/plan-task/.planning-result.json" <<'EOF'
+{
+  "stage": "planning",
+  "status": "completed",
+  "agent": "codex",
+  "model": "claude-sonnet-4-6"
+}
+EOF
+
+cat > "$WORKTREES_DIR/plan-task/features/plan-task/.initial-route.json" <<'EOF'
+{
+  "planner": "claude-sonnet-4-6",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6"
+}
+EOF
+
+cat > "$WORKTREES_DIR/plan-task/features/plan-task/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "claude-opus-4-7",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6"
+}
+EOF
+
+cat > "$WORKTREES_DIR/plan-task/features/plan-task/.routing-complete" <<'EOF'
+{
+  "planner": "claude-opus-4-7",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6",
+  "planDepth": "light",
+  "codeDepth": "medium",
+  "reviewMode": "static"
+}
+EOF
+
+cat > "$WORKTREES_DIR/plan-task/features/plan-task/.phase-config.json" <<'EOF'
+{
+  "planning": {
+    "model": "claude-opus-4-7",
+    "agent": "claude",
+    "depth": "light"
+  },
+  "coding": {
+    "model": "gpt-5.4",
+    "agent": "codex",
+    "depth": "medium"
+  },
+  "review": {
+    "model": "claude-sonnet-4-6",
+    "agent": "claude",
+    "mode": "static"
+  }
+}
+EOF
+
+OUTPUT_ROUTE_ARTIFACT="$TMP_DIR/output-route-artifact.txt"
+run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ROUTE_ARTIFACT"
+
+if grep -q 'executed planning: codex / claude-sonnet-4-6' "$OUTPUT_ROUTE_ARTIFACT" \
+  && grep -q 'bootstrap route: p=claude-sonnet-4-6, c=gpt-5.4' "$OUTPUT_ROUTE_ARTIFACT" \
+  && grep -q 'recommended after expansion: p=claude-opus-4-7' "$OUTPUT_ROUTE_ARTIFACT" \
+  && grep -q 'active remaining route: c=gpt-5.4, r=claude-sonnet-4-6' "$OUTPUT_ROUTE_ARTIFACT"; then
+  pass "awaiting approval distinguishes executed planning from expanded route drift"
+else
+  fail "route lifecycle detail is missing from awaiting approval output"
+fi
+
+cat > "$WORKTREES_DIR/plan-task/features/plan-task/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "claude-sonnet-4-6",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6"
+}
+EOF
+
+OUTPUT_ROUTE_NO_DRIFT="$TMP_DIR/output-route-no-drift.txt"
+run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ROUTE_NO_DRIFT"
+
+if grep -q 'executed planning: codex / claude-sonnet-4-6' "$OUTPUT_ROUTE_NO_DRIFT" \
+  && ! grep -q 'recommended after expansion:' "$OUTPUT_ROUTE_NO_DRIFT"; then
+  pass "awaiting approval omits expanded planner recommendation when there is no planner drift"
+else
+  fail "no-drift route display still shows expanded planner recommendation"
 fi
 
 cat > "$WORKTREES_DIR/rejected-plan-task/features/rejected-plan-task/.planning-rejected.json" <<'EOF'

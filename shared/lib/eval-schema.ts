@@ -81,6 +81,9 @@
  * - **1.24.0**: Added optional `failureReason` and `promptSizeDiagnostic`
  *   fields so oversized eval prompts can fail fast before judge invocation
  *   with component byte-size diagnostics.
+ * - **1.25.0**: Added optional `executedPlanning` provenance so eval records
+ *   preserve the actual planning agent/model from `.planning-result.json`
+ *   separately from bootstrap, expanded, and active route recommendations.
  *
  * @module eval-schema
  */
@@ -90,7 +93,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.24.0';
+export const SCHEMA_VERSION = '1.25.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -105,6 +108,13 @@ export interface ResolvedModelRoutingDecision {
 }
 
 export type EvalRouting = Partial<Record<RoutingRole, ResolvedModelRoutingDecision>>;
+
+export interface EvalExecutedPlanning {
+  agent?: string;
+  model?: string;
+  status?: 'running' | 'awaiting_user' | 'completed' | 'aborted' | 'failed';
+  source?: '.planning-result.json';
+}
 
 // ────────────────────────────────────────────────────────────────
 // Scoring Rubric
@@ -1499,6 +1509,16 @@ export interface EvalRecord {
    * @since 1.18.0
    */
   routeProvenance?: EvalRouteProvenance;
+
+  /**
+   * Authoritative planning execution provenance from `.planning-result.json`.
+   *
+   * Distinguishes the planner agent/model that actually executed planning from
+   * later expanded-route recommendations that may suggest a different planner.
+   *
+   * @since 1.25.0
+   */
+  executedPlanning?: EvalExecutedPlanning;
 
   /** Compact, falsifiable router prediction metadata for this route decision. */
   routePrediction?: RoutePrediction;
