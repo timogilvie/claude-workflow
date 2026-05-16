@@ -330,7 +330,7 @@ function getClassificationReason(label: ConfigOverrideClassificationLabel, path:
     case 'will add to repo default':
       return `${path} is a canonical config field missing from .wavemill-config.json.`;
     case 'already local-only':
-      return `${path} exists only in .wavemill-config.local.json and is not a canonical sync field.`;
+      return `${path} does not need to be synced — it is either absent from .wavemill-config.json (and not a canonical field), or it matches the existing repo default.`;
     case 'requires decision':
       return `${path} looks sensitive, machine-local, or intentionally overridden.`;
   }

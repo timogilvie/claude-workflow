@@ -53,7 +53,7 @@ Examples:
 When `.wavemill-config.local.json` exists, run `npx tsx tools/sync-config.ts --dry-run` to see how local-only or conflicting fields are classified:
 
 - `will add to repo default`: the field exists only in `.wavemill-config.local.json`, is part of Wavemill's canonical config template, and would be a candidate to copy into `.wavemill-config.json`
-- `already local-only`: the field exists only in `.wavemill-config.local.json` and is not a canonical sync field
+- `already local-only`: the field does not need to be synced — either it exists only in `.wavemill-config.local.json` and is not a canonical field, or it exists in both files with the same value (redundant override)
 - `requires decision`: the field looks sensitive, machine-local, or intentionally overridden relative to `.wavemill-config.json`
 
 This dry-run output is there to prevent accidental promotion of secrets, local paths, or personal-only settings into the committed repo config.
