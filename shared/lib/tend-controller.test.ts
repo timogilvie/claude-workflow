@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { LinearIssueSummary } from './linear.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import {
+  defaultHealthChecker,
   executeMerge,
   formatStatusLine,
   selectNextCandidate,
@@ -146,6 +148,110 @@ function buildMergeTestOptions(overrides: {
 
 function hasCall(calls: string[], pattern: RegExp): boolean {
   return calls.some((call) => pattern.test(call));
+}
+
+function runGit(repoDir: string, args: string[]): string {
+  return execFileSync('git', args, {
+    cwd: repoDir,
+    encoding: 'utf-8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Wavemill Test',
+      GIT_AUTHOR_EMAIL: 'wavemill@example.com',
+      GIT_COMMITTER_NAME: 'Wavemill Test',
+      GIT_COMMITTER_EMAIL: 'wavemill@example.com',
+    },
+  }).trim();
+}
+
+function createCommit(repoDir: string, filename: string, contents: string, message: string): string {
+  writeFileSync(join(repoDir, filename), contents);
+  runGit(repoDir, ['add', filename]);
+  runGit(repoDir, ['commit', '-m', message]);
+  return runGit(repoDir, ['rev-parse', 'HEAD']);
+}
+
+function createRepoWithRemoteIntegration(): {
+  repoDir: string;
+  remoteSha: string;
+  cleanup: () => void;
+} {
+  const rootDir = mkdtempSync(join(tmpdir(), 'wavemill-tend-health-'));
+  const remoteDir = join(rootDir, 'remote.git');
+  const seedDir = join(rootDir, 'seed');
+  const repoDir = join(rootDir, 'repo');
+
+  mkdirSync(remoteDir, { recursive: true });
+  mkdirSync(seedDir, { recursive: true });
+  mkdirSync(repoDir, { recursive: true });
+  runGit(remoteDir, ['init', '--bare']);
+  runGit(seedDir, ['init']);
+  const remoteSha = createCommit(seedDir, 'README.md', 'remote integration\n', 'seed integration branch');
+  runGit(seedDir, ['branch', '-M', 'auto/integration']);
+  runGit(seedDir, ['remote', 'add', 'origin', remoteDir]);
+  runGit(seedDir, ['push', 'origin', 'auto/integration']);
+
+  runGit(repoDir, ['init']);
+  runGit(repoDir, ['remote', 'add', 'origin', remoteDir]);
+  runGit(repoDir, ['fetch', 'origin', 'auto/integration']);
+  runGit(repoDir, ['remote', 'set-url', 'origin', 'git@github.com:example/repo.git']);
+  writeFileSync(
+    join(repoDir, '.wavemill-config.json'),
+    JSON.stringify({ integration: { integrationBranch: 'auto/integration' } }),
+  );
+
+  return {
+    repoDir,
+    remoteSha,
+    cleanup: () => rmSync(rootDir, { recursive: true, force: true }),
+  };
+}
+
+function writeFakeGh(binDir: string, responseBody: string, logPath?: string): void {
+  mkdirSync(binDir, { recursive: true });
+  const scriptPath = join(binDir, 'gh');
+  const script = [
+    '#!/bin/sh',
+    'set -eu',
+    'if [ "${1:-}" != "api" ]; then',
+    '  echo "unexpected gh command: $*" >&2',
+    '  exit 1',
+    'fi',
+    logPath ? `printf '%s\\n' "$2" > ${JSON.stringify(logPath)}` : ':',
+    `cat <<'EOF'`,
+    responseBody,
+    'EOF',
+  ].join('\n');
+  writeFileSync(scriptPath, script);
+  chmodSync(scriptPath, 0o755);
+}
+
+async function withFakeGh<T>(
+  responseBody: string,
+  run: (context: { binDir: string; logPath: string }) => Promise<T>,
+): Promise<T> {
+  const fakeRoot = mkdtempSync(join(tmpdir(), 'wavemill-gh-'));
+  const binDir = join(fakeRoot, 'bin');
+  const logPath = join(fakeRoot, 'gh-api-path.txt');
+  const originalPath = process.env.PATH ?? '';
+  writeFakeGh(binDir, responseBody, logPath);
+  process.env.PATH = `${binDir}${originalPath ? `:${originalPath}` : ''}`;
+
+  try {
+    return await run({ binDir, logPath });
+  } finally {
+    process.env.PATH = originalPath;
+    rmSync(fakeRoot, { recursive: true, force: true });
+  }
+}
+
+function hasLocalBranch(repoDir: string, branch: string): boolean {
+  try {
+    runGit(repoDir, ['rev-parse', '--verify', branch]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function withDecision(
@@ -806,6 +912,113 @@ describe('selectNextCandidate dependency cycles', () => {
       assert.equal(decision.eligible.length, 0);
       assert.equal(decision.blocked[0]?.reason, 'dependency-cycle');
     });
+  });
+});
+
+describe('defaultHealthChecker', () => {
+  it('resolves origin integration when local branch is missing', async () => {
+    const repo = createRepoWithRemoteIntegration();
+
+    try {
+      assert.equal(hasLocalBranch(repo.repoDir, 'auto/integration'), false);
+      assert.equal(runGit(repo.repoDir, ['rev-parse', 'refs/remotes/origin/auto/integration']), repo.remoteSha);
+
+      await withFakeGh('{"check_runs":[{"name":"ci","conclusion":"success"}]}', async ({ logPath }) => {
+        const health = await defaultHealthChecker('auto/integration', repo.repoDir);
+        assert.deepEqual(health, { state: 'healthy' });
+        assert.match(readFileSync(logPath, 'utf-8'), new RegExp(repo.remoteSha));
+      });
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('keeps local branch precedence over origin tracking refs', async () => {
+    const repo = createRepoWithRemoteIntegration();
+
+    try {
+      runGit(repo.repoDir, ['checkout', '-b', 'auto/integration', 'origin/auto/integration']);
+      const localSha = createCommit(repo.repoDir, 'README.md', 'local integration\n', 'local branch wins');
+      runGit(repo.repoDir, ['checkout', '--detach']);
+
+      await withFakeGh('{"check_runs":[{"name":"ci","conclusion":"success"}]}', async ({ logPath }) => {
+        const health = await defaultHealthChecker('auto/integration', repo.repoDir);
+        assert.deepEqual(health, { state: 'healthy' });
+        assert.match(readFileSync(logPath, 'utf-8'), new RegExp(localSha));
+        assert.doesNotMatch(readFileSync(logPath, 'utf-8'), new RegExp(`${repo.remoteSha}$`));
+      });
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('reports degraded health when neither local nor origin ref resolves', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-tend-health-missing-'));
+    writeFileSync(
+      join(repoDir, '.wavemill-config.json'),
+      JSON.stringify({ integration: { integrationBranch: 'auto/integration' } }),
+    );
+    runGit(repoDir, ['init']);
+    runGit(repoDir, ['remote', 'add', 'origin', 'git@github.com:example/repo.git']);
+
+    try {
+      const health = await defaultHealthChecker('auto/integration', repoDir);
+      assert.equal(health.state, 'unhealthy');
+      assert.match(health.reason ?? '', /health-check-error/);
+      assert.match(health.reason ?? '', /auto\/integration/);
+      assert.match(health.reason ?? '', /refs\/remotes\/origin\/auto\/integration/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the remote-tracking sha before surfacing failing checks', async () => {
+    const repo = createRepoWithRemoteIntegration();
+
+    try {
+      await withFakeGh('{"check_runs":[{"name":"ci","conclusion":"failure"}]}', async ({ logPath }) => {
+        const health = await defaultHealthChecker('auto/integration', repo.repoDir);
+        assert.deepEqual(health, { state: 'unhealthy', reason: 'ci: failure' });
+        assert.match(readFileSync(logPath, 'utf-8'), new RegExp(repo.remoteSha));
+      });
+    } finally {
+      repo.cleanup();
+    }
+  });
+});
+
+describe('selectNextCandidate with real integration health', () => {
+  it('evaluates ready PRs when only origin integration exists locally', async () => {
+    const repo = createRepoWithRemoteIntegration();
+
+    try {
+      mkdirSync(join(repo.repoDir, '.wavemill', 'evals'), { recursive: true });
+      const options: SelectNextCandidateOptions = {
+        repoDir: repo.repoDir,
+        prFetcher: async () => [
+          pr({
+            number: 180,
+            title: 'Ready PR',
+            headRefName: 'task/ready-pr',
+            body: metadata(['task: HOK-1729']),
+          }),
+        ],
+        challengeGateDeps: {
+          linearSiblingLookup: async () => [],
+          branchExists: async () => false,
+        },
+      };
+
+      await withFakeGh('{"check_runs":[{"name":"ci","conclusion":"success"}]}', async () => {
+        const decision = await selectNextCandidate(options);
+        assert.deepEqual(decision.integrationHealth, { state: 'healthy' });
+        assert.equal(decision.eligible.length, 1);
+        assert.equal(decision.blocked.length, 0);
+        assert.equal(decision.nextPR, 180);
+      });
+    } finally {
+      repo.cleanup();
+    }
   });
 });
 

@@ -111,6 +111,7 @@ If you want a different config than the one committed in `.wavemill-config.json`
 ```
 
 Merge rules: nested objects are recursively merged, arrays are replaced entirely (not concatenated), and primitive values from the local file win. The local file alone is also valid — if you have no committed config but a local one, it acts as the whole config.
+For full ownership and placement guidance, see [Config Files](config-files.md).
 
 ### Config Versioning
 

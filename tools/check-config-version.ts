@@ -13,7 +13,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { loadWavemillConfig, CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
+import { loadWavemillBaseConfig, CURRENT_CONFIG_VERSION } from '../shared/lib/config.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 
 interface VersionCheckResult {
@@ -24,7 +24,7 @@ interface VersionCheckResult {
   needsUpgrade: boolean;
 }
 
-function compareVersions(v1: string, v2: string): number {
+export function compareVersions(v1: string, v2: string): number {
   const parts1 = v1.split('.').map(Number);
   const parts2 = v2.split('.').map(Number);
 
@@ -37,7 +37,7 @@ function compareVersions(v1: string, v2: string): number {
   return 0;
 }
 
-function checkConfigVersion(repoDir: string = process.cwd()): VersionCheckResult {
+export function checkConfigVersion(repoDir: string = process.cwd()): VersionCheckResult {
   const configPath = resolve(repoDir, '.wavemill-config.json');
 
   // Check if config file exists
@@ -53,7 +53,7 @@ function checkConfigVersion(repoDir: string = process.cwd()): VersionCheckResult
   // Load config
   let config;
   try {
-    config = loadWavemillConfig(repoDir);
+    config = loadWavemillBaseConfig(repoDir);
   } catch (err) {
     const message = errorMessage(err);
     return {
@@ -106,45 +106,47 @@ function checkConfigVersion(repoDir: string = process.cwd()): VersionCheckResult
   };
 }
 
-runTool({
-  name: 'check-config-version',
-  description: 'Check if the wavemill config version is up to date',
-  options: {
-    json: { type: 'boolean', description: 'Output result as JSON' },
-  },
-  examples: [
-    'npx tsx tools/check-config-version.ts',
-    'npx tsx tools/check-config-version.ts --json',
-  ],
-  run({ args }) {
-    try {
-      const result = checkConfigVersion();
+if (import.meta.main) {
+  runTool({
+    name: 'check-config-version',
+    description: 'Check if the wavemill config version is up to date',
+    options: {
+      json: { type: 'boolean', description: 'Output result as JSON' },
+    },
+    examples: [
+      'npx tsx tools/check-config-version.ts',
+      'npx tsx tools/check-config-version.ts --json',
+    ],
+    run({ args }) {
+      try {
+        const result = checkConfigVersion();
 
-      if (args.json) {
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        console.log(result.message);
+        if (args.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(result.message);
+        }
+
+        // Exit code: 0 if current/newer, 1 if needs upgrade, 2 on error
+        process.exitCode = result.needsUpgrade ? 1 : 0;
+        return;
+      } catch (err) {
+        const message = errorMessage(err);
+
+        if (args.json) {
+          console.log(JSON.stringify({
+            status: 'error',
+            currentVersion: CURRENT_CONFIG_VERSION,
+            message,
+            needsUpgrade: false,
+          }, null, 2));
+        } else {
+          console.error(`Error: ${message}`);
+        }
+
+        process.exitCode = 2;
+        return;
       }
-
-      // Exit code: 0 if current/newer, 1 if needs upgrade, 2 on error
-      process.exitCode = result.needsUpgrade ? 1 : 0;
-      return;
-    } catch (err) {
-      const message = errorMessage(err);
-
-      if (args.json) {
-        console.log(JSON.stringify({
-          status: 'error',
-          currentVersion: CURRENT_CONFIG_VERSION,
-          message,
-          needsUpgrade: false,
-        }, null, 2));
-      } else {
-        console.error(`Error: ${message}`);
-      }
-
-      process.exitCode = 2;
-      return;
-    }
-  },
-});
+    },
+  });
+}

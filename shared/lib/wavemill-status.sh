@@ -284,6 +284,10 @@ coding_blocked_completion_detail() {
   local worktree="$1" slug="$2" issue="$3"
   local feature_dir="$worktree/features/$slug"
   local artifact_record summary reason artifact_mtime
+  local auto_detail
+
+  auto_detail="$(coding_auto_advance_detail "$worktree" "$slug" "$issue")"
+  [[ -z "$auto_detail" ]] || return 0
 
   artifact_record="$(read_blocked_completion "$feature_dir" "$issue")"
   [[ -n "$artifact_record" ]] || return 0
@@ -291,6 +295,15 @@ coding_blocked_completion_detail() {
   IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
   summary="$(truncate_blocked_completion_summary "$summary")"
   printf '%s needs attention: %s. Type "advance %s" to launch review.\n' "$issue" "$summary" "$issue"
+}
+
+coding_auto_advance_detail() {
+  local worktree="$1" slug="$2" issue="$3"
+  local feature_dir="$worktree/features/$slug"
+  local artifact="$feature_dir/.coding-auto-advance.json"
+
+  [[ -f "$artifact" ]] || return 0
+  printf '%s auto-advanced coding to review from blocked completion.\n' "$issue"
 }
 
 planning_rejection_detail() {
@@ -792,13 +805,14 @@ render_section_header() {
 render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
-  local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail planning_detail reported ds pane watchdog_classification watchdog_detail running_detail coding_blocked_detail
+  local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail planning_detail reported ds pane watchdog_classification watchdog_detail running_detail coding_blocked_detail coding_auto_detail
 
   t=$(elapsed "$worktree")
   reported=""
   watchdog_classification=""
   watchdog_detail=""
   coding_blocked_detail=""
+  coding_auto_detail=""
 
   if [[ "$task_status" == "merged" ]]; then
     st_str="${G}✓ merged${N}"
@@ -868,8 +882,11 @@ render_task_row() {
       ;;
     executing) phase_str="${G}🔨 executing${N}" ;;
     coding)
+      coding_auto_detail=$(coding_auto_advance_detail "$worktree" "$slug" "$issue")
       coding_blocked_detail=$(coding_blocked_completion_detail "$worktree" "$slug" "$issue")
-      if [[ -n "$coding_blocked_detail" ]]; then
+      if [[ -n "$coding_auto_detail" ]]; then
+        phase_str="${G}auto review${N}"
+      elif [[ -n "$coding_blocked_detail" ]]; then
         phase_str="${R}⚠ coding${N}"
       else
         phase_str="${G}💻 coding${N}"
@@ -914,7 +931,9 @@ render_task_row() {
   printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
     "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
-  if [[ -n "$coding_blocked_detail" ]]; then
+  if [[ -n "$coding_auto_detail" ]]; then
+    reported="$coding_auto_detail"
+  elif [[ -n "$coding_blocked_detail" ]]; then
     reported="$coding_blocked_detail"
   fi
   planning_detail=$(planning_rejection_detail "$worktree" "$slug")

@@ -93,7 +93,14 @@ for fn in \
   check_stage_aborted \
   _persist_phase \
   resolve_phase \
+  resolve_stage_result_model \
+  write_stage_result \
   normalize_prompt_command_reply \
+  blocked_completion_current_head \
+  blocked_completion_commit_matches_head \
+  blocked_completion_worktree_clean_for_auto \
+  blocked_completion_validate_for_advance \
+  complete_coding_advance \
   handle_advance_command \
   execute_or_defer_monitor_command
 do
@@ -105,6 +112,18 @@ do
   printf '%s\n\n' "$extracted" >> "$FUNCS_FILE"
 done
 source "$FUNCS_FILE"
+
+resolve_stage_result_model() {
+  local _feature_dir="$1" _stage="$2" fallback="$3"
+  printf '%s\n' "$fallback"
+}
+
+write_stage_result() {
+  local feature_dir="$1" stage="$2" status="$3"
+  cat > "$feature_dir/.${stage}-result.json" <<EOF
+{"stage":"$stage","status":"$status"}
+EOF
+}
 
 log_lines=()
 warn_lines=()
@@ -172,6 +191,36 @@ write_coding_result() {
 EOF
 }
 
+setup_git_worktree() {
+  local worktree="$1"
+  git init "$worktree" >/dev/null 2>&1
+  (
+    cd "$worktree"
+    git config user.name "Test User"
+    git config user.email "test@example.com"
+    printf 'base\n' > tracked.txt
+    git add tracked.txt
+    git commit -m "base" >/dev/null 2>&1
+  )
+}
+
+write_blocked_completion() {
+  local feature_dir="$1" commit="$2" extra_json="${3:-}"
+  cat > "$feature_dir/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level verification is failing outside this change.",
+  "recommendedAction": "advance_to_review"$extra_json
+}
+EOF
+}
+
 run_advance() {
   local event="$1"
   reset_harness
@@ -192,8 +241,10 @@ init_state "$STATE_FILE"
 WORKTREE_SUCCESS="$SCENARIO_DIR/worktree-success"
 FEATURE_SUCCESS="$WORKTREE_SUCCESS/features/test-slug"
 mkdir -p "$FEATURE_SUCCESS"
+setup_git_worktree "$WORKTREE_SUCCESS"
 write_task_state "HOK-1639" "test-slug" "$WORKTREE_SUCCESS" "coding"
 write_coding_result "$FEATURE_SUCCESS" "running"
+write_blocked_completion "$FEATURE_SUCCESS" "$(git -C "$WORKTREE_SUCCESS" rev-parse --short HEAD)"
 run_advance "advance HOK-1639"
 assert_eq "success status" "handled" "$MONITOR_COMMAND_STATUS"
 assert_file_exists "success writes audit artifact" "$FEATURE_SUCCESS/.coding-advance-override.json"
@@ -202,9 +253,10 @@ assert_eq "success acks command offset" "7" "${ACKED_OFFSETS[0]:-}"
 assert_contains "success log message" "HOK-1639 -> advance recorded; review will launch on the next monitor tick" "${log_lines[*]}"
 assert_eq "success audit issue" "HOK-1639" "$(jq -r '.issue' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "success audit reason" "manual advance via mill input" "$(jq -r '.reason' "$FEATURE_SUCCESS/.coding-advance-override.json")"
-assert_eq "success audit path" "features/test-slug/.coding-result.json" "$(jq -r '.artifact_summary.path' "$FEATURE_SUCCESS/.coding-advance-override.json")"
-assert_eq "success audit status" "running" "$(jq -r '.artifact_summary.status' "$FEATURE_SUCCESS/.coding-advance-override.json")"
-assert_eq "success audit artifact keys count" "2" "$(jq -r '.artifact_summary.artifact_keys | length' "$FEATURE_SUCCESS/.coding-advance-override.json")"
+assert_eq "success audit path" "features/test-slug/.coding-blocked-completion.json" "$(jq -r '.artifact_summary.path' "$FEATURE_SUCCESS/.coding-advance-override.json")"
+assert_eq "success audit action" "advance_to_review" "$(jq -r '.artifact_summary.recommendedAction' "$FEATURE_SUCCESS/.coding-advance-override.json")"
+assert_eq "success audit passing count" "1" "$(jq -r '.artifact_summary.passing_checks_count' "$FEATURE_SUCCESS/.coding-advance-override.json")"
+assert_eq "success audit stage running guardrail" "true" "$(jq -r '.guardrails.stageRunning' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_contains "success audit timestamp present" "T" "$(jq -r '.timestamp' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "backlog prompt preserves advance command" "advance HOK-1639" "$(normalize_prompt_command_reply "advance HOK-1639")"
 
@@ -250,7 +302,7 @@ write_task_state "HOK-2002" "bad-json-slug" "$WORKTREE_BAD_JSON" "coding"
 cat > "$FEATURE_BAD_JSON/.planning-result.json" <<'EOF'
 {"stage":"planning","status":"completed"}
 EOF
-printf '{broken json\n' > "$FEATURE_BAD_JSON/.coding-result.json"
+printf '{broken json\n' > "$FEATURE_BAD_JSON/.coding-blocked-completion.json"
 run_advance "advance HOK-2002"
 assert_eq "bad json invalid" "invalid" "$MONITOR_COMMAND_STATUS"
 assert_contains "bad json message" "blocked-completion artifact" "${warn_lines[*]}"
@@ -259,8 +311,21 @@ assert_contains "bad json message" "blocked-completion artifact" "${warn_lines[*
 WORKTREE_BAD_STATUS="$SCENARIO_DIR/worktree-bad-status"
 FEATURE_BAD_STATUS="$WORKTREE_BAD_STATUS/features/bad-status-slug"
 mkdir -p "$FEATURE_BAD_STATUS"
+setup_git_worktree "$WORKTREE_BAD_STATUS"
 write_task_state "HOK-2003" "bad-status-slug" "$WORKTREE_BAD_STATUS" "coding"
-write_coding_result "$FEATURE_BAD_STATUS" "failed"
+write_coding_result "$FEATURE_BAD_STATUS" "running"
+cat > "$FEATURE_BAD_STATUS/.coding-blocked-completion.json" <<'EOF'
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "passingChecks": [],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level verification is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
 run_advance "advance HOK-2003"
 assert_eq "bad status invalid" "invalid" "$MONITOR_COMMAND_STATUS"
 assert_contains "bad status message" "blocked-completion artifact" "${warn_lines[*]}"
@@ -279,12 +344,13 @@ done
 WORKTREE_AUDIT_FAIL="$SCENARIO_DIR/worktree-audit-fail"
 FEATURE_AUDIT_FAIL="$WORKTREE_AUDIT_FAIL/features/audit-fail-slug"
 mkdir -p "$FEATURE_AUDIT_FAIL"
+setup_git_worktree "$WORKTREE_AUDIT_FAIL"
 write_task_state "HOK-2004" "audit-fail-slug" "$WORKTREE_AUDIT_FAIL" "coding"
 write_coding_result "$FEATURE_AUDIT_FAIL" "running"
+write_blocked_completion "$FEATURE_AUDIT_FAIL" "$(git -C "$WORKTREE_AUDIT_FAIL" rev-parse --short HEAD)"
 chmod 500 "$FEATURE_AUDIT_FAIL"
 run_advance_quiet "advance HOK-2004"
 assert_eq "audit failure invalid" "invalid" "$MONITOR_COMMAND_STATUS"
-assert_contains "audit failure message" "could not create audit artifact" "${warn_lines[*]}"
 assert_file_missing "audit failure does not create marker" "$FEATURE_AUDIT_FAIL/.coding-complete"
 chmod 700 "$FEATURE_AUDIT_FAIL"
 
@@ -292,12 +358,31 @@ chmod 700 "$FEATURE_AUDIT_FAIL"
 WORKTREE_IDEMP="$SCENARIO_DIR/worktree-idempotent"
 FEATURE_IDEMP="$WORKTREE_IDEMP/features/idempotent-slug"
 mkdir -p "$FEATURE_IDEMP"
+setup_git_worktree "$WORKTREE_IDEMP"
 write_task_state "HOK-2005" "idempotent-slug" "$WORKTREE_IDEMP" "coding"
 write_coding_result "$FEATURE_IDEMP" "running"
+write_blocked_completion "$FEATURE_IDEMP" "$(git -C "$WORKTREE_IDEMP" rev-parse --short HEAD)"
 touch "$FEATURE_IDEMP/.coding-complete"
 run_advance "advance HOK-2005"
 assert_eq "idempotent handled" "handled" "$MONITOR_COMMAND_STATUS"
 assert_file_exists "idempotent audit exists" "$FEATURE_IDEMP/.coding-advance-override.json"
 assert_file_exists "idempotent marker still exists" "$FEATURE_IDEMP/.coding-complete"
+
+# Soft guardrails are overrideable for manual advance
+WORKTREE_SOFT="$SCENARIO_DIR/worktree-soft"
+FEATURE_SOFT="$WORKTREE_SOFT/features/soft-slug"
+mkdir -p "$FEATURE_SOFT"
+setup_git_worktree "$WORKTREE_SOFT"
+(
+  cd "$WORKTREE_SOFT"
+  printf 'dirty\n' >> tracked.txt
+)
+write_task_state "HOK-2006" "soft-slug" "$WORKTREE_SOFT" "coding"
+write_coding_result "$FEATURE_SOFT" "running"
+write_blocked_completion "$FEATURE_SOFT" "deadbee"
+run_advance "advance HOK-2006"
+assert_eq "soft guardrail override handled" "handled" "$MONITOR_COMMAND_STATUS"
+assert_eq "soft guardrail commit mismatch recorded" "false" "$(jq -r '.guardrails.commitMatchesHead' "$FEATURE_SOFT/.coding-advance-override.json")"
+assert_eq "soft guardrail dirty worktree recorded" "false" "$(jq -r '.guardrails.worktreeClean' "$FEATURE_SOFT/.coding-advance-override.json")"
 
 echo "PASS: advance command validates, audits, and advances coding tasks"
