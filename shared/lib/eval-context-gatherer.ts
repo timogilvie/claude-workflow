@@ -942,7 +942,7 @@ function loadExecutedPlanning(
         source: '.planning-result.json',
       };
     } catch {
-      return undefined;
+      continue;
     }
   }
 
