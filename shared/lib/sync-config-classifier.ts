@@ -15,7 +15,7 @@ interface ClassifierOptions {
   canonicalConfig: Record<string, unknown>;
 }
 
-const SECRET_KEY_PATTERN = /(api[_-]?key|token|password|secret|credential|auth|private[_-]?key)/i;
+const SECRET_KEY_PATTERN = /(api[_-]?key|token|password|secret|credential|\bauth\b|private[_-]?key)/i;
 const UNIX_ABSOLUTE_PATTERN = /^\/(?:[^\0]*)$/;
 const WINDOWS_ABSOLUTE_PATTERN = /^[A-Za-z]:\\/;
 const HOME_OR_ENV_PATH_PATTERN = /^(~\/|\$[A-Za-z_][A-Za-z0-9_]*\/|%[A-Za-z_][A-Za-z0-9_]*%\\)/;
