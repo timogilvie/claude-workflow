@@ -204,7 +204,8 @@ Configuration (`.wavemill-config.json`):
 - `mill.1` dashboard
 - `mill.2` status log
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
-- `advance <issue-id>` records a manual coding override for a tracked coding task with a valid running `.coding-result.json`, writes `features/<slug>/.coding-advance-override.json`, and creates `features/<slug>/.coding-complete` so review launches on the next monitor tick.
+- When coding writes a valid `features/<slug>/.coding-blocked-completion.json` that recommends review advancement and passes mill guardrails, mill auto-advances the task to review and records `features/<slug>/.coding-auto-advance.json`.
+- `advance <issue-id>` remains the manual fallback for tracked coding tasks with a valid blocked-completion artifact. It writes `features/<slug>/.coding-advance-override.json` and creates `features/<slug>/.coding-complete` so review launches on the next monitor tick.
 
 ## When to Prefer Mill Mode
 

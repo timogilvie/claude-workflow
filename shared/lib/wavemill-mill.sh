@@ -3404,6 +3404,303 @@ emit_blocked_completion_attention() {
   return 0
 }
 
+blocked_completion_current_head() {
+  local worktree="$1"
+  git -C "$worktree" rev-parse HEAD 2>/dev/null || true
+}
+
+blocked_completion_commit_matches_head() {
+  local artifact_commit="${1:-}" head="${2:-}"
+
+  [[ -z "$artifact_commit" ]] && return 0
+  [[ -n "$head" ]] || return 1
+  [[ "$artifact_commit" == "$head" ]] && return 0
+  [[ "$head" == "$artifact_commit"* ]] && return 0
+  return 1
+}
+
+blocked_completion_worktree_clean_for_auto() {
+  local worktree="$1" slug="$2"
+  local status_lines line path normalized_path
+  local artifact_prefix="features/$slug/"
+
+  status_lines="$(git -C "$worktree" status --porcelain --untracked-files=all 2>/dev/null || true)"
+  [[ -z "$status_lines" ]] && return 0
+
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    path="${line#?? }"
+    if [[ "$path" == *" -> "* ]]; then
+      path="${path##* -> }"
+    fi
+    normalized_path="${path#./}"
+
+    if [[ "$normalized_path" == .wavemill/* ]]; then
+      continue
+    fi
+
+    if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
+      continue
+    fi
+
+    return 1
+  done <<< "$status_lines"
+
+  return 0
+}
+
+blocked_completion_validate_for_advance() {
+  local issue="$1" feature_dir="$2" mode="${3:-auto}"
+  local slug artifact_path artifact_rel_path result_path result_rel_path worktree
+  local json_valid=false schema_valid=false stage_running=false stage_is_coding=false
+  local implementation_complete=false committed=false recommended_action_matches=false
+  local has_passing_checks=false has_blocking_checks=false commit_matches_head=true
+  local worktree_clean=true artifact_commit="" current_head="" decision_reason=""
+  local manual_soft_failure=false
+
+  slug="$(basename "$feature_dir")"
+  worktree="$(git -C "$feature_dir/../.." rev-parse --show-toplevel 2>/dev/null || true)"
+  artifact_path="$feature_dir/.coding-blocked-completion.json"
+  artifact_rel_path="features/$slug/.coding-blocked-completion.json"
+  result_path="$feature_dir/.coding-result.json"
+  result_rel_path="features/$slug/.coding-result.json"
+
+  if [[ ! -f "$artifact_path" ]]; then
+    decision_reason="missing blocked-completion artifact"
+  elif ! jq empty "$artifact_path" >/dev/null 2>&1; then
+    decision_reason="invalid JSON in $artifact_rel_path"
+  else
+    json_valid=true
+
+    if jq -e '
+      type == "object" and
+      (.stage | type == "string") and
+      (.implementationComplete | type == "boolean") and
+      (.committed | type == "boolean") and
+      (.passingChecks | type == "array") and
+      all(.passingChecks[]?; type == "string") and
+      (.blockingChecks | type == "array") and
+      all(.blockingChecks[]?; type == "string") and
+      (.blockingReason | type == "string") and
+      (.evidence | type == "string") and
+      (.recommendedAction | type == "string") and
+      ((has("commit") | not) or (.commit | type == "string"))
+    ' "$artifact_path" >/dev/null 2>&1; then
+      schema_valid=true
+    else
+      decision_reason="blocked-completion artifact is missing required fields"
+    fi
+  fi
+
+  if [[ "$json_valid" == true && "$schema_valid" == true ]]; then
+    stage_is_coding=$(jq -r 'if .stage == "coding" then "true" else "false" end' "$artifact_path" 2>/dev/null || echo false)
+    implementation_complete=$(jq -r 'if .implementationComplete == true then "true" else "false" end' "$artifact_path" 2>/dev/null || echo false)
+    committed=$(jq -r 'if .committed == true then "true" else "false" end' "$artifact_path" 2>/dev/null || echo false)
+    recommended_action_matches=$(jq -r 'if .recommendedAction == "advance_to_review" then "true" else "false" end' "$artifact_path" 2>/dev/null || echo false)
+    has_passing_checks=$(jq -r 'if ((.passingChecks | length) > 0) then "true" else "false" end' "$artifact_path" 2>/dev/null || echo false)
+    has_blocking_checks=$(jq -r 'if ((.blockingChecks | length) > 0) then "true" else "false" end' "$artifact_path" 2>/dev/null || echo false)
+    artifact_commit=$(jq -r '.commit // empty' "$artifact_path" 2>/dev/null || echo "")
+
+    if [[ ! -f "$result_path" ]]; then
+      decision_reason="${decision_reason:-missing $result_rel_path}"
+    elif ! jq -e '.stage == "coding" and .status == "running"' "$result_path" >/dev/null 2>&1; then
+      decision_reason="${decision_reason:-$result_rel_path is not coding/running}"
+    else
+      stage_running=true
+    fi
+
+    if [[ "$stage_is_coding" != true ]]; then
+      decision_reason="${decision_reason:-blocked-completion artifact stage is not coding}"
+    elif [[ "$implementation_complete" != true ]]; then
+      decision_reason="${decision_reason:-implementationComplete must be true}"
+    elif [[ "$committed" != true ]]; then
+      decision_reason="${decision_reason:-committed must be true}"
+    elif [[ "$recommended_action_matches" != true ]]; then
+      decision_reason="${decision_reason:-recommendedAction must be advance_to_review}"
+    elif [[ "$has_passing_checks" != true ]]; then
+      decision_reason="${decision_reason:-passingChecks must be non-empty}"
+    elif [[ "$has_blocking_checks" != true ]]; then
+      decision_reason="${decision_reason:-blockingChecks must be non-empty}"
+    fi
+  fi
+
+  if [[ -n "$artifact_commit" ]]; then
+    current_head="$(blocked_completion_current_head "$worktree")"
+    if ! blocked_completion_commit_matches_head "$artifact_commit" "$current_head"; then
+      commit_matches_head=false
+      if [[ "$mode" == "auto" ]]; then
+        decision_reason="${decision_reason:-artifact commit does not match HEAD}"
+      else
+        manual_soft_failure=true
+      fi
+    fi
+  fi
+
+  if ! blocked_completion_worktree_clean_for_auto "$worktree" "$slug"; then
+    worktree_clean=false
+    if [[ "$mode" == "auto" ]]; then
+      decision_reason="${decision_reason:-worktree is not clean enough for auto-advance}"
+    else
+      manual_soft_failure=true
+    fi
+  fi
+
+  if [[ -z "$decision_reason" && "$mode" == "manual" && "$manual_soft_failure" == true ]]; then
+    decision_reason="manual override accepted with soft guardrail failures"
+  fi
+  [[ -z "$decision_reason" ]] && decision_reason="eligible"
+
+  jq -n \
+    --arg issue "$issue" \
+    --arg mode "$mode" \
+    --arg artifactPath "$artifact_rel_path" \
+    --arg resultPath "$result_rel_path" \
+    --arg reason "$decision_reason" \
+    --arg commit "$artifact_commit" \
+    --arg head "$current_head" \
+    --argjson stageRunning "$stage_running" \
+    --argjson jsonValid "$json_valid" \
+    --argjson schemaValid "$schema_valid" \
+    --argjson stageIsCoding "$stage_is_coding" \
+    --argjson implementationComplete "$implementation_complete" \
+    --argjson committed "$committed" \
+    --argjson recommendedActionMatches "$recommended_action_matches" \
+    --argjson hasPassingChecks "$has_passing_checks" \
+    --argjson hasBlockingChecks "$has_blocking_checks" \
+    --argjson commitMatchesHead "$commit_matches_head" \
+    --argjson worktreeClean "$worktree_clean" \
+    --argjson eligible "$(
+      if [[ "$decision_reason" == "eligible" || "$decision_reason" == "manual override accepted with soft guardrail failures" ]]; then
+        printf 'true'
+      else
+        printf 'false'
+      fi
+    )" \
+    '{
+      issue: $issue,
+      mode: $mode,
+      eligible: $eligible,
+      reason: $reason,
+      artifactPath: $artifactPath,
+      resultPath: $resultPath,
+      commit: $commit,
+      head: $head,
+      guardrails: {
+        stageRunning: $stageRunning,
+        jsonValid: $jsonValid,
+        schemaValid: $schemaValid,
+        stageIsCoding: $stageIsCoding,
+        implementationComplete: $implementationComplete,
+        committed: $committed,
+        recommendedActionMatches: $recommendedActionMatches,
+        hasPassingChecks: $hasPassingChecks,
+        hasBlockingChecks: $hasBlockingChecks,
+        commitMatchesHead: $commitMatchesHead,
+        worktreeClean: $worktreeClean
+      }
+    }'
+
+  if [[ "$decision_reason" == "eligible" || "$decision_reason" == "manual override accepted with soft guardrail failures" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+complete_coding_advance() {
+  local issue="$1" feature_dir="$2" audit_path="$3" stage_notes="$4"
+  local audit_tmp marker_path advance_agent
+
+  audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
+    log_warn "$issue advance failed: could not create audit artifact"
+    return 1
+  }
+  cat > "$audit_tmp"
+  if ! mv "$audit_tmp" "$audit_path"; then
+    rm -f "$audit_tmp"
+    log_warn "$issue advance failed: could not finalize audit artifact"
+    return 1
+  fi
+
+  advance_agent="${current_agent:-}"
+  if ! write_stage_result "$feature_dir" "coding" "completed" "$advance_agent" "$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")" "$stage_notes"; then
+    log_warn "$issue advance failed: could not update coding stage result"
+    return 1
+  fi
+
+  marker_path="$feature_dir/.coding-complete"
+  if ! touch "$marker_path"; then
+    log_warn "$issue advance failed: could not create $marker_path"
+    return 1
+  fi
+
+  return 0
+}
+
+auto_advance_blocked_completion() {
+  local issue="$1" feature_dir="$2"
+  local slug artifact_path artifact_record summary reason artifact_mtime decision_json
+  local audit_path audit_timestamp passing_count blocking_count blocked_json
+
+  AUTO_ADVANCE_BLOCKED_COMPLETION_REASON=""
+  artifact_path="$feature_dir/.coding-blocked-completion.json"
+  [[ -f "$artifact_path" ]] || return 1
+
+  slug="$(basename "$feature_dir")"
+  decision_json="$(blocked_completion_validate_for_advance "$issue" "$feature_dir" auto 2>/dev/null)" || {
+    AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="$(jq -r '.reason // "blocked-completion artifact is ineligible"' <<<"$decision_json" 2>/dev/null || echo "blocked-completion artifact is ineligible")"
+    return 1
+  }
+
+  artifact_record="$(read_blocked_completion "$feature_dir")"
+  IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
+  audit_path="$feature_dir/.coding-auto-advance.json"
+  audit_timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  passing_count="$(jq -r '(.passingChecks // []) | length' "$artifact_path" 2>/dev/null || echo 0)"
+  blocking_count="$(jq -r '(.blockingChecks // []) | length' "$artifact_path" 2>/dev/null || echo 0)"
+  blocked_json="$(jq -c '[.]' "$artifact_path")"
+
+  if ! jq -n \
+    --arg timestamp "$audit_timestamp" \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg reason "automatic advance from valid blocked-completion artifact" \
+    --arg blockedCompletionPath "features/$slug/.coding-blocked-completion.json" \
+    --arg blockedCompletionSummary "$summary" \
+    --argjson passingChecksCount "$passing_count" \
+    --argjson blockingChecksCount "$blocking_count" \
+    --argjson validation "$decision_json" \
+    --argjson blocked "$blocked_json" \
+    '{
+      timestamp: $timestamp,
+      issue: $issue,
+      slug: $slug,
+      commit: ($validation.commit // ""),
+      reason: $reason,
+      blocked_completion_path: $blockedCompletionPath,
+      blocked_completion_summary: $blockedCompletionSummary,
+      guardrails: ($validation.guardrails // {}),
+      passing_checks_count: $passingChecksCount,
+      blocking_checks_count: $blockingChecksCount,
+      blockedCompletion: (($blocked[0] // {}) | {
+        stage,
+        implementationComplete,
+        committed,
+        commit,
+        passingChecks,
+        blockingChecks,
+        blockingReason,
+        evidence,
+        recommendedAction
+      })
+    }' | complete_coding_advance "$issue" "$feature_dir" "$audit_path" "Blocked verification accepted automatically; review may proceed"; then
+    return 1
+  fi
+
+  log "status" "[auto-advance] $issue advancing coding to review from valid .coding-blocked-completion.json"
+  return 0
+}
+
 handle_planning_overreach_rejection() {
   local issue="$1" feature_dir="$2" win="$3" current_agent="${4:-}"
   local -a files=("${VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES[@]:-}")
@@ -7677,8 +7974,8 @@ handle_select_command() {
 handle_advance_command() {
   local event="$1"
   local payload issue slug worktree feature_dir current_phase artifact_path artifact_rel_path
-  local marker_path audit_path audit_tmp audit_timestamp task_phase
-  local artifact_json artifact_status artifact_stage artifact_agent artifact_model artifact_notes artifact_keys_json
+  local task_phase decision_json audit_path audit_timestamp soft_failures_json blocked_json
+  local artifact_record artifact_summary artifact_mtime
 
   MONITOR_COMMAND_STATUS="noop"
   MONITOR_COMMAND_DEFER_EVENT=""
@@ -7732,83 +8029,60 @@ handle_advance_command() {
     return 0
   fi
 
-  artifact_path="$feature_dir/.coding-result.json"
-  artifact_rel_path="features/$slug/.coding-result.json"
+  artifact_path="$feature_dir/.coding-blocked-completion.json"
+  artifact_rel_path="features/$slug/.coding-blocked-completion.json"
   if [[ ! -f "$artifact_path" ]]; then
     log_warn "$issue has no valid blocked-completion artifact at $artifact_rel_path"
     MONITOR_COMMAND_STATUS="invalid"
     return 0
   fi
 
-  if ! jq empty "$artifact_path" >/dev/null 2>&1; then
+  decision_json="$(blocked_completion_validate_for_advance "$issue" "$feature_dir" manual 2>/dev/null)" || {
     log_warn "$issue has no valid blocked-completion artifact at $artifact_rel_path"
-    MONITOR_COMMAND_STATUS="invalid"
-    return 0
-  fi
-
-  artifact_json=$(cat "$artifact_path")
-  artifact_status=$(printf '%s' "$artifact_json" | jq -r '.status // empty' 2>/dev/null || echo "")
-  artifact_stage=$(printf '%s' "$artifact_json" | jq -r '.stage // "coding"' 2>/dev/null || echo "coding")
-  if [[ "$artifact_status" != "running" || "$artifact_stage" != "coding" ]]; then
-    log_warn "$issue has no valid blocked-completion artifact at $artifact_rel_path"
-    MONITOR_COMMAND_STATUS="invalid"
-    return 0
-  fi
-
-  artifact_agent=$(printf '%s' "$artifact_json" | jq -r '.agent // empty' 2>/dev/null || echo "")
-  artifact_model=$(printf '%s' "$artifact_json" | jq -r '.model // empty' 2>/dev/null || echo "")
-  artifact_notes=$(printf '%s' "$artifact_json" | jq -r '.notes // empty' 2>/dev/null || echo "")
-  artifact_keys_json=$(printf '%s' "$artifact_json" | jq -c '(.artifacts // {}) | if type == "object" then keys else [] end' 2>/dev/null || echo '[]')
-
-  audit_path="$feature_dir/.coding-advance-override.json"
-  audit_timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  audit_tmp="$(mktemp "$feature_dir/.coding-advance-override.json.tmp.XXXXXX")" || {
-    log_warn "$issue advance failed: could not create audit artifact"
     MONITOR_COMMAND_STATUS="invalid"
     return 0
   }
+
+  audit_path="$feature_dir/.coding-advance-override.json"
+  audit_timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  artifact_record="$(read_blocked_completion "$feature_dir")"
+  IFS=$'\001' read -r artifact_summary _reason artifact_mtime <<< "$artifact_record"
+  blocked_json="$(jq -c '[.]' "$artifact_path")"
+  soft_failures_json="$(jq -c '
+    .guardrails
+    | to_entries
+    | map(select((.key == "commitMatchesHead" or .key == "worktreeClean") and (.value == false)))
+    | map(.key)
+  ' <<<"$decision_json" 2>/dev/null || echo '[]')"
 
   if ! jq -n \
     --arg timestamp "$audit_timestamp" \
     --arg issue "$issue" \
     --arg reason "manual advance via mill input" \
+    --arg summary "$artifact_summary" \
     --arg path "$artifact_rel_path" \
-    --arg stage "$artifact_stage" \
-    --arg status "$artifact_status" \
-    --arg agent "$artifact_agent" \
-    --arg model "$artifact_model" \
-    --arg notes "$artifact_notes" \
-    --argjson artifactKeys "$artifact_keys_json" \
+    --arg resultPath "features/$slug/.coding-result.json" \
+    --argjson validation "$decision_json" \
+    --argjson softFailures "$soft_failures_json" \
+    --argjson blocked "$blocked_json" \
     '{
       timestamp: $timestamp,
       issue: $issue,
       reason: $reason,
       artifact_summary: {
         path: $path,
-        stage: $stage,
-        status: $status,
-        agent: $agent,
-        model: $model,
-        notes: $notes,
-        artifact_keys: $artifactKeys
-      }
-    }' > "$audit_tmp"; then
-    rm -f "$audit_tmp"
-    log_warn "$issue advance failed: could not write audit artifact"
-    MONITOR_COMMAND_STATUS="invalid"
-    return 0
-  fi
-
-  if ! mv "$audit_tmp" "$audit_path"; then
-    rm -f "$audit_tmp"
-    log_warn "$issue advance failed: could not finalize audit artifact"
-    MONITOR_COMMAND_STATUS="invalid"
-    return 0
-  fi
-
-  marker_path="$feature_dir/.coding-complete"
-  if ! touch "$marker_path"; then
-    log_warn "$issue advance failed: could not create $marker_path"
+        summary: $summary,
+        stage: (($blocked[0] // {}).stage // ""),
+        recommendedAction: (($blocked[0] // {}).recommendedAction // ""),
+        implementationComplete: (($blocked[0] // {}).implementationComplete // false),
+        committed: (($blocked[0] // {}).committed // false),
+        passing_checks_count: (((($blocked[0] // {}).passingChecks) // []) | length),
+        blocking_checks_count: (((($blocked[0] // {}).blockingChecks) // []) | length),
+        coding_result_path: $resultPath
+      },
+      guardrails: ($validation.guardrails // {}),
+      soft_failures: $softFailures
+    }' | complete_coding_advance "$issue" "$feature_dir" "$audit_path" "Blocked verification accepted manually; review may proceed"; then
     MONITOR_COMMAND_STATUS="invalid"
     return 0
   fi
@@ -8596,6 +8870,11 @@ monitor_issue_state() {
               log "status" "$ISSUE → .coding-complete detected, marking coding as completed"
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
               # Next iteration will detect resolved_phase == "review" and launch review
+              active_count=$((active_count + 1))
+              return 0
+            fi
+            if auto_advance_blocked_completion "$ISSUE" "$FEATURE_DIR"; then
+              set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
               return 0
             fi
