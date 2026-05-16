@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { CURRENT_CONFIG_VERSION, type WavemillConfig } from './config.ts';
+import { CURRENT_CONFIG_VERSION, loadWavemillBaseConfig, type WavemillConfig } from './config.ts';
 
 export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
   configVersion: CURRENT_CONFIG_VERSION,
@@ -394,6 +394,7 @@ export function prepareConfigSync(repoDir: string): PreparedConfigSync {
 
   const localConfigResult = localConfigExists ? tryReadJsonObject(localConfigPath) : { value: null as Record<string, unknown> | null };
   const localConfig = localConfigResult.value;
+  const currentBaseConfig = loadWavemillBaseConfig(repoDir);
 
   const mergedConfig = deepMergeConfig(CANONICAL_CONFIG_TEMPLATE, currentConfig) as WavemillConfig;
   mergedConfig.configVersion = CURRENT_CONFIG_VERSION;
@@ -407,9 +408,9 @@ export function prepareConfigSync(repoDir: string): PreparedConfigSync {
   const additions = configExists ? identifyConfigAdditions(currentConfig, mergedConfig) : [];
   const alreadyCurrent =
     configExists &&
-    currentConfig.configVersion === CURRENT_CONFIG_VERSION &&
+    currentBaseConfig.configVersion === CURRENT_CONFIG_VERSION &&
     additions.length === 0 &&
-    isDeepStrictEqual(currentConfig, mergedConfig);
+    isDeepStrictEqual(currentBaseConfig, mergedConfig);
 
   return {
     configPath,

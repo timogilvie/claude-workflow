@@ -28,6 +28,10 @@ afterEach(() => {
   tempRepos.clear();
 });
 
+function writeLocalConfig(repoDir: string, config: Record<string, unknown>) {
+  writeFileSync(join(repoDir, '.wavemill-config.local.json'), JSON.stringify(config), 'utf-8');
+}
+
 describe('config-sync', () => {
   it('deepMergeConfig preserves user values while adding missing defaults', () => {
     const merged = deepMergeConfig(
@@ -80,6 +84,63 @@ describe('config-sync', () => {
     const prepared = prepareConfigSync(repoDir);
     assert.equal(prepared.alreadyCurrent, true);
     assert.equal(prepared.localConfigExists, true);
+  });
+
+  it('reports additions from base even when local overlay has them', () => {
+    const repoDir = makeTempRepo();
+    writeFileSync(
+      join(repoDir, '.wavemill-config.json'),
+      JSON.stringify({
+        configVersion: '1.3.0',
+        mill: { maxParallel: 7 },
+      }),
+      'utf-8',
+    );
+    writeLocalConfig(repoDir, {
+      configVersion: CURRENT_CONFIG_VERSION,
+      router: {
+        enabled: false,
+      },
+      hokusai: {
+        dataSubmission: {
+          enabled: true,
+          consentVersion: 'local',
+          endpoint: 'https://local.invalid/submit',
+        },
+      },
+    });
+
+    const prepared = prepareConfigSync(repoDir);
+
+    assert.equal(prepared.alreadyCurrent, false);
+    assert.ok(prepared.additions.includes('router'));
+    assert.ok(prepared.additions.includes('hokusai'));
+    assert.equal(prepared.mergedConfig.router?.enabled, CANONICAL_CONFIG_TEMPLATE.router?.enabled);
+    assert.equal(
+      prepared.mergedConfig.hokusai?.dataSubmission?.endpoint,
+      CANONICAL_CONFIG_TEMPLATE.hokusai?.dataSubmission?.endpoint,
+    );
+  });
+
+  it('output is stable whether local overlay is absent or empty', () => {
+    const repoDir = makeTempRepo();
+    writeFileSync(
+      join(repoDir, '.wavemill-config.json'),
+      JSON.stringify({
+        configVersion: '1.3.0',
+        mill: { maxParallel: 7 },
+      }),
+      'utf-8',
+    );
+    const withoutLocal = prepareConfigSync(repoDir);
+
+    writeLocalConfig(repoDir, {});
+    clearConfigCache(repoDir);
+    const withEmptyLocal = prepareConfigSync(repoDir);
+
+    assert.equal(withoutLocal.alreadyCurrent, withEmptyLocal.alreadyCurrent);
+    assert.deepEqual(withoutLocal.additions, withEmptyLocal.additions);
+    assert.deepEqual(withoutLocal.mergedConfig, withEmptyLocal.mergedConfig);
   });
 
   it('captures local config parse errors without blocking sync preparation', () => {
