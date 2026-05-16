@@ -344,68 +344,115 @@ plan_waiting_for_review() {
 
 render_plan_model_routing() {
   local worktree="$1" slug="$2"
-  local routing_file="" candidate records_json cache_key mtime rendered
+  local planning_result_file="" initial_route_file="" post_expansion_file="" routing_complete_file=""
+  local phase_config_file="" routing_jsonl_file="" candidate rendered cache_key artifact_key mtime
+
+  for candidate in \
+    "$worktree/features/$slug/.planning-result.json" \
+    "$worktree/bugs/$slug/.planning-result.json"
+  do
+    [[ -f "$candidate" ]] || continue
+    planning_result_file="$candidate"
+    break
+  done
+
+  for candidate in \
+    "$worktree/features/$slug/.initial-route.json" \
+    "$worktree/bugs/$slug/.initial-route.json"
+  do
+    [[ -f "$candidate" ]] || continue
+    initial_route_file="$candidate"
+    break
+  done
+
+  for candidate in \
+    "$worktree/features/$slug/.post-expansion-route.json" \
+    "$worktree/bugs/$slug/.post-expansion-route.json"
+  do
+    [[ -f "$candidate" ]] || continue
+    post_expansion_file="$candidate"
+    break
+  done
+
+  for candidate in \
+    "$worktree/features/$slug/.routing-complete" \
+    "$worktree/bugs/$slug/.routing-complete"
+  do
+    [[ -f "$candidate" ]] || continue
+    routing_complete_file="$candidate"
+    break
+  done
+
+  for candidate in \
+    "$worktree/features/$slug/.phase-config.json" \
+    "$worktree/bugs/$slug/.phase-config.json"
+  do
+    [[ -f "$candidate" ]] || continue
+    phase_config_file="$candidate"
+    break
+  done
 
   for candidate in \
     "$worktree/features/$slug/routing.jsonl" \
     "$worktree/bugs/$slug/routing.jsonl"
   do
-    if [[ -f "$candidate" ]]; then
-      routing_file="$candidate"
-      break
+    [[ -f "$candidate" ]] || continue
+    routing_jsonl_file="$candidate"
+    break
+  done
+
+  artifact_key=""
+  for candidate in \
+    "$planning_result_file" \
+    "$initial_route_file" \
+    "$post_expansion_file" \
+    "$routing_complete_file" \
+    "$phase_config_file" \
+    "$routing_jsonl_file"
+  do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      mtime=$(stat -f %m "$candidate" 2>/dev/null || stat -c %Y "$candidate" 2>/dev/null || echo 0)
+      artifact_key+="${candidate}:${mtime}|"
     fi
   done
 
-  if [[ -n "$routing_file" ]]; then
-    mtime=$(stat -f %m "$routing_file" 2>/dev/null || stat -c %Y "$routing_file" 2>/dev/null || echo 0)
-    cache_key="${routing_file}:${mtime}"
-    if [[ -v WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"] ]]; then
-      printf '%s' "${WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]}"
-      return 0
-    fi
-    records_json="$(
-      jq -Rcs '
-        split("\n")
-        | map(select(length > 0) | fromjson?)
-        | reduce .[] as $item ({};
-            if (($item.role // null) | type) == "string" then
-              .[$item.role] = $item
-            else
-              .
-            end
-          )
-        | [
-            {"role":"planner"} + (.planner // {}),
-            {"role":"coder"} + (.coder // {}),
-            {"role":"reviewer"} + (.reviewer // {})
-          ]
-      ' "$routing_file" 2>/dev/null
-    )"
-    [[ -n "$records_json" ]] || records_json='[{"role":"planner"},{"role":"coder"},{"role":"reviewer"}]'
-  else
+  if [[ -z "$artifact_key" ]]; then
     cache_key="missing:${worktree}:${slug}"
-    if [[ -v WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"] ]]; then
-      printf '%s' "${WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]}"
-      return 0
-    fi
-    records_json='[{"role":"planner"},{"role":"coder"},{"role":"reviewer"}]'
+  else
+    cache_key="$artifact_key"
+  fi
+
+  if [[ -v WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"] ]]; then
+    printf '%s' "${WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]}"
+    return 0
   fi
 
   rendered="$(
-    MODEL_RESOLUTION_DISPLAY_INPUT="$records_json" \
+    MODEL_RESOLUTION_DISPLAY_PLANNING_RESULT_PATH="$planning_result_file" \
+    MODEL_RESOLUTION_DISPLAY_INITIAL_ROUTE_PATH="$initial_route_file" \
+    MODEL_RESOLUTION_DISPLAY_POST_EXPANSION_PATH="$post_expansion_file" \
+    MODEL_RESOLUTION_DISPLAY_ROUTING_COMPLETE_PATH="$routing_complete_file" \
+    MODEL_RESOLUTION_DISPLAY_PHASE_CONFIG_PATH="$phase_config_file" \
+    MODEL_RESOLUTION_DISPLAY_ROUTING_JSONL_PATH="$routing_jsonl_file" \
     MODEL_RESOLUTION_DISPLAY_MODULE="$WAVEMILL_REPO_DIR/shared/lib/model-resolution-display.ts" \
     npx tsx -e '
       (async () => {
         const modulePath = process.env.MODEL_RESOLUTION_DISPLAY_MODULE;
-        const records = JSON.parse(process.env.MODEL_RESOLUTION_DISPLAY_INPUT ?? "[]");
-        const { formatAllSubagentModelDisplayText } = await import(modulePath);
-        process.stdout.write(formatAllSubagentModelDisplayText(records));
+        const { formatRouteLifecycleDisplayTextFromPaths } = await import(modulePath);
+        process.stdout.write(formatRouteLifecycleDisplayTextFromPaths({
+          planningResultPath: process.env.MODEL_RESOLUTION_DISPLAY_PLANNING_RESULT_PATH,
+          initialRoutePath: process.env.MODEL_RESOLUTION_DISPLAY_INITIAL_ROUTE_PATH,
+          postExpansionRoutePath: process.env.MODEL_RESOLUTION_DISPLAY_POST_EXPANSION_PATH,
+          routingCompletePath: process.env.MODEL_RESOLUTION_DISPLAY_ROUTING_COMPLETE_PATH,
+          phaseConfigPath: process.env.MODEL_RESOLUTION_DISPLAY_PHASE_CONFIG_PATH,
+          routingJsonlPath: process.env.MODEL_RESOLUTION_DISPLAY_ROUTING_JSONL_PATH,
+        }));
       })().catch(() => process.exit(1));
     ' 2>/dev/null || true
   )"
 
   if [[ -z "$rendered" ]]; then
-    rendered="  planner: model resolution unavailable"$'\n'"  coder:   model resolution unavailable"$'\n'"  reviewer: model resolution unavailable"
+    rendered="executed planning: model resolution unavailable"$'\n'"bootstrap route: unavailable"
   fi
   WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]="$rendered"
   printf '%s' "$rendered"

@@ -29,11 +29,15 @@ runTool({
     });
 
     console.log(`promote: ${result.status}${result.prUrl ? ` url=${result.prUrl}` : ''}`);
+    if (result.infoSummary) {
+      console.log(`info: ${result.infoSummary}`);
+    }
     if (result.checkSummary) {
       console.log(`checks: ${result.checkSummary}`);
     }
     if (result.status === 'blocked' && result.blockSummary) {
       console.log(`blocked: ${result.blockSummary}`);
+      process.exitCode = 1;
     }
   },
 });

@@ -136,7 +136,7 @@ The ready watchdog runs once per monitor tick for `phase=ready` tasks. After `re
 
 When GitHub says the PR is `MERGEABLE` but `BEHIND`, the watchdog treats that as a mechanically recoverable branch-update path. It fetches the latest base, merges it into the PR branch, pushes the branch, and then resets the controller-owned ready result back to a pending rerun. If the auto-update conflicts, the push fails repeatedly, or the local worktree is not safe to mutate, the watchdog escalates to `needs user` with the real failure detail.
 
-When GitHub says the PR is open, mergeable, and green, the watchdog still performs local recovery for stale controller state. That path is limited to clearing stale local ready markers and resetting the ready result. If auto-recovery is disabled or unsafe, the watchdog prints an explicit `tools/ready-watchdog.ts --recover <ISSUE>` command instead.
+When GitHub says the PR is open, mergeable, and green, the watchdog still performs local recovery for stale controller state. That path is limited to clearing stale local ready markers and resetting the ready result. During the later merge-lane step, tend skips its pre-merge rebase when `origin/auto/integration` is already an ancestor of the PR head; otherwise it performs the rebase before merging. If auto-recovery is disabled or unsafe, the watchdog prints an explicit `tools/ready-watchdog.ts --recover <ISSUE>` command instead.
 
 Configuration lives under `ready.watchdog`:
 
@@ -317,6 +317,18 @@ Behavior:
 - refreshes a managed `Promotion Summary` section in the PR body with recent merged Wavemill PRs and recent integration commits
 - reuses the shared check waiter to report whether the promotion PR is passing, pending, or failing
 - leaves merge policy separate from task PR merge policy by never calling auto-merge here
+
+### Protected Integration Branches
+
+If `wavemill promote` detects that `main` already contains an earlier squash-merged snapshot of the integration branch, it may need to reconcile branch history before refreshing the promotion PR. Wavemill now checks GitHub branch protection before attempting that rewrite and will not require you to relax protection on `auto/integration` just to open or update the promotion PR.
+
+The top-level `promotion` config controls the fallback:
+
+- `protectedIntegrationStrategy: "skip-reconciliation"` is the default. Wavemill leaves the protected integration branch untouched and continues with the direct `integration -> promotion` PR.
+- `protectedIntegrationStrategy: "block"` returns a blocked result with manual/admin reconciliation guidance instead of attempting an unsafe rewrite.
+- `protectedIntegrationStrategy: "use-promotion-head"` pushes a dedicated unprotected branch such as `auto/promotion` and opens the PR from that branch instead.
+
+If Wavemill cannot verify branch protection status, it blocks rather than risk rewriting the branch blindly.
 
 For the broader controller design, see the [Autonomous Integration Merge Controller Plan](https://linear.app/hokusai/document/autonomous-integration-merge-controller-plan-79e27e27d690).
 

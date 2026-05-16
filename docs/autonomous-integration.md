@@ -73,7 +73,7 @@ If you have in-flight task PRs when you flip this on, set `mill.baseBranch` to `
 }
 ```
 
-Set `mill.baseBranch` to the same branch as `integration.integrationBranch`. That keeps new task worktrees aligned with the branch tend is merging into. If `mill.baseBranch` stays on `main`, tend can still rebase each PR onto `auto/integration`, but you are pushing conflict resolution later in the pipeline.
+Set `mill.baseBranch` to the same branch as `integration.integrationBranch`. That keeps new task worktrees aligned with the branch tend is merging into. If `mill.baseBranch` stays on `main`, tend can still reconcile each PR against `auto/integration` later in the merge lane, but it now skips the pre-merge rebase whenever the PR head already contains `auto/integration`; otherwise you are still pushing conflict resolution later in the pipeline.
 
 ## Pipeline
 

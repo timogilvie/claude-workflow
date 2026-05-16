@@ -1588,6 +1588,29 @@
             },
             "additionalProperties": false
         },
+        "promotion": {
+            "type": "object",
+            "description": "Settings for how wavemill promote behaves when squash-snapshot reconciliation would need to mutate a protected integration branch.",
+            "properties": {
+                "protectedIntegrationStrategy": {
+                    "type": "string",
+                    "enum": [
+                        "skip-reconciliation",
+                        "block",
+                        "use-promotion-head"
+                    ],
+                    "default": "skip-reconciliation",
+                    "description": "Fallback strategy when promotion detects that reconciling the integration branch would require updating a protected branch. skip-reconciliation keeps the direct promotion PR, block stops with manual guidance, and use-promotion-head pushes a dedicated transport branch instead."
+                },
+                "promotionHeadBranch": {
+                    "type": "string",
+                    "minLength": 1,
+                    "default": "auto/promotion",
+                    "description": "Dedicated branch used as the PR head when protectedIntegrationStrategy is use-promotion-head."
+                }
+            },
+            "additionalProperties": false
+        },
         "permissions": {
             "type": "object",
             "description": "Permission settings for agent tool usage. Configures which commands can be auto-approved without user confirmation.",

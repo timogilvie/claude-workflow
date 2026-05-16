@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   formatAllSubagentModelDisplayText,
+  formatRouteLifecycleDisplayText,
   formatSubagentModelDisplayText,
   formatSubagentModelResolution,
 } from './model-resolution-display.ts';
@@ -177,5 +178,74 @@ test('echoes provided resolved ids without re-resolving', () => {
     text,
     'planner: requested=opus → resolved=claude-haiku-4-5\n'
       + '         fallback=claude-haiku-4-5 (reason: quota-exhausted)',
+  );
+});
+
+test('formats executed planning, bootstrap route, drift, and active remaining route', () => {
+  const text = formatRouteLifecycleDisplayText({
+    executedPlanning: {
+      agent: 'codex',
+      model: 'claude-sonnet-4-6',
+      status: 'completed',
+      source: '.planning-result.json',
+    },
+    bootstrapRoute: {
+      planner: 'claude-sonnet-4-6',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-4-6',
+    },
+    expandedRoute: {
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-4-6',
+    },
+    activeRoute: {
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-4-6',
+    },
+  });
+
+  assert.equal(
+    text,
+    'executed planning: codex / claude-sonnet-4-6\n'
+      + 'bootstrap route: p=claude-sonnet-4-6, c=gpt-5.4, r=claude-sonnet-4-6\n'
+      + 'recommended after expansion: p=claude-opus-4-7\n'
+      + 'active remaining route: c=gpt-5.4, r=claude-sonnet-4-6',
+  );
+});
+
+test('omits expanded recommendation when planner matches executed planning', () => {
+  const text = formatRouteLifecycleDisplayText({
+    executedPlanning: {
+      agent: 'codex',
+      model: 'claude-sonnet-4-6',
+    },
+    expandedRoute: {
+      planner: 'CLAUDE-SONNET-4-6',
+    },
+  });
+
+  assert.equal(text, 'executed planning: codex / claude-sonnet-4-6');
+});
+
+test('labels runtime routing records as execution telemetry', () => {
+  const text = formatRouteLifecycleDisplayText({
+    executedPlanning: {
+      unavailable: true,
+    },
+    executionTelemetry: [
+      {
+        role: 'planner',
+        requested: 'opus',
+        resolved: 'claude-opus-4-7',
+      },
+    ],
+  });
+
+  assert.equal(
+    text,
+    'executed planning: model resolution unavailable\n'
+      + 'execution telemetry:\n'
+      + 'planner: requested=opus → resolved=claude-opus-4-7',
   );
 });

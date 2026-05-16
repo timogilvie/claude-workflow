@@ -114,6 +114,7 @@ function buildMergeTestOptions(overrides: {
     if (cmd.includes('gh pr list --label')) return '[]';
     if (cmd.includes('git rev-parse --git-common-dir')) return join(repoDir, '.git');
     if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+    if (cmd.includes('git merge-base --is-ancestor')) { const e = new Error('Command failed: git merge-base --is-ancestor'); (e as unknown as Record<string, unknown>).status = 1; throw e; }
     if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
     return '';
   };
@@ -837,6 +838,7 @@ describe('executeMerge', () => {
       assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
       assert.ok(hasCall(options.calls, /git worktree add/));
       assert.ok(hasCall(options.calls, /git fetch origin 'auto\/integration'/));
+      assert.ok(hasCall(options.calls, /git merge-base --is-ancestor 'origin\/auto\/integration' 'abc123def456'/));
       assert.ok(hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
       assert.ok(hasCall(options.calls, /git push --force-with-lease/));
       assert.ok(hasCall(options.calls, /gh pr checks 42 --json name,state,bucket 2>&1 \|\| true/));
@@ -846,6 +848,102 @@ describe('executeMerge', () => {
       assert.ok(hasCall(options.calls, /git worktree remove --force/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
     } finally {
+      options.cleanup();
+    }
+  });
+
+  it('skips pre-merge rebase when the PR head already contains integration', async () => {
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes("git merge-base --is-ancestor 'origin/auto/integration' 'abc123def456'")) return '';
+        if (cmd.includes('git rebase')) throw new Error('rebase should have been skipped');
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+        return '';
+      },
+    });
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.ok(hasCall(options.calls, /git merge-base --is-ancestor 'origin\/auto\/integration' 'abc123def456'/));
+      assert.ok(!hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
+      assert.ok(!hasCall(options.calls, /git push --force-with-lease/));
+      assert.ok(hasCall(options.calls, /gh pr checks 42 --json name,state,bucket 2>&1 \|\| true/));
+      assert.ok(hasCall(options.calls, /gh pr merge 42 --squash/));
+      assert.ok(hasCall(options.calls, /git push origin --delete 'task\/merge-me'/));
+      assert.ok(hasCall(options.calls, /git worktree remove --force/));
+      assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('does not block a PR whose remote head is a conflict-resolution merge commit', async () => {
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rev-parse') && cmd.includes('origin/task/merge-me')) return 'mergecommit630';
+        if (cmd.includes("git merge-base --is-ancestor 'origin/auto/integration' 'mergecommit630'")) return '';
+        if (cmd.includes('git rebase')) {
+          throw new Error('rebase would reintroduce resolved conflicts in promotion-controller files');
+        }
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+        return '';
+      },
+    });
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.ok(hasCall(options.calls, /git merge-base --is-ancestor 'origin\/auto\/integration' 'mergecommit630'/));
+      assert.ok(!hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
+      assert.equal(options.labels.includes('blocked:42'), false);
+      assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('falls back to the existing rebase path when the ancestry check errors', async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('git merge-base --is-ancestor')) throw new Error('fatal: bad revision');
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+        return '';
+      },
+    });
+
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.ok(hasCall(options.calls, /git merge-base --is-ancestor 'origin\/auto\/integration' 'abc123def456'/));
+      assert.ok(hasCall(options.calls, /git rebase 'origin\/auto\/integration'/));
+      assert.ok(hasCall(options.calls, /git push --force-with-lease/));
+      assert.ok(
+        warnings.some((warning) => warning.includes('pre-merge ancestry check failed')),
+        'expected a warning when ancestry probing fails operationally',
+      );
+    } finally {
+      console.warn = originalWarn;
       options.cleanup();
     }
   });

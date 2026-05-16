@@ -118,6 +118,12 @@ describe('eval-orchestrator', () => {
       planContent: undefined,
       selfReviewSummary: undefined,
       routingDecision,
+      executedPlanning: {
+        agent: 'codex',
+        model: 'claude-opus-4-6',
+        status: 'completed',
+        source: '.planning-result.json',
+      },
       executionModel: 'gpt-5.4',
     }));
     mock.method(evalOrchestratorDeps, 'execShellCommand', () => 'task/unified-eval');
@@ -250,6 +256,12 @@ describe('eval-orchestrator', () => {
       costOutcome,
       interventionRecords,
       routingDecision,
+      executedPlanning: {
+        agent: 'codex',
+        model: 'claude-opus-4-6',
+        status: 'completed',
+        source: '.planning-result.json',
+      },
     });
 
     assert.deepEqual(
@@ -259,6 +271,7 @@ describe('eval-orchestrator', () => {
         workflowCostStatus: orchestrated.workflowCostStatus,
         constraints: orchestrated.constraints,
         routeProvenance: orchestrated.routeProvenance,
+        executedPlanning: orchestrated.executedPlanning,
         trainingEligible: orchestrated.trainingEligible,
         budgetEvalEligible: orchestrated.budgetEvalEligible,
         eligibilityErrors: orchestrated.eligibilityErrors,
@@ -271,6 +284,7 @@ describe('eval-orchestrator', () => {
         workflowCostStatus: postCompletion.workflowCostStatus,
         constraints: postCompletion.constraints,
         routeProvenance: postCompletion.routeProvenance,
+        executedPlanning: postCompletion.executedPlanning,
         trainingEligible: postCompletion.trainingEligible,
         budgetEvalEligible: postCompletion.budgetEvalEligible,
         eligibilityErrors: postCompletion.eligibilityErrors,

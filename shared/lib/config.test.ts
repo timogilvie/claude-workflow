@@ -18,12 +18,14 @@ import {
   loadWavemillConfig,
   clearConfigCache,
   INTEGRATION_DEFAULTS,
+  PROMOTION_DEFAULTS,
   getChallengeConfig,
   getChallengeSchedulerConfig,
   getAvailableModelsForStage,
   getRouterConfig,
   getEvalConfig,
   getIntegrationConfig,
+  getPromotionConfig,
   getIntegrationReadyPolicy,
   getMillConfig,
   getExpansionHandshakeConfig,
@@ -2088,6 +2090,77 @@ test('getIntegrationConfig returns a full valid integration block', () => {
   }
 });
 
+test('getPromotionConfig returns defaults when section is missing', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, '{}');
+
+    assert.deepEqual(getPromotionConfig(tmp), PROMOTION_DEFAULTS);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getPromotionConfig merges partial overrides with defaults', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      promotion: {
+        protectedIntegrationStrategy: 'block',
+      },
+    }));
+
+    assert.deepEqual(getPromotionConfig(tmp), {
+      ...PROMOTION_DEFAULTS,
+      protectedIntegrationStrategy: 'block',
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getPromotionConfig returns a full valid promotion block', () => {
+  const tmp = makeTempRepo();
+  const promotion = {
+    protectedIntegrationStrategy: 'use-promotion-head' as const,
+    promotionHeadBranch: 'auto/release-transport',
+  };
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({ promotion }));
+
+    assert.deepEqual(getPromotionConfig(tmp), promotion);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid promotion protectedIntegrationStrategy throws validation error', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      promotion: {
+        protectedIntegrationStrategy: 'rewrite-anyway',
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('invalid integration mergeMethod throws validation error', () => {
   const tmp = makeTempRepo();
   try {
@@ -2483,6 +2556,31 @@ test('local overlay deep-merges objects onto base', () => {
     assert.equal(config.mill?.maxParallel, 7);
     assert.equal(config.integration?.enabled, true);
     assert.equal(config.integration?.integrationBranch, 'auto/integration');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('local overlay deep-merges promotion config onto base', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      promotion: {
+        protectedIntegrationStrategy: 'skip-reconciliation',
+        promotionHeadBranch: 'auto/base-promotion',
+      },
+    }));
+    writeLocalConfig(tmp, JSON.stringify({
+      promotion: {
+        protectedIntegrationStrategy: 'use-promotion-head',
+      },
+    }));
+
+    assert.deepEqual(getPromotionConfig(tmp), {
+      protectedIntegrationStrategy: 'use-promotion-head',
+      promotionHeadBranch: 'auto/base-promotion',
+    });
   } finally {
     cleanUp(tmp);
   }

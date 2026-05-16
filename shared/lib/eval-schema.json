@@ -1838,6 +1838,33 @@
       },
       "additionalProperties": false
     },
+    "executedPlanning": {
+      "type": "object",
+      "description": "Authoritative planning execution provenance loaded from .planning-result.json.",
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "awaiting_user",
+            "completed",
+            "aborted",
+            "failed"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "const": ".planning-result.json"
+        }
+      },
+      "additionalProperties": false
+    },
     "routePrediction": {
       "$ref": "#/$defs/RoutePrediction"
     },

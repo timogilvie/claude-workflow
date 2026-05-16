@@ -763,7 +763,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for prompt size diagnostics', () => {
-  assert.equal(SCHEMA_VERSION, '1.24.0');
+  assert.equal(SCHEMA_VERSION, '1.25.0');
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1545,6 +1545,31 @@ test('routeProvenance validates when present', () => {
   assert.equal(properties.routeProvenance?.type, 'object');
 });
 
+test('executedPlanning remains optional for legacy records', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('executedPlanning validates when present', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.25.0',
+    executedPlanning: {
+      agent: 'codex',
+      model: 'claude-sonnet-4-6',
+      status: 'completed',
+      source: '.planning-result.json',
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.executedPlanning?.type, 'object');
+});
+
 test('Wavemill router fields validate and schema stays in parity', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
@@ -1579,8 +1604,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.24.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.24.0');
+test('Schema version constant is 1.25.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.25.0');
 });
 
 test('Record with resolved-model routing validates', () => {

@@ -41,6 +41,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-mill-model-flags.test.sh \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
+  "$REPO_DIR"/tests/notification-waiting.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -62,6 +63,26 @@ for f in \
     fail "$(basename "$f") has syntax errors"
   fi
 done
+
+# ============================================================================
+# TEST 1A: Launcher attach shutdown handling
+# ============================================================================
+echo ""
+echo "=== Launcher Attach Shutdown ==="
+
+ATTACH_BLOCK=$(awk '
+  /^sleep 1$/ { in_block=1 }
+  in_block { print }
+  /Session ended\. Run/ { in_block=0 }
+' "$LIB_DIR/wavemill-mill.sh")
+if grep -q 'set +e' <<< "$ATTACH_BLOCK" \
+  && grep -q 'tmux attach -t "$SESSION"' <<< "$ATTACH_BLOCK" \
+  && grep -q 'attach_rc=$?' <<< "$ATTACH_BLOCK" \
+  && grep -q 'set -e' <<< "$ATTACH_BLOCK"; then
+  pass "launcher handles non-zero tmux attach during normal shutdown"
+else
+  fail "launcher tmux attach is not guarded against normal shutdown exit codes"
+fi
 
 # ============================================================================
 # TEST 1B: State mutation helper behavior
@@ -170,6 +191,18 @@ else
   fail "background jobs cleanup lifecycle: $background_jobs_cleanup_output"
 fi
 unset background_jobs_cleanup_status
+
+echo ""
+echo "=== Notification → waiting (Claude hook adapter) ==="
+
+notification_waiting_output="$(bash "$REPO_DIR/tests/notification-waiting.test.sh" 2>&1)" || notification_waiting_status=$?
+notification_waiting_status="${notification_waiting_status:-0}"
+if [[ "$notification_waiting_status" -eq 0 ]]; then
+  pass "Claude Notification events map to waiting state"
+else
+  fail "Claude Notification → waiting behavior: $notification_waiting_output"
+fi
+unset notification_waiting_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check
@@ -1439,6 +1472,17 @@ if grep -q "$REPO_DIR/features/test-slug/selected-task.json" "$PROMPT_RENDER_DIR
   pass "rendered prompts use absolute canonical feature paths"
 else
   fail "rendered prompts still rely on cwd-relative feature paths"
+fi
+
+if grep -q 'Recommended after expansion' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q '\.planning-result.json' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q '\.post-expansion-route.json' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q 'runtime execution telemetry' "$REPO_DIR/tools/prompts/review-phase.md" \
+  && grep -q 'Recommended after expansion' "$PROMPT_RENDER_DIR/review-codex.txt" \
+  && grep -q '\.planning-result.json' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "review prompt distinguishes executed planning from expanded recommendations"
+else
+  fail "review prompt is missing route provenance guidance"
 fi
 
 TMUX_CAPTURE=()
