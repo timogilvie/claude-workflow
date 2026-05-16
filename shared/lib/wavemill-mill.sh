@@ -7996,7 +7996,7 @@ handle_advance_command() {
   fi
   issue="$1"
 
-  if [[ ! "$issue" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
+  if [[ ! "$issue" =~ ^[A-Z][A-Z0-9]+-[0-9]+(_c)?$ ]]; then
     log_warn "usage: advance <issue-id>"
     MONITOR_COMMAND_STATUS="invalid"
     return 0
