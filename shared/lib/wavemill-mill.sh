@@ -3640,7 +3640,7 @@ complete_coding_advance() {
 auto_advance_blocked_completion() {
   local issue="$1" feature_dir="$2"
   local slug artifact_path artifact_record summary reason artifact_mtime decision_json
-  local audit_path audit_timestamp passing_count blocking_count
+  local audit_path audit_timestamp passing_count blocking_count blocked_json
 
   AUTO_ADVANCE_BLOCKED_COMPLETION_REASON=""
   artifact_path="$feature_dir/.coding-blocked-completion.json"
@@ -3658,6 +3658,7 @@ auto_advance_blocked_completion() {
   audit_timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   passing_count="$(jq -r '(.passingChecks // []) | length' "$artifact_path" 2>/dev/null || echo 0)"
   blocking_count="$(jq -r '(.blockingChecks // []) | length' "$artifact_path" 2>/dev/null || echo 0)"
+  blocked_json="$(jq -c '[.]' "$artifact_path")"
 
   if ! jq -n \
     --arg timestamp "$audit_timestamp" \
@@ -3669,7 +3670,7 @@ auto_advance_blocked_completion() {
     --argjson passingChecksCount "$passing_count" \
     --argjson blockingChecksCount "$blocking_count" \
     --argjson validation "$decision_json" \
-    --slurpfile blocked "$artifact_path" \
+    --argjson blocked "$blocked_json" \
     '{
       timestamp: $timestamp,
       issue: $issue,
@@ -7973,7 +7974,7 @@ handle_select_command() {
 handle_advance_command() {
   local event="$1"
   local payload issue slug worktree feature_dir current_phase artifact_path artifact_rel_path
-  local task_phase decision_json audit_path audit_timestamp soft_failures_json
+  local task_phase decision_json audit_path audit_timestamp soft_failures_json blocked_json
   local artifact_record artifact_summary artifact_mtime
 
   MONITOR_COMMAND_STATUS="noop"
@@ -8046,6 +8047,7 @@ handle_advance_command() {
   audit_timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   artifact_record="$(read_blocked_completion "$feature_dir")"
   IFS=$'\001' read -r artifact_summary _reason artifact_mtime <<< "$artifact_record"
+  blocked_json="$(jq -c '[.]' "$artifact_path")"
   soft_failures_json="$(jq -c '
     .guardrails
     | to_entries
@@ -8062,7 +8064,7 @@ handle_advance_command() {
     --arg resultPath "features/$slug/.coding-result.json" \
     --argjson validation "$decision_json" \
     --argjson softFailures "$soft_failures_json" \
-    --slurpfile blocked "$artifact_path" \
+    --argjson blocked "$blocked_json" \
     '{
       timestamp: $timestamp,
       issue: $issue,
