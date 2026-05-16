@@ -1,5 +1,5 @@
 {
-  "configVersion": "1.3.0",
+  "configVersion": "1.4.0",
   "linear": {
     "project": "wavemill"
   },
@@ -14,7 +14,7 @@
     "planningMode": "interactive",
     "maxRetries": 3,
     "retryDelay": 2,
-    "defaultMaxCostUsd": 25.00
+    "defaultMaxCostUsd": 25
   },
   "expand": {
     "maxSelect": 3,
@@ -86,14 +86,14 @@
         "outputCostPerMTok": 15,
         "cacheReadCostPerMTok": 0.25
       },
+      "gpt-5.5": {
+        "inputCostPerMTok": 5,
+        "outputCostPerMTok": 30
+      },
       "gpt-5.3-codex-spark": {
         "inputCostPerMTok": 1.75,
         "outputCostPerMTok": 14,
         "cacheReadCostPerMTok": 0.44
-      },
-      "gpt-5.5": {
-        "inputCostPerMTok": 5,
-        "outputCostPerMTok": 30
       }
     },
     "interventionPenalties": {
@@ -106,11 +106,14 @@
       "selfReviewBlocker": 0.2
     }
   },
-  "challengeScheduler": {
-    "enabled": true,
-    "newModelChallengeCount": 25
-  },
   "autoEval": true,
+  "hokusai": {
+    "dataSubmission": {
+      "enabled": false,
+      "consentVersion": "1.0",
+      "endpoint": "https://api.hokusai.dev/v1/submit"
+    }
+  },
   "challenge": {
     "enabled": true,
     "rate": 0.3,
@@ -141,21 +144,6 @@
     "minRecords": 20,
     "minModels": 2,
     "models": [],
-    "defaultAgent": "claude",
-    "agentMap": {
-      "claude-opus-4-6": "claude",
-      "claude-opus-4-7": "claude",
-      "claude-sonnet-4-6": "claude",
-      "claude-sonnet-4-5-20250929": "claude",
-      "claude-haiku-4-5-20251001": "claude",
-      "gpt-5.3-codex": "codex",
-      "gpt-5.4": "codex",
-      "gpt-5.3-codex-spark": "codex",
-      "gpt-5.5": "codex"
-    },
-    "mode": "auto",
-    "llmModel": "gpt-4o-mini",
-    "llmProvider": "openai",
     "availableModels": {
       "planner": [
         "claude-opus-4-7",
@@ -163,7 +151,22 @@
         "gpt-5.4",
         "gpt-5.5"
       ]
-    }
+    },
+    "defaultAgent": "claude",
+    "agentMap": {
+      "claude-opus-4-7": "claude",
+      "claude-sonnet-4-6": "claude",
+      "claude-opus-4-6": "claude",
+      "claude-sonnet-4-5-20250929": "claude",
+      "claude-haiku-4-5-20251001": "claude",
+      "gpt-5.3-codex": "codex",
+      "gpt-5.4": "codex",
+      "gpt-5.5": "codex",
+      "gpt-5.3-codex-spark": "codex"
+    },
+    "mode": "auto",
+    "llmModel": "gpt-4o-mini",
+    "llmProvider": "openai"
   },
   "validation": {
     "enabled": true,
@@ -180,21 +183,6 @@
   "constraints": {
     "enabled": true,
     "cleanupAfterMerge": false
-  },
-  "integration": {
-    "enabled": false,
-    "integrationBranch": "auto/integration",
-    "promotionBranch": "main",
-    "mergeMethod": "squash",
-    "deleteBranchAfterMerge": true,
-    "haltOnRed": true,
-    "requiredChecks": [
-      "Shell and Unit Tests",
-      "Check Lifecycle Paths",
-      "Lifecycle Integration Tests"
-    ],
-    "highRiskPolicy": "manual",
-    "useMillSession": true
   },
   "ui": {
     "visualVerification": true,
@@ -230,5 +218,28 @@
       "enabled": true,
       "autoApproveReadOnly": true
     }
+  },
+  "challengeScheduler": {
+    "enabled": true,
+    "newModelChallengeCount": 25
+  },
+  "integration": {
+    "enabled": false,
+    "integrationBranch": "auto/integration",
+    "promotionBranch": "main",
+    "mergeMethod": "squash",
+    "deleteBranchAfterMerge": true,
+    "haltOnRed": true,
+    "requiredChecks": [
+      "Shell and Unit Tests",
+      "Check Lifecycle Paths",
+      "Lifecycle Integration Tests"
+    ],
+    "highRiskPolicy": "manual",
+    "useMillSession": true
+  },
+  "promotion": {
+    "protectedIntegrationStrategy": "use-promotion-head",
+    "promotionHeadBranch": "auto/promotion"
   }
 }
