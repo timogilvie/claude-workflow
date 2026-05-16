@@ -32,6 +32,7 @@ function shellHarness(overrides: {
   mergedPrs?: Array<{ number: number; title: string; labels?: Array<{ name: string }> }>;
   checks?: Array<{ name: string; state?: string; conclusion?: string | null; bucket?: string | null }>;
   integrationTreeLog?: string;
+  recentCommitLogByRange?: Record<string, string>;
   integrationTree?: string;
   promotionTree?: string;
   pushError?: string;
@@ -191,12 +192,18 @@ function shellHarness(overrides: {
         ]);
       }
 
-      if (cmd.includes("git log --first-parent --oneline -n 10 'origin/main..auto/integration'")) {
-        return 'abc123 Add release guardrails (#101)\n';
-      }
-
-      if (cmd.includes("git log --first-parent --oneline -n 10 'previous-integration-sha..auto/integration'")) {
-        return 'abc123 Add release guardrails (#101)\n';
+      const recentCommitsMatch = cmd.match(/^git log --first-parent --oneline -n 10 '([^']+\.\.auto\/integration)'$/);
+      if (recentCommitsMatch) {
+        const range = recentCommitsMatch[1];
+        if (overrides.recentCommitLogByRange?.[range] !== undefined) {
+          return overrides.recentCommitLogByRange[range];
+        }
+        if (range === 'origin/main..auto/integration') {
+          return 'abc123 Add release guardrails (#101)\n';
+        }
+        if (range === 'previous-integration-sha..auto/integration') {
+          return 'abc123 Add release guardrails (#101)\n';
+        }
       }
 
       if (cmd.includes("gh pr list --head 'auto/integration' --base 'main' --state open --json number,url,body")) {
@@ -512,7 +519,12 @@ describe('runPromotion', () => {
         'previous-integration-sha promoted-tree',
         'older-sha old-tree',
       ].join('\n'),
+      recentCommitLogByRange: {
+        'origin/main..auto/integration': 'old111 Already promoted change (#11)\n',
+        'previous-integration-sha..auto/integration': 'new222 New integration work (#22)\n',
+      },
       openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+      mergedPrs: [{ number: 22, title: 'New integration work', labels: [{ name: 'wavemill' }] }],
     });
 
     try {
@@ -524,11 +536,24 @@ describe('runPromotion', () => {
 
       assert.equal(result.status, 'updated');
       assert.equal(result.headBranch, 'auto/integration');
+      assert.deepEqual(result.squashRecovery, {
+        status: 'applied-in-place',
+        detail: 'matched promoted snapshot previous-integration-sha on auto/integration',
+      });
+      assert.match(result.infoSummary ?? '', /Applied squash reconciliation to auto\/integration/);
       assert(shell.calls.some((cmd) => cmd.includes("git commit-tree 'integration-sha^{tree}' -p 'origin-main-sha'")));
       assert(shell.calls.includes("gh api 'repos/example/repo/branches/auto/integration'"));
       assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
       assert(shell.calls.some((cmd) => cmd.includes("git push --force-with-lease='refs/heads/auto/integration:integration-sha'")));
       assert(shell.calls.some((cmd) => cmd.includes("git merge-base --is-ancestor 'reconciled-sha' 'origin/main'")));
+      assert(shell.calls.some((cmd) => cmd === "git log --first-parent --oneline -n 10 'previous-integration-sha..auto/integration'"));
+      assert(!shell.calls.some((cmd) => cmd === "git log --first-parent --oneline -n 10 'origin/main..auto/integration'"));
+      const writtenBody = readFileSync('/tmp/promotion-body.txt', 'utf-8');
+      const parsedBody = JSON.parse(writtenBody).body;
+      assert.match(parsedBody, /Promotion path: Squash reconciliation applied to auto\/integration/);
+      assert.match(parsedBody, /New integration work/);
+      assert.match(parsedBody, /new222 New integration work/);
+      assert.doesNotMatch(parsedBody, /Already promoted change/);
     } finally {
       repo.cleanup();
     }
@@ -829,7 +854,7 @@ describe('runPromotion', () => {
     }
   });
 
-  it('skips reconciliation on a protected integration branch by default', async () => {
+  it('blocks instead of opening a direct conflicted PR on a protected integration branch by default', async () => {
     const repo = makeRepo();
     const shell = shellHarness({
       baseIntegrated: false,
@@ -851,12 +876,19 @@ describe('runPromotion', () => {
         healthChecker: async () => ({ state: 'healthy' }),
       });
 
-      assert.equal(result.status, 'updated');
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'protected-integration-reconciliation-required');
       assert.equal(result.headBranch, 'auto/integration');
-      assert.match(result.infoSummary ?? '', /skipped squash-snapshot reconciliation/);
+      assert.deepEqual(result.squashRecovery, {
+        status: 'blocked',
+        detail: 'matched promoted snapshot previous-integration-sha on auto/integration',
+      });
+      assert.match(result.blockSummary ?? '', /known-conflicted by ancestry/);
+      assert.match(result.blockSummary ?? '', /use-promotion-head/);
       assert(!shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
       assert(!shell.calls.some((cmd) => cmd.includes("git push --force-with-lease='refs/heads/auto/integration:integration-sha'")));
-      assert(shell.calls.some((cmd) => cmd.includes("gh api --method PATCH 'repos/example/repo/pulls/77' --input")));
+      assert(!shell.calls.some((cmd) => cmd.includes("gh api --method PATCH 'repos/example/repo/pulls/77' --input")));
+      assert(!shell.calls.some((cmd) => cmd.includes('gh pr create')));
     } finally {
       repo.cleanup();
     }
@@ -888,6 +920,10 @@ describe('runPromotion', () => {
 
       assert.equal(result.status, 'blocked');
       assert.equal(result.blockReason, 'protected-integration-reconciliation-required');
+      assert.deepEqual(result.squashRecovery, {
+        status: 'blocked',
+        detail: 'matched promoted snapshot previous-integration-sha on auto/integration',
+      });
       assert.match(result.blockSummary ?? '', /reason=required-status-checks/);
       assert.match(result.blockSummary ?? '', /manual\/admin reconciliation required/);
       assert.equal(result.prUrl, 'https://github.com/example/repo/pull/77');
@@ -919,6 +955,10 @@ describe('runPromotion', () => {
 
       assert.equal(result.status, 'blocked');
       assert.equal(result.blockReason, 'protected-integration-reconciliation-required');
+      assert.deepEqual(result.squashRecovery, {
+        status: 'blocked',
+        detail: 'matched promoted snapshot previous-integration-sha on auto/integration',
+      });
       assert.match(result.blockSummary ?? '', /reason=protection-unknown/);
       assert.match(result.blockSummary ?? '', /could not verify/);
       assert(!shell.calls.some((cmd) => cmd.includes('git update-ref')));
@@ -955,12 +995,18 @@ describe('runPromotion', () => {
 
       assert.equal(result.status, 'opened');
       assert.equal(result.headBranch, 'auto/release-transport');
+      assert.deepEqual(result.squashRecovery, {
+        status: 'applied-via-promotion-head',
+        detail: 'matched promoted snapshot previous-integration-sha on auto/integration; head=auto/release-transport',
+      });
       assert.match(result.infoSummary ?? '', /using dedicated promotion head auto\/release-transport/);
       assert(shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/release-transport' 'reconciled-sha'"));
       assert(shell.calls.some((cmd) => cmd === "git push origin 'refs/heads/auto/release-transport:refs/heads/auto/release-transport'"));
       assert(!shell.calls.some((cmd) => cmd === "git update-ref 'refs/heads/auto/integration' 'reconciled-sha' 'integration-sha'"));
       assert(shell.calls.some((cmd) => cmd.includes("gh pr list --head 'auto/release-transport' --base 'main'")));
       assert(shell.calls.some((cmd) => cmd.includes("gh pr create --head 'auto/release-transport' --base 'main'")));
+      const writtenBody = readFileSync('/tmp/promotion-body.txt', 'utf-8');
+      assert.match(writtenBody, /auto\/release-transport/);
     } finally {
       repo.cleanup();
     }

@@ -39,6 +39,7 @@ for f in \
   hokusai-router.test.ts \
   context-linter.test.ts \
   config-sync.test.ts \
+  sync-config-classifier.test.ts \
   llm-router.test.ts \
   issue-expander.test.ts \
   ready-stage.test.ts \

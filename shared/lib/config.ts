@@ -727,6 +727,7 @@ function validateAgentsModelSelectors(config: unknown): void {
  * Lifetime: process-level singleton (no file watching or TTL).
  */
 const configCache = new Map<string, WavemillConfig>();
+const baseConfigCache = new Map<string, WavemillConfig>();
 
 /**
  * Resolve a repo directory path to an absolute path for cache key consistency.
@@ -764,44 +765,76 @@ function resolveRepoDir(repoDir?: string): string {
  * console.log(config.router?.enabled); // typed access
  * ```
  */
+function normalizeLegacyPlanningMode(config: unknown): WavemillConfig {
+  if (
+    typeof config === 'object' &&
+    config !== null &&
+    'mill' in config &&
+    typeof (config as { mill?: { planningMode?: string } }).mill === 'object' &&
+    (config as { mill?: { planningMode?: string } }).mill?.planningMode === 'skip'
+  ) {
+    (config as { mill: { planningMode: 'interactive' } }).mill.planningMode = 'interactive';
+  }
+
+  validateConfig(config);
+  return config as WavemillConfig;
+}
+
+function loadBaseConfigFromDisk(absRepoDir: string): WavemillConfig {
+  const configPath = resolve(absRepoDir, '.wavemill-config.json');
+  const base = existsSync(configPath) ? readAndParseConfig(configPath) : {};
+  return normalizeLegacyPlanningMode(base);
+}
+
+/**
+ * Load the tracked repo config from `.wavemill-config.json` only.
+ *
+ * This ignores `.wavemill-config.local.json` and is intended for workflows that
+ * operate on the tracked base file itself, such as config upgrade checks and
+ * sync planning.
+ */
+export function loadWavemillBaseConfig(repoDir?: string): WavemillConfig {
+  const absRepoDir = resolveRepoDir(repoDir);
+
+  const cached = baseConfigCache.get(absRepoDir);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const baseConfig = loadBaseConfigFromDisk(absRepoDir);
+  baseConfigCache.set(absRepoDir, baseConfig);
+  return baseConfig;
+}
+
+/**
+ * Load the runtime config by overlaying `.wavemill-config.local.json` on top of
+ * `.wavemill-config.json`, with local values winning.
+ */
 export function loadWavemillConfig(repoDir?: string): WavemillConfig {
   const absRepoDir = resolveRepoDir(repoDir);
 
-  // Check cache first
   const cached = configCache.get(absRepoDir);
   if (cached !== undefined) {
     return cached;
   }
 
-  // Load config file
-  const configPath = resolve(absRepoDir, '.wavemill-config.json');
   const localConfigPath = resolve(absRepoDir, '.wavemill-config.local.json');
 
   // Missing base file is not an error (all fields are optional). A `.local.json`
   // alone with no base is also valid — it acts as the entire config.
-  const base = existsSync(configPath) ? readAndParseConfig(configPath) : {};
+  const base = existsSync(resolve(absRepoDir, '.wavemill-config.json'))
+    ? loadWavemillBaseConfig(absRepoDir)
+    : {};
   const overlay = existsSync(localConfigPath) ? readAndParseConfig(localConfigPath) : null;
   const merged = overlay ? deepMergeConfig(base, overlay) : base;
-
-  // Migrate legacy configs that still carry the removed skip-planning mode.
-  if (
-    typeof merged === 'object' &&
-    merged !== null &&
-    'mill' in merged &&
-    typeof (merged as { mill?: { planningMode?: string } }).mill === 'object' &&
-    (merged as { mill?: { planningMode?: string } }).mill?.planningMode === 'skip'
-  ) {
-    (merged as { mill: { planningMode: 'interactive' } }).mill.planningMode = 'interactive';
-  }
 
   // Validate the merged result against the schema. The overlay file is partial,
   // so validating it alone would be too permissive; validating the merge catches
   // type mismatches and unknown keys regardless of which file contributed them.
-  validateConfig(merged);
+  const validated = normalizeLegacyPlanningMode(merged);
 
-  // Cache and return
-  configCache.set(absRepoDir, merged);
-  return merged;
+  configCache.set(absRepoDir, validated);
+  return validated;
 }
 
 function readAndParseConfig(path: string): unknown {
@@ -864,8 +897,10 @@ export function clearConfigCache(repoDir?: string): void {
   if (repoDir !== undefined) {
     const absRepoDir = resolveRepoDir(repoDir);
     configCache.delete(absRepoDir);
+    baseConfigCache.delete(absRepoDir);
   } else {
     configCache.clear();
+    baseConfigCache.clear();
   }
 
   // Reset validator state for deterministic tests and long-lived processes.
