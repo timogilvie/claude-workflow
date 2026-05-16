@@ -123,7 +123,7 @@ describe('config-sync', () => {
       {
         path: 'developer.nickname',
         label: 'already local-only',
-        reason: 'developer.nickname exists only in .wavemill-config.local.json and is not a canonical sync field.',
+        reason: 'developer.nickname does not need to be synced — it is either absent from .wavemill-config.json (and not a canonical field), or it matches the existing repo default.',
       },
     ]);
   });
