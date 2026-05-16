@@ -1,6 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { CURRENT_CONFIG_VERSION, loadWavemillBaseConfig, type WavemillConfig } from './config.ts';
+import {
+  classifyLocalOverrideFields,
+  type LocalOverrideClassificationEntry,
+} from './sync-config-classifier.ts';
 
 export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
   configVersion: CURRENT_CONFIG_VERSION,
@@ -168,12 +172,28 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
 
 export interface PreparedConfigSync {
   configPath: string;
+  localConfigPath: string;
   backupPath: string;
   configExists: boolean;
+  localConfigExists: boolean;
+  localConfig: Record<string, unknown>;
   currentConfig: Record<string, unknown>;
   mergedConfig: WavemillConfig;
   additions: string[];
+  localOverrideClassifications: LocalOverrideClassificationEntry[];
   alreadyCurrent: boolean;
+}
+
+function parseJsonConfig(path: string): Record<string, unknown> {
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`Failed to parse ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function pathIsEqualOrChild(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}.`);
 }
 
 export function deepMergeConfig(target: any, source: any): any {
@@ -223,12 +243,19 @@ export function identifyConfigAdditions(before: any, after: any, currentPath = '
 
 export function prepareConfigSync(repoDir: string): PreparedConfigSync {
   const configPath = resolve(repoDir, '.wavemill-config.json');
+  const localConfigPath = resolve(repoDir, '.wavemill-config.local.json');
   const backupPath = resolve(repoDir, '.wavemill-config.json.backup');
   const configExists = existsSync(configPath);
+  const localConfigExists = existsSync(localConfigPath);
 
   let currentConfig: Record<string, unknown> = {};
   if (configExists) {
-    currentConfig = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    currentConfig = parseJsonConfig(configPath);
+  }
+
+  let localConfig: Record<string, unknown> = {};
+  if (localConfigExists) {
+    localConfig = parseJsonConfig(localConfigPath);
   }
 
   const currentBaseConfig = loadWavemillBaseConfig(repoDir);
@@ -243,6 +270,11 @@ export function prepareConfigSync(repoDir: string): PreparedConfigSync {
   }
 
   const additions = configExists ? identifyConfigAdditions(currentConfig, mergedConfig) : [];
+  const localOverrideClassifications = classifyLocalOverrideFields({
+    baseConfig: currentConfig,
+    localConfig,
+    canonicalConfig: CANONICAL_CONFIG_TEMPLATE as unknown as Record<string, unknown>,
+  });
   const alreadyCurrent =
     configExists &&
     currentBaseConfig.configVersion === CURRENT_CONFIG_VERSION &&
@@ -251,11 +283,28 @@ export function prepareConfigSync(repoDir: string): PreparedConfigSync {
 
   return {
     configPath,
+    localConfigPath,
     backupPath,
     configExists,
+    localConfigExists,
+    localConfig,
     currentConfig,
     mergedConfig,
     additions,
+    localOverrideClassifications,
     alreadyCurrent,
   };
+}
+
+export function findLocalPromotionConflicts(prepared: PreparedConfigSync): LocalOverrideClassificationEntry[] {
+  const requiresDecision = prepared.localOverrideClassifications.filter(
+    entry => entry.label === 'requires decision',
+  );
+  if (requiresDecision.length === 0 || prepared.additions.length === 0) {
+    return [];
+  }
+
+  return requiresDecision.filter(entry =>
+    prepared.additions.some(addition => pathIsEqualOrChild(addition, entry.path)),
+  );
 }
