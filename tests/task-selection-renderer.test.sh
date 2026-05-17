@@ -137,7 +137,7 @@ render_prompt_under_test() {
   GROUPED_DISPLAY=""
   GROUPED_SELECT_FROM=""
   if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
-    render_grouped_task_list "$queue_plan_json" "$available"
+    render_grouped_task_list "$queue_plan_json" "$available" || true
     if [[ -n "$GROUPED_DISPLAY" ]]; then
       echo "$GROUPED_DISPLAY"
       select_from="$GROUPED_SELECT_FROM"
@@ -427,7 +427,7 @@ test_fallback_when_queue_analysis_fails() {
       GROUPED_DISPLAY=""
       GROUPED_SELECT_FROM=""
       if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
-        render_grouped_task_list "$queue_plan_json" "$available"
+        render_grouped_task_list "$queue_plan_json" "$available" || true
         if [[ -n "$GROUPED_DISPLAY" ]]; then
           echo "$GROUPED_DISPLAY"
           select_from="$GROUPED_SELECT_FROM"
@@ -463,6 +463,64 @@ test_fallback_when_queue_analysis_fails() {
   check_contains "fallback preserves more hint" "$stdout" "(3 blocked task(s) hidden - enter 'm' to show all)"
   check_not_contains "fallback omits grouped header" "$stdout" "Available Now - Parallel Wave 1"
   check_contains "fallback warns once" "$stderr" "queue analysis unavailable, falling back to flat list"
+}
+
+test_fallback_when_grouped_plan_has_no_renderable_tasks() {
+  local stdout stderr
+  stdout="$TEST_TMP/no-renderable.out"
+  stderr="$TEST_TMP/no-renderable.err"
+  FUNCTIONS_FILE="$FUNCTIONS_FILE" CANDIDATES="$CANDIDATES" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    render_prompt_under_test() {
+      local available="$1" avail_unblocked avail_blocked avail_blocked_count queue_plan_json
+      avail_unblocked=$(echo "$available" | awk -F'"'"'|'"'"' '"'"'$6 == 0 || $6 == ""'"'"')
+      avail_blocked=$(echo "$available" | awk -F'"'"'|'"'"' '"'"'$6 > 0'"'"')
+      avail_blocked_count=0
+      [[ -n "$avail_blocked" ]] && avail_blocked_count=$(echo "$avail_blocked" | grep -c .)
+
+      echo "Next tasks:"
+      queue_plan_json=""
+      GROUPED_DISPLAY=""
+      GROUPED_SELECT_FROM=""
+      if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
+        render_grouped_task_list "$queue_plan_json" "$available" || true
+        if [[ -n "$GROUPED_DISPLAY" ]]; then
+          echo "$GROUPED_DISPLAY"
+          select_from="$GROUPED_SELECT_FROM"
+          USING_GROUPED_VIEW=true
+        fi
+      fi
+      if [[ -z "$GROUPED_DISPLAY" ]]; then
+        USING_GROUPED_VIEW=false
+        [[ -n "$queue_plan_json" ]] || log_warn "queue analysis unavailable, falling back to flat list"
+        if [[ -n "$avail_unblocked" ]]; then
+          echo "$avail_unblocked" | head -9 | awk -F'"'"'|'"'"' '"'"'{printf "  %s. %s - %s (score: %.0f)\n", NR, $1, $3, $5}'"'"'
+        else
+          echo "  (no unblocked tasks)"
+        fi
+        if (( avail_blocked_count > 0 )); then
+          echo ""
+          echo "  ($avail_blocked_count blocked task(s) hidden - enter '\''m'\'' to show all)"
+        fi
+      fi
+    }
+    log_warn() { printf "%s\n" "$*" >&2; }
+    fetch_queue_plan() {
+      printf "%s\n" '"'"'{"availableNow":["HOK-999"],"queuedAfterDependencies":[],"avoidRunningTogether":[],"needsTriage":[]}'"'"'
+    }
+    USING_GROUPED_VIEW=false
+    SELECT_SHOW_ALL=false
+    GROUPED_SELECT_FROM=""
+    GROUPED_DISPLAY=""
+    render_prompt_under_test "$CANDIDATES"
+  ' >"$stdout" 2>"$stderr"
+
+  stdout=$(cat "$stdout")
+  stderr=$(cat "$stderr")
+  check_contains "empty grouped render falls back to flat list" "$stdout" "1. HOK-10 - Foundation task (score: 98)"
+  check_not_contains "empty grouped render does not warn analysis failed" "$stderr" "queue analysis unavailable"
 }
 
 run_queue_plan_failure_case() {
@@ -618,6 +676,7 @@ test_scoring_boosts_focus_and_near_milestones
 test_grouped_render_deduplicates_and_keeps_one_item_per_line
 test_render_rejects_malformed_json
 test_fallback_when_queue_analysis_fails
+test_fallback_when_grouped_plan_has_no_renderable_tasks
 test_fetch_queue_plan_failure_diagnostics_cache_empty
 test_fetch_queue_plan_failure_diagnostics_jq_massage
 test_fetch_queue_plan_failure_diagnostics_plan_queue
