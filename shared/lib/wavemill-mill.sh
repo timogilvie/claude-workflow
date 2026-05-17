@@ -9865,7 +9865,7 @@ while :; do
               QUEUE_PLAN_CACHE="$queue_plan_json"
               LAST_QUEUE_PLAN_FETCH=$(date +%s)
             fi
-            render_grouped_task_list "$queue_plan_json" "$available" "$_backlog_budget" "$_backlog_expanded" "$_deps_expanded" "$_active_issue_ids"
+            render_grouped_task_list "$queue_plan_json" "$available" "$_backlog_budget" "$_backlog_expanded" "$_deps_expanded" "$_active_issue_ids" || true
             if [[ -n "$GROUPED_DISPLAY" ]]; then
               select_from="$GROUPED_SELECT_FROM"
               USING_GROUPED_VIEW=true
