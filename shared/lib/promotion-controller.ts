@@ -932,7 +932,7 @@ export function updateBranchWithBase(
   shellRunner: ShellRunner = (cmd, opts) => String(execShellCommand(cmd, opts)),
 ): BranchBaseUpdateResult {
   const dirtyState = String(shellRunner(
-    'git status --porcelain',
+    'git status --porcelain --untracked-files=no',
     { encoding: 'utf-8', cwd: repoDir },
   )).trim();
   if (dirtyState) {
