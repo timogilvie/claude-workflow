@@ -1601,6 +1601,10 @@ describe('ready-stage', () => {
           commands.some((cmd) => /gh pr checks '?42'? --json state 2>\/dev\/null$/.test(cmd)),
           'expected gatherPRContext to suppress gh stderr'
         );
+        assert.ok(
+          commands.every((cmd) => !cmd.includes('gh pr diff')),
+          'expected gatherPRContext not to fetch the full PR diff'
+        );
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });
