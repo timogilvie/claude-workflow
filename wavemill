@@ -127,6 +127,16 @@ ${GREEN}Commands:${NC}
              - \`wavemill tend --loop\` runs the integration queue loop
              - \`wavemill tend promote\` opens or updates the promotion PR
 
+  ${CYAN}observer${NC}  Watch running mill sessions for stuck states and UX issues
+             - Inspects tmux panes, monitor processes, workflow state, and logs
+             - Reports ignored phase markers, stale state/logs, hung children,
+               warnings, crashes, and dashboard/pane anomalies
+             - Can file high-confidence findings to Linear with --file-linear
+             Usage:
+               ${CYAN}wavemill observer --once${NC}
+               ${CYAN}wavemill observer --loop --interval 120${NC}
+               ${CYAN}wavemill observer --json --file-linear --linear-team HOK${NC}
+
   ${CYAN}promote${NC}   Open or update a promotion PR from integration to main
              - Reuses shared branch health and PR check helpers
              - Never auto-merges the promotion PR
@@ -854,6 +864,18 @@ run_tend() {
   exec npx tsx "$tend_tool" "$@"
 }
 
+run_observer() {
+  local observer_tool="$TOOLS_DIR/observer.ts"
+
+  if [[ ! -f "$observer_tool" ]]; then
+    echo -e "${RED}Error:${NC} Observer tool not found at: $observer_tool" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Starting Wavemill Observer...${NC}"
+  exec npx tsx "$observer_tool" "$@"
+}
+
 run_promote() {
   local promote_tool="$TOOLS_DIR/promote.ts"
 
@@ -1055,6 +1077,10 @@ case "${1:-}" in
   tend)
     shift
     run_tend "$@"
+    ;;
+  observer)
+    shift
+    run_observer "$@"
     ;;
   promote)
     shift
