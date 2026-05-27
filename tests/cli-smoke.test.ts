@@ -63,6 +63,7 @@ describe('wavemill CLI', () => {
       assert.match(out, /review/);
       assert.match(out, /eval/);
       assert.match(out, /route/);
+      assert.match(out, /observer/);
       assert.match(out, /hokusai/);
     });
 
@@ -241,6 +242,21 @@ describe('wavemill CLI', () => {
       } finally {
         rmSync(repoDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('observer command', () => {
+    it('shows observer help', () => {
+      const out = run(['observer', '--help']);
+      assert.match(out, /Wavemill Observer/);
+      assert.match(out, /--loop/);
+      assert.match(out, /--file-linear/);
+    });
+
+    it('prints the supervisor prompt', () => {
+      const out = run(['observer', '--print-prompt']);
+      assert.match(out, /You are the Wavemill Observer/);
+      assert.match(out, /wavemill observer --json --once/);
     });
   });
 });
