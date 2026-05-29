@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -68,6 +68,14 @@ interface Finding {
   evidence: string[];
   recommendation: string;
   linearIssueUrl?: string;
+}
+
+interface ReadyWatchdogLogEntry {
+  line: string;
+  issue: string;
+  label: string;
+  action: string;
+  detail: string;
 }
 
 interface RepoSnapshot {
@@ -428,7 +436,7 @@ function tailLines(path: string, count: number): string[] {
   }
 }
 
-function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, options: ObserverOptions): Finding[] {
+export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, options: ObserverOptions): Finding[] {
   const findings: Finding[] = [];
   const now = Date.now();
   const processByParent = new Map<number, ProcessRow[]>();
@@ -525,7 +533,40 @@ function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, options: Ob
       }
     }
 
-    for (const line of repo.millLogPath ? tailLines(repo.millLogPath, options.maxLogLines) : []) {
+    const logLines = repo.millLogPath ? tailLines(repo.millLogPath, options.maxLogLines) : [];
+    const repeatedReadyWatchdogLines = new Set<string>();
+    const readyWatchdogEntries = logLines.map(parseReadyWatchdogLine).filter((entry): entry is ReadyWatchdogLogEntry => entry !== null);
+    const readyWatchdogGroups = new Map<string, ReadyWatchdogLogEntry[]>();
+    for (const entry of readyWatchdogEntries) {
+      const key = `${entry.issue}\0${entry.label}\0${entry.action}`;
+      const group = readyWatchdogGroups.get(key) ?? [];
+      group.push(entry);
+      readyWatchdogGroups.set(key, group);
+    }
+    for (const group of readyWatchdogGroups.values()) {
+      if (group.length < 3) continue;
+      for (const entry of group) repeatedReadyWatchdogLines.add(entry.line);
+      const latest = group[group.length - 1];
+      findings.push({
+        id: `repeated-ready-watchdog-${repo.session}-${latest.issue}-${hashText(`${latest.action}:${latest.detail}`)}`,
+        severity: group.length >= 5 ? 'urgent' : 'high',
+        category: 'stuck',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        issue: latest.issue,
+        title: `${latest.issue} repeatedly triggers ready watchdog ${latest.action}`,
+        evidence: [
+          `occurrences=${group.length}`,
+          `action=${latest.action}`,
+          `detail=${latest.detail}`,
+          ...group.slice(-4).map((entry) => entry.line),
+        ],
+        recommendation: 'Treat this as a stuck ready/integration handoff. Inspect the backstage tend loop and workflow state, then file or fix the Wavemill defect if it is not resolved by a narrow operational nudge.',
+      });
+    }
+
+    for (const line of logLines) {
       if (/\b(FATAL|ERROR|panic|UnhandledPromiseRejection|uncaught exception)\b/i.test(line)) {
         findings.push({
           id: `log-error-${repo.session}-${hashText(line)}`,
@@ -539,6 +580,7 @@ function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, options: Ob
           recommendation: 'Inspect surrounding log context and file a bug if this is not a task-local failure.',
         });
       } else if (/\bWARN\b|warning|ready watchdog|queue analysis unavailable|timed out|timeout/i.test(line)) {
+        if (repeatedReadyWatchdogLines.has(line)) continue;
         findings.push({
           id: `log-warning-${repo.session}-${hashText(line)}`,
           severity: line.includes('ready watchdog') ? 'medium' : 'low',
@@ -598,6 +640,18 @@ function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, options: Ob
   }
 
   return dedupeFindings(findings);
+}
+
+function parseReadyWatchdogLine(line: string): ReadyWatchdogLogEntry | null {
+  const match = line.match(/ready watchdog:\s+(\S+)\s+(.+?)\s+\(([^)]+)\)\s+-\s+(.+)$/i);
+  if (!match) return null;
+  return {
+    line,
+    issue: match[1],
+    label: match[2],
+    action: match[3],
+    detail: match[4],
+  };
 }
 
 function terminalStatus(status?: string): boolean {
@@ -851,7 +905,10 @@ async function main(): Promise<void> {
   } while (true);
 }
 
-main().catch((error) => {
-  process.stderr.write(`observer failed: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-});
+const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+if (isMain) {
+  main().catch((error) => {
+    process.stderr.write(`observer failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}
