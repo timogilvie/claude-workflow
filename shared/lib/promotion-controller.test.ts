@@ -102,7 +102,7 @@ function shellHarness(overrides: {
         if (overrides.fetchError) throw new Error(overrides.fetchError);
         return '';
       }
-      if (cmd === 'git status --porcelain') return `${overrides.statusPorcelain ?? ''}`;
+      if (cmd === 'git status --porcelain --untracked-files=no') return `${overrides.statusPorcelain ?? ''}`;
       if (cmd === "git switch 'auto/integration'") return '';
       if (cmd === 'git symbolic-ref --quiet --short HEAD') {
         if (overrides.currentBranch === null) throw new Error('detached HEAD');
@@ -321,7 +321,7 @@ describe('runPromotion', () => {
       assert.deepEqual(
         shell.calls.slice(0, 5),
         [
-          'git status --porcelain',
+          'git status --porcelain --untracked-files=no',
           "git fetch --quiet origin 'main' 'auto/integration'",
           "git switch 'auto/integration'",
           "git merge-tree --write-tree 'auto/integration' 'origin/main'",
@@ -395,7 +395,20 @@ describe('runPromotion', () => {
       const result = updateBranchWithBase('auto/integration', 'main', repo.repoDir, shell.shellRunner);
       assert.equal(result.status, 'dirty-worktree');
       assert.equal(shell.calls.length, 1);
-      assert.equal(shell.calls[0], 'git status --porcelain');
+      assert.equal(shell.calls[0], 'git status --porcelain --untracked-files=no');
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('proceeds when only untracked files are present (wavemill state must not block auto-update)', () => {
+    const repo = makeRepo();
+    const shell = shellHarness({ statusPorcelain: '' });
+
+    try {
+      const result = updateBranchWithBase('auto/integration', 'main', repo.repoDir, shell.shellRunner);
+      assert.equal(result.status, 'success');
+      assert.equal(shell.calls[0], 'git status --porcelain --untracked-files=no');
     } finally {
       repo.cleanup();
     }
@@ -419,7 +432,7 @@ describe('runPromotion', () => {
     const calls: string[] = [];
     const shellRunner = (cmd: string) => {
       calls.push(cmd);
-      if (cmd === 'git status --porcelain') return '';
+      if (cmd === 'git status --porcelain --untracked-files=no') return '';
       return '';
     };
 
