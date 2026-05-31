@@ -79,6 +79,13 @@ else
   fail "launcher is missing the /tmp self-copy guard"
 fi
 
+if grep -q 'mktemp /tmp/wavemill-mill\.XXXXXX' "$LIB_DIR/wavemill-mill.sh" \
+  && ! grep -q 'mktemp /tmp/wavemill-mill-XXXXXX\.sh' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "launcher self-copy mktemp template is BSD-compatible"
+else
+  fail "launcher self-copy mktemp template is not BSD-compatible"
+fi
+
 ATTACH_BLOCK=$(awk '
   /^sleep 1$/ { in_block=1 }
   in_block { print }
