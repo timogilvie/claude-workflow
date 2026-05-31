@@ -42,9 +42,24 @@ output=$({
 } || true)
 
 hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
-[[ -f "$hook_file" ]] && pass "Raw emission: JSON hook file created" || fail "Raw emission: JSON hook file not created"
-echo -n "$output" | grep -q $'\e]777' && pass "Raw emission: OSC 777 sequence found" || fail "Raw emission: OSC 777 sequence not found"
-! echo -n "$output" | grep -q $'\eP''tmux;' && pass "Raw emission: No tmux prefix" || fail "Raw emission: Unexpected tmux prefix"
+if [[ -f "$hook_file" ]]; then
+  pass "Raw emission: JSON hook file created"
+else
+  fail "Raw emission: JSON hook file not created"
+fi
+
+if echo -n "$output" | grep -q $'\e]777'; then
+  pass "Raw emission: OSC 777 sequence found"
+else
+  fail "Raw emission: OSC 777 sequence not found"
+fi
+
+if ! echo -n "$output" | grep -q $'\eP''tmux;'; then
+  pass "Raw emission: No tmux prefix"
+else
+  fail "Raw emission: Unexpected tmux prefix"
+fi
+
 rm -f "$hook_file"
 
 # Test 2: Tmux passthrough wrapping
@@ -59,9 +74,24 @@ output=$({
 } || true)
 
 hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
-[[ -f "$hook_file" ]] && pass "Tmux: JSON hook file created" || fail "Tmux: JSON hook file not created"
-echo -n "$output" | head -c 10 | grep -q $'\eP''tmux;' && pass "Tmux: Starts with tmux prefix" || fail "Tmux: Missing tmux prefix"
-echo -n "$output" | grep -q $'\e\e]777' && pass "Tmux: Inner ESC doubled" || fail "Tmux: ESC not doubled"
+if [[ -f "$hook_file" ]]; then
+  pass "Tmux: JSON hook file created"
+else
+  fail "Tmux: JSON hook file not created"
+fi
+
+if echo -n "$output" | head -c 10 | grep -q $'\eP''tmux;'; then
+  pass "Tmux: Starts with tmux prefix"
+else
+  fail "Tmux: Missing tmux prefix"
+fi
+
+if echo -n "$output" | grep -q $'\e\e]777'; then
+  pass "Tmux: Inner ESC doubled"
+else
+  fail "Tmux: ESC not doubled"
+fi
+
 rm -f "$hook_file"
 unset TMUX || true
 
@@ -78,8 +108,18 @@ output=$({
 } || true)
 
 hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
-[[ -f "$hook_file" ]] && pass "Disabled: JSON still created" || fail "Disabled: JSON not created"
-! echo -n "$output" | grep -q $'\e]777' && pass "Disabled: No OSC emitted" || fail "Disabled: OSC was emitted"
+if [[ -f "$hook_file" ]]; then
+  pass "Disabled: JSON still created"
+else
+  fail "Disabled: JSON not created"
+fi
+
+if ! echo -n "$output" | grep -q $'\e]777'; then
+  pass "Disabled: No OSC emitted"
+else
+  fail "Disabled: OSC was emitted"
+fi
+
 rm -f "$hook_file" .wavemill-config.json
 
 # Test 4: Default enabled
@@ -94,7 +134,12 @@ output=$({
   wavemill_hook_write "working" "PreToolUse" "Bash" "claude" 2>&1
 } || true)
 
-echo -n "$output" | grep -q $'\e]777' && pass "Default: OSC emitted" || fail "Default: OSC not emitted"
+if echo -n "$output" | grep -q $'\e]777'; then
+  pass "Default: OSC emitted"
+else
+  fail "Default: OSC not emitted"
+fi
+
 hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
 rm -f "$hook_file"
 
@@ -110,7 +155,12 @@ output=$({
   wavemill_hook_write "working" "PreToolUse" "Bash" "claude" 2>&1
 } || true)
 
-echo -n "$output" | grep -q $'\e]777' && pass "Non-boolean: OSC emitted" || fail "Non-boolean: OSC not emitted"
+if echo -n "$output" | grep -q $'\e]777'; then
+  pass "Non-boolean: OSC emitted"
+else
+  fail "Non-boolean: OSC not emitted"
+fi
+
 hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
 rm -f "$hook_file" .wavemill-config.json
 
@@ -125,9 +175,19 @@ output=$({
   wavemill_hook_write "working" "PreToolUse" "$detail" "claude" 2>&1
 } || true)
 
-! (echo -n "$output" | sed -n 's/.*notify;wavemill;\(.*\).*/\1/p' | grep -q $'\a') && pass "Sanitize: BEL removed" || fail "Sanitize: BEL found"
+if ! (echo -n "$output" | sed -n 's/.*notify;wavemill;\(.*\).*/\1/p' | grep -q $'\a'); then
+  pass "Sanitize: BEL removed"
+else
+  fail "Sanitize: BEL found"
+fi
+
 bel_count=$(echo -n "$output" | grep -o $'\a' | wc -l)
-[[ "$bel_count" -eq 1 ]] && pass "Sanitize: One BEL terminator" || fail "Sanitize: Found $bel_count BELs"
+if [[ "$bel_count" -eq 1 ]]; then
+  pass "Sanitize: One BEL terminator"
+else
+  fail "Sanitize: Found $bel_count BELs"
+fi
+
 hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
 rm -f "$hook_file"
 
@@ -140,9 +200,20 @@ exit_code=0
 {
   wavemill_hook_write "working" "PreToolUse" "Bash" "claude" 2>/dev/null
 } || exit_code=$?
-[[ $exit_code -eq 0 ]] && pass "Best-effort: Returns 0" || fail "Best-effort: Non-zero exit"
+
+if [[ $exit_code -eq 0 ]]; then
+  pass "Best-effort: Returns 0"
+else
+  fail "Best-effort: Non-zero exit"
+fi
+
 hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
-[[ -f "$hook_file" ]] && pass "Best-effort: JSON written" || fail "Best-effort: JSON not written"
+if [[ -f "$hook_file" ]]; then
+  pass "Best-effort: JSON written"
+else
+  fail "Best-effort: JSON not written"
+fi
+
 rm -f "$hook_file"
 
 # Test 8: Missing jq (documented)
