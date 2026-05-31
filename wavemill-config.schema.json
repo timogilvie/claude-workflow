@@ -1304,6 +1304,11 @@
                             "type": "string",
                             "description": "Optional API key for authentication."
                         },
+                        "apiKeyEnv": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Environment variable name that holds the Hokusai bearer token. Falls back to HOKUSAI_API_TOKEN when omitted."
+                        },
                         "timeout": {
                             "type": "integer",
                             "default": 5000,

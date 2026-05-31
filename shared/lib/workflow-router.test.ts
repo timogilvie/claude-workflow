@@ -554,26 +554,27 @@ await test('auto mode uses hokusai first when configured', async () => {
       mode: 'auto',
       hokusai: {
         endpoint: 'http://localhost:8080/predict',
+        apiKey: 'test-token',
         timeout: 1000,
       },
     },
   });
 
   globalThis.fetch = async () => new Response(JSON.stringify({
-    schema_version: '1.0',
-    route: {
-      planner_model: 'claude-sonnet-4-5-20250929',
-      coder_model: 'gpt-5.3-codex',
-      reviewer_model: 'claude-haiku-4-5-20251001',
-      plan_depth: 'medium',
-      code_depth: 'medium',
-      review_mode: 'light',
-    },
     predictions: {
-      expected_success_probability: 0.88,
-      expected_cost_usd: 1.75,
-      confidence: 0.81,
+      recommended_strategy: {
+        planner_model: 'claude-sonnet-4-5-20250929',
+        coder_model: 'gpt-5.3-codex',
+        reviewer_model: 'claude-haiku-4-5-20251001',
+        plan_depth: 'medium',
+        code_depth: 'medium',
+        review_mode: 'light',
+        estimated_success_under_budget: 0.88,
+        estimated_cost_usd: 1.75,
+        confidence: 0.81,
+      },
     },
+    metadata: {},
   }), { status: 200 });
 
   try {
@@ -824,6 +825,7 @@ await test('auto mode logs frontier substitution without constrained banner when
       ...frontierSiblingConfig().router,
       hokusai: {
         endpoint: 'http://localhost:8080/predict',
+        apiKey: 'test-token',
         timeout: 1000,
       },
     },
@@ -838,20 +840,20 @@ await test('auto mode logs frontier substitution without constrained banner when
 
   try {
     globalThis.fetch = async () => new Response(JSON.stringify({
-      schema_version: '1.0',
-      route: {
-        planner_model: 'gpt-5.4',
-        coder_model: 'gpt-5.4',
-        reviewer_model: 'gpt-5.4',
-        plan_depth: 'medium',
-        code_depth: 'medium',
-        review_mode: 'light',
-      },
       predictions: {
-        expected_success_probability: 0.88,
-        expected_cost_usd: 1.75,
-        confidence: 0.81,
+        recommended_strategy: {
+          planner_model: 'gpt-5.4',
+          coder_model: 'gpt-5.4',
+          reviewer_model: 'gpt-5.4',
+          plan_depth: 'medium',
+          code_depth: 'medium',
+          review_mode: 'light',
+          estimated_success_under_budget: 0.88,
+          estimated_cost_usd: 1.75,
+          confidence: 0.81,
+        },
       },
+      metadata: {},
     }), { status: 200 });
     const { result, stderr } = await captureStderr(() =>
       routeWorkflowAuto('Implement a backend feature with tests and review.', { repoDir })
@@ -999,6 +1001,7 @@ await test('explicit hokusai mode falls back gracefully to stage-aware', async (
       mode: 'hokusai',
       hokusai: {
         endpoint: 'http://localhost:8080/predict',
+        apiKey: 'test-token',
         timeout: 100,
       },
     },

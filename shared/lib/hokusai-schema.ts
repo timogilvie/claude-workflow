@@ -112,6 +112,125 @@ export interface HokusaiInputOverrides {
   reviewerModels?: string[];
 }
 
+export type HokusaiModel30TaskType =
+  | 'feature'
+  | 'bugfix'
+  | 'refactor'
+  | 'research'
+  | 'maintenance';
+
+export type HokusaiModel30Objective =
+  | 'lowest_cost'
+  | 'fastest_completion'
+  | 'highest_reliability';
+
+export type HokusaiModel30WorkflowStage = 'plan' | 'code' | 'review';
+export type HokusaiModel30RiskLevel = 'low' | 'medium' | 'high';
+export type HokusaiModel30EstimatedComplexity = 'low' | 'medium' | 'high';
+export type HokusaiModel30Depth = 'low' | 'medium' | 'high';
+export type HokusaiModel30ReviewMode = 'light' | 'standard' | 'deep';
+
+export interface HokusaiModel30TaskInput {
+  description: string;
+  task_type: HokusaiModel30TaskType;
+}
+
+export interface HokusaiModel30Routing {
+  available_models?: string[];
+  available_planner_models?: string[];
+  available_coder_models?: string[];
+  available_reviewer_models?: string[];
+  max_cost_usd?: number;
+  objective?: HokusaiModel30Objective;
+}
+
+export interface HokusaiModel30Context {
+  domain?: Exclude<HokusaiDomain, 'unknown'>;
+  repo_size_bucket?: HokusaiRepoSizeBucket;
+  requires_tests?: boolean;
+  risk_level?: HokusaiModel30RiskLevel;
+  file_count?: number;
+  estimated_complexity?: HokusaiModel30EstimatedComplexity;
+  security_sensitive?: boolean;
+}
+
+export interface HokusaiModel30Workflow {
+  stages?: HokusaiModel30WorkflowStage[];
+}
+
+export interface HokusaiModel30Metadata {
+  external_task_id?: string;
+  run_id?: string;
+  integration_version?: string;
+  idempotency_key?: string;
+}
+
+export interface HokusaiModel30Inputs {
+  task: HokusaiModel30TaskInput;
+  routing?: HokusaiModel30Routing;
+  context?: HokusaiModel30Context;
+  workflow?: HokusaiModel30Workflow;
+  metadata?: HokusaiModel30Metadata;
+}
+
+export interface HokusaiModel30Request {
+  inputs: HokusaiModel30Inputs;
+}
+
+export interface HokusaiModel30StrategyAlternative {
+  [key: string]: unknown;
+}
+
+export interface HokusaiModel30Tradeoff {
+  [key: string]: unknown;
+}
+
+export interface HokusaiModel30NearestNeighbor {
+  [key: string]: unknown;
+}
+
+export interface HokusaiRecommendedStrategy {
+  planner_model: string;
+  coder_model: string;
+  reviewer_model: string;
+  stages?: HokusaiModel30WorkflowStage[];
+  estimated_success_under_budget?: number;
+  estimated_cost_usd?: number;
+  estimated_duration_seconds?: number;
+  confidence?: number;
+  plan_depth?: HokusaiModel30Depth;
+  code_depth?: HokusaiModel30Depth;
+  review_mode?: HokusaiModel30ReviewMode;
+}
+
+export interface HokusaiModel30Predictions {
+  recommended_strategy: HokusaiRecommendedStrategy;
+  alternatives?: HokusaiModel30StrategyAlternative[];
+  tradeoffs?: HokusaiModel30Tradeoff[];
+  nearest_neighbors?: HokusaiModel30NearestNeighbor[];
+}
+
+export interface HokusaiModel30ResponseMetadata {
+  request_id?: string;
+  inference_log_id?: string;
+  [key: string]: unknown;
+}
+
+export interface HokusaiModel30Response {
+  predictions: HokusaiModel30Predictions;
+  metadata?: HokusaiModel30ResponseMetadata;
+}
+
+export interface HokusaiModel30RequestOptions extends HokusaiInputOverrides {
+  description?: string;
+  externalTaskId?: string;
+  runId?: string;
+  integrationVersion?: string;
+  idempotencyKey?: string;
+  objective?: HokusaiModel30Objective | string;
+  workflowStages?: string[];
+}
+
 // ============================================================================
 // Output Schema Types
 // ============================================================================
@@ -462,6 +581,89 @@ function pickAvailableModels(
     coder_models: pickStageModels(overrides?.coderModels),
     reviewer_models: pickStageModels(overrides?.reviewerModels),
   };
+}
+
+function pickNonEmptyStrings(values: string[] | undefined): string[] | undefined {
+  const filtered = values?.filter((value) => typeof value === 'string' && value.trim().length > 0);
+  return filtered && filtered.length > 0 ? filtered : undefined;
+}
+
+function isModel30Objective(value: string | undefined): value is HokusaiModel30Objective {
+  return value === 'lowest_cost' || value === 'fastest_completion' || value === 'highest_reliability';
+}
+
+function isModel30WorkflowStage(value: string): value is HokusaiModel30WorkflowStage {
+  return value === 'plan' || value === 'code' || value === 'review';
+}
+
+function inferResearchTask(description: string): boolean {
+  return /\b(research|investigate|explore|spike|evaluate|compare|analysis)\b/i.test(description);
+}
+
+export function mapTaskTypeToModel30(
+  taskType: string | undefined,
+  options: { hasMigration?: boolean; description?: string } = {},
+): HokusaiModel30TaskType {
+  const normalized = (taskType || '').trim().toLowerCase();
+  const description = options.description?.trim() || '';
+  const inferredResearch = inferResearchTask(description);
+
+  if (normalized === 'research' || inferredResearch) return 'research';
+
+  if (normalized === 'bugfix') return 'bugfix';
+  if (normalized === 'feature') return 'feature';
+  if (normalized === 'refactor') return 'refactor';
+  if (normalized === 'docs' || normalized === 'test' || normalized === 'tests' || normalized === 'infra' || normalized === 'chore' || options.hasMigration) {
+    return 'maintenance';
+  }
+
+  return inferredResearch ? 'research' : 'feature';
+}
+
+function normalizeWorkflowStages(stages: string[] | undefined): HokusaiModel30WorkflowStage[] | undefined {
+  const filtered = stages?.filter((stage): stage is HokusaiModel30WorkflowStage => isModel30WorkflowStage(stage));
+  return filtered && filtered.length > 0 ? filtered : undefined;
+}
+
+function mapEstimatedComplexity(complexity: number | undefined): HokusaiModel30EstimatedComplexity | undefined {
+  if (typeof complexity !== 'number' || !Number.isFinite(complexity)) {
+    return undefined;
+  }
+  if (complexity >= 4) return 'high';
+  if (complexity >= 2) return 'medium';
+  return 'low';
+}
+
+function inferSecuritySensitive(
+  description: string,
+  riskFlags: string[] | undefined,
+): boolean | undefined {
+  if (Array.isArray(riskFlags) && riskFlags.some((flag) =>
+    flag.includes('auth') || flag.includes('security') || flag.includes('payment')
+  )) {
+    return true;
+  }
+  if (/\b(auth|security|token|secret|credential|payment|permission|oauth)\b/i.test(description)) {
+    return true;
+  }
+  return undefined;
+}
+
+function resolveHokusaiDescription(
+  descriptor: Partial<TaskDescriptor> | undefined,
+  description: string | undefined,
+): string {
+  const explicit = description?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const tokenEstimate = descriptor?.signals?.heuristic?.description_tokens;
+  if (typeof tokenEstimate === 'number' && tokenEstimate > 0) {
+    return `Task requiring approximately ${tokenEstimate} tokens of implementation context.`;
+  }
+
+  throw new Error('Hokusai Model 30 request requires a non-empty task description');
 }
 
 function resolveChosenCandidate(
@@ -876,5 +1078,110 @@ export function toHokusaiInput(
         ?? 0,
     },
     available_models: pickAvailableModels(descriptor, overrides),
+  };
+}
+
+export function toHokusaiModel30Request(
+  descriptor?: Partial<TaskDescriptor>,
+  repoContext?: RepoContext,
+  options: HokusaiModel30RequestOptions = {},
+): HokusaiModel30Request {
+  const heuristic = descriptor?.signals?.heuristic;
+  const learned = descriptor?.signals?.learned;
+  const riskFlags = learned?.risk_flags;
+  const description = resolveHokusaiDescription(descriptor, options.description);
+  const isMigration = Boolean(heuristic?.has_migration || riskFlagsToBooleans(riskFlags).is_migration);
+  const sharedModels = pickNonEmptyStrings(
+    options.availableModels
+    ?? options.modelsAvailable
+    ?? descriptor?.constraints?.models_available,
+  );
+  const plannerModels = pickNonEmptyStrings(options.plannerModels) ?? sharedModels;
+  const coderModels = pickNonEmptyStrings(options.coderModels) ?? sharedModels;
+  const reviewerModels = pickNonEmptyStrings(options.reviewerModels) ?? sharedModels;
+  const routing: HokusaiModel30Routing = {};
+  const workflowStages = normalizeWorkflowStages(options.workflowStages);
+  const domain = mapDomain(learned?.domain);
+  const effectiveFileCount = heuristic?.files_touched;
+  const context: HokusaiModel30Context = {};
+  const metadata: HokusaiModel30Metadata = {};
+
+  if (sharedModels) {
+    routing.available_models = sharedModels;
+  }
+  if (plannerModels) {
+    routing.available_planner_models = plannerModels;
+  }
+  if (coderModels) {
+    routing.available_coder_models = coderModels;
+  }
+  if (reviewerModels) {
+    routing.available_reviewer_models = reviewerModels;
+  }
+
+  const maxCostUsd = options.maxCostUsd ?? options.max_cost_usd ?? descriptor?.constraints?.max_cost_usd;
+  if (typeof maxCostUsd === 'number' && Number.isFinite(maxCostUsd) && maxCostUsd >= 0) {
+    routing.max_cost_usd = maxCostUsd;
+  }
+
+  if (isModel30Objective(options.objective)) {
+    routing.objective = options.objective;
+  }
+
+  if (domain !== 'unknown') {
+    context.domain = domain;
+  }
+
+  const repoSizeBucket = repoSizeToBucket(heuristic?.repo_size_loc ?? repoContext?.repoSize?.loc);
+  if (repoSizeBucket) {
+    context.repo_size_bucket = repoSizeBucket;
+  }
+
+  if (typeof (heuristic?.has_tests) === 'boolean') {
+    context.requires_tests = heuristic.has_tests;
+  }
+
+  context.risk_level = riskFlagsToLevel(riskFlags);
+
+  if (typeof effectiveFileCount === 'number' && Number.isFinite(effectiveFileCount) && effectiveFileCount >= 0) {
+    context.file_count = effectiveFileCount;
+  } else if (typeof repoContext?.repoSize?.fileCount === 'number' && Number.isFinite(repoContext.repoSize.fileCount) && repoContext.repoSize.fileCount >= 0) {
+    context.file_count = repoContext.repoSize.fileCount;
+  }
+
+  const estimatedComplexity = mapEstimatedComplexity(learned?.complexity);
+  if (estimatedComplexity) {
+    context.estimated_complexity = estimatedComplexity;
+  }
+
+  const securitySensitive = inferSecuritySensitive(description, riskFlags);
+  if (typeof securitySensitive === 'boolean') {
+    context.security_sensitive = securitySensitive;
+  }
+
+  if (options.externalTaskId?.trim()) {
+    metadata.external_task_id = options.externalTaskId.trim();
+  }
+  if (options.runId?.trim()) {
+    metadata.run_id = options.runId.trim();
+  }
+  if (options.integrationVersion?.trim()) {
+    metadata.integration_version = options.integrationVersion.trim();
+  }
+  if (options.idempotencyKey?.trim()) {
+    metadata.idempotency_key = options.idempotencyKey.trim();
+  }
+
+  return {
+    inputs: {
+      task: {
+        description,
+        task_type: mapTaskTypeToModel30(heuristic?.task_type, { hasMigration: isMigration, description }),
+      },
+      ...(Object.keys(routing).length > 0 ? { routing } : {}),
+      ...(Object.keys(context).length > 0 ? { context } : {}),
+      ...(workflowStages ? { workflow: { stages: workflowStages } } : {}),
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+    },
   };
 }

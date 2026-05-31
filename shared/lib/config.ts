@@ -110,6 +110,7 @@ export interface PricingEntry {
 export interface HokusaiRouterConfig {
   endpoint?: string;
   apiKey?: string;
+  apiKeyEnv?: string;
   timeout?: number;
 }
 

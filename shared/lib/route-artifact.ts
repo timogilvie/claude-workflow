@@ -35,6 +35,12 @@ export interface RouteProvenance {
   inputHash: string;
   routedAt: string;
   routerMode: 'normal' | 'constrained' | 'survival';
+  requestId?: string;
+  inferenceLogId?: string;
+  estimatedDurationSeconds?: number;
+  alternatives?: unknown;
+  tradeoffs?: unknown;
+  nearestNeighbors?: unknown;
 }
 
 export interface RouteDecisionWithProvenance extends WorkflowRouteDecision {
