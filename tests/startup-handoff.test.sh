@@ -236,6 +236,7 @@ cp "$REPO_DIR/shared/lib/routing-emitter.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/startup-progress.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/model-validator.ts" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/shared/lib/wavemill-status.sh" "$TEST_REPO/shared/lib/"
+cp "$REPO_DIR/shared/lib/wavemill-window-titles.sh" "$TEST_REPO/shared/lib/"
 cp "$REPO_DIR/tools/prompts/"*.md "$TEST_REPO/tools/prompts/"
 
 # Stub agent_launch_interactive so it doesn't exercise real tmux pane readiness
