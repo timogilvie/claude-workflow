@@ -100,25 +100,38 @@ issue="HOK-1856-A"
 stderr_file="$TMP_ROOT/raw.stderr"
 hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "working" "PreToolUse" "Read" "claude")"
 raw_output="$(cat "$stderr_file")"
-expected_raw="${esc}]777;notify;wavemill ${issue};working: Read${esc}\\"
-if [[ "$raw_output" == "$expected_raw" ]] \
-  && [[ "$raw_output" != *"Ptmux;"* ]] \
+if [[ -z "$raw_output" ]] \
   && jq -e '.state == "working" and .event == "PreToolUse" and .detail == "Read" and .agent == "claude"' "$hook_file" >/dev/null 2>&1; then
-  pass "raw OSC 777 emits outside tmux after JSON write"
+  pass "working PreToolUse writes JSON without OSC"
 else
-  fail "raw OSC 777 emission outside tmux"
+  fail "working PreToolUse should not emit OSC"
 fi
 rm -f "$hook_file"
 
 session="hook-osc-$$-2"
 issue="HOK-1856-B"
+stderr_file="$TMP_ROOT/waiting.stderr"
+hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "waiting" "Notification" "review" "claude")"
+waiting_output="$(cat "$stderr_file")"
+expected_waiting="${esc}]777;notify;wavemill ${issue};waiting on review${esc}\\"
+if [[ "$waiting_output" == "$expected_waiting" ]] \
+  && [[ "$waiting_output" != *"Ptmux;"* ]] \
+  && jq -e '.state == "waiting" and .event == "Notification" and .detail == "review" and .agent == "claude"' "$hook_file" >/dev/null 2>&1; then
+  pass "waiting Notification emits raw OSC after JSON write"
+else
+  fail "waiting Notification raw OSC emission"
+fi
+rm -f "$hook_file"
+
+session="hook-osc-$$-3"
+issue="HOK-1856-C"
 stderr_file="$TMP_ROOT/tmux.stderr"
-hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "tmux-session" "working" "PreToolUse" "Read" "claude")"
+hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "tmux-session" "waiting" "Notification" "Read" "claude")"
 tmux_output="$(cat "$stderr_file")"
 if [[ "$tmux_output" == *"${esc}Ptmux;"* ]] \
-  && [[ "$tmux_output" == *"${esc}${esc}]777;notify;wavemill ${issue};working: Read"* ]] \
+  && [[ "$tmux_output" == *"${esc}${esc}]777;notify;wavemill ${issue};waiting on Read"* ]] \
   && [[ "$tmux_output" == *"${esc}${esc}\\${esc}\\" ]] \
-  && jq -e '.state == "working" and .detail == "Read"' "$hook_file" >/dev/null 2>&1; then
+  && jq -e '.state == "waiting" and .event == "Notification" and .detail == "Read"' "$hook_file" >/dev/null 2>&1; then
   pass "tmux passthrough wraps and escapes OSC payload"
 else
   fail "tmux passthrough framing"
@@ -128,8 +141,8 @@ rm -f "$hook_file"
 optout_repo="$TMP_ROOT/optout-repo"
 mkdir -p "$optout_repo"
 printf '%s\n' '{"hooks":{"emitOsc":false}}' > "$optout_repo/.wavemill-config.json"
-session="hook-osc-$$-3"
-issue="HOK-1856-C"
+session="hook-osc-$$-4"
+issue="HOK-1856-D"
 stderr_file="$TMP_ROOT/optout.stderr"
 hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "waiting" "Notification" "review" "claude" "$optout_repo")"
 if [[ ! -s "$stderr_file" ]] \
@@ -140,13 +153,13 @@ else
 fi
 rm -f "$hook_file"
 
-session="hook-osc-$$-4"
+session="hook-osc-$$-5"
 issue='HOK-1856;bad'
 detail="semi;line${esc}break${bel}bell"$'\n'"tail"
 stderr_file="$TMP_ROOT/sanitize.stderr"
-hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "working" "PreToolUse" "$detail" "claude")"
+hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "waiting" "Notification" "$detail" "claude")"
 sanitized_output="$(cat "$stderr_file")"
-expected_sanitized="${esc}]777;notify;wavemill HOK-1856bad;working: semilinebreakbelltail${esc}\\"
+expected_sanitized="${esc}]777;notify;wavemill HOK-1856bad;waiting on semilinebreakbelltail${esc}\\"
 if [[ "$sanitized_output" == "$expected_sanitized" ]] \
   && jq -e '.detail == $detail' --arg detail "$detail" "$hook_file" >/dev/null 2>&1; then
   pass "OSC payload sanitizes delimiters and control bytes"
@@ -155,8 +168,8 @@ else
 fi
 rm -f "$hook_file"
 
-session="hook-osc-$$-5"
-issue="HOK-1856-D"
+session="hook-osc-$$-6"
+issue="HOK-1856-E"
 stderr_file="$TMP_ROOT/no-phase.stderr"
 hook_file="$(run_write "$stderr_file" "$session" "$issue" "" "" "working" "PreToolUse" "Read" "claude")"
 if [[ ! -s "$stderr_file" ]] \
@@ -167,8 +180,8 @@ else
 fi
 rm -f "$hook_file"
 
-session="hook-osc-$$-6"
-issue="HOK-1856-E"
+session="hook-osc-$$-7"
+issue="HOK-1856-F"
 stderr_file="$TMP_ROOT/invalid.stderr"
 hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "unknown" "PreToolUse" "Read" "claude")"
 if [[ ! -e "$hook_file" && ! -s "$stderr_file" ]]; then

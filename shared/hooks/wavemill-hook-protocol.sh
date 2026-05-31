@@ -164,6 +164,11 @@ _wavemill_hook_emit_osc() {
   _wavemill_hook_osc_allowed_context || return 0
   _wavemill_hook_osc_enabled || return 0
 
+  case "$state" in
+    waiting|error) ;;
+    *) return 0 ;;
+  esac
+
   if [[ -n "$issue" ]]; then
     title="wavemill $issue"
   fi
