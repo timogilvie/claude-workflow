@@ -69,6 +69,10 @@ export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
 source "$LIB_DIR/wavemill-common.sh"
 source "$LIB_DIR/agent-adapters.sh"
 source "$LIB_DIR/startup-progress.sh"
+if [[ -f "$LIB_DIR/wavemill-worktree-deps.sh" ]]; then
+# shellcheck source=wavemill-worktree-deps.sh
+source "$LIB_DIR/wavemill-worktree-deps.sh"
+fi
 if [[ -f "$LIB_DIR/wavemill-window-titles.sh" ]]; then
 # shellcheck source=wavemill-window-titles.sh
 source "$LIB_DIR/wavemill-window-titles.sh"
@@ -469,44 +473,7 @@ startup_phase_failed() {
 # silently for non-JS repos.
 ensure_worktree_dependencies() {
   local wt_dir="$1" issue="$2"
-  local pm="" lockfile="" install_cmd=""
-
-  if [[ -f "$wt_dir/pnpm-lock.yaml" ]]; then
-    pm="pnpm"; lockfile="pnpm-lock.yaml"
-    install_cmd="pnpm install --frozen-lockfile --prefer-offline"
-  elif [[ -f "$wt_dir/yarn.lock" ]]; then
-    pm="yarn"; lockfile="yarn.lock"
-    install_cmd="yarn install --frozen-lockfile --prefer-offline"
-  elif [[ -f "$wt_dir/package-lock.json" ]]; then
-    pm="npm"; lockfile="package-lock.json"
-    install_cmd="npm ci --prefer-offline"
-  else
-    return 0
-  fi
-
-  if [[ -d "$wt_dir/node_modules" ]]; then
-    return 0
-  fi
-
-  if ! command -v "$pm" >/dev/null 2>&1; then
-    startup_log "  Warning: $lockfile present but '$pm' not on PATH; skipping dep install"
-    return 0
-  fi
-
-  startup_step "[1.5/7] Installing deps ($pm)..."
-  local install_stderr
-  install_stderr="$(mktemp)"
-  if ! (cd "$wt_dir" && eval "$install_cmd") >/dev/null 2>"$install_stderr"; then
-    startup_log "✗ $issue FAILED at step [1.5/7]: $pm install"
-    [[ -s "$install_stderr" ]] && tail -n 40 "$install_stderr" | sed 's/^/  '"$pm"': /' >> "$STATUS_LOG_FILE"
-    [[ -s "$install_stderr" && -n "${STARTUP_TASK_LOG_FILE:-}" ]] && tail -n 40 "$install_stderr" | sed 's/^/  '"$pm"': /' >> "$STARTUP_TASK_LOG_FILE"
-    rm -f "$install_stderr"
-    startup_log "  Task will not be launched. Retry with: wavemill mill"
-    return 1
-  fi
-  rm -f "$install_stderr"
-  startup_step "[1.5/7] Installing deps ($pm)... ✓"
-  return 0
+  worktree_deps_ensure "$wt_dir" "$REPO_DIR" "$issue"
 }
 
 startup_run_task_phases() {
