@@ -71,6 +71,13 @@ done
 echo ""
 echo "=== Launcher Attach Shutdown ==="
 
+if grep -q '_WAVEMILL_MILL_REEXEC' "$LIB_DIR/wavemill-mill.sh" \
+  && grep -q 'WAVEMILL_MILL_LIB_DIR' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "launcher copies itself to /tmp before execution"
+else
+  fail "launcher is missing the /tmp self-copy guard"
+fi
+
 ATTACH_BLOCK=$(awk '
   /^sleep 1$/ { in_block=1 }
   in_block { print }

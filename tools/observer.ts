@@ -864,13 +864,14 @@ function sleep(ms: number): Promise<void> {
 }
 
 function observerPrompt(): string {
+  const wavemillDir = resolve(__dirname, '..');
   return `You are the Wavemill Observer.
 
 Run \`wavemill observer --json --once\` every few minutes and use its findings as the authoritative structured snapshot.
 
 Act conservatively:
 - If a finding identifies a conclusively hung child process blocking the monitor, terminate only that child and verify recovery.
-- If the root cause is a clear Wavemill code defect, fix it in /Users/timothyogilvie/Dropbox/wavemill, add tests, commit, push, and open a PR targeting auto/integration.
+- If the root cause is a clear Wavemill code defect, fix it in ${wavemillDir}, add tests, commit, push, and open a PR targeting auto/integration.
 - Otherwise create a Linear issue with the evidence from the observer output.
 - Never kill a whole tmux session, reset worktrees, or modify active task work unless explicitly instructed.
 
