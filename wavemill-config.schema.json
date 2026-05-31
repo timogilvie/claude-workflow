@@ -1648,6 +1648,18 @@
             },
             "additionalProperties": false
         },
+        "hooks": {
+            "type": "object",
+            "description": "Settings for hook protocol output fan-out.",
+            "properties": {
+                "emitOsc": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Emit OSC terminal notification escape sequences alongside hook JSON writes."
+                }
+            },
+            "additionalProperties": false
+        },
         "quota": {
             "type": "object",
             "description": "Configuration for proactive model quota health detection and manual status overrides.",
