@@ -246,6 +246,18 @@
             },
             "additionalProperties": false
         },
+        "hooks": {
+            "type": "object",
+            "description": "Hook and status-emission settings.",
+            "properties": {
+                "emitOsc": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Opt out of OSC 777 terminal notifications emitted by hook status writes."
+                }
+            },
+            "additionalProperties": false
+        },
         "taskSelection": {
             "type": "object",
             "description": "Controls default task selection behavior in wavemill mill.",

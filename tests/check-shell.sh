@@ -43,6 +43,7 @@ for f in \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/notification-waiting.test.sh \
+  "$REPO_DIR"/tests/hook-osc-emit.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -211,6 +212,18 @@ else
   fail "Claude Notification → waiting behavior: $notification_waiting_output"
 fi
 unset notification_waiting_status
+
+echo ""
+echo "=== Hook OSC Emission ==="
+
+hook_osc_emit_output="$(bash "$REPO_DIR/tests/hook-osc-emit.test.sh" 2>&1)" || hook_osc_emit_status=$?
+hook_osc_emit_status="${hook_osc_emit_status:-0}"
+if [[ "$hook_osc_emit_status" -eq 0 ]]; then
+  pass "hook OSC emission fan-out behavior"
+else
+  fail "hook OSC emission behavior: $hook_osc_emit_output"
+fi
+unset hook_osc_emit_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check
