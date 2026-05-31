@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guard: copy this script to /tmp and re-exec from there to prevent Dropbox
+# from replacing the file mid-execution, which can surface as a spurious EOF
+# parse error when bash seeks back into the large monitor heredoc. (HOK-1755)
+if [[ -z "${_WAVEMILL_MILL_REEXEC:-}" ]]; then
+  _mm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  _mm_tmp="$(mktemp /tmp/wavemill-mill-XXXXXX.sh)"
+  cp "${BASH_SOURCE[0]}" "$_mm_tmp"
+  chmod +x "$_mm_tmp"
+  WAVEMILL_MILL_LIB_DIR="$_mm_lib" _WAVEMILL_MILL_REEXEC=1 \
+    exec bash "$_mm_tmp" "$@"
+fi
+
 # Wavemill Mill - Continuous Task Execution System
 #
 # This script implements a continuous loop that:
@@ -40,7 +52,7 @@ fi
 
 # Source common library and load layered config
 # Resolution: env vars > .wavemill-config.json > ~/.wavemill/config.json > defaults
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${WAVEMILL_MILL_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 source "$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/agent-adapters.sh"
 load_config "$REPO_DIR"
