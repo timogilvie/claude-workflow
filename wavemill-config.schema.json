@@ -563,6 +563,74 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "contributions": {
+                    "type": "object",
+                    "description": "Durable queue and delivery settings for redacted contribution and benchmark outcome rows.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable durable local queueing for redacted contribution rows. Requires valid user consent."
+                        },
+                        "endpoint": {
+                            "description": "Explicit endpoint for contribution upload. When null or absent, drain must not attempt upload.",
+                            "default": null,
+                            "oneOf": [
+                                {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "endpointTokenEnv": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Environment variable containing a bearer token for the contribution endpoint."
+                        },
+                        "batchSize": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Maximum rows to send in one batch."
+                        },
+                        "exportPath": {
+                            "description": "Relative-to-main-repo or absolute path used for manual JSONL export when no endpoint is configured.",
+                            "default": null,
+                            "oneOf": [
+                                {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "maxRetries": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Maximum retry attempts before moving a transiently failing batch to dead-letter."
+                        },
+                        "backoffInitialMs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Initial exponential backoff delay in milliseconds."
+                        },
+                        "backoffMaxMs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Maximum exponential backoff delay in milliseconds."
+                        },
+                        "timeoutMs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "HTTP timeout for contribution drain requests in milliseconds."
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false
