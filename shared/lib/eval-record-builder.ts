@@ -31,6 +31,7 @@ import type {
   FallbackEventMetadata,
   TaskDescriptor,
   EvalConstraints,
+  EvalPhaseDurations,
   EvalRouting,
   ManifestRef,
   PromptSizeDiagnostic,
@@ -75,6 +76,8 @@ export interface EvalRecordMetadata {
   routeProvenance?: EvalRouteProvenance | null;
   /** Actual planning execution provenance from `.planning-result.json`. */
   executedPlanning?: EvalExecutedPlanning | null;
+  /** Per-phase wall-clock durations derived from workflow result artifacts. */
+  phaseDurations?: EvalPhaseDurations | null;
   /** Compact router prediction metadata for calibration. */
   routePrediction?: RoutePrediction | null;
   /** Difficulty analysis results */
@@ -300,6 +303,22 @@ export function attachExecutedPlanning(
     return;
   }
   record.executedPlanning = toEvalExecutedPlanning(executedPlanning);
+}
+
+export function attachPhaseDurations(
+  record: EvalRecord,
+  durations?: EvalPhaseDurations | null,
+): void {
+  if (!durations) {
+    return;
+  }
+
+  record.phaseDurationsSeconds = {
+    ...(isFiniteNonNegativeBudget(durations.planning) ? { planning: durations.planning } : {}),
+    ...(isFiniteNonNegativeBudget(durations.coding) ? { coding: durations.coding } : {}),
+    ...(isFiniteNonNegativeBudget(durations.review) ? { review: durations.review } : {}),
+    ...(isFiniteNonNegativeBudget(durations.total) ? { total: durations.total } : {}),
+  };
 }
 
 function pickFirstNonEmptyString(...values: Array<unknown>): string | undefined {
@@ -1075,6 +1094,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
   attachExecutedPlanning(record, metadata.executedPlanning);
+  attachPhaseDurations(record, metadata.phaseDurations);
   attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachRoutePrediction(record, metadata.routePrediction);
   attachDifficultyMetadata(record, metadata.difficulty || null);
