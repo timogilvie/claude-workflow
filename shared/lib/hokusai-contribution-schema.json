@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Hokusai contribution rows",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "success_under_budget": { "type": "boolean" },
+        "inputs": { "type": "object" },
+        "actual_cost_usd": { "type": "number", "minimum": 0 },
+        "wall_clock_seconds": { "type": "number", "minimum": 0 },
+        "task_id": { "type": "string" },
+        "harness": { "type": "string" }
+      },
+      "required": ["success_under_budget"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": "technical_task_router_row/v1" },
+        "task_descriptor": { "type": "object" },
+        "allowed_models": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "selected_models": {
+          "type": "object",
+          "properties": {
+            "planner": { "type": "string" },
+            "coder": { "type": "string" },
+            "reviewer": { "type": "string" }
+          },
+          "required": ["coder", "reviewer"],
+          "additionalProperties": false
+        },
+        "budget_usd": { "type": "number", "minimum": 0 },
+        "actual_cost_usd": { "type": "number", "minimum": 0 },
+        "wall_clock_seconds": { "type": "number", "minimum": 0 },
+        "success_under_budget": { "type": "boolean" },
+        "completion_result": {
+          "type": "string",
+          "enum": ["success", "failure"]
+        },
+        "scorer_ref": { "type": "string" },
+        "observed_at": { "type": "string" },
+        "task_id": { "type": "string" },
+        "harness": { "type": "string" }
+      },
+      "required": [
+        "schema_version",
+        "task_descriptor",
+        "allowed_models",
+        "selected_models",
+        "success_under_budget",
+        "completion_result",
+        "observed_at"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}
