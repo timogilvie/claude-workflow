@@ -4064,7 +4064,7 @@ _ensure_task_window_exists() {
   fi
 
   canonical="${issue}-${slug}"
-  log_warn "  Window $canonical missing, recreating..."
+  log_warn "  Window $canonical missing, recreating..." >&2
   tmux new-window -d -t "$session" -n "$canonical" -c "$wt_dir" 2>/dev/null || true
   target="$(tmux display-message -p -t "$session:$canonical" '#{window_id}' 2>/dev/null || true)"
   [[ -n "$target" ]] || target="$canonical"

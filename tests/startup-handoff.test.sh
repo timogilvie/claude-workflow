@@ -228,6 +228,12 @@ WINDOW_RESOLUTION_BLOCK="$(awk '
   capture { print }
 ' "$MILL_SCRIPT")"
 
+ENSURE_WINDOW_BLOCK="$(awk '
+  /^_ensure_task_window_exists\(\) \{/ { capture=1 }
+  /^# Relaunch an in-flight task/ { capture=0 }
+  capture { print }
+' "$MILL_SCRIPT")"
+
 RESTORE_WINDOW_BLOCK="$(awk '
   /^_restore_inflight_task_window_if_missing\(\) \{/ { capture=1 }
   /^# Launch an agent in a tmux window/ { capture=0 }
@@ -271,6 +277,12 @@ if [[ "$RESTORE_WINDOW_BLOCK" == *'_tmux_task_window_target "$SESSION" "$issue" 
   pass "resume restore treats renamed task windows as existing via stable windowId"
 else
   fail "resume restore still relies on canonical tmux window names"
+fi
+
+if [[ "$ENSURE_WINDOW_BLOCK" == *'log_warn "  Window $canonical missing, recreating..." >&2'* ]]; then
+  pass "missing-window recovery keeps warning logs out of captured tmux targets"
+else
+  fail "missing-window recovery can leak warning logs into captured tmux targets"
 fi
 
 if [[ "$LAUNCH_PLANNING_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
