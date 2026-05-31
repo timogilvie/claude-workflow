@@ -131,6 +131,12 @@ function stubBaseEvalDeps(executionModel = 'gpt-5.4'): void {
     planContent: undefined,
     selfReviewSummary: undefined,
     routingDecision: undefined,
+    phaseDurations: {
+      planning: 120,
+      coding: 480,
+      review: 60,
+      total: 660,
+    },
     executionModel,
   });
   postCompletionHookDeps.detectAndFormatInterventions = () => ({
@@ -156,8 +162,9 @@ function stubBaseEvalDeps(executionModel = 'gpt-5.4'): void {
   });
   postCompletionHookDeps.collectReworkOutcome = () => ({ agentIterations: 0 });
   postCompletionHookDeps.collectDeliveryOutcome = () => ({ prCreated: true, merged: false });
-  postCompletionHookDeps.evaluateTask = async (_input, outcomes) => ({
+  postCompletionHookDeps.evaluateTask = async (input, outcomes) => ({
     ...makeRecord(),
+    timeSeconds: Number((input as { timeSeconds?: number }).timeSeconds ?? makeRecord().timeSeconds),
     modelId: '',
     modelVersion: '',
     workflowCost: 1.5,
@@ -343,6 +350,54 @@ await test('enrichPostCompletionRecord attaches taskDescriptor for persisted rec
     assert.equal(record.enrichmentDiagnostics, undefined);
   } finally {
     clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval passes and persists phase durations', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-hook-phase-'));
+  let capturedEvalInput: Record<string, unknown> | undefined;
+  let persistedRecord: EvalRecord | undefined;
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.evaluateTask = async (input, outcomes) => {
+        capturedEvalInput = input as Record<string, unknown>;
+        return {
+          ...makeRecord(),
+          timeSeconds: Number((input as { timeSeconds?: number }).timeSeconds ?? makeRecord().timeSeconds),
+          outcomes,
+        };
+      };
+      postCompletionHookDeps.appendEvalRecord = (record) => {
+        persistedRecord = record;
+      };
+      postCompletionHookDeps.runContextUpdateWork = async () => {};
+
+      const ok = await runPostCompletionEval({
+        issueId: 'HOK-1930',
+        prNumber: '1930',
+        prUrl: 'https://example.test/pr/1930',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/accurate-wall-clock',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(ok, true);
+    });
+
+    assert.equal(capturedEvalInput?.timeSeconds, 660);
+    assert.deepEqual(persistedRecord?.phaseDurationsSeconds, {
+      planning: 120,
+      coding: 480,
+      review: 60,
+      total: 660,
+    });
+    assert.equal(persistedRecord?.timeSeconds, 660);
+  } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
 });

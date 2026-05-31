@@ -84,6 +84,8 @@
  * - **1.25.0**: Added optional `executedPlanning` provenance so eval records
  *   preserve the actual planning agent/model from `.planning-result.json`
  *   separately from bootstrap, expanded, and active route recommendations.
+ * - **1.26.0**: Added optional `phaseDurationsSeconds` so eval records retain
+ *   per-phase wall-clock durations computed from workflow result artifacts.
  *
  * @module eval-schema
  */
@@ -93,7 +95,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.25.0';
+export const SCHEMA_VERSION = '1.26.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -114,6 +116,13 @@ export interface EvalExecutedPlanning {
   model?: string;
   status?: 'running' | 'awaiting_user' | 'completed' | 'aborted' | 'failed';
   source?: '.planning-result.json';
+}
+
+export interface EvalPhaseDurations {
+  planning?: number;
+  coding?: number;
+  review?: number;
+  total?: number;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1297,6 +1306,13 @@ export interface EvalRecord {
 
   /** Wall-clock time in seconds for task completion */
   timeSeconds: number;
+
+  /**
+   * Per-phase LLM wall-clock durations in seconds.
+   * Computed from stage result file startedAt/finishedAt.
+   * Missing phases (skipped or failed) are undefined, not 0.
+   */
+  phaseDurationsSeconds?: EvalPhaseDurations;
 
   /** ISO 8601 datetime string when the eval was recorded */
   timestamp: string;
