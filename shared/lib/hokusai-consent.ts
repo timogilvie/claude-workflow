@@ -6,7 +6,6 @@ import { getHokusaiContributionsConfig, getHokusaiSubmissionConfig } from './con
 import { errorMessage } from './error-utils.ts';
 
 export const CURRENT_CONSENT_VERSION = '1.0';
-export const DEFAULT_HOKUSAI_ENDPOINT = 'https://api.hokusai.dev/v1/submit';
 
 export const CONSENT_TEXT = `Hokusai data submission is strictly opt-in.
 
@@ -46,7 +45,7 @@ export interface ConsentState {
 
 export interface SubmissionStatus extends ConsentState {
   currentVersion: string;
-  endpoint: string;
+  endpoint: string | null;
   consentValid: boolean;
   submissionAllowed: boolean;
 }
@@ -77,8 +76,8 @@ function resolveCurrentConsentVersion(repoDir?: string): string {
   return getHokusaiSubmissionConfig(repoDir).consentVersion || CURRENT_CONSENT_VERSION;
 }
 
-function resolveEndpoint(repoDir?: string): string {
-  return getHokusaiSubmissionConfig(repoDir).endpoint || DEFAULT_HOKUSAI_ENDPOINT;
+function resolveEndpoint(repoDir?: string): string | null {
+  return getHokusaiSubmissionConfig(repoDir).endpoint || null;
 }
 
 function updateUserConfig(
@@ -253,7 +252,7 @@ export function getStatusDisplay(options: { configDir?: string; repoDir?: string
     `Consent valid: ${status.consentValid ? 'yes' : 'no'}`,
     `Consent version: ${status.consentVersion ?? 'none'} (current: ${status.currentVersion})`,
     `Consented at: ${status.consentedAt ?? 'never'}`,
-    `Endpoint: ${status.endpoint}`,
+    `Endpoint: ${status.endpoint ?? 'not configured'}`,
   ];
 
   if (!status.submissionAllowed) {
