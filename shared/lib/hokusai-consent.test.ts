@@ -7,6 +7,7 @@ import { after, describe, it } from 'node:test';
 import {
   disableSubmission,
   enableSubmission,
+  getStatusDisplay,
   getContributionConsentStatus,
   getConsentState,
   getSubmissionStatus,
@@ -341,6 +342,15 @@ describe('hokusai-consent', () => {
       const status = getSubmissionStatus({ configDir, repoDir });
       assert.equal(status.consentValid, true);
       assert.equal(status.submissionAllowed, true);
+    });
+
+    it('reports an unconfigured endpoint cleanly when none is set', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({ hokusai: { dataSubmission: { consentVersion: '1.0' } } });
+
+      const status = getSubmissionStatus({ configDir, repoDir });
+      assert.equal(status.endpoint, null);
+      assert.match(getStatusDisplay({ configDir, repoDir }), /Endpoint: not configured/);
     });
 
     it('requires contributions.enabled for queue operations', () => {

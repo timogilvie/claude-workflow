@@ -9,6 +9,10 @@ import {
   type QueueAccessOptions,
 } from './hokusai-queue.ts';
 import { exportPendingContributions } from './hokusai-queue-export.ts';
+import {
+  recordPendingAcceptedBatch,
+  updateRewardStatus,
+} from './hokusai-reward-ledger.ts';
 
 export interface DrainQueueOptions extends QueueAccessOptions {
   fetchImpl?: typeof fetch;
@@ -59,18 +63,99 @@ function normalizeJobIds(payload: unknown): string[] {
     return [];
   }
 
-  const jobIds = (payload as { jobIds?: unknown }).jobIds;
-  if (!Array.isArray(jobIds)) {
-    return [];
+  const record = payload as Record<string, unknown>;
+  const candidates = [record.jobIds, record.job_ids];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter((jobId): jobId is string => typeof jobId === 'string');
+    }
   }
 
-  return jobIds.filter((jobId): jobId is string => typeof jobId === 'string');
+  const single = [record.jobId, record.job_id].find((value) => typeof value === 'string');
+  return typeof single === 'string' ? [single] : [];
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function parseTokenAmount(value: unknown): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function sanitizeRewardMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => (
+      typeof entry === 'string'
+        || typeof entry === 'number'
+        || typeof entry === 'boolean'
+        || entry === null
+    )),
+  );
+}
+
+function normalizeAcceptedPayload(payload: unknown): {
+  jobIds: string[];
+  contributionId?: string;
+  rewardDetected: boolean;
+  tokenAmount?: number | null;
+  rewardMetadata?: Record<string, unknown>;
+} {
+  if (!payload || typeof payload !== 'object') {
+    return { jobIds: [], rewardDetected: false };
+  }
+
+  const record = payload as Record<string, unknown>;
+  const rewards = record.rewards && typeof record.rewards === 'object' && !Array.isArray(record.rewards)
+    ? record.rewards as Record<string, unknown>
+    : undefined;
+  const directTokenAmount = hasOwn(record, 'tokenAmount')
+    ? parseTokenAmount(record.tokenAmount)
+    : hasOwn(record, 'token_amount')
+      ? parseTokenAmount(record.token_amount)
+      : undefined;
+  const nestedTokenAmount = rewards && hasOwn(rewards, 'tokenAmount')
+    ? parseTokenAmount(rewards.tokenAmount)
+    : rewards && hasOwn(rewards, 'token_amount')
+      ? parseTokenAmount(rewards.token_amount)
+      : undefined;
+  const tokenAmount = directTokenAmount !== undefined ? directTokenAmount : nestedTokenAmount;
+  const contributionId = [record.contributionId, record.contribution_id]
+    .find((value): value is string => typeof value === 'string' && value.length > 0);
+
+  return {
+    jobIds: normalizeJobIds(record),
+    ...(contributionId ? { contributionId } : {}),
+    rewardDetected: tokenAmount !== undefined || rewards !== undefined,
+    ...(tokenAmount !== undefined ? { tokenAmount } : {}),
+    ...(rewards ? { rewardMetadata: sanitizeRewardMetadata(rewards) } : {}),
+  };
 }
 
 async function postBatch(
   batch: PendingBatch,
   opts: DrainQueueOptions,
-): Promise<{ status: 'accepted'; jobIds: string[] } | { status: 'transient' | 'permanent'; error: string; httpStatus?: number }> {
+): Promise<
+  | {
+    status: 'accepted';
+    jobIds: string[];
+    contributionId?: string;
+    rewardDetected: boolean;
+    tokenAmount?: number | null;
+    rewardMetadata?: Record<string, unknown>;
+  }
+  | { status: 'transient' | 'permanent'; error: string; httpStatus?: number }
+> {
   const config = getHokusaiContributionsConfig(opts.repoDir);
   const fetchImpl = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
@@ -105,7 +190,7 @@ async function postBatch(
 
     const text = await response.text();
     if (!text.trim()) {
-      return { status: 'accepted', jobIds: [] };
+      return { status: 'accepted', jobIds: [], rewardDetected: false };
     }
 
     let parsed: unknown;
@@ -119,7 +204,7 @@ async function postBatch(
       };
     }
 
-    return { status: 'accepted', jobIds: normalizeJobIds(parsed) };
+    return { status: 'accepted', ...normalizeAcceptedPayload(parsed) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const code = error instanceof Error && error.name === 'AbortError'
@@ -166,6 +251,32 @@ export async function drainContributionQueue(
 
   if (posted.status === 'accepted') {
     await markBatchAccepted(batch, { jobIds: posted.jobIds }, opts);
+    const acceptedAt = now.toISOString();
+    const contributionId = posted.contributionId ?? batch.idempotencyKey;
+    try {
+      await recordPendingAcceptedBatch({
+        contributionId,
+        batchId: batch.entries[0]?.entryId ?? null,
+        idempotencyKey: batch.idempotencyKey,
+        rowCount: batch.entries.length,
+        submittedAt: batch.entries[0]?.enqueuedAt ?? acceptedAt,
+        acceptedAt,
+        hokusaiJobIds: posted.jobIds,
+      }, opts);
+
+      if (posted.rewardDetected) {
+        await updateRewardStatus({
+          contributionId,
+          status: 'accepted',
+          acceptedAt,
+          ...(posted.tokenAmount !== undefined ? { tokenAmount: posted.tokenAmount } : {}),
+          hokusaiJobIds: posted.jobIds,
+          ...(posted.rewardMetadata ? { rewardMetadata: posted.rewardMetadata } : {}),
+        }, opts);
+      }
+    } catch (error) {
+      console.warn(`[hokusai-ledger] Failed to record accepted contribution batch: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return {
       status: 'uploaded',
       uploadedCount: batch.entries.length,
@@ -182,6 +293,25 @@ export async function drainContributionQueue(
 
   if (posted.status === 'permanent') {
     await markBatchPermanentFailure(batch, failure, opts);
+    try {
+      await recordPendingAcceptedBatch({
+        contributionId: batch.idempotencyKey,
+        batchId: batch.entries[0]?.entryId ?? null,
+        idempotencyKey: batch.idempotencyKey,
+        rowCount: batch.entries.length,
+        submittedAt: batch.entries[0]?.enqueuedAt ?? now.toISOString(),
+        acceptedAt: now.toISOString(),
+      }, opts);
+      await updateRewardStatus({
+        contributionId: batch.idempotencyKey,
+        status: 'rejected',
+        acceptedAt: null,
+        tokenAmount: null,
+        rejectionReason: posted.error,
+      }, opts);
+    } catch (error) {
+      console.warn(`[hokusai-ledger] Failed to record rejected contribution batch: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return {
       status: 'permanent_failure',
       error: posted.error,

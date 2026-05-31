@@ -177,29 +177,27 @@ The documented production prediction endpoint is:
 
 ---
 
-## 6. Training / Submission Schema
+## 6. Contribution / Outcome Schema
 
 ```json
 {
-  "schema_version": "1.0",
-  "run_id": "string",
+  "success_under_budget": true,
   "task_id": "string",
-  "constraints": {
-    "max_cost_usd": 3.0
-  },
-  "route_taken": {
-    "planner_model": "model-a",
-    "coder_model": "model-b",
-    "reviewer_model": "model-c"
-  },
-  "observed_outcomes": {
-    "completed_successfully": true,
-    "actual_cost_usd": 2.41,
-    "actual_time_seconds": 1840,
-    "intervention_count": 1
+  "actual_cost_usd": 2.41,
+  "wall_clock_seconds": 1840,
+  "harness": "wavemill",
+  "inputs": {
+    "task_type": "bugfix",
+    "routing": {
+      "max_cost_usd": 3.0
+    }
   }
 }
 ```
+
+Wavemill can also emit stricter benchmark contribution rows under `technical_task_router_row/v1` for benchmark-style observations.
+
+Contribution uploads are asynchronous outcome data. They are not the same payload as the live `/predict` request, and Wavemill does not assume an immediate token receipt for every accepted row.
 
 ---
 

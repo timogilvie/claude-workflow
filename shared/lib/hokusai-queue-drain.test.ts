@@ -6,6 +6,7 @@ import { after, beforeEach, describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
 import { saveUserConfig } from './hokusai-consent.ts';
 import type { ContributionRow } from './hokusai-contribution-schema.ts';
+import { listRewardLedgerEntries } from './hokusai-reward-ledger.ts';
 import { drainContributionQueue } from './hokusai-queue-drain.ts';
 import { enqueueContribution, hokusaiQueueStatus, readPending } from './hokusai-queue.ts';
 
@@ -95,6 +96,10 @@ describe('hokusai-queue-drain', () => {
     assert.equal(result.status, 'uploaded');
     assert.deepEqual(result.jobIds, ['job-1']);
     assert.equal(hokusaiQueueStatus({ repoDir, configDir }).processedLineCount, 1);
+    const ledger = listRewardLedgerEntries({ repoDir, configDir });
+    assert.equal(ledger.status, 'ok');
+    assert.equal(ledger.entries[0]?.status, 'pending');
+    assert.deepEqual(ledger.entries[0]?.hokusaiJobIds, ['job-1']);
   });
 
   it('accepts 204 empty responses', async () => {
@@ -109,6 +114,49 @@ describe('hokusai-queue-drain', () => {
 
     assert.equal(result.status, 'uploaded');
     assert.deepEqual(result.jobIds, []);
+    const ledger = listRewardLedgerEntries({ repoDir, configDir });
+    assert.equal(ledger.status, 'ok');
+    assert.equal(ledger.entries[0]?.status, 'pending');
+    assert.equal(ledger.entries[0]?.tokenAmount, null);
+  });
+
+  it('records immediate rewards when present on accepted uploads', async () => {
+    const { repoDir, configDir } = makeRepo({ batchSize: 1 });
+    await enqueueContribution(makeRow('a'), { repoDir, configDir });
+
+    const result = await drainContributionQueue({
+      repoDir,
+      configDir,
+      fetchImpl: async () => new Response(JSON.stringify({
+        job_ids: ['job-1'],
+        token_amount: 4,
+      }), { status: 200 }),
+    });
+
+    assert.equal(result.status, 'uploaded');
+    const ledger = listRewardLedgerEntries({ repoDir, configDir });
+    assert.equal(ledger.status, 'ok');
+    assert.equal(ledger.entries[0]?.status, 'accepted');
+    assert.equal(ledger.entries[0]?.tokenAmount, 4);
+  });
+
+  it('treats explicit null rewards as accepted without coercing to zero', async () => {
+    const { repoDir, configDir } = makeRepo({ batchSize: 1 });
+    await enqueueContribution(makeRow('a'), { repoDir, configDir });
+
+    await drainContributionQueue({
+      repoDir,
+      configDir,
+      fetchImpl: async () => new Response(JSON.stringify({
+        jobId: 'job-1',
+        rewards: { tokenAmount: null, status: 'pending' },
+      }), { status: 200 }),
+    });
+
+    const ledger = listRewardLedgerEntries({ repoDir, configDir });
+    assert.equal(ledger.status, 'ok');
+    assert.equal(ledger.entries[0]?.status, 'accepted');
+    assert.equal(ledger.entries[0]?.tokenAmount, null);
   });
 
   it('drains more than batchSize in bounded batches', async () => {
@@ -169,6 +217,7 @@ describe('hokusai-queue-drain', () => {
     assert.equal(result.status, 'dead_lettered');
     const deadLetterPath = join(repoDir, '.wavemill', 'hokusai', 'queue', 'dead-letter.jsonl');
     assert.equal(readFileSync(deadLetterPath, 'utf-8').trim().split('\n').length, 1);
+    assert.deepEqual(listRewardLedgerEntries({ repoDir, configDir }), { status: 'ok', entries: [] });
   });
 
   it('moves permanent failures to dead-letter and allows later batches to continue', async () => {
@@ -195,5 +244,9 @@ describe('hokusai-queue-drain', () => {
 
     assert.equal(first.status, 'permanent_failure');
     assert.equal(second.status, 'uploaded');
+    const ledger = listRewardLedgerEntries({ repoDir, configDir });
+    assert.equal(ledger.status, 'ok');
+    assert.equal(ledger.entries[0]?.status, 'rejected');
+    assert.equal(ledger.entries[0]?.tokenAmount, null);
   });
 });

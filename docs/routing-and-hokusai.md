@@ -118,27 +118,46 @@ Wavemill sends a nested `inputs` payload with:
 
 Wavemill expects `predictions.recommended_strategy` in the response and converts it into the internal `WorkflowRouteDecision`. If the request times out, auth fails, the API returns `4xx/5xx`, or the response shape is invalid, Wavemill classifies the failure and falls back to local routing.
 
-### Submission Schema
+### Contribution Contract
 
-Outbound Hokusai training submissions include a `schema_version` field:
+Contribution uploads are not the same thing as live Model 30 routing input.
 
-- `1.0` submissions contain route, constraint, and observed outcome fields.
-- `1.1` submissions also include a `rubric_signals` block when sanitized rubric features are available.
-- `1.2` submissions can additionally include optional `route_prediction` and `route_calibration` blocks when present on the eval record.
+The live `/predict` API gets task and routing constraints. Contribution upload gets observed workflow outcomes after the run finishes. Wavemill only queues privacy-safe contribution rows after redaction and validation.
 
-The `rubric_signals` block carries the rubric version, criterion count, mean score, five normalized criterion scores, optional determinative boundary, and optional rubric provenance. These values come from the privacy-safe rubric projection on the task descriptor plus record-level rubric metadata.
+Current supported row shapes are:
 
-Free-text rubric rationale, stage rationale, judge notes, prompt-registry hashes, and internal model identifiers are not forwarded. Redaction uses an allow-list for safe strings, so unexpected new text fields are stripped by default while numeric rubric features pass through unchanged.
+- public Submit Data rows with required `success_under_budget`
+- stricter benchmark rows using `technical_task_router_row/v1`
 
-The new fields are optional. Existing consumers can continue accepting old submissions and ignore unknown optional fields until they are updated for `1.1`.
+Optional compact `inputs`, cost, timing, harness, and benchmark metadata may be included when they pass the redaction allow-list. Raw eval payloads, task bodies, prompts, repository names before redaction, and secrets do not leave the machine.
 
 ### Contribution Queue
 
 Outcome and benchmark contribution uploads are separate from live Model 30 routing. Live prediction calls stay synchronous and continue to fall back to local routing when Hokusai is unavailable; Wavemill does not enqueue stale route requests.
 
-When `hokusai.contributions.enabled` is `true` and user consent is valid, Wavemill can store redacted contribution rows under `.wavemill/hokusai/` and later drain them to an explicitly configured contribution endpoint. The queue only stores validated row shapes such as the public Submit Data fields (`success_under_budget`, optional `inputs`, `actual_cost_usd`, `wall_clock_seconds`, `task_id`, `harness`) and the stricter `technical_task_router_row/v1` benchmark shape. Raw eval payloads, task text, prompts, and other unredacted inputs are rejected before enqueue.
+When `hokusai.contributions.enabled` is `true` and user consent is valid, Wavemill stores redacted contribution rows under `.wavemill/hokusai/` and later drains them to an explicitly configured contribution endpoint. There is no public default upload endpoint in repo config. If Hokusai has not published a stable contribution API for your environment, leave the endpoint unset and export rows for manual handling instead.
 
 If no explicit contribution endpoint is configured, drain can export pending rows for manual submission instead of pretending upload succeeded. Transient failures such as timeouts, `429`, and `5xx` responses are retried with persisted backoff; permanent failures such as auth, schema, or malformed-row errors move to dead-letter with redacted operator-facing details only.
+
+### Reward Ledger
+
+Accepted contribution batches are tracked locally in `.wavemill/hokusai/reward-ledger.json`.
+
+The ledger records:
+
+- accepted uploads that are still waiting on reward information as `pending`
+- immediate reward responses as `accepted`
+- permanently rejected uploads as `rejected`
+
+`tokenAmount` is nullable by design. Some accepted uploads return no reward yet, or no reward at all.
+
+Inspect the ledger with:
+
+```bash
+npx tsx tools/show-hokusai-ledger.ts
+npx tsx tools/show-hokusai-ledger.ts --status pending
+npx tsx tools/show-hokusai-ledger.ts --json
+```
 
 ## Related Commands
 
