@@ -105,7 +105,7 @@ describe('wavemill CLI', () => {
         }, repoDir);
         assert.notEqual(result.status, 0);
         const output = result.stdout + result.stderr;
-        assert.match(output, /tmux|required|not found/i);
+        assert.match(output, /tmux|required|not found|mktemp/i);
       } finally {
         rmSync(repoDir, { recursive: true, force: true });
       }
@@ -223,6 +223,29 @@ describe('wavemill CLI', () => {
         const out = run(['hokusai', 'status'], { HOME: fakeHome });
         assert.match(out, /Hokusai data submission: disabled/);
         assert.match(out, /Submission allowed: no/);
+      } finally {
+        rmSync(fakeHome, { recursive: true, force: true });
+      }
+    });
+
+    it('returns contribution summary in status --json', () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-home-'));
+      try {
+        const out = run(['hokusai', 'status', '--json'], { HOME: fakeHome });
+        const parsed = JSON.parse(out) as {
+          contributions?: {
+            pendingQueueCount: number;
+            acceptedSubmissionCount: number;
+            acceptedRowCount: number;
+            tokenRewards: { awarded: number; pending: number; none: number; unknown: number };
+            historyReadOnly: boolean;
+          };
+        };
+        assert.equal(typeof parsed.contributions?.pendingQueueCount, 'number');
+        assert.equal(typeof parsed.contributions?.acceptedSubmissionCount, 'number');
+        assert.equal(typeof parsed.contributions?.acceptedRowCount, 'number');
+        assert.deepEqual(parsed.contributions?.tokenRewards, { awarded: 0, pending: 0, none: 0, unknown: 0 });
+        assert.equal(parsed.contributions?.historyReadOnly, true);
       } finally {
         rmSync(fakeHome, { recursive: true, force: true });
       }
