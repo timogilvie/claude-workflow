@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 import {
   DEFAULT_MODEL_REGISTRY,
   ModelSelectorParseError,
@@ -78,6 +78,10 @@ interface MatrixCase {
 }
 
 describe('resolveEffectiveModel', () => {
+  beforeEach(() => {
+    delete process.env.WAVEMILL_RESOLVED_MODEL;
+  });
+
   const parent = resolveSelector({ kind: 'alias', family: 'sonnet' });
   const unavailableRegistry: ModelRegistry = {
     models: {

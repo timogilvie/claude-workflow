@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { getHokusaiSubmissionConfig } from './config.ts';
+import { getHokusaiContributionsConfig, getHokusaiSubmissionConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 
 export const CURRENT_CONSENT_VERSION = '1.0';
@@ -48,6 +48,12 @@ export interface SubmissionStatus extends ConsentState {
   currentVersion: string;
   endpoint: string;
   consentValid: boolean;
+  submissionAllowed: boolean;
+}
+
+export interface ContributionConsentStatus {
+  consentValid: boolean;
+  contributionsEnabled: boolean;
   submissionAllowed: boolean;
 }
 
@@ -218,6 +224,25 @@ export function getSubmissionStatus(options: { configDir?: string; repoDir?: str
     consentValid,
     submissionAllowed: state.enabled && consentValid,
   };
+}
+
+export function getContributionConsentStatus(
+  options: { configDir?: string; repoDir?: string } = {},
+): ContributionConsentStatus {
+  const status = getSubmissionStatus(options);
+  const contributionsEnabled = getHokusaiContributionsConfig(options.repoDir).enabled === true;
+
+  return {
+    consentValid: status.consentValid,
+    contributionsEnabled,
+    submissionAllowed: status.submissionAllowed && contributionsEnabled,
+  };
+}
+
+export function isHokusaiContributionsEnabled(
+  options: { configDir?: string; repoDir?: string } = {},
+): boolean {
+  return getContributionConsentStatus(options).submissionAllowed;
 }
 
 export function getStatusDisplay(options: { configDir?: string; repoDir?: string } = {}): string {
