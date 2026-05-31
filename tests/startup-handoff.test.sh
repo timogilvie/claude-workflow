@@ -240,6 +240,12 @@ RESTORE_WINDOW_BLOCK="$(awk '
   capture { print }
 ' "$MILL_SCRIPT")"
 
+REROUTE_EXPANDED_BLOCK="$(awk '
+  /^reroute_expanded_packets_for_coding_handoff\(\) \{/ { capture=1 }
+  /^recover_missing_expansion_artifact\(\) \{/ { capture=0 }
+  capture { print }
+' "$MILL_SCRIPT")"
+
 LAUNCH_PLANNING_BLOCK="$(awk '
   /^launch_planning_phase\(\) \{/ { capture=1 }
   /^# Launch the coding phase/ { capture=0 }
@@ -273,6 +279,8 @@ else
 fi
 
 if [[ "$RESTORE_WINDOW_BLOCK" == *'_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir"'* ]] \
+  && [[ "$RESTORE_WINDOW_BLOCK" == *'-f "$feature_dir/.coding-complete"'* ]] \
+  && [[ "$RESTORE_WINDOW_BLOCK" == *'launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH"'* ]] \
   && [[ "$RESTORE_WINDOW_BLOCK" != *'grep -qxF "$win"'* ]]; then
   pass "resume restore treats renamed task windows as existing via stable windowId"
 else
@@ -285,7 +293,15 @@ else
   fail "missing-window recovery can leak warning logs into captured tmux targets"
 fi
 
+if [[ "$REROUTE_EXPANDED_BLOCK" == *'sibling_issue sibling_slug sibling_worktree'* ]] \
+  && [[ "$REROUTE_EXPANDED_BLOCK" != *'read -r issue slug worktree'* ]]; then
+  pass "expanded reroute scan avoids clobbering restore issue variables"
+else
+  fail "expanded reroute scan can clobber restore issue variables"
+fi
+
 if [[ "$LAUNCH_PLANNING_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
+  && [[ "$LAUNCH_PLANNING_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
   && [[ "$LAUNCH_PLANNING_BLOCK" == *'_launch_agent_in_pane "$SESSION:$win"'* ]]; then
   pass "planning launch targets stable task window selector"
 else
@@ -293,7 +309,10 @@ else
 fi
 
 if [[ "$LAUNCH_CODING_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
+  && [[ "$LAUNCH_CODING_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
   && [[ "$LAUNCH_REVIEW_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
+  && [[ "$LAUNCH_REVIEW_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
+  && [[ "$LAUNCH_READY_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
   && [[ "$LAUNCH_READY_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]]; then
   pass "coding/review/ready launches target stable task window selector"
 else
