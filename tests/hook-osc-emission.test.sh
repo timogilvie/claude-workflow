@@ -13,12 +13,12 @@ FAIL=0
 
 pass() {
   echo "✓ $1"
-  ((PASS++))
+  PASS=$((PASS + 1))
 }
 
 fail() {
   echo "✗ $1"
-  ((FAIL++))
+  FAIL=$((FAIL + 1))
 }
 
 # Create temp directory for test files
@@ -175,7 +175,8 @@ output=$({
   wavemill_hook_write "working" "PreToolUse" "$detail" "claude" 2>&1
 } || true)
 
-if ! (echo -n "$output" | sed -n 's/.*notify;wavemill;\(.*\).*/\1/p' | grep -q $'\a'); then
+bel=$'\a'
+if ! (echo -n "$output" | sed -n "s/.*notify;wavemill;\\([^$bel]*\\).*/\\1/p" | grep -q "$bel"); then
   pass "Sanitize: BEL removed"
 else
   fail "Sanitize: BEL found"
