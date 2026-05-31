@@ -69,6 +69,10 @@ export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
 source "$LIB_DIR/wavemill-common.sh"
 source "$LIB_DIR/agent-adapters.sh"
 source "$LIB_DIR/startup-progress.sh"
+if [[ -f "$LIB_DIR/wavemill-worktree-deps.sh" ]]; then
+# shellcheck source=wavemill-worktree-deps.sh
+source "$LIB_DIR/wavemill-worktree-deps.sh"
+fi
 if [[ -f "$LIB_DIR/wavemill-window-titles.sh" ]]; then
 # shellcheck source=wavemill-window-titles.sh
 source "$LIB_DIR/wavemill-window-titles.sh"
