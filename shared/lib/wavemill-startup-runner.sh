@@ -69,6 +69,10 @@ export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
 source "$LIB_DIR/wavemill-common.sh"
 source "$LIB_DIR/agent-adapters.sh"
 source "$LIB_DIR/startup-progress.sh"
+if [[ -f "$LIB_DIR/wavemill-worktree-deps.sh" ]]; then
+# shellcheck source=wavemill-worktree-deps.sh
+source "$LIB_DIR/wavemill-worktree-deps.sh"
+fi
 if [[ -f "$LIB_DIR/wavemill-window-titles.sh" ]]; then
 # shellcheck source=wavemill-window-titles.sh
 source "$LIB_DIR/wavemill-window-titles.sh"
@@ -466,6 +470,7 @@ write_startup_pane_wrapper() {
   local wrapper_path="$1" marker_path="$2" issue="$3" wt_dir="$4"
   local startup_log_file="${5:-}" status_log_file="${6:-}" startup_id="${7:-}"
   local session="${8:-}" hook_protocol="${9:-}"
+  local deps_lib="$LIB_DIR/wavemill-worktree-deps.sh"
 
   cat > "$wrapper_path" <<EOF
 #!/usr/bin/env bash
@@ -473,19 +478,30 @@ set -Eeuo pipefail
 
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WORKTREE_ROOT='$WORKTREE_ROOT'
 [[ -f '$hook_protocol' ]] && source '$hook_protocol' 2>/dev/null || true
 
 issue='$issue'
 wt_dir='$wt_dir'
+parent_dir='$REPO_DIR'
 marker_path='$marker_path'
-startup_log_file='${startup_log_file:-}'
-status_log_file='${status_log_file:-}'
+deps_lib='$deps_lib'
+STARTUP_TASK_LOG_FILE='${startup_log_file:-}'
+STATUS_LOG_FILE='${status_log_file:-}'
 
 log_line() {
   local line="\$*"
   printf '%s\n' "\$line"
-  [[ -n "\$startup_log_file" ]] && printf '%s\n' "\$line" >> "\$startup_log_file" 2>/dev/null || true
-  [[ -n "\$status_log_file" ]] && printf '%s\n' "\$line" >> "\$status_log_file" 2>/dev/null || true
+  [[ -n "\$STARTUP_TASK_LOG_FILE" ]] && printf '%s\n' "\$line" >> "\$STARTUP_TASK_LOG_FILE" 2>/dev/null || true
+  [[ -n "\$STATUS_LOG_FILE" ]] && printf '%s\n' "\$line" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+}
+
+startup_log() {
+  log_line "\$*"
+}
+
+startup_step() {
+  log_line "\$*"
 }
 
 write_marker() {
@@ -500,6 +516,22 @@ write_marker() {
 }
 
 source_dependency_context() {
+  if [[ -f "\$deps_lib" ]]; then
+    source "\$deps_lib"
+    if command -v worktree_deps_ensure >/dev/null 2>&1; then
+      wavemill_hook_write "working" "install_start" "dependency install" "startup" 2>/dev/null || true
+      local rc=0
+      worktree_deps_ensure "\$wt_dir" "\$parent_dir" "\$issue" || rc=\$?
+      if [[ \$rc -ne 0 ]]; then
+        wavemill_hook_write "error" "install_failed" "install-failed:\$rc" "startup" 2>/dev/null || true
+        write_marker "failed" "install-failed:\$rc"
+        exit "\$rc"
+      fi
+      write_marker "ok" "deps-ok"
+      return 0
+    fi
+  fi
+
   local mode pm lockfile install_cmd
   mode=""
   pm=""
