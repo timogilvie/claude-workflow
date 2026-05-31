@@ -1,11 +1,13 @@
 import { getHokusaiContributionsConfig } from './config.ts';
 import { getContributionConsentStatus } from './hokusai-consent.ts';
+import { appendHokusaiLedgerEntry, type HokusaiRewardStatus } from './hokusai-ledger.ts';
 import {
   createSafeFailure,
   markBatchAccepted,
   markBatchPermanentFailure,
   markBatchTransientFailure,
   readPending,
+  type PendingBatch,
   type QueueAccessOptions,
 } from './hokusai-queue.ts';
 import { exportPendingContributions } from './hokusai-queue-export.ts';
@@ -67,10 +69,51 @@ function normalizeJobIds(payload: unknown): string[] {
   return jobIds.filter((jobId): jobId is string => typeof jobId === 'string');
 }
 
+function normalizeStringField(payload: unknown, key: string): string | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function normalizeTokenReward(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const value = (payload as { tokenReward?: unknown }).tokenReward;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function deriveRewardStatus(tokenReward: number | undefined): HokusaiRewardStatus {
+  if (tokenReward === undefined) {
+    return 'pending';
+  }
+  if (tokenReward === 0) {
+    return 'none';
+  }
+  return 'awarded';
+}
+
+function earliestQueuedAt(batch: PendingBatch): string | undefined {
+  const timestamps = batch.entries
+    .map((entry) => entry.enqueuedAt)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .map((value) => new Date(value).getTime())
+    .filter((value) => Number.isFinite(value));
+  if (timestamps.length === 0) {
+    return undefined;
+  }
+  return new Date(Math.min(...timestamps)).toISOString();
+}
+
 async function postBatch(
   batch: PendingBatch,
   opts: DrainQueueOptions,
-): Promise<{ status: 'accepted'; jobIds: string[] } | { status: 'transient' | 'permanent'; error: string; httpStatus?: number }> {
+): Promise<
+{ status: 'accepted'; jobIds: string[]; jobId?: string; submissionId?: string; tokenReward?: number }
+| { status: 'transient' | 'permanent'; error: string; httpStatus?: number }
+> {
   const config = getHokusaiContributionsConfig(opts.repoDir);
   const fetchImpl = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
@@ -119,7 +162,13 @@ async function postBatch(
       };
     }
 
-    return { status: 'accepted', jobIds: normalizeJobIds(parsed) };
+    return {
+      status: 'accepted',
+      jobIds: normalizeJobIds(parsed),
+      jobId: normalizeStringField(parsed, 'jobId'),
+      submissionId: normalizeStringField(parsed, 'submissionId'),
+      tokenReward: normalizeTokenReward(parsed),
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const code = error instanceof Error && error.name === 'AbortError'
@@ -162,10 +211,29 @@ export async function drainContributionQueue(
 
   const batch = pending.batch!;
   const now = opts.now ?? new Date();
+  const submittedAt = now.toISOString();
   const posted = await postBatch(batch, opts);
 
   if (posted.status === 'accepted') {
     await markBatchAccepted(batch, { jobIds: posted.jobIds }, opts);
+    const acceptedAt = (opts.now ?? new Date()).toISOString();
+    appendHokusaiLedgerEntry({
+      schemaVersion: 1,
+      eventType: 'accepted',
+      timestamp: acceptedAt,
+      modelId: '30',
+      idempotencyKey: batch.idempotencyKey,
+      batchId: batch.entries[0]?.entryId ?? batch.idempotencyKey,
+      ...(posted.jobId ? { jobId: posted.jobId } : {}),
+      ...(posted.jobIds.length > 0 ? { jobIds: posted.jobIds } : {}),
+      ...(posted.submissionId ? { submissionId: posted.submissionId } : {}),
+      rowCount: batch.entries.length,
+      ...(earliestQueuedAt(batch) ? { queuedAt: earliestQueuedAt(batch) } : {}),
+      submittedAt,
+      acceptedAt,
+      rewardStatus: deriveRewardStatus(posted.tokenReward),
+      ...(posted.tokenReward !== undefined ? { tokenReward: posted.tokenReward } : {}),
+    }, opts);
     return {
       status: 'uploaded',
       uploadedCount: batch.entries.length,
@@ -182,6 +250,22 @@ export async function drainContributionQueue(
 
   if (posted.status === 'permanent') {
     await markBatchPermanentFailure(batch, failure, opts);
+    const rejectedAt = (opts.now ?? new Date()).toISOString();
+    appendHokusaiLedgerEntry({
+      schemaVersion: 1,
+      eventType: 'rejected',
+      timestamp: rejectedAt,
+      modelId: '30',
+      idempotencyKey: batch.idempotencyKey,
+      batchId: batch.entries[0]?.entryId ?? batch.idempotencyKey,
+      rowCount: batch.entries.length,
+      ...(earliestQueuedAt(batch) ? { queuedAt: earliestQueuedAt(batch) } : {}),
+      submittedAt,
+      rejectedAt,
+      rewardStatus: 'unknown',
+      errorCode: 'permanent_http_failure',
+      summary: posted.error,
+    }, opts);
     return {
       status: 'permanent_failure',
       error: posted.error,
@@ -204,6 +288,24 @@ export async function drainContributionQueue(
     maxRetries: config.maxRetries,
     nextAttemptAt,
   });
+  if (retryStatus === 'dead_lettered') {
+    const rejectedAt = (opts.now ?? new Date()).toISOString();
+    appendHokusaiLedgerEntry({
+      schemaVersion: 1,
+      eventType: 'rejected',
+      timestamp: rejectedAt,
+      modelId: '30',
+      idempotencyKey: batch.idempotencyKey,
+      batchId: batch.entries[0]?.entryId ?? batch.idempotencyKey,
+      rowCount: batch.entries.length,
+      ...(earliestQueuedAt(batch) ? { queuedAt: earliestQueuedAt(batch) } : {}),
+      submittedAt,
+      rejectedAt,
+      rewardStatus: 'unknown',
+      errorCode: 'transient_exhausted',
+      summary: 'Contribution submission retries exhausted',
+    }, opts);
+  }
 
   return {
     status: retryStatus,
