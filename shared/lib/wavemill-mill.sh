@@ -914,9 +914,9 @@ cleanup_completed_task() {
 
   # Log completion with optional reason
   if [[ -n "$completion_reason" ]]; then
-    log "Complete: $issue ($completion_reason)"
+    log "$issue: Complete ($completion_reason)"
   else
-    log "Complete: $issue"
+    log "$issue: Complete"
   fi
 }
 
@@ -4912,7 +4912,7 @@ launch_ready_phase() {
     pending_log_level="info"
   fi
 
-  log "$pending_log_level" "  Launching ready phase for $issue (PR #$pr_number)"
+  log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
   ready_stderr_file=$(mktemp) || {
     log_warn "  Failed to capture ready stderr for $issue (mktemp failed)"
@@ -5057,8 +5057,8 @@ launch_ready_phase() {
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
-    log "status" "  Restored ready labels for PR #$pr_number"
-    log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
+    log "status" "  $issue: Restored ready labels for PR #$pr_number"
+    log "  $issue: Ready checks completed (verdict: ${verdict:-unknown})"
     return 0
   fi
 
@@ -5836,9 +5836,9 @@ cleanup_completed_task() {
 
   # Log completion with optional reason
   if [[ -n "$completion_reason" ]]; then
-    log "Complete: $issue ($completion_reason)"
+    log "$issue: Complete ($completion_reason)"
   else
-    log "Complete: $issue"
+    log "$issue: Complete"
   fi
 }
 
@@ -6791,7 +6791,7 @@ render_grouped_task_list() {
     if declare -F wavemill_config_annotation >/dev/null 2>&1; then
       backlog_annotation="$(wavemill_config_annotation "backlog.maxLines" "${config_max:-auto}")"
     fi
-    log "status" "[backlog] tier=$tier budget=$budget${backlog_annotation}"
+    log "info" "[backlog] tier=$tier budget=$budget${backlog_annotation}"
     BACKLOG_LAST_TIER="$tier"
   fi
 
@@ -6836,7 +6836,7 @@ launch_task() {
   linear_issue=$(get_linear_issue_id "$issue")
   challenge_model=$(get_task_meta "$issue" "challengeModel")
 
-  log "status" "Launching $issue: $title"
+  log "status" "$issue: Launching - $title"
 
   # Fetch issue details
   local issue_json
@@ -7160,13 +7160,13 @@ launch_task() {
         fi
 
         if [[ "$route_source" == "live" ]]; then
-          log "info" "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+          log "info" "  $issue Route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         elif [[ "$route_source" == "batch-cache" ]]; then
-          log "info" "  Workflow route (from batch cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+          log "info" "  $issue Route (from batch cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         elif [[ "$route_source" == "startup-cache" ]]; then
-          log "info" "  Workflow route (from startup cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+          log "info" "  $issue Route (from startup cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         else
-          log "info" "  Workflow route (heuristic fallback): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+          log "info" "  $issue Route (heuristic fallback): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         fi
       else
         cat > "$routing_failure_file" <<EOF
@@ -7508,10 +7508,10 @@ Implement from the issue description plus direct codebase analysis."
     "$resolved_planner_agent" "$planner_launch_model"; then
     return 0
   fi
-  log "status" "Routing complete (direct), launched planning with $planner_launch_model"
+  log "status" "$issue Routing complete (direct), launched planning with $planner_launch_model"
 
   log "status" "$issue launched (phase: ${initial_phase}, agent: ${resolved_planner_agent}${planner_launch_model:+ --model $planner_launch_model})"
-  [[ -n "$planner_model" ]] && log "info" "Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
+  [[ -n "$planner_model" ]] && log "info" "$issue: Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
 
   if [[ "$should_launch_challenger" == "true" ]]; then
     WAVEMILL_DISABLE_CHALLENGE=1 launch_task "$challenger_key" "$challenger_slug" "$challenger_title" 0
