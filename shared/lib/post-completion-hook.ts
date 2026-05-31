@@ -459,7 +459,12 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       ctx.worktreePath
     );
     const phaseDurations = stageArtifacts.phaseDurations;
-    const timeSeconds = phaseDurations?.total ?? 0;
+    const timeSeconds =
+      typeof phaseDurations?.total === 'number'
+      && Number.isFinite(phaseDurations.total)
+      && phaseDurations.total >= 0
+        ? phaseDurations.total
+        : null;
 
     // 3. Detect all interventions
     console.log('Post-completion eval: detecting interventions...');

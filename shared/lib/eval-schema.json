@@ -76,7 +76,7 @@
       "description": "The rubric band label derived from the score."
     },
     "timeSeconds": {
-      "type": "number",
+      "type": ["number", "null"],
       "minimum": 0,
       "description": "Wall-clock time in seconds for task completion."
     },

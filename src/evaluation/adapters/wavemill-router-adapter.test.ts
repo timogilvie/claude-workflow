@@ -153,6 +153,7 @@ test('fixture end-to-end run appends an eval record with workflow_success_rate_u
     const hem = persisted[persisted.length - 1];
 
     assert.equal(hem.workflow_success_rate_under_budget, 0.5);
+    assert.equal(hem.timeSeconds, null);
     assert.ok(hem.wavemill_router_diagnostics);
   } finally {
     cleanup(tmp);
