@@ -4017,6 +4017,62 @@ _ensure_window_exists() {
   fi
 }
 
+_tmux_window_target_exists() {
+  local session="$1" target="$2" expected_path="${3:-}"
+  local target_session target_path
+
+  [[ -n "$session" && -n "$target" ]] || return 1
+  target_session="$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null || true)"
+  [[ "$target_session" == "$session" ]] || return 1
+  if [[ -n "$expected_path" ]]; then
+    target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+    [[ "$target_path" == "$expected_path" ]] || return 1
+  fi
+  return 0
+}
+
+_tmux_task_window_target() {
+  local session="$1" issue="$2" slug="$3" state_file="${4:-${STATE_FILE:-}}" wt_dir="${5:-}"
+  local stored_target="" canonical target
+
+  if [[ -n "$state_file" && -f "$state_file" ]]; then
+    stored_target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$state_file" 2>/dev/null || true)"
+  fi
+  if _tmux_window_target_exists "$session" "$stored_target" "$wt_dir"; then
+    printf '%s\n' "$stored_target"
+    return 0
+  fi
+
+  canonical="${issue}-${slug}"
+  target="$(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null \
+    | awk -F'|' -v name="$canonical" '$2 == name { print $1; exit }')"
+  if _tmux_window_target_exists "$session" "$target" "$wt_dir"; then
+    printf '%s\n' "$target"
+    return 0
+  fi
+
+  return 1
+}
+
+_ensure_task_window_exists() {
+  local session="$1" issue="$2" slug="$3" wt_dir="$4"
+  local target canonical
+
+  if target="$(_tmux_task_window_target "$session" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir")"; then
+    printf '%s\n' "$target"
+    return 0
+  fi
+
+  canonical="${issue}-${slug}"
+  log_warn "  Window $canonical missing, recreating..."
+  tmux new-window -d -t "$session" -n "$canonical" -c "$wt_dir" 2>/dev/null || true
+  target="$(tmux display-message -p -t "$session:$canonical" '#{window_id}' 2>/dev/null || true)"
+  [[ -n "$target" ]] || target="$canonical"
+  tmux set-option -t "$session:$target" remain-on-exit on 2>/dev/null || true
+  sleep 1
+  printf '%s\n' "$target"
+}
+
 # Relaunch an in-flight task's phase agent when its tmux window has been lost
 # (typically after a `r`/`a` session resume, which kills the prior tmux session
 # before restarting the monitor).
@@ -4031,12 +4087,11 @@ _ensure_window_exists() {
 _RESTORE_STATE=""
 _restore_inflight_task_window_if_missing() {
   local issue="$1" slug="$2" branch="$3" phase="$4"
-  local win="${issue}-${slug}"
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   local feature_dir="${wt_dir}/features/${slug}"
   _RESTORE_STATE="none"
 
-  if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
+  if _tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" >/dev/null 2>&1; then
     return 0
   fi
 
@@ -4161,9 +4216,9 @@ launch_planning_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local planner_model="$7" planner_agent="$8" plan_depth="$9"
   local operating_mode="normal"
-  local win="${issue}-${slug}"
+  local win
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
-  _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
   configure_agent_hooks "$planner_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
@@ -4190,9 +4245,9 @@ launch_coding_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local coder_model="$7" coder_agent="$8" code_depth="$9"
   local operating_mode="normal"
-  local win="${issue}-${slug}"
+  local win
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
-  _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
   configure_agent_hooks "$coder_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
@@ -4219,9 +4274,9 @@ launch_review_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local reviewer_model="$7" reviewer_agent="$8" review_mode="$9"
   local operating_mode="normal"
-  local win="${issue}-${slug}"
+  local win
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
-  _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
   configure_agent_hooks "$reviewer_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
@@ -4890,7 +4945,7 @@ set_ready_pass_labels() {
 launch_ready_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local pr_number="$7"
-  local win="${issue}-${slug}"
+  local win
   local state_dir status_file result ready_rc merge_status verdict
   local current_agent current_model prompt_file launch_rc launch_head checks_run checks_passed
   local remediation_attempts remediation_launch_head remediation_enabled remediation_max_attempts
@@ -4898,7 +4953,7 @@ launch_ready_phase() {
   local remediation_artifacts_json failed_check_names_json ready_result_file ready_stderr_file
   local prior_ready_status prior_ready_verdict pending_log_level
 
-  _ensure_window_exists "$SESSION" "$win" "$wt_dir"
+  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
   status_file="/tmp/${SESSION}-${issue}-status.txt"
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
