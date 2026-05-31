@@ -28,5 +28,15 @@ describe('review-engine scoped mode', () => {
     assert.match(prompt, /Test-coverage gaps/);
     assert.match(prompt, /needs_stronger_reviewer/);
     assert.match(prompt, /stronger_reviewer_reason/);
+    assert.match(prompt, /Reverts #N/);
+    assert.match(prompt, /auto\/integration/);
+  });
+
+  it('documents cross-PR revert protection in the normal general prompt', () => {
+    const prompt = reviewEngineTestUtils.loadPersonaPromptTemplate('general', 'normal');
+
+    assert.match(prompt, /Intentionally reverts #N/);
+    assert.match(prompt, /auto\/integration/);
+    assert.match(prompt, /merge base/);
   });
 });

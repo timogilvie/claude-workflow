@@ -294,6 +294,15 @@ export interface ReviewConfig {
   enabled?: boolean;
 }
 
+export interface CrossPrRevertCheckConfig {
+  enabled?: boolean;
+  maxRecentMerges?: number;
+}
+
+export interface ReviewMergeConfig {
+  crossPrRevertCheck?: CrossPrRevertCheckConfig;
+}
+
 export type DeepSeekProviderStage = keyof AvailableModelsConfig;
 
 export interface DeepSeekLauncherConfig {
@@ -339,6 +348,13 @@ export type PromotionProtectedIntegrationStrategy =
 export interface PromotionConfig {
   protectedIntegrationStrategy: PromotionProtectedIntegrationStrategy;
   promotionHeadBranch: string;
+}
+
+export interface ResolvedReviewMergeConfig {
+  crossPrRevertCheck: {
+    enabled: boolean;
+    maxRecentMerges: number;
+  };
 }
 
 export interface IntegrationReadyPolicyConfig {
@@ -496,6 +512,7 @@ export interface WavemillConfig {
   constraints?: ConstraintsConfig;
   ui?: UiConfig;
   review?: ReviewConfig;
+  reviewMerge?: ReviewMergeConfig;
   providers?: ProvidersConfig;
   integration?: Partial<IntegrationConfig>;
   promotion?: Partial<PromotionConfig>;
@@ -527,6 +544,13 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
 export const PROMOTION_DEFAULTS: PromotionConfig = {
   protectedIntegrationStrategy: 'skip-reconciliation',
   promotionHeadBranch: 'auto/promotion',
+};
+
+export const REVIEW_MERGE_DEFAULTS: ResolvedReviewMergeConfig = {
+  crossPrRevertCheck: {
+    enabled: true,
+    maxRecentMerges: 50,
+  },
 };
 
 export const DEFAULT_READY_MIGRATION_PATTERNS = [
@@ -1109,6 +1133,22 @@ export function getIntegrationConfig(repoDir?: string): IntegrationConfig {
  */
 export function getPromotionConfig(repoDir?: string): PromotionConfig {
   return { ...PROMOTION_DEFAULTS, ...(loadWavemillConfig(repoDir).promotion ?? {}) };
+}
+
+/**
+ * Get the review/merge hardening config section.
+ * Returns defaults when not configured.
+ */
+export function getReviewMergeConfig(repoDir?: string): ResolvedReviewMergeConfig {
+  const config = loadWavemillConfig(repoDir).reviewMerge ?? {};
+  const crossPrRevertCheck = config.crossPrRevertCheck ?? {};
+  return {
+    crossPrRevertCheck: {
+      enabled: crossPrRevertCheck.enabled ?? REVIEW_MERGE_DEFAULTS.crossPrRevertCheck.enabled,
+      maxRecentMerges:
+        crossPrRevertCheck.maxRecentMerges ?? REVIEW_MERGE_DEFAULTS.crossPrRevertCheck.maxRecentMerges,
+    },
+  };
 }
 
 /**

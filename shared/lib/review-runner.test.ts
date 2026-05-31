@@ -5,12 +5,12 @@
  * End-to-end tests with real LLM calls should be run manually.
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { ReviewResult, ReviewOptions } from './review-runner.ts';
+import { reviewChanges, reviewRunnerDeps, type ReviewOptions } from './review-runner.ts';
 
 // Test constants
 const TEST_DIR = join(tmpdir(), `review-runner-test-${Date.now()}`);
@@ -28,6 +28,7 @@ describe('review-runner', () => {
     if (existsSync(TEST_DIR)) {
       rmSync(TEST_DIR, { recursive: true, force: true });
     }
+    mock.restoreAll();
   });
 
   describe('Configuration Loading', () => {
@@ -105,6 +106,67 @@ describe('review-runner', () => {
       const source = readFileSync(new URL('./review-runner.ts', import.meta.url), 'utf-8');
 
       assert.match(source, /operatingMode:\s*options\.operatingMode/);
+    });
+
+    it('adds a deterministic blocker for unacknowledged cross-PR reverts', async () => {
+      mock.method(reviewRunnerDeps, 'getCurrentBranch', () => 'task/remove-strategy');
+      mock.method(reviewRunnerDeps, 'getGitDiff', () => 'diff --git a/strategy.txt b/strategy.txt');
+      mock.method(reviewRunnerDeps, 'assertReviewableDiff', () => undefined);
+      mock.method(reviewRunnerDeps, 'ensureClaudeAvailable', async () => undefined);
+      mock.method(reviewRunnerDeps, 'gatherReviewContextAsync', async () => ({
+        diff: 'diff --git a/strategy.txt b/strategy.txt',
+        plan: 'plan',
+        taskPacket: 'packet',
+        designContext: null,
+        metadata: {
+          branch: 'task/remove-strategy',
+          files: ['strategy.txt'],
+          hasUiChanges: false,
+        },
+      }));
+      mock.method(reviewRunnerDeps, 'execShellCommand', (command: string) => {
+        if (command.includes('git merge-base')) {
+          return 'base-sha\n';
+        }
+        if (command.includes('gh pr view')) {
+          return '';
+        }
+        if (command.includes('git log --format=%B')) {
+          return '';
+        }
+        throw new Error(`unexpected command: ${command}`);
+      });
+      mock.method(reviewRunnerDeps, 'detectCrossPrReverts', () => [
+        {
+          prNumber: 437,
+          title: 'Restore strategy explorer (#437)',
+          files: [{ path: 'strategy.txt', status: 'deleted', confidence: 'deleted' }],
+        },
+      ]);
+      mock.method(reviewRunnerDeps, 'runReview', async (context) => {
+        assert.match(context.diff, /Cross-PR revert detector findings/);
+        return {
+          verdict: 'ready',
+          codeReviewFindings: [],
+          metadata: {
+            branch: 'task/remove-strategy',
+            files: ['strategy.txt'],
+            hasUiChanges: false,
+            designContextAvailable: false,
+            uiVerificationRun: false,
+          },
+        };
+      });
+
+      const result = await reviewChanges({
+        repoDir: TEST_DIR,
+      });
+
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.codeReviewFindings.length, 1);
+      assert.equal(result.codeReviewFindings[0].severity, 'blocker');
+      assert.equal(result.codeReviewFindings[0].category, 'cross-pr-revert');
+      assert.match(result.codeReviewFindings[0].description, /Reverts #437/);
     });
   });
 

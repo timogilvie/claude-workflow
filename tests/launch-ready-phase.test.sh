@@ -39,9 +39,23 @@ extract_function() {
   local source_file="$1"
   local function_name="$2"
   awk -v name="$function_name" '
-    $0 ~ "^" name "\\(\\) \\{" { capture=1 }
-    capture { print }
-    capture && $0 == "}" { exit }
+    function brace_delta(line, opened, closed) {
+      opened = gsub(/\{/, "{", line)
+      closed = gsub(/\}/, "}", line)
+      return opened - closed
+    }
+
+    $0 ~ "^" name "\\(\\) \\{" {
+      capture=1
+      depth=0
+    }
+    capture {
+      print
+      depth += brace_delta($0)
+      if (depth == 0) {
+        exit
+      }
+    }
   ' "$source_file"
 }
 
@@ -52,6 +66,8 @@ extract_function "$MILL_SCRIPT" "clear_ready_conflict_attention" >> "$LAUNCH_FUN
 extract_function "$MILL_SCRIPT" "transient_mergeability_count" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "increment_transient_mergeability_count" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "write_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "cross_pr_revert_gate_allows_merge" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_transient_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "log_ready_failure_result" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "log_ready_unparseable_result" >> "$LAUNCH_FUNC_FILE"
@@ -198,9 +214,42 @@ run_launch_case() {
       mkdir -p "$1"
       printf "%s\n" "$2" > "$1/.needs-attention"
     }
+    cross_pr_revert_gate_allows_merge() {
+      case "$TEST_CASE" in
+        cross_pr_revert_blocked)
+          write_ready_attention_file "$2" "PR #$4 removes files from #437 without explicit acknowledgement. Affected files: strategy.txt."
+          log "status" "⛔ $1 → Cross-PR revert guard blocked ready phase for PR #$4"
+          return 1
+          ;;
+        cross_pr_revert_error)
+          write_ready_attention_file "$2" "Cross-PR revert guard failed for PR #$4."
+          log_error "  Cross-PR revert guard failed for $1 (PR #$4)"
+          return 1
+          ;;
+        *)
+          return 0
+          ;;
+      esac
+    }
     npx() {
       if [[ "${1:-}" != "tsx" ]]; then
         return 1
+      fi
+
+      if [[ "${2:-}" == "$TOOLS_DIR/check-cross-pr-reverts.ts" ]]; then
+        case "$TEST_CASE" in
+          cross_pr_revert_blocked)
+            printf "%s\n" "{\"blocked\":true,\"reverts\":[{\"prNumber\":437,\"files\":[{\"path\":\"strategy.txt\"}]}],\"acknowledged\":[],\"unacknowledged\":[{\"prNumber\":437,\"files\":[{\"path\":\"strategy.txt\"}]}]}"
+            return 1
+            ;;
+          cross_pr_revert_error)
+            return 2
+            ;;
+          *)
+            printf "%s\n" "{\"blocked\":false,\"reverts\":[],\"acknowledged\":[],\"unacknowledged\":[]}"
+            return 0
+            ;;
+        esac
       fi
 
       if [[ "${2:-}" == "$TOOLS_DIR/set-pr-ready-label.ts" ]]; then
@@ -331,6 +380,21 @@ check_contains "pending re-check logs launch at debug level" "$output" "logs=deb
 check_contains "pending re-check logs retry at debug level" "$output" "debug   CI checks pending for HOK-1300 (PR #304) - will retry"
 check_not_contains "pending re-check does not log launch at info level" "$output" "info   HOK-1300: Launching ready phase (PR #304)"
 check_not_contains "pending re-check does not log retry at info level" "$output" "info   CI checks pending for HOK-1300 (PR #304) - will retry"
+
+output="$(run_launch_case cross_pr_revert_blocked)"
+check_contains "cross-pr revert block returns failure" "$output" "rc=1"
+check_contains "cross-pr revert block writes attention" "$output" "PR #304 removes files from #437 without explicit acknowledgement."
+check_contains "cross-pr revert block includes file list" "$output" "Affected files: strategy.txt."
+check_contains "cross-pr revert block skips ready result writes" "$output" "stage_calls="
+check_contains "cross-pr revert block logs status" "$output" "Cross-PR revert guard blocked ready phase for PR #304"
+check_not_contains "cross-pr revert block does not run ready tool" "$output" "\"verdict\":"
+
+output="$(run_launch_case cross_pr_revert_error)"
+check_contains "cross-pr revert tool error returns failure" "$output" "rc=1"
+check_contains "cross-pr revert tool error writes attention" "$output" "Cross-PR revert guard failed for PR #304."
+check_contains "cross-pr revert tool error skips ready result writes" "$output" "stage_calls="
+check_contains "cross-pr revert tool error logs failure" "$output" "Cross-PR revert guard failed for HOK-1300 (PR #304)"
+check_not_contains "cross-pr revert error does not run ready tool" "$output" "\"verdict\":"
 
 output="$(run_launch_case unknown_first)"
 check_contains "unknown first poll returns retry code" "$output" "rc=4"
