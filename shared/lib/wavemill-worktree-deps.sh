@@ -85,7 +85,7 @@ _wd_is_world_writable() {
     return
   fi
   if perms="$(stat -c '%a' "$path" 2>/dev/null)"; then
-    [[ $((10#$perms & 2)) -ne 0 ]]
+    [[ $((8#$perms & 2)) -ne 0 ]]
     return
   fi
   return 1

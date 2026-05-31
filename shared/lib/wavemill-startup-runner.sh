@@ -473,6 +473,7 @@ startup_phase_failed() {
 # silently for non-JS repos.
 ensure_worktree_dependencies() {
   local wt_dir="$1" issue="$2"
+  command -v worktree_deps_ensure >/dev/null 2>&1 || return 0
   worktree_deps_ensure "$wt_dir" "$REPO_DIR" "$issue"
 }
 
