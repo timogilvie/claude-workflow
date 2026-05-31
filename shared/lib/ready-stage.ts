@@ -139,7 +139,6 @@ export interface ReadyStageConfig {
  */
 interface PRContext {
   prNumber: number;
-  diff: string;
   changedFiles: string[];
   labels: string[];
   branch: string;
@@ -497,11 +496,11 @@ function detectMigrationCycle(revisions: Map<string, MigrationRevision>): Migrat
 /**
  * Gather PR context from GitHub CLI.
  *
- * Fetches PR metadata, diff, and changed files list.
+ * Fetches PR metadata and changed files list.
  *
  * @param prNumber - PR number to check
  * @param repoDir - Repository directory
- * @returns PR context including diff and changed files
+ * @returns PR context including changed files
  * @throws Error if gh CLI fails or PR not found
  */
 async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRContext> {
@@ -512,12 +511,6 @@ async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRCon
       { encoding: 'utf-8', cwd: repoDir }
     );
     const prData = JSON.parse(prJson.toString());
-
-    // Fetch PR diff
-    const diff = readyStageDeps.execShellCommand(
-      `gh pr diff ${escapeShellArg(String(prNumber))}`,
-      { encoding: 'utf-8', cwd: repoDir }
-    ).toString();
 
     // Extract changed files from JSON
     const changedFiles: string[] = prData.files?.map((f: any) => f.path) || [];
@@ -545,7 +538,6 @@ async function gatherPRContext(prNumber: number, repoDir: string): Promise<PRCon
 
     return {
       prNumber,
-      diff,
       changedFiles,
       labels,
       branch: prData.headRefName,
