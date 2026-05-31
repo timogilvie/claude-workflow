@@ -48,7 +48,7 @@ describe('evaluateTask', () => {
     assert.ok(result.modelVersion);
     assert.equal(result.score, 0.85);
     assert.equal(result.scoreBand, 'Minor Feedback');
-    assert.equal(typeof result.timeSeconds, 'number');
+    assert.equal(result.timeSeconds, null);
     assert.ok(new Date(result.timestamp).toISOString() === result.timestamp);
     assert.equal(result.interventionRequired, false);
     assert.equal(result.interventionCount, 0);
@@ -85,6 +85,46 @@ describe('evaluateTask', () => {
     );
 
     assert.equal(result.scoreBand, 'Full Success');
+  });
+
+  it('preserves explicit null timeSeconds', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.85,
+      rationale: 'Duration was unknown but the implementation was good.',
+      interventionFlags: [],
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Handle missing timing metadata',
+        prReviewOutput: 'Clean diff',
+        timeSeconds: null,
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.equal(result.timeSeconds, null);
+  });
+
+  it('normalizes invalid timeSeconds values to null', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.85,
+      rationale: 'Timing input was invalid.',
+      interventionFlags: [],
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Handle invalid timing metadata',
+        prReviewOutput: 'Clean diff',
+        timeSeconds: Number.NaN,
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.equal(result.timeSeconds, null);
   });
 
   it('passes intervention metadata through to the result', async () => {

@@ -451,7 +451,7 @@ function buildHemRecord(
     modelVersion: 'v1',
     score: aggregateScore,
     scoreBand: getScoreBand(aggregateScore).label,
-    timeSeconds: 0,
+    timeSeconds: null,
     timestamp: new Date().toISOString(),
     interventionRequired: score.wavemill_router_diagnostics.intervention_count > 0,
     interventionCount: score.wavemill_router_diagnostics.intervention_count,

@@ -35,7 +35,7 @@ export interface ExportRow {
   score_band: string;
 
   // Timing
-  time_seconds: number;
+  time_seconds: number | null;
   planning_time_seconds: number | null;
   coding_time_seconds: number | null;
   review_time_seconds: number | null;
@@ -176,6 +176,11 @@ export function flattenRecord(
   const resourceVariants = summarizeResourceVariants(record);
   const rubric = record.rubricEval;
 
+  const timeSeconds =
+    typeof record.timeSeconds === 'number' && Number.isFinite(record.timeSeconds) && record.timeSeconds >= 0
+      ? record.timeSeconds
+      : null;
+
   return {
     id: record.id,
     timestamp: record.timestamp,
@@ -191,7 +196,7 @@ export function flattenRecord(
     score: record.score,
     score_band: record.scoreBand,
 
-    time_seconds: record.timeSeconds,
+    time_seconds: timeSeconds,
     planning_time_seconds: record.phaseDurationsSeconds?.planning ?? null,
     coding_time_seconds: record.phaseDurationsSeconds?.coding ?? null,
     review_time_seconds: record.phaseDurationsSeconds?.review ?? null,
