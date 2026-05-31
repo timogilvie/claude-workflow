@@ -462,44 +462,22 @@ startup_phase_failed() {
   startup_log "✗ $issue FAILED at $col: $message"
 }
 
-detect_worktree_dependency_install() {
-  local wt_dir="$1"
-  local pm="" lockfile="" install_cmd="" mode=""
-
-  if [[ -f "$wt_dir/pnpm-lock.yaml" ]]; then
-    pm="pnpm"; lockfile="pnpm-lock.yaml"; install_cmd="pnpm install --frozen-lockfile --prefer-offline"
-  elif [[ -f "$wt_dir/yarn.lock" ]]; then
-    pm="yarn"; lockfile="yarn.lock"; install_cmd="yarn install --frozen-lockfile --prefer-offline"
-  elif [[ -f "$wt_dir/package-lock.json" ]]; then
-    pm="npm"; lockfile="package-lock.json"; install_cmd="npm ci --prefer-offline"
-  else
-    mode="no-lockfile"
-  fi
-
-  if [[ -z "$mode" && -d "$wt_dir/node_modules" ]]; then
-    mode="node_modules-present"
-  fi
-
-  if [[ -z "$mode" ]] && ! command -v "$pm" >/dev/null 2>&1; then
-    mode="pm-missing"
-  fi
-
-  [[ -z "$mode" ]] && mode="install-required"
-  printf '%s|%s|%s|%s\n' "$mode" "$pm" "$lockfile" "$install_cmd"
-}
-
 write_startup_pane_wrapper() {
   local wrapper_path="$1" marker_path="$2" issue="$3" wt_dir="$4"
   local startup_log_file="${5:-}" status_log_file="${6:-}" startup_id="${7:-}"
+  local session="${8:-}" hook_protocol="${9:-}"
 
   cat > "$wrapper_path" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+[[ -f '$hook_protocol' ]] && source '$hook_protocol' 2>/dev/null || true
+
 issue='$issue'
 wt_dir='$wt_dir'
 marker_path='$marker_path'
-startup_id='${startup_id:-}'
 startup_log_file='${startup_log_file:-}'
 status_log_file='${status_log_file:-}'
 
@@ -508,13 +486,6 @@ log_line() {
   printf '%s\n' "\$line"
   [[ -n "\$startup_log_file" ]] && printf '%s\n' "\$line" >> "\$startup_log_file" 2>/dev/null || true
   [[ -n "\$status_log_file" ]] && printf '%s\n' "\$line" >> "\$status_log_file" 2>/dev/null || true
-}
-
-emit_progress() {
-  local col="\$1" state="\$2" detail="\${3:-}"
-  if [[ -n "\$startup_id" && "\${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && declare -F progress_update >/dev/null 2>&1; then
-    progress_update "\$startup_id" "\$col" "\$state" "\$detail" || true
-  fi
 }
 
 write_marker() {
@@ -555,36 +526,32 @@ source_dependency_context() {
     no-lockfile)
       log_line "[wavemill] No lockfile found; skipping dependency install."
       write_marker "ok" "no-lockfile"
-      emit_progress deps done
       return 0
       ;;
     node_modules-present)
       log_line "[wavemill] node_modules already present; skipping dependency install."
       write_marker "ok" "node_modules-present"
-      emit_progress deps done
       return 0
       ;;
     pm-missing)
       log_line "[wavemill] Warning: \$lockfile present but '\$pm' not on PATH; skipping dependency install."
       write_marker "ok" "pm-missing:\$pm"
-      emit_progress deps done
       return 0
       ;;
   esac
 
   log_line "[wavemill] Installing dependencies with \$pm..."
-  emit_progress deps running
+  wavemill_hook_write "working" "install_start" "dependency install" "startup" 2>/dev/null || true
   local rc=0
   (cd "\$wt_dir" && eval "\$install_cmd") || rc=\$?
   if [[ \$rc -ne 0 ]]; then
     log_line "[wavemill] Dependency install failed (\$pm, exit \$rc)."
-    emit_progress deps failed "dependency install"
+    wavemill_hook_write "error" "install_failed" "install-failed:\$pm:\$rc" "startup" 2>/dev/null || true
     write_marker "failed" "install-failed:\$pm:\$rc"
     exit "\$rc"
   fi
   log_line "[wavemill] Dependency install complete (\$pm)."
   write_marker "ok" "install-done:\$pm"
-  emit_progress deps done
 }
 
 source_dependency_context
@@ -723,7 +690,7 @@ startup_run_task_phases() {
   dep_marker="/tmp/wavemill-${SESSION}-${issue}.deps.marker"
   dep_wrapper="/tmp/wavemill-${SESSION}-${issue}-startup-wrapper.sh"
   rm -f "$dep_marker" "$dep_wrapper"
-  write_startup_pane_wrapper "$dep_wrapper" "$dep_marker" "$issue" "$wt_dir" "${STARTUP_TASK_LOG_FILE:-}" "$STATUS_LOG_FILE" "$startup_id"
+  write_startup_pane_wrapper "$dep_wrapper" "$dep_marker" "$issue" "$wt_dir" "${STARTUP_TASK_LOG_FILE:-}" "$STATUS_LOG_FILE" "$startup_id" "$SESSION" "$(dirname "$LIB_DIR")/hooks/wavemill-hook-protocol.sh"
   if [[ "$DRY_RUN" == "true" ]]; then
     startup_step "[3/7] Creating tmux window...   [DRY-RUN skip]"
   else

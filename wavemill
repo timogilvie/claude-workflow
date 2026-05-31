@@ -872,7 +872,7 @@ run_observer() {
     exit 1
   fi
 
-  echo -e "${CYAN}Starting Wavemill Observer...${NC}"
+  echo -e "${CYAN}Starting Wavemill Observer...${NC}" >&2
   exec npx tsx "$observer_tool" "$@"
 }
 
