@@ -5057,8 +5057,8 @@ launch_ready_phase() {
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
-    log "status" "  $issue: Restored ready labels for PR #$pr_number"
-    log "  $issue: Ready checks completed (verdict: ${verdict:-unknown})"
+    log "debug" "  $issue: Restored ready labels for PR #$pr_number"
+    log "debug" "  $issue: Ready checks completed (verdict: ${verdict:-unknown})"
     return 0
   fi
 
@@ -9027,7 +9027,7 @@ monitor_issue_state() {
               return 0
             fi
             set_window_attention_state "$WIN" "needs-user"
-            log "$ISSUE → Ready checks completed for PR #$pr_number"
+            log "status" "$ISSUE → Ready checks completed for PR #$pr_number"
             return 0
           fi
           # No PR created or ready phase disabled - mark for attention
