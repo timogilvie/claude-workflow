@@ -39,6 +39,7 @@ import {
   getDeepSeekProviderConfig,
   getDeepSeekLauncherConfig,
   getAgentsConfig,
+  getHokusaiRouterConfig,
   getHokusaiSubmissionConfig,
   getProvidersConfig,
   getReadyConfig,
@@ -1655,6 +1656,29 @@ test('getHokusaiSubmissionConfig returns hokusai section', () => {
     assert.equal(hokusaiConfig.enabled, false);
     assert.equal(hokusaiConfig.consentVersion, '2.0');
     assert.equal(hokusaiConfig.endpoint, 'https://example.com/hokusai');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getHokusaiRouterConfig returns router.hokusai section including apiKeyEnv', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: {
+        hokusai: {
+          endpoint: 'https://api.hokus.ai/api/v1/models/30/predict',
+          apiKeyEnv: 'CUSTOM_HOKUSAI_TOKEN',
+          timeout: 9000,
+        },
+      },
+    }));
+
+    const hokusaiConfig = getHokusaiRouterConfig(tmp);
+    assert.equal(hokusaiConfig.endpoint, 'https://api.hokus.ai/api/v1/models/30/predict');
+    assert.equal(hokusaiConfig.apiKeyEnv, 'CUSTOM_HOKUSAI_TOKEN');
+    assert.equal(hokusaiConfig.timeout, 9000);
   } finally {
     cleanUp(tmp);
   }

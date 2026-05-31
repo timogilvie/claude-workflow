@@ -1,4 +1,8 @@
-import type { HokusaiOutput, HokusaiPlanDepth, HokusaiCodeDepth, HokusaiReviewMode } from './hokusai-schema.ts';
+import type {
+  HokusaiModel30Response,
+  HokusaiOutput,
+  HokusaiRecommendedStrategy,
+} from './hokusai-schema.ts';
 import {
   CODE_TOKENS,
   PLAN_TOKENS,
@@ -10,19 +14,19 @@ import {
   type WorkflowRouteDecision,
 } from './workflow-router.ts';
 
-const PLAN_DEPTH_MAP: Record<HokusaiPlanDepth, PlanDepth> = {
+const PLAN_DEPTH_MAP: Record<'low' | 'medium' | 'high', PlanDepth> = {
   low: 'light',
   medium: 'medium',
   high: 'deep',
 };
 
-const CODE_DEPTH_MAP: Record<HokusaiCodeDepth, CodeDepth> = {
+const CODE_DEPTH_MAP: Record<'low' | 'medium' | 'high', CodeDepth> = {
   low: 'light',
   medium: 'medium',
   high: 'deep',
 };
 
-const REVIEW_MODE_MAP: Record<HokusaiReviewMode, Exclude<ReviewMode, 'none'>> = {
+const REVIEW_MODE_MAP: Record<'light' | 'standard' | 'deep', Exclude<ReviewMode, 'none'>> = {
   light: 'static',
   standard: 'llm',
   deep: 'static+llm',
@@ -37,11 +41,11 @@ function roundMoney(value: number): number {
 }
 
 function allocateStageCosts(
-  expectedTotalCost: number,
+  expectedTotalCost: number | undefined,
   fallbackCosts: [number, number, number],
 ): [number, number, number] {
   const fallbackTotal = fallbackCosts.reduce((sum, value) => sum + value, 0);
-  if (!Number.isFinite(expectedTotalCost) || expectedTotalCost < 0) {
+  if (!Number.isFinite(expectedTotalCost) || (expectedTotalCost as number) < 0) {
     return fallbackCosts;
   }
 
@@ -62,39 +66,65 @@ function allocateStageCosts(
   ];
 }
 
-export function fromHokusaiOutput(
-  output: HokusaiOutput,
-  options?: { repoDir?: string },
+function derivePlanDepth(strategy: HokusaiRecommendedStrategy): PlanDepth {
+  if (strategy.plan_depth) {
+    return PLAN_DEPTH_MAP[strategy.plan_depth];
+  }
+  return strategy.stages?.includes('plan') ? 'medium' : 'light';
+}
+
+function deriveCodeDepth(strategy: HokusaiRecommendedStrategy): CodeDepth {
+  if (strategy.code_depth) {
+    return CODE_DEPTH_MAP[strategy.code_depth];
+  }
+  return strategy.stages?.includes('code') ? 'medium' : 'light';
+}
+
+function deriveReviewMode(strategy: HokusaiRecommendedStrategy): Exclude<ReviewMode, 'none'> {
+  if (strategy.review_mode) {
+    return REVIEW_MODE_MAP[strategy.review_mode];
+  }
+  return strategy.stages?.includes('review') ? 'llm' : 'static';
+}
+
+export function fromHokusaiRecommendedStrategy(
+  strategy: HokusaiRecommendedStrategy,
+  options: {
+    repoDir?: string;
+    metadata?: HokusaiModel30Response['metadata'];
+    alternatives?: unknown;
+    tradeoffs?: unknown;
+    nearestNeighbors?: unknown;
+  } = {},
 ): WorkflowRouteDecision {
-  const planDepth = PLAN_DEPTH_MAP[output.route.plan_depth];
-  const codeDepth = CODE_DEPTH_MAP[output.route.code_depth];
-  const reviewRecommended = REVIEW_MODE_MAP[output.route.review_mode];
+  const planDepth = derivePlanDepth(strategy);
+  const codeDepth = deriveCodeDepth(strategy);
+  const reviewRecommended = deriveReviewMode(strategy);
   const fallbackCosts: [number, number, number] = [
-    estimateStageCost(output.route.planner_model, PLAN_TOKENS[planDepth], options?.repoDir),
-    estimateStageCost(output.route.coder_model, CODE_TOKENS[codeDepth], options?.repoDir),
-    estimateStageCost(output.route.reviewer_model, REVIEW_TOKENS[reviewRecommended], options?.repoDir),
+    estimateStageCost(strategy.planner_model, PLAN_TOKENS[planDepth], options.repoDir),
+    estimateStageCost(strategy.coder_model, CODE_TOKENS[codeDepth], options.repoDir),
+    estimateStageCost(strategy.reviewer_model, REVIEW_TOKENS[reviewRecommended], options.repoDir),
   ];
   const [expectedCostPlan, expectedCostCode, expectedCostReview] = allocateStageCosts(
-    output.predictions.expected_cost_usd,
+    strategy.estimated_cost_usd,
     fallbackCosts,
   );
 
   return {
-    planner: output.route.planner_model,
-    coder: output.route.coder_model,
-    reviewer: output.route.reviewer_model,
+    planner: strategy.planner_model,
+    coder: strategy.coder_model,
+    reviewer: strategy.reviewer_model,
     planDepth,
     codeDepth,
     reviewRecommended,
-    expectedSuccess: clamp(output.predictions.expected_success_probability, 0, 1),
+    expectedSuccess: clamp(strategy.estimated_success_under_budget ?? 0.5, 0, 1),
     expectedCostPlan,
     expectedCostCode,
     expectedCostReview,
-    confidence: clamp(output.predictions.confidence, 0, 1),
+    confidence: clamp(strategy.confidence ?? 0.5, 0, 1),
     reasoning: [
-      `Adapted from Hokusai output schema v${output.schema_version}.`,
-      `Review mapping: ${output.route.review_mode} -> ${reviewRecommended}.`,
-      'Stage costs are apportioned from Hokusai expected_cost_usd using router token heuristics.',
+      'Adapted from Hokusai Model 30 recommended_strategy.',
+      'Stage costs are apportioned from Hokusai estimated_cost_usd using router token heuristics.',
     ],
     signals: {
       taskType: 'feature',
@@ -103,5 +133,52 @@ export function fromHokusaiOutput(
       fileTypes: [],
       riskScore: 0,
     },
+    provenance: {
+      source: 'live',
+      inputKind: 'issue',
+      inputPath: '',
+      inputHash: '',
+      routedAt: new Date().toISOString(),
+      routerMode: 'normal',
+      ...(options.metadata?.request_id ? { requestId: String(options.metadata.request_id) } : {}),
+      ...(options.metadata?.inference_log_id ? { inferenceLogId: String(options.metadata.inference_log_id) } : {}),
+      ...(typeof strategy.estimated_duration_seconds === 'number' && Number.isFinite(strategy.estimated_duration_seconds)
+        ? { estimatedDurationSeconds: strategy.estimated_duration_seconds }
+        : {}),
+      ...(options.alternatives ? { alternatives: options.alternatives } : {}),
+      ...(options.tradeoffs ? { tradeoffs: options.tradeoffs } : {}),
+      ...(options.nearestNeighbors ? { nearestNeighbors: options.nearestNeighbors } : {}),
+    },
   };
+}
+
+export function fromHokusaiModel30Response(
+  response: HokusaiModel30Response,
+  options?: { repoDir?: string },
+): WorkflowRouteDecision {
+  return fromHokusaiRecommendedStrategy(response.predictions.recommended_strategy, {
+    repoDir: options?.repoDir,
+    metadata: response.metadata,
+    alternatives: response.predictions.alternatives,
+    tradeoffs: response.predictions.tradeoffs,
+    nearestNeighbors: response.predictions.nearest_neighbors,
+  });
+}
+
+export function fromHokusaiOutput(
+  output: HokusaiOutput,
+  options?: { repoDir?: string },
+): WorkflowRouteDecision {
+  return fromHokusaiRecommendedStrategy({
+    planner_model: output.route.planner_model,
+    coder_model: output.route.coder_model,
+    reviewer_model: output.route.reviewer_model,
+    plan_depth: output.route.plan_depth,
+    code_depth: output.route.code_depth,
+    review_mode: output.route.review_mode,
+    estimated_success_under_budget: output.predictions.expected_success_probability,
+    estimated_cost_usd: output.predictions.expected_cost_usd,
+    confidence: output.predictions.confidence,
+    stages: ['plan', 'code', 'review'],
+  }, options);
 }

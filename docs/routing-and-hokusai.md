@@ -104,6 +104,20 @@ Hokusai is optional. The default model is:
 - local learning from your own data
 - collective learning only when explicitly enabled
 
+### Live Prediction Contract
+
+Live Hokusai routing uses the public Model 30 prediction endpoint:
+
+`POST https://api.hokus.ai/api/v1/models/30/predict`
+
+Wavemill sends a nested `inputs` payload with:
+
+- `inputs.task.description`
+- `inputs.task.task_type`
+- optional `inputs.routing`, `inputs.context`, `inputs.workflow`, and `inputs.metadata`
+
+Wavemill expects `predictions.recommended_strategy` in the response and converts it into the internal `WorkflowRouteDecision`. If the request times out, auth fails, the API returns `4xx/5xx`, or the response shape is invalid, Wavemill classifies the failure and falls back to local routing.
+
 ### Submission Schema
 
 Outbound Hokusai training submissions include a `schema_version` field:
