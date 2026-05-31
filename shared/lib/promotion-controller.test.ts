@@ -33,8 +33,11 @@ function shellHarness(overrides: {
   checks?: Array<{ name: string; state?: string; conclusion?: string | null; bucket?: string | null }>;
   integrationTreeLog?: string;
   recentCommitLogByRange?: Record<string, string>;
+  recentPrCommitLogByRange?: Record<string, string>;
+  diffNameStatusByRefs?: Record<string, string>;
   integrationTree?: string;
   promotionTree?: string;
+  existingPathsByRef?: Record<string, string[]>;
   pushError?: string;
   promotionHeadPushError?: string;
   fetchError?: string;
@@ -204,6 +207,29 @@ function shellHarness(overrides: {
         if (range === 'previous-integration-sha..auto/integration') {
           return 'abc123 Add release guardrails (#101)\n';
         }
+      }
+
+      const recentPrCommitsMatch = cmd.match(/^git log --first-parent --max-count=10 --pretty=format:%H%x09%P%x09%s '([^']+\.\.auto\/integration)'$/);
+      if (recentPrCommitsMatch) {
+        const range = recentPrCommitsMatch[1];
+        return overrides.recentPrCommitLogByRange?.[range] ?? '';
+      }
+
+      const diffNameStatusMatch = cmd.match(/^git diff --name-status '([^']+)' '([^']+)'$/);
+      if (diffNameStatusMatch) {
+        const key = `${diffNameStatusMatch[1]}..${diffNameStatusMatch[2]}`;
+        return overrides.diffNameStatusByRefs?.[key] ?? '';
+      }
+
+      const catFileMatch = cmd.match(/^git cat-file -e '([^:']+):(.+)'(?: 2>\/dev\/null)?$/);
+      if (catFileMatch) {
+        const ref = catFileMatch[1];
+        const path = catFileMatch[2];
+        const existingPaths = overrides.existingPathsByRef?.[ref] ?? [];
+        if (existingPaths.includes(path)) {
+          return '';
+        }
+        throw new Error('missing path');
       }
 
       if (cmd.includes("gh pr list --head 'auto/integration' --base 'main' --state open --json number,url,body")) {
@@ -472,6 +498,37 @@ describe('runPromotion', () => {
       const parsedBody = JSON.parse(writtenBody).body;
       assert.match(parsedBody, /Promotion Summary/);
       assert.match(parsedBody, /PR #101: Add release guardrails/);
+      assert.doesNotMatch(parsedBody, /Surviving changes warnings/);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('adds surviving-change warnings when a recent integration PR is missing from the promoted tree', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
+      recentPrCommitLogByRange: {
+        'origin/main..auto/integration': 'merge437\tparent436\tRestore strategy explorer (#437)',
+      },
+      diffNameStatusByRefs: {
+        'parent436..merge437': 'A\tstrategy.txt\n',
+      },
+      mergedPrs: [{ number: 437, title: 'Restore strategy explorer', labels: [{ name: 'wavemill' }] }],
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        healthChecker: async () => ({ state: 'healthy' }),
+      });
+
+      assert.equal(result.status, 'updated');
+      const writtenBody = readFileSync('/tmp/promotion-body.txt', 'utf-8');
+      const parsedBody = JSON.parse(writtenBody).body;
+      assert.match(parsedBody, /Surviving changes warnings:/);
+      assert.match(parsedBody, /PR #437 is in integration history, but added files are absent from promoted tree/);
     } finally {
       repo.cleanup();
     }

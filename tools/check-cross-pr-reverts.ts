@@ -1,0 +1,132 @@
+#!/usr/bin/env -S npx tsx
+import { runTool, resolveRepoDir } from '../shared/lib/tool-runner.ts';
+import { fileURLToPath } from 'node:url';
+import { getIntegrationConfig, getReviewMergeConfig } from '../shared/lib/config.ts';
+import {
+  detectCrossPrReverts,
+  filterUnacknowledgedReverts,
+  parseRevertAcknowledgements,
+} from '../shared/lib/cross-pr-revert-detector.ts';
+import { escapeShellArg, execShellCommand } from '../shared/lib/shell-utils.ts';
+
+export const crossPrRevertCheckDeps = {
+  detectCrossPrReverts,
+  execShellCommand,
+};
+
+export interface CrossPrRevertCheckResult {
+  blocked: boolean;
+  disabled?: boolean;
+  reverts: ReturnType<typeof detectCrossPrReverts>;
+  acknowledged: ReturnType<typeof detectCrossPrReverts>;
+  unacknowledged: ReturnType<typeof detectCrossPrReverts>;
+}
+
+export function runCrossPrRevertCheck(input: {
+  repoDir: string;
+  baseRef?: string;
+  headRef?: string;
+  integrationRef?: string;
+  acknowledgementText?: string;
+  maxRecentMerges?: number;
+}): CrossPrRevertCheckResult {
+  const reviewMergeConfig = getReviewMergeConfig(input.repoDir);
+  if (!reviewMergeConfig.crossPrRevertCheck.enabled) {
+    return {
+      blocked: false,
+      disabled: true,
+      reverts: [],
+      acknowledged: [],
+      unacknowledged: [],
+    };
+  }
+
+  const integrationRef = input.integrationRef || getIntegrationConfig(input.repoDir).integrationBranch;
+  const baseRef = input.baseRef || String(crossPrRevertCheckDeps.execShellCommand(
+    `git merge-base ${escapeShellArg(integrationRef)} ${escapeShellArg(input.headRef || 'HEAD')}`,
+    { cwd: input.repoDir, encoding: 'utf-8' },
+  )).trim();
+  const headRef = input.headRef || 'HEAD';
+  const reverts = crossPrRevertCheckDeps.detectCrossPrReverts({
+    repoDir: input.repoDir,
+    baseRef,
+    headRef,
+    integrationRef,
+    maxRecentMerges: input.maxRecentMerges ?? reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
+  });
+  const acknowledgements = parseRevertAcknowledgements(
+    input.acknowledgementText ?? loadAcknowledgementText(input.repoDir),
+  );
+  const unacknowledged = filterUnacknowledgedReverts(reverts, acknowledgements);
+  const acknowledged = reverts.filter((finding) => acknowledgements.has(finding.prNumber));
+
+  return {
+    blocked: unacknowledged.length > 0,
+    reverts,
+    acknowledged,
+    unacknowledged,
+  };
+}
+
+function loadAcknowledgementText(repoDir: string): string {
+  try {
+    return String(crossPrRevertCheckDeps.execShellCommand(
+      'gh pr view --json body,title --jq \'.title + "\\n" + (.body // "")\'',
+      { cwd: repoDir, encoding: 'utf-8' },
+    ));
+  } catch {
+    return '';
+  }
+}
+
+function printResultAndExit(result: CrossPrRevertCheckResult): never {
+  console.log(JSON.stringify(result, null, 2));
+  process.exit(result.blocked ? 1 : 0);
+}
+
+const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  runTool({
+    name: 'check-cross-pr-reverts',
+    description: 'Detect unacknowledged deletions of files introduced by other recent integration PRs',
+    options: {
+      'repo-dir': { type: 'string', description: 'Repository directory' },
+      'base-ref': { type: 'string', description: 'Explicit base ref for diffing the candidate branch' },
+      'head-ref': { type: 'string', description: 'Head ref to inspect (default: HEAD)' },
+      'integration-ref': { type: 'string', description: 'Integration branch/ref (default from config)' },
+      ack: { type: 'string', description: 'Explicit acknowledgement text to parse instead of PR metadata' },
+      'max-recent-merges': { type: 'string', description: 'Override scan depth for recent integration commits' },
+    },
+    examples: [
+      'npx tsx tools/check-cross-pr-reverts.ts --repo-dir .',
+      'npx tsx tools/check-cross-pr-reverts.ts --repo-dir . --head-ref HEAD --base-ref abc123',
+    ],
+    async run({ args }) {
+      try {
+        const repoDir = resolveRepoDir(args['repo-dir'] as string | undefined);
+        const maxRecentMerges = args['max-recent-merges']
+          ? Number.parseInt(String(args['max-recent-merges']), 10)
+          : undefined;
+        if (args['max-recent-merges'] && (!Number.isInteger(maxRecentMerges) || maxRecentMerges <= 0)) {
+          throw new Error('--max-recent-merges must be a positive integer');
+        }
+
+        const result = runCrossPrRevertCheck({
+          repoDir,
+          baseRef: args['base-ref'] as string | undefined,
+          headRef: args['head-ref'] as string | undefined,
+          integrationRef: args['integration-ref'] as string | undefined,
+          acknowledgementText: args.ack as string | undefined,
+          maxRecentMerges,
+        });
+
+        printResultAndExit(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(message);
+        process.exit(2);
+      }
+    },
+  });
+}

@@ -1,6 +1,7 @@
 import { writeFileSync } from 'fs';
 import { confirm } from './cli-prompt.ts';
 import { getIntegrationConfig, getPromotionConfig } from './config.ts';
+import { detectSurvivingChangeWarnings, type CrossPrRevertFinding } from './cross-pr-revert-detector.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import { errorMessage } from './error-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
@@ -399,6 +400,14 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
     options.repoDir,
     shellRunner,
   );
+  const survivingChangeWarnings = detectSurvivingChangeWarnings({
+    repoDir: options.repoDir,
+    baseRef: comparisonBase,
+    headRef: effectiveHeadTip,
+    integrationRef: integrationBranch,
+    maxRecentMerges: RECENT_COMMIT_LIMIT,
+    shellRunner,
+  });
   const nextBody = updatePromotionSection(
     currentPr?.body ?? '',
     renderPromotionSection({
@@ -408,6 +417,7 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
       promotionNote,
       recentPrs,
       recentCommits,
+      survivingChangeWarnings,
     }),
   );
 
@@ -1482,6 +1492,7 @@ function renderPromotionSection(input: {
   promotionNote?: string;
   recentPrs: MergedPrSummary[];
   recentCommits: string[];
+  survivingChangeWarnings: CrossPrRevertFinding[];
 }): string {
   const lines = [
     PROMOTION_SECTION_BEGIN,
@@ -1514,7 +1525,22 @@ function renderPromotionSection(input: {
     lines.push('');
   }
 
-  if (input.recentPrs.length === 0 && input.recentCommits.length === 0) {
+  if (input.survivingChangeWarnings.length > 0) {
+    lines.push('Surviving changes warnings:');
+    for (const warning of input.survivingChangeWarnings) {
+      lines.push(
+        `- PR #${warning.prNumber} is in integration history, but added files are absent from promoted tree: ` +
+        warning.files.map((file) => file.path).join(', '),
+      );
+    }
+    lines.push('');
+  }
+
+  if (
+    input.recentPrs.length === 0 &&
+    input.recentCommits.length === 0 &&
+    input.survivingChangeWarnings.length === 0
+  ) {
     lines.push('No recent merged Wavemill PRs detected.');
     lines.push('');
   }
