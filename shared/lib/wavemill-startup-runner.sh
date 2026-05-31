@@ -466,15 +466,109 @@ startup_phase_failed() {
   startup_log "✗ $issue FAILED at $col: $message"
 }
 
-# Install JS deps in a worktree when a lockfile is present and node_modules is
-# missing. Worktrees created by `git worktree add` start without node_modules,
-# so test scripts that depend on local .bin binaries (jest, ts-node, etc.) fail
-# unless we install. Detects the package manager from the lockfile and skips
-# silently for non-JS repos.
-ensure_worktree_dependencies() {
+# Detect which package manager (if any) needs to run for a fresh worktree.
+# Outputs three lines: pm, lockfile, install_cmd.
+# Returns 1 when no install is needed (no lockfile, or node_modules already
+# present, or the package manager binary is missing).
+# Callers can capture stdout with process substitution or mapfile.
+_detect_worktree_pm() {
   local wt_dir="$1" issue="$2"
-  command -v worktree_deps_ensure >/dev/null 2>&1 || return 0
-  worktree_deps_ensure "$wt_dir" "$REPO_DIR" "$issue"
+  local pm="" lockfile="" install_cmd=""
+
+  if [[ -f "$wt_dir/pnpm-lock.yaml" ]]; then
+    pm="pnpm"; lockfile="pnpm-lock.yaml"
+    install_cmd="pnpm install --frozen-lockfile --prefer-offline"
+  elif [[ -f "$wt_dir/yarn.lock" ]]; then
+    pm="yarn"; lockfile="yarn.lock"
+    install_cmd="yarn install --frozen-lockfile --prefer-offline"
+  elif [[ -f "$wt_dir/package-lock.json" ]]; then
+    pm="npm"; lockfile="package-lock.json"
+    install_cmd="npm ci --prefer-offline"
+  else
+    return 1
+  fi
+
+  if [[ -d "$wt_dir/node_modules" ]]; then
+    return 1
+  fi
+
+  if ! command -v "$pm" >/dev/null 2>&1; then
+    startup_log "  Warning: $lockfile present but '$pm' not on PATH; skipping dep install"
+    return 1
+  fi
+
+  printf '%s\n' "$pm" "$lockfile" "$install_cmd"
+  return 0
+}
+
+# Run the package manager install inside the already-created tmux pane so that
+# the user sees live output while the runner waits for a per-task sentinel file.
+# Args: wt_dir  issue  session  win  pm  install_cmd
+# Returns 0 on success, 1 on failure or timeout.
+ensure_worktree_dependencies_in_pane() {
+  local wt_dir="$1" issue="$2" session="$3" win="$4" pm="$5" install_cmd="$6"
+
+  local sentinel_file="/tmp/wavemill-${session}-${issue}-deps.exit"
+  local sentinel_script="/tmp/wavemill-${session}-${issue}-deps.sh"
+  rm -f "$sentinel_file"
+
+  local wt_dir_q install_cmd_q sentinel_file_q
+  printf -v wt_dir_q '%q' "$wt_dir"
+  printf -v install_cmd_q '%q' "$install_cmd"
+  printf -v sentinel_file_q '%q' "$sentinel_file"
+
+  cat > "$sentinel_script" <<INSTALL_EOF
+#!/usr/bin/env bash
+printf '\\n[wavemill] Installing dependencies ($pm)...\\n'
+cd $wt_dir_q
+$install_cmd
+__wavemill_rc=\$?
+printf '%s\\n' "\$__wavemill_rc" > $sentinel_file_q
+if [[ "\$__wavemill_rc" -ne 0 ]]; then
+  printf '[wavemill] ✗ Dependency install FAILED (exit %s)\\n' "\$__wavemill_rc"
+  printf '[wavemill] Task will not be launched. Retry with: wavemill mill\\n'
+else
+  printf '[wavemill] ✓ Dependencies installed successfully\\n'
+fi
+INSTALL_EOF
+  chmod +x "$sentinel_script"
+
+  local script_q
+  printf -v script_q '%q' "$sentinel_script"
+  tmux send-keys -t "$session:$win" "bash $script_q" Enter
+
+  # Poll up to 5 minutes (600 × 0.5 s) for the sentinel.
+  local poll_count=0 timeout_polls=600
+  while (( poll_count < timeout_polls )); do
+    [[ -f "$sentinel_file" ]] && break
+    sleep 0.5
+    poll_count=$(( poll_count + 1 ))
+  done
+
+  rm -f "$sentinel_script"
+
+  if [[ ! -f "$sentinel_file" ]]; then
+    local elapsed=$(( poll_count / 2 ))
+    startup_log "✗ $issue: dependency install timed out after ${elapsed}s"
+    startup_log "  See the task pane for details"
+    [[ -n "${STARTUP_TASK_LOG_FILE:-}" ]] && \
+      printf '  %s install timed out after %ss - see task pane\n' "$pm" "$elapsed" >> "$STARTUP_TASK_LOG_FILE"
+    return 1
+  fi
+
+  local rc
+  rc="$(cat "$sentinel_file")"
+  rm -f "$sentinel_file"
+
+  if [[ "${rc:-1}" -ne 0 ]]; then
+    startup_log "✗ $issue FAILED at step [3/7]: $pm install (exit $rc)"
+    startup_log "  See the task pane for full output"
+    [[ -n "${STARTUP_TASK_LOG_FILE:-}" ]] && \
+      printf '  %s install failed (exit %s) - see task pane\n' "$pm" "$rc" >> "$STARTUP_TASK_LOG_FILE"
+    return 1
+  fi
+
+  return 0
 }
 
 startup_run_task_phases() {
@@ -599,20 +693,13 @@ startup_run_task_phases() {
 
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" worktree done
 
-  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps running
-  if ! ensure_worktree_dependencies "$wt_dir" "$issue"; then
-    [[ -n "${created_new:-}" && "$created_new" == "true" ]] && \
-      git worktree remove --force "$wt_dir" >/dev/null 2>&1 || true
-    startup_phase_failed "$startup_id" deps "$issue" "dependency install"
-    return 1
-  fi
-  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps done
-
-  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent running
   AGENT_CMD="$task_agent"
   pretrust_directory "$wt_dir"
   startup_step "[2/7] Pre-trusting directory... ✓"
 
+  # Create the task tmux window immediately after the worktree is ready so all
+  # task windows appear before any dependency installs begin. The deps install
+  # runs inside this pane so users see live progress.
   win="$issue-$slug"
   if [[ "$DRY_RUN" == "true" ]]; then
     startup_step "[3/7] Creating tmux window...   [DRY-RUN skip]"
@@ -625,6 +712,40 @@ startup_run_task_phases() {
     created_window=true
     startup_step "[3/7] Creating tmux window...   ✓"
   fi
+
+  # Detect whether a dependency install is needed, then run it inside the task
+  # pane so users see live output. The agent is not launched until the install
+  # succeeds.
+  local _deps_pm="" _deps_lockfile="" _deps_cmd="" _deps_needed=false
+  local _detect_out
+  if _detect_out="$(_detect_worktree_pm "$wt_dir" "$issue")"; then
+    _deps_pm="$(printf '%s' "$_detect_out" | sed -n '1p')"
+    _deps_lockfile="$(printf '%s' "$_detect_out" | sed -n '2p')"
+    _deps_cmd="$(printf '%s' "$_detect_out" | sed -n '3p')"
+    _deps_needed=true
+  fi
+
+  if [[ "$_deps_needed" == "true" ]]; then
+    [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps running
+    if [[ "$DRY_RUN" == "true" ]]; then
+      startup_step "[3.5/7] Installing deps ($_deps_pm)... [DRY-RUN skip]"
+      [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps done
+    elif ! ensure_worktree_dependencies_in_pane "$wt_dir" "$issue" "$SESSION" "$win" "$_deps_pm" "$_deps_cmd"; then
+      # Keep the window open so the user can inspect the install failure.
+      # Only remove a freshly created worktree if we can't reuse it later.
+      [[ -n "${created_new:-}" && "$created_new" == "true" ]] && \
+        git worktree remove --force "$wt_dir" >/dev/null 2>&1 || true
+      startup_phase_failed "$startup_id" deps "$issue" "dependency install"
+      return 1
+    else
+      [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps done
+      startup_step "[3.5/7] Installing deps ($_deps_pm)... ✓"
+    fi
+  else
+    [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps done
+  fi
+
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent running
 
   packet_content="$(cat "$task_packet_file" 2>/dev/null || true)"
   issue_json="$(cat "$issue_json_file" 2>/dev/null || echo '{}')"
