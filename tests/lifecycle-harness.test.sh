@@ -142,6 +142,7 @@ harness_extract_real_functions() {
     mark_blocked_completion_announced \
     blocked_completion_current_head \
     blocked_completion_commit_matches_head \
+    blocked_completion_auto_allowed_dirty_path \
     blocked_completion_worktree_clean_for_auto \
     blocked_completion_validate_for_advance \
     complete_coding_advance \
@@ -1052,6 +1053,47 @@ EOF
   check_file_absent "auto blocked completion: no dedupe marker written" "$repo/features/$slug/.blocked-completion-announced"
 }
 
+test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise() {
+  local slug="coding-blocked-metadata-noise"
+  local issue="HOK-1758-METADATA"
+  local repo tick commit feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  cat > "$feature_dir/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  printf '# Plan\n' > "$feature_dir/plan.md"
+  printf '# Task Packet\n' > "$feature_dir/task-packet.md"
+  printf '# Header\n' > "$feature_dir/task-packet-header.md"
+  printf '# Details\n' > "$feature_dir/task-packet-details.md"
+  printf '{"issue":"%s"}\n' "$issue" > "$feature_dir/selected-task.json"
+  printf '{"prompt":"registry"}\n' > "$repo/prompt-registry.jsonl"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "metadata noise: phase remains coding for handoff" "coding" "$(kv_value "$tick" phase)"
+  check_eq "metadata noise: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "metadata noise: attention cleared" "clear" "$(kv_value "$tick" attention)"
+  check_contains "metadata noise: auto-advance log emitted" "$(kv_value "$tick" log_output)" "[auto-advance] $issue advancing coding to review"
+  check_file_exists "metadata noise: audit artifact written" "$feature_dir/.coding-auto-advance.json"
+  check_file_exists "metadata noise: coding complete marker written" "$feature_dir/.coding-complete"
+  check_file_absent "metadata noise: no dedupe marker written" "$feature_dir/.blocked-completion-announced"
+}
+
 test_coding_blocked_completion_dedupes_same_artifact() {
   local slug="coding-blocked-completion-dedupe"
   local issue="HOK-1642-DEDUP"
@@ -1247,6 +1289,38 @@ EOF
   check_eq "dirty worktree: stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
   check_eq "dirty worktree: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
   check_file_absent "dirty worktree: no auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+}
+
+test_coding_blocked_completion_unknown_feature_file_does_not_auto_advance() {
+  local slug="coding-blocked-unknown-feature-file"
+  local issue="HOK-1758-UNKNOWN"
+  local repo tick commit feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  printf 'console.log("noise");\n' > "$feature_dir/extra.ts"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  cat > "$feature_dir/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "unknown feature file: stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "unknown feature file: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_file_absent "unknown feature file: no auto audit written" "$feature_dir/.coding-auto-advance.json"
+  check_file_absent "unknown feature file: no coding complete marker" "$feature_dir/.coding-complete"
 }
 
 test_coding_blocked_completion_dedupes_when_stat_unavailable() {
