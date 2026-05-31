@@ -98,10 +98,6 @@ export WAVEMILL_DRY_RUN_BACKLOG_FILE="$BACKLOG_FILE"
 export WAVEMILL_DRY_RUN_PLAN_OUT="$LAUNCH_PLAN_FILE"
 export GH_REPO="acme/wavemill"
 
-# Some BSD mktemp implementations treat this template literally; clear stale
-# files so wavemill's self-copy bootstrap cannot collide in fixture runs.
-rm -f /tmp/wavemill-mill-XXXXXX.sh
-
 set +e
 (
   cd "$REPO_DIR"
