@@ -50,6 +50,33 @@ make_mock_bin() {
 set -euo pipefail
 printf 'tmux %s\n' "$*" >> "${MOCK_TMUX_LOG:?}"
 case "${1:-}" in
+  new-window)
+    cwd=""
+    cmd=""
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -c)
+          cwd="${2:-}"
+          shift 2
+          ;;
+        -*)
+          shift
+          ;;
+        *)
+          cmd="$1"
+          shift
+          ;;
+      esac
+    done
+    if [[ -n "$cmd" ]]; then
+      if [[ -n "$cwd" ]]; then
+        (cd "$cwd" && "$cmd") || true
+      else
+        "$cmd" || true
+      fi
+    fi
+    ;;
   list-panes)
     printf '0\n'
     ;;
@@ -120,6 +147,20 @@ cat >/dev/null || true
 exit 0
 EOF
   chmod +x "$dir/claude"
+
+  cat > "$dir/pnpm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'pnpm %s\n' "$*" >> "${MOCK_PNPM_LOG:?}"
+if [[ -n "${MOCK_PNPM_SLEEP_SEC:-}" ]]; then
+  sleep "${MOCK_PNPM_SLEEP_SEC}"
+fi
+if [[ "${MOCK_PNPM_FAIL:-0}" == "1" ]]; then
+  exit 13
+fi
+exit 0
+EOF
+  chmod +x "$dir/pnpm"
 }
 
 write_plan() {
@@ -259,7 +300,8 @@ export MOCK_TMUX_LOG="$TMP_ROOT/tmux.log"
 export MOCK_GIT_LOG="$TMP_ROOT/git.log"
 export MOCK_NPX_LOG="$TMP_ROOT/npx.log"
 export MOCK_LINEAR_LOG="$TMP_ROOT/linear.log"
-touch "$MOCK_TMUX_LOG" "$MOCK_GIT_LOG" "$MOCK_NPX_LOG" "$MOCK_LINEAR_LOG"
+export MOCK_PNPM_LOG="$TMP_ROOT/pnpm.log"
+touch "$MOCK_TMUX_LOG" "$MOCK_GIT_LOG" "$MOCK_NPX_LOG" "$MOCK_LINEAR_LOG" "$MOCK_PNPM_LOG"
 
 STATE_DIR="$TEST_REPO/.wavemill"
 STATE_FILE="$STATE_DIR/workflow-state.json"
@@ -361,6 +403,8 @@ printf 'stale plan\n' > "$STALE_FEATURE_DIR/plan.md"
 touch "$STALE_FEATURE_DIR/.plan-approved" "$STALE_FEATURE_DIR/.coding-complete"
 
 SUCCESS_OUTPUT="$TMP_ROOT/success-output.txt"
+mkdir -p "$TEST_REPO/worktrees/alpha-task"
+printf 'lock\n' > "$TEST_REPO/worktrees/alpha-task/pnpm-lock.yaml"
 bash "$RUNNER_SCRIPT" "$SUCCESS_PLAN" > "$SUCCESS_OUTPUT" 2>&1
 
 if wait_for_jq_match '.tasks["HOK-1001"].phase == "planning"' "$STATE_FILE"; then
@@ -392,6 +436,14 @@ if grep -q 'HOK-1001|In Progress' "$MOCK_LINEAR_LOG"; then
   pass "startup runner updates Linear after a successful launch"
 else
   fail "startup runner did not update Linear for the successful task"
+fi
+
+if awk '/tmux new-window -d -t startup-success -n HOK-1001-alpha-task/{tw=NR} /pnpm install --frozen-lockfile --prefer-offline/{pi=NR} END{exit !(tw>0 && pi>0 && tw<pi)}' "$MOCK_TMUX_LOG" "$MOCK_PNPM_LOG"; then
+  pass "startup runner creates the tmux pane before dependency install starts"
+else
+  fail "startup runner did not create pane before dependency install"
+  dump_file_on_failure "tmux-log" "$MOCK_TMUX_LOG"
+  dump_file_on_failure "pnpm-log" "$MOCK_PNPM_LOG"
 fi
 
 if [[ -f "$SUCCESS_MONITOR_ENV" ]] && grep -q '^TASKS_FILE=' "$SUCCESS_MONITOR_ENV"; then
@@ -464,6 +516,7 @@ fi
 printf '{"session":"startup-test","started":"2026-04-12T00:00:00Z","tasks":{}}\n' > "$STATE_FILE"
 : > "$MOCK_LINEAR_LOG"
 : > "$MOCK_TMUX_LOG"
+: > "$MOCK_PNPM_LOG"
 FAIL_PLAN="$TMP_ROOT/failure-plan.json"
 FAIL_MONITOR_ENV="$TMP_ROOT/failure-monitor.env"
 FAIL_MONITOR_SCRIPT="$TMP_ROOT/failure-monitor.sh"
@@ -472,26 +525,32 @@ FAIL_LAUNCHED="$TMP_ROOT/failure-launched.txt"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAIL_MONITOR_SCRIPT"
 chmod +x "$FAIL_MONITOR_SCRIPT"
 write_plan "$FAIL_PLAN" "$TEST_REPO" "$STATE_DIR" "$STATE_FILE" "startup-failure" "$FAIL_MONITOR_ENV" "$FAIL_MONITOR_SCRIPT" "$FAIL_STATUS_LOG" "$FAIL_LAUNCHED" "[$TASK_ONE_JSON,$TASK_TWO_JSON]"
+mkdir -p "$TEST_REPO/worktrees/alpha-task"
+printf 'lock\n' > "$TEST_REPO/worktrees/alpha-task/pnpm-lock.yaml"
+export MOCK_PNPM_FAIL=1
 
 FAIL_OUTPUT="$TMP_ROOT/failure-output.txt"
 export FAIL_WORKTREE_MATCH="broken-task"
 WAVEMILL_NO_PROGRESS=0 bash "$RUNNER_SCRIPT" "$FAIL_PLAN" > "$FAIL_OUTPUT" 2>&1
 unset FAIL_WORKTREE_MATCH
+unset MOCK_PNPM_FAIL
 
-if jq -e '.tasks["HOK-1001"]' "$STATE_FILE" >/dev/null 2>&1 \
+if ! jq -e '.tasks["HOK-1001"]' "$STATE_FILE" >/dev/null 2>&1 \
   && ! jq -e '.tasks["HOK-1002"]' "$STATE_FILE" >/dev/null 2>&1; then
-  pass "startup runner isolates per-task startup failures without orphaned state"
+  pass "startup runner removes task state when startup fails before agent launch"
 else
   fail "startup runner left orphaned workflow state after a task startup failure"
 fi
 
 if grep -q 'HOK-1001|In Progress' "$MOCK_LINEAR_LOG" && ! grep -q 'HOK-1002|In Progress' "$MOCK_LINEAR_LOG"; then
-  pass "startup runner only updates Linear for tasks that fully launched"
+  fail "startup runner updated Linear for a dependency-failed task launch"
+elif ! grep -q 'HOK-1001|In Progress' "$MOCK_LINEAR_LOG" && ! grep -q 'HOK-1002|In Progress' "$MOCK_LINEAR_LOG"; then
+  pass "startup runner skips Linear updates when dependency install blocks launch"
 else
-  fail "startup runner updated Linear for a failed task launch"
+  fail "startup runner applied unexpected Linear updates after dependency failure"
 fi
 
-if grep -q 'FAILED at worktree: worktree creation' "$FAIL_STATUS_LOG" && grep -q '── Task 2/2: HOK-1002' "$FAIL_STATUS_LOG"; then
+if grep -q 'FAILED at deps: dependency install' "$FAIL_STATUS_LOG"; then
   pass "startup failures stay visible in the tmux startup log output"
 else
   fail "startup failure logging is missing from the control-pane output"

@@ -462,51 +462,133 @@ startup_phase_failed() {
   startup_log "✗ $issue FAILED at $col: $message"
 }
 
-# Install JS deps in a worktree when a lockfile is present and node_modules is
-# missing. Worktrees created by `git worktree add` start without node_modules,
-# so test scripts that depend on local .bin binaries (jest, ts-node, etc.) fail
-# unless we install. Detects the package manager from the lockfile and skips
-# silently for non-JS repos.
-ensure_worktree_dependencies() {
-  local wt_dir="$1" issue="$2"
-  local pm="" lockfile="" install_cmd=""
+detect_worktree_dependency_install() {
+  local wt_dir="$1"
+  local pm="" lockfile="" install_cmd="" mode=""
 
   if [[ -f "$wt_dir/pnpm-lock.yaml" ]]; then
-    pm="pnpm"; lockfile="pnpm-lock.yaml"
-    install_cmd="pnpm install --frozen-lockfile --prefer-offline"
+    pm="pnpm"; lockfile="pnpm-lock.yaml"; install_cmd="pnpm install --frozen-lockfile --prefer-offline"
   elif [[ -f "$wt_dir/yarn.lock" ]]; then
-    pm="yarn"; lockfile="yarn.lock"
-    install_cmd="yarn install --frozen-lockfile --prefer-offline"
+    pm="yarn"; lockfile="yarn.lock"; install_cmd="yarn install --frozen-lockfile --prefer-offline"
   elif [[ -f "$wt_dir/package-lock.json" ]]; then
-    pm="npm"; lockfile="package-lock.json"
-    install_cmd="npm ci --prefer-offline"
+    pm="npm"; lockfile="package-lock.json"; install_cmd="npm ci --prefer-offline"
   else
-    return 0
+    mode="no-lockfile"
   fi
 
-  if [[ -d "$wt_dir/node_modules" ]]; then
-    return 0
+  if [[ -z "$mode" && -d "$wt_dir/node_modules" ]]; then
+    mode="node_modules-present"
   fi
 
-  if ! command -v "$pm" >/dev/null 2>&1; then
-    startup_log "  Warning: $lockfile present but '$pm' not on PATH; skipping dep install"
-    return 0
+  if [[ -z "$mode" ]] && ! command -v "$pm" >/dev/null 2>&1; then
+    mode="pm-missing"
   fi
 
-  startup_step "[1.5/7] Installing deps ($pm)..."
-  local install_stderr
-  install_stderr="$(mktemp)"
-  if ! (cd "$wt_dir" && eval "$install_cmd") >/dev/null 2>"$install_stderr"; then
-    startup_log "✗ $issue FAILED at step [1.5/7]: $pm install"
-    [[ -s "$install_stderr" ]] && tail -n 40 "$install_stderr" | sed 's/^/  '"$pm"': /' >> "$STATUS_LOG_FILE"
-    [[ -s "$install_stderr" && -n "${STARTUP_TASK_LOG_FILE:-}" ]] && tail -n 40 "$install_stderr" | sed 's/^/  '"$pm"': /' >> "$STARTUP_TASK_LOG_FILE"
-    rm -f "$install_stderr"
-    startup_log "  Task will not be launched. Retry with: wavemill mill"
-    return 1
+  [[ -z "$mode" ]] && mode="install-required"
+  printf '%s|%s|%s|%s\n' "$mode" "$pm" "$lockfile" "$install_cmd"
+}
+
+write_startup_pane_wrapper() {
+  local wrapper_path="$1" marker_path="$2" issue="$3" wt_dir="$4"
+  local startup_log_file="${5:-}" status_log_file="${6:-}" startup_id="${7:-}"
+
+  cat > "$wrapper_path" <<EOF
+#!/opt/homebrew/bin/bash
+set -Eeuo pipefail
+
+issue='$issue'
+wt_dir='$wt_dir'
+marker_path='$marker_path'
+startup_id='${startup_id:-}'
+startup_log_file='${startup_log_file:-}'
+status_log_file='${status_log_file:-}'
+
+log_line() {
+  local line="\$*"
+  printf '%s\n' "\$line"
+  [[ -n "\$startup_log_file" ]] && printf '%s\n' "\$line" >> "\$startup_log_file" 2>/dev/null || true
+  [[ -n "\$status_log_file" ]] && printf '%s\n' "\$line" >> "\$status_log_file" 2>/dev/null || true
+}
+
+emit_progress() {
+  local col="\$1" state="\$2" detail="\${3:-}"
+  if [[ -n "\$startup_id" && "\${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && declare -F progress_update >/dev/null 2>&1; then
+    progress_update "\$startup_id" "\$col" "\$state" "\$detail" || true
   fi
-  rm -f "$install_stderr"
-  startup_step "[1.5/7] Installing deps ($pm)... ✓"
-  return 0
+}
+
+write_marker() {
+  local status="\$1" detail="\${2:-}"
+  local tmp_file
+  tmp_file="\$(mktemp "\${marker_path}.tmp.XXXXXX")" || exit 1
+  {
+    printf 'status=%s\n' "\$status"
+    printf 'detail=%s\n' "\$detail"
+  } > "\$tmp_file"
+  mv "\$tmp_file" "\$marker_path"
+}
+
+source_dependency_context() {
+  local mode pm lockfile install_cmd
+  mode=""
+  pm=""
+  lockfile=""
+  install_cmd=""
+  if [[ -f "\$wt_dir/pnpm-lock.yaml" ]]; then
+    pm="pnpm"; lockfile="pnpm-lock.yaml"; install_cmd="pnpm install --frozen-lockfile --prefer-offline"
+  elif [[ -f "\$wt_dir/yarn.lock" ]]; then
+    pm="yarn"; lockfile="yarn.lock"; install_cmd="yarn install --frozen-lockfile --prefer-offline"
+  elif [[ -f "\$wt_dir/package-lock.json" ]]; then
+    pm="npm"; lockfile="package-lock.json"; install_cmd="npm ci --prefer-offline"
+  else
+    mode="no-lockfile"
+  fi
+  if [[ -z "\$mode" && -d "\$wt_dir/node_modules" ]]; then
+    mode="node_modules-present"
+  fi
+  if [[ -z "\$mode" ]] && ! command -v "\$pm" >/dev/null 2>&1; then
+    mode="pm-missing"
+  fi
+  [[ -z "\$mode" ]] && mode="install-required"
+
+  case "\$mode" in
+    no-lockfile)
+      log_line "[wavemill] No lockfile found; skipping dependency install."
+      write_marker "ok" "no-lockfile"
+      emit_progress deps done
+      return 0
+      ;;
+    node_modules-present)
+      log_line "[wavemill] node_modules already present; skipping dependency install."
+      write_marker "ok" "node_modules-present"
+      emit_progress deps done
+      return 0
+      ;;
+    pm-missing)
+      log_line "[wavemill] Warning: \$lockfile present but '\$pm' not on PATH; skipping dependency install."
+      write_marker "ok" "pm-missing:\$pm"
+      emit_progress deps done
+      return 0
+      ;;
+  esac
+
+  log_line "[wavemill] Installing dependencies with \$pm..."
+  emit_progress deps running
+  if ! (cd "\$wt_dir" && eval "\$install_cmd"); then
+    local rc=\$?
+    log_line "[wavemill] Dependency install failed (\$pm, exit \$rc)."
+    emit_progress deps failed "dependency install"
+    write_marker "failed" "install-failed:\$pm:\$rc"
+    exit "\$rc"
+  fi
+  log_line "[wavemill] Dependency install complete (\$pm)."
+  write_marker "ok" "install-done:\$pm"
+  emit_progress deps done
+}
+
+source_dependency_context
+EOF
+  chmod +x "$wrapper_path"
 }
 
 startup_run_task_phases() {
@@ -517,6 +599,7 @@ startup_run_task_phases() {
   local depends_on base_from_task
   local packet_content issue_json issue_description issue_context details_context labels_json
   local feature_dir status_file planning_prompt instr_file created_window created_window_id state_written created_new=false planner_launch_model
+  local dep_wrapper dep_marker dep_status dep_detail dep_wait_count
 
   local startup_id
   startup_id="$(echo "$task_json" | jq -r '.startupId // empty')"
@@ -631,25 +714,19 @@ startup_run_task_phases() {
 
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" worktree done
 
-  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps running
-  if ! ensure_worktree_dependencies "$wt_dir" "$issue"; then
-    [[ -n "${created_new:-}" && "$created_new" == "true" ]] && \
-      git worktree remove --force "$wt_dir" >/dev/null 2>&1 || true
-    startup_phase_failed "$startup_id" deps "$issue" "dependency install"
-    return 1
-  fi
-  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps done
-
-  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent running
   AGENT_CMD="$task_agent"
   pretrust_directory "$wt_dir"
   startup_step "[2/7] Pre-trusting directory... ✓"
 
   win="$issue-$slug"
+  dep_marker="/tmp/wavemill-${SESSION}-${issue}.deps.marker"
+  dep_wrapper="/tmp/wavemill-${SESSION}-${issue}-startup-wrapper.sh"
+  rm -f "$dep_marker" "$dep_wrapper"
+  write_startup_pane_wrapper "$dep_wrapper" "$dep_marker" "$issue" "$wt_dir" "${STARTUP_TASK_LOG_FILE:-}" "$STATUS_LOG_FILE" "$startup_id"
   if [[ "$DRY_RUN" == "true" ]]; then
     startup_step "[3/7] Creating tmux window...   [DRY-RUN skip]"
   else
-    wavemill_lock_run "tmux-win" tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" >/dev/null
+    wavemill_lock_run "tmux-win" tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" "$dep_wrapper" >/dev/null
     created_window_id="$(tmux display-message -p -t "$SESSION:$win" '#{window_id}' 2>/dev/null || true)"
     tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
     tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
@@ -799,6 +876,27 @@ $details_context"
   tmux set-environment -t "$SESSION" WAVEMILL_RESOLVED_MODEL "$planner_launch_model" 2>/dev/null || true
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps running
+  dep_wait_count=0
+  while [[ ! -f "$dep_marker" ]]; do
+    dep_wait_count=$((dep_wait_count + 1))
+    if [[ "$dep_wait_count" -gt 7200 ]]; then
+      startup_phase_failed "$startup_id" deps "$issue" "dependency install marker timeout"
+      [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
+      tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
+      return 1
+    fi
+    sleep 0.1
+  done
+  dep_status="$(sed -n 's/^status=//p' "$dep_marker" | head -n 1)"
+  dep_detail="$(sed -n 's/^detail=//p' "$dep_marker" | head -n 1)"
+  if [[ "$dep_status" != "ok" ]]; then
+    startup_phase_failed "$startup_id" deps "$issue" "dependency install ($dep_detail)"
+    [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
+    return 1
+  fi
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" deps done
+  [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent running
   if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
