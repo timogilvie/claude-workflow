@@ -261,7 +261,7 @@ agent_resolve_dashboard_pid() {
   fi
 
   [[ -n "$session" ]] || return 0
-  tmux show-environment -t "$session" WAVEMILL_DASHBOARD_PID 2>/dev/null \
+  { tmux show-environment -t "$session" WAVEMILL_DASHBOARD_PID 2>/dev/null || true; } \
     | sed -n 's/^WAVEMILL_DASHBOARD_PID=//p' \
     | head -1
 }
