@@ -61,13 +61,18 @@ function normalizeJobIds(payload: unknown): string[] {
     return [];
   }
 
-  const jobIds = (payload as { jobIds?: unknown }).jobIds;
-  if (!Array.isArray(jobIds)) {
-    return [];
+  const record = payload as Record<string, unknown>;
+  const candidates = [record.jobIds, record.job_ids];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter((jobId): jobId is string => typeof jobId === 'string');
+    }
   }
 
-  return jobIds.filter((jobId): jobId is string => typeof jobId === 'string');
+  const single = [record.jobId, record.job_id].find((value) => typeof value === 'string');
+  return typeof single === 'string' ? [single] : [];
 }
+
 
 function normalizeStringField(payload: unknown, key: string): string | undefined {
   if (!payload || typeof payload !== 'object') {
