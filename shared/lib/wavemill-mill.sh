@@ -6,7 +6,7 @@ set -euo pipefail
 # parse error when bash seeks back into the large monitor heredoc. (HOK-1755)
 if [[ -z "${_WAVEMILL_MILL_REEXEC:-}" ]]; then
   _mm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  _mm_tmp="$(mktemp /tmp/wavemill-mill-XXXXXX.sh)"
+  _mm_tmp="$(mktemp /tmp/wavemill-mill.XXXXXX)"
   cp "${BASH_SOURCE[0]}" "$_mm_tmp"
   chmod +x "$_mm_tmp"
   WAVEMILL_MILL_LIB_DIR="$_mm_lib" _WAVEMILL_MILL_REEXEC=1 \
