@@ -132,6 +132,14 @@ Free-text rubric rationale, stage rationale, judge notes, prompt-registry hashes
 
 The new fields are optional. Existing consumers can continue accepting old submissions and ignore unknown optional fields until they are updated for `1.1`.
 
+### Contribution Queue
+
+Outcome and benchmark contribution uploads are separate from live Model 30 routing. Live prediction calls stay synchronous and continue to fall back to local routing when Hokusai is unavailable; Wavemill does not enqueue stale route requests.
+
+When `hokusai.contributions.enabled` is `true` and user consent is valid, Wavemill can store redacted contribution rows under `.wavemill/hokusai/` and later drain them to an explicitly configured contribution endpoint. The queue only stores validated row shapes such as the public Submit Data fields (`success_under_budget`, optional `inputs`, `actual_cost_usd`, `wall_clock_seconds`, `task_id`, `harness`) and the stricter `technical_task_router_row/v1` benchmark shape. Raw eval payloads, task text, prompts, and other unredacted inputs are rejected before enqueue.
+
+If no explicit contribution endpoint is configured, drain can export pending rows for manual submission instead of pretending upload succeeded. Transient failures such as timeouts, `429`, and `5xx` responses are retried with persisted backoff; permanent failures such as auth, schema, or malformed-row errors move to dead-letter with redacted operator-facing details only.
+
 ## Related Commands
 
 - `wavemill mill` runs routing as part of the main factory loop

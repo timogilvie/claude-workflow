@@ -7,8 +7,10 @@ import { after, describe, it } from 'node:test';
 import {
   disableSubmission,
   enableSubmission,
+  getContributionConsentStatus,
   getConsentState,
   getSubmissionStatus,
+  isHokusaiContributionsEnabled,
   isConsentValid,
   loadUserConfig,
   recordConsent,
@@ -339,6 +341,56 @@ describe('hokusai-consent', () => {
       const status = getSubmissionStatus({ configDir, repoDir });
       assert.equal(status.consentValid, true);
       assert.equal(status.submissionAllowed, true);
+    });
+
+    it('requires contributions.enabled for queue operations', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { consentVersion: '1.0' },
+          contributions: { enabled: true },
+        },
+      });
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const status = getContributionConsentStatus({ configDir, repoDir });
+      assert.deepEqual(status, {
+        consentValid: true,
+        contributionsEnabled: true,
+        submissionAllowed: true,
+      });
+      assert.equal(isHokusaiContributionsEnabled({ configDir, repoDir }), true);
+    });
+
+    it('disables queue operations when contributions.enabled is false', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { consentVersion: '1.0' },
+          contributions: { enabled: false },
+        },
+      });
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const status = getContributionConsentStatus({ configDir, repoDir });
+      assert.deepEqual(status, {
+        consentValid: true,
+        contributionsEnabled: false,
+        submissionAllowed: false,
+      });
+      assert.equal(isHokusaiContributionsEnabled({ configDir, repoDir }), false);
     });
   });
 });
