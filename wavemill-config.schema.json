@@ -246,6 +246,18 @@
             },
             "additionalProperties": false
         },
+        "hooks": {
+            "type": "object",
+            "description": "Hook and status-emission settings.",
+            "properties": {
+                "emitOsc": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Opt out of OSC 777 terminal notifications emitted by hook status writes."
+                }
+            },
+            "additionalProperties": false
+        },
         "taskSelection": {
             "type": "object",
             "description": "Controls default task selection behavior in wavemill mill.",
@@ -546,8 +558,75 @@
                         },
                         "endpoint": {
                             "type": "string",
-                            "default": "https://api.hokusai.dev/v1/submit",
-                            "description": "Hokusai API endpoint for data submission."
+                            "description": "Explicit Hokusai endpoint for legacy data submission integrations. Leave unset unless you operate a private submission service."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "contributions": {
+                    "type": "object",
+                    "description": "Durable queue and delivery settings for redacted contribution and benchmark outcome rows.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable durable local queueing for redacted contribution rows. Requires valid user consent."
+                        },
+                        "endpoint": {
+                            "description": "Explicit endpoint for contribution upload. When null or absent, drain must not attempt upload.",
+                            "default": null,
+                            "oneOf": [
+                                {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "endpointTokenEnv": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Environment variable containing a bearer token for the contribution endpoint."
+                        },
+                        "batchSize": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Maximum rows to send in one batch."
+                        },
+                        "exportPath": {
+                            "description": "Relative-to-main-repo or absolute path used for manual JSONL export when no endpoint is configured.",
+                            "default": null,
+                            "oneOf": [
+                                {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "maxRetries": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Maximum retry attempts before moving a transiently failing batch to dead-letter."
+                        },
+                        "backoffInitialMs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Initial exponential backoff delay in milliseconds."
+                        },
+                        "backoffMaxMs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Maximum exponential backoff delay in milliseconds."
+                        },
+                        "timeoutMs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "HTTP timeout for contribution drain requests in milliseconds."
                         }
                     },
                     "additionalProperties": false
@@ -1303,6 +1382,11 @@
                         "apiKey": {
                             "type": "string",
                             "description": "Optional API key for authentication."
+                        },
+                        "apiKeyEnv": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Environment variable name that holds the Hokusai bearer token. Falls back to HOKUSAI_API_TOKEN when omitted."
                         },
                         "timeout": {
                             "type": "integer",

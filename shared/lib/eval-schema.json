@@ -80,6 +80,29 @@
       "minimum": 0,
       "description": "Wall-clock time in seconds for task completion."
     },
+    "phaseDurationsSeconds": {
+      "type": "object",
+      "description": "Per-phase LLM wall-clock durations in seconds computed from workflow result artifacts.",
+      "properties": {
+        "planning": {
+          "type": "number",
+          "minimum": 0
+        },
+        "coding": {
+          "type": "number",
+          "minimum": 0
+        },
+        "review": {
+          "type": "number",
+          "minimum": 0
+        },
+        "total": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
     "timestamp": {
       "type": "string",
       "format": "date-time",

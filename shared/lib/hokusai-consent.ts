@@ -2,11 +2,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { getHokusaiSubmissionConfig } from './config.ts';
+import { getHokusaiContributionsConfig, getHokusaiSubmissionConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 
 export const CURRENT_CONSENT_VERSION = '1.0';
-export const DEFAULT_HOKUSAI_ENDPOINT = 'https://api.hokusai.dev/v1/submit';
 
 export const CONSENT_TEXT = `Hokusai data submission is strictly opt-in.
 
@@ -46,8 +45,14 @@ export interface ConsentState {
 
 export interface SubmissionStatus extends ConsentState {
   currentVersion: string;
-  endpoint: string;
+  endpoint: string | null;
   consentValid: boolean;
+  submissionAllowed: boolean;
+}
+
+export interface ContributionConsentStatus {
+  consentValid: boolean;
+  contributionsEnabled: boolean;
   submissionAllowed: boolean;
 }
 
@@ -71,8 +76,8 @@ function resolveCurrentConsentVersion(repoDir?: string): string {
   return getHokusaiSubmissionConfig(repoDir).consentVersion || CURRENT_CONSENT_VERSION;
 }
 
-function resolveEndpoint(repoDir?: string): string {
-  return getHokusaiSubmissionConfig(repoDir).endpoint || DEFAULT_HOKUSAI_ENDPOINT;
+function resolveEndpoint(repoDir?: string): string | null {
+  return getHokusaiSubmissionConfig(repoDir).endpoint || null;
 }
 
 function updateUserConfig(
@@ -220,6 +225,25 @@ export function getSubmissionStatus(options: { configDir?: string; repoDir?: str
   };
 }
 
+export function getContributionConsentStatus(
+  options: { configDir?: string; repoDir?: string } = {},
+): ContributionConsentStatus {
+  const status = getSubmissionStatus(options);
+  const contributionsEnabled = getHokusaiContributionsConfig(options.repoDir).enabled === true;
+
+  return {
+    consentValid: status.consentValid,
+    contributionsEnabled,
+    submissionAllowed: status.submissionAllowed && contributionsEnabled,
+  };
+}
+
+export function isHokusaiContributionsEnabled(
+  options: { configDir?: string; repoDir?: string } = {},
+): boolean {
+  return getContributionConsentStatus(options).submissionAllowed;
+}
+
 export function getStatusDisplay(options: { configDir?: string; repoDir?: string } = {}): string {
   const status = getSubmissionStatus(options);
   const lines = [
@@ -228,7 +252,7 @@ export function getStatusDisplay(options: { configDir?: string; repoDir?: string
     `Consent valid: ${status.consentValid ? 'yes' : 'no'}`,
     `Consent version: ${status.consentVersion ?? 'none'} (current: ${status.currentVersion})`,
     `Consented at: ${status.consentedAt ?? 'never'}`,
-    `Endpoint: ${status.endpoint}`,
+    `Endpoint: ${status.endpoint ?? 'not configured'}`,
   ];
 
   if (!status.submissionAllowed) {

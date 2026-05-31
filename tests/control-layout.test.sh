@@ -102,11 +102,13 @@ create_test_repo() {
   cp "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/startup-progress.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-common.sh" "$repo_dir/shared/lib/"
+  cp "$REPO_DIR/shared/lib/wavemill-worktree-deps.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-input-reader.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/agent-adapters.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/routing-emitter.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/model-validator.ts" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-status.sh" "$repo_dir/shared/lib/"
+  cp "$REPO_DIR/shared/lib/wavemill-window-titles.sh" "$repo_dir/shared/lib/"
 }
 
 write_plan() {

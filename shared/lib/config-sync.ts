@@ -68,7 +68,6 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     dataSubmission: {
       enabled: false,
       consentVersion: '1.0',
-      endpoint: 'https://api.hokusai.dev/v1/submit',
     },
   },
   challenge: {

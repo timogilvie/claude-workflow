@@ -19,6 +19,14 @@ if ! declare -f wavemill_pick_usage_tip >/dev/null 2>&1; then
   fi
   unset _wss_dir
 fi
+if ! declare -f wavemill_apply_window_metadata >/dev/null 2>&1; then
+  _wss_title_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || true
+  if [[ -f "${_wss_title_dir}/wavemill-window-titles.sh" ]]; then
+    # shellcheck source=wavemill-window-titles.sh
+    source "${_wss_title_dir}/wavemill-window-titles.sh"
+  fi
+  unset _wss_title_dir
+fi
 
 PANE_MODE=""
 if [[ "${1:-}" == --pane=* ]]; then
@@ -543,6 +551,25 @@ gather_tasks() {
       echo "—|$slug|$branch|$dir||executing|"
     done
   fi
+}
+
+refresh_window_metadata_for_active_tasks() {
+  declare -F wavemill_apply_window_metadata >/dev/null 2>&1 || return 0
+  [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]] || return 0
+
+  local tasks issue slug branch worktree status phase pr target
+  tasks="$(gather_tasks)"
+  [[ -n "$tasks" ]] || return 0
+
+  while IFS='|' read -r issue slug branch worktree status phase pr; do
+    [[ -n "$issue" && -n "$slug" ]] || continue
+    if ! is_active "$worktree" "$issue-$slug"; then
+      continue
+    fi
+    target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$STATE_FILE" 2>/dev/null || true)"
+    [[ -n "$target" ]] || target="$SESSION:$issue-$slug"
+    wavemill_apply_window_metadata "$SESSION" "$issue" "$target" "$STATE_FILE" >/dev/null 2>&1 || true
+  done <<< "$tasks"
 }
 
 gather_jobs() {
@@ -1184,6 +1211,7 @@ run_dashboard() {
   # already guard failures with "|| true" / "2>/dev/null" so errexit adds
   # no safety here — only fragility.
   set +e
+  local last_window_metadata_refresh=0 now_ts
   while true; do
     # Block USR1 during rendering to prevent partial frame output.
     # Signals received during this window set WAVEMILL_REDRAW via the trap
@@ -1193,6 +1221,11 @@ run_dashboard() {
     # Keep tmux scrollback clean without blanking the visible pane.
     clear_dashboard_scrollback
     refresh_pr_cache
+    now_ts="$(date +%s)"
+    if (( now_ts - last_window_metadata_refresh >= 10 )); then
+      refresh_window_metadata_for_active_tasks
+      last_window_metadata_refresh="$now_ts"
+    fi
     render_dashboard
     redraw_dashboard_frame "$FRAME"
 

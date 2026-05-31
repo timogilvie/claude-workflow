@@ -72,6 +72,29 @@ Subcommands:
 
 - `promote`: open or refresh the promotion PR from the integration branch to the promotion branch
 
+### `wavemill observer`
+
+Inspects currently running mill tmux sessions and reports Wavemill infrastructure problems before they silently block progress. It reads tmux panes, process trees, `.wavemill/workflow-state.json`, and recent mill logs.
+
+```bash
+wavemill observer --once
+wavemill observer --loop --interval 120
+wavemill observer --json
+wavemill observer --file-linear --linear-team HOK
+```
+
+Flags:
+
+- `--once`: run one observation pass and exit
+- `--loop`: continue watching active sessions
+- `--interval <seconds>`: delay between loop iterations
+- `--json`: emit structured snapshots for a supervising Codex session
+- `--file-linear`: create Linear issues for high-confidence urgent/high findings using `LINEAR_API_KEY` from `.env` or the environment
+- `--dry-run`: report what would be found without creating Linear issues
+- `--print-prompt`: print the recommended long-running Codex supervisor prompt
+
+The observer itself is conservative: it detects and reports stuck states, warnings, crashes, and visual pane/display issues. A supervising Codex session should decide whether to apply a narrow operational nudge, file a Linear issue, or make a Wavemill PR targeting `auto/integration`.
+
 ### `wavemill promote`
 
 Direct entry point for promotion mode.
@@ -137,6 +160,7 @@ Shows the built-in help output.
 - Use `wavemill plan` when epics are too large to mill directly.
 - Use `wavemill review` or `wavemill eval` when you want targeted inspection.
 - Use `wavemill tend` when you need to inspect or drive the `auto/integration` queue.
+- Use `wavemill observer` when you want a long-running watchdog over active mill sessions.
 - Use `wavemill promote` when you are ready to move `auto/integration` toward `main`.
 - Use `wavemill route` or `wavemill hokusai` when you are tuning the learning system.
 

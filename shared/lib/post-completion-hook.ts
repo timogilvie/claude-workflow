@@ -25,7 +25,7 @@ import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
 import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
-import { attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
+import { attachPhaseDurations, attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getEvalContextUpdatesConfig, getMaxCostUsd } from './config.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
@@ -48,6 +48,7 @@ import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, fo
 import { errorMessage } from './error-utils.ts';
 import type {
   EvalExecutedPlanning,
+  EvalPhaseDurations,
   EvalRecord,
   EvalRouteProvenance,
   EvalRouting,
@@ -250,6 +251,7 @@ interface PostCompletionEnrichmentInput {
   routing?: EvalRouting | null;
   routePrediction?: RoutePrediction | null;
   executedPlanning?: EvalExecutedPlanning | null;
+  phaseDurations?: EvalPhaseDurations | null;
 }
 
 function resolveRouteArtifactDirs(
@@ -371,6 +373,7 @@ export function enrichPostCompletionRecord(
       input.worktreePath,
     ),
     executedPlanning: input.executedPlanning,
+    phaseDurations: input.phaseDurations,
     routePrediction: input.routePrediction,
     routing: input.routing,
     challengeRouteContext: input.challengePairId
@@ -455,6 +458,8 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       branchName,
       ctx.worktreePath
     );
+    const phaseDurations = stageArtifacts.phaseDurations;
+    const timeSeconds = phaseDurations?.total ?? 0;
 
     // 3. Detect all interventions
     console.log('Post-completion eval: detecting interventions...');
@@ -505,6 +510,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
         interventionText: interventionData.text,
         issueId: ctx.issueId || undefined,
         prUrl: evalContext.prUrl || undefined,
+        timeSeconds,
         metadata: { workflowType: ctx.workflowType, hookTriggered: true, interventionSummary: interventionData.summary },
         taskPacket: stageArtifacts.taskPacket,
         planContent: stageArtifacts.planContent,
@@ -522,6 +528,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     if (record.outcomes) {
       record.outcomes.success = isEvalSuccess(record);
     }
+    attachPhaseDurations(record, phaseDurations);
 
     // 5. Compute workflow cost
     let costOutcome: ReturnType<typeof computeWorkflowCost> | null = null;
@@ -610,6 +617,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       routing: stageArtifacts.routing,
       routePrediction: stageArtifacts.routePrediction,
       executedPlanning: stageArtifacts.executedPlanning,
+      phaseDurations,
     });
 
     // 7. Persist

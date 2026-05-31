@@ -31,6 +31,7 @@ for f in \
   "$REPO_DIR"/tests/dashboard-refresh.test.sh \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
+  "$REPO_DIR"/tests/log-hygiene.test.sh \
   "$REPO_DIR"/tests/project-context-suggestion.test.sh \
   "$REPO_DIR"/tests/wavemill-usage-tips.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
@@ -42,6 +43,7 @@ for f in \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/notification-waiting.test.sh \
+  "$REPO_DIR"/tests/hook-osc-emit.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -69,6 +71,13 @@ done
 # ============================================================================
 echo ""
 echo "=== Launcher Attach Shutdown ==="
+
+if grep -q '_WAVEMILL_MILL_REEXEC' "$LIB_DIR/wavemill-mill.sh" \
+  && grep -q 'WAVEMILL_MILL_LIB_DIR' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "launcher copies itself to /tmp before execution"
+else
+  fail "launcher is missing the /tmp self-copy guard"
+fi
 
 ATTACH_BLOCK=$(awk '
   /^sleep 1$/ { in_block=1 }
@@ -203,6 +212,30 @@ else
   fail "Claude Notification → waiting behavior: $notification_waiting_output"
 fi
 unset notification_waiting_status
+
+echo ""
+echo "=== Hook OSC Emission ==="
+
+hook_osc_emit_output="$(bash "$REPO_DIR/tests/hook-osc-emit.test.sh" 2>&1)" || hook_osc_emit_status=$?
+hook_osc_emit_status="${hook_osc_emit_status:-0}"
+if [[ "$hook_osc_emit_status" -eq 0 ]]; then
+  pass "hook OSC emission fan-out behavior"
+else
+  fail "hook OSC emission behavior: $hook_osc_emit_output"
+fi
+unset hook_osc_emit_status
+
+echo ""
+echo "=== Worktree Dependency Fast Path ==="
+
+worktree_deps_output="$(bash "$REPO_DIR/tests/wavemill-worktree-deps.test.sh" 2>&1)" || worktree_deps_status=$?
+worktree_deps_status="${worktree_deps_status:-0}"
+if [[ "$worktree_deps_status" -eq 0 ]]; then
+  pass "worktree dependency fast-path behavior"
+else
+  fail "worktree dependency fast-path behavior: $worktree_deps_output"
+fi
+unset worktree_deps_status
 
 # ============================================================================
 # TEST 2: Heredoc function-availability check
@@ -2679,6 +2712,15 @@ else
 fi
 unset dashboard_refresh_status
 
+window_titles_output="$(bash "$REPO_DIR/tests/wavemill-window-titles.test.sh" 2>&1)" || window_titles_status=$?
+window_titles_status="${window_titles_status:-0}"
+if [[ "$window_titles_status" -eq 0 ]]; then
+  pass "window title helper tests"
+else
+  fail "window title helper tests: $window_titles_output"
+fi
+unset window_titles_status
+
 # ============================================================================
 # TEST 6: Routing resilience regression guards
 # ============================================================================
@@ -2740,6 +2782,19 @@ if grep -q 'wavemill_hook_write_routing' "$REPO_DIR/shared/hooks/wavemill-hook-p
   pass "hook protocol exposes routing writer"
 else
   fail "hook protocol routing writer is missing"
+fi
+
+if grep -q 'windowId' "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" \
+  && grep -q "display-message -p -t \"\\\$SESSION:\\\$win\" '#{window_id}'" "$REPO_DIR/shared/lib/wavemill-startup-runner.sh"; then
+  pass "startup persists stable tmux windowId"
+else
+  fail "startup stable windowId persistence is missing"
+fi
+
+if grep -q 'wavemill_apply_window_metadata' "$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh"; then
+  pass "hook notify triggers best-effort metadata refresh"
+else
+  fail "hook metadata refresh wiring is missing"
 fi
 
 # ============================================================================
