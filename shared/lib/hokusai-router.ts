@@ -6,12 +6,11 @@
 
 import { getHokusaiRouterConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
-import { fromHokusaiOutput } from './hokusai-adapter.ts';
+import { fromHokusaiModel30Response } from './hokusai-adapter.ts';
 import {
-  toHokusaiInput,
-  type HokusaiOutput,
-  type HokusaiPredictions,
-  type HokusaiRoute,
+  toHokusaiModel30Request,
+  type HokusaiModel30Response,
+  type HokusaiRecommendedStrategy,
 } from './hokusai-schema.ts';
 import {
   getConfiguredModelsForDescriptor,
@@ -20,6 +19,21 @@ import {
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
+export const DEFAULT_HOKUSAI_MODEL30_ENDPOINT = 'https://api.hokus.ai/api/v1/models/30/predict';
+export const DEFAULT_HOKUSAI_TIMEOUT_MS = 5000;
+
+export type HokusaiFailureClassification =
+  | 'missing_auth'
+  | 'timeout'
+  | 'network_error'
+  | 'unauthorized'
+  | 'not_found'
+  | 'invalid_payload'
+  | 'rate_limited'
+  | 'server_error'
+  | 'http_error'
+  | 'invalid_response';
+
 export interface HokusaiRouterOptions {
   repoDir?: string;
   modelsAvailable?: string[];
@@ -27,43 +41,74 @@ export interface HokusaiRouterOptions {
   coderModels?: string[];
   reviewerModels?: string[];
   maxCostUsd?: number;
+  workflowStages?: string[];
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
-function isHokusaiRoute(value: unknown): value is HokusaiRoute {
+function isRecommendedStrategy(value: unknown): value is HokusaiRecommendedStrategy {
   return Boolean(
     value &&
     typeof value === 'object' &&
-    typeof (value as HokusaiRoute).planner_model === 'string' &&
-    typeof (value as HokusaiRoute).coder_model === 'string' &&
-    typeof (value as HokusaiRoute).reviewer_model === 'string' &&
-    ['low', 'medium', 'high'].includes((value as HokusaiRoute).plan_depth) &&
-    ['low', 'medium', 'high'].includes((value as HokusaiRoute).code_depth) &&
-    ['light', 'standard', 'deep'].includes((value as HokusaiRoute).review_mode)
+    isNonEmptyString((value as HokusaiRecommendedStrategy).planner_model) &&
+    isNonEmptyString((value as HokusaiRecommendedStrategy).coder_model) &&
+    isNonEmptyString((value as HokusaiRecommendedStrategy).reviewer_model)
   );
 }
 
-function isHokusaiPredictions(value: unknown): value is HokusaiPredictions {
+export function isHokusaiModel30Response(value: unknown): value is HokusaiModel30Response {
   return Boolean(
     value &&
     typeof value === 'object' &&
-    isFiniteNumber((value as HokusaiPredictions).expected_success_probability) &&
-    isFiniteNumber((value as HokusaiPredictions).expected_cost_usd) &&
-    isFiniteNumber((value as HokusaiPredictions).confidence)
+    value !== null &&
+    typeof (value as HokusaiModel30Response).predictions === 'object' &&
+    (value as HokusaiModel30Response).predictions !== null &&
+    isRecommendedStrategy((value as HokusaiModel30Response).predictions.recommended_strategy)
   );
 }
 
-export function isHokusaiOutput(value: unknown): value is HokusaiOutput {
-  return Boolean(
-    value &&
-    typeof value === 'object' &&
-    typeof (value as HokusaiOutput).schema_version === 'string' &&
-    isHokusaiRoute((value as HokusaiOutput).route) &&
-    isHokusaiPredictions((value as HokusaiOutput).predictions)
-  );
+function resolveConfiguredAuthToken(repoDir?: string): string | undefined {
+  const config = getHokusaiRouterConfig(repoDir);
+  const envVarName = config.apiKeyEnv || 'HOKUSAI_API_TOKEN';
+  const envToken = process.env[envVarName]?.trim();
+  if (envToken) {
+    return envToken;
+  }
+  return config.apiKey?.trim() || undefined;
+}
+
+export function classifyHokusaiFailure(
+  error: unknown,
+  response?: Pick<Response, 'status'>,
+): HokusaiFailureClassification {
+  if (response) {
+    if (response.status === 401 || response.status === 403) return 'unauthorized';
+    if (response.status === 404) return 'not_found';
+    if (response.status === 422) return 'invalid_payload';
+    if (response.status === 429) return 'rate_limited';
+    if (response.status >= 500) return 'server_error';
+    return 'http_error';
+  }
+
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return 'timeout';
+  }
+
+  const message = errorMessage(error).toLowerCase();
+  if (message.includes('abort')) {
+    return 'timeout';
+  }
+  if (message.includes('invalid hokusai response shape') || message.includes('invalid json')) {
+    return 'invalid_response';
+  }
+
+  return 'network_error';
+}
+
+function warnHokusaiFailure(classification: HokusaiFailureClassification, detail: string): void {
+  console.warn(`[hokusai-router] Hokusai routing failed (${classification}): ${detail}`);
 }
 
 export async function routeViaHokusai(
@@ -72,9 +117,11 @@ export async function routeViaHokusai(
 ): Promise<WorkflowRouteDecision | null> {
   const repoDir = options.repoDir;
   const config = getHokusaiRouterConfig(repoDir);
-  const endpoint = config.endpoint;
+  const endpoint = config.endpoint || DEFAULT_HOKUSAI_MODEL30_ENDPOINT;
+  const authToken = resolveConfiguredAuthToken(repoDir);
 
-  if (!endpoint) {
+  if (!authToken) {
+    warnHokusaiFailure('missing_auth', 'missing bearer token');
     return null;
   }
 
@@ -84,10 +131,12 @@ export async function routeViaHokusai(
     modelsAvailable: descriptorModelsAvailable,
     maxCostUsd: options.maxCostUsd,
   });
-  const input = toHokusaiInput(
+  const requestBody = toHokusaiModel30Request(
     descriptor,
     descriptor.repoContext,
     {
+      description: prompt,
+      externalTaskId: 'workflow-route',
       modelsAvailable: options.modelsAvailable,
       plannerModels: options.plannerModels ?? (options.modelsAvailable
         ? undefined
@@ -99,45 +148,52 @@ export async function routeViaHokusai(
         ? undefined
         : getConfiguredModelsForDescriptorStage(repoDir, 'reviewer')),
       maxCostUsd: options.maxCostUsd,
+      workflowStages: options.workflowStages ?? ['plan', 'code', 'review'],
     },
-    'workflow-route',
   );
 
   const controller = new AbortController();
-  const timeoutMs = config.timeout ?? 5000;
+  const timeoutMs = config.timeout ?? DEFAULT_HOKUSAI_TIMEOUT_MS;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const headers: Record<string, string> = {
-      'content-type': 'application/json',
-    };
-    if (config.apiKey) {
-      headers['authorization'] = `Bearer ${config.apiKey}`;
-    }
-
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers,
-      body: JSON.stringify(input),
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+      const classification = classifyHokusaiFailure(null, response);
+      warnHokusaiFailure(classification, `HTTP ${response.status}`);
+      return null;
     }
 
-    const payload: unknown = await response.json();
-    if (!isHokusaiOutput(payload)) {
-      throw new Error('Invalid Hokusai response shape');
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      warnHokusaiFailure('invalid_response', errorMessage(error));
+      return null;
     }
 
-    const decision = fromHokusaiOutput(payload, { repoDir });
+    if (!isHokusaiModel30Response(payload)) {
+      warnHokusaiFailure('invalid_response', 'missing predictions.recommended_strategy');
+      return null;
+    }
+
+    const decision = fromHokusaiModel30Response(payload, { repoDir });
     if (typeof options.maxCostUsd === 'number') {
       decision.constraints = { maxCostUsd: options.maxCostUsd };
     }
     return decision;
   } catch (error) {
-    console.warn(`[hokusai-router] Hokusai routing failed: ${errorMessage(error)}`);
+    const classification = classifyHokusaiFailure(error);
+    warnHokusaiFailure(classification, errorMessage(error));
     return null;
   } finally {
     clearTimeout(timeout);
