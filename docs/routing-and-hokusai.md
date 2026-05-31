@@ -140,6 +140,19 @@ When `hokusai.contributions.enabled` is `true` and user consent is valid, Wavemi
 
 If no explicit contribution endpoint is configured, drain can export pending rows for manual submission instead of pretending upload succeeded. Transient failures such as timeouts, `429`, and `5xx` responses are retried with persisted backoff; permanent failures such as auth, schema, or malformed-row errors move to dead-letter with redacted operator-facing details only.
 
+Contribution lifecycle history is stored in an append-only ledger at `.wavemill/hokusai/ledger.jsonl`. Accepted and rejected terminal events track idempotency key, Model `30`, row count, timestamps, job/submission identifiers when present, and reward state (`pending`, `none`, `awarded`, `unknown`). Missing rewards are never inferred as zero.
+
+`wavemill hokusai status` includes queue and ledger summary fields:
+
+- pending queue count
+- accepted submission count
+- accepted row count
+- rejected submission count
+- last terminal submission
+- known awarded tokens plus pending/none/unknown reward counts
+
+Ledger summary deduplicates by idempotency key and returned job/submission IDs to avoid double-counting duplicate accepts or retries. Awarded totals are local known awards only, not a live Hokusai account balance.
+
 ## Related Commands
 
 - `wavemill mill` runs routing as part of the main factory loop

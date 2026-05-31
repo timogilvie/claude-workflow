@@ -10,6 +10,7 @@ export interface HokusaiQueuePaths {
   deadLetterPath: string;
   statePath: string;
   exportDir: string;
+  ledgerPath: string;
 }
 
 export function resolveHokusaiQueuePaths(repoDir?: string): HokusaiQueuePaths {
@@ -21,7 +22,16 @@ export function resolveHokusaiQueuePaths(repoDir?: string): HokusaiQueuePaths {
     deadLetterPath: join(rootDir, 'queue', 'dead-letter.jsonl'),
     statePath: join(rootDir, 'state.json'),
     exportDir: join(rootDir, 'export'),
+    ledgerPath: join(rootDir, 'ledger.jsonl'),
   };
+}
+
+export function resolveHokusaiLedgerDir(repoDir?: string): string {
+  return resolveFromMainRepo(HOKUSAI_ROOT, repoDir);
+}
+
+export function resolveHokusaiLedgerPath(repoDir?: string): string {
+  return join(resolveHokusaiLedgerDir(repoDir), 'ledger.jsonl');
 }
 
 export function resolveContributionExportPath(exportPath: string, repoDir?: string): string {
