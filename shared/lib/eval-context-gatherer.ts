@@ -20,6 +20,7 @@ import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadMetrics } from './review-metrics.ts';
 import type {
   EvalExecutedPlanning,
+  EvalPhaseDurations,
   EvalRouting,
   RoutePrediction,
   RoutingDecision,
@@ -837,6 +838,81 @@ function loadFromArchive(repoDir: string, issueId: string, filename: string): st
   return undefined;
 }
 
+function parseIsoTimestamp(value: unknown): number | null {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return null;
+  }
+
+  const timestampMs = Date.parse(value);
+  return Number.isFinite(timestampMs) ? timestampMs : null;
+}
+
+function readPhaseDurationSeconds(resultPath: string): number | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as Record<string, unknown>;
+    const startedAt = parseIsoTimestamp(parsed.startedAt);
+    const finishedAt = parseIsoTimestamp(parsed.finishedAt);
+
+    if (startedAt === null || finishedAt === null || finishedAt < startedAt) {
+      return undefined;
+    }
+
+    return Math.max(0, (finishedAt - startedAt) / 1000);
+  } catch {
+    return undefined;
+  }
+}
+
+export function computePhaseDurations(
+  repoDir: string,
+  slug: string,
+  worktreePath?: string,
+): EvalPhaseDurations | undefined {
+  const searchRoots = [worktreePath, repoDir].filter((root): root is string => Boolean(root));
+  const phaseFiles: Array<{ phase: Exclude<keyof EvalPhaseDurations, 'total'>; file: string }> = [
+    { phase: 'planning', file: '.planning-result.json' },
+    { phase: 'coding', file: '.coding-result.json' },
+    { phase: 'review', file: '.review-result.json' },
+  ];
+
+  const durations: EvalPhaseDurations = {};
+
+  for (const { phase, file } of phaseFiles) {
+    let duration: number | undefined;
+
+    for (const root of searchRoots) {
+      for (const dir of ['features', 'bugs']) {
+        const resultPath = path.join(root, dir, slug, file);
+        if (!existsSync(resultPath)) {
+          continue;
+        }
+
+        duration = readPhaseDurationSeconds(resultPath);
+        break;
+      }
+
+      if (duration !== undefined) {
+        break;
+      }
+    }
+
+    if (duration !== undefined) {
+      durations[phase] = duration;
+    }
+  }
+
+  const total = [durations.planning, durations.coding, durations.review]
+    .filter((value): value is number => typeof value === 'number')
+    .reduce((sum, value) => sum + value, 0);
+
+  if (Object.keys(durations).length === 0) {
+    return undefined;
+  }
+
+  durations.total = total;
+  return durations;
+}
+
 export function gatherStageArtifacts(
   repoDir: string,
   issueId: string,
@@ -850,6 +926,7 @@ export function gatherStageArtifacts(
   routing?: EvalRouting;
   routePrediction?: RoutePrediction;
   executedPlanning?: EvalExecutedPlanning;
+  phaseDurations?: EvalPhaseDurations;
   executionModel?: string;
 } {
   // Derive feature slug
@@ -864,6 +941,7 @@ export function gatherStageArtifacts(
       routing: loadResolvedModelRouting(repoDir, issueId),
       routePrediction: buildRoutePrediction(loadRoutingCompleteRawFromArchive(repoDir, issueId) ?? undefined),
       executedPlanning: undefined,
+      phaseDurations: undefined,
       executionModel: undefined,
     };
   }
@@ -890,6 +968,7 @@ export function gatherStageArtifacts(
     routing,
     routePrediction: buildRoutePrediction(routingCompleteRaw),
     executedPlanning: loadExecutedPlanning(repoDir, slug, issueId, worktreePath),
+    phaseDurations: computePhaseDurations(repoDir, slug, worktreePath),
     executionModel: loadStageExecutionModel(repoDir, slug, worktreePath),
   };
 }

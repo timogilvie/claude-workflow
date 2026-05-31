@@ -15,11 +15,13 @@ import {
   mapDomain,
   mapLanguage,
   mapTaskType,
+  mapTaskTypeToModel30,
   repoSizeToBucket,
   riskFlagsToBooleans,
   riskFlagsToLevel,
   toHokusaiSubmission,
   toHokusaiInput,
+  toHokusaiModel30Request,
   validateHokusaiSubmission,
 } from './hokusai-schema.ts';
 
@@ -421,6 +423,124 @@ describe('hokusai-schema', () => {
         coder_models: ['shared-from-descriptor'],
         reviewer_models: ['shared-from-descriptor'],
       });
+    });
+  });
+
+  describe('toHokusaiModel30Request', () => {
+    it('includes the required nested task description and task type', () => {
+      const result = toHokusaiModel30Request(makeDescriptor(), undefined, {
+        description: 'Implement the requested workflow feature with tests.',
+      });
+
+      assert.equal(result.inputs.task.description, 'Implement the requested workflow feature with tests.');
+      assert.equal(result.inputs.task.task_type, 'feature');
+    });
+
+    it('maps routing constraints, model pools, and workflow stages into inputs', () => {
+      const result = toHokusaiModel30Request(makeDescriptor(), undefined, {
+        description: 'Investigate the routing issue and propose a fix.',
+        modelsAvailable: ['shared-a'],
+        plannerModels: ['planner-a'],
+        coderModels: ['coder-a'],
+        reviewerModels: ['reviewer-a'],
+        maxCostUsd: 3.25,
+        objective: 'highest_reliability',
+        workflowStages: ['plan', 'code', 'invalid', 'review'],
+        externalTaskId: 'HOK-1246',
+        runId: 'run-1',
+        integrationVersion: 'v2',
+        idempotencyKey: 'idem-1',
+      });
+
+      assert.deepEqual(result.inputs.routing, {
+        available_models: ['shared-a'],
+        available_planner_models: ['planner-a'],
+        available_coder_models: ['coder-a'],
+        available_reviewer_models: ['reviewer-a'],
+        max_cost_usd: 3.25,
+        objective: 'highest_reliability',
+      });
+      assert.deepEqual(result.inputs.workflow, {
+        stages: ['plan', 'code', 'review'],
+      });
+      assert.deepEqual(result.inputs.metadata, {
+        external_task_id: 'HOK-1246',
+        run_id: 'run-1',
+        integration_version: 'v2',
+        idempotency_key: 'idem-1',
+      });
+      assert.equal(result.inputs.task.task_type, 'research');
+    });
+
+    it('maps descriptor and repo context into the model 30 context schema', () => {
+      const result = toHokusaiModel30Request(makeDescriptor({
+        signals: {
+          heuristic: {
+            task_type: 'infra',
+            languages: ['typescript'],
+            framework_tags: ['react'],
+            files_touched: 7,
+            repo_size_loc: 55_000,
+            description_tokens: 120,
+            is_greenfield: false,
+            has_migration: false,
+            has_ui: false,
+            has_tests: true,
+            cross_service: false,
+          },
+          learned: {
+            complexity: 5,
+            domain: 'backend',
+            risk_flags: ['security-auth', 'cross-service'],
+          },
+        },
+      }), {
+        repoId: 'repo',
+        repoVisibility: 'private',
+        primaryLanguage: 'TypeScript',
+        repoSize: {
+          fileCount: 999,
+          loc: 55_000,
+          dependencyCount: 10,
+        },
+      }, {
+        description: 'Secure the auth token flow across services.',
+      });
+
+      assert.deepEqual(result.inputs.context, {
+        domain: 'backend',
+        repo_size_bucket: 'large',
+        requires_tests: true,
+        risk_level: 'medium',
+        file_count: 7,
+        estimated_complexity: 'high',
+        security_sensitive: true,
+      });
+      assert.equal(result.inputs.task.task_type, 'maintenance');
+    });
+
+    it('omits empty arrays and invalid objectives', () => {
+      const result = toHokusaiModel30Request(makeDescriptor(), undefined, {
+        description: 'Implement the feature.',
+        modelsAvailable: [],
+        plannerModels: [],
+        coderModels: [],
+        reviewerModels: [],
+        objective: 'balanced',
+        workflowStages: [],
+      });
+
+      assert.deepEqual(result.inputs.routing, {
+        max_cost_usd: 12.5,
+      });
+      assert.equal(result.inputs.workflow, undefined);
+    });
+
+    it('maps legacy task types into the public enum only', () => {
+      assert.equal(mapTaskTypeToModel30('docs'), 'maintenance');
+      assert.equal(mapTaskTypeToModel30('chore'), 'maintenance');
+      assert.equal(mapTaskTypeToModel30('feature'), 'feature');
+      assert.equal(mapTaskTypeToModel30('unknown', { description: 'Research new routing strategies' }), 'research');
     });
   });
 

@@ -67,6 +67,7 @@ describe('eval-orchestrator', () => {
   let routingDecision: RoutingDecision;
   let interventionRecords: InterventionRecord[];
   let costOutcome: WorkflowCostOutcome;
+  let evaluateTaskInput: Record<string, unknown> | undefined;
 
   beforeEach(() => {
     mock.restoreAll();
@@ -118,6 +119,12 @@ describe('eval-orchestrator', () => {
       planContent: undefined,
       selfReviewSummary: undefined,
       routingDecision,
+      phaseDurations: {
+        planning: 120,
+        coding: 480,
+        review: 60,
+        total: 660,
+      },
       executedPlanning: {
         agent: 'codex',
         model: 'claude-opus-4-6',
@@ -175,11 +182,15 @@ describe('eval-orchestrator', () => {
     }));
     mock.method(evalOrchestratorDeps, 'computeWorkflowCost', () => costOutcome);
     mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => undefined);
-    mock.method(evalOrchestratorDeps, 'evaluateTask', async (_input, outcomes) => ({
-      ...makeJudgeRecord(),
-      outcomes,
-      routingDecision,
-    }));
+    mock.method(evalOrchestratorDeps, 'evaluateTask', async (input, outcomes) => {
+      evaluateTaskInput = input as Record<string, unknown>;
+      return {
+        ...makeJudgeRecord(),
+        timeSeconds: Number((input as { timeSeconds?: number }).timeSeconds ?? makeJudgeRecord().timeSeconds),
+        outcomes,
+        routingDecision,
+      };
+    });
   });
 
   afterEach(() => {
@@ -197,6 +208,14 @@ describe('eval-orchestrator', () => {
     });
 
     assert.equal(record.workflowCost, 3.75);
+    assert.equal(record.timeSeconds, 660);
+    assert.deepEqual(record.phaseDurationsSeconds, {
+      planning: 120,
+      coding: 480,
+      review: 60,
+      total: 660,
+    });
+    assert.equal(evaluateTaskInput?.timeSeconds, 660);
     assert.deepEqual(record.workflowTokenUsage, costOutcome.status === 'success' ? costOutcome.models : undefined);
     assert.equal(record.workflowCostStatus, 'success');
     assert.equal(record.taskDescriptor?.outcome?.total_cost_usd, 3.75);
@@ -215,6 +234,13 @@ describe('eval-orchestrator', () => {
 
     const postCompletion = {
       ...makeJudgeRecord(),
+      timeSeconds: 660,
+      phaseDurationsSeconds: {
+        planning: 120,
+        coding: 480,
+        review: 60,
+        total: 660,
+      },
       outcomes: {
         success: true,
         review: { humanReviewRequired: false, rounds: 0, approvals: 1, changeRequests: 0 },
@@ -262,6 +288,12 @@ describe('eval-orchestrator', () => {
         status: 'completed',
         source: '.planning-result.json',
       },
+      phaseDurations: {
+        planning: 120,
+        coding: 480,
+        review: 60,
+        total: 660,
+      },
     });
 
     assert.deepEqual(
@@ -272,6 +304,7 @@ describe('eval-orchestrator', () => {
         constraints: orchestrated.constraints,
         routeProvenance: orchestrated.routeProvenance,
         executedPlanning: orchestrated.executedPlanning,
+        phaseDurationsSeconds: orchestrated.phaseDurationsSeconds,
         trainingEligible: orchestrated.trainingEligible,
         budgetEvalEligible: orchestrated.budgetEvalEligible,
         eligibilityErrors: orchestrated.eligibilityErrors,
@@ -285,6 +318,7 @@ describe('eval-orchestrator', () => {
         constraints: postCompletion.constraints,
         routeProvenance: postCompletion.routeProvenance,
         executedPlanning: postCompletion.executedPlanning,
+        phaseDurationsSeconds: postCompletion.phaseDurationsSeconds,
         trainingEligible: postCompletion.trainingEligible,
         budgetEvalEligible: postCompletion.budgetEvalEligible,
         eligibilityErrors: postCompletion.eligibilityErrors,

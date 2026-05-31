@@ -72,6 +72,14 @@ issue | route | worktree | deps | agent | linear
 
 Each row is a task. The columns track routing handoff, worktree creation, dependency installation, agent launch, and the Linear state update. Cells move through `.`, `…`, `✓`, `✗`, and `-` for pending, running, done, failed, and skipped.
 
+When a JS lockfile exists and a fresh worktree has no `node_modules`, startup now attempts a safe dependency fast path before install:
+
+- It compares parent checkout and worktree metadata (lockfile hash, `packageManager`, Node signature, workspace signature).
+- If compatible, it reuses parent dependencies (`deps: reused (cow)` or `deps: reused (symlink)`).
+- If incompatible or unsafe, it logs the fallback reason and runs the normal install (`installing deps: <reason>`).
+- `WAVEMILL_WORKTREE_DEPS_FAST_PATH=0` disables reuse checks and always uses the legacy install path.
+- Non-JS repos and missing package-manager binary behavior are unchanged (still skip dependency install).
+
 Startup launches tasks concurrently by phase. The default startup worker limit is `4`; override it with:
 
 ```bash
@@ -205,6 +213,8 @@ Configuration (`.wavemill-config.json`):
 - `mill.2` status log
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
 - When coding writes a valid `features/<slug>/.coding-blocked-completion.json` that recommends review advancement and passes mill guardrails, mill auto-advances the task to review and records `features/<slug>/.coding-auto-advance.json`.
+- The auto-advance dirty-worktree guardrail ignores controller-owned metadata noise including `.wavemill/*`, `features/<slug>/.*`, `features/<slug>/plan.md`, `features/<slug>/task-packet*.md`, `features/<slug>/selected-task.json`, and the root `prompt-registry.jsonl`.
+- Root `prompt-registry.jsonl` is intentionally treated as Wavemill-owned generated metadata for this guardrail only. Unknown source changes and unknown non-dotfiles under `features/<slug>/` still block auto-advance and require user review or manual `advance <issue-id>`.
 - `advance <issue-id>` remains the manual fallback for tracked coding tasks with a valid blocked-completion artifact. It writes `features/<slug>/.coding-advance-override.json` and creates `features/<slug>/.coding-complete` so review launches on the next monitor tick.
 
 ## When to Prefer Mill Mode

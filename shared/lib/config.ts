@@ -110,6 +110,7 @@ export interface PricingEntry {
 export interface HokusaiRouterConfig {
   endpoint?: string;
   apiKey?: string;
+  apiKeyEnv?: string;
   timeout?: number;
 }
 
@@ -119,8 +120,21 @@ export interface HokusaiDataSubmissionConfig {
   endpoint?: string;
 }
 
+export interface HokusaiContributionsConfig {
+  enabled?: boolean;
+  endpoint?: string | null;
+  endpointTokenEnv?: string;
+  batchSize?: number;
+  exportPath?: string | null;
+  maxRetries?: number;
+  backoffInitialMs?: number;
+  backoffMaxMs?: number;
+  timeoutMs?: number;
+}
+
 export interface HokusaiConfig {
   dataSubmission?: HokusaiDataSubmissionConfig;
+  contributions?: HokusaiContributionsConfig;
 }
 
 export interface AvailableModelsConfig {
@@ -964,6 +978,24 @@ export function getHokusaiRouterConfig(repoDir?: string): HokusaiRouterConfig {
  */
 export function getHokusaiSubmissionConfig(repoDir?: string): HokusaiDataSubmissionConfig {
   return loadWavemillConfig(repoDir).hokusai?.dataSubmission || {};
+}
+
+/**
+ * Get the Hokusai contribution queue config subsection with normalized defaults.
+ */
+export function getHokusaiContributionsConfig(repoDir?: string): Required<HokusaiContributionsConfig> {
+  const config = loadWavemillConfig(repoDir).hokusai?.contributions || {};
+  return {
+    enabled: config.enabled ?? false,
+    endpoint: config.endpoint ?? null,
+    endpointTokenEnv: config.endpointTokenEnv ?? '',
+    batchSize: config.batchSize ?? 50,
+    exportPath: config.exportPath ?? null,
+    maxRetries: config.maxRetries ?? 5,
+    backoffInitialMs: config.backoffInitialMs ?? 1_000,
+    backoffMaxMs: config.backoffMaxMs ?? 300_000,
+    timeoutMs: config.timeoutMs ?? 30_000,
+  };
 }
 
 /**

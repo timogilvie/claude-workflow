@@ -699,6 +699,7 @@ describe('routing-policy integration', () => {
         mode: 'auto',
         hokusai: {
           endpoint: 'http://localhost:8080/predict',
+          apiKey: 'test-token',
           timeout: 1000,
         },
       },
@@ -710,20 +711,20 @@ describe('routing-policy integration', () => {
     globalThis.fetch = async (_input, init) => {
       requestBody = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({
-        schema_version: '1.0',
-        route: {
-          planner_model: 'claude-opus-4-7',
-          coder_model: 'claude-sonnet-4-6',
-          reviewer_model: 'claude-opus-4-6',
-          plan_depth: 'medium',
-          code_depth: 'medium',
-          review_mode: 'standard',
-        },
         predictions: {
-          expected_success_probability: 0.88,
-          expected_cost_usd: 4.2,
-          confidence: 0.81,
+          recommended_strategy: {
+            planner_model: 'claude-opus-4-7',
+            coder_model: 'claude-sonnet-4-6',
+            reviewer_model: 'claude-opus-4-6',
+            plan_depth: 'medium',
+            code_depth: 'medium',
+            review_mode: 'standard',
+            estimated_success_under_budget: 0.88,
+            estimated_cost_usd: 4.2,
+            confidence: 0.81,
+          },
         },
+        metadata: {},
       }), { status: 200 });
     };
 
@@ -736,13 +737,13 @@ describe('routing-policy integration', () => {
 
       assert.equal(decision.routingMode, 'hokusai');
       assert.ok(requestBody);
-      const availableModels = requestBody?.available_models as Record<string, string[]>;
+      const availableModels = (requestBody?.inputs as { routing?: Record<string, string[]> } | undefined)?.routing;
       assert.deepEqual(
-        availableModels.coder_models.sort(),
+        availableModels?.available_coder_models?.sort(),
         ['claude-opus-4-6', 'claude-opus-4-7', 'gpt-5.4', 'gpt-5.5'].sort(),
       );
       assert.deepEqual(
-        availableModels.planner_models.sort(),
+        availableModels?.available_planner_models?.sort(),
         ['claude-opus-4-6', 'claude-opus-4-7', 'gpt-5.4', 'gpt-5.5'].sort(),
       );
       assert.equal(decision.signals.taskDifficulty, 'critical');

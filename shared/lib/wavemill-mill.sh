@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guard: copy this script to /tmp and re-exec from there to prevent Dropbox
+# from replacing the file mid-execution, which can surface as a spurious EOF
+# parse error when bash seeks back into the large monitor heredoc. (HOK-1755)
+if [[ -z "${_WAVEMILL_MILL_REEXEC:-}" ]]; then
+  _mm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  _mm_tmp="$(mktemp /tmp/wavemill-mill-XXXXXX.sh)"
+  cp "${BASH_SOURCE[0]}" "$_mm_tmp"
+  chmod +x "$_mm_tmp"
+  WAVEMILL_MILL_LIB_DIR="$_mm_lib" _WAVEMILL_MILL_REEXEC=1 \
+    exec bash "$_mm_tmp" "$@"
+fi
+
 # Wavemill Mill - Continuous Task Execution System
 #
 # This script implements a continuous loop that:
@@ -40,7 +52,7 @@ fi
 
 # Source common library and load layered config
 # Resolution: env vars > .wavemill-config.json > ~/.wavemill/config.json > defaults
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${WAVEMILL_MILL_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 source "$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/agent-adapters.sh"
 load_config "$REPO_DIR"
@@ -902,9 +914,9 @@ cleanup_completed_task() {
 
   # Log completion with optional reason
   if [[ -n "$completion_reason" ]]; then
-    log "Complete: $issue ($completion_reason)"
+    log "$issue: Complete ($completion_reason)"
   else
-    log "Complete: $issue"
+    log "$issue: Complete"
   fi
 }
 
@@ -3419,10 +3431,37 @@ blocked_completion_commit_matches_head() {
   return 1
 }
 
+blocked_completion_auto_allowed_dirty_path() {
+  local normalized_path="$1" slug="$2"
+  local artifact_prefix="features/$slug/"
+
+  if [[ "$normalized_path" == .wavemill/* ]]; then
+    return 0
+  fi
+
+  # Root prompt registry updates are Wavemill-owned generated metadata.
+  if [[ "$normalized_path" == "prompt-registry.jsonl" ]]; then
+    return 0
+  fi
+
+  if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
+    return 0
+  fi
+
+  case "$normalized_path" in
+    "${artifact_prefix}plan.md"|\
+    "${artifact_prefix}task-packet"*.md|\
+    "${artifact_prefix}selected-task.json")
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 blocked_completion_worktree_clean_for_auto() {
   local worktree="$1" slug="$2"
   local status_lines line path normalized_path
-  local artifact_prefix="features/$slug/"
 
   status_lines="$(git -C "$worktree" status --porcelain --untracked-files=all 2>/dev/null || true)"
   [[ -z "$status_lines" ]] && return 0
@@ -3435,11 +3474,7 @@ blocked_completion_worktree_clean_for_auto() {
     fi
     normalized_path="${path#./}"
 
-    if [[ "$normalized_path" == .wavemill/* ]]; then
-      continue
-    fi
-
-    if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
+    if blocked_completion_auto_allowed_dirty_path "$normalized_path" "$slug"; then
       continue
     fi
 
@@ -4877,7 +4912,7 @@ launch_ready_phase() {
     pending_log_level="info"
   fi
 
-  log "$pending_log_level" "  Launching ready phase for $issue (PR #$pr_number)"
+  log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
   ready_stderr_file=$(mktemp) || {
     log_warn "  Failed to capture ready stderr for $issue (mktemp failed)"
@@ -5022,8 +5057,8 @@ launch_ready_phase() {
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
-    log "status" "  Restored ready labels for PR #$pr_number"
-    log "  Ready checks completed for $issue (verdict: ${verdict:-unknown})"
+    log "debug" "  $issue: Restored ready labels for PR #$pr_number"
+    log "debug" "  $issue: Ready checks completed (verdict: ${verdict:-unknown})"
     return 0
   fi
 
@@ -5801,9 +5836,9 @@ cleanup_completed_task() {
 
   # Log completion with optional reason
   if [[ -n "$completion_reason" ]]; then
-    log "Complete: $issue ($completion_reason)"
+    log "$issue: Complete ($completion_reason)"
   else
-    log "Complete: $issue"
+    log "$issue: Complete"
   fi
 }
 
@@ -6756,7 +6791,7 @@ render_grouped_task_list() {
     if declare -F wavemill_config_annotation >/dev/null 2>&1; then
       backlog_annotation="$(wavemill_config_annotation "backlog.maxLines" "${config_max:-auto}")"
     fi
-    log "status" "[backlog] tier=$tier budget=$budget${backlog_annotation}"
+    log "info" "[backlog] tier=$tier budget=$budget${backlog_annotation}"
     BACKLOG_LAST_TIER="$tier"
   fi
 
@@ -6801,7 +6836,7 @@ launch_task() {
   linear_issue=$(get_linear_issue_id "$issue")
   challenge_model=$(get_task_meta "$issue" "challengeModel")
 
-  log "status" "Launching $issue: $title"
+  log "status" "$issue: Launching - $title"
 
   # Fetch issue details
   local issue_json
@@ -7125,13 +7160,13 @@ launch_task() {
         fi
 
         if [[ "$route_source" == "live" ]]; then
-          log "info" "  Workflow route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+          log "info" "  $issue Route: planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         elif [[ "$route_source" == "batch-cache" ]]; then
-          log "info" "  Workflow route (from batch cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+          log "info" "  $issue Route (from batch cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         elif [[ "$route_source" == "startup-cache" ]]; then
-          log "info" "  Workflow route (from startup cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+          log "info" "  $issue Route (from startup cache): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         else
-          log "info" "  Workflow route (heuristic fallback): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
+          log "info" "  $issue Route (heuristic fallback): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         fi
       else
         cat > "$routing_failure_file" <<EOF
@@ -7473,10 +7508,10 @@ Implement from the issue description plus direct codebase analysis."
     "$resolved_planner_agent" "$planner_launch_model"; then
     return 0
   fi
-  log "status" "Routing complete (direct), launched planning with $planner_launch_model"
+  log "status" "$issue Routing complete (direct), launched planning with $planner_launch_model"
 
   log "status" "$issue launched (phase: ${initial_phase}, agent: ${resolved_planner_agent}${planner_launch_model:+ --model $planner_launch_model})"
-  [[ -n "$planner_model" ]] && log "info" "Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
+  [[ -n "$planner_model" ]] && log "info" "$issue: Routing: planner=$planner_model, coder=$task_model, reviewer=$reviewer_model"
 
   if [[ "$should_launch_challenger" == "true" ]]; then
     WAVEMILL_DISABLE_CHALLENGE=1 launch_task "$challenger_key" "$challenger_slug" "$challenger_title" 0
@@ -8992,7 +9027,7 @@ monitor_issue_state() {
               return 0
             fi
             set_window_attention_state "$WIN" "needs-user"
-            log "$ISSUE → Ready checks completed for PR #$pr_number"
+            log "status" "$ISSUE → Ready checks completed for PR #$pr_number"
             return 0
           fi
           # No PR created or ready phase disabled - mark for attention

@@ -22,12 +22,12 @@ runTool({
     'npx tsx tools/set-issues-state.ts HOK-123 HOK-124',
     'npx tsx tools/set-issues-state.ts --state "Done" HOK-123 HOK-124',
   ],
-  async run({ positional, options }) {
+  async run({ positional, args }) {
     if (!positional || positional.length === 0) {
       throw new Error('At least one issue identifier is required');
     }
 
-    const stateName = options.state || 'In Progress';
+    const stateName = args.state || 'In Progress';
     const result = await setIssuesState(positional, stateName);
     console.log(JSON.stringify(result, null, 2));
     if (result.failed.length > 0) {

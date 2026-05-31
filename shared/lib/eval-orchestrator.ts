@@ -44,7 +44,7 @@ import {
   collectDeliveryOutcome,
 } from './outcome-collectors.ts';
 import { evaluateTask } from './eval.ts';
-import { attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
+import { attachPhaseDurations, attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
@@ -245,6 +245,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
 
   // Gather stage artifacts for judge attribution (search worktree first if provided)
   const stageArtifacts = evalOrchestratorDeps.gatherStageArtifacts(repoDir, issueId, branch, worktreePath);
+  const phaseDurations = stageArtifacts.phaseDurations;
 
   if (issueId) console.log(`  Issue: ${issueId}`);
   if (prNumber) console.log(`  PR: #${prNumber}`);
@@ -273,9 +274,11 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     }
   }
 
-  const wallClockSeconds = branch
-    ? evalOrchestratorDeps.computeWallClockSeconds(repoDir, branch) ?? 0
-    : 0;
+  const wallClockSeconds = phaseDurations?.total && phaseDurations.total > 0
+    ? phaseDurations.total
+    : branch
+      ? evalOrchestratorDeps.computeWallClockSeconds(repoDir, branch) ?? 0
+      : 0;
 
   const runInterventionAnalysis = () =>
     Promise.resolve().then(() => {
@@ -403,6 +406,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   if (record.outcomes) {
     record.outcomes.success = isEvalSuccess(record);
   }
+  attachPhaseDurations(record, phaseDurations);
 
   // Pre-populate stageOutcomes so buildTaskDescriptor can embed them in the descriptor.
   // enrichTrainingMetadata calls attachStageOutcomes again as part of its comprehensive
@@ -522,6 +526,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     challengePairId,
     routeProvenance: deriveRouteProvenance(repoDir, branch, issueId, worktreePath),
     executedPlanning: stageArtifacts.executedPlanning,
+    phaseDurations,
     routePrediction: stageArtifacts.routePrediction,
     routing: stageArtifacts.routing,
     difficulty: difficultyData,

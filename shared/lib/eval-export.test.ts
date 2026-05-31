@@ -75,6 +75,9 @@ test('flattenRecord produces correct flat row', () => {
   assert.equal(row.score, record.score);
   assert.equal(row.score_band, record.scoreBand);
   assert.equal(row.time_seconds, record.timeSeconds);
+  assert.equal(row.planning_time_seconds, null);
+  assert.equal(row.coding_time_seconds, null);
+  assert.equal(row.review_time_seconds, null);
   assert.equal(row.intervention_required, false);
   assert.equal(row.intervention_count, 0);
   assert.equal(row.intervention_details, '[]');
@@ -230,6 +233,22 @@ test('flattenRecord leaves rubric export fields blank when absent', () => {
   assert.equal(row.rubric_determinative_boundary, '');
 });
 
+test('flattenRecord exports phase duration columns when present', () => {
+  const row = flattenRecord(makeRecord({
+    phaseDurationsSeconds: {
+      planning: 120,
+      coding: 480,
+      review: 60,
+      total: 660,
+    },
+  }));
+
+  assert.equal(row.time_seconds, 245);
+  assert.equal(row.planning_time_seconds, 120);
+  assert.equal(row.coding_time_seconds, 480);
+  assert.equal(row.review_time_seconds, 60);
+});
+
 // ────────────────────────────────────────────────────────────────
 // Redaction Tests
 // ────────────────────────────────────────────────────────────────
@@ -320,7 +339,7 @@ test('toCsv column count matches header count', () => {
   const lines = csv.trim().split('\n');
   const headerCols = lines[0].split(',').length;
 
-  assert.equal(headerCols, 39);
+  assert.equal(headerCols, 42);
 });
 
 // ────────────────────────────────────────────────────────────────

@@ -57,6 +57,7 @@ weekly-competitive-review-prompt.md
 .wavemill/context/
 .wavemill/logs/
 .wavemill/registry/
+.wavemill/hokusai/
 .wavemill/state/
 .wavemill/locks/
 .wavemill/linear-retry-drain.last-run

@@ -39,7 +39,9 @@ import {
   getDeepSeekProviderConfig,
   getDeepSeekLauncherConfig,
   getAgentsConfig,
+  getHokusaiRouterConfig,
   getHokusaiSubmissionConfig,
+  getHokusaiContributionsConfig,
   getProvidersConfig,
   getReadyConfig,
   getReadyWatchdogConfig,
@@ -1660,6 +1662,87 @@ test('getHokusaiSubmissionConfig returns hokusai section', () => {
   }
 });
 
+test('getHokusaiRouterConfig returns router.hokusai section including apiKeyEnv', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: {
+        hokusai: {
+          endpoint: 'https://api.hokus.ai/api/v1/models/30/predict',
+          apiKeyEnv: 'CUSTOM_HOKUSAI_TOKEN',
+          timeout: 9000,
+        },
+      },
+    }));
+
+    const hokusaiConfig = getHokusaiRouterConfig(tmp);
+    assert.equal(hokusaiConfig.endpoint, 'https://api.hokus.ai/api/v1/models/30/predict');
+    assert.equal(hokusaiConfig.apiKeyEnv, 'CUSTOM_HOKUSAI_TOKEN');
+    assert.equal(hokusaiConfig.timeout, 9000);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getHokusaiContributionsConfig returns normalized defaults when unset', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.deepEqual(getHokusaiContributionsConfig(tmp), {
+      enabled: false,
+      endpoint: null,
+      endpointTokenEnv: '',
+      batchSize: 50,
+      exportPath: null,
+      maxRetries: 5,
+      backoffInitialMs: 1000,
+      backoffMaxMs: 300000,
+      timeoutMs: 30000,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getHokusaiContributionsConfig returns configured values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      hokusai: {
+        contributions: {
+          enabled: true,
+          endpoint: 'https://example.com/contributions',
+          endpointTokenEnv: 'HOKUSAI_TOKEN',
+          batchSize: 25,
+          exportPath: '.wavemill/hokusai-export',
+          maxRetries: 7,
+          backoffInitialMs: 2000,
+          backoffMaxMs: 600000,
+          timeoutMs: 45000,
+        },
+      },
+    }));
+
+    assert.deepEqual(getHokusaiContributionsConfig(tmp), {
+      enabled: true,
+      endpoint: 'https://example.com/contributions',
+      endpointTokenEnv: 'HOKUSAI_TOKEN',
+      batchSize: 25,
+      exportPath: '.wavemill/hokusai-export',
+      maxRetries: 7,
+      backoffInitialMs: 2000,
+      backoffMaxMs: 600000,
+      timeoutMs: 45000,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('getUiConfig returns ui section', () => {
   const tmp = makeTempRepo();
   try {
@@ -1754,7 +1837,10 @@ test('all top-level sections can coexist', () => {
       plan: { maxDisplay: 5 },
       eval: { evalsDir: '.wavemill/evals' },
       autoEval: true,
-      hokusai: { dataSubmission: { enabled: false, consentVersion: '1.0' } },
+      hokusai: {
+        dataSubmission: { enabled: false, consentVersion: '1.0' },
+        contributions: { enabled: true, endpoint: null, batchSize: 10 },
+      },
       router: { enabled: true },
       validation: { enabled: true },
       constraints: { enabled: false },
@@ -1771,6 +1857,7 @@ test('all top-level sections can coexist', () => {
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
     assert.equal(config.autoEval, true);
     assert.equal(config.hokusai?.dataSubmission?.enabled, false);
+    assert.equal(config.hokusai?.contributions?.enabled, true);
     assert.equal(config.router?.enabled, true);
     assert.equal(config.validation?.enabled, true);
     assert.equal(config.constraints?.enabled, false);

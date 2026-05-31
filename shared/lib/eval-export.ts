@@ -36,6 +36,9 @@ export interface ExportRow {
 
   // Timing
   time_seconds: number;
+  planning_time_seconds: number | null;
+  coding_time_seconds: number | null;
+  review_time_seconds: number | null;
 
   // Intervention signals
   intervention_required: boolean;
@@ -91,6 +94,9 @@ const COLUMNS: (keyof ExportRow)[] = [
   'score',
   'score_band',
   'time_seconds',
+  'planning_time_seconds',
+  'coding_time_seconds',
+  'review_time_seconds',
   'intervention_required',
   'intervention_count',
   'intervention_details',
@@ -186,6 +192,9 @@ export function flattenRecord(
     score_band: record.scoreBand,
 
     time_seconds: record.timeSeconds,
+    planning_time_seconds: record.phaseDurationsSeconds?.planning ?? null,
+    coding_time_seconds: record.phaseDurationsSeconds?.coding ?? null,
+    review_time_seconds: record.phaseDurationsSeconds?.review ?? null,
 
     intervention_required: record.interventionRequired,
     intervention_count: record.interventionCount,

@@ -104,19 +104,53 @@ Hokusai is optional. The default model is:
 - local learning from your own data
 - collective learning only when explicitly enabled
 
-### Submission Schema
+### Live Prediction Contract
 
-Outbound Hokusai training submissions include a `schema_version` field:
+Live Hokusai routing uses the public Model 30 prediction endpoint:
 
-- `1.0` submissions contain route, constraint, and observed outcome fields.
-- `1.1` submissions also include a `rubric_signals` block when sanitized rubric features are available.
-- `1.2` submissions can additionally include optional `route_prediction` and `route_calibration` blocks when present on the eval record.
+`POST https://api.hokus.ai/api/v1/models/30/predict`
 
-The `rubric_signals` block carries the rubric version, criterion count, mean score, five normalized criterion scores, optional determinative boundary, and optional rubric provenance. These values come from the privacy-safe rubric projection on the task descriptor plus record-level rubric metadata.
+Wavemill sends a nested `inputs` payload with:
 
-Free-text rubric rationale, stage rationale, judge notes, prompt-registry hashes, and internal model identifiers are not forwarded. Redaction uses an allow-list for safe strings, so unexpected new text fields are stripped by default while numeric rubric features pass through unchanged.
+- `inputs.task.description`
+- `inputs.task.task_type`
+- optional `inputs.routing`, `inputs.context`, `inputs.workflow`, and `inputs.metadata`
 
-The new fields are optional. Existing consumers can continue accepting old submissions and ignore unknown optional fields until they are updated for `1.1`.
+Wavemill expects `predictions.recommended_strategy` in the response and converts it into the internal `WorkflowRouteDecision`. If the request times out, auth fails, the API returns `4xx/5xx`, or the response shape is invalid, Wavemill classifies the failure and falls back to local routing.
+
+### Contribution Contract
+
+Contribution uploads are not the same thing as live Model 30 routing input.
+
+The live `/predict` API gets task and routing constraints. Contribution upload gets observed workflow outcomes after the run finishes. Wavemill only queues privacy-safe contribution rows after redaction and validation.
+
+Current supported row shapes are:
+
+- public Submit Data rows with required `success_under_budget`
+- stricter benchmark rows using `technical_task_router_row/v1`
+
+Optional compact `inputs`, cost, timing, harness, and benchmark metadata may be included when they pass the redaction allow-list. Raw eval payloads, task bodies, prompts, repository names before redaction, and secrets do not leave the machine.
+
+### Contribution Queue
+
+Outcome and benchmark contribution uploads are separate from live Model 30 routing. Live prediction calls stay synchronous and continue to fall back to local routing when Hokusai is unavailable; Wavemill does not enqueue stale route requests.
+
+When `hokusai.contributions.enabled` is `true` and user consent is valid, Wavemill stores redacted contribution rows under `.wavemill/hokusai/` and later drains them to an explicitly configured contribution endpoint. There is no public default upload endpoint in repo config. If Hokusai has not published a stable contribution API for your environment, leave the endpoint unset and export rows for manual handling instead.
+
+If no explicit contribution endpoint is configured, drain can export pending rows for manual submission instead of pretending upload succeeded. Transient failures such as timeouts, `429`, and `5xx` responses are retried with persisted backoff; permanent failures such as auth, schema, or malformed-row errors move to dead-letter with redacted operator-facing details only.
+
+Contribution lifecycle history is stored in an append-only ledger at `.wavemill/hokusai/ledger.jsonl`. Accepted and rejected terminal events track idempotency key, Model `30`, row count, timestamps, job/submission identifiers when present, and reward state (`pending`, `none`, `awarded`, `unknown`). Missing rewards are never inferred as zero.
+
+`wavemill hokusai status` includes queue and ledger summary fields:
+
+- pending queue count
+- accepted submission count
+- accepted row count
+- rejected submission count
+- last terminal submission
+- known awarded tokens plus pending/none/unknown reward counts
+
+Ledger summary deduplicates by idempotency key and returned job/submission IDs to avoid double-counting duplicate accepts or retries. Awarded totals are local known awards only, not a live Hokusai account balance.
 
 ## Related Commands
 
