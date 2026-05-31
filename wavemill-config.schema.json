@@ -546,8 +546,7 @@
                         },
                         "endpoint": {
                             "type": "string",
-                            "default": "https://api.hokusai.dev/v1/submit",
-                            "description": "Hokusai API endpoint for data submission."
+                            "description": "Explicit Hokusai endpoint for legacy data submission integrations. Leave unset unless you operate a private submission service."
                         }
                     },
                     "additionalProperties": false

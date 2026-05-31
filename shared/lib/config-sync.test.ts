@@ -149,10 +149,7 @@ test('prepareConfigSync reports additions from base even when local overlay has 
     assert.ok(prepared.additions.includes('router'));
     assert.ok(prepared.additions.includes('hokusai'));
     assert.equal(prepared.mergedConfig.router?.enabled, CANONICAL_CONFIG_TEMPLATE.router?.enabled);
-    assert.equal(
-      prepared.mergedConfig.hokusai?.dataSubmission?.endpoint,
-      CANONICAL_CONFIG_TEMPLATE.hokusai?.dataSubmission?.endpoint,
-    );
+    assert.equal(prepared.mergedConfig.hokusai?.dataSubmission?.endpoint, undefined);
   } finally {
     cleanUp(repoDir);
   }
