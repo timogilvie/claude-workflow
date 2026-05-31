@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { clearConfigCache, getHokusaiRouterConfig } from './config.ts';
-import { routeViaHokusai } from './hokusai-router.ts';
+import { clearConfigCache } from './config.ts';
+import { classifyHokusaiFailure, DEFAULT_HOKUSAI_MODEL30_ENDPOINT, routeViaHokusai } from './hokusai-router.ts';
 
 let passed = 0;
 let failed = 0;
@@ -27,16 +27,16 @@ async function test(name: string, fn: () => void | Promise<void>) {
 function makeRepo(configOverrides: Record<string, unknown> = {}): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'hokusai-router-test-'));
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
-  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
-    router: {
-      hokusai: {
-        endpoint: 'http://localhost:8080/predict',
+    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+      router: {
+        hokusai: {
+          endpoint: 'http://localhost:8080/predict',
+        apiKeyEnv: 'TEST_HOKUSAI_TOKEN',
         timeout: 100,
       },
       ...configOverrides,
     },
   }));
-  clearConfigCache(repoDir);
 
   return {
     repoDir,
@@ -49,56 +49,177 @@ function makeRepo(configOverrides: Record<string, unknown> = {}): { repoDir: str
 
 const originalFetch = globalThis.fetch;
 const originalWarn = console.warn;
+const originalToken = process.env.TEST_HOKUSAI_TOKEN;
 
 console.log('\n--- hokusai-router Tests ---\n');
 
-await test('successful routing returns a workflow decision', async () => {
+await test('successful routing returns a workflow decision from the model 30 response', async () => {
   const { repoDir, cleanup } = makeRepo();
+  process.env.TEST_HOKUSAI_TOKEN = 'secret-token';
   globalThis.fetch = async () => new Response(JSON.stringify({
-    schema_version: '1.0',
-    route: {
-      planner_model: 'claude-sonnet-4-5-20250929',
-      coder_model: 'gpt-5.3-codex',
-      reviewer_model: 'claude-haiku-4-5-20251001',
-      plan_depth: 'medium',
-      code_depth: 'high',
-      review_mode: 'standard',
-    },
     predictions: {
-      expected_success_probability: 0.91,
-      expected_cost_usd: 2.5,
-      confidence: 0.72,
+      recommended_strategy: {
+        planner_model: 'claude-sonnet-4-5-20250929',
+        coder_model: 'gpt-5.3-codex',
+        reviewer_model: 'claude-haiku-4-5-20251001',
+        stages: ['plan', 'code', 'review'],
+        estimated_success_under_budget: 0.91,
+        estimated_cost_usd: 2.5,
+        estimated_duration_seconds: 480,
+        confidence: 0.72,
+      },
+      alternatives: [{ coder_model: 'gpt-5.4' }],
+      tradeoffs: [{ type: 'cost' }],
+      nearest_neighbors: [{ id: 'n1' }],
+    },
+    metadata: {
+      request_id: 'req-1',
+      inference_log_id: 'log-1',
     },
   }), { status: 200 });
 
   try {
     const decision = await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
     assert.ok(decision);
+    assert.equal(decision?.planner, 'claude-sonnet-4-5-20250929');
     assert.equal(decision?.coder, 'gpt-5.3-codex');
-    assert.equal(decision?.codeDepth, 'deep');
+    assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
+    assert.equal(decision?.planDepth, 'medium');
+    assert.equal(decision?.reviewRecommended, 'llm');
+    assert.equal(decision?.provenance?.requestId, 'req-1');
+    assert.equal(decision?.provenance?.inferenceLogId, 'log-1');
+    assert.equal(decision?.provenance?.estimatedDurationSeconds, 480);
   } finally {
     globalThis.fetch = originalFetch;
     cleanup();
   }
 });
 
-await test('timeout handling returns null', async () => {
+await test('sends the nested inputs payload and prevents legacy flat payload keys', async () => {
   const { repoDir, cleanup } = makeRepo();
+  process.env.TEST_HOKUSAI_TOKEN = 'secret-token';
+  let requestBody = '';
+  let authorization = '';
+  globalThis.fetch = async (_input, init) => {
+    requestBody = String(init?.body ?? '');
+    authorization = String((init?.headers as Record<string, string>).authorization ?? '');
+    return new Response(JSON.stringify({
+      predictions: {
+        recommended_strategy: {
+          planner_model: 'planner',
+          coder_model: 'coder',
+          reviewer_model: 'reviewer',
+          stages: ['plan', 'code', 'review'],
+          estimated_success_under_budget: 0.7,
+          estimated_cost_usd: 1.1,
+          confidence: 0.6,
+        },
+      },
+      metadata: {},
+    }), { status: 200 });
+  };
+
+  try {
+    await routeViaHokusai('Implement a backend feature with tests.', {
+      repoDir,
+      maxCostUsd: 3.25,
+      plannerModels: ['planner-a'],
+      coderModels: ['coder-a'],
+      reviewerModels: ['reviewer-a'],
+    });
+    const parsed = JSON.parse(requestBody);
+    assert.ok(parsed.inputs);
+    assert.equal(parsed.inputs.task.description, 'Implement a backend feature with tests.');
+    assert.equal(parsed.inputs.routing.max_cost_usd, 3.25);
+    assert.deepEqual(parsed.inputs.routing.available_planner_models, ['planner-a']);
+    assert.deepEqual(parsed.inputs.routing.available_coder_models, ['coder-a']);
+    assert.deepEqual(parsed.inputs.routing.available_reviewer_models, ['reviewer-a']);
+    assert.deepEqual(parsed.inputs.workflow.stages, ['plan', 'code', 'review']);
+    assert.equal(parsed.schema_version, undefined);
+    assert.equal(parsed.task_descriptor, undefined);
+    assert.equal(parsed.available_models, undefined);
+    assert.equal(parsed.constraints, undefined);
+    assert.equal(authorization, 'Bearer secret-token');
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+await test('uses the documented production endpoint when routeViaHokusai is called without an override', async () => {
+  const { repoDir, cleanup } = makeRepo();
+  const originalDefaultToken = process.env.HOKUSAI_API_TOKEN;
+  process.env.HOKUSAI_API_TOKEN = 'secret-token';
+  let endpoint = '';
+  globalThis.fetch = async (input) => {
+    endpoint = String(input);
+    return new Response(JSON.stringify({
+      predictions: {
+        recommended_strategy: {
+          planner_model: 'planner',
+          coder_model: 'coder',
+          reviewer_model: 'reviewer',
+        },
+      },
+      metadata: {},
+    }), { status: 200 });
+  };
+
+  try {
+    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({}));
+    clearConfigCache(repoDir);
+    await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
+    assert.equal(endpoint, DEFAULT_HOKUSAI_MODEL30_ENDPOINT);
+  } finally {
+    if (originalDefaultToken === undefined) {
+      delete process.env.HOKUSAI_API_TOKEN;
+    } else {
+      process.env.HOKUSAI_API_TOKEN = originalDefaultToken;
+    }
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+await test('missing auth fails fast and never sends a request', async () => {
+  const { repoDir, cleanup } = makeRepo();
+  delete process.env.TEST_HOKUSAI_TOKEN;
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    throw new Error('should not call');
+  };
+
+  try {
+    const decision = await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
+    assert.equal(decision, null);
+    assert.equal(called, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+await test('timeout handling returns null and classifies timeout', async () => {
+  const { repoDir, cleanup } = makeRepo();
+  process.env.TEST_HOKUSAI_TOKEN = 'secret-token';
   globalThis.fetch = async (_input, init) => new Promise<Response>((_resolve, reject) => {
-    init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
   });
 
   try {
     const decision = await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
     assert.equal(decision, null);
+    assert.equal(classifyHokusaiFailure(new DOMException('aborted', 'AbortError')), 'timeout');
   } finally {
     globalThis.fetch = originalFetch;
     cleanup();
   }
 });
 
-await test('network errors return null and warn', async () => {
+await test('network errors return null and warn without leaking the token', async () => {
   const { repoDir, cleanup } = makeRepo();
+  process.env.TEST_HOKUSAI_TOKEN = 'secret-token';
   const warnings: string[] = [];
   console.warn = (message?: unknown) => {
     warnings.push(String(message));
@@ -110,7 +231,8 @@ await test('network errors return null and warn', async () => {
   try {
     const decision = await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
     assert.equal(decision, null);
-    assert.ok(warnings.some((message) => message.includes('Hokusai routing failed')));
+    assert.ok(warnings.some((message) => message.includes('network_error')));
+    assert.ok(warnings.every((message) => !message.includes('secret-token')));
   } finally {
     console.warn = originalWarn;
     globalThis.fetch = originalFetch;
@@ -118,153 +240,64 @@ await test('network errors return null and warn', async () => {
   }
 });
 
-await test('invalid responses return null', async () => {
+for (const [status, classification] of [
+  [401, 'unauthorized'],
+  [403, 'unauthorized'],
+  [404, 'not_found'],
+  [422, 'invalid_payload'],
+  [429, 'rate_limited'],
+  [500, 'server_error'],
+  [502, 'server_error'],
+] as const) {
+  await test(`HTTP ${status} returns null and classifies ${classification}`, async () => {
+    const { repoDir, cleanup } = makeRepo();
+    process.env.TEST_HOKUSAI_TOKEN = 'secret-token';
+    const warnings: string[] = [];
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+    globalThis.fetch = async () => new Response('error', { status });
+
+    try {
+      const decision = await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
+      assert.equal(decision, null);
+      assert.ok(warnings.some((message) => message.includes(classification)));
+    } finally {
+      console.warn = originalWarn;
+      globalThis.fetch = originalFetch;
+      cleanup();
+    }
+  });
+}
+
+await test('invalid success responses return null and classify invalid_response', async () => {
   const { repoDir, cleanup } = makeRepo();
+  process.env.TEST_HOKUSAI_TOKEN = 'secret-token';
+  const warnings: string[] = [];
+  console.warn = (message?: unknown) => {
+    warnings.push(String(message));
+  };
   globalThis.fetch = async () => new Response(JSON.stringify({ ok: true }), { status: 200 });
 
   try {
     const decision = await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
     assert.equal(decision, null);
+    assert.ok(warnings.some((message) => message.includes('invalid_response')));
   } finally {
-    globalThis.fetch = originalFetch;
-    cleanup();
-  }
-});
-
-await test('config loading returns endpoint and timeout', () => {
-  const { repoDir, cleanup } = makeRepo();
-  try {
-    const config = getHokusaiRouterConfig(repoDir);
-    assert.equal(config.endpoint, 'http://localhost:8080/predict');
-    assert.equal(config.timeout, 100);
-  } finally {
-    cleanup();
-  }
-});
-
-await test('maxCostUsd is passed through to the Hokusai request', async () => {
-  const { repoDir, cleanup } = makeRepo();
-  let requestBody = '';
-  globalThis.fetch = async (_input, init) => {
-    requestBody = String(init?.body ?? '');
-    return new Response(JSON.stringify({
-      schema_version: '1.0',
-      route: {
-        planner_model: 'claude-sonnet-4-5-20250929',
-        coder_model: 'gpt-5.3-codex',
-        reviewer_model: 'claude-haiku-4-5-20251001',
-        plan_depth: 'low',
-        code_depth: 'medium',
-        review_mode: 'light',
-      },
-      predictions: {
-        expected_success_probability: 0.7,
-        expected_cost_usd: 1.1,
-        confidence: 0.6,
-      },
-    }), { status: 200 });
-  };
-
-  try {
-    await routeViaHokusai('Implement a backend feature with tests.', { repoDir, maxCostUsd: 3.25 });
-    const parsed = JSON.parse(requestBody);
-    assert.equal(parsed.constraints.max_cost_usd, 3.25);
-  } finally {
-    globalThis.fetch = originalFetch;
-    cleanup();
-  }
-});
-
-await test('configured router availability populates descriptor and stage pools', async () => {
-  const { repoDir, cleanup } = makeRepo({
-    availableModels: {
-      planner: ['gpt-5.5', 'claude-opus-4-7'],
-      coder: ['gpt-5.4', 'gpt-5.3-codex'],
-      reviewer: ['claude-sonnet-4-6'],
-    },
-  });
-  let requestBody = '';
-  globalThis.fetch = async (_input, init) => {
-    requestBody = String(init?.body ?? '');
-    return new Response(JSON.stringify({
-      schema_version: '1.0',
-      route: {
-        planner_model: 'gpt-5.5',
-        coder_model: 'gpt-5.4',
-        reviewer_model: 'claude-sonnet-4-6',
-        plan_depth: 'medium',
-        code_depth: 'medium',
-        review_mode: 'standard',
-      },
-      predictions: {
-        expected_success_probability: 0.8,
-        expected_cost_usd: 1.7,
-        confidence: 0.65,
-      },
-    }), { status: 200 });
-  };
-
-  try {
-    await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
-    const parsed = JSON.parse(requestBody);
-    assert.deepEqual(parsed.available_models, {
-      planner_models: ['gpt-5.5', 'claude-opus-4-7'],
-      coder_models: ['gpt-5.4', 'gpt-5.3-codex'],
-      reviewer_models: ['claude-sonnet-4-6'],
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-    cleanup();
-  }
-});
-
-await test('explicit modelsAvailable overrides configured descriptor availability', async () => {
-  const { repoDir, cleanup } = makeRepo({
-    availableModels: {
-      planner: ['gpt-5.5', 'claude-opus-4-7'],
-      coder: ['gpt-5.4', 'gpt-5.3-codex'],
-      reviewer: ['claude-sonnet-4-6'],
-    },
-  });
-  let requestBody = '';
-  globalThis.fetch = async (_input, init) => {
-    requestBody = String(init?.body ?? '');
-    return new Response(JSON.stringify({
-      schema_version: '1.0',
-      route: {
-        planner_model: 'override-model',
-        coder_model: 'override-model',
-        reviewer_model: 'override-model',
-        plan_depth: 'low',
-        code_depth: 'low',
-        review_mode: 'light',
-      },
-      predictions: {
-        expected_success_probability: 0.6,
-        expected_cost_usd: 0.9,
-        confidence: 0.55,
-      },
-    }), { status: 200 });
-  };
-
-  try {
-    await routeViaHokusai('Implement a backend feature with tests.', {
-      repoDir,
-      modelsAvailable: ['override-model'],
-    });
-    const parsed = JSON.parse(requestBody);
-    assert.deepEqual(parsed.available_models, {
-      planner_models: ['override-model'],
-      coder_models: ['override-model'],
-      reviewer_models: ['override-model'],
-    });
-  } finally {
+    console.warn = originalWarn;
     globalThis.fetch = originalFetch;
     cleanup();
   }
 });
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
+globalThis.fetch = originalFetch;
+console.warn = originalWarn;
+if (originalToken === undefined) {
+  delete process.env.TEST_HOKUSAI_TOKEN;
+} else {
+  process.env.TEST_HOKUSAI_TOKEN = originalToken;
+}
 if (failed > 0) {
   process.exit(1);
 }

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fromHokusaiOutput } from './hokusai-adapter.ts';
-import type { HokusaiOutput } from './hokusai-schema.ts';
+import { fromHokusaiModel30Response } from './hokusai-adapter.ts';
+import type { HokusaiModel30Response } from './hokusai-schema.ts';
 
 let passed = 0;
 let failed = 0;
@@ -39,99 +39,81 @@ function makeRepo(): { repoDir: string; cleanup: () => void } {
   };
 }
 
-function makeOutput(overrides: Partial<HokusaiOutput> = {}): HokusaiOutput {
+function makeResponse(overrides: Partial<HokusaiModel30Response> = {}): HokusaiModel30Response {
   return {
-    schema_version: '1.0',
-    route: {
-      planner_model: 'planner',
-      coder_model: 'coder',
-      reviewer_model: 'reviewer',
-      plan_depth: 'medium',
-      code_depth: 'medium',
-      review_mode: 'standard',
-      ...overrides.route,
-    },
     predictions: {
-      expected_success_probability: 0.82,
-      expected_cost_usd: 12.34,
-      confidence: 0.67,
+      recommended_strategy: {
+        planner_model: 'planner',
+        coder_model: 'coder',
+        reviewer_model: 'reviewer',
+        stages: ['plan', 'code', 'review'],
+        estimated_success_under_budget: 0.82,
+        estimated_cost_usd: 12.34,
+        estimated_duration_seconds: 600,
+        confidence: 0.67,
+      },
       ...overrides.predictions,
     },
-    ...overrides,
+    metadata: {
+      request_id: 'req-1',
+      inference_log_id: 'log-1',
+      ...overrides.metadata,
+    },
   };
 }
 
 console.log('\n--- hokusai-adapter Tests ---\n');
 
-test('maps depth and review enums into WorkflowRouteDecision values', () => {
-  const low = fromHokusaiOutput(makeOutput({
-    route: { planner_model: 'planner', coder_model: 'coder', reviewer_model: 'reviewer', plan_depth: 'low', code_depth: 'low', review_mode: 'light' },
-  }));
-  assert.equal(low.planDepth, 'light');
-  assert.equal(low.codeDepth, 'light');
-  assert.equal(low.reviewRecommended, 'static');
-
-  const medium = fromHokusaiOutput(makeOutput({
-    route: { planner_model: 'planner', coder_model: 'coder', reviewer_model: 'reviewer', plan_depth: 'medium', code_depth: 'medium', review_mode: 'standard' },
-  }));
-  assert.equal(medium.planDepth, 'medium');
-  assert.equal(medium.codeDepth, 'medium');
-  assert.equal(medium.reviewRecommended, 'llm');
-
-  const high = fromHokusaiOutput(makeOutput({
-    route: { planner_model: 'planner', coder_model: 'coder', reviewer_model: 'reviewer', plan_depth: 'high', code_depth: 'high', review_mode: 'deep' },
-  }));
-  assert.equal(high.planDepth, 'deep');
-  assert.equal(high.codeDepth, 'deep');
-  assert.equal(high.reviewRecommended, 'static+llm');
-});
-
-test('passes models through and maps predictions to expectedSuccess and confidence', () => {
-  const decision = fromHokusaiOutput(makeOutput({
-    route: {
-      planner_model: 'claude-sonnet-4-5-20250929',
-      coder_model: 'gpt-5.3-codex',
-      reviewer_model: 'claude-haiku-4-5-20251001',
-      plan_depth: 'medium',
-      code_depth: 'medium',
-      review_mode: 'standard',
-    },
+test('maps model 30 strategy fields into WorkflowRouteDecision values', () => {
+  const decision = fromHokusaiModel30Response(makeResponse({
     predictions: {
-      expected_success_probability: 0.91,
-      expected_cost_usd: 9.5,
-      confidence: 0.42,
+      recommended_strategy: {
+        planner_model: 'claude-sonnet-4-5-20250929',
+        coder_model: 'gpt-5.3-codex',
+        reviewer_model: 'claude-haiku-4-5-20251001',
+        plan_depth: 'high',
+        code_depth: 'low',
+        review_mode: 'deep',
+        estimated_success_under_budget: 0.91,
+        estimated_cost_usd: 9.5,
+        confidence: 0.42,
+      },
     },
   }));
 
   assert.equal(decision.planner, 'claude-sonnet-4-5-20250929');
   assert.equal(decision.coder, 'gpt-5.3-codex');
   assert.equal(decision.reviewer, 'claude-haiku-4-5-20251001');
+  assert.equal(decision.planDepth, 'deep');
+  assert.equal(decision.codeDepth, 'light');
+  assert.equal(decision.reviewRecommended, 'static+llm');
   assert.equal(decision.expectedSuccess, 0.91);
   assert.equal(decision.confidence, 0.42);
 });
 
-test('apportions expected_cost_usd across stages using heuristic cost weights', () => {
+test('apportions estimated_cost_usd across stages using heuristic cost weights', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
-    const decision = fromHokusaiOutput(makeOutput(), { repoDir });
+    const decision = fromHokusaiModel30Response(makeResponse(), { repoDir });
     assert.equal(Number((decision.expectedCostPlan + decision.expectedCostCode + decision.expectedCostReview).toFixed(2)), 12.34);
     assert.ok(decision.expectedCostCode > decision.expectedCostPlan);
     assert.ok(decision.expectedCostCode > decision.expectedCostReview);
-    assert.ok(decision.expectedCostPlan > 0);
-    assert.ok(decision.expectedCostReview > 0);
   } finally {
     cleanup();
   }
 });
 
-test('falls back to heuristic costs when expected_cost_usd is invalid', () => {
+test('falls back to heuristic costs when estimated_cost_usd is invalid', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
-    const decision = fromHokusaiOutput(makeOutput({
+    const decision = fromHokusaiModel30Response(makeResponse({
       predictions: {
-        expected_success_probability: 0.82,
-        expected_cost_usd: Number.NaN,
-        confidence: 0.67,
+        recommended_strategy: {
+          planner_model: 'planner',
+          coder_model: 'coder',
+          reviewer_model: 'reviewer',
+          estimated_cost_usd: Number.NaN,
+        },
       },
     }), { repoDir });
     assert.ok(decision.expectedCostPlan > 0);
@@ -142,24 +124,30 @@ test('falls back to heuristic costs when expected_cost_usd is invalid', () => {
   }
 });
 
-test('clamps probability fields and applies default signals', () => {
-  const decision = fromHokusaiOutput(makeOutput({
+test('clamps probability fields and preserves provenance metadata', () => {
+  const decision = fromHokusaiModel30Response(makeResponse({
     predictions: {
-      expected_success_probability: 2,
-      expected_cost_usd: 0,
-      confidence: -1,
+      recommended_strategy: {
+        planner_model: 'planner',
+        coder_model: 'coder',
+        reviewer_model: 'reviewer',
+        estimated_success_under_budget: 2,
+        estimated_cost_usd: 0,
+        estimated_duration_seconds: 123,
+        confidence: -1,
+      },
+      alternatives: [{ planner_model: 'alt' }],
+      tradeoffs: [{ kind: 'speed' }],
+      nearest_neighbors: [{ id: 'n1' }],
     },
   }));
 
   assert.equal(decision.expectedSuccess, 1);
   assert.equal(decision.confidence, 0);
-  assert.deepEqual(decision.signals, {
-    taskType: 'feature',
-    promptLength: 'medium',
-    complexityScore: 0,
-    fileTypes: [],
-    riskScore: 0,
-  });
+  assert.equal(decision.provenance?.requestId, 'req-1');
+  assert.equal(decision.provenance?.inferenceLogId, 'log-1');
+  assert.equal(decision.provenance?.estimatedDurationSeconds, 123);
+  assert.deepEqual(decision.provenance?.alternatives, [{ planner_model: 'alt' }]);
 });
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
