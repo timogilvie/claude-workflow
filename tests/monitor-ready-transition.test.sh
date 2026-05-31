@@ -356,7 +356,7 @@ JSON
     transient_attention="absent"
     [[ -f "$READY_DIR/.needs-attention-transient" ]] && transient_attention="present"
     transient_count="$(cat "$READY_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
-    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\nbypass_warn_count=%s\nsave_task_state_status=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\n" \
+    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\nbypass_warn_count=%s\nsave_task_state_status=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\nlogs=%s\n" \
       "$CURRENT_PHASE" \
       "$ATTENTION_STATE" \
       "$READY_LAUNCH_COUNT" \
@@ -370,7 +370,8 @@ JSON
       "$save_task_state_status" \
       "$needs_attention" \
       "$transient_attention" \
-      "$transient_count"
+      "$transient_count" \
+      "$LOG_OUTPUT"
   '
 }
 
@@ -406,6 +407,7 @@ ready_pending_transitions_to_pass_output="$(run_monitor_case ready_pending_trans
 check_contains "pending ready passes on re-poll" "$ready_pending_transitions_to_pass_output" "ready_launches=1"
 check_contains "pending ready pass keeps attention clear" "$ready_pending_transitions_to_pass_output" "attention=clear"
 check_contains "pending ready pass holds slot active" "$ready_pending_transitions_to_pass_output" "active_count=1"
+check_contains "pending ready pass logs status completion once" "$ready_pending_transitions_to_pass_output" "logs=status HOK-1249 → Ready checks completed for PR #321"
 
 ready_pending_failure_needs_user_output="$(run_monitor_case ready_pending_failure_needs_user)"
 check_contains "pending ready failure relaunches once" "$ready_pending_failure_needs_user_output" "ready_launches=1"
