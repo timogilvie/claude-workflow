@@ -148,7 +148,7 @@ describe('hokusai-queue-drain', () => {
     });
 
     assert.equal(result.status, 'retry_scheduled');
-    const pending = readPending({
+    const pending = await readPending({
       repoDir,
       configDir,
       now: new Date('2026-05-31T12:00:00.500Z'),

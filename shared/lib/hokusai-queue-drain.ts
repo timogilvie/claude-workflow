@@ -151,7 +151,7 @@ export async function drainContributionQueue(
     return { status: 'unconfigured' };
   }
 
-  const pending = readPending(opts);
+  const pending = await readPending(opts);
   if (pending.status === 'disabled' || pending.status === 'empty' || pending.status === 'waiting' || pending.status === 'corrupt_state') {
     return {
       status: pending.status,

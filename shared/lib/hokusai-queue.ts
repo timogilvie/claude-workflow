@@ -241,7 +241,7 @@ export async function enqueueBatch(
   return results;
 }
 
-export function readPending(opts: QueueAccessOptions = {}): ReadPendingResult {
+export async function readPending(opts: QueueAccessOptions = {}): Promise<ReadPendingResult> {
   const consent = getContributionConsentStatus(opts);
   if (!consent.submissionAllowed) {
     return { status: 'disabled' };
@@ -268,36 +268,31 @@ export function readPending(opts: QueueAccessOptions = {}): ReadPendingResult {
 
   const slice = lines.slice(state.processedLineCount);
   const entries: HokusaiQueueEnvelope[] = [];
-  let lineCount = 0;
+  let deadLetteredCount = 0;
 
   for (const line of slice) {
-    lineCount += 1;
     let parsed: HokusaiQueueEnvelope;
     try {
       parsed = JSON.parse(line) as HokusaiQueueEnvelope;
       validateContributionRow(parsed.row);
     } catch (error) {
-      return {
-        status: 'ready',
-        batch: {
-          entries: [{
-            schemaVersion: STATE_SCHEMA_VERSION,
-            entryId: 'malformed-entry',
-            rowShape: 'submit_data',
-            row: { success_under_budget: false },
-            idempotencyKey: 'malformed-entry',
-            enqueuedAt: now.toISOString(),
-            attempts: 0,
-            nextAttemptAt: now.toISOString(),
-          }],
-          lineCount: 1,
-          idempotencyKey: 'malformed-entry',
-        },
-      };
+      appendJsonlLine(paths.deadLetterPath, {
+        rawLine: line,
+        error: error instanceof Error ? error.message : errorMessage(error),
+        deadLetteredAt: now.toISOString(),
+      });
+      deadLetteredCount += 1;
+      continue;
     }
 
     if (new Date(parsed.nextAttemptAt).getTime() > now.getTime()) {
       if (entries.length === 0) {
+        if (deadLetteredCount > 0) {
+          await mutateQueueState(opts, (current) => ({
+            ...current,
+            processedLineCount: current.processedLineCount + deadLetteredCount,
+          }));
+        }
         return { status: 'waiting', nextAttemptAt: parsed.nextAttemptAt };
       }
       break;
@@ -310,14 +305,20 @@ export function readPending(opts: QueueAccessOptions = {}): ReadPendingResult {
   }
 
   if (entries.length === 0) {
-    return { status: 'waiting', nextAttemptAt: undefined };
+    if (deadLetteredCount > 0) {
+      await mutateQueueState(opts, (current) => ({
+        ...current,
+        processedLineCount: current.processedLineCount + deadLetteredCount,
+      }));
+    }
+    return { status: 'empty' };
   }
 
   return {
     status: 'ready',
     batch: {
       entries,
-      lineCount: entries.length,
+      lineCount: entries.length + deadLetteredCount,
       idempotencyKey: computeBatchIdempotencyKey(entries),
     },
   };

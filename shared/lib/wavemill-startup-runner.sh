@@ -493,7 +493,7 @@ write_startup_pane_wrapper() {
   local startup_log_file="${5:-}" status_log_file="${6:-}" startup_id="${7:-}"
 
   cat > "$wrapper_path" <<EOF
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 set -Eeuo pipefail
 
 issue='$issue'
@@ -574,8 +574,9 @@ source_dependency_context() {
 
   log_line "[wavemill] Installing dependencies with \$pm..."
   emit_progress deps running
-  if ! (cd "\$wt_dir" && eval "\$install_cmd"); then
-    local rc=\$?
+  local rc=0
+  (cd "\$wt_dir" && eval "\$install_cmd") || rc=\$?
+  if [[ \$rc -ne 0 ]]; then
     log_line "[wavemill] Dependency install failed (\$pm, exit \$rc)."
     emit_progress deps failed "dependency install"
     write_marker "failed" "install-failed:\$pm:\$rc"

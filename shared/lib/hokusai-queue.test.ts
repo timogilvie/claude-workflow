@@ -111,8 +111,8 @@ describe('hokusai-queue', () => {
     const { repoDir, configDir } = makeRepo();
     await enqueueContribution(makeRow(), { repoDir, configDir });
 
-    const first = readPending({ repoDir, configDir });
-    const second = readPending({ repoDir, configDir });
+    const first = await readPending({ repoDir, configDir });
+    const second = await readPending({ repoDir, configDir });
 
     assert.equal(first.status, 'ready');
     assert.equal(second.status, 'ready');
@@ -124,7 +124,7 @@ describe('hokusai-queue', () => {
     await enqueueContribution(makeRow(), { repoDir, configDir });
     writeFileSync(join(repoDir, '.wavemill', 'hokusai', 'state.json'), '{ nope', 'utf-8');
 
-    const result = readPending({ repoDir, configDir });
+    const result = await readPending({ repoDir, configDir });
     assert.equal(result.status, 'corrupt_state');
     assert.match(result.error ?? '', /Failed to parse JSON state file/);
   });
