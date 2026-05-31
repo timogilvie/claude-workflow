@@ -2700,6 +2700,15 @@ else
 fi
 unset dashboard_refresh_status
 
+window_titles_output="$(bash "$REPO_DIR/tests/wavemill-window-titles.test.sh" 2>&1)" || window_titles_status=$?
+window_titles_status="${window_titles_status:-0}"
+if [[ "$window_titles_status" -eq 0 ]]; then
+  pass "window title helper tests"
+else
+  fail "window title helper tests: $window_titles_output"
+fi
+unset window_titles_status
+
 # ============================================================================
 # TEST 6: Routing resilience regression guards
 # ============================================================================
@@ -2761,6 +2770,19 @@ if grep -q 'wavemill_hook_write_routing' "$REPO_DIR/shared/hooks/wavemill-hook-p
   pass "hook protocol exposes routing writer"
 else
   fail "hook protocol routing writer is missing"
+fi
+
+if grep -q 'windowId' "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" \
+  && grep -q "display-message -p -t \"\\\$SESSION:\\\$win\" '#{window_id}'" "$REPO_DIR/shared/lib/wavemill-startup-runner.sh"; then
+  pass "startup persists stable tmux windowId"
+else
+  fail "startup stable windowId persistence is missing"
+fi
+
+if grep -q 'wavemill_apply_window_metadata' "$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh"; then
+  pass "hook notify triggers best-effort metadata refresh"
+else
+  fail "hook metadata refresh wiring is missing"
 fi
 
 # ============================================================================

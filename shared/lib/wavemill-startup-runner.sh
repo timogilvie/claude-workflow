@@ -69,6 +69,10 @@ export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
 source "$LIB_DIR/wavemill-common.sh"
 source "$LIB_DIR/agent-adapters.sh"
 source "$LIB_DIR/startup-progress.sh"
+if [[ -f "$LIB_DIR/wavemill-window-titles.sh" ]]; then
+# shellcheck source=wavemill-window-titles.sh
+source "$LIB_DIR/wavemill-window-titles.sh"
+fi
 
 write_shell_assignment() {
   local name="$1" value="${2-}"
@@ -172,7 +176,7 @@ reset_startup_phase_artifacts() {
 save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
-  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}" phase="${19:-}"
+  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}" phase="${19:-}" window_id="${20:-}"
   state_mutate "$STATE_FILE" \
     '.tasks[$issue] = (.tasks[$issue] // {}) + {
         slug: $slug,
@@ -194,13 +198,15 @@ save_task_state() {
       | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
       | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
       | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end
+      | if $windowId != "" then .tasks[$issue].windowId = $windowId else . end
       | if $phase != "" then .tasks[$issue].phase = $phase else . end' \
     --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
     --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
     --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-    --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" --arg phase "$phase"
+    --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" --arg phase "$phase" \
+    --arg windowId "$window_id"
 }
 
 remove_task_state() {
@@ -356,6 +362,7 @@ write_monitor_env() {
     write_shell_assignment "DASHBOARD_VERBOSITY" "$DASHBOARD_VERBOSITY"
     write_shell_assignment "DASHBOARD_LOG_TO_FILE" "$DASHBOARD_LOG_TO_FILE"
     write_shell_assignment "WAVEMILL_DASHBOARD_PID" "${WAVEMILL_DASHBOARD_PID:-}"
+    write_shell_assignment "WAVEMILL_STATE_FILE" "$STATE_FILE"
     write_shell_assignment "MILL_LOG_FILE" "$MILL_LOG_FILE"
     write_shell_assignment "STATUS_LOG_FILE" "$STATUS_LOG_FILE"
     write_shell_assignment "TASKS_FILE" "$tasks_file"
@@ -392,6 +399,7 @@ setup_control_dashboard() {
   if [[ -n "${WAVEMILL_DASHBOARD_PID:-}" ]]; then
     tmux set-environment -t "$SESSION" WAVEMILL_DASHBOARD_PID "$WAVEMILL_DASHBOARD_PID"
   fi
+  tmux set-environment -t "$SESSION" WAVEMILL_STATE_FILE "$STATE_FILE" 2>/dev/null || true
 
   tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.2" "bash -c \"clear && printf 'Wavemill Status Log\\n\\n' && tail -n 200 -f '$STATUS_LOG_FILE'\""
   tmux select-pane -t "$SESSION:$WAVEMILL_WINDOW_MILL.0"
@@ -508,7 +516,7 @@ startup_run_task_phases() {
   local challenge challenge_pair challenge_role challenge_model task_agent win
   local depends_on base_from_task
   local packet_content issue_json issue_description issue_context details_context labels_json
-  local feature_dir status_file planning_prompt instr_file created_window state_written created_new=false planner_launch_model
+  local feature_dir status_file planning_prompt instr_file created_window created_window_id state_written created_new=false planner_launch_model
 
   local startup_id
   startup_id="$(echo "$task_json" | jq -r '.startupId // empty')"
@@ -642,6 +650,7 @@ startup_run_task_phases() {
     startup_step "[3/7] Creating tmux window...   [DRY-RUN skip]"
   else
     wavemill_lock_run "tmux-win" tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" >/dev/null
+    created_window_id="$(tmux display-message -p -t "$SESSION:$win" '#{window_id}' 2>/dev/null || true)"
     tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
     tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
     tmux set-option -t "$SESSION:$win" remain-on-exit on >/dev/null 2>&1 || true
@@ -751,20 +760,23 @@ $details_context"
   # downstream startup checks do not depend on a second jq update succeeding.
   local persisted_phase="planning"
   if ! wavemill_lock_run "state" save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
-    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
+    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase" "${created_window_id:-}"; then
     startup_phase_failed "$startup_id" agent "$issue" "saving workflow state"
-    [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    [[ -n "${created_window:-}" ]] && tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     return 1
   fi
 
   if ! wavemill_lock_run "state" set_task_phase_local "$issue" "$persisted_phase"; then
     wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
-    [[ -n "${created_window:-}" ]] && tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    [[ -n "${created_window:-}" ]] && tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     startup_phase_failed "$startup_id" agent "$issue" "setting phase"
     return 1
   fi
   state_written=true
   startup_step "[5/7] Saving workflow state...  ✓"
+  if declare -F wavemill_apply_window_metadata >/dev/null 2>&1; then
+    wavemill_apply_window_metadata "$SESSION" "$issue" "${created_window_id:-}" "$STATE_FILE" >/dev/null 2>&1 || true
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     startup_step "[6/7] Launching agent...        [DRY-RUN skip]"
@@ -789,7 +801,7 @@ $details_context"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
   if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
-    tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     startup_phase_failed "$startup_id" agent "$issue" "launching planning agent"
     return 1
   fi
@@ -797,13 +809,16 @@ $details_context"
   # Re-persist the launched task after the pane handoff succeeds so the final
   # workflow record reflects a fully launched planning session.
   if ! wavemill_lock_run "state" save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
-    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase"; then
+    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase" "${created_window_id:-}"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
-    tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     startup_phase_failed "$startup_id" agent "$issue" "re-saving workflow state"
     return 1
   fi
   startup_step "[6/7] Launching agent...        ✓"
+  if declare -F wavemill_apply_window_metadata >/dev/null 2>&1; then
+    wavemill_apply_window_metadata "$SESSION" "$issue" "${created_window_id:-}" "$STATE_FILE" >/dev/null 2>&1 || true
+  fi
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent done
 
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" linear running
@@ -813,7 +828,7 @@ $details_context"
   # workflow-state during startup.
   if ! wavemill_lock_run "state" set_task_phase_local "$issue" "$persisted_phase"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
-    tmux kill-window -t "$SESSION:$win" >/dev/null 2>&1 || true
+    tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     startup_phase_failed "$startup_id" linear "$issue" "finalizing workflow state"
     return 1
   fi
