@@ -443,8 +443,9 @@ check_contains "pass after remediation clears conflict marker" "$output" "confli
 check_contains "pass after remediation clears attention head" "$output" "conflict_attention_head="
 check_contains "pass after remediation clears reported marker" "$output" "conflict_attention_reported=absent"
 check_contains "pass after remediation clears needs attention" "$output" "needs_attention=absent"
-check_contains "pass after remediation logs restored labels with issue prefix" "$output" "status   HOK-1300: Restored ready labels for PR #304"
-check_contains "pass after remediation logs ready completion with issue prefix" "$output" "HOK-1300: Ready checks completed (verdict: pass)"
+check_contains "pass after remediation demotes restored labels to debug" "$output" "debug   HOK-1300: Restored ready labels for PR #304"
+check_contains "pass after remediation demotes ready completion to debug" "$output" "debug   HOK-1300: Ready checks completed (verdict: pass)"
+check_not_contains "pass after remediation no longer emits restored labels at status" "$output" "status   HOK-1300: Restored ready labels for PR #304"
 
 output="$(run_launch_case ready_label_failure)"
 check_contains "ready label failure returns failure" "$output" "rc=1"

@@ -225,6 +225,18 @@ else
 fi
 unset hook_osc_emit_status
 
+echo ""
+echo "=== Worktree Dependency Fast Path ==="
+
+worktree_deps_output="$(bash "$REPO_DIR/tests/wavemill-worktree-deps.test.sh" 2>&1)" || worktree_deps_status=$?
+worktree_deps_status="${worktree_deps_status:-0}"
+if [[ "$worktree_deps_status" -eq 0 ]]; then
+  pass "worktree dependency fast-path behavior"
+else
+  fail "worktree dependency fast-path behavior: $worktree_deps_output"
+fi
+unset worktree_deps_status
+
 # ============================================================================
 # TEST 2: Heredoc function-availability check
 # ============================================================================

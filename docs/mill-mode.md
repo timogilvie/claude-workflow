@@ -72,6 +72,14 @@ issue | route | worktree | deps | agent | linear
 
 Each row is a task. The columns track routing handoff, worktree creation, dependency installation, agent launch, and the Linear state update. Cells move through `.`, `…`, `✓`, `✗`, and `-` for pending, running, done, failed, and skipped.
 
+When a JS lockfile exists and a fresh worktree has no `node_modules`, startup now attempts a safe dependency fast path before install:
+
+- It compares parent checkout and worktree metadata (lockfile hash, `packageManager`, Node signature, workspace signature).
+- If compatible, it reuses parent dependencies (`deps: reused (cow)` or `deps: reused (symlink)`).
+- If incompatible or unsafe, it logs the fallback reason and runs the normal install (`installing deps: <reason>`).
+- `WAVEMILL_WORKTREE_DEPS_FAST_PATH=0` disables reuse checks and always uses the legacy install path.
+- Non-JS repos and missing package-manager binary behavior are unchanged (still skip dependency install).
+
 Startup launches tasks concurrently by phase. The default startup worker limit is `4`; override it with:
 
 ```bash
