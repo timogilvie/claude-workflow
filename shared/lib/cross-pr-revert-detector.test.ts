@@ -121,7 +121,7 @@ test('detectSurvivingChangeWarnings reports history-only PRs whose added files a
   }
 });
 
-test('detectCrossPrReverts ignores PR-numbered first-parent commits when integration did not create a merge commit', () => {
+test('detectCrossPrReverts ignores non-merge integration commits even when their subject mentions a PR number', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
     commitFile(repoDir, 'strategy.txt', 'live integration\n', 'Restore strategy explorer (#437)');

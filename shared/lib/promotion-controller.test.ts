@@ -209,9 +209,12 @@ function shellHarness(overrides: {
         }
       }
 
-      const recentPrCommitsMatch = cmd.match(/^git log --first-parent(?: --merges)? --max-count=10 --pretty=format:%H%x09%P%x09%s '([^']+\.\.auto\/integration)'$/);
-      if (recentPrCommitsMatch) {
-        const range = recentPrCommitsMatch[1];
+      if (
+        cmd.startsWith('git log --first-parent')
+        && cmd.includes("--pretty=format:%H%x09%P%x09%s '")
+        && cmd.endsWith("..auto/integration'")
+      ) {
+        const range = cmd.slice(cmd.indexOf("'") + 1, -1);
         return overrides.recentPrCommitLogByRange?.[range] ?? '';
       }
 
