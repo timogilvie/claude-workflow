@@ -92,7 +92,7 @@ export interface EvalInput {
   /** Pull request URL */
   prUrl?: string;
   /** Wall-clock time for task completion */
-  timeSeconds?: number;
+  timeSeconds?: number | null;
   /** Routing decision metadata (HOK-775) */
   routingDecision?: RoutingDecision;
   /** Expanded task packet content (if available) */
@@ -149,6 +149,12 @@ interface LLMCallResult {
 interface PricingEntry {
   inputCostPerMTok: number;
   outputCostPerMTok: number;
+}
+
+function normalizeTimeSeconds(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
 }
 
 /**
@@ -575,13 +581,14 @@ export async function evaluateTask(
     interventionText,
     issueId,
     prUrl,
-    timeSeconds = 0,
+    timeSeconds,
     routingDecision,
     taskPacket,
     planContent,
     selfReviewSummary,
     metadata = {},
   } = input;
+  const normalizedTimeSeconds = normalizeTimeSeconds(timeSeconds);
 
   // Determine which intervention format to use
   // If interventionRecords provided, prefer it; else use legacy interventions
@@ -650,7 +657,7 @@ export async function evaluateTask(
       judgeProvider: provider,
       score: 0,
       scoreBand: 'Failure',
-      timeSeconds,
+      timeSeconds: normalizedTimeSeconds,
       timestamp: new Date().toISOString(),
       interventionRequired: interventionCount > 0,
       interventionCount,
@@ -701,7 +708,7 @@ export async function evaluateTask(
     judgeProvider: provider,
     score,
     scoreBand: band.label,
-    timeSeconds,
+    timeSeconds: normalizedTimeSeconds,
     timestamp: new Date().toISOString(),
     interventionRequired: interventionCount > 0,
     interventionCount,

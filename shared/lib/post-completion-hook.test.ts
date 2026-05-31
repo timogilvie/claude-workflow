@@ -163,15 +163,23 @@ function stubBaseEvalDeps(executionModel = 'gpt-5.4'): void {
   postCompletionHookDeps.collectReworkOutcome = () => ({ agentIterations: 0 });
   postCompletionHookDeps.collectDeliveryOutcome = () => ({ prCreated: true, merged: false });
   postCompletionHookDeps.evaluateTask = async (input, outcomes) => ({
-    ...makeRecord(),
-    timeSeconds: Number((input as { timeSeconds?: number }).timeSeconds ?? makeRecord().timeSeconds),
-    modelId: '',
-    modelVersion: '',
-    workflowCost: 1.5,
-    workflowTokenUsage: {},
-    constraints: { maxCostUsd: 6.5 },
-    routingDecision: undefined,
-    outcomes,
+    ...(() => {
+      const timeSeconds =
+        Object.prototype.hasOwnProperty.call(input, 'timeSeconds')
+          ? (input as { timeSeconds?: number | null }).timeSeconds
+          : makeRecord().timeSeconds;
+      return {
+        ...makeRecord(),
+        timeSeconds,
+        modelId: '',
+        modelVersion: '',
+        workflowCost: 1.5,
+        workflowTokenUsage: {},
+        constraints: { maxCostUsd: 6.5 },
+        routingDecision: undefined,
+        outcomes,
+      };
+    })(),
   });
   postCompletionHookDeps.getCurrentOperatingMode = () => 'normal';
   postCompletionHookDeps.getEvalContextUpdatesConfig = () => ({
@@ -364,9 +372,13 @@ await test('runPostCompletionEval passes and persists phase durations', async ()
       stubBaseEvalDeps();
       postCompletionHookDeps.evaluateTask = async (input, outcomes) => {
         capturedEvalInput = input as Record<string, unknown>;
+        const timeSeconds =
+          Object.prototype.hasOwnProperty.call(input, 'timeSeconds')
+            ? (input as { timeSeconds?: number | null }).timeSeconds
+            : makeRecord().timeSeconds;
         return {
           ...makeRecord(),
-          timeSeconds: Number((input as { timeSeconds?: number }).timeSeconds ?? makeRecord().timeSeconds),
+          timeSeconds,
           outcomes,
         };
       };
@@ -397,6 +409,59 @@ await test('runPostCompletionEval passes and persists phase durations', async ()
       total: 660,
     });
     assert.equal(persistedRecord?.timeSeconds, 660);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval preserves null duration when phase totals are unavailable', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-hook-null-'));
+  let capturedEvalInput: Record<string, unknown> | undefined;
+  let persistedRecord: EvalRecord | undefined;
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.gatherStageArtifacts = () => ({
+        taskPacket: undefined,
+        planContent: undefined,
+        selfReviewSummary: undefined,
+        routingDecision: undefined,
+        executionModel: 'gpt-5.4',
+      });
+      postCompletionHookDeps.evaluateTask = async (input, outcomes) => {
+        capturedEvalInput = input as Record<string, unknown>;
+        const timeSeconds =
+          Object.prototype.hasOwnProperty.call(input, 'timeSeconds')
+            ? (input as { timeSeconds?: number | null }).timeSeconds
+            : makeRecord().timeSeconds;
+        return {
+          ...makeRecord(),
+          timeSeconds,
+          outcomes,
+        };
+      };
+      postCompletionHookDeps.appendEvalRecord = (record) => {
+        persistedRecord = record;
+      };
+      postCompletionHookDeps.runContextUpdateWork = async () => {};
+
+      const ok = await runPostCompletionEval({
+        issueId: 'HOK-1930',
+        prNumber: '1930',
+        prUrl: 'https://example.test/pr/1930',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/accurate-wall-clock',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(ok, true);
+    });
+
+    assert.equal(capturedEvalInput?.timeSeconds, null);
+    assert.equal(persistedRecord?.timeSeconds, null);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
