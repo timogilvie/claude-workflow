@@ -4812,8 +4812,9 @@ cross_pr_revert_gate_allows_merge() {
 
   if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" 2>/dev/null); then
     return 0
+  else
+    rc=$?
   fi
-  rc=$?
 
   if [[ "$rc" -eq 1 ]]; then
     prs=$(printf '%s' "$result" | jq -r '[.unacknowledged[]?.prNumber] | reduce .[] as $item ([]; if index($item) then . else . + [$item] end) | map("#" + tostring) | join(", ")' 2>/dev/null || echo "")

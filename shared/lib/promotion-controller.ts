@@ -403,7 +403,7 @@ export async function runPromotion(options: PromotionOptions): Promise<Promotion
   const survivingChangeWarnings = detectSurvivingChangeWarnings({
     repoDir: options.repoDir,
     baseRef: comparisonBase,
-    headRef: effectiveHeadTip,
+    headRef: promotionTip,
     integrationRef: integrationBranch,
     maxRecentMerges: RECENT_COMMIT_LIMIT,
     shellRunner,

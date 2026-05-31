@@ -509,7 +509,8 @@ describe('runPromotion', () => {
     const shell = shellHarness({
       openPrs: [{ number: 77, url: 'https://github.com/example/repo/pull/77', body: '' }],
       recentPrCommitLogByRange: {
-        'origin/main..auto/integration': 'merge437\tparent436\tRestore strategy explorer (#437)',
+        'origin/main..auto/integration':
+          'merge437\tparent436 branch437\tMerge pull request #437 from test/pr-437',
       },
       diffNameStatusByRefs: {
         'parent436..merge437': 'A\tstrategy.txt\n',

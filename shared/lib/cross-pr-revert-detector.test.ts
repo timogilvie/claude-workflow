@@ -32,6 +32,16 @@ function removeFile(repoDir: string, path: string, message: string): string {
   return git(repoDir, 'rev-parse HEAD');
 }
 
+function mergePrBranch(
+  repoDir: string,
+  branch: string,
+  prNumber: number,
+  title: string,
+): string {
+  git(repoDir, `merge --no-ff ${shellQuote(branch)} -m ${shellQuote(`Merge pull request #${prNumber} from test/${branch}`)} -m ${shellQuote(title)}`);
+  return git(repoDir, 'rev-parse HEAD');
+}
+
 function makeRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'cross-pr-revert-'));
   git(repoDir, 'init -b main');
@@ -53,7 +63,10 @@ function shellQuote(value: string): string {
 test('detectCrossPrReverts flags deletion of a file added by a recent integration PR', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
-    commitFile(repoDir, 'strategy.txt', 'live integration\n', 'Restore strategy explorer (#437)');
+    git(repoDir, 'checkout -b pr-437');
+    commitFile(repoDir, 'strategy.txt', 'live integration\n', 'Restore strategy explorer');
+    git(repoDir, 'checkout auto/integration');
+    const mergeCommit = mergePrBranch(repoDir, 'pr-437', 437, 'Restore strategy explorer');
     git(repoDir, 'checkout -b task/remove-strategy auto/integration');
     const baseRef = git(repoDir, 'merge-base auto/integration HEAD');
     const headRef = removeFile(repoDir, 'strategy.txt', 'Remove unrelated diff');
@@ -68,8 +81,8 @@ test('detectCrossPrReverts flags deletion of a file added by a recent integratio
     assert.deepEqual(findings, [
       {
         prNumber: 437,
-        title: 'Restore strategy explorer (#437)',
-        mergeCommit: git(repoDir, 'rev-parse auto/integration'),
+        title: 'Merge pull request #437 from test/pr-437',
+        mergeCommit,
         files: [
           {
             path: 'strategy.txt',
@@ -88,7 +101,10 @@ test('detectSurvivingChangeWarnings reports history-only PRs whose added files a
   const { repoDir, cleanup } = makeRepo();
   try {
     const mainBase = git(repoDir, 'rev-parse main');
-    commitFile(repoDir, 'strategy.txt', 'live integration\n', 'Restore strategy explorer (#437)');
+    git(repoDir, 'checkout -b pr-437');
+    commitFile(repoDir, 'strategy.txt', 'live integration\n', 'Restore strategy explorer');
+    git(repoDir, 'checkout auto/integration');
+    mergePrBranch(repoDir, 'pr-437', 437, 'Restore strategy explorer');
     const findings = detectSurvivingChangeWarnings({
       repoDir,
       baseRef: mainBase,
@@ -100,6 +116,27 @@ test('detectSurvivingChangeWarnings reports history-only PRs whose added files a
     assert.equal(findings[0].prNumber, 437);
     assert.equal(findings[0].files[0].path, 'strategy.txt');
     assert.equal(findings[0].files[0].confidence, 'missing-survivor');
+  } finally {
+    cleanup();
+  }
+});
+
+test('detectCrossPrReverts ignores PR-numbered first-parent commits when integration did not create a merge commit', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    commitFile(repoDir, 'strategy.txt', 'live integration\n', 'Restore strategy explorer (#437)');
+    git(repoDir, 'checkout -b task/remove-strategy auto/integration');
+    const baseRef = git(repoDir, 'merge-base auto/integration HEAD');
+    const headRef = removeFile(repoDir, 'strategy.txt', 'Remove unrelated diff');
+
+    const findings = detectCrossPrReverts({
+      repoDir,
+      baseRef,
+      headRef,
+      integrationRef: 'auto/integration',
+    });
+
+    assert.deepEqual(findings, []);
   } finally {
     cleanup();
   }

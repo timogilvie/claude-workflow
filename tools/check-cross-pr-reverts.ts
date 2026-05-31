@@ -75,7 +75,14 @@ function loadAcknowledgementText(repoDir: string): string {
       { cwd: repoDir, encoding: 'utf-8' },
     ));
   } catch {
-    return '';
+    try {
+      return String(crossPrRevertCheckDeps.execShellCommand(
+        'git log --format=%B -n 20 HEAD',
+        { cwd: repoDir, encoding: 'utf-8' },
+      ));
+    } catch {
+      return '';
+    }
   }
 }
 

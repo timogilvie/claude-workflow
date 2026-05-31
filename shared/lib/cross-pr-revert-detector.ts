@@ -156,7 +156,12 @@ function collectRecentPrCommits(
   maxRecentMerges?: number,
 ): RecentPrCommit[] {
   const limit = maxRecentMerges ?? DEFAULT_MAX_RECENT_MERGES;
-  const output = runGit(
+  const mergeOutput = runGit(
+    shellRunner,
+    repoDir,
+    `git log --first-parent --merges --max-count=${limit} --pretty=format:%H%x09%P%x09%s ${escapeShellArg(revisionRange)}`,
+  ).trim();
+  const output = mergeOutput || runGit(
     shellRunner,
     repoDir,
     `git log --first-parent --max-count=${limit} --pretty=format:%H%x09%P%x09%s ${escapeShellArg(revisionRange)}`,
@@ -178,12 +183,14 @@ function parseRecentPrCommit(line: string): RecentPrCommit | null {
     return null;
   }
 
+  const parents = parentsText.trim().split(/\s+/).filter(Boolean);
+
   const prNumber = extractPrNumber(subject);
   if (prNumber === null) {
     return null;
   }
 
-  const parent = parentsText.trim().split(/\s+/).filter(Boolean)[0];
+  const parent = parents[0];
   if (!parent) {
     return null;
   }
@@ -197,8 +204,9 @@ function parseRecentPrCommit(line: string): RecentPrCommit | null {
 }
 
 function extractPrNumber(subject: string): number | null {
-  const match = subject.match(/(?:merge pull request #|#)(\d+)\b/i)
-    ?? subject.match(/\(#(\d+)\)\s*$/i);
+  const match = subject.match(/merge pull request #(\d+)\b/i)
+    ?? subject.match(/\(#(\d+)\)\s*$/i)
+    ?? subject.match(/(?:^|\s)#(\d+)\b/i);
   if (!match) {
     return null;
   }

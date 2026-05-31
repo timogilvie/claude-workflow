@@ -198,6 +198,7 @@ run_launch_case() {
       mkdir -p "$1"
       printf "%s\n" "$2" > "$1/.needs-attention"
     }
+    cross_pr_revert_gate_allows_merge() { return 0; }
     npx() {
       if [[ "${1:-}" != "tsx" ]]; then
         return 1
