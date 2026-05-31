@@ -146,6 +146,18 @@ wavemill_hook_notify() {
   kill -0 "$dashboard_pid" 2>/dev/null || return 0
 
   kill -USR1 "$dashboard_pid" 2>/dev/null || true
+  if [[ -n "${WAVEMILL_SESSION:-}" && -n "${WAVEMILL_ISSUE:-}" ]]; then
+    (
+      local hook_dir helper state_file
+      hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || true)"
+      helper="${hook_dir%/hooks}/lib/wavemill-window-titles.sh"
+      [[ -f "$helper" ]] || exit 0
+      # shellcheck source=wavemill-window-titles.sh
+      source "$helper" || exit 0
+      state_file="${WAVEMILL_STATE_FILE:-${STATE_FILE:-}}"
+      wavemill_apply_window_metadata "${WAVEMILL_SESSION:-}" "${WAVEMILL_ISSUE:-}" "" "$state_file" >/dev/null 2>&1 || true
+    ) 2>/dev/null || true
+  fi
   return 0
 }
 
@@ -174,14 +186,20 @@ wavemill_hook_write() {
   local timestamp
   timestamp=$(date +%s)
 
+  local base_json='{}'
+  if [[ -f "$hook_file" ]] && jq -e . "$hook_file" >/dev/null 2>&1; then
+    base_json="$(cat "$hook_file")"
+  fi
+
   # Atomic write: build JSON in tmp, then mv (prevents partial reads)
   if jq -n \
+    --argjson base "$base_json" \
     --arg state "$state" \
     --arg event "$event" \
     --arg detail "$detail" \
     --arg agent "$agent" \
     --argjson timestamp "$timestamp" \
-    '{state: $state, event: $event, agent: $agent, timestamp: $timestamp}
+    '$base + {state: $state, event: $event, agent: $agent, timestamp: $timestamp}
      + (if $detail != "" then {detail: $detail} else {} end)' > "$tmp_file" 2>/dev/null; then
     if mv "$tmp_file" "$hook_file" 2>/dev/null; then
       wavemill_hook_notify
