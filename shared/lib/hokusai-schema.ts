@@ -617,7 +617,7 @@ export function mapTaskTypeToModel30(
     return 'maintenance';
   }
 
-  return inferredResearch ? 'research' : 'feature';
+  return 'feature';
 }
 
 function normalizeWorkflowStages(stages: string[] | undefined): HokusaiModel30WorkflowStage[] | undefined {
