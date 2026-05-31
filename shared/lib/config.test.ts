@@ -21,6 +21,7 @@ import {
   CURRENT_CONFIG_VERSION,
   INTEGRATION_DEFAULTS,
   PROMOTION_DEFAULTS,
+  REVIEW_MERGE_DEFAULTS,
   getChallengeConfig,
   getChallengeSchedulerConfig,
   getAvailableModelsForStage,
@@ -28,6 +29,7 @@ import {
   getEvalConfig,
   getIntegrationConfig,
   getPromotionConfig,
+  getReviewMergeConfig,
   getIntegrationReadyPolicy,
   getMillConfig,
   getExpansionHandshakeConfig,
@@ -2234,6 +2236,59 @@ test('getPromotionConfig returns defaults when section is missing', () => {
     writeConfig(tmp, '{}');
 
     assert.deepEqual(getPromotionConfig(tmp), PROMOTION_DEFAULTS);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getReviewMergeConfig returns defaults when section is missing', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, '{}');
+
+    assert.deepEqual(getReviewMergeConfig(tmp), REVIEW_MERGE_DEFAULTS);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('getReviewMergeConfig merges partial overrides with defaults', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      reviewMerge: {
+        crossPrRevertCheck: {
+          maxRecentMerges: 12,
+        },
+      },
+    }));
+
+    assert.deepEqual(getReviewMergeConfig(tmp), {
+      crossPrRevertCheck: {
+        enabled: true,
+        maxRecentMerges: 12,
+      },
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('schema rejects invalid reviewMerge.crossPrRevertCheck.maxRecentMerges values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      reviewMerge: {
+        crossPrRevertCheck: {
+          maxRecentMerges: 0,
+        },
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /maxRecentMerges/);
   } finally {
     cleanUp(tmp);
   }

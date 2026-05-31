@@ -1762,24 +1762,40 @@ wavemill_lock_run() {
   local max_retries="${WAVEMILL_LOCK_MAX_RETRIES:-300}"
   local sleep_seconds="${WAVEMILL_LOCK_SLEEP_SECONDS:-0.1}"
   local stale_seconds="${WAVEMILL_LOCK_STALE_SECONDS:-120}"
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    if wavemill_lock_dir_is_stale "$lock_dir" "$stale_seconds"; then
-      rm -f "$lock_dir/owner.pid" "$lock_dir/owner.command" 2>/dev/null || true
-      rmdir "$lock_dir" 2>/dev/null || true
-      continue
-    fi
-    attempts=$((attempts + 1))
-    if (( attempts >= max_retries )); then
-      if declare -F startup_log >/dev/null 2>&1; then
-        startup_log "Warning: wavemill_lock_run timeout on $lock_name; aborting locked operation"
+  local observed_owner current_owner
+  while true; do
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+      observed_owner="$(cat "$lock_dir/owner.pid" 2>/dev/null || true)"
+      if wavemill_lock_dir_is_stale "$lock_dir" "$stale_seconds"; then
+        current_owner="$(cat "$lock_dir/owner.pid" 2>/dev/null || true)"
+        if [[ -n "$observed_owner" && "$current_owner" == "$observed_owner" ]]; then
+          rm -f "$lock_dir/owner.pid" "$lock_dir/owner.command" 2>/dev/null || true
+          rmdir "$lock_dir" 2>/dev/null || true
+          continue
+        fi
       fi
-      return 1
+      attempts=$((attempts + 1))
+      if (( attempts >= max_retries )); then
+        if declare -F startup_log >/dev/null 2>&1; then
+          startup_log "Warning: wavemill_lock_run timeout on $lock_name; aborting locked operation"
+        fi
+        return 1
+      fi
+      sleep "$sleep_seconds"
+    done
+
+    # If another process removed the lock directory before owner metadata could
+    # be written, retry instead of running the critical section unlocked.
+    if printf '%s\n' "${BASHPID:-$$}" > "$lock_dir/owner.pid" 2>/dev/null \
+      && printf '%s\n' "$*" > "$lock_dir/owner.command" 2>/dev/null; then
+      break
     fi
+
+    rm -f "$lock_dir/owner.pid" "$lock_dir/owner.command" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || true
     sleep "$sleep_seconds"
   done
 
-  printf '%s\n' "${BASHPID:-$$}" > "$lock_dir/owner.pid" 2>/dev/null || true
-  printf '%s\n' "$*" > "$lock_dir/owner.command" 2>/dev/null || true
   "$@"
   local rc=$?
   rm -f "$lock_dir/owner.pid" "$lock_dir/owner.command" 2>/dev/null || true
@@ -1796,12 +1812,16 @@ wavemill_lock_dir_is_stale() {
   local lock_dir="$1" stale_seconds="$2"
   local owner_pid mtime now
 
-  if [[ -f "$lock_dir/owner.pid" ]]; then
-    owner_pid="$(cat "$lock_dir/owner.pid" 2>/dev/null || true)"
-    if [[ "$owner_pid" =~ ^[0-9]+$ ]]; then
-      kill -0 "$owner_pid" 2>/dev/null && return 1
-      return 0
-    fi
+  if [[ ! -f "$lock_dir/owner.pid" ]]; then
+    # Treat owner-less directories as still in-flight so waiters do not delete
+    # a lock that another process is still acquiring or releasing.
+    return 1
+  fi
+
+  owner_pid="$(cat "$lock_dir/owner.pid" 2>/dev/null || true)"
+  if [[ "$owner_pid" =~ ^[0-9]+$ ]]; then
+    kill -0 "$owner_pid" 2>/dev/null && return 1
+    return 0
   fi
 
   [[ "$stale_seconds" =~ ^[0-9]+$ ]] || stale_seconds=120

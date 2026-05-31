@@ -1574,6 +1574,30 @@
             },
             "additionalProperties": false
         },
+        "reviewMerge": {
+            "type": "object",
+            "description": "Deterministic guards that prevent review and merge flows from silently reverting changes from other recently merged PRs.",
+            "properties": {
+                "crossPrRevertCheck": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "When true, detect and block unacknowledged deletions of files introduced by other recent PRs on the integration branch."
+                        },
+                        "maxRecentMerges": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 50,
+                            "description": "Maximum number of recent first-parent integration commits to scan for cross-PR revert detection."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "integration": {
             "type": "object",
             "description": "Settings for autonomous integration mode (opt-in). Task branches are promoted to an integration branch before merging to main.",
