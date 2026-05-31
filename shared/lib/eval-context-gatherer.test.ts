@@ -8,6 +8,7 @@ import * as os from 'node:os';
 import * as nodePath from 'node:path';
 import * as shellUtils from './shell-utils.ts';
 import {
+  computePhaseDurations,
   computeWallClockSeconds,
   fetchIssueData,
   formatIssueAsPrompt,
@@ -287,6 +288,90 @@ describe('eval-context-gatherer', () => {
       const result = computeWallClockSeconds('/repo', 'missing-branch');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('computePhaseDurations', () => {
+    function makeTmpDir(): string {
+      return fs.mkdtempSync(nodePath.join(os.tmpdir(), 'phase-durations-'));
+    }
+
+    it('returns all completed phase durations and total', () => {
+      const repoDir = makeTmpDir();
+      const featureDir = nodePath.join(repoDir, 'features', 'accurate-wall-clock');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.planning-result.json'),
+        JSON.stringify({
+          startedAt: '2026-05-31T10:00:00.000Z',
+          finishedAt: '2026-05-31T10:05:30.000Z',
+        }),
+      );
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.coding-result.json'),
+        JSON.stringify({
+          startedAt: '2026-05-31T10:06:00.000Z',
+          finishedAt: '2026-05-31T10:21:00.000Z',
+        }),
+      );
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.review-result.json'),
+        JSON.stringify({
+          startedAt: '2026-05-31T10:21:00.000Z',
+          finishedAt: '2026-05-31T10:24:15.000Z',
+        }),
+      );
+
+      try {
+        expect(computePhaseDurations(repoDir, 'accurate-wall-clock')).toEqual({
+          planning: 330,
+          coding: 900,
+          review: 195,
+          total: 1425,
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('leaves missing phase files undefined', () => {
+      const repoDir = makeTmpDir();
+      const featureDir = nodePath.join(repoDir, 'features', 'accurate-wall-clock');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.coding-result.json'),
+        JSON.stringify({
+          startedAt: '2026-05-31T10:06:00.000Z',
+          finishedAt: '2026-05-31T10:21:00.000Z',
+        }),
+      );
+
+      try {
+        expect(computePhaseDurations(repoDir, 'accurate-wall-clock')).toEqual({
+          coding: 900,
+          total: 900,
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('ignores incomplete phase result files', () => {
+      const repoDir = makeTmpDir();
+      const featureDir = nodePath.join(repoDir, 'features', 'accurate-wall-clock');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.planning-result.json'),
+        JSON.stringify({
+          startedAt: '2026-05-31T10:00:00.000Z',
+        }),
+      );
+
+      try {
+        expect(computePhaseDurations(repoDir, 'accurate-wall-clock')).toBeUndefined();
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -660,6 +745,8 @@ describe('eval-context-gatherer', () => {
           status: 'completed',
           agent: 'codex',
           model: 'claude-sonnet-4-6',
+          startedAt: '2026-05-31T10:00:00.000Z',
+          finishedAt: '2026-05-31T10:02:00.000Z',
         }),
       );
 
@@ -693,6 +780,10 @@ describe('eval-context-gatherer', () => {
           model: 'claude-sonnet-4-6',
           status: 'completed',
           source: '.planning-result.json',
+        });
+        expect(result.phaseDurations).toEqual({
+          planning: 120,
+          total: 120,
         });
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });

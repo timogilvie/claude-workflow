@@ -16,6 +16,7 @@ import {
   attachDifficultyMetadata,
   attachExecutedPlanning,
   attachFallbackEvent,
+  attachPhaseDurations,
   attachRouteProvenance,
   attachRouterPolicyMetadata,
   attachProviderMetadata,
@@ -1146,6 +1147,31 @@ describe('eval-record-builder', () => {
     it('attaches executed planning through enrichEvalRecord', () => {
       enrichEvalRecord(baseRecord, { executedPlanning });
       expect(baseRecord.executedPlanning).toEqual(executedPlanning);
+    });
+  });
+
+  describe('attachPhaseDurations', () => {
+    it('is a no-op when durations are undefined', () => {
+      const before = { ...baseRecord };
+      attachPhaseDurations(baseRecord, undefined);
+      expect(baseRecord.phaseDurationsSeconds).toBeUndefined();
+      expect(baseRecord).toEqual(before);
+    });
+
+    it('attaches per-phase durations when provided', () => {
+      attachPhaseDurations(baseRecord, {
+        planning: 120,
+        coding: 480,
+        review: 60,
+        total: 660,
+      });
+
+      expect(baseRecord.phaseDurationsSeconds).toEqual({
+        planning: 120,
+        coding: 480,
+        review: 60,
+        total: 660,
+      });
     });
   });
 
