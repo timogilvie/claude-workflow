@@ -3419,10 +3419,37 @@ blocked_completion_commit_matches_head() {
   return 1
 }
 
+blocked_completion_auto_allowed_dirty_path() {
+  local normalized_path="$1" slug="$2"
+  local artifact_prefix="features/$slug/"
+
+  if [[ "$normalized_path" == .wavemill/* ]]; then
+    return 0
+  fi
+
+  # Root prompt registry updates are Wavemill-owned generated metadata.
+  if [[ "$normalized_path" == "prompt-registry.jsonl" ]]; then
+    return 0
+  fi
+
+  if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
+    return 0
+  fi
+
+  case "$normalized_path" in
+    "${artifact_prefix}plan.md"|\
+    "${artifact_prefix}task-packet"*.md|\
+    "${artifact_prefix}selected-task.json")
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 blocked_completion_worktree_clean_for_auto() {
   local worktree="$1" slug="$2"
   local status_lines line path normalized_path
-  local artifact_prefix="features/$slug/"
 
   status_lines="$(git -C "$worktree" status --porcelain --untracked-files=all 2>/dev/null || true)"
   [[ -z "$status_lines" ]] && return 0
@@ -3435,11 +3462,7 @@ blocked_completion_worktree_clean_for_auto() {
     fi
     normalized_path="${path#./}"
 
-    if [[ "$normalized_path" == .wavemill/* ]]; then
-      continue
-    fi
-
-    if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
+    if blocked_completion_auto_allowed_dirty_path "$normalized_path" "$slug"; then
       continue
     fi
 
