@@ -750,6 +750,15 @@ describe('hokusai-schema', () => {
       assert.equal(result.observed_outcomes.actual_time_seconds, 0);
     });
 
+    it('keeps submissions eligible when timeSeconds is unknown', () => {
+      const result = expectSuccess(toHokusaiSubmission(makeRecord({
+        timeSeconds: null,
+      })));
+
+      assert.equal(result.observed_outcomes.actual_time_seconds, null);
+      assert.equal(result.observed_outcomes.actual_cost_usd, 2.41);
+    });
+
     it('returns eligibility failure when routing information is unavailable', () => {
       expectFailure(
         toHokusaiSubmission(makeRecord({
@@ -935,6 +944,15 @@ describe('hokusai-schema', () => {
       });
     });
 
+    it('accepts null actual_time_seconds', () => {
+      const submission = expectSuccess(toHokusaiSubmission(makeRecord({ timeSeconds: null })));
+
+      assert.deepEqual(validateHokusaiSubmission(submission), {
+        valid: true,
+        errors: [],
+      });
+    });
+
     it('rejects malformed rubric signal numbers', () => {
       const submission = expectSuccess(toHokusaiSubmission(makeRecord()));
       submission.schema_version = '1.1';
@@ -1027,7 +1045,7 @@ describe('hokusai-schema', () => {
         'route_taken.reviewer_model must be a non-empty string',
         'observed_outcomes.completed_successfully must be a boolean',
         'observed_outcomes.actual_cost_usd must be a non-negative number',
-        'observed_outcomes.actual_time_seconds must be a non-negative number',
+        'observed_outcomes.actual_time_seconds must be null or a non-negative number',
         'observed_outcomes.intervention_count must be a non-negative integer',
         'constraints.max_cost_usd must be null or a non-negative number',
       ]);

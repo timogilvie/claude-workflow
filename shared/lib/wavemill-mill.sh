@@ -4846,6 +4846,34 @@ write_ready_attention_file() {
   printf '%s\n' "$message" > "$state_dir/.needs-attention"
 }
 
+cross_pr_revert_gate_allows_merge() {
+  local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4"
+  local result rc prs files message
+
+  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" 2>/dev/null); then
+    return 0
+  else
+    rc=$?
+  fi
+
+  if [[ "$rc" -eq 1 ]]; then
+    prs=$(printf '%s' "$result" | jq -r '[.unacknowledged[]?.prNumber] | reduce .[] as $item ([]; if index($item) then . else . + [$item] end) | map("#" + tostring) | join(", ")' 2>/dev/null || echo "")
+    files=$(printf '%s' "$result" | jq -r '[.unacknowledged[]?.files[]?.path] | reduce .[] as $item ([]; if index($item) then . else . + [$item] end) | join(", ")' 2>/dev/null || echo "")
+    [[ -n "$prs" ]] || prs="a recently merged PR"
+    message="PR #$pr_number removes files from $prs without explicit acknowledgement."
+    if [[ -n "$files" ]]; then
+      message="$message Affected files: $files."
+    fi
+    write_ready_attention_file "$state_dir" "$message"
+    log "status" "⛔ $issue → Cross-PR revert guard blocked ready phase for PR #$pr_number"
+    return 1
+  fi
+
+  write_ready_attention_file "$state_dir" "Cross-PR revert guard failed for PR #$pr_number."
+  log_error "  Cross-PR revert guard failed for $issue (PR #$pr_number)"
+  return 1
+}
+
 transient_mergeability_count() {
   local state_dir="$1"
   local count_file="$state_dir/.transient-mergeability-count"
@@ -5009,6 +5037,10 @@ launch_ready_phase() {
   fi
 
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
+
+  if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number"; then
+    return 1
+  fi
 
   ready_stderr_file=$(mktemp) || {
     log_warn "  Failed to capture ready stderr for $issue (mktemp failed)"

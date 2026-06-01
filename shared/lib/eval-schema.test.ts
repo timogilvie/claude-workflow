@@ -74,24 +74,28 @@ function validateNode(
     }
   }
 
-  const expectedType = schemaNode.type as string | undefined;
-  if (expectedType === 'string' && typeof value !== 'string') {
-    errors.push(`${path}: expected string, got ${typeof value}`);
-  } else if (expectedType === 'number' && typeof value !== 'number') {
-    errors.push(`${path}: expected number, got ${typeof value}`);
-  } else if (expectedType === 'integer') {
+  const expectedType = schemaNode.type as string | string[] | undefined;
+  const expectedTypes = Array.isArray(expectedType) ? expectedType : expectedType ? [expectedType] : [];
+  const matchesExpectedType = expectedTypes.length === 0 || expectedTypes.some((type) => {
+    if (type === 'null') return value === null;
+    if (type === 'string') return typeof value === 'string';
+    if (type === 'number') return typeof value === 'number';
+    if (type === 'integer') return typeof value === 'number' && Number.isInteger(value);
+    if (type === 'boolean') return typeof value === 'boolean';
+    if (type === 'array') return Array.isArray(value);
+    if (type === 'object') return typeof value === 'object' && value !== null && !Array.isArray(value);
+    return false;
+  });
+
+  if (!matchesExpectedType && expectedTypes.length > 0) {
+    errors.push(`${path}: expected ${expectedTypes.join(' or ')}, got ${value === null ? 'null' : typeof value}`);
+    return;
+  }
+
+  if (expectedTypes.includes('integer')) {
     if (typeof value !== 'number' || !Number.isInteger(value)) {
       errors.push(`${path}: expected integer, got ${value}`);
     }
-  } else if (expectedType === 'boolean' && typeof value !== 'boolean') {
-    errors.push(`${path}: expected boolean, got ${typeof value}`);
-  } else if (expectedType === 'array' && !Array.isArray(value)) {
-    errors.push(`${path}: expected array, got ${typeof value}`);
-  } else if (
-    expectedType === 'object' &&
-    (typeof value !== 'object' || value === null || Array.isArray(value))
-  ) {
-    errors.push(`${path}: expected object, got ${typeof value}`);
   }
 
   if (typeof value === 'number') {
@@ -119,7 +123,7 @@ function validateNode(
     }
   }
 
-  if (expectedType === 'array' && Array.isArray(value) && schemaNode.items) {
+  if (expectedTypes.includes('array') && Array.isArray(value) && schemaNode.items) {
     const itemSchema = schemaNode.items as Record<string, unknown>;
     value.forEach((item, index) => {
       validateNode(item, itemSchema, `${path}[${index}]`, errors);
@@ -127,7 +131,7 @@ function validateNode(
   }
 
   if (
-    expectedType === 'object' &&
+    expectedTypes.includes('object') &&
     typeof value === 'object' &&
     value !== null &&
     !Array.isArray(value)
@@ -762,8 +766,8 @@ function validPromptSizeDiagnostic() {
   };
 }
 
-test('SCHEMA_VERSION is bumped for prompt size diagnostics', () => {
-  assert.equal(SCHEMA_VERSION, '1.26.0');
+test('SCHEMA_VERSION is bumped for nullable timeSeconds', () => {
+  assert.equal(SCHEMA_VERSION, '1.27.0');
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1595,6 +1599,20 @@ test('phaseDurationsSeconds validates when present', () => {
   assert.equal(properties.phaseDurationsSeconds?.type, 'object');
 });
 
+test('timeSeconds accepts null for unknown duration', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.27.0',
+    timeSeconds: null,
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  assert.deepEqual(properties.timeSeconds?.type, ['number', 'null']);
+});
+
 test('Wavemill router fields validate and schema stays in parity', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
@@ -1629,8 +1647,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.26.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.26.0');
+test('Schema version constant is 1.27.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.27.0');
 });
 
 test('Record with resolved-model routing validates', () => {

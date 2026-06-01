@@ -18,6 +18,14 @@ import { runReview, type ReviewResult, type ReviewFinding, type ReviewerPersona 
 import { ensureClaudeAvailable } from './llm-cli.ts';
 import type { ReviewProgressReporter } from './review-progress.ts';
 import type { OperatingMode } from './operating-mode.ts';
+import { getIntegrationConfig, getReviewMergeConfig } from './config.ts';
+import {
+  detectCrossPrReverts,
+  filterUnacknowledgedReverts,
+  parseRevertAcknowledgements,
+  type CrossPrRevertFinding,
+} from './cross-pr-revert-detector.ts';
+import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -50,6 +58,17 @@ export interface ReviewOptions {
 // Re-export types from review-engine for backward compatibility
 export type { ReviewFinding, ReviewResult, ReviewerPersona } from './review-engine.ts';
 
+export const reviewRunnerDeps = {
+  assertReviewableDiff,
+  detectCrossPrReverts,
+  ensureClaudeAvailable,
+  execShellCommand,
+  gatherReviewContextAsync,
+  getCurrentBranch,
+  getGitDiff,
+  runReview,
+};
+
 
 // ────────────────────────────────────────────────────────────────
 // Main Entry Point
@@ -76,9 +95,13 @@ export async function reviewChanges(
     message: `Checking git diff against ${targetBranch}`,
   });
 
-  const branch = getCurrentBranch(repoDir);
-  const diff = getGitDiff(targetBranch, repoDir, options.sinceCommit);
-  assertReviewableDiff(diff, branch, options.sinceCommit ? `commit ${options.sinceCommit.slice(0, 8)}` : targetBranch);
+  const branch = reviewRunnerDeps.getCurrentBranch(repoDir);
+  const diff = reviewRunnerDeps.getGitDiff(targetBranch, repoDir, options.sinceCommit);
+  reviewRunnerDeps.assertReviewableDiff(
+    diff,
+    branch,
+    options.sinceCommit ? `commit ${options.sinceCommit.slice(0, 8)}` : targetBranch,
+  );
 
   await reporter?.emit({
     event: 'preflight_ok',
@@ -87,7 +110,7 @@ export async function reviewChanges(
   });
 
   if (!process.env.SKIP_PREFLIGHT_CHECK) {
-    await ensureClaudeAvailable({
+    await reviewRunnerDeps.ensureClaudeAvailable({
       verbose: options.verbose,
       reporter,
     });
@@ -99,10 +122,21 @@ export async function reviewChanges(
   });
 
   // Gather review context (skip design standards if explicitly requested)
-  const context = await gatherReviewContextAsync(targetBranch, repoDir, {
+  const context = await reviewRunnerDeps.gatherReviewContextAsync(targetBranch, repoDir, {
     designStandards: !options.skipUi,
     sinceCommit: options.sinceCommit,
   });
+
+  const deterministicFindings = await collectCrossPrRevertReviewFindings({
+    repoDir,
+    sinceCommit: options.sinceCommit,
+  });
+  const reviewContext = deterministicFindings.length > 0
+    ? {
+      ...context,
+      diff: prependCrossPrRevertContext(context.diff, deterministicFindings),
+    }
+    : context;
 
   await reporter?.emit({
     event: 'context_loaded',
@@ -114,12 +148,117 @@ export async function reviewChanges(
   });
 
   // Delegate to review engine
-  return runReview(context, repoDir, {
+  const result = await reviewRunnerDeps.runReview(reviewContext, repoDir, {
     skipUi: options.skipUi,
     verbose: options.verbose,
     reviewers: options.reviewers,
     reporter,
     skipClaudePreflight: true,
     operatingMode: options.operatingMode,
+  });
+
+  return mergeDeterministicFindings(result, deterministicFindings);
+}
+
+async function collectCrossPrRevertReviewFindings(input: {
+  repoDir: string;
+  sinceCommit?: string;
+}): Promise<ReviewFinding[]> {
+  const reviewMergeConfig = getReviewMergeConfig(input.repoDir);
+  if (!reviewMergeConfig.crossPrRevertCheck.enabled) {
+    return [];
+  }
+
+  const integrationBranch = getIntegrationConfig(input.repoDir).integrationBranch;
+  const baseRef = input.sinceCommit || String(reviewRunnerDeps.execShellCommand(
+    `git merge-base ${escapeShellArg(integrationBranch)} HEAD`,
+    { cwd: input.repoDir, encoding: 'utf-8' },
+  )).trim();
+
+  const findings = reviewRunnerDeps.detectCrossPrReverts({
+    repoDir: input.repoDir,
+    baseRef,
+    headRef: 'HEAD',
+    integrationRef: integrationBranch,
+    maxRecentMerges: reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
+  });
+  const acknowledgements = parseRevertAcknowledgements(loadRevertAcknowledgementText(input.repoDir));
+  const unacknowledged = filterUnacknowledgedReverts(findings, acknowledgements);
+
+  return unacknowledged.map(buildCrossPrRevertReviewFinding);
+}
+
+function loadRevertAcknowledgementText(repoDir: string): string {
+  try {
+    return String(reviewRunnerDeps.execShellCommand(
+      'gh pr view --json body,title,number --jq \'.title + "\\n" + (.body // "")\'',
+      { cwd: repoDir, encoding: 'utf-8' },
+    ));
+  } catch {
+    try {
+      return String(reviewRunnerDeps.execShellCommand(
+        'git log --format=%B -n 20 HEAD',
+        { cwd: repoDir, encoding: 'utf-8' },
+      ));
+    } catch {
+      return '';
+    }
+  }
+}
+
+function buildCrossPrRevertReviewFinding(finding: CrossPrRevertFinding): ReviewFinding {
+  const paths = finding.files.map((file) => file.path);
+  return {
+    severity: 'blocker',
+    location: paths.join(', ') || 'cross-pr-revert',
+    category: 'cross-pr-revert',
+    description:
+      `This change deletes files introduced by PR #${finding.prNumber}` +
+      `${finding.title ? ` (${finding.title})` : ''}. ` +
+      `Add an explicit acknowledgement like "Reverts #${finding.prNumber}" or ` +
+      `"Intentionally reverts #${finding.prNumber}" for every affected PR.`,
+  };
+}
+
+function prependCrossPrRevertContext(diff: string, findings: ReviewFinding[]): string {
+  const advisory = [
+    'Cross-PR revert detector findings:',
+    ...findings.map((finding) => `- ${finding.description} [${finding.location}]`),
+    '',
+  ].join('\n');
+  return `${advisory}${diff}`;
+}
+
+function mergeDeterministicFindings(result: ReviewResult, findings: ReviewFinding[]): ReviewResult {
+  if (findings.length === 0) {
+    return result;
+  }
+
+  const codeReviewFindings = deduplicateReviewFindings([
+    ...findings,
+    ...result.codeReviewFindings,
+  ]);
+
+  return {
+    ...result,
+    verdict: codeReviewFindings.some((finding) => finding.severity === 'blocker') ? 'not_ready' : result.verdict,
+    codeReviewFindings,
+  };
+}
+
+function deduplicateReviewFindings(findings: ReviewFinding[]): ReviewFinding[] {
+  const deduped = new Map<string, ReviewFinding>();
+  for (const finding of findings) {
+    const key = `${finding.severity}|${finding.location}|${finding.category}|${finding.description}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, finding);
+    }
+  }
+
+  return [...deduped.values()].sort((a, b) => {
+    if (a.severity !== b.severity) {
+      return a.severity === 'blocker' ? -1 : 1;
+    }
+    return a.location.localeCompare(b.location);
   });
 }

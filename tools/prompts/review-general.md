@@ -75,6 +75,8 @@ These are NOT worth flagging in your review:
 
 Focus your review on these categories:
 
+- Cross-PR revert protection: If the diff removes files or behavior from another recent PR on `auto/integration`, compare against the merge base with `auto/integration`, not just the current working tree. Require an explicit acknowledgement such as `Reverts #N` or `Intentionally reverts #N` for each affected PR.
+
 #### 1. Logical Errors and Edge Cases
 - **Off-by-one errors** - Array indexing, loop boundaries
 - **Null/undefined handling** - Missing checks that will cause runtime errors

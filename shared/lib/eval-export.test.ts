@@ -85,6 +85,11 @@ test('flattenRecord produces correct flat row', () => {
   assert.equal(row.pr_url, 'https://github.com/org/repo/pull/42');
 });
 
+test('flattenRecord preserves null timeSeconds for unknown duration', () => {
+  const row = flattenRecord(makeRecord({ timeSeconds: null }));
+  assert.equal(row.time_seconds, null);
+});
+
 test('flattenRecord computes prompt features correctly', () => {
   const record = makeRecord({
     originalPrompt: 'Hello world\nSecond line\nThird line with more words',
@@ -309,6 +314,26 @@ test('flattenRecord preserves original prompt length even when redacted', () => 
 // ────────────────────────────────────────────────────────────────
 
 console.log('\n--- CSV Tests ---\n');
+
+test('toCsv emits blank cells for null time_seconds and preserves numeric durations', () => {
+  const rows: ExportRow[] = [
+    flattenRecord(makeRecord({ id: 'null-row', timeSeconds: null })),
+    flattenRecord(makeRecord({ id: 'zero-row', timeSeconds: 0 })),
+    flattenRecord(makeRecord({ id: 'positive-row', timeSeconds: 245 })),
+  ];
+  const csv = toCsv(rows).trimEnd().split('\n');
+  const header = csv[0].split(',');
+  const timeIndex = header.indexOf('time_seconds');
+  const idIndex = header.indexOf('id');
+
+  assert.ok(timeIndex >= 0);
+  assert.equal(csv[1].split(',')[idIndex], 'null-row');
+  assert.equal(csv[1].split(',')[timeIndex], '');
+  assert.equal(csv[2].split(',')[idIndex], 'zero-row');
+  assert.equal(csv[2].split(',')[timeIndex], '0');
+  assert.equal(csv[3].split(',')[idIndex], 'positive-row');
+  assert.equal(csv[3].split(',')[timeIndex], '245');
+});
 
 test('toCsv produces header and data rows', () => {
   const rows = [flattenRecord(makeRecord())];
