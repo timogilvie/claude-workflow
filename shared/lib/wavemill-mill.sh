@@ -4048,8 +4048,8 @@ _tmux_window_target_exists() {
   [[ "$target_session" == "$session" ]] || return 1
   if [[ -n "$expected_path" ]]; then
     target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-    expected_real="$(cd "$expected_path" 2>/dev/null && pwd -P || printf '%s\n' "$expected_path")"
-    target_real="$(cd "$target_path" 2>/dev/null && pwd -P || printf '%s\n' "$target_path")"
+    expected_real="$(cd -P "$expected_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$expected_path")"
+    target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
     [[ "$target_real" == "$expected_real" ]] || return 1
   fi
   return 0
