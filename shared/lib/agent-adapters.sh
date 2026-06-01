@@ -8,6 +8,15 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$script_dir/routing-emitter.sh"
 
+agent_tmux_target() {
+  local session="$1" window="$2"
+  [[ -n "$window" ]] || return 1
+  case "$window" in
+    @*|*:*) printf '%s\n' "$window" ;;
+    *) printf '%s:%s\n' "$session" "$window" ;;
+  esac
+}
+
 # ============================================================================
 # AGENT RESOLUTION
 # ============================================================================
@@ -1309,6 +1318,8 @@ agent_launch_autonomous() {
   local hooks_dir dashboard_pid
   hooks_dir="$(agent_hooks_dir)"
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
+  local target
+  target="$(agent_tmux_target "$session" "$window")" || return 1
   local repo_dir="${REPO_DIR:-$(pwd)}"
   local role feature_dir
   role="$(routing_role_from_window "$window" 2>/dev/null || true)"
@@ -1389,8 +1400,8 @@ cat '$instr_file' | claude${effective_model_flag} --dangerously-skip-permissions
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       chmod +x "$launcher"
-      tmux send-keys -t "$session:$window" -l -- "$launcher"
-      tmux send-keys -t "$session:$window" C-m
+      tmux send-keys -t "$target" -l -- "$launcher"
+      tmux send-keys -t "$target" C-m
       ;;
     claude)
       if agent_model_is_deepseek "$model"; then
@@ -1444,10 +1455,10 @@ cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
         chmod +x "$launcher"
-        tmux send-keys -t "$session:$window" -l -- "$launcher"
-        tmux send-keys -t "$session:$window" C-m
+        tmux send-keys -t "$target" -l -- "$launcher"
+        tmux send-keys -t "$target" C-m
       else
-        tmux send-keys -t "$session:$window" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$window' WAVEMILL_RESOLVED_MODEL='$model'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
+        tmux send-keys -t "$target" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$window' WAVEMILL_RESOLVED_MODEL='$model'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
       fi
       ;;
     codex)
@@ -1480,8 +1491,8 @@ echo "[wavemill] Agent exited (codex=\${codex_rc})"
 LAUNCHEOF
       chmod +x "$launcher"
       printf -v launcher_cmd '%q' "$launcher"
-      tmux send-keys -t "$session:$window" -l -- "$launcher_cmd"
-      tmux send-keys -t "$session:$window" C-m
+      tmux send-keys -t "$target" -l -- "$launcher_cmd"
+      tmux send-keys -t "$target" C-m
       ;;
     *)
       # Generic fallback: start the agent, then paste instructions via tmux buffer.
@@ -1491,21 +1502,21 @@ LAUNCHEOF
         rm -f "$exit_file" 2>/dev/null || true
       fi
       if [[ -n "$exit_file" ]]; then
-        tmux send-keys -t "$session:$window" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}; rc=\$?; printf '%s\n' \"\$rc\" > '$exit_file'" C-m
+        tmux send-keys -t "$target" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}; rc=\$?; printf '%s\n' \"\$rc\" > '$exit_file'" C-m
       else
-        tmux send-keys -t "$session:$window" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}" C-m
+        tmux send-keys -t "$target" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}" C-m
       fi
       sleep 0.3
       local pane_pid=""
-      pane_pid=$(tmux display-message -t "$session:$window" -p '#{pane_pid}' 2>/dev/null || echo "")
+      pane_pid=$(tmux display-message -t "$target" -p '#{pane_pid}' 2>/dev/null || echo "")
       if [[ -n "$pane_pid" && -n "$issue" ]]; then
         env WAVEMILL_SESSION="$session" WAVEMILL_ISSUE="$issue" WAVEMILL_DASHBOARD_PID="$dashboard_pid" "$hooks_dir/process-status-monitor.sh" "$pane_pid" "$exit_file" >/dev/null 2>&1 &
       fi
       local instr
       instr="$(cat "$instr_file")"
       tmux set-buffer "$instr"
-      tmux paste-buffer -t "$session:$window"
-      tmux send-keys -t "$session:$window" C-m
+      tmux paste-buffer -t "$target"
+      tmux send-keys -t "$target" C-m
       ;;
   esac
 }
@@ -1513,6 +1524,15 @@ LAUNCHEOF
 _agent_find_issue_window() {
   local session="$1"
   local issue="$2"
+  local stored_target
+
+  if [[ -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]] && command -v jq >/dev/null 2>&1; then
+    stored_target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$STATE_FILE" 2>/dev/null || true)"
+    if [[ -n "$stored_target" ]] && tmux display-message -p -t "$stored_target" '#{window_id}' >/dev/null 2>&1; then
+      printf '%s\n' "$stored_target"
+      return 0
+    fi
+  fi
 
   tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
     | awk -v prefix="${issue}-" 'index($0, prefix) == 1 { print; exit }'
@@ -1541,7 +1561,7 @@ agent_resume_after_error() {
     return 1
   fi
 
-  target="$session:$window"
+  target="$(agent_tmux_target "$session" "$window")" || return 1
   if ! tmux list-panes -t "$target" >/dev/null 2>&1; then
     _agent_log_warn "Cannot resume $issue: tmux target $target is unavailable"
     return 1
@@ -1656,6 +1676,9 @@ agent_launch_interactive() {
   if [[ "$agent_cmd" == "codex" ]] && [[ "$agent_flags" != *" --dangerously-bypass-approvals-and-sandbox"* ]]; then
     agent_flags="${agent_flags} --dangerously-bypass-approvals-and-sandbox"
   fi
+
+  local target
+  target="$(agent_tmux_target "$session" "$window")" || return 1
 
   agent_prepare_pane_for_launch "$session" "$window" 15 3 "$abort_check_cmd"
   local prepare_rc=$?
@@ -1827,7 +1850,6 @@ LAUNCHEOF
   chmod +x "$launcher"
   printf -v launcher_cmd '%q' "$launcher"
 
-  local target="$session:$window"
   if [[ "$prepare_rc" -ne 0 ]]; then
     _agent_log_warn "  Pane not ready for send-keys; using respawn-pane fallback"
     local wt_dir
@@ -1846,7 +1868,7 @@ LAUNCHEOF
 
   while (( retry < max_retries )); do
     if (( retry > 0 )); then
-      _agent_log_warn "  Retry $retry/$((max_retries - 1)): re-dispatching launcher to $session:$window"
+      _agent_log_warn "  Retry $retry/$((max_retries - 1)): re-dispatching launcher to $target"
       sleep "$retry_delay"
     fi
 
@@ -1864,20 +1886,20 @@ LAUNCHEOF
     local baseline_command baseline_children
     baseline_command=$(_pane_current_command "$target")
     baseline_children=$(_pane_child_count "$target")
-    tmux send-keys -t "$session:$window" -l -- "$launcher_cmd"
+    tmux send-keys -t "$target" -l -- "$launcher_cmd"
     sleep "$enter_delay"
-    tmux send-keys -t "$session:$window" C-m
+    tmux send-keys -t "$target" C-m
 
     if agent_verify_launch "$session" "$window" "$verify_wait" "$verify_poll" "$baseline_command" "$baseline_children"; then
       return 0
     fi
 
-    tmux send-keys -t "$session:$window" C-c 2>/dev/null || true
+    tmux send-keys -t "$target" C-c 2>/dev/null || true
     sleep "$enter_delay"
     (( retry += 1 ))
   done
 
-  _agent_log_warn "  FAILED: launcher did not start in $session:$window after $max_retries attempts"
+  _agent_log_warn "  FAILED: launcher did not start in $target after $max_retries attempts"
   return 1
 }
 
@@ -2009,7 +2031,8 @@ agent_terminate_in_pane() {
   local session="$1"
   local window="$2"
   local max_wait="${3:-15}"
-  local target="$session:$window"
+  local target
+  target="$(agent_tmux_target "$session" "$window")" || return 1
 
   # Quick check — maybe nothing is running
   if _pane_is_dead_or_idle "$target"; then
@@ -2098,7 +2121,8 @@ agent_terminate_in_pane() {
 agent_pane_is_ready() {
   local session="$1"
   local window="$2"
-  local target="$session:$window"
+  local target
+  target="$(agent_tmux_target "$session" "$window")" || return 1
 
   if tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | grep -q '^1$'; then
     _agent_log_debug "Pane $target is dead during readiness check, respawning"
@@ -2144,7 +2168,8 @@ agent_verify_launch() {
   local poll_interval="${4:-0.3}"
   local baseline_command="${5:-}"
   local baseline_children="${6:-}"
-  local target="$session:$window"
+  local target
+  target="$(agent_tmux_target "$session" "$window")" || return 1
   local saw_probe_data=0
 
   local attempts
@@ -2209,7 +2234,8 @@ agent_wait_for_pane_ready() {
   local max_wait="${3:-3}"
   local poll_interval="${4:-0.2}"
   local abort_check_cmd="${5:-}"
-  local target="$session:$window"
+  local target
+  target="$(agent_tmux_target "$session" "$window")" || return 1
 
   local attempts
   attempts=$(awk "BEGIN { v = $max_wait / $poll_interval; if (v < 1) v = 1; printf \"%d\", (v == int(v) ? v : int(v) + 1) }")
@@ -2245,7 +2271,8 @@ agent_prepare_pane_for_launch() {
   local terminate_wait="${3:-15}"
   local ready_wait="${4:-3}"
   local abort_check_cmd="${5:-}"
-  local target="$session:$window"
+  local target
+  target="$(agent_tmux_target "$session" "$window")" || return 1
 
   if ! agent_terminate_in_pane "$session" "$window" "$terminate_wait"; then
     _agent_log_warn "  Timed out waiting for previous agent to exit in $target"
