@@ -48,7 +48,7 @@ import { attachPhaseDurations, attachStageOutcomes, enrichTrainingMetadata } fro
 import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
-import { triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
+import { formatHokusaiSubmissionTriggerResult, triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 import { computeWorkflowCost, loadPricingTable, type WorkflowCostOutcome } from './workflow-cost.ts';
 import type {
@@ -551,9 +551,12 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   }
 
   if (persisted) {
-    await evalOrchestratorDeps.triggerHokusaiSubmission(record, { repoDir }).catch((error) => {
+    try {
+      const result = await evalOrchestratorDeps.triggerHokusaiSubmission(record, { repoDir });
+      console.log(`[hokusai] submission ${formatHokusaiSubmissionTriggerResult(result)}`);
+    } catch (error) {
       console.warn(`[hokusai] failed to trigger submission: ${errorMessage(error)}`);
-    });
+    }
   }
 
   return record;

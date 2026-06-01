@@ -43,6 +43,14 @@ describe('hokusai-contribution-schema', () => {
     assert.equal(row.actual_cost_usd, 1.23);
   });
 
+  it('validates null actual cost for submit-data rows', () => {
+    const row = validateContributionRow({
+      success_under_budget: false,
+      actual_cost_usd: null,
+    });
+    assert.equal(row.actual_cost_usd, null);
+  });
+
   it('validates a benchmark row', () => {
     const row = validateContributionRow({
       schema_version: TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION,
@@ -64,6 +72,23 @@ describe('hokusai-contribution-schema', () => {
       harness: 'wavemill',
     });
     assert.equal(row.schema_version, TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION);
+  });
+
+  it('validates null actual cost for benchmark rows', () => {
+    const row = validateContributionRow({
+      schema_version: TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION,
+      task_descriptor: makeTaskDescriptor(),
+      allowed_models: ['planner-a', 'coder-a', 'reviewer-a'],
+      selected_models: {
+        coder: 'coder-a',
+        reviewer: 'reviewer-a',
+      },
+      actual_cost_usd: null,
+      success_under_budget: false,
+      completion_result: 'success',
+      observed_at: '2026-05-30T12:00:00.000Z',
+    });
+    assert.equal(row.actual_cost_usd, null);
   });
 
   it('rejects rows missing success_under_budget', () => {

@@ -7,7 +7,7 @@
       "properties": {
         "success_under_budget": { "type": "boolean" },
         "inputs": { "type": "object" },
-        "actual_cost_usd": { "type": "number", "minimum": 0 },
+        "actual_cost_usd": { "type": ["number", "null"], "minimum": 0 },
         "wall_clock_seconds": { "type": "number", "minimum": 0 },
         "task_id": { "type": "string" },
         "harness": { "type": "string" }
@@ -35,7 +35,7 @@
           "additionalProperties": false
         },
         "budget_usd": { "type": "number", "minimum": 0 },
-        "actual_cost_usd": { "type": "number", "minimum": 0 },
+        "actual_cost_usd": { "type": ["number", "null"], "minimum": 0 },
         "wall_clock_seconds": { "type": "number", "minimum": 0 },
         "success_under_budget": { "type": "boolean" },
         "completion_result": {
