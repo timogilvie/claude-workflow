@@ -27,7 +27,7 @@ const FORBIDDEN_KEYS = new Set([
 export interface SubmitDataContributionRow {
   success_under_budget: boolean;
   inputs?: Record<string, ContributionScalar | ContributionScalar[] | Record<string, ContributionScalar>>;
-  actual_cost_usd?: number;
+  actual_cost_usd?: number | null;
   wall_clock_seconds?: number;
   task_id?: string;
   harness?: string;
@@ -45,7 +45,7 @@ export interface TechnicalTaskRouterContributionRowV1 {
   allowed_models: string[];
   selected_models: TechnicalTaskRouterSelectedModels;
   budget_usd?: number;
-  actual_cost_usd?: number;
+  actual_cost_usd?: number | null;
   wall_clock_seconds?: number;
   success_under_budget: boolean;
   completion_result: 'success' | 'failure';
@@ -120,7 +120,11 @@ function isSubmitDataContributionRow(value: unknown): value is SubmitDataContrib
     return false;
   }
 
-  if (value.actual_cost_usd !== undefined && !isFiniteNonNegativeNumber(value.actual_cost_usd)) {
+  if (
+    value.actual_cost_usd !== undefined
+    && value.actual_cost_usd !== null
+    && !isFiniteNonNegativeNumber(value.actual_cost_usd)
+  ) {
     return false;
   }
 
@@ -175,7 +179,11 @@ function isTechnicalTaskRouterContributionRow(value: unknown): value is Technica
     return false;
   }
 
-  if (value.actual_cost_usd !== undefined && !isFiniteNonNegativeNumber(value.actual_cost_usd)) {
+  if (
+    value.actual_cost_usd !== undefined
+    && value.actual_cost_usd !== null
+    && !isFiniteNonNegativeNumber(value.actual_cost_usd)
+  ) {
     return false;
   }
 
