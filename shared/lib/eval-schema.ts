@@ -86,6 +86,9 @@
  *   separately from bootstrap, expanded, and active route recommendations.
  * - **1.26.0**: Added optional `phaseDurationsSeconds` so eval records retain
  *   per-phase wall-clock durations computed from workflow result artifacts.
+ * - **1.27.0**: `timeSeconds` now accepts `null` so eval records can preserve
+ *   indeterminate wall-clock duration instead of coercing unknown time to `0`
+ *   (HOK-1926)
  *
  * @module eval-schema
  */
@@ -95,7 +98,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.26.0';
+export const SCHEMA_VERSION = '1.27.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1304,8 +1307,8 @@ export interface EvalRecord {
   /** The rubric band label derived from the score */
   scoreBand: ScoreBandLabel;
 
-  /** Wall-clock time in seconds for task completion */
-  timeSeconds: number;
+  /** Wall-clock time in seconds for task completion, or null when unknown */
+  timeSeconds: number | null;
 
   /**
    * Per-phase LLM wall-clock durations in seconds.
