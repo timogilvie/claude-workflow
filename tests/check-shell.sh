@@ -1176,9 +1176,12 @@ else
     fail "dashboard is missing free slot count rendering"
   fi
 
-  if grep -qE '^window_index\(\) \{' "$STATUS_SCRIPT" \
-    && grep -q "tmux display-message -t \"\\\$SESSION:\\\$win\" -p '#{window_index}'" "$STATUS_SCRIPT"; then
-    pass "dashboard resolves tmux window indices for pane column"
+  if grep -qE '^task_window_target\(\) \{' "$STATUS_SCRIPT" \
+    && grep -Fq '.tasks[$issue].windowId // empty' "$STATUS_SCRIPT" \
+    && grep -Fq '#{pane_current_path}' "$STATUS_SCRIPT" \
+    && grep -qE '^window_index\(\) \{' "$STATUS_SCRIPT" \
+    && grep -q "tmux display-message -t \"\\\$target\" -p '#{window_index}'" "$STATUS_SCRIPT"; then
+    pass "dashboard resolves worktree-validated tmux window indices for pane column"
   else
     fail "dashboard is missing tmux window index lookup"
   fi
