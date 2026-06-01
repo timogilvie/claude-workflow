@@ -241,7 +241,7 @@ wavemill_resolve_model() {
 
 wavemill_apply_window_metadata() {
   local session="${1:-}" issue="${2:-}" window_target="${3:-}" state_file="${4:-${STATE_FILE:-}}"
-  local hook_json branch phase slug worktree detail target pane_pid ports_csv model pr_json pr_number pr_state title status_right target_path
+  local hook_json branch phase slug worktree detail target candidate pane_pid ports_csv model pr_json pr_number pr_state title status_right target_path
 
   [[ -n "$session" && -n "$issue" ]] || return 0
   command -v tmux >/dev/null 2>&1 || return 0
@@ -278,6 +278,16 @@ wavemill_apply_window_metadata() {
       target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
       [[ "$target_path" == "$worktree" ]] || target=""
     fi
+  fi
+  if [[ -z "$target" && -n "$worktree" ]]; then
+    while IFS='|' read -r candidate _name; do
+      [[ -n "$candidate" ]] || continue
+      target_path="$(tmux display-message -p -t "$candidate" '#{pane_current_path}' 2>/dev/null || true)"
+      if [[ "$target_path" == "$worktree" ]]; then
+        target="$candidate"
+        break
+      fi
+    done < <(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null || true)
   fi
   [[ -n "$target" ]] || return 0
 
