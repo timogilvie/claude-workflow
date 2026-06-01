@@ -13,6 +13,28 @@ export interface TriggerHokusaiSubmissionOptions {
   redactionSalt?: string;
 }
 
+export type HokusaiSubmissionTriggerResult =
+  | { status: 'disabled' }
+  | { status: 'not_eligible'; reasons: string[] }
+  | { status: 'enqueued'; entryId?: string; drainStarted: boolean }
+  | { status: 'duplicate'; drainStarted: false }
+  | { status: 'failed'; error: string };
+
+export function formatHokusaiSubmissionTriggerResult(result: HokusaiSubmissionTriggerResult): string {
+  switch (result.status) {
+    case 'disabled':
+      return 'disabled';
+    case 'not_eligible':
+      return `not eligible (${result.reasons.join(', ') || 'no reason provided'})`;
+    case 'enqueued':
+      return `enqueued${result.entryId ? ` entry=${result.entryId}` : ''}${result.drainStarted ? ' drain=started' : ''}`;
+    case 'duplicate':
+      return 'duplicate';
+    case 'failed':
+      return `failed (${result.error})`;
+  }
+}
+
 export const hokusaiSubmissionTriggerDeps = {
   getHokusaiSubmissionConfig,
   toHokusaiSubmission,
@@ -23,11 +45,16 @@ export const hokusaiSubmissionTriggerDeps = {
 };
 
 function toBudgetCompliant(submission: HokusaiSubmission): boolean {
+  const actualCostUsd = submission.observed_outcomes.actual_cost_usd;
+  if (typeof actualCostUsd !== 'number' || !Number.isFinite(actualCostUsd)) {
+    return false;
+  }
+
   const maxCostUsd = submission.constraints.max_cost_usd;
   if (typeof maxCostUsd !== 'number' || !Number.isFinite(maxCostUsd)) {
     return true;
   }
-  return submission.observed_outcomes.actual_cost_usd <= maxCostUsd;
+  return actualCostUsd <= maxCostUsd;
 }
 
 function toContributionProjection(submission: HokusaiSubmission, observedAt: string): RedactedEvalContributionProjection {
@@ -62,23 +89,23 @@ function warnHokusai(message: string, error: unknown): void {
 /**
  * Best-effort Hokusai submission trigger for completed eval records.
  *
- * The eval path should call this after persistence and should not await it.
- * All failures are downgraded to warnings so evaluation completion remains
- * reliable even when config, redaction, queueing, or drain behavior changes.
+ * The eval path should call this after persistence and await the enqueue
+ * attempt. Upload is intentionally detached so evaluation completion remains
+ * independent from endpoint latency or transient service failures.
  */
 export async function triggerHokusaiSubmission(
   record: EvalRecord,
   options: TriggerHokusaiSubmissionOptions,
-): Promise<void> {
+): Promise<HokusaiSubmissionTriggerResult> {
   try {
     const config = hokusaiSubmissionTriggerDeps.getHokusaiSubmissionConfig(options.repoDir);
     if (config.enabled !== true) {
-      return;
+      return { status: 'disabled' };
     }
 
     const submissionResult = hokusaiSubmissionTriggerDeps.toHokusaiSubmission(record);
     if (!submissionResult.ok) {
-      return;
+      return { status: 'not_eligible', reasons: submissionResult.reasons };
     }
 
     const redactedSubmission = hokusaiSubmissionTriggerDeps.redactHokusaiSubmission(submissionResult.submission, {
@@ -94,7 +121,7 @@ export async function triggerHokusaiSubmission(
     });
 
     if (enqueueResult.status !== 'enqueued') {
-      return;
+      return { status: enqueueResult.status, drainStarted: false };
     }
 
     void hokusaiSubmissionTriggerDeps.drainContributionQueue({
@@ -103,7 +130,13 @@ export async function triggerHokusaiSubmission(
     }).catch((error) => {
       warnHokusai('opportunistic drain failed', error);
     });
+    return {
+      status: 'enqueued',
+      entryId: enqueueResult.entry?.entryId,
+      drainStarted: true,
+    };
   } catch (error) {
     warnHokusai('submission trigger failed', error);
+    return { status: 'failed', error: errorMessage(error) };
   }
 }

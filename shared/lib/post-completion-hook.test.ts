@@ -173,6 +173,7 @@ function stubBaseEvalDeps(executionModel = 'gpt-5.4'): void {
         timeSeconds,
         modelId: '',
         modelVersion: '',
+        issueId: input.issueId,
         workflowCost: 1.5,
         workflowTokenUsage: {},
         constraints: { maxCostUsd: 6.5 },
@@ -216,6 +217,7 @@ async function withMockedPostCompletionDeps(fn: () => Promise<void> | void): Pro
     postCompletionHookDeps.collectDeliveryOutcome = outcomeCollectors.collectDeliveryOutcome;
     postCompletionHookDeps.getEvalContextUpdatesConfig = defaultPostCompletionHookDeps.getEvalContextUpdatesConfig;
     postCompletionHookDeps.getCurrentOperatingMode = defaultPostCompletionHookDeps.getCurrentOperatingMode;
+    postCompletionHookDeps.triggerHokusaiSubmission = defaultPostCompletionHookDeps.triggerHokusaiSubmission;
     postCompletionHookDeps.runContextUpdateWork = defaultPostCompletionHookDeps.runContextUpdateWork;
     postCompletionHookDeps.appendContextUpdateWarning = defaultPostCompletionHookDeps.appendContextUpdateWarning;
   }
@@ -728,6 +730,102 @@ await test('runPostCompletionEval keeps eval persisted when context updates time
     assert.equal(warnings[0].retryCount, 0);
     assert.equal(typeof warnings[0].durationMs, 'number');
   } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval enqueues Hokusai after persistence before context updates', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-hokusai-enqueue-'));
+  makeContextUpdateRepo(repoDir, 'hokusai-enqueue', 'HOK-1583');
+  clearConfigCache(repoDir);
+  const calls: string[] = [];
+  const logs: string[] = [];
+  const originalLog = console.log;
+
+  try {
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    };
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.appendEvalRecord = (record, options) => {
+        calls.push('persist');
+        defaultPostCompletionHookDeps.appendEvalRecord(record, options);
+      };
+      postCompletionHookDeps.triggerHokusaiSubmission = async (record, options) => {
+        calls.push(`hokusai:${record.issueId}:${options.repoDir}`);
+        return { status: 'enqueued', entryId: 'entry-1', drainStarted: true };
+      };
+      postCompletionHookDeps.runContextUpdateWork = async () => {
+        calls.push('context');
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1583',
+        prNumber: '1583',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/hokusai-enqueue',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    assert.deepEqual(calls, [
+      'persist',
+      `hokusai:HOK-1583:${repoDir}`,
+      'context',
+    ]);
+    assert.ok(logs.some((line) => line.includes('Post-completion eval: Hokusai submission enqueued entry=entry-1 drain=started')));
+  } finally {
+    console.log = originalLog;
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval keeps eval persisted when Hokusai enqueue fails', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-hokusai-fails-'));
+  makeContextUpdateRepo(repoDir, 'hokusai-fails', 'HOK-1584');
+  clearConfigCache(repoDir);
+  const warnings: string[] = [];
+  let contextCalls = 0;
+  const originalWarn = console.warn;
+
+  try {
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.triggerHokusaiSubmission = async () => {
+        throw new Error('queue unavailable');
+      };
+      postCompletionHookDeps.runContextUpdateWork = async () => {
+        contextCalls += 1;
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-1584',
+        prNumber: '1584',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/hokusai-fails',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    assert.equal(contextCalls, 1);
+    assert.ok(warnings.some((line) => line.includes('Post-completion eval: Hokusai submission failed (queue unavailable)')));
+    assert.ok(existsSync(join(repoDir, '.wavemill', 'evals', 'evals.jsonl')));
+  } finally {
+    console.warn = originalWarn;
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });
   }

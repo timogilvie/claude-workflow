@@ -182,7 +182,7 @@ describe('eval-orchestrator', () => {
     }));
     mock.method(evalOrchestratorDeps, 'computeWorkflowCost', () => costOutcome);
     mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => undefined);
-    mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => undefined);
+    mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => ({ status: 'disabled' }));
     mock.method(evalOrchestratorDeps, 'evaluateTask', async (input, outcomes) => {
       evaluateTaskInput = input as Record<string, unknown>;
       const timeSeconds =
@@ -432,6 +432,7 @@ describe('eval-orchestrator', () => {
       order.push('trigger');
       triggeredRecord = record;
       triggeredRepoDir = options.repoDir;
+      return { status: 'enqueued', drainStarted: true };
     });
 
     const record = await runEvaluation({
@@ -450,7 +451,7 @@ describe('eval-orchestrator', () => {
   });
 
   it('does not trigger Hokusai submission when persistence fails', async () => {
-    const trigger = mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => undefined);
+    const trigger = mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => ({ status: 'disabled' }));
     mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => {
       throw new Error('disk full');
     });
@@ -469,7 +470,7 @@ describe('eval-orchestrator', () => {
   it('waits for the Hokusai trigger before returning', async () => {
     let resolveTrigger: (() => void) | undefined;
     mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', () => new Promise((resolve) => {
-      resolveTrigger = resolve;
+      resolveTrigger = () => resolve({ status: 'enqueued', drainStarted: true });
     }));
 
     const run = runEvaluation({
