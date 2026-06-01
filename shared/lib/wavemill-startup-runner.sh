@@ -422,6 +422,7 @@ spawn_integration_window() {
   fi
 
   startup_log "Starting backstage window (tend loop + background status)..."
+  WORKTREE_ROOT="${WORKTREE_ROOT:-$REPO_DIR}"
   printf -v integration_cmd 'exec env WAVEMILL_SESSION=%q WAVEMILL_ISSUE=%q npx tsx %q --loop --repo-dir %q' \
     "$SESSION" "integration" "$TOOLS_DIR/tend.ts" "$REPO_DIR"
   tmux new-window -d -t "$SESSION" -n "$WAVEMILL_WINDOW_BACKSTAGE" -c "$REPO_DIR" "$integration_cmd" >/dev/null
@@ -863,7 +864,7 @@ $details_context"
   fi
   state_written=true
   startup_step "[5/7] Saving workflow state...  ✓"
-  if declare -F wavemill_apply_window_metadata >/dev/null 2>&1; then
+  if [[ -n "${created_window_id:-}" ]] && declare -F wavemill_apply_window_metadata >/dev/null 2>&1; then
     wavemill_apply_window_metadata "$SESSION" "$issue" "${created_window_id:-}" "$STATE_FILE" >/dev/null 2>&1 || true
   fi
 
@@ -888,7 +889,7 @@ $details_context"
   tmux set-environment -t "$SESSION" WAVEMILL_RESOLVED_MODEL "$planner_launch_model" 2>/dev/null || true
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
-  if ! agent_launch_interactive "$SESSION" "$win" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}"; then
+  if ! agent_launch_interactive "$SESSION" "${created_window_id:-$win}" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}" "" "" "$issue"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     startup_phase_failed "$startup_id" agent "$issue" "launching planning agent"
@@ -905,7 +906,7 @@ $details_context"
     return 1
   fi
   startup_step "[6/7] Launching agent...        ✓"
-  if declare -F wavemill_apply_window_metadata >/dev/null 2>&1; then
+  if [[ -n "${created_window_id:-}" ]] && declare -F wavemill_apply_window_metadata >/dev/null 2>&1; then
     wavemill_apply_window_metadata "$SESSION" "$issue" "${created_window_id:-}" "$STATE_FILE" >/dev/null 2>&1 || true
   fi
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" agent done

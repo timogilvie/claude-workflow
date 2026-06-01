@@ -601,7 +601,14 @@ is_active() {
   local worktree="$1"
   local win="$2"
   [[ -d "$worktree" ]] && return 0
-  tmux list-panes -t "$SESSION:$win" 2>/dev/null >/dev/null && return 0
+  local target="" issue="" slug=""
+  if [[ "$win" =~ ^([A-Z]+-[0-9]+(_c)?)-(.+)$ ]]; then
+    issue="${BASH_REMATCH[1]}"
+    slug="${BASH_REMATCH[3]}"
+    target="$(task_window_target "$issue" "$slug" "$worktree" 2>/dev/null || true)"
+  fi
+  [[ -n "$target" ]] || target="$SESSION:$win"
+  tmux list-panes -t "$target" 2>/dev/null >/dev/null && return 0
   return 1
 }
 
@@ -826,10 +833,23 @@ task_window_target() {
   canonical="${issue}-${slug}"
   target="$(tmux list-windows -t "$SESSION" -F '#{window_id}|#{window_name}' 2>/dev/null \
     | awk -F'|' -v name="$canonical" '$2 == name { print $1; exit }')"
-  [[ -n "$target" ]] || return 0
-  target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-  if [[ -z "$worktree" || "$target_path" == "$worktree" ]]; then
-    printf '%s\n' "$target"
+  if [[ -n "$target" ]]; then
+    target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+    if [[ -z "$worktree" || "$target_path" == "$worktree" ]]; then
+      printf '%s\n' "$target"
+      return 0
+    fi
+  fi
+
+  if [[ -n "$worktree" ]]; then
+    while IFS='|' read -r target _name; do
+      [[ -n "$target" ]] || continue
+      target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+      if [[ "$target_path" == "$worktree" ]]; then
+        printf '%s\n' "$target"
+        return 0
+      fi
+    done < <(tmux list-windows -t "$SESSION" -F '#{window_id}|#{window_name}' 2>/dev/null || true)
   fi
 }
 
