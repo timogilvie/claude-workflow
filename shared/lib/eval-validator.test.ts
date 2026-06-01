@@ -50,7 +50,7 @@ describe('eval-validator', () => {
   it('reports an all-valid file with no issues', async () => {
     const filePath = writeJsonlFile([
       JSON.stringify(makeRecord({ id: 'eval-1' })),
-      JSON.stringify(makeRecord({ id: 'eval-2', timeSeconds: 43 })),
+      JSON.stringify(makeRecord({ id: 'eval-2', timeSeconds: null })),
     ]);
 
     const report = await validateEvalsFile(filePath);
@@ -200,5 +200,25 @@ describe('eval-validator', () => {
       { file: 'evals.jsonl', line: 1 },
     );
     assert.ok(issues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'score'));
+  });
+
+  it('accepts null timeSeconds and still rejects invalid duration values', () => {
+    const validIssues = validateEvalRecord(
+      makeRecord({ timeSeconds: null }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(!validIssues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'timeSeconds'));
+
+    const negativeIssues = validateEvalRecord(
+      makeRecord({ timeSeconds: -1 }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(negativeIssues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'timeSeconds'));
+
+    const stringIssues = validateEvalRecord(
+      makeRecord({ timeSeconds: 'slow' as unknown as number }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(stringIssues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'timeSeconds'));
   });
 });

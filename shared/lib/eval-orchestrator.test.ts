@@ -184,9 +184,13 @@ describe('eval-orchestrator', () => {
     mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => undefined);
     mock.method(evalOrchestratorDeps, 'evaluateTask', async (input, outcomes) => {
       evaluateTaskInput = input as Record<string, unknown>;
+      const timeSeconds =
+        Object.prototype.hasOwnProperty.call(input, 'timeSeconds')
+          ? (input as { timeSeconds?: number | null }).timeSeconds
+          : makeJudgeRecord().timeSeconds;
       return {
         ...makeJudgeRecord(),
-        timeSeconds: Number((input as { timeSeconds?: number }).timeSeconds ?? makeJudgeRecord().timeSeconds),
+        timeSeconds,
         outcomes,
         routingDecision,
       };
@@ -221,6 +225,75 @@ describe('eval-orchestrator', () => {
     assert.equal(record.taskDescriptor?.outcome?.total_cost_usd, 3.75);
     assert.equal(record.constraints?.maxCostUsd, 6.5);
     assert.equal(record.enrichmentDiagnostics, undefined);
+  });
+
+  it('preserves null duration when git history is indeterminate', async () => {
+    mock.method(evalOrchestratorDeps, 'gatherStageArtifacts', () => ({
+      taskPacket: undefined,
+      planContent: undefined,
+      selfReviewSummary: undefined,
+      routingDecision,
+      phaseDurations: undefined,
+      executionModel: 'gpt-5.4',
+    }));
+    mock.method(evalOrchestratorDeps, 'computeWallClockSeconds', () => null);
+
+    const record = await runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'codex',
+    });
+
+    assert.equal(evaluateTaskInput?.timeSeconds, null);
+    assert.equal(record.timeSeconds, null);
+  });
+
+  it('preserves null duration when no branch is available', async () => {
+    mock.method(evalOrchestratorDeps, 'gatherStageArtifacts', () => ({
+      taskPacket: undefined,
+      planContent: undefined,
+      selfReviewSummary: undefined,
+      routingDecision,
+      phaseDurations: undefined,
+      executionModel: 'gpt-5.4',
+    }));
+    mock.method(evalOrchestratorDeps, 'execShellCommand', () => '');
+
+    const record = await runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'codex',
+    });
+
+    assert.equal(evaluateTaskInput?.timeSeconds, null);
+    assert.equal(record.timeSeconds, null);
+  });
+
+  it('preserves positive git-derived duration when phase totals are unavailable', async () => {
+    mock.method(evalOrchestratorDeps, 'gatherStageArtifacts', () => ({
+      taskPacket: undefined,
+      planContent: undefined,
+      selfReviewSummary: undefined,
+      routingDecision,
+      phaseDurations: undefined,
+      executionModel: 'gpt-5.4',
+    }));
+    mock.method(evalOrchestratorDeps, 'computeWallClockSeconds', () => 180);
+
+    const record = await runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'codex',
+    });
+
+    assert.equal(evaluateTaskInput?.timeSeconds, 180);
+    assert.equal(record.timeSeconds, 180);
   });
 
   it('matches post-completion training fields for equivalent inputs', async () => {

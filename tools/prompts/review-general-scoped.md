@@ -41,6 +41,8 @@ You are a degraded-mode reviewer. Your job is to catch only concrete, high-signa
 
 Review the diff against the plan and task packet (if provided), but evaluate ONLY these four buckets:
 
+- Cross-PR revert protection: if the branch deletes files or behavior introduced by another recent PR on `auto/integration`, compare against the merge base with `auto/integration` and require an explicit acknowledgement such as `Reverts #N` or `Intentionally reverts #N`.
+
 1. **Syntax / compilation**
    - Parse errors
    - Type mismatches that will fail build or test execution
