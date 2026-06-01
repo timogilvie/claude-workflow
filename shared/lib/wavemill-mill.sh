@@ -8443,7 +8443,9 @@ monitor_issue_state() {
   WT_DIR="${WORKTREE_ROOT}/${SLUG}"
   local WIN_TARGET
   WIN_TARGET="$(_tmux_task_window_target "$SESSION" "$ISSUE" "$SLUG" "${STATE_FILE:-}" "$WT_DIR" 2>/dev/null || true)"
-  [[ -n "$WIN_TARGET" ]] || WIN_TARGET="$(_tmux_target_join "$SESSION" "$WIN")"
+  if [[ -z "$WIN_TARGET" ]]; then
+    WIN_TARGET="$(_tmux_target_join "$SESSION" "$WIN" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$WIN")"
+  fi
   local FEATURE_DIR="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}"
   current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
   needs_attention="false"
@@ -9394,7 +9396,7 @@ monitor_issue_state() {
         WIN_TARGET="$(tmux display-message -p -t "$SESSION:$WIN" '#{window_id}' 2>/dev/null || true)"
         [[ -n "$WIN_TARGET" ]] || WIN_TARGET="$WIN"
         persist_task_window_id "$ISSUE" "$WIN_TARGET"
-        WIN_TARGET="$(_tmux_target_join "$SESSION" "$WIN_TARGET")"
+        WIN_TARGET="$(_tmux_target_join "$SESSION" "$WIN_TARGET" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$WIN_TARGET")"
         tmux set-option -t "$WIN_TARGET" remain-on-exit on 2>/dev/null || true
         sleep 1
         active_count=$((active_count + 1))
