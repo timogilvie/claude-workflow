@@ -21,7 +21,7 @@ export interface RedactedEvalContributionProjection {
   observedAt: string;
   observedSuccess: boolean;
   budgetCompliant: boolean;
-  actualCostUsd?: number;
+  actualCostUsd?: number | null;
   wallClockSeconds?: number;
   inputs?: Record<string, unknown>;
   taskDescriptor?: HokusaiTaskDescriptor;
