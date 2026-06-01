@@ -809,12 +809,22 @@ check_routing_complete() {
 
 set_window_attention_state() {
   local win="$1" state="${2:-clear}"
+  local target="$win" issue="" slug=""
+  if [[ "$win" =~ ^([A-Z]+-[0-9]+(_c)?)-(.+)$ ]]; then
+    issue="${BASH_REMATCH[1]}"
+    slug="${BASH_REMATCH[3]}"
+    local expected_worktree=""
+    [[ -n "${WORKTREE_ROOT:-}" ]] && expected_worktree="${WORKTREE_ROOT}/${slug}"
+    target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$expected_worktree" 2>/dev/null || true)"
+  fi
+  [[ -n "$target" ]] || target="$win"
+  target="$(_tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target")"
   if [[ "$state" == "needs-user" ]]; then
-    tmux set-window-option -t "$SESSION:$win" window-status-style bg=red,fg=white,bold >/dev/null 2>&1 || true
-    tmux set-window-option -t "$SESSION:$win" window-status-current-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+    tmux set-window-option -t "$target" window-status-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+    tmux set-window-option -t "$target" window-status-current-style bg=red,fg=white,bold >/dev/null 2>&1 || true
   else
-    tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
-    tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
+    tmux set-window-option -u -t "$target" window-status-style >/dev/null 2>&1 || true
+    tmux set-window-option -u -t "$target" window-status-current-style >/dev/null 2>&1 || true
   fi
   tmux refresh-client -S >/dev/null 2>&1 || true
 }
@@ -883,7 +893,10 @@ cleanup_completed_task() {
 
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
-  execute tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
+  local target
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
+  [[ -n "$target" ]] || target="$win"
+  execute tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
   log "debug" "Closed window: $win"
 
   # Remove worktree
@@ -3339,26 +3352,35 @@ notify_planning_rejection_agent() {
   shift 2
   local -a files=("$@")
   local artifact="$feature_dir/.planning-rejected.json"
-  local slug files_summary notified tmp message
+  local slug files_summary notified tmp message target issue
 
   [[ -n "${SESSION:-}" && -n "$win" && -f "$artifact" ]] || return 0
 
   notified=$(jq -r '.notifiedAt // empty' "$artifact" 2>/dev/null || true)
   [[ -z "$notified" ]] || return 0
 
-  if command -v _pane_is_dead_or_idle >/dev/null 2>&1 && _pane_is_dead_or_idle "$SESSION:$win"; then
-    return 0
-  fi
-
-  if [[ "$(tmux list-panes -t "$SESSION:$win" -F '#{pane_dead}' 2>/dev/null | head -1)" == "1" ]]; then
-    return 0
-  fi
-
   slug="$(basename "$feature_dir")"
+  if [[ "$win" =~ ^([A-Z]+-[0-9]+(_c)?)-(.+)$ ]]; then
+    issue="${BASH_REMATCH[1]}"
+    local expected_worktree=""
+    [[ -n "${WORKTREE_ROOT:-}" ]] && expected_worktree="${WORKTREE_ROOT}/${slug}"
+    target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$expected_worktree" 2>/dev/null || true)"
+  fi
+  [[ -n "$target" ]] || target="$win"
+  target="$(_tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target")"
+
+  if command -v _pane_is_dead_or_idle >/dev/null 2>&1 && _pane_is_dead_or_idle "$target"; then
+    return 0
+  fi
+
+  if [[ "$(tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | head -1)" == "1" ]]; then
+    return 0
+  fi
+
   files_summary="$(planning_rejection_files_summary "${files[@]}")"
   message="Planning approval was rejected because planning modified out-of-scope files: $files_summary. Those changes were reverted and .plan-approved was removed. Do not edit source/config files during planning. Update only features/$slug/plan.md if needed, then wait for user approval again."
 
-  tmux send-keys -t "$SESSION:$win" "$message" C-m 2>/dev/null || return 0
+  tmux send-keys -t "$target" "$message" C-m 2>/dev/null || return 0
 
   tmp=$(mktemp "${artifact}.tmp.XXXXXX" 2>/dev/null) || return 0
   jq --arg notifiedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '.notifiedAt = $notifiedAt' "$artifact" > "$tmp" 2>/dev/null \
@@ -4031,6 +4053,15 @@ _tmux_window_target_exists() {
   return 0
 }
 
+_tmux_target_join() {
+  local session="$1" target="$2"
+  [[ -n "$target" ]] || return 1
+  case "$target" in
+    @*|*:*) printf '%s\n' "$target" ;;
+    *) printf '%s:%s\n' "$session" "$target" ;;
+  esac
+}
+
 _tmux_task_window_target() {
   local session="$1" issue="$2" slug="$3" state_file="${4:-${STATE_FILE:-}}" wt_dir="${5:-}"
   local stored_target="" canonical target
@@ -4051,6 +4082,16 @@ _tmux_task_window_target() {
     return 0
   fi
 
+  if [[ -n "$wt_dir" ]]; then
+    while IFS='|' read -r target _name; do
+      [[ -n "$target" ]] || continue
+      if _tmux_window_target_exists "$session" "$target" "$wt_dir"; then
+        printf '%s\n' "$target"
+        return 0
+      fi
+    done < <(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null || true)
+  fi
+
   return 1
 }
 
@@ -4068,7 +4109,7 @@ _ensure_task_window_exists() {
   tmux new-window -d -t "$session" -n "$canonical" -c "$wt_dir" 2>/dev/null || true
   target="$(tmux display-message -p -t "$session:$canonical" '#{window_id}' 2>/dev/null || true)"
   [[ -n "$target" ]] || target="$canonical"
-  tmux set-option -t "$session:$target" remain-on-exit on 2>/dev/null || true
+  tmux set-option -t "$(_tmux_target_join "$session" "$target")" remain-on-exit on 2>/dev/null || true
   sleep 1
   printf '%s\n' "$target"
 }
@@ -4222,8 +4263,14 @@ _restore_inflight_task_window_if_missing() {
 #   $6 = issue ID (optional)
 _launch_agent_in_pane() {
   local target="$1" agent_cmd="$2" model="$3" prompt_file="$4" slug="${5:-}" issue="${6:-}"
-  local session="${target%%:*}"
-  local window="${target#*:}"
+  local session window
+  if [[ "$target" == @* ]]; then
+    session="$SESSION"
+    window="$target"
+  else
+    session="${target%%:*}"
+    window="${target#*:}"
+  fi
   local agent_flags=""
   local abort_check_cmd=""
   local feature_dir=""
@@ -4245,7 +4292,7 @@ _launch_agent_in_pane() {
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
 
-  agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd"
+  agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd" "$issue"
 }
 
 # Launch the planning phase in an existing tmux window
@@ -4274,7 +4321,7 @@ $issue_desc
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" "$operating_mode" > "$prompt_file"
 
   log_task "status" "$issue" "Launching planning phase for $issue (model: $planner_model, depth: $plan_depth, mode: $operating_mode)"
-  _launch_agent_in_pane "$SESSION:$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug" "$issue"
+  _launch_agent_in_pane "$win" "$planner_agent" "$planner_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
 
@@ -4304,7 +4351,7 @@ $issue_desc
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$code_depth" "$coder_agent" "$operating_mode" > "$prompt_file"
 
   log_task "status" "$issue" "Launching coding phase for $issue (model: $coder_model, depth: $code_depth, mode: $operating_mode)"
-  _launch_agent_in_pane "$SESSION:$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug" "$issue"
+  _launch_agent_in_pane "$win" "$coder_agent" "$coder_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
 
@@ -4334,7 +4381,7 @@ $issue_desc
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$reviewer_model" "$review_mode" "$reviewer_agent" "$operating_mode" > "$prompt_file"
 
   log_task "status" "$issue" "Launching review phase for $issue (model: $reviewer_model, mode: $review_mode, operating mode: $operating_mode)"
-  _launch_agent_in_pane "$SESSION:$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug" "$issue"
+  _launch_agent_in_pane "$win" "$reviewer_agent" "$reviewer_model" "$prompt_file" "$slug" "$issue"
   return $?
 }
 
@@ -4346,6 +4393,7 @@ $issue_desc
 restore_review_task_window() {
   local issue="$1" slug="$2" branch="$3" pr="$4" wt_dir="$5"
   local win="${issue}-${slug}"
+  local target=""
   local feature_dir="$wt_dir/features/$slug"
   local issue_json_file="/tmp/${SESSION}-${issue}-issue.json"
   local task_header_file="$feature_dir/task-packet-header.md"
@@ -4435,15 +4483,18 @@ ${issue_desc:-No issue description was available from cached or live issue data.
 EOF
   fi
 
-  if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" 2>/dev/null || true)"
+  if [[ -z "$target" ]]; then
     log "status" "⚡ $issue → Restoring review window (PR #$pr)"
     tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir" 2>/dev/null || return 1
-    tmux set-option -t "$SESSION:$win" remain-on-exit on 2>/dev/null || true
+    target="$(tmux display-message -p -t "$SESSION:$win" '#{window_id}' 2>/dev/null || true)"
+    [[ -n "$target" ]] || target="$win"
+    tmux set-option -t "$(_tmux_target_join "$SESSION" "$target")" remain-on-exit on 2>/dev/null || true
     restored_window="true"
     sleep 1
   fi
 
-  if _pane_is_dead_or_idle "$SESSION:$win"; then
+  if _pane_is_dead_or_idle "$(_tmux_target_join "$SESSION" "$target")"; then
     if declare -F launch_review_phase >/dev/null 2>&1 && declare -F agent_resolve_from_model >/dev/null 2>&1; then
       # Get review phase configuration from state
       local reviewer_model review_mode reviewer_agent
@@ -4468,7 +4519,7 @@ EOF
     else
       # Keep the restored window useful in stripped-down test or utility contexts
       # where the full launch stack has not been sourced yet.
-      tmux send-keys -t "$SESSION:$win" "cd '$wt_dir'" C-m 2>/dev/null || true
+      tmux send-keys -t "$(_tmux_target_join "$SESSION" "$target")" "cd '$wt_dir'" C-m 2>/dev/null || true
     fi
   fi
 
@@ -5100,7 +5151,7 @@ launch_ready_phase() {
 
     prompt_file="/tmp/${SESSION}-${issue}-conflict-prompt.txt"
     build_conflict_resolution_prompt "$pr_number" "$branch" "$wt_dir" "$status_file" "$base_branch" > "$prompt_file"
-    _launch_agent_in_pane "$SESSION:$win" "$current_agent" "$current_model" "$prompt_file" "$slug"
+    _launch_agent_in_pane "$win" "$current_agent" "$current_model" "$prompt_file" "$slug" "$issue"
     launch_rc=$?
 
     if [[ "$launch_rc" -eq 0 ]]; then
@@ -5263,7 +5314,7 @@ launch_ready_phase() {
       "$failed_check_summary" \
       "$ready_result_file" > "$prompt_file"
 
-    _launch_agent_in_pane "$SESSION:$win" "$remediation_agent" "$current_model" "$prompt_file" "$slug" "$issue"
+    _launch_agent_in_pane "$win" "$remediation_agent" "$current_model" "$prompt_file" "$slug" "$issue"
     launch_rc=$?
 
     if [[ "$launch_rc" -eq 0 ]]; then
@@ -5340,12 +5391,22 @@ check_ready_stage() {
 
 set_window_attention_state() {
   local win="$1" state="${2:-clear}"
+  local target="$win" issue="" slug=""
+  if [[ "$win" =~ ^([A-Z]+-[0-9]+(_c)?)-(.+)$ ]]; then
+    issue="${BASH_REMATCH[1]}"
+    slug="${BASH_REMATCH[3]}"
+    local expected_worktree=""
+    [[ -n "${WORKTREE_ROOT:-}" ]] && expected_worktree="${WORKTREE_ROOT}/${slug}"
+    target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$expected_worktree" 2>/dev/null || true)"
+  fi
+  [[ -n "$target" ]] || target="$win"
+  target="$(_tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target")"
   if [[ "$state" == "needs-user" ]]; then
-    tmux set-window-option -t "$SESSION:$win" window-status-style bg=red,fg=white,bold >/dev/null 2>&1 || true
-    tmux set-window-option -t "$SESSION:$win" window-status-current-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+    tmux set-window-option -t "$target" window-status-style bg=red,fg=white,bold >/dev/null 2>&1 || true
+    tmux set-window-option -t "$target" window-status-current-style bg=red,fg=white,bold >/dev/null 2>&1 || true
   else
-    tmux set-window-option -u -t "$SESSION:$win" window-status-style >/dev/null 2>&1 || true
-    tmux set-window-option -u -t "$SESSION:$win" window-status-current-style >/dev/null 2>&1 || true
+    tmux set-window-option -u -t "$target" window-status-style >/dev/null 2>&1 || true
+    tmux set-window-option -u -t "$target" window-status-current-style >/dev/null 2>&1 || true
   fi
   tmux refresh-client -S >/dev/null 2>&1 || true
 }
@@ -5934,7 +5995,10 @@ cleanup_completed_task() {
 
   # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
-  tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
+  local target
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
+  [[ -n "$target" ]] || target="$win"
+  tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
   log "debug" "Closed window: $win"
 
   # Remove worktree
@@ -7449,10 +7513,14 @@ EOF
 
   # Create tmux window
   local win="$issue-$slug"
+  local win_target
   tmux new-window -d -t "$SESSION" -n "$win" -c "$wt_dir"
+  win_target="$(tmux display-message -p -t "$SESSION:$win" '#{window_id}' 2>/dev/null || true)"
+  [[ -n "$win_target" ]] || win_target="$win"
+  persist_task_window_id "$issue" "$win_target"
   # Prevent window destruction if the pane shell exits (e.g. from a stray Ctrl-D).
   # This lets _pane_is_dead_or_idle detect and respawn dead panes during phase transitions.
-  tmux set-option -t "$SESSION:$win" remain-on-exit on 2>/dev/null || true
+  tmux set-option -t "$(_tmux_target_join "$SESSION" "$win_target")" remain-on-exit on 2>/dev/null || true
   set_window_attention_state "$win" "clear"
 
   # Run setup command in new worktrees (e.g., npm install)
@@ -7460,7 +7528,7 @@ EOF
     log "info" "  Running setup: $SETUP_CMD"
     local _sentinel="/tmp/.wavemill-setup-${issue//[^a-zA-Z0-9_-]/_}"
     rm -f "$_sentinel"
-    tmux send-keys -t "$SESSION:$win" \
+    tmux send-keys -t "$(_tmux_target_join "$SESSION" "$win_target")" \
       "$SETUP_CMD && touch '$_sentinel' || touch '$_sentinel'" C-m
     local _t=0
     while [[ ! -f "$_sentinel" ]] && (( _t < 180 )); do
@@ -8373,6 +8441,11 @@ monitor_issue_state() {
   PR="${PR_BY_ISSUE[$ISSUE]:-}"
   WIN="$ISSUE-$SLUG"
   WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+  local WIN_TARGET
+  WIN_TARGET="$(_tmux_task_window_target "$SESSION" "$ISSUE" "$SLUG" "${STATE_FILE:-}" "$WT_DIR" 2>/dev/null || true)"
+  if [[ -z "$WIN_TARGET" ]]; then
+    WIN_TARGET="$(_tmux_target_join "$SESSION" "$WIN" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$WIN")"
+  fi
   local FEATURE_DIR="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}"
   current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
   needs_attention="false"
@@ -8408,7 +8481,7 @@ monitor_issue_state() {
     # When quit is requested, force-clean merged tasks instead of waiting for the
     # user to close the review window (which blocks shutdown indefinitely).
     if [[ "${QUIT_REQUESTED:-false}" != "true" ]] \
-       && tmux list-panes -t "$SESSION:$WIN" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+       && tmux list-panes -t "$WIN_TARGET" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
       active_count=$((active_count + 1))
       return 0
     fi
@@ -8932,7 +9005,7 @@ monitor_issue_state() {
             # HOK-1210: Do NOT auto-approve just because the pane is idle.
             # The agent must create .plan-approved after explicit user approval.
             # If the pane is idle or dead without the marker, log once and wait for user.
-            if [[ -f "$FEATURE_DIR/plan.md" ]] && _pane_is_dead_or_idle "$SESSION:$WIN"; then
+            if [[ -f "$FEATURE_DIR/plan.md" ]] && _pane_is_dead_or_idle "$WIN_TARGET"; then
               if [[ "${!approval_wait_var:-}" != "true" ]]; then
                 log "status" "⏳ $ISSUE → Plan ready — awaiting user approval (touch .plan-approved to continue)"
                 printf -v "$approval_wait_var" '%s' "true"
@@ -9277,7 +9350,7 @@ monitor_issue_state() {
         executing)
           # Legacy autonomous mode - treat an idle shell as exited so stalled
           # autonomous panes do not occupy a slot forever.
-          if ! _pane_is_dead_or_idle "$SESSION:$WIN"; then
+          if ! _pane_is_dead_or_idle "$WIN_TARGET"; then
             set_window_attention_state "$WIN" "clear"
             active_count=$((active_count + 1))
             return 0
@@ -9317,10 +9390,14 @@ monitor_issue_state() {
       # Window itself is gone (shouldn't happen with remain-on-exit, but
       # handle gracefully). Flag for attention instead of cleaning up
       # immediately — the worktree and branch still have value.
-      if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qF "$WIN"; then
+      if ! _tmux_task_window_target "$SESSION" "$ISSUE" "$SLUG" "${STATE_FILE:-}" "$WT_DIR" >/dev/null 2>&1; then
         log "status" "⚠ $ISSUE → Window disappeared during $current_phase phase, recreating..."
         tmux new-window -d -t "$SESSION" -n "$WIN" -c "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true
-        tmux set-option -t "$SESSION:$WIN" remain-on-exit on 2>/dev/null || true
+        WIN_TARGET="$(tmux display-message -p -t "$SESSION:$WIN" '#{window_id}' 2>/dev/null || true)"
+        [[ -n "$WIN_TARGET" ]] || WIN_TARGET="$WIN"
+        persist_task_window_id "$ISSUE" "$WIN_TARGET"
+        WIN_TARGET="$(_tmux_target_join "$SESSION" "$WIN_TARGET" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$WIN_TARGET")"
+        tmux set-option -t "$WIN_TARGET" remain-on-exit on 2>/dev/null || true
         sleep 1
         active_count=$((active_count + 1))
         set_window_attention_state "$WIN" "needs-user"

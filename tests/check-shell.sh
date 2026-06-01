@@ -692,7 +692,7 @@ else
 
   # HOK-1210: Monitor must NOT auto-approve on idle pane. It should log and wait.
   if grep -Fq 'if [[ "$resolved_phase" == "awaiting_user" ]]; then' <<< "$MONITOR_ISSUE_BLOCK" \
-    && grep -Fq '_pane_is_dead_or_idle "$SESSION:$WIN"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq '_pane_is_dead_or_idle "$WIN_TARGET"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'Plan ready — awaiting user approval' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq '_approval_wait_logged_' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'printf -v "$approval_wait_var"' <<< "$MONITOR_ISSUE_BLOCK"; then
@@ -1724,9 +1724,63 @@ else
   fail "agent_launch_interactive should have succeeded after a retry"
 fi
 
+if [[ "$(agent_tmux_target "wavemill-test" "@42")" == "@42" ]] \
+  && [[ "$(agent_tmux_target "wavemill-test" "planning")" == "wavemill-test:planning" ]]; then
+  pass "agent_tmux_target preserves stable tmux window ids"
+else
+  fail "agent_tmux_target does not preserve stable tmux window ids"
+fi
+
+LAUNCH_VERIFY_RESULTS=(0)
+LAUNCH_VERIFY_INDEX=0
+LAUNCH_SEND_TARGETS=()
+tmux() {
+  if [[ "${1:-}" == "send-keys" ]]; then
+    local i target_arg=""
+    for ((i = 1; i <= $#; i++)); do
+      if [[ "${!i}" == "-t" ]]; then
+        local j=$((i + 1))
+        target_arg="${!j}"
+        break
+      fi
+    done
+    LAUNCH_SEND_TARGETS+=("$target_arg")
+  fi
+  return 0
+}
+agent_prepare_pane_for_launch() {
+  return 0
+}
+agent_verify_launch() {
+  LAUNCH_VERIFY_INDEX=$((LAUNCH_VERIFY_INDEX + 1))
+  return 0
+}
+AGENT_LAUNCH_MAX_RETRIES=1
+if agent_launch_interactive "wavemill-test" "@42" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4" ""; then
+  if printf '%s\n' "${LAUNCH_SEND_TARGETS[@]}" | grep -qx '@42' \
+    && ! printf '%s\n' "${LAUNCH_SEND_TARGETS[@]}" | grep -qx 'wavemill-test:@42'; then
+    pass "agent_launch_interactive dispatches directly to stable tmux window ids"
+  else
+    fail "agent_launch_interactive rebuilt a stable tmux window id as a session:name target"
+  fi
+else
+  fail "agent_launch_interactive failed for stable tmux window id target"
+fi
+
 LAUNCH_VERIFY_RESULTS=(1)
 LAUNCH_VERIFY_INDEX=0
 LAUNCH_SEND_KEYS=0
+tmux() {
+  if [[ "${1:-}" == "send-keys" ]]; then
+    LAUNCH_SEND_KEYS=$((LAUNCH_SEND_KEYS + 1))
+  fi
+  return 0
+}
+agent_verify_launch() {
+  local result="${LAUNCH_VERIFY_RESULTS[$LAUNCH_VERIFY_INDEX]:-1}"
+  LAUNCH_VERIFY_INDEX=$((LAUNCH_VERIFY_INDEX + 1))
+  return "$result"
+}
 AGENT_LAUNCH_MAX_RETRIES=1
 if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4" ""; then
   fail "agent_launch_interactive succeeded even though verification never passed"
