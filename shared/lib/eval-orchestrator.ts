@@ -551,7 +551,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   }
 
   if (persisted) {
-    void evalOrchestratorDeps.triggerHokusaiSubmission(record, { repoDir }).catch((error) => {
+    await evalOrchestratorDeps.triggerHokusaiSubmission(record, { repoDir }).catch((error) => {
       console.warn(`[hokusai] failed to trigger submission: ${errorMessage(error)}`);
     });
   }
