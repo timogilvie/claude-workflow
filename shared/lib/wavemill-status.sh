@@ -456,6 +456,8 @@ render_plan_model_routing() {
     MODEL_RESOLUTION_DISPLAY_PHASE_CONFIG_PATH="$phase_config_file" \
     MODEL_RESOLUTION_DISPLAY_ROUTING_JSONL_PATH="$routing_jsonl_file" \
     MODEL_RESOLUTION_DISPLAY_MODULE="$WAVEMILL_REPO_DIR/shared/lib/model-resolution-display.ts" \
+    NO_UPDATE_NOTIFIER=1 \
+    npm_config_update_notifier=false \
     npx tsx -e '
       (async () => {
         const modulePath = process.env.MODEL_RESOLUTION_DISPLAY_MODULE;
@@ -500,8 +502,7 @@ elapsed() {
 # Read agent status via hook protocol with TTL-based fallback to pane liveness.
 # Hook files use a 300s TTL - stale status falls back to tmux pane state.
 agent_status() {
-  local win="$1"
-  local issue="${win%%-*}"
+  local issue="$1" target="${2:-}"
   local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
 
   # Prefer hook-reported state when fresh (300s TTL)
@@ -527,7 +528,8 @@ agent_status() {
 
   # Fallback to pane liveness for agents without hook support or stale hooks
   local dead
-  dead=$(tmux list-panes -t "$SESSION:$win" -F '#{pane_dead}' 2>/dev/null | head -1) || {
+  [[ -n "$target" ]] || { echo "done"; return; }
+  dead=$(tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | head -1) || {
     echo "done"; return
   }
   if [[ "$dead" == "1" ]]; then echo "exited"; else echo "running"; fi
@@ -539,7 +541,7 @@ agent_status() {
 
 gather_tasks() {
   if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
-    jq -r '.tasks | to_entries[] | "\(.key)|\(.value.slug)|\(.value.branch)|\(.value.worktree)|\(.value.status // "")|\(.value.phase // "executing")|\(.value.pr // "")"' \
+    jq -r '.tasks | to_entries[] | select(.key != "" and ((.value.slug // "") != "")) | "\(.key)|\(.value.slug)|\(.value.branch)|\(.value.worktree)|\(.value.status // "")|\(.value.phase // "executing")|\(.value.pr // "")"' \
       "$STATE_FILE" 2>/dev/null
   else
     for dir in "$WORKTREE_ROOT"/*/; do
@@ -566,8 +568,7 @@ refresh_window_metadata_for_active_tasks() {
     if ! is_active "$worktree" "$issue-$slug"; then
       continue
     fi
-    target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$STATE_FILE" 2>/dev/null || true)"
-    [[ -n "$target" ]] || target="$SESSION:$issue-$slug"
+    target="$(task_window_target "$issue" "$slug" "$worktree")"
     wavemill_apply_window_metadata "$SESSION" "$issue" "$target" "$STATE_FILE" >/dev/null 2>&1 || true
   done <<< "$tasks"
 }
@@ -805,17 +806,39 @@ is_actionable_state() {
   esac
 }
 
-window_index() {
-  local win="$1"
-  # `tmux display-message -t session:missing-window` silently falls back to the
-  # active window's info instead of erroring, which misreports missing task
-  # windows as whichever window is currently focused (typically the control
-  # window at index 0). Verify presence first.
-  if ! tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qxF "$win"; then
-    echo "—"
-    return
+task_window_target() {
+  local issue="$1" slug="$2" worktree="$3"
+  local stored_target="" canonical target target_path
+
+  if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
+    stored_target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$STATE_FILE" 2>/dev/null || true)"
   fi
-  tmux display-message -t "$SESSION:$win" -p '#{window_index}' 2>/dev/null || echo "—"
+
+  for target in "$stored_target" "$SESSION:$issue-$slug"; do
+    [[ -n "$target" ]] || continue
+    target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+    if [[ -z "$worktree" || "$target_path" == "$worktree" ]]; then
+      tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null || true
+      return 0
+    fi
+  done
+
+  canonical="${issue}-${slug}"
+  target="$(tmux list-windows -t "$SESSION" -F '#{window_id}|#{window_name}' 2>/dev/null \
+    | awk -F'|' -v name="$canonical" '$2 == name { print $1; exit }')"
+  [[ -n "$target" ]] || return 0
+  target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+  if [[ -z "$worktree" || "$target_path" == "$worktree" ]]; then
+    printf '%s\n' "$target"
+  fi
+}
+
+window_index() {
+  local issue="$1" slug="$2" worktree="$3"
+  local target
+  target="$(task_window_target "$issue" "$slug" "$worktree")"
+  [[ -n "$target" ]] || { echo "—"; return; }
+  tmux display-message -t "$target" -p '#{window_index}' 2>/dev/null || echo "—"
 }
 
 render_section_header() {
@@ -953,7 +976,7 @@ render_task_row() {
 
   ds="$slug"
   (( ${#ds} > 22 )) && ds="${ds:0:19}..."
-  pane=$(window_index "$win")
+  pane=$(window_index "$issue" "$slug" "$worktree")
 
   printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
     "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
@@ -1175,7 +1198,7 @@ render_dashboard() {
       if [[ "$task_status" == "merged" ]]; then
         agent_state="exited"
       else
-        agent_state=$(agent_status "$win")
+        agent_state=$(agent_status "$issue" "$(task_window_target "$issue" "$slug" "$worktree")")
       fi
 
       classification=$(is_actionable_state "$agent_state" "$task_phase" "$worktree" "$slug" "$issue")
