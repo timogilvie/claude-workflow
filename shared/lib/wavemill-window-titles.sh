@@ -241,7 +241,7 @@ wavemill_resolve_model() {
 
 wavemill_apply_window_metadata() {
   local session="${1:-}" issue="${2:-}" window_target="${3:-}" state_file="${4:-${STATE_FILE:-}}"
-  local hook_json branch phase slug detail target pane_pid ports_csv model pr_json pr_number pr_state title status_right
+  local hook_json branch phase slug worktree detail target pane_pid ports_csv model pr_json pr_number pr_state title status_right target_path
 
   [[ -n "$session" && -n "$issue" ]] || return 0
   command -v tmux >/dev/null 2>&1 || return 0
@@ -256,15 +256,28 @@ wavemill_apply_window_metadata() {
     branch="$(jq -r --arg issue "$issue" '.tasks[$issue].branch // empty' "$state_file" 2>/dev/null || true)"
     phase="$(jq -r --arg issue "$issue" '.tasks[$issue].phase // empty' "$state_file" 2>/dev/null || true)"
     slug="$(jq -r --arg issue "$issue" '.tasks[$issue].slug // empty' "$state_file" 2>/dev/null || true)"
+    worktree="$(jq -r --arg issue "$issue" '.tasks[$issue].worktree // empty' "$state_file" 2>/dev/null || true)"
     [[ -n "$window_target" ]] || window_target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$state_file" 2>/dev/null || true)"
   fi
 
   target="$window_target"
+  if [[ -n "$target" && -n "$worktree" ]]; then
+    target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+    [[ "$target_path" == "$worktree" ]] || target=""
+  fi
   if [[ -z "$target" && -n "$slug" ]]; then
     target="$session:$issue-$slug"
+    if [[ -n "$worktree" ]]; then
+      target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+      [[ "$target_path" == "$worktree" ]] || target=""
+    fi
   fi
   if [[ -z "$target" ]]; then
     target="$(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null | awk -F'|' -v issue="$issue" '$2 ~ ("^" issue "-") {print $1; exit}')"
+    if [[ -n "$target" && -n "$worktree" ]]; then
+      target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+      [[ "$target_path" == "$worktree" ]] || target=""
+    fi
   fi
   [[ -n "$target" ]] || return 0
 

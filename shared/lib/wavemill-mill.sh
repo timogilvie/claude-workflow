@@ -4064,13 +4064,31 @@ _ensure_task_window_exists() {
   fi
 
   canonical="${issue}-${slug}"
-  log_warn "  Window $canonical missing, recreating..."
+  log_warn "  Window $canonical missing, recreating..." >&2
   tmux new-window -d -t "$session" -n "$canonical" -c "$wt_dir" 2>/dev/null || true
   target="$(tmux display-message -p -t "$session:$canonical" '#{window_id}' 2>/dev/null || true)"
   [[ -n "$target" ]] || target="$canonical"
   tmux set-option -t "$session:$target" remain-on-exit on 2>/dev/null || true
   sleep 1
   printf '%s\n' "$target"
+}
+
+persist_task_window_id() {
+  local issue="$1" target="$2"
+  local resolved_target window_id
+
+  [[ -n "$issue" && -n "$target" ]] || return 0
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 0
+
+  resolved_target="$target"
+  [[ "$resolved_target" == @* ]] || resolved_target="$SESSION:$resolved_target"
+  window_id="$(tmux display-message -p -t "$resolved_target" '#{window_id}' 2>/dev/null || true)"
+  [[ -n "$window_id" ]] || return 0
+
+  state_mutate "$STATE_FILE" \
+    '.tasks[$issue].windowId = $windowId | .tasks[$issue].updated = (now | todate)' \
+    --arg issue "$issue" \
+    --arg windowId "$window_id" >/dev/null 2>&1 || true
 }
 
 # Relaunch an in-flight task's phase agent when its tmux window has been lost
@@ -4092,6 +4110,10 @@ _restore_inflight_task_window_if_missing() {
   _RESTORE_STATE="none"
 
   if _tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "$phase" == "coding" && -f "$feature_dir/.coding-complete" ]]; then
     return 0
   fi
 
@@ -4151,6 +4173,21 @@ _restore_inflight_task_window_if_missing() {
       agent_cmd="$(agent_resolve_from_model "$model")"
       launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
         "$model" "$agent_cmd" "$depth" || rc=$?
+      ;;
+    review)
+      model=$(read_phase_config "$feature_dir" "review" "model")
+      [[ -z "$model" ]] && model=$(get_task_meta "$issue" "reviewerModel")
+      model="$(resolve_phase_model "review" "$model" "claude-sonnet-4-6")"
+      if declare -F agent_resolve_model >/dev/null 2>&1; then
+        model="$(agent_resolve_model "reviewer" "$model" "$REPO_DIR")" || return 1
+      fi
+      local review_mode
+      review_mode=$(read_phase_config "$feature_dir" "review" "mode")
+      [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$issue" "reviewMode")
+      [[ -z "$review_mode" ]] && review_mode="static"
+      agent_cmd="$(agent_resolve_from_model "$model")"
+      launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent_cmd" "$review_mode" || rc=$?
       ;;
     *)
       log_warn "$issue → Cannot restore window for unsupported phase: $phase"
@@ -4219,6 +4256,7 @@ launch_planning_phase() {
   local win
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
+  persist_task_window_id "$issue" "$win"
   configure_agent_hooks "$planner_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
@@ -4248,6 +4286,7 @@ launch_coding_phase() {
   local win
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
+  persist_task_window_id "$issue" "$win"
   configure_agent_hooks "$coder_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
@@ -4277,6 +4316,7 @@ launch_review_phase() {
   local win
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
   win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
+  persist_task_window_id "$issue" "$win"
   configure_agent_hooks "$reviewer_agent" "$wt_dir" "$REPO_DIR"
 
   # Read issue context
@@ -4982,6 +5022,7 @@ launch_ready_phase() {
   local prior_ready_status prior_ready_verdict pending_log_level
 
   win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
+  persist_task_window_id "$issue" "$win"
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
   status_file="/tmp/${SESSION}-${issue}-status.txt"
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
@@ -6295,23 +6336,24 @@ reroute_expanded_packets_for_coding_handoff() {
   count=$((count + 1))
 
   if [[ -f "${STATE_FILE:-}" ]]; then
-    while IFS=$'\t' read -r issue slug worktree; do
-      [[ -n "$issue" && -n "$slug" && -n "$worktree" ]] || continue
-      [[ "$issue" == "$current_issue" ]] && continue
+    local sibling_issue sibling_slug sibling_worktree sibling_feature_dir
+    while IFS=$'\t' read -r sibling_issue sibling_slug sibling_worktree; do
+      [[ -n "$sibling_issue" && -n "$sibling_slug" && -n "$sibling_worktree" ]] || continue
+      [[ "$sibling_issue" == "$current_issue" ]] && continue
 
-      local feature_dir="$worktree/features/$slug"
-      [[ -d "$feature_dir" ]] || continue
-      [[ -f "$feature_dir/.post-expansion-route.json" ]] && continue
-      [[ -f "$feature_dir/.coding-result.json" ]] && continue
-      [[ -f "$feature_dir/.planning-result.json" ]] || continue
-      if ! jq -e '.status == "completed"' "$feature_dir/.planning-result.json" >/dev/null 2>&1; then
+      sibling_feature_dir="$sibling_worktree/features/$sibling_slug"
+      [[ -d "$sibling_feature_dir" ]] || continue
+      [[ -f "$sibling_feature_dir/.post-expansion-route.json" ]] && continue
+      [[ -f "$sibling_feature_dir/.coding-result.json" ]] && continue
+      [[ -f "$sibling_feature_dir/.planning-result.json" ]] || continue
+      if ! jq -e '.status == "completed"' "$sibling_feature_dir/.planning-result.json" >/dev/null 2>&1; then
         continue
       fi
 
-      if append_expanded_reroute_input "$input_file" "$issue" "$slug" "$feature_dir"; then
+      if append_expanded_reroute_input "$input_file" "$sibling_issue" "$sibling_slug" "$sibling_feature_dir"; then
         count=$((count + 1))
       fi
-    done < <(jq -r '.tasks | to_entries[] | [.key, (.value.slug // ""), (.value.worktree // "")] | @tsv' "$STATE_FILE" 2>/dev/null || true)
+    done < <(jq -r '.tasks | to_entries[] | select(.key != "" and ((.value.slug // "") != "")) | [.key, (.value.slug // ""), (.value.worktree // "")] | @tsv' "$STATE_FILE" 2>/dev/null || true)
   fi
 
   [[ -n "${DEFAULT_MAX_COST_USD:-}" ]] && route_max_cost_args=(--max-cost "$DEFAULT_MAX_COST_USD")
@@ -9031,6 +9073,19 @@ monitor_issue_state() {
           local pr_number
           review_status=$(read_stage_status "$FEATURE_DIR" "review")
           pr_number=$(find_pr_for_branch "$BRANCH")
+
+          if [[ "$review_status" == "running" && -z "$pr_number" ]]; then
+            _restore_inflight_task_window_if_missing "$ISSUE" "$SLUG" "$BRANCH" "review"
+            if [[ "$_RESTORE_STATE" == "restored" ]]; then
+              set_window_attention_state "$WIN" "clear"
+              active_count=$((active_count + 1))
+              return 0
+            elif [[ "$_RESTORE_STATE" == "failed" ]]; then
+              set_window_attention_state "$WIN" "needs-user"
+              active_count=$((active_count + 1))
+              return 0
+            fi
+          fi
 
           # Reconcile legacy/stale review state: once a PR exists, review is effectively complete
           # and the controller can move into ready even if the stage file is still "running".

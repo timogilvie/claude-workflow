@@ -57,16 +57,16 @@ run_render() {
 
     agent_status() {
       case "$1" in
-        HOK-1220-plan-task) echo "exited" ;;
-        HOK-1230-rejected-plan-task) echo "running" ;;
-        HOK-1221-waiting-task) echo "waiting" ;;
-        HOK-1222-active-task) echo "running" ;;
+        HOK-1220) echo "exited" ;;
+        HOK-1230) echo "running" ;;
+        HOK-1221) echo "waiting" ;;
+        HOK-1222) echo "running" ;;
         *) echo "running" ;;
       esac
     }
 
     window_index() {
-      local win="$1"
+      local win="$1-$2"
       jq -r --arg win "$win" '.pane[$win] // "—"' "$behavior_file"
     }
 
