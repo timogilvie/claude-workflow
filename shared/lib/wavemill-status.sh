@@ -818,7 +818,7 @@ task_window_target() {
   local stored_target="" canonical target target_path worktree_real target_real
 
   if [[ -n "$worktree" ]]; then
-    worktree_real="$(cd "$worktree" 2>/dev/null && pwd -P || printf '%s\n' "$worktree")"
+    worktree_real="$(cd -P "$worktree" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$worktree")"
   fi
 
   if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
@@ -828,7 +828,7 @@ task_window_target() {
   for target in "$stored_target" "$SESSION:$issue-$slug"; do
     [[ -n "$target" ]] || continue
     target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-    target_real="$(cd "$target_path" 2>/dev/null && pwd -P || printf '%s\n' "$target_path")"
+    target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
     if [[ -z "$worktree" || "$target_real" == "$worktree_real" ]]; then
       tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null || true
       return 0
@@ -840,7 +840,7 @@ task_window_target() {
     | awk -F'|' -v name="$canonical" '$2 == name { print $1; exit }')"
   if [[ -n "$target" ]]; then
     target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-    target_real="$(cd "$target_path" 2>/dev/null && pwd -P || printf '%s\n' "$target_path")"
+    target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
     if [[ -z "$worktree" || "$target_real" == "$worktree_real" ]]; then
       printf '%s\n' "$target"
       return 0
@@ -851,7 +851,7 @@ task_window_target() {
     while IFS='|' read -r target _name; do
       [[ -n "$target" ]] || continue
       target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-      target_real="$(cd "$target_path" 2>/dev/null && pwd -P || printf '%s\n' "$target_path")"
+      target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
       if [[ "$target_real" == "$worktree_real" ]]; then
         printf '%s\n' "$target"
         return 0
