@@ -101,6 +101,25 @@ describe('hokusai-queue-drain', () => {
     assert.equal(summary.tokenRewards.awarded, 5);
   });
 
+  it('loads endpoint token from repo .env using HOKUSAI_API_KEY alias', async () => {
+    const { repoDir, configDir } = makeRepo({ batchSize: 1, endpointTokenEnv: 'HOKUSAI_API_TOKEN' });
+    await enqueueContribution(makeRow('a'), { repoDir, configDir });
+    writeFileSync(join(repoDir, '.env'), 'HOKUSAI_API_KEY=repo-secret\n');
+    let authorization = '';
+
+    const result = await drainContributionQueue({
+      repoDir,
+      configDir,
+      fetchImpl: async (_input, init) => {
+        authorization = String((init?.headers as Record<string, string>).authorization ?? '');
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    assert.equal(result.status, 'uploaded');
+    assert.equal(authorization, 'Bearer repo-secret');
+  });
+
   it('accepts 204 empty responses', async () => {
     const { repoDir, configDir } = makeRepo();
     await enqueueContribution(makeRow('a'), { repoDir, configDir });

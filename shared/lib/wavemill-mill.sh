@@ -259,7 +259,7 @@ replay_route_transparency_logs() {
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in
-      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*)
+      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*|"[hokusai-router]"*)
         log "info" "$line"
         ;;
     esac
@@ -2212,7 +2212,7 @@ replay_route_transparency_logs() {
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in
-      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*)
+      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*|"[hokusai-router]"*)
         log "info" "$line"
         ;;
     esac
