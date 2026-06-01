@@ -392,6 +392,16 @@ This ensures that agent #5 knows what agents #1-4 built, leading to more consist
 
 The eval result is persisted before project-context and subsystem maintenance runs. Those follow-up updates are best-effort: failures or timeouts do not make the eval fail.
 
+Detached post-merge eval hooks have a separate wall-clock timeout. The default is 180 seconds:
+
+```json
+{
+  "eval": {
+    "postMergeTimeoutSeconds": 180
+  }
+}
+```
+
 Configure the optional post-eval update phase in `.wavemill-config.json`:
 
 ```json

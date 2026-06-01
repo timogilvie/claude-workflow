@@ -319,6 +319,38 @@ test('too-small eval maxPromptBytes is rejected by schema validation', () => {
   }
 });
 
+test('eval postMergeTimeoutSeconds is accepted by schema validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: { postMergeTimeoutSeconds: 180 },
+    }));
+
+    assert.equal(getEvalConfig(tmp).postMergeTimeoutSeconds, 180);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('too-small eval postMergeTimeoutSeconds is rejected by schema validation', () => {
+  if (!hasAjv) {
+    console.log('        SKIP  Ajv not installed');
+    return;
+  }
+
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      eval: { postMergeTimeoutSeconds: 29 },
+    }));
+    assert.throws(() => loadWavemillConfig(tmp), /Config validation failed/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('evalContextUpdates accessor returns defaults when absent', () => {
   const tmp = makeTempRepo();
   try {

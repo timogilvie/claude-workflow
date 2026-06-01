@@ -5792,9 +5792,19 @@ maybe_run_challenge_eval() {
   log "status" "  📊 Challenge eval running in background for $issue (pid $pid)"
 }
 
+post_merge_eval_timeout_seconds() {
+  local timeout
+  timeout=$(wavemill_load_config "$REPO_DIR" | jq -r '.eval.postMergeTimeoutSeconds // 180' 2>/dev/null || echo "180")
+  if [[ "$timeout" =~ ^[0-9]+$ ]] && (( timeout >= 30 )); then
+    echo "$timeout"
+  else
+    echo "180"
+  fi
+}
+
 launch_background_post_merge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4" issue_ref="$5" reason="$6" preresolved_agent="${7:-}"
-  local eval_agent eval_log rc
+  local eval_agent eval_log eval_timeout rc
 
   if [[ -n "$preresolved_agent" ]]; then
     eval_agent="$preresolved_agent"
@@ -5805,13 +5815,14 @@ launch_background_post_merge_eval() {
   fi
 
   eval_log="/tmp/${SESSION}-eval-${issue}.log"
+  eval_timeout="$(post_merge_eval_timeout_seconds)"
   : >"$eval_log"
 
   (
     {
       printf 'Launching %s eval in background\n' "$reason"
       if [[ -n "$pr" ]]; then
-        if _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+        if _with_timeout "$eval_timeout" npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$issue_ref" --pr "$pr" --branch "$branch" \
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
@@ -5822,7 +5833,7 @@ launch_background_post_merge_eval() {
           rc=$?
         fi
       else
-        if _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+        if _with_timeout "$eval_timeout" npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$issue_ref" --branch "$branch" \
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \

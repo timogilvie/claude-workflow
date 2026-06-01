@@ -194,6 +194,7 @@ export interface EvalConfig {
   pricing?: Record<string, PricingEntry>;
   interventionPenalties?: InterventionPenaltiesConfig;
   successThreshold?: number;
+  postMergeTimeoutSeconds?: number;
   mintEligibility?: MintEligibilityConfig;
   maxPromptBytes?: number;
   oversizePolicy?: 'fail' | 'truncate';
