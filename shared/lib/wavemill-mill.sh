@@ -4041,14 +4041,16 @@ _ensure_window_exists() {
 
 _tmux_window_target_exists() {
   local session="$1" target="$2" expected_path="${3:-}"
-  local target_session target_path
+  local target_session target_path expected_real target_real
 
   [[ -n "$session" && -n "$target" ]] || return 1
   target_session="$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null || true)"
   [[ "$target_session" == "$session" ]] || return 1
   if [[ -n "$expected_path" ]]; then
     target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-    [[ "$target_path" == "$expected_path" ]] || return 1
+    expected_real="$(cd -P "$expected_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$expected_path")"
+    target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
+    [[ "$target_real" == "$expected_real" ]] || return 1
   fi
   return 0
 }
