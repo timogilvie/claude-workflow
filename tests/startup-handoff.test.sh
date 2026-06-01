@@ -302,7 +302,8 @@ fi
 
 if [[ "$LAUNCH_PLANNING_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
   && [[ "$LAUNCH_PLANNING_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
-  && [[ "$LAUNCH_PLANNING_BLOCK" == *'_launch_agent_in_pane "$SESSION:$win"'* ]]; then
+  && [[ "$LAUNCH_PLANNING_BLOCK" == *'_launch_agent_in_pane "$win"'* ]] \
+  && [[ "$LAUNCH_PLANNING_BLOCK" != *'_launch_agent_in_pane "$SESSION:$win"'* ]]; then
   pass "planning launch targets stable task window selector"
 else
   fail "planning launch does not use stable task window selector"
@@ -310,8 +311,12 @@ fi
 
 if [[ "$LAUNCH_CODING_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
   && [[ "$LAUNCH_CODING_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
+  && [[ "$LAUNCH_CODING_BLOCK" == *'_launch_agent_in_pane "$win"'* ]] \
+  && [[ "$LAUNCH_CODING_BLOCK" != *'_launch_agent_in_pane "$SESSION:$win"'* ]] \
   && [[ "$LAUNCH_REVIEW_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
   && [[ "$LAUNCH_REVIEW_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
+  && [[ "$LAUNCH_REVIEW_BLOCK" == *'_launch_agent_in_pane "$win"'* ]] \
+  && [[ "$LAUNCH_REVIEW_BLOCK" != *'_launch_agent_in_pane "$SESSION:$win"'* ]] \
   && [[ "$LAUNCH_READY_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
   && [[ "$LAUNCH_READY_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]]; then
   pass "coding/review/ready launches target stable task window selector"
