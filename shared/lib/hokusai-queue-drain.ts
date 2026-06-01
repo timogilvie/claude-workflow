@@ -1,4 +1,5 @@
 import { getHokusaiContributionsConfig } from './config.ts';
+import { resolveEnvValue } from './env-file.ts';
 import { getContributionConsentStatus } from './hokusai-consent.ts';
 import { appendHokusaiLedgerEntry, type HokusaiRewardStatus } from './hokusai-ledger.ts';
 import {
@@ -123,7 +124,7 @@ async function postBatch(
   const fetchImpl = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-  const token = config.endpointTokenEnv ? process.env[config.endpointTokenEnv] : '';
+  const token = resolveEnvValue([config.endpointTokenEnv, 'HOKUSAI_API_KEY'], opts.repoDir) || '';
 
   try {
     const response = await fetchImpl(config.endpoint!, {
