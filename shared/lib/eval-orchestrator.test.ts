@@ -466,25 +466,32 @@ describe('eval-orchestrator', () => {
     assert.equal(trigger.mock.calls.length, 0);
   });
 
-  it('returns without waiting for the Hokusai trigger promise', async () => {
+  it('waits for the Hokusai trigger before returning', async () => {
     let resolveTrigger: (() => void) | undefined;
     mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', () => new Promise((resolve) => {
       resolveTrigger = resolve;
     }));
 
+    const run = runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'codex',
+    }).then(() => 'resolved');
+
     const result = await Promise.race([
-      runEvaluation({
-        issueId: 'HOK-1495',
-        prNumber: '1495',
-        repoDir,
-        worktreePath: repoDir,
-        agentType: 'codex',
-      }).then(() => 'resolved'),
+      run,
       new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 25)),
     ]);
 
-    assert.equal(result, 'resolved');
+    assert.equal(result, 'timeout');
     resolveTrigger?.();
+    const completed = await Promise.race([
+      run,
+      new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 25)),
+    ]);
+    assert.equal(completed, 'resolved');
   });
 
   it('logs and swallows trigger rejections', async () => {
