@@ -274,11 +274,12 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     }
   }
 
-  const wallClockSeconds = phaseDurations?.total && phaseDurations.total > 0
-    ? phaseDurations.total
-    : branch
-      ? evalOrchestratorDeps.computeWallClockSeconds(repoDir, branch) ?? 0
-      : 0;
+  const wallClockSeconds: number | null =
+    phaseDurations?.total && phaseDurations.total > 0
+      ? phaseDurations.total
+      : branch
+        ? evalOrchestratorDeps.computeWallClockSeconds(repoDir, branch)
+        : null;
 
   const runInterventionAnalysis = () =>
     Promise.resolve().then(() => {
