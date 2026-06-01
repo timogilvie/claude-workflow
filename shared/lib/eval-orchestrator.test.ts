@@ -182,6 +182,7 @@ describe('eval-orchestrator', () => {
     }));
     mock.method(evalOrchestratorDeps, 'computeWorkflowCost', () => costOutcome);
     mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => undefined);
+    mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => undefined);
     mock.method(evalOrchestratorDeps, 'evaluateTask', async (input, outcomes) => {
       evaluateTaskInput = input as Record<string, unknown>;
       const timeSeconds =
@@ -418,5 +419,89 @@ describe('eval-orchestrator', () => {
     assert.equal(record.workflowCostStatus, 'skipped');
     assert.ok(record.enrichmentDiagnostics?.includes('workflowCost'));
     assert.ok(warn.mock.calls.some((call) => String(call.arguments[0]).includes('workflowCost')));
+  });
+
+  it('triggers Hokusai submission after successful persistence', async () => {
+    const order: string[] = [];
+    let triggeredRecord: EvalRecord | undefined;
+    let triggeredRepoDir: string | undefined;
+    mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => {
+      order.push('persist');
+    });
+    mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async (record, options) => {
+      order.push('trigger');
+      triggeredRecord = record;
+      triggeredRepoDir = options.repoDir;
+    });
+
+    const record = await runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'codex',
+    });
+
+    assert.deepEqual(order, ['persist', 'trigger']);
+    assert.equal(triggeredRepoDir, repoDir);
+    assert.equal(triggeredRecord?.id, record.id);
+    assert.equal(triggeredRecord?.workflowCost, 3.75);
+    assert.equal(triggeredRecord?.constraints?.maxCostUsd, 6.5);
+  });
+
+  it('does not trigger Hokusai submission when persistence fails', async () => {
+    const trigger = mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => undefined);
+    mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => {
+      throw new Error('disk full');
+    });
+
+    await runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'codex',
+    });
+
+    assert.equal(trigger.mock.calls.length, 0);
+  });
+
+  it('returns without waiting for the Hokusai trigger promise', async () => {
+    let resolveTrigger: (() => void) | undefined;
+    mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', () => new Promise((resolve) => {
+      resolveTrigger = resolve;
+    }));
+
+    const result = await Promise.race([
+      runEvaluation({
+        issueId: 'HOK-1495',
+        prNumber: '1495',
+        repoDir,
+        worktreePath: repoDir,
+        agentType: 'codex',
+      }).then(() => 'resolved'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 25)),
+    ]);
+
+    assert.equal(result, 'resolved');
+    resolveTrigger?.();
+  });
+
+  it('logs and swallows trigger rejections', async () => {
+    const warn = mock.method(console, 'warn', () => undefined);
+    mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => {
+      throw new Error('trigger failed');
+    });
+
+    await runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'codex',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.ok(warn.mock.calls.some((call) => String(call.arguments[0]).includes('[hokusai] failed to trigger submission: trigger failed')));
   });
 });
