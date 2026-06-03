@@ -30,7 +30,7 @@ import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getEvalContextUpdatesConfig, getMaxCostUsd } from './config.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 import { getCurrentOperatingMode } from './operating-mode.ts';
-import { isEvalSuccess } from './eval-success-policy.ts';
+import { finalizeEvalSuccess } from './eval-success-policy.ts';
 import {
   collectCiOutcome,
   collectTestsOutcome,
@@ -531,7 +531,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       record.modelVersion = executionModel;
     }
     if (record.outcomes) {
-      record.outcomes.success = isEvalSuccess(record);
+      record.outcomes.success = finalizeEvalSuccess(record, { repoDir });
     }
     attachPhaseDurations(record, phaseDurations);
 
