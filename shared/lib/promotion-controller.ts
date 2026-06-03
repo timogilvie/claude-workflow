@@ -1526,6 +1526,8 @@ function renderPromotionSection(input: {
     '',
     `Branch health: ${formatHealth(input.health)}`,
     '',
+    `> ⚠️ **Merge this PR with a merge commit — do NOT squash or rebase.** A squash creates a new commit that drops \`${input.integrationBranch}\` from \`${input.promotionBranch}\`'s ancestry, which forces a manual reconcile and re-blocks the next \`wavemill promote\`. A merge commit keeps \`${input.integrationBranch}\` an ancestor of \`${input.promotionBranch}\` so future promotions stay clean.`,
+    '',
   ];
 
   if (input.promotionNote) {
