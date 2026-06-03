@@ -76,22 +76,36 @@ test('setIssuesState with empty identifiers returns without API calls', async ()
 test('setIssuesState batches issue lookup, team state lookup, and updates', async () => {
   process.env.LINEAR_API_KEY = 'test';
   const teamFetches = new Set<string>();
+  const lookupTeamKeys: string[] = [];
   let issueLookupCount = 0;
   let mutationCount = 0;
 
   const restore = installFetchMock((payload) => {
-    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+    if (payload.query.includes('issues(') && payload.query.includes('number: { in: [')) {
       issueLookupCount += 1;
-      return {
-        issues: {
-          nodes: [
-            { id: 'i1', identifier: 'HOK-201', team: { id: 't1' } },
-            { id: 'i2', identifier: 'HOK-202', team: { id: 't1' } },
-            { id: 'i3', identifier: 'HOK-301', team: { id: 't2' } },
-            { id: 'i4', identifier: 'HOK-302', team: { id: 't2' } },
-          ],
-        },
-      };
+      const teamKey = String(payload.variables?.teamKey || '');
+      lookupTeamKeys.push(teamKey);
+      if (teamKey === 'HOK') {
+        return {
+          issues: {
+            nodes: [
+              { id: 'i1', identifier: 'HOK-201', team: { id: 't1' } },
+              { id: 'i2', identifier: 'HOK-202', team: { id: 't1' } },
+            ],
+          },
+        };
+      }
+      if (teamKey === 'ABC') {
+        return {
+          issues: {
+            nodes: [
+              { id: 'i3', identifier: 'ABC-301', team: { id: 't2' } },
+              { id: 'i4', identifier: 'ABC-302', team: { id: 't2' } },
+            ],
+          },
+        };
+      }
+      throw new Error(`Unexpected team key: ${teamKey}`);
     }
     if (payload.query.includes('query($teamId: String!)')) {
       const teamId = String(payload.variables?.teamId || '');
@@ -106,12 +120,13 @@ test('setIssuesState batches issue lookup, team state lookup, and updates', asyn
   });
 
   try {
-    const result = await setIssuesState(['HOK-201', 'HOK-202', 'HOK-301', 'HOK-302'], 'In Progress');
-    assert.equal(issueLookupCount, 1);
+    const result = await setIssuesState(['HOK-201', 'HOK-202', 'ABC-301', 'ABC-302'], 'In Progress');
+    assert.equal(issueLookupCount, 2);
+    assert.deepEqual(lookupTeamKeys.sort(), ['ABC', 'HOK']);
     assert.equal(teamFetches.size, 2);
     assert.equal(mutationCount, 4);
     assert.deepEqual(result.failed, []);
-    assert.deepEqual(result.updated.sort(), ['HOK-201', 'HOK-202', 'HOK-301', 'HOK-302']);
+    assert.deepEqual(result.updated.sort(), ['ABC-301', 'ABC-302', 'HOK-201', 'HOK-202']);
   } finally {
     restore();
   }
@@ -121,7 +136,7 @@ test('setIssuesState returns failed entries on mutation errors without throwing'
   process.env.LINEAR_API_KEY = 'test';
 
   const restore = installFetchMock((payload) => {
-    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+    if (payload.query.includes('issues(') && payload.query.includes('number: { in: [')) {
       return {
         issues: {
           nodes: [
@@ -158,7 +173,7 @@ test('setIssuesState reports a generic error when Linear returns success false',
   process.env.LINEAR_API_KEY = 'test';
 
   const restore = installFetchMock((payload) => {
-    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+    if (payload.query.includes('issues(') && payload.query.includes('number: { in: [')) {
       return {
         issues: {
           nodes: [
@@ -196,7 +211,7 @@ test('setIssuesState reports malformed mutation responses per issue', async () =
   process.env.LINEAR_API_KEY = 'test';
 
   const restore = installFetchMock((payload) => {
-    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+    if (payload.query.includes('issues(') && payload.query.includes('number: { in: [')) {
       return {
         issues: {
           nodes: [
@@ -221,6 +236,48 @@ test('setIssuesState reports malformed mutation responses per issue', async () =
     assert.equal(result.failed[0].issueId, 'HOK-503');
     assert.equal(result.failed[0].error, 'Linear API response missing issueUpdate result');
     assert.equal(result.failed[0].category, 'graphql');
+  } finally {
+    restore();
+  }
+});
+
+test('setIssuesState reports invalid identifiers without issuing a lookup for them', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  const lookupTeamKeys: string[] = [];
+  let mutationCount = 0;
+
+  const restore = installFetchMock((payload) => {
+    if (payload.query.includes('issues(') && payload.query.includes('number: { in: [')) {
+      const teamKey = String(payload.variables?.teamKey || '');
+      lookupTeamKeys.push(teamKey);
+      return {
+        issues: {
+          nodes: [
+            { id: 'ok-id', identifier: 'HOK-801', team: { id: 't8' } },
+          ],
+        },
+      };
+    }
+    if (payload.query.includes('query($teamId: String!)')) {
+      return { team: { states: { nodes: [{ id: 'state-t8', name: 'In Progress' }] } } };
+    }
+    if (payload.query.includes('mutation($issueId: String!, $input: IssueUpdateInput!)')) {
+      mutationCount += 1;
+      return { issueUpdate: { success: true, issue: { id: 'ok-id', identifier: 'HOK-801', url: 'u' } } };
+    }
+    throw new Error(`Unhandled query: ${payload.query}`);
+  });
+
+  try {
+    const result = await setIssuesState(['bad-id', 'HOK-801'], 'In Progress');
+    assert.deepEqual(lookupTeamKeys, ['HOK']);
+    assert.equal(mutationCount, 1);
+    assert.deepEqual(result.updated, ['HOK-801']);
+    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed[0].issueId, 'bad-id');
+    assert.equal(result.failed[0].category, 'client');
+    assert.equal(result.failed[0].isRetryable, false);
+    assert.match(result.failed[0].error, /Invalid issue identifier: bad-id/);
   } finally {
     restore();
   }

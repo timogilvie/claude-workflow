@@ -706,6 +706,7 @@ export async function setIssuesState(
   const PAGE_SIZE = 250;
   const fetchedIdentifiers = new Set<string>();
   const allNodes: Array<{ id: string; identifier: string; team: { id: string } }> = [];
+  const groupedIdentifiers = new Map<string, Array<{ identifier: string; number: number }>>();
   const pushFailure = (issueId: string, detail: { error: string } & Partial<ClassifiedLinearError>) => {
     failed.push({
       issueId,
@@ -718,45 +719,76 @@ export async function setIssuesState(
     });
   };
 
-  // Fetch in pages to avoid the 250-node GraphQL limit
-  for (let offset = 0; offset < identifiers.length; offset += PAGE_SIZE) {
-    const chunk = identifiers.slice(offset, offset + PAGE_SIZE);
-    let data: Record<string, unknown>;
+  for (const identifier of identifiers) {
     try {
-      data = await request(
-        `
-          query($identifiers: [String!]) {
-            issues(filter: { identifier: { in: $identifiers } }, first: ${PAGE_SIZE}) {
-              nodes {
-                id
-                identifier
-                team {
+      const { teamKey, number } = parseIdentifier(identifier);
+      const group = groupedIdentifiers.get(teamKey);
+      if (group) {
+        group.push({ identifier, number });
+      } else {
+        groupedIdentifiers.set(teamKey, [{ identifier, number }]);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushFailure(identifier, {
+        error: message,
+        message,
+        category: 'client',
+        httpStatus: null,
+        graphqlErrors: [],
+        isRetryable: false,
+      });
+      fetchedIdentifiers.add(identifier);
+    }
+  }
+
+  // Fetch in pages to avoid the 250-node GraphQL limit. Linear only supports
+  // filtering by issue number within a team, so identifiers are grouped by team key first.
+  for (const [teamKey, entries] of groupedIdentifiers) {
+    for (let offset = 0; offset < entries.length; offset += PAGE_SIZE) {
+      const chunk = entries.slice(offset, offset + PAGE_SIZE);
+      const chunkIdentifiers = chunk.map((entry) => entry.identifier);
+      const numbers = chunk.map((entry) => entry.number);
+      let data: Record<string, unknown>;
+      try {
+        data = await request(
+          `
+            query($teamKey: String!) {
+              issues(
+                filter: { number: { in: [${numbers.join(', ')}] }, team: { key: { eq: $teamKey } } },
+                first: ${PAGE_SIZE}
+              ) {
+                nodes {
                   id
+                  identifier
+                  team {
+                    id
+                  }
                 }
               }
             }
-          }
-        `,
-        { identifiers: chunk },
-      );
-    } catch (err) {
-      const classified = classifyLinearError(err);
-      for (const identifier of chunk) {
-        pushFailure(identifier, {
-          error: `Failed to fetch issue: ${classified.message}`,
-          ...classified,
-        });
-        fetchedIdentifiers.add(identifier);
+          `,
+          { teamKey },
+        );
+      } catch (err) {
+        const classified = classifyLinearError(err);
+        for (const identifier of chunkIdentifiers) {
+          pushFailure(identifier, {
+            error: `Failed to fetch issue: ${classified.message}`,
+            ...classified,
+          });
+          fetchedIdentifiers.add(identifier);
+        }
+        continue;
       }
-      continue;
+      const nodes = (data.issues as {
+        nodes?: Array<{ id: string; identifier: string; team: { id: string } }>;
+      } | undefined)?.nodes || [];
+      for (const node of nodes) {
+        fetchedIdentifiers.add(node.identifier);
+      }
+      allNodes.push(...nodes);
     }
-    const nodes = (data.issues as {
-      nodes?: Array<{ id: string; identifier: string; team: { id: string } }>;
-    } | undefined)?.nodes || [];
-    for (const node of nodes) {
-      fetchedIdentifiers.add(node.identifier);
-    }
-    allNodes.push(...nodes);
   }
 
   const issues = allNodes;
