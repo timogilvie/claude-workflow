@@ -928,11 +928,31 @@ function predictPromotionBaseMerge(
     return { status: 'clean' };
   } catch (error) {
     const message = errorMessage(error);
-    if (/conflict/i.test(message)) {
+    // `git merge-tree --write-tree` exits 1 when the trees conflict, writing the
+    // conflicted-file list to stdout rather than stderr. execSync therefore throws
+    // an error whose message is only "Command failed: git merge-tree ..." with no
+    // "conflict" substring, so we must classify by exit status (1 => conflicts) and
+    // keep the string match as a fallback for runners that surface git's text.
+    // Any other status (128, command-not-found, ...) is a genuine "unknown" failure.
+    if (execExitStatus(error) === 1 || /conflict/i.test(message)) {
       return { status: 'conflicts', detail: message };
     }
     return { status: 'unknown', detail: message };
   }
+}
+
+/**
+ * Extract the process exit status from a thrown execSync/child_process error,
+ * or null when it is not an exec error (e.g. a synthetic Error).
+ */
+function execExitStatus(error: unknown): number | null {
+  if (error && typeof error === 'object' && 'status' in error) {
+    const status = (error as { status?: unknown }).status;
+    if (typeof status === 'number') {
+      return status;
+    }
+  }
+  return null;
 }
 
 export function updateBranchWithBase(
@@ -1049,7 +1069,11 @@ function formatBaseBehindSummary(
   detail?: string,
 ): string {
   if (reason === 'base-behind-conflicts') {
-    return `branch behind protected base; merging ${promotionRemoteRef} into ${integrationBranch} is expected to conflict`;
+    return [
+      `${integrationBranch} has diverged from protected base ${promotionRemoteRef}; merging ${promotionRemoteRef} into ${integrationBranch} is expected to conflict`,
+      `likely cause: ${promotionRemoteRef} received commits that did not flow through ${integrationBranch} (e.g. a PR merged with base=main), or a squash promotion left no matching tree to auto-reconcile`,
+      `remediation: open a PR merging ${promotionRemoteRef} into ${integrationBranch}, resolve the conflicts, merge it, then rerun wavemill promote`,
+    ].join('; ');
   }
   if (reason === 'base-unknown') {
     return detail
