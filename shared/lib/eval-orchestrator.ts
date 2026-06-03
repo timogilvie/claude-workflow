@@ -15,7 +15,7 @@
 
 import path from 'node:path';
 import { errorMessage } from './error-utils.ts';
-import { isEvalSuccess } from './eval-success-policy.ts';
+import { finalizeEvalSuccess } from './eval-success-policy.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getDeepSeekProviderMetadata } from './deepseek-provider.ts';
 import {
@@ -407,7 +407,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
 
   // 9. Set success flag based on score threshold
   if (record.outcomes) {
-    record.outcomes.success = isEvalSuccess(record);
+    record.outcomes.success = finalizeEvalSuccess(record, { repoDir });
   }
   attachPhaseDurations(record, phaseDurations);
 
