@@ -353,7 +353,6 @@ await test('enrichPostCompletionRecord attaches taskDescriptor for persisted rec
       'gpt-5.5',
       'claude-opus-4-7',
       'gpt-5.4',
-      'gpt-5.3-codex',
       'claude-sonnet-4-6',
     ]);
     assert.equal(record.workflowCostStatus, 'success');
