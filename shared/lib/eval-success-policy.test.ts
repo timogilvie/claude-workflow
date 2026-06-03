@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
 import {
   DEFAULT_SUCCESS_THRESHOLD,
+  finalizeEvalSuccess,
   getSuccessThreshold,
   isEvalSuccess,
   SUCCESS_POLICY_VERSION,
@@ -29,6 +30,11 @@ describe('eval-success-policy', () => {
   it('uses the default threshold when outcomes.success is missing', () => {
     assert.equal(isEvalSuccess({ score: 0.8 }), true);
     assert.equal(isEvalSuccess({ score: 0.7 }), false);
+  });
+
+  it('finalizes placeholder success values from score', () => {
+    assert.equal(finalizeEvalSuccess({ score: 0.96, outcomes: { success: false } }), true);
+    assert.equal(finalizeEvalSuccess({ score: 0.7, outcomes: { success: true } }), false);
   });
 
   it('returns false when no success signals are present', () => {
