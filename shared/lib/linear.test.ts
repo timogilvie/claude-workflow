@@ -24,6 +24,11 @@ function installFetchMock(handler: (payload: GraphQLPayload) => unknown | Promis
   };
 }
 
+function isBatchIssueLookup(payload: GraphQLPayload, teamKey = 'HOK') {
+  return payload.query.includes('issues(filter: { number: { in:')
+    && payload.query.includes(`team: { key: { eq: "${teamKey}" } }`);
+}
+
 test('setIssueState caches team workflow states across calls', async () => {
   process.env.LINEAR_API_KEY = 'test';
   const teamId = 'team-cache-1';
@@ -80,7 +85,7 @@ test('setIssuesState batches issue lookup, team state lookup, and updates', asyn
   let mutationCount = 0;
 
   const restore = installFetchMock((payload) => {
-    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+    if (isBatchIssueLookup(payload)) {
       issueLookupCount += 1;
       return {
         issues: {
@@ -117,11 +122,55 @@ test('setIssuesState batches issue lookup, team state lookup, and updates', asyn
   }
 });
 
+test('setIssuesState does not use the unsupported identifier issue filter', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  const queries: string[] = [];
+
+  const restore = installFetchMock((payload) => {
+    queries.push(payload.query);
+    if (isBatchIssueLookup(payload)) {
+      return {
+        issues: {
+          nodes: [
+            { id: 'issue-regression', identifier: 'HOK-303', team: { id: 'team-regression' } },
+          ],
+        },
+      };
+    }
+    if (payload.query.includes('query($teamId: String!)')) {
+      return { team: { states: { nodes: [{ id: 'state-regression', name: 'In Progress' }] } } };
+    }
+    if (payload.query.includes('mutation($issueId: String!, $input: IssueUpdateInput!)')) {
+      return {
+        issueUpdate: {
+          success: true,
+          issue: { id: 'issue-regression', identifier: 'HOK-303', url: 'u' },
+        },
+      };
+    }
+    throw new Error(`Unhandled query: ${payload.query}`);
+  });
+
+  try {
+    const result = await setIssuesState(['HOK-303'], 'In Progress');
+    assert.deepEqual(result.failed, []);
+    assert.deepEqual(result.updated, ['HOK-303']);
+    const unsupportedFilter = [
+      'identifier:',
+      '{ in:',
+    ].join(' ');
+    assert.equal(queries.some((query) => query.includes(unsupportedFilter)), false);
+    assert.equal(queries.some((query) => query.includes('number: { in:')), true);
+  } finally {
+    restore();
+  }
+});
+
 test('setIssuesState returns failed entries on mutation errors without throwing', async () => {
   process.env.LINEAR_API_KEY = 'test';
 
   const restore = installFetchMock((payload) => {
-    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+    if (isBatchIssueLookup(payload)) {
       return {
         issues: {
           nodes: [
@@ -158,7 +207,7 @@ test('setIssuesState reports a generic error when Linear returns success false',
   process.env.LINEAR_API_KEY = 'test';
 
   const restore = installFetchMock((payload) => {
-    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+    if (isBatchIssueLookup(payload)) {
       return {
         issues: {
           nodes: [
@@ -196,7 +245,7 @@ test('setIssuesState reports malformed mutation responses per issue', async () =
   process.env.LINEAR_API_KEY = 'test';
 
   const restore = installFetchMock((payload) => {
-    if (payload.query.includes('issues(filter: { identifier: { in: $identifiers } }')) {
+    if (isBatchIssueLookup(payload)) {
       return {
         issues: {
           nodes: [

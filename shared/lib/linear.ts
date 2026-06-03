@@ -717,46 +717,66 @@ export async function setIssuesState(
       message: detail.message ?? detail.error,
     });
   };
+  const identifiersByTeam = new Map<string, Array<{ identifier: string; number: number }>>();
 
-  // Fetch in pages to avoid the 250-node GraphQL limit
-  for (let offset = 0; offset < identifiers.length; offset += PAGE_SIZE) {
-    const chunk = identifiers.slice(offset, offset + PAGE_SIZE);
-    let data: Record<string, unknown>;
+  for (const identifier of identifiers) {
     try {
-      data = await request(
-        `
-          query($identifiers: [String!]) {
-            issues(filter: { identifier: { in: $identifiers } }, first: ${PAGE_SIZE}) {
-              nodes {
-                id
-                identifier
-                team {
+      const parsed = parseIdentifier(identifier);
+      const group = identifiersByTeam.get(parsed.teamKey) || [];
+      group.push({ identifier, number: parsed.number });
+      identifiersByTeam.set(parsed.teamKey, group);
+    } catch (err) {
+      const classified = classifyLinearError(err);
+      pushFailure(identifier, {
+        error: `Failed to fetch issue: ${classified.message}`,
+        ...classified,
+      });
+      fetchedIdentifiers.add(identifier);
+    }
+  }
+
+  // Fetch in pages to avoid the 250-node GraphQL limit. Linear's IssueFilter
+  // supports number + team key, not identifier, so batch by team first.
+  for (const [teamKey, parsedIdentifiers] of identifiersByTeam) {
+    for (let offset = 0; offset < parsedIdentifiers.length; offset += PAGE_SIZE) {
+      const chunk = parsedIdentifiers.slice(offset, offset + PAGE_SIZE);
+      const numbers = chunk.map((item) => item.number);
+      let data: Record<string, unknown>;
+      try {
+        data = await request(
+          `
+            query {
+              issues(filter: { number: { in: [${numbers.join(', ')}] }, team: { key: { eq: "${teamKey}" } } }, first: ${PAGE_SIZE}) {
+                nodes {
                   id
+                  identifier
+                  team {
+                    id
+                  }
                 }
               }
             }
-          }
-        `,
-        { identifiers: chunk },
-      );
-    } catch (err) {
-      const classified = classifyLinearError(err);
-      for (const identifier of chunk) {
-        pushFailure(identifier, {
-          error: `Failed to fetch issue: ${classified.message}`,
-          ...classified,
-        });
-        fetchedIdentifiers.add(identifier);
+          `,
+        );
+      } catch (err) {
+        const classified = classifyLinearError(err);
+        for (const { identifier } of chunk) {
+          pushFailure(identifier, {
+            error: `Failed to fetch issue: ${classified.message}`,
+            ...classified,
+          });
+          fetchedIdentifiers.add(identifier);
+        }
+        continue;
       }
-      continue;
+      const nodes = (data.issues as {
+        nodes?: Array<{ id: string; identifier: string; team: { id: string } }>;
+      } | undefined)?.nodes || [];
+      for (const node of nodes) {
+        fetchedIdentifiers.add(node.identifier);
+      }
+      allNodes.push(...nodes);
     }
-    const nodes = (data.issues as {
-      nodes?: Array<{ id: string; identifier: string; team: { id: string } }>;
-    } | undefined)?.nodes || [];
-    for (const node of nodes) {
-      fetchedIdentifiers.add(node.identifier);
-    }
-    allNodes.push(...nodes);
   }
 
   const issues = allNodes;
