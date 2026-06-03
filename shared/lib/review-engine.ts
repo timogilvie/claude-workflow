@@ -607,7 +607,7 @@ async function runReviewWithRetry(
         `  - Context is too large for the model\n\n` +
         `Troubleshooting:\n` +
         `  - Run with --verbose to see full LLM response\n` +
-        `  - Try a different model: REVIEW_MODEL=claude-opus-4-7 npx tsx tools/review-changes.ts\n` +
+        `  - Try a different model: REVIEW_MODEL=claude-opus-4-8 npx tsx tools/review-changes.ts\n` +
         `  - Break changes into smaller PRs if diff is very large\n` +
         `  - Check your network connection and retry`
       );
