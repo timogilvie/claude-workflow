@@ -430,7 +430,7 @@ describe('quota fallback', () => {
   it('filters task ladders to models supported by the selected provider', async () => {
     const { cliPath, logPath } = createMockCli('provider-filter', {
       'gpt-5.5': { type: 'other', message: 'invalid model for claude cli', code: 1 },
-      'claude-opus-4-7': { type: 'success', text: 'anthropic planning winner' },
+      'claude-opus-4-8': { type: 'success', text: 'anthropic planning winner' },
     });
 
     const result = await callLLM('planning prompt', {
@@ -441,8 +441,8 @@ describe('quota fallback', () => {
       taskType: 'planning',
     });
 
-    assert.equal(result.model, 'claude-opus-4-7');
-    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-opus-4-7']);
+    assert.equal(result.model, 'claude-opus-4-8');
+    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-opus-4-8']);
   });
 
   it('keeps DeepSeek Claude-compatible models in provider-filtered ladders', async () => {

@@ -683,7 +683,7 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 3. Save the routing results to $routing_path as JSON:
    {
      "planner": "claude-sonnet-4-6",
-     "coder": "claude-opus-4-7",
+     "coder": "claude-opus-4-8",
      "reviewer": "claude-sonnet-4-6",
      "planDepth": "light",
      "codeDepth": "medium",
@@ -701,7 +701,7 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 - Use the routing tool's recommendations directly - don't override them
 - If the routing tool fails, use sensible defaults:
   - planner: claude-sonnet-4-6
-  - coder: claude-opus-4-7
+  - coder: claude-opus-4-8
   - reviewer: claude-sonnet-4-6
   - planDepth: light
   - codeDepth: medium
