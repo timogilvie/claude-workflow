@@ -606,13 +606,12 @@ describe('model-registry', () => {
       clearConfigCache(repoDir);
 
       assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.5', 'claude-opus-4-7']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4', 'gpt-5.3-codex']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4']);
       assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['claude-sonnet-4-6']);
       assert.deepEqual(getConfiguredModelsForDescriptor(repoDir), [
         'gpt-5.5',
         'claude-opus-4-7',
         'gpt-5.4',
-        'gpt-5.3-codex',
         'claude-sonnet-4-6',
       ]);
     } finally {

@@ -25,7 +25,7 @@ from template_utils import fill_template
 # We lazy-import to avoid hard dependency on dspy for dry-run mode.
 _prepare_data = None
 
-AVAILABLE_MODELS = "claude-sonnet-4-5-20250929,gpt-5.3-codex,gpt-5.4,gpt-5.5"
+AVAILABLE_MODELS = "claude-sonnet-4-5-20250929,gpt-5.4,gpt-5.5"
 
 
 def _get_prepare_data():
@@ -94,7 +94,6 @@ Given a task description, recommend which AI model should handle it based on tas
 ## Model Selection Guidelines
 
 - **claude-sonnet-4-5-20250929**: Best default for most tasks. Fast, cost-effective, handles features, bugfixes, refactoring, and documentation well. Choose this unless the task clearly requires a more capable model.
-- **gpt-5.3-codex**: Consider for complex multi-file refactors or tasks requiring deep architectural reasoning across many files.
 - **gpt-5.4**: Reserve for the highest-complexity tasks: large-scale migrations, security-critical changes, or tasks with complex cross-cutting concerns.
 - **gpt-5.5**: Premier OpenAI frontier model for the most demanding planning, coding, and review tasks when quality matters more than cost.
 
