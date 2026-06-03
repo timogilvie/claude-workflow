@@ -1770,7 +1770,7 @@ if (( ${#TASKS[@]} > 0 )); then
 
   # ── Phase 2: Write task packets (no expansion — agent expands in-pane) ────
   # If the Linear description is already a task packet, use it directly.
-  # Otherwise, write the raw description — the planning agent will expand later.
+  # Otherwise, write the title plus raw description — the planning agent will expand later.
   for t in "${TASKS[@]}"; do
     IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
     PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
@@ -1779,10 +1779,15 @@ if (( ${#TASKS[@]} > 0 )); then
 
     if is_task_packet "$current_desc"; then
       log "info" "$ISSUE has task packet"
+      printf '%s\n' "$current_desc" > "$PACKET_FILE"
     else
-      log "info" "$ISSUE raw description saved (agent will expand)"
+      log "info" "$ISSUE title and raw description saved (agent will expand)"
+      if [[ -n "$current_desc" ]]; then
+        printf '%s\n\n%s\n' "$TITLE" "$current_desc" > "$PACKET_FILE"
+      else
+        printf '%s\n' "$TITLE" > "$PACKET_FILE"
+      fi
     fi
-    echo "$current_desc" > "$PACKET_FILE"
   done
 fi
 
@@ -7055,17 +7060,22 @@ launch_task() {
   local issue_desc
   issue_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
 
-  # Task packet handling — write raw description (agent will expand in-pane)
+  # Task packet handling — write title plus raw description (agent will expand in-pane)
   local packet_file="/tmp/${SESSION}-${issue}-taskpacket.md"
   if [[ -f "$packet_file" ]]; then
     :
   else
     if is_task_packet "$issue_desc"; then
       log "info" "$issue has task packet"
+      printf '%s\n' "$issue_desc" > "$packet_file"
     else
-      log "info" "$issue raw description saved (agent will expand)"
+      log "info" "$issue title and raw description saved (agent will expand)"
+      if [[ -n "$issue_desc" ]]; then
+        printf '%s\n\n%s\n' "$title" "$issue_desc" > "$packet_file"
+      else
+        printf '%s\n' "$title" > "$packet_file"
+      fi
     fi
-    echo "$issue_desc" > "$packet_file"
   fi
   local packet_content
   packet_content=$(cat "$packet_file" 2>/dev/null || echo "")

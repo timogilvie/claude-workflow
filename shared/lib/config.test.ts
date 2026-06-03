@@ -2216,6 +2216,25 @@ test('getIntegrationConfig returns defaults for an empty section', () => {
   }
 });
 
+test('getIntegrationConfig uses mill base branch when integration branch is not configured', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      mill: {
+        baseBranch: 'main',
+      },
+    }));
+
+    assert.deepEqual(getIntegrationConfig(tmp), {
+      ...INTEGRATION_DEFAULTS,
+      integrationBranch: 'main',
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('getIntegrationConfig merges partial overrides with defaults', () => {
   const tmp = makeTempRepo();
   try {
