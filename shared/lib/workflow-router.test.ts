@@ -188,7 +188,8 @@ await test('routes broad CLI workflow work to deep planning and medium-or-higher
     );
     assert.equal(decision.planDepth, 'deep');
     assert.ok([
-      'gpt-5.3-codex',
+      'gpt-5.5',
+      'gpt-5.4',
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
       'claude-opus-4-6',
@@ -564,7 +565,7 @@ await test('auto mode uses hokusai first when configured', async () => {
     predictions: {
       recommended_strategy: {
         planner_model: 'claude-sonnet-4-5-20250929',
-        coder_model: 'gpt-5.3-codex',
+        coder_model: 'gpt-5.4',
         reviewer_model: 'claude-haiku-4-5-20251001',
         plan_depth: 'medium',
         code_depth: 'medium',
@@ -580,7 +581,47 @@ await test('auto mode uses hokusai first when configured', async () => {
   try {
     const decision = await routeWorkflowAuto('Add a workflow router mode with tests.', { repoDir });
     assert.equal(decision.routingMode, 'hokusai');
-    assert.equal(decision.coder, 'gpt-5.3-codex');
+    assert.equal(decision.coder, 'gpt-5.4');
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+await test('auto mode rejects disabled hokusai model selections', async () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+      hokusai: {
+        endpoint: 'http://localhost:8080/predict',
+        apiKey: 'test-token',
+        timeout: 1000,
+      },
+    },
+  });
+
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    predictions: {
+      recommended_strategy: {
+        planner_model: 'claude-sonnet-4-5-20250929',
+        coder_model: 'gpt-5.3-codex',
+        reviewer_model: 'claude-haiku-4-5-20251001',
+        plan_depth: 'medium',
+        code_depth: 'medium',
+        review_mode: 'light',
+        estimated_success_under_budget: 0.88,
+        estimated_cost_usd: 1.75,
+        confidence: 0.81,
+      },
+    },
+    metadata: {},
+  }), { status: 200 });
+
+  try {
+    const decision = await routeWorkflowAuto('Add a workflow router mode with tests.', { repoDir });
+    assert.notEqual(decision.routingMode, 'hokusai');
+    assert.notEqual(decision.coder, 'gpt-5.3-codex');
   } finally {
     globalThis.fetch = originalFetch;
     cleanup();
