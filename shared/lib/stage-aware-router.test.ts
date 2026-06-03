@@ -515,7 +515,7 @@ test('routeStageAware reads per-stage model constraints from router config', () 
   try {
     const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir });
     assert.ok(decision);
-    assert.equal(decision?.planner, 'gpt-5.3-codex');
+    assert.equal(decision?.planner, 'claude-opus-4-6');
     assert.equal(decision?.coder, 'claude-opus-4-6');
     assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
   } finally {
@@ -547,8 +547,8 @@ test('routeStageAware falls back to router.models when a stage list is empty', (
   try {
     const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir });
     assert.ok(decision);
-    assert.equal(decision?.planner, 'gpt-5.3-codex');
-    assert.equal(decision?.coder, 'gpt-5.3-codex');
+    assert.equal(decision?.planner, 'claude-haiku-4-5-20251001');
+    assert.equal(decision?.coder, 'claude-haiku-4-5-20251001');
     assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
   } finally {
     cleanup();

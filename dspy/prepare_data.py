@@ -140,13 +140,12 @@ AGENT_MAP = {
     "claude-opus-4-6": "claude",
     "claude-sonnet-4-5-20250929": "claude",
     "claude-haiku-4-5-20251001": "claude",
-    "gpt-5.3-codex": "codex",
     "gpt-5.4": "codex",
     "gpt-5.5": "codex",
 }
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
-AVAILABLE_MODELS = "claude-sonnet-4-6,claude-opus-4-7,claude-sonnet-4-5-20250929,claude-opus-4-6,gpt-5.3-codex,gpt-5.4,gpt-5.5"
+AVAILABLE_MODELS = "claude-sonnet-4-6,claude-opus-4-7,claude-sonnet-4-5-20250929,claude-opus-4-6,gpt-5.4,gpt-5.5"
 
 
 def resolve_agent(model_id: str) -> str:
@@ -199,12 +198,12 @@ def derive_optimal_routing(record: dict) -> dict:
     greenfield = is_greenfield(prompt)
 
     # Determine the right model
-    if model_id == "gpt-5.3-codex" and score < 0.85:
-        # Codex failed — should have been Claude (especially if not greenfield)
-        recommended_model = DEFAULT_MODEL
+    if model_id == "gpt-5.3-codex":
+        # gpt-5.3-codex is not available on ChatGPT-backed Codex accounts.
+        recommended_model = "gpt-5.4" if score >= 0.85 and greenfield else DEFAULT_MODEL
     elif greenfield and score >= 0.90 and intervention_count == 0:
         # Successful greenfield task — codex would be equally effective and cheaper
-        recommended_model = "gpt-5.3-codex"
+        recommended_model = "gpt-5.4"
     elif score >= 0.85 and intervention_count <= 1:
         # This model worked well — keep it
         recommended_model = model_id
@@ -231,7 +230,7 @@ def _build_reasoning(model: str, risk_flags: list[str], greenfield: bool, score:
     parts = []
     agent = resolve_agent(model)
 
-    if greenfield and model == "gpt-5.3-codex":
+    if greenfield and model == "gpt-5.4":
         parts.append("Greenfield task suitable for Codex at lower cost.")
     elif risk_flags:
         parts.append(f"Risk flags [{', '.join(risk_flags)}] suggest using {agent}.")
