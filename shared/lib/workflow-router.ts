@@ -34,6 +34,7 @@ import type { RuntimeResourceSelection } from './resource-selection.ts';
 import type { RouteProvenance } from './route-artifact.ts';
 import { isDeepSeekLikeModelId } from './model-registry.ts';
 import { validateModelOrThrow } from './model-validator.ts';
+import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -158,7 +159,6 @@ const DEFAULT_MODEL_POOL = [
   'deepseek-v4-flash',
   'deepseek-chat',
   'deepseek-reasoner',
-  'gpt-5.3-codex',
   'gpt-5.4',
   'gpt-5.5',
 ];
@@ -431,7 +431,7 @@ function filterProviderPool(
   repoDir?: string,
   stage?: 'planner' | 'coder' | 'reviewer',
 ): ResolvedModelPool {
-  const filtered = filterDeepSeekModels(models, repoDir, stage);
+  const filtered = filterDeepSeekModels(filterDisabledModels(models), repoDir, stage);
   return {
     models: filtered.models,
     warnings: filtered.warnings,
@@ -836,7 +836,7 @@ function downgradeModelsForBudget(params: {
   // Define downgrade tiers for each role (most expensive to cheapest)
   const coderTiers = [
     ['gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
-    ['gpt-5.3-codex', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
+    ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
     ['claude-haiku-4-5-20251001'],
   ];
 
@@ -1071,8 +1071,8 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   const coder = codeDepth === 'deep'
     ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'], coderRecommendation.recommendedModel)
     : codeDepth === 'medium'
-      ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'gpt-5.3-codex', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'], coderRecommendation.recommendedModel)
-      : pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'gpt-5.3-codex', 'claude-haiku-4-5-20251001'], coderRecommendation.recommendedModel);
+      ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'], coderRecommendation.recommendedModel)
+      : pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'claude-haiku-4-5-20251001'], coderRecommendation.recommendedModel);
 
   const reviewer = reviewRecommended === 'static+llm'
     ? pickAvailableModel(reviewerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', planner], planner)
@@ -1650,6 +1650,10 @@ export async function routeWorkflowHokusai(
     reviewerModels: policyResolution?.policyStagePools.reviewerModels,
   });
   if (!decision) {
+    return routeWorkflowStageAware(prompt, options);
+  }
+  if (isDisabledModel(decision.planner) || isDisabledModel(decision.coder) || isDisabledModel(decision.reviewer)) {
+    routerLog(`hokusai routing returned disabled model; falling back to local routing: planner=${decision.planner} coder=${decision.coder} reviewer=${decision.reviewer}`);
     return routeWorkflowStageAware(prompt, options);
   }
 
