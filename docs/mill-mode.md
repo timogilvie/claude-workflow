@@ -55,7 +55,7 @@ Accepted selector forms are:
 
 - family aliases such as `opus`, `sonnet`, and `haiku`
 - `inherit`
-- pinned model IDs such as `claude-opus-4-7`
+- pinned model IDs such as `claude-opus-4-8`
 
 `--model` applies the same selector to planning, coding, and review. Use the per-stage flags when you only want to override one stage.
 
@@ -427,8 +427,8 @@ Challenge mode can also run head-to-head comparisons to generate stronger routin
 When quota pressure changes a routing decision, the control pane replays a single transparency line from the router or fallback path:
 
 ```text
-11:31:02 [router] constrained mode: claude-opus-4-7 quota is degrading; reserving it for high-complexity steps
-11:31:44 [coder] claude-opus-4-7 unavailable (quota); falling back to claude-sonnet-4-6
+11:31:02 [router] constrained mode: claude-opus-4-8 quota is degrading; reserving it for high-complexity steps
+11:31:44 [coder] claude-opus-4-8 unavailable (quota); falling back to claude-sonnet-4-6
 ```
 
 Healthy runs do not emit extra routing noise.

@@ -99,7 +99,7 @@ describe('resolveEffectiveModel', () => {
       workspaceSelector: 'opus',
       expectedLayer: 'workspace',
       expectedRequested: { kind: 'alias', family: 'opus', channel: 'stable' },
-      expectedResolved: 'claude-opus-4-7',
+      expectedResolved: 'claude-opus-4-8',
       expectedSource: 'alias',
       expectedFamilyChannel: 'stable',
     },
@@ -125,8 +125,8 @@ describe('resolveEffectiveModel', () => {
     {
       name: 'defaults when both workspace and user selectors are absent',
       expectedLayer: 'default',
-      expectedRequested: { kind: 'pinned', modelId: 'claude-opus-4-7' },
-      expectedResolved: 'claude-opus-4-7',
+      expectedRequested: { kind: 'pinned', modelId: 'claude-opus-4-8' },
+      expectedResolved: 'claude-opus-4-8',
       expectedSource: 'pinned',
     },
     {
@@ -135,7 +135,7 @@ describe('resolveEffectiveModel', () => {
       userOverride: 'inherit',
       expectedLayer: 'workspace',
       expectedRequested: { kind: 'alias', family: 'opus', channel: 'stable' },
-      expectedResolved: 'claude-opus-4-7',
+      expectedResolved: 'claude-opus-4-8',
       expectedSource: 'alias',
       expectedFamilyChannel: 'stable',
     },
@@ -156,24 +156,24 @@ describe('resolveEffectiveModel', () => {
       workspaceSelector: 'inherit',
       userOverride: 'inherit',
       expectedLayer: 'default',
-      expectedRequested: { kind: 'pinned', modelId: 'claude-opus-4-7' },
-      expectedResolved: 'claude-opus-4-7',
+      expectedRequested: { kind: 'pinned', modelId: 'claude-opus-4-8' },
+      expectedResolved: 'claude-opus-4-8',
       expectedSource: 'pinned',
     },
     {
       name: 'defaults when user inherit has no workspace selector',
       userOverride: 'inherit',
       expectedLayer: 'default',
-      expectedRequested: { kind: 'pinned', modelId: 'claude-opus-4-7' },
-      expectedResolved: 'claude-opus-4-7',
+      expectedRequested: { kind: 'pinned', modelId: 'claude-opus-4-8' },
+      expectedResolved: 'claude-opus-4-8',
       expectedSource: 'pinned',
     },
     {
       name: 'defaults when workspace inherit has no parent and no user override',
       workspaceSelector: 'inherit',
       expectedLayer: 'default',
-      expectedRequested: { kind: 'pinned', modelId: 'claude-opus-4-7' },
-      expectedResolved: 'claude-opus-4-7',
+      expectedRequested: { kind: 'pinned', modelId: 'claude-opus-4-8' },
+      expectedResolved: 'claude-opus-4-8',
       expectedSource: 'pinned',
     },
     {
@@ -213,7 +213,7 @@ describe('resolveEffectiveModel', () => {
       userOverride: 'opus',
       policyContext: makePolicyContext({
         quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
-          'claude-opus-4-7': 'exhausted',
+          'claude-opus-4-8': 'exhausted',
         }),
       }),
       expectedLayer: 'policy',
@@ -288,10 +288,11 @@ describe('resolveEffectiveModel', () => {
     const registry: ModelRegistry = {
       models: {
         'claude-opus-4-7': DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7'],
+        'claude-opus-4-8': DEFAULT_MODEL_REGISTRY.models['claude-opus-4-8'],
         'gpt-5.5': DEFAULT_MODEL_REGISTRY.models['gpt-5.5'],
       },
       ladders: {
-        review: ['claude-opus-4-7', 'gpt-5.5'],
+        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5'],
       },
     };
 
@@ -303,6 +304,7 @@ describe('resolveEffectiveModel', () => {
             registryOverride: registry,
             maxCostTier: 'strong_generalist',
             quotaState: makeQuotaSnapshot(registry, {
+              'claude-opus-4-8': 'exhausted',
               'claude-opus-4-7': 'exhausted',
               'gpt-5.5': 'exhausted',
             }),
@@ -321,9 +323,10 @@ describe('resolveEffectiveModel', () => {
     const registry: ModelRegistry = {
       models: {
         'claude-opus-4-7': DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7'],
+        'claude-opus-4-8': DEFAULT_MODEL_REGISTRY.models['claude-opus-4-8'],
       },
       ladders: {
-        review: ['claude-opus-4-7'],
+        review: ['claude-opus-4-8', 'claude-opus-4-7'],
       },
     };
 
@@ -335,6 +338,7 @@ describe('resolveEffectiveModel', () => {
             maxCostTier: 'strong_generalist',
             quotaState: makeQuotaSnapshot(registry, {
               'claude-opus-4-7': 'exhausted',
+              'claude-opus-4-8': 'exhausted',
             }),
           }),
         }),
@@ -391,7 +395,7 @@ describe('resolveEffectiveModel', () => {
 
     assert.equal(result.resolutionLayer, 'workspace');
     assert.deepEqual(result.requested, { kind: 'alias', family: 'opus', channel: 'stable' });
-    assert.equal(result.resolved, 'claude-opus-4-7');
+    assert.equal(result.resolved, 'claude-opus-4-8');
     assert.equal(result.source, 'alias');
   });
 
@@ -411,7 +415,7 @@ describe('resolveEffectiveModel', () => {
       policyContext: makePolicyContext(),
     });
 
-    assert.equal(root.resolved, 'claude-opus-4-7');
+    assert.equal(root.resolved, 'claude-opus-4-8');
     assert.equal(child.resolved, 'claude-haiku-4-5-20251001');
     assert.equal(grandchild.resolved, 'claude-haiku-4-5-20251001');
     assert.equal(grandchild.source, 'inherited');
