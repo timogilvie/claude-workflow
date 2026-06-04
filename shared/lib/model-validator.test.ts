@@ -24,6 +24,7 @@ describe('model-validator', () => {
       assert.ok(all.includes('gpt-5.4'), 'Should include gpt-5.4');
       assert.ok(all.includes('gpt-5.5'), 'Should include gpt-5.5');
       assert.ok(all.includes('claude-opus-4-6'), 'Should include claude-opus-4-6');
+      assert.ok(all.includes('claude-opus-4-8'), 'Should include claude-opus-4-8');
       assert.ok(all.includes('claude-opus-4-7'), 'Should include claude-opus-4-7');
       assert.ok(all.includes('claude-sonnet-4-6'), 'Should include claude-sonnet-4-6');
       assert.ok(all.includes('deepseek-v4-pro'), 'Should include deepseek-v4-pro');
@@ -40,6 +41,7 @@ describe('model-validator', () => {
       assert.ok(codexModels.includes('gpt-5.3-codex'), 'Codex should include gpt-5.3-codex');
       assert.ok(codexModels.includes('gpt-5.5'), 'Codex should include gpt-5.5');
       assert.ok(claudeModels.includes('claude-opus-4-6'), 'Claude should include claude-opus-4-6');
+      assert.ok(claudeModels.includes('claude-opus-4-8'), 'Claude should include claude-opus-4-8');
       assert.ok(claudeModels.includes('claude-opus-4-7'), 'Claude should include claude-opus-4-7');
       assert.ok(claudeModels.includes('deepseek-v4-pro'), 'Claude should include deepseek-v4-pro');
     });
@@ -59,6 +61,7 @@ describe('model-validator', () => {
       assert.strictEqual(isValidModel('gpt-5.4', '.'), true);
       assert.strictEqual(isValidModel('gpt-5.5', '.'), true);
       assert.strictEqual(isValidModel('claude-opus-4-6', '.'), true);
+      assert.strictEqual(isValidModel('claude-opus-4-8', '.'), true);
       assert.strictEqual(isValidModel('claude-opus-4-7', '.'), true);
       assert.strictEqual(isValidModel('claude-sonnet-4-6', '.'), true);
       assert.strictEqual(isValidModel('deepseek-v4-pro', '.'), true);
@@ -116,6 +119,9 @@ describe('model-validator', () => {
       });
       assert.doesNotThrow(() => {
         validateModelOrThrow('claude-opus-4-6', '.');
+      });
+      assert.doesNotThrow(() => {
+        validateModelOrThrow('claude-opus-4-8', '.');
       });
       assert.doesNotThrow(() => {
         validateModelOrThrow('claude-opus-4-7', '.');
@@ -269,7 +275,7 @@ describe('model-validator', () => {
   describe('resolveModelSelectorTokenOrThrow', () => {
     it('resolves aliases to concrete model IDs for launch', () => {
       const resolved = resolveModelSelectorTokenOrThrow('opus', 'reviewer', '.');
-      assert.equal(resolved.resolvedModelId, 'claude-opus-4-7');
+      assert.equal(resolved.resolvedModelId, 'claude-opus-4-8');
       assert.equal(resolved.token, 'opus');
       assert.equal(resolved.kind, 'alias');
     });

@@ -219,19 +219,22 @@ describe('wavemill CLI', () => {
   describe('hokusai command', () => {
     it('shows disabled status by default in an isolated HOME', () => {
       const fakeHome = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-home-'));
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-repo-'));
       try {
-        const out = run(['hokusai', 'status'], { HOME: fakeHome });
+        const out = run(['hokusai', 'status', '--repo-dir', repoDir], { HOME: fakeHome });
         assert.match(out, /Hokusai data submission: disabled/);
         assert.match(out, /Submission allowed: no/);
       } finally {
         rmSync(fakeHome, { recursive: true, force: true });
+        rmSync(repoDir, { recursive: true, force: true });
       }
     });
 
     it('returns contribution summary in status --json', () => {
       const fakeHome = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-home-'));
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-repo-'));
       try {
-        const out = run(['hokusai', 'status', '--json'], { HOME: fakeHome });
+        const out = run(['hokusai', 'status', '--json', '--repo-dir', repoDir], { HOME: fakeHome });
         const parsed = JSON.parse(out) as {
           contributions?: {
             pendingQueueCount: number;
@@ -248,6 +251,7 @@ describe('wavemill CLI', () => {
         assert.equal(parsed.contributions?.historyReadOnly, true);
       } finally {
         rmSync(fakeHome, { recursive: true, force: true });
+        rmSync(repoDir, { recursive: true, force: true });
       }
     });
   });

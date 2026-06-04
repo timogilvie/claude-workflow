@@ -150,6 +150,7 @@ function withChallengeRecommendation<T extends WorkflowRouteDecision>(decision: 
 }
 
 const DEFAULT_MODEL_POOL = [
+  'claude-opus-4-8',
   'claude-opus-4-7',
   'claude-sonnet-4-6',
   'claude-opus-4-6',
@@ -835,19 +836,19 @@ function downgradeModelsForBudget(params: {
 
   // Define downgrade tiers for each role (most expensive to cheapest)
   const coderTiers = [
-    ['gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
+    ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
     ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
     ['claude-haiku-4-5-20251001'],
   ];
 
   const plannerTiers = [
-    ['gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
+    ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
     ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
     ['claude-haiku-4-5-20251001'],
   ];
 
   const reviewerTiers = [
-    ['gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
+    ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
     ['claude-haiku-4-5-20251001'],
   ];
 
@@ -901,7 +902,7 @@ export function applyDifficultyFloor(
     if (floor.preferOpus) {
       const opus = pickAvailableModel(
         pool,
-        ['gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
+        ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
         model,
       );
       if (!opus.toLowerCase().includes('haiku')) {
@@ -927,7 +928,7 @@ export function applyDifficultyFloor(
   if (floor.preferOpus && isSonnetOrBelow) {
     const opus = pickAvailableModel(
       pool,
-      ['gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
+      ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
       model,
     );
     // Only upgrade if opus is actually in the pool
@@ -1065,17 +1066,17 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   });
 
   const planner = planDepth === 'deep'
-    ? pickAvailableModel(plannerPool, ['gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel)
+    ? pickAvailableModel(plannerPool, ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel)
     : pickAvailableModel(plannerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel);
 
   const coder = codeDepth === 'deep'
-    ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'], coderRecommendation.recommendedModel)
+    ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'], coderRecommendation.recommendedModel)
     : codeDepth === 'medium'
       ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'], coderRecommendation.recommendedModel)
       : pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'claude-haiku-4-5-20251001'], coderRecommendation.recommendedModel);
 
   const reviewer = reviewRecommended === 'static+llm'
-    ? pickAvailableModel(reviewerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.5', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', planner], planner)
+    ? pickAvailableModel(reviewerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', planner], planner)
     : reviewRecommended === 'llm'
       ? pickAvailableModel(reviewerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', planner], planner)
       : pickAvailableModel(reviewerPool, ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', planner], planner);

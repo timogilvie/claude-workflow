@@ -150,6 +150,7 @@ export interface ModelCapabilitiesOverride {
   class?: ModelRegistryClass;
   strengths?: string[];
   weaknesses?: string[];
+  disabled?: boolean;
   qualityScores?: Partial<Record<RegistryTaskType, number>>;
   pricing?: PricingEntry;
   defaultLadderEligible?: boolean;

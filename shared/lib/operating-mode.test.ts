@@ -120,10 +120,10 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
         },
       },
       ladders: {
-        planning: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
+        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
         classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
       },
     },
@@ -256,6 +256,7 @@ describe('operating-mode', () => {
 
   it('reads the persisted quota state and returns the matching mode', () => {
     writeQuotaState({
+      'claude-opus-4-8': 'degrading',
       'claude-opus-4-7': 'degrading',
       'claude-opus-4-6': 'degrading',
       'gpt-5.5': 'degrading',
@@ -309,6 +310,7 @@ describe('operating-mode', () => {
       writeQuotaState({
         'claude-opus-4-7': 'exhausted',
         'claude-opus-4-6': 'exhausted',
+        'claude-opus-4-8': 'exhausted',
         'gpt-5.4': 'healthy',
         'gpt-5.5': 'healthy',
       });
@@ -316,7 +318,7 @@ describe('operating-mode', () => {
       assert.equal(getCurrentOperatingMode(repoDir), 'normal');
       assert.equal(hasAnyHealthyModel(repoDir), true);
       assert.deepEqual(getOperatingModeResult(repoDir).vendorBreakdown, {
-        anthropic: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
+        anthropic: { healthy: 0, degraded: 0, exhausted: 3, total: 3 },
         openai: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
       });
     });
@@ -326,13 +328,14 @@ describe('operating-mode', () => {
       writeQuotaState({
         'claude-opus-4-7': 'degrading',
         'claude-opus-4-6': 'degrading',
+        'claude-opus-4-8': 'degrading',
         'gpt-5.4': 'degrading',
         'gpt-5.5': 'degrading',
       });
 
       assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
       assert.deepEqual(getOperatingModeResult(repoDir).vendorBreakdown, {
-        anthropic: { healthy: 0, degraded: 2, exhausted: 0, total: 2 },
+        anthropic: { healthy: 0, degraded: 3, exhausted: 0, total: 3 },
         openai: { healthy: 0, degraded: 2, exhausted: 0, total: 2 },
       });
     });
@@ -342,6 +345,7 @@ describe('operating-mode', () => {
       writeQuotaState({
         'claude-opus-4-7': 'exhausted',
         'claude-opus-4-6': 'exhausted',
+        'claude-opus-4-8': 'exhausted',
         'gpt-5.4': 'exhausted',
         'gpt-5.5': 'exhausted',
       });
@@ -363,6 +367,7 @@ describe('operating-mode', () => {
 
   it('exposes global and model modes through the CLI tool', () => {
     writeQuotaState({
+      'claude-opus-4-8': 'exhausted',
       'claude-opus-4-7': 'exhausted',
       'claude-opus-4-6': 'exhausted',
       'gpt-5.4': 'degrading',
@@ -389,12 +394,13 @@ describe('operating-mode', () => {
     writeQuotaState({
       'claude-opus-4-7': 'healthy',
       'claude-opus-4-6': 'degrading',
+      'claude-opus-4-8': 'healthy',
       'gpt-5.4': 'exhausted',
     });
 
     assert.equal(
       runOperatingModeTool(['global', '--verbose', '--repo-dir', repoDir]).stdout,
-      ['normal', 'Vendor breakdown:', '  anthropic: 1/2 healthy (1 degraded)', '  openai   : 1/2 healthy (1 exhausted)'].join('\n'),
+      ['normal', 'Vendor breakdown:', '  anthropic: 2/3 healthy (1 degraded)', '  openai   : 1/2 healthy (1 exhausted)'].join('\n'),
     );
   });
 
@@ -410,6 +416,10 @@ describe('operating-mode', () => {
       quota: {
         manualOverrides: {
           'claude-opus-4-7': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
+          'claude-opus-4-8': {
             status: 'degrading',
             reason: 'aggregate frontier capacity check',
           },
@@ -445,13 +455,14 @@ describe('operating-mode', () => {
 
       assert.equal(result.mode, 'normal');
       assert.deepEqual(result.vendorBreakdown, {
-        anthropic: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
+        anthropic: { healthy: 3, degraded: 0, exhausted: 0, total: 3 },
         openai: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
       });
     });
 
     it('returns constrained mode with degraded vendor counts', () => {
       writeQuotaState({
+        'claude-opus-4-8': 'healthy',
         'claude-opus-4-7': 'degrading',
         'claude-opus-4-6': 'exhausted',
         'gpt-5.5': 'degrading',
@@ -460,15 +471,16 @@ describe('operating-mode', () => {
 
       const result = getOperatingModeResult(repoDir);
 
-      assert.equal(result.mode, 'constrained');
+      assert.equal(result.mode, 'normal');
       assert.deepEqual(result.vendorBreakdown, {
-        anthropic: { healthy: 0, degraded: 1, exhausted: 1, total: 2 },
+        anthropic: { healthy: 1, degraded: 1, exhausted: 1, total: 3 },
         openai: { healthy: 0, degraded: 1, exhausted: 1, total: 2 },
       });
     });
 
     it('returns survival mode when all frontier models are exhausted', () => {
       writeQuotaState({
+        'claude-opus-4-8': 'exhausted',
         'claude-opus-4-7': 'exhausted',
         'claude-opus-4-6': 'exhausted',
         'gpt-5.5': 'exhausted',
@@ -479,7 +491,7 @@ describe('operating-mode', () => {
 
       assert.equal(result.mode, 'survival');
       assert.deepEqual(result.vendorBreakdown, {
-        anthropic: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
+        anthropic: { healthy: 0, degraded: 0, exhausted: 3, total: 3 },
         openai: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
       });
     });
@@ -497,6 +509,7 @@ describe('operating-mode', () => {
       }, null, 2), 'utf-8');
       clearConfigCache(repoDir);
       writeQuotaState({
+        'claude-opus-4-8': 'healthy',
         'claude-opus-4-7': 'healthy',
         'claude-opus-4-6': 'degrading',
         'gpt-5.4': 'exhausted',
@@ -506,7 +519,7 @@ describe('operating-mode', () => {
 
       assert.equal(result.mode, 'normal');
       assert.deepEqual(result.vendorBreakdown, {
-        anthropic: { healthy: 1, degraded: 1, exhausted: 0, total: 2 },
+        anthropic: { healthy: 2, degraded: 1, exhausted: 0, total: 3 },
         openai: { healthy: 1, degraded: 0, exhausted: 1, total: 2 },
       });
     });
@@ -516,6 +529,9 @@ describe('operating-mode', () => {
         modelRegistry: {
           models: {
             'claude-opus-4-7': {
+              class: 'strong_generalist',
+            },
+            'claude-opus-4-8': {
               class: 'strong_generalist',
             },
             'claude-opus-4-6': {

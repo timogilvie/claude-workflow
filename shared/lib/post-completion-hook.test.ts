@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
 import { clearConfigCache } from './config.ts';
-import { isEvalSuccess } from './eval-success-policy.ts';
+import { finalizeEvalSuccess } from './eval-success-policy.ts';
 import {
   collectPostCompletionOutcomes,
   enrichPostCompletionRecord,
@@ -594,7 +594,7 @@ await test('runPostCompletionEval persists outcomes and clears missing_outcome e
     const record = JSON.parse(persistedLines.at(-1) || '{}');
 
     assert.ok(record.outcomes);
-    assert.equal(record.outcomes.success, isEvalSuccess(record));
+    assert.equal(record.outcomes.success, finalizeEvalSuccess(record));
     assert.deepEqual(record.outcomes.ci, { ran: true, passed: true, checks: [] });
     assert.deepEqual(record.outcomes.tests, { added: true, passRate: 1 });
     assert.ok(!record.eligibilityErrors.includes('missing_outcome'));
