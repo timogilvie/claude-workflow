@@ -153,6 +153,8 @@ export interface ModelCapabilitiesOverride {
   qualityScores?: Partial<Record<RegistryTaskType, number>>;
   pricing?: PricingEntry;
   defaultLadderEligible?: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
   contextWindowTokens?: number;
   toolSupport?: ToolSupport;
   multimodal?: MultimodalSupport;

@@ -171,8 +171,8 @@
                 },
                 "model": {
                     "type": "string",
-                    "default": "claude-opus-4-7",
-                    "description": "Model selector for plan decomposition and research. Accepts a family alias such as 'opus', 'inherit', or a pinned model ID such as 'claude-opus-4-7'. Can be overridden with PLAN_MODEL env var."
+                    "default": "claude-opus-4-8",
+                    "description": "Model selector for plan decomposition and research. Accepts a family alias such as 'opus', 'inherit', or a pinned model ID such as 'claude-opus-4-8'. Can be overridden with PLAN_MODEL env var."
                 },
                 "interactive": {
                     "type": "boolean",
@@ -673,9 +673,9 @@
                 },
                 "comparisonModel": {
                     "type": "string",
-                    "default": "claude-opus-4-7",
+                    "default": "claude-opus-4-8",
                     "minLength": 1,
-                    "description": "Model selector used as the LLM judge for challenge PR comparison. Accepts a family alias such as 'opus', 'inherit', or a pinned model ID such as 'claude-opus-4-7'."
+                    "description": "Model selector used as the LLM judge for challenge PR comparison. Accepts a family alias such as 'opus', 'inherit', or a pinned model ID such as 'claude-opus-4-8'."
                 },
                 "autoMergeWinner": {
                     "type": "boolean",
@@ -1115,6 +1115,13 @@
                             },
                             "defaultLadderEligible": {
                                 "type": "boolean"
+                            },
+                            "disabled": {
+                                "type": "boolean"
+                            },
+                            "disabledReason": {
+                                "type": "string",
+                                "minLength": 1
                             },
                             "contextWindowTokens": {
                                 "type": "integer",

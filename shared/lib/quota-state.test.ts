@@ -107,6 +107,13 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
   writeRepoConfig(targetRepoDir, {
     modelRegistry: {
       models: {
+        'claude-opus-4-8': {
+          vendor: 'anthropic',
+          class: 'frontier',
+          strengths: ['long-horizon reasoning'],
+          weaknesses: ['api dependency'],
+          qualityScores: { planning: 95, coding: 92, review: 94, classify: 75, routing: 78 },
+        },
         'gpt-5.4': {
           vendor: 'openai',
           class: 'frontier',
@@ -130,10 +137,10 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
         },
       },
       ladders: {
-        planning: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro'],
+        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro'],
         classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro'],
       },
     },
@@ -569,6 +576,10 @@ describe('quota-state', () => {
       },
       quota: {
         manualOverrides: {
+          'claude-opus-4-8': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
           'claude-opus-4-7': {
             status: 'degrading',
             reason: 'aggregate frontier capacity check',
@@ -608,6 +619,14 @@ describe('quota-state', () => {
     writeMultiFrontierConfig(repoDir);
 
     recordLimitError({
+      modelId: 'claude-opus-4-8',
+      reason: '429 rate_limit',
+    }, repoDir);
+    recordLimitError({
+      modelId: 'claude-opus-4-8',
+      reason: 'quota_exhausted',
+    }, repoDir);
+    recordLimitError({
       modelId: 'claude-opus-4-7',
       reason: '429 rate_limit',
     }, repoDir);
@@ -629,13 +648,14 @@ describe('quota-state', () => {
 
     assert.equal(getCurrentOperatingMode(repoDir), 'normal');
     assert.deepEqual(getVendorQuotaBreakdown(readQuotaSnapshot(repoDir), [
+      { modelId: 'claude-opus-4-8', vendor: 'anthropic' },
       { modelId: 'claude-opus-4-7', vendor: 'anthropic' },
       { modelId: 'claude-opus-4-6', vendor: 'anthropic' },
       { modelId: 'gpt-5.5', vendor: 'openai' },
       { modelId: 'gpt-5.4', vendor: 'openai' },
       { modelId: 'deepseek-v4-pro', vendor: 'deepseek' },
     ]), {
-      anthropic: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
+      anthropic: { healthy: 0, degraded: 0, exhausted: 3, total: 3 },
       openai: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
       deepseek: { healthy: 1, degraded: 0, exhausted: 0, total: 1 },
     });
@@ -644,6 +664,10 @@ describe('quota-state', () => {
   it('derives constrained operating mode when every frontier vendor is degrading', () => {
     writeMultiFrontierConfig(repoDir);
 
+    recordLimitError({
+      modelId: 'claude-opus-4-8',
+      reason: '429 rate_limit',
+    }, repoDir);
     recordLimitError({
       modelId: 'claude-opus-4-7',
       reason: '429 rate_limit',
@@ -671,6 +695,7 @@ describe('quota-state', () => {
   it('derives survival operating mode when every frontier vendor is exhausted', () => {
     writeMultiFrontierConfig(repoDir);
 
+    markExhausted({ modelId: 'claude-opus-4-8', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'claude-opus-4-7', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'claude-opus-4-6', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'gpt-5.5', reason: 'quota_exhausted' }, repoDir);

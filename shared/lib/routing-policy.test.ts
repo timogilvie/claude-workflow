@@ -179,6 +179,7 @@ describe('routing-policy ranking', () => {
       taskType: 'coding',
       difficulty: 'critical',
       quotaState: makeSnapshot({
+        'claude-opus-4-8': 'exhausted',
         'claude-opus-4-7': 'exhausted',
         'claude-opus-4-6': 'exhausted',
         'gpt-5.5': 'exhausted',
@@ -740,11 +741,11 @@ describe('routing-policy integration', () => {
       const availableModels = (requestBody?.inputs as { routing?: Record<string, string[]> } | undefined)?.routing;
       assert.deepEqual(
         availableModels?.available_coder_models?.sort(),
-        ['claude-opus-4-6', 'claude-opus-4-7', 'gpt-5.4', 'gpt-5.5'].sort(),
+        ['claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.4', 'gpt-5.5'].sort(),
       );
       assert.deepEqual(
         availableModels?.available_planner_models?.sort(),
-        ['claude-opus-4-6', 'claude-opus-4-7', 'gpt-5.4', 'gpt-5.5'].sort(),
+        ['claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.4', 'gpt-5.5'].sort(),
       );
       assert.equal(decision.signals.taskDifficulty, 'critical');
     } finally {

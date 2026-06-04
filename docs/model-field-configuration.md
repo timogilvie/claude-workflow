@@ -5,7 +5,7 @@ The checked-in `model` field lets a workspace declare version-controlled routing
 Accepted values:
 - `"inherit"` defers to the next broader layer.
 - Family aliases such as `"opus"`, `"sonnet"`, `"haiku"`, `"gpt-5.5"`, and `"gemini-pro"` resolve to the current stable pin for that family.
-- Pinned model IDs such as `"claude-opus-4-7"`, `"claude-sonnet-4-6"`, and `"claude-haiku-4-5-20251001"` resolve exactly as written.
+- Pinned model IDs such as `"claude-opus-4-8"`, `"claude-sonnet-4-6"`, and `"claude-haiku-4-5-20251001"` resolve exactly as written.
 
 ## Agent Definitions
 
@@ -15,7 +15,7 @@ Before:
 {
   "router": {
     "availableModels": {
-      "planner": ["claude-opus-4-7"],
+      "planner": ["claude-opus-4-8"],
       "coder": ["gpt-5.5", "claude-sonnet-4-6"],
       "reviewer": ["claude-sonnet-4-6"]
     }
@@ -29,7 +29,7 @@ After:
 {
   "router": {
     "availableModels": {
-      "planner": ["claude-opus-4-7"],
+      "planner": ["claude-opus-4-8"],
       "coder": ["gpt-5.5", "claude-sonnet-4-6"],
       "reviewer": ["claude-sonnet-4-6"]
     }
@@ -62,7 +62,7 @@ After:
     "agentCmd": "codex"
   },
   "agents": {
-    "planner": { "model": "claude-opus-4-7" },
+    "planner": { "model": "claude-opus-4-8" },
     "coder": { "model": "sonnet" },
     "reviewer": { "model": "haiku" }
   }

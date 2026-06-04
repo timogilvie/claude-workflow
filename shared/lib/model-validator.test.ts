@@ -269,7 +269,7 @@ describe('model-validator', () => {
   describe('resolveModelSelectorTokenOrThrow', () => {
     it('resolves aliases to concrete model IDs for launch', () => {
       const resolved = resolveModelSelectorTokenOrThrow('opus', 'reviewer', '.');
-      assert.equal(resolved.resolvedModelId, 'claude-opus-4-7');
+      assert.equal(resolved.resolvedModelId, 'claude-opus-4-8');
       assert.equal(resolved.token, 'opus');
       assert.equal(resolved.kind, 'alias');
     });

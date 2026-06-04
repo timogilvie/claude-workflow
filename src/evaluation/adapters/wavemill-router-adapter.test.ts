@@ -36,9 +36,9 @@ test('replay_exact_match joins route artifacts and eval records', async () => {
     });
 
     assert.equal(result.score.workflow_success_rate_under_budget, 0.5);
-    assert.equal(result.score.wavemill_router_diagnostics.total_records, 4);
+    assert.equal(result.score.wavemill_router_diagnostics.total_records, 5);
     assert.equal(result.score.wavemill_router_diagnostics.scoreable_records, 2);
-    assert.equal(result.score.wavemill_router_diagnostics.invalid_route_records, 1);
+    assert.equal(result.score.wavemill_router_diagnostics.invalid_route_records, 2);
   } finally {
     cleanup(tmp);
   }
@@ -80,8 +80,8 @@ test('missing eval or artifact lowers scoreable coverage', async () => {
       persist: false,
     });
 
-    assert.equal(result.score.wavemill_router_diagnostics.total_records, 5);
-    assert.equal(result.score.wavemill_router_diagnostics.scoreable_coverage, 0.4);
+    assert.equal(result.score.wavemill_router_diagnostics.total_records, 6);
+    assert.equal(result.score.wavemill_router_diagnostics.scoreable_coverage, 0.333333);
   } finally {
     cleanup(tmp);
   }
@@ -101,7 +101,7 @@ test('malformed JSON is loaded leniently and classified as invalid', async () =>
 
     const invalid = result.records.find((record) => record.routePath?.endsWith('routing-complete.json'));
     assert.ok(invalid);
-    assert.equal(result.score.wavemill_router_diagnostics.invalid_route_rate, 0.25);
+    assert.equal(result.score.wavemill_router_diagnostics.invalid_route_rate, 0.4);
   } finally {
     cleanup(tmp);
   }

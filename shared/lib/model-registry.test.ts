@@ -136,6 +136,7 @@ function assertCapabilityMetadata(modelId: string, model: ModelRegistry['models'
 describe('model-registry', () => {
   it('seeds the canonical Claude defaults with complete metadata', () => {
     const expectedModels = [
+      'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',
       'claude-sonnet-4-6',
@@ -146,6 +147,7 @@ describe('model-registry', () => {
       'deepseek-v4-flash',
       'deepseek-v4-pro',
       'deepseek-v4-pro[1m]',
+      'gpt-5.3-codex',
       'gpt-5.5',
       'gpt-5.4',
     ];
@@ -171,7 +173,7 @@ describe('model-registry', () => {
   });
 
   it('getLadder returns configured default ladders', () => {
-    assert.equal(getLadder(DEFAULT_MODEL_REGISTRY, 'review')[0], 'claude-opus-4-7');
+    assert.equal(getLadder(DEFAULT_MODEL_REGISTRY, 'review')[0], 'claude-opus-4-8');
     assert.deepEqual(getLadder(DEFAULT_MODEL_REGISTRY, 'classify'), [
       'claude-haiku-4-5-20251001',
       'deepseek-v4-flash',
@@ -269,6 +271,7 @@ describe('model-registry', () => {
     });
 
     assert.deepEqual(once, [
+      'claude-opus-4-8',
       'claude-opus-4-7',
       'gpt-5.5',
       'gpt-5.4',
@@ -300,9 +303,10 @@ describe('model-registry', () => {
     assert.deepEqual(rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding'), [
       'gpt-5.5',
       'gpt-5.4',
+      'claude-opus-4-8',
+      'claude-opus-4-7',
       'deepseek-v4-pro',
       'claude-sonnet-4-6',
-      'claude-opus-4-7',
       'deepseek-chat',
       'deepseek-v4-flash',
       'claude-haiku-4-5-20251001',
@@ -578,7 +582,7 @@ describe('model-registry', () => {
       writeConfig(repoDir, {
         router: {
           availableModels: {
-            planner: ['gpt-5.5', 'claude-opus-4-7'],
+            planner: ['gpt-5.5', 'claude-opus-4-8'],
             coder: ['gpt-5.4', 'gpt-5.3-codex'],
             reviewer: ['claude-sonnet-4-6'],
           },
@@ -591,6 +595,7 @@ describe('model-registry', () => {
               strengths: ['coding'],
               weaknesses: ['none'],
               qualityScores: { coding: 89 },
+              disabled: false,
               contextWindowTokens: 128_000,
               toolSupport: 'full',
               multimodal: { text: true, image: false },
@@ -605,12 +610,12 @@ describe('model-registry', () => {
       });
       clearConfigCache(repoDir);
 
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.5', 'claude-opus-4-7']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.5', 'claude-opus-4-8']);
       assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4', 'gpt-5.3-codex']);
       assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['claude-sonnet-4-6']);
       assert.deepEqual(getConfiguredModelsForDescriptor(repoDir), [
         'gpt-5.5',
-        'claude-opus-4-7',
+        'claude-opus-4-8',
         'gpt-5.4',
         'gpt-5.3-codex',
         'claude-sonnet-4-6',
@@ -740,7 +745,7 @@ describe('parseModelSelector', () => {
   });
 
   it('keeps the existing stable pins in the channel registry', () => {
-    assert.equal(FAMILY_ALIASES.opus.channels.stable, 'claude-opus-4-7');
+    assert.equal(FAMILY_ALIASES.opus.channels.stable, 'claude-opus-4-8');
     assert.equal(FAMILY_ALIASES.sonnet.channels.stable, 'claude-sonnet-4-6');
     assert.equal(FAMILY_ALIASES.haiku.channels.stable, 'claude-haiku-4-5-20251001');
     assert.equal(FAMILY_ALIASES['gpt-5.5'].channels.stable, 'gpt-5.5');
@@ -1037,13 +1042,13 @@ describe('resolveSelectorWithPolicy', () => {
 
     assert.deepEqual(resolved, {
       requested: { kind: 'alias', family: 'opus' },
-      resolved: 'claude-opus-4-7',
+      resolved: 'claude-opus-4-8',
       source: 'alias',
       familyChannel: 'stable',
     });
   });
 
-  it('falls back to sonnet when opus quota is exhausted', () => {
+  it('falls back to the nearest same-vendor review downgrade when the stable Opus quota is exhausted', () => {
     const resolved = resolveSelectorWithPolicy(
       { kind: 'alias', family: 'opus' },
       undefined,
@@ -1051,6 +1056,7 @@ describe('resolveSelectorWithPolicy', () => {
         taskType: 'review',
         difficulty: 'moderate',
         quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-8': 'exhausted',
           'claude-opus-4-7': 'exhausted',
         }),
         registryOverride: DEFAULT_MODEL_REGISTRY,
@@ -1127,6 +1133,7 @@ describe('resolveSelectorWithPolicy', () => {
         taskType: 'review',
         difficulty: 'moderate',
         quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-8': 'exhausted',
           'claude-opus-4-7': 'exhausted',
         }),
         registryOverride: DEFAULT_MODEL_REGISTRY,
@@ -1142,11 +1149,11 @@ describe('resolveSelectorWithPolicy', () => {
   it('throws a typed error when no viable substitute exists', () => {
     const registry: ModelRegistry = {
       models: {
-        'claude-opus-4-7': DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7'],
-        'gpt-5.5': DEFAULT_MODEL_REGISTRY.models['gpt-5.5'],
+        'claude-opus-4-8': DEFAULT_MODEL_REGISTRY.models['claude-opus-4-8'],
+        'claude-sonnet-4-6': DEFAULT_MODEL_REGISTRY.models['claude-sonnet-4-6'],
       },
       ladders: {
-        review: ['claude-opus-4-7', 'gpt-5.5'],
+        review: ['claude-opus-4-8', 'claude-sonnet-4-6'],
       },
     };
 
@@ -1160,8 +1167,8 @@ describe('resolveSelectorWithPolicy', () => {
             difficulty: 'moderate',
             maxCostTier: 'strong_generalist',
             quotaState: makeQuotaSnapshot(registry, {
-              'claude-opus-4-7': 'exhausted',
-              'gpt-5.5': 'exhausted',
+              'claude-opus-4-8': 'exhausted',
+              'claude-sonnet-4-6': 'exhausted',
             }),
             registryOverride: registry,
           },
@@ -1185,6 +1192,7 @@ describe('resolveSelectorWithPolicy', () => {
         difficulty: 'moderate',
         maxCostTier: 'strong_generalist',
         quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-8': 'exhausted',
           'claude-opus-4-7': 'exhausted',
         }),
         registryOverride: DEFAULT_MODEL_REGISTRY,
@@ -1203,6 +1211,7 @@ describe('resolveSelectorWithPolicy', () => {
         taskType: 'review',
         difficulty: 'moderate',
         quotaState: makeQuotaSnapshot(DEFAULT_MODEL_REGISTRY, {
+          'claude-opus-4-8': 'exhausted',
           'claude-opus-4-7': 'exhausted',
         }),
         registryOverride: DEFAULT_MODEL_REGISTRY,

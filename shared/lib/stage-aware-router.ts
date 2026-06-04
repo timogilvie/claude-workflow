@@ -19,6 +19,7 @@ import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
 import {
   evaluateCapabilityConstraints,
+  filterDisabledModelIds,
   getConfiguredModelsForDescriptor,
   getEffectiveRegistry,
   hasCapabilityConstraints,
@@ -493,12 +494,14 @@ function stageCostFromRecord(
 function resolveModelsForRole(
   constraints: StageAwareConstraints,
   role: 'planner' | 'coder' | 'reviewer',
+  repoDir?: string,
 ): Set<string> | null {
+  const registry = getEffectiveRegistry(repoDir);
   // Preserve historical behavior for runtime/API allowlist overrides:
   // a flat `modelsAvailable` constraint applies to every stage and wins
   // over repo-configured per-stage defaults.
   if (constraints.modelsAvailable && constraints.modelsAvailable.length > 0) {
-    return new Set(constraints.modelsAvailable);
+    return new Set(filterDisabledModelIds(registry, constraints.modelsAvailable));
   }
 
   const stageModels = role === 'planner'
@@ -508,7 +511,7 @@ function resolveModelsForRole(
       : constraints.reviewerModelsAvailable;
 
   if (stageModels && stageModels.length > 0) {
-    return new Set(stageModels);
+    return new Set(filterDisabledModelIds(registry, stageModels));
   }
 
   return null;
@@ -541,7 +544,8 @@ function aggregateRoleRanking(
   rubricWeight: number,
   repoDir?: string,
 ): RoleRanking {
-  const allowedModels = resolveModelsForRole(constraints, role);
+  const allowedModels = resolveModelsForRole(constraints, role, repoDir);
+  const registry = getEffectiveRegistry(repoDir);
   const byModel = new Map<string, { scoreWeight: number; weightedScore: number; costWeight: number; weightedCost: number; support: number }>();
 
   for (const neighbor of neighbors) {
@@ -553,6 +557,9 @@ function aggregateRoleRanking(
       continue;
     }
     if (allowedModels && !allowedModels.has(modelId)) {
+      continue;
+    }
+    if (registry.models[modelId]?.disabled === true) {
       continue;
     }
 
@@ -595,7 +602,6 @@ function aggregateRoleRanking(
     return { role, stageKey, candidates };
   }
 
-  const registry = getEffectiveRegistry(repoDir);
   const constrainedCandidates = candidates.filter((candidate) => {
     const capabilities = registry.models[candidate.modelId];
     return capabilities && evaluateCapabilityConstraints(capabilities, capabilityConstraints).satisfied;
@@ -794,37 +800,38 @@ export function routeStageAwareWithContext(
   options: StageAwareOptions = {},
 ): StageAwareDecision | null {
   const { repoDir, routerConfig, records } = context;
+  const registry = getEffectiveRegistry(repoDir);
   const plannerModels = filterDeepSeekModels(
-    getAvailableModelsForStage(routerConfig, 'planner') || [],
+    filterDisabledModelIds(registry, getAvailableModelsForStage(routerConfig, 'planner') || []),
     repoDir,
     'planner',
   ).models;
   const coderModels = filterDeepSeekModels(
-    getAvailableModelsForStage(routerConfig, 'coder') || [],
+    filterDisabledModelIds(registry, getAvailableModelsForStage(routerConfig, 'coder') || []),
     repoDir,
     'coder',
   ).models;
   const reviewerModels = filterDeepSeekModels(
-    getAvailableModelsForStage(routerConfig, 'reviewer') || [],
+    filterDisabledModelIds(registry, getAvailableModelsForStage(routerConfig, 'reviewer') || []),
     repoDir,
     'reviewer',
   ).models;
   const filteredModelsAvailable = filterDeepSeekModels(
-    options.modelsAvailable || [],
+    filterDisabledModelIds(registry, options.modelsAvailable || []),
     repoDir,
   ).models;
   const filteredPlannerOptions = filterDeepSeekModels(
-    options.plannerModelsAvailable || [],
+    filterDisabledModelIds(registry, options.plannerModelsAvailable || []),
     repoDir,
     'planner',
   ).models;
   const filteredCoderOptions = filterDeepSeekModels(
-    options.coderModelsAvailable || [],
+    filterDisabledModelIds(registry, options.coderModelsAvailable || []),
     repoDir,
     'coder',
   ).models;
   const filteredReviewerOptions = filterDeepSeekModels(
-    options.reviewerModelsAvailable || [],
+    filterDisabledModelIds(registry, options.reviewerModelsAvailable || []),
     repoDir,
     'reviewer',
   ).models;

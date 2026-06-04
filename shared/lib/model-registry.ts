@@ -40,6 +40,8 @@ export interface ModelCapabilities {
     cacheReadCostPerMTok?: number;
   };
   defaultLadderEligible?: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
   contextWindowTokens: number;
   toolSupport: ToolSupport;
   multimodal: MultimodalSupport;
@@ -104,6 +106,8 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     qualityScores: { ...capabilities.qualityScores },
     pricing: capabilities.pricing ? { ...capabilities.pricing } : undefined,
     defaultLadderEligible: capabilities.defaultLadderEligible,
+    disabled: capabilities.disabled,
+    disabledReason: capabilities.disabledReason,
     contextWindowTokens: capabilities.contextWindowTokens,
     toolSupport: capabilities.toolSupport,
     multimodal: { ...capabilities.multimodal },
@@ -234,6 +238,8 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
     },
     pricing: override?.pricing ? { ...override.pricing } : undefined,
     defaultLadderEligible: override?.defaultLadderEligible ?? true,
+    disabled: override?.disabled ?? false,
+    disabledReason: override?.disabledReason,
     contextWindowTokens: override?.contextWindowTokens ?? 128_000,
     toolSupport: override?.toolSupport ?? 'full',
     multimodal: override?.multimodal ? { ...override.multimodal } : { text: true, image: false },
@@ -262,6 +268,8 @@ function mergeCapabilities(
     },
     pricing: override.pricing ? { ...override.pricing } : seed.pricing ? { ...seed.pricing } : undefined,
     defaultLadderEligible: override.defaultLadderEligible ?? seed.defaultLadderEligible ?? true,
+    disabled: override.disabled ?? seed.disabled ?? false,
+    disabledReason: override.disabledReason ?? seed.disabledReason,
     contextWindowTokens: override.contextWindowTokens ?? seed.contextWindowTokens,
     toolSupport: override.toolSupport ?? seed.toolSupport,
     multimodal: override.multimodal ? { ...override.multimodal } : { ...seed.multimodal },
@@ -380,7 +388,7 @@ export class ModelResolutionError extends Error {
 export const FAMILY_ALIASES = Object.freeze({
   opus: Object.freeze({
     channels: Object.freeze({
-      stable: 'claude-opus-4-7',
+      stable: 'claude-opus-4-8',
     }),
     description: 'Stable Anthropic frontier alias for the Opus family.',
   }),
@@ -635,6 +643,26 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
 
 export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
   models: {
+    'claude-opus-4-8': {
+      vendor: 'anthropic',
+      class: 'frontier',
+      strengths: ['long-horizon reasoning', 'code review', 'architecture'],
+      weaknesses: ['higher cost', 'slower'],
+      qualityScores: scores(62, 97, 87, 97, 62),
+      pricing: {
+        inputCostPerMTok: 5,
+        outputCostPerMTok: 25,
+        cacheWriteCostPerMTok: 6.25,
+        cacheReadCostPerMTok: 0.5,
+      },
+      contextWindowTokens: 200_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 5,
+      costPerMillionOutputTokensUsd: 25,
+    },
     'claude-opus-4-7': {
       vendor: 'anthropic',
       class: 'frontier',
@@ -772,6 +800,28 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 2.5,
       costPerMillionOutputTokensUsd: 15,
     },
+    'gpt-5.3-codex': {
+      vendor: 'openai',
+      class: 'frontier',
+      strengths: ['historical Codex compatibility', 'code generation'],
+      weaknesses: ['unsupported with ChatGPT-backed Codex accounts'],
+      qualityScores: scores(57, 89, 88, 88, 57),
+      pricing: {
+        inputCostPerMTok: 1.75,
+        outputCostPerMTok: 14,
+        cacheReadCostPerMTok: 0.44,
+      },
+      defaultLadderEligible: false,
+      disabled: true,
+      disabledReason: 'Unsupported for Codex with ChatGPT accounts (HTTP 400 invalid_request_error).',
+      contextWindowTokens: 256_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 1.75,
+      costPerMillionOutputTokensUsd: 14,
+    },
     'deepseek-v4-pro': {
       vendor: 'deepseek',
       class: 'strong_generalist',
@@ -884,10 +934,10 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     },
   },
   ladders: {
-    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-opus-4-7'],
-    planning: ['gpt-5.5', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    coding: ['gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
-    review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
+    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-opus-4-8', 'claude-opus-4-7'],
+    planning: ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    coding: ['gpt-5.5', 'gpt-5.4', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
+    review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
     classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
   },
 };
@@ -899,12 +949,26 @@ export function getModel(registry: ModelRegistry, modelId: string): ModelCapabil
   return registry.models[modelId];
 }
 
+export function isModelDisabled(
+  registry: ModelRegistry,
+  modelId: string,
+): boolean {
+  return registry.models[modelId]?.disabled === true;
+}
+
+export function filterDisabledModelIds(
+  registry: ModelRegistry,
+  modelIds: readonly string[],
+): string[] {
+  return modelIds.filter((modelId) => !isModelDisabled(registry, modelId));
+}
+
 export function getLadder(registry: ModelRegistry, taskType: RegistryTaskType): string[] {
   const configured = registry.ladders[taskType];
   if (configured) {
     return configured.filter((modelId) => {
       if (registry.models[modelId]) {
-        return true;
+        return !isModelDisabled(registry, modelId);
       }
       warnUnknownModel(taskType, modelId);
       return false;
@@ -913,6 +977,7 @@ export function getLadder(registry: ModelRegistry, taskType: RegistryTaskType): 
 
   return Object.entries(registry.models)
     .filter(([, capabilities]) => capabilities.defaultLadderEligible !== false)
+    .filter(([, capabilities]) => capabilities.disabled !== true)
     .filter(([, capabilities]) => Number.isFinite(capabilities.qualityScores[taskType]))
     .sort((left, right) => compareModels(taskType, left, right))
     .filter(([, capabilities]) => capabilities.qualityScores[taskType] > 0)
@@ -925,7 +990,10 @@ export function rankCandidates(
   opts?: { excluded?: string[] },
 ): string[] {
   const excluded = new Set(opts?.excluded ?? []);
-  return getLadder(registry, taskType).filter((modelId) => !excluded.has(modelId));
+  return filterDisabledModelIds(
+    registry,
+    getLadder(registry, taskType).filter((modelId) => !excluded.has(modelId)),
+  );
 }
 
 /**
@@ -966,12 +1034,13 @@ export function getConfiguredModelsForDescriptorStage(
   repoDir: string | undefined,
   stage: DescriptorModelStage,
 ): string[] {
+  const registry = getEffectiveRegistry(repoDir);
   const configuredModels = getAvailableModelsForStage(getRouterConfig(repoDir), stage);
   if (configuredModels && configuredModels.length > 0) {
-    return dedupeModelIds(configuredModels);
+    return dedupeModelIds(filterDisabledModelIds(registry, configuredModels));
   }
 
-  return dedupeModelIds(getLadder(getEffectiveRegistry(repoDir), DESCRIPTOR_STAGE_TO_TASK_TYPE[stage]));
+  return dedupeModelIds(getLadder(registry, DESCRIPTOR_STAGE_TO_TASK_TYPE[stage]));
 }
 
 export function getConfiguredModelsForDescriptor(repoDir?: string): string[] {

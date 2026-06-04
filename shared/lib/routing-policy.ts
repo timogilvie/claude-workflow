@@ -1,6 +1,7 @@
 import {
   CLASS_RANK,
   evaluateCapabilityConstraints,
+  filterDisabledModelIds,
   getEffectiveRegistry,
   getLadder,
   hasCapabilityConstraints,
@@ -126,7 +127,9 @@ function filterProviderUnavailableModels(
   registry: ModelRegistry,
   repoDir?: string,
 ): ModelRegistry {
-  const allowedModelIds = new Set(filterDeepSeekModels(Object.keys(registry.models), repoDir).models);
+  const allowedModelIds = new Set(
+    filterDeepSeekModels(filterDisabledModelIds(registry, Object.keys(registry.models)), repoDir).models,
+  );
 
   return {
     models: Object.fromEntries(
