@@ -5,6 +5,7 @@
  */
 
 import { getHokusaiRouterConfig } from './config.ts';
+import { resolveEnvValue } from './env-file.ts';
 import { errorMessage } from './error-utils.ts';
 import { fromHokusaiModel30Response } from './hokusai-adapter.ts';
 import {
@@ -72,7 +73,7 @@ export function isHokusaiModel30Response(value: unknown): value is HokusaiModel3
 function resolveConfiguredAuthToken(repoDir?: string): string | undefined {
   const config = getHokusaiRouterConfig(repoDir);
   const envVarName = config.apiKeyEnv || 'HOKUSAI_API_TOKEN';
-  const envToken = process.env[envVarName]?.trim();
+  const envToken = resolveEnvValue([envVarName, 'HOKUSAI_API_KEY'], repoDir);
   if (envToken) {
     return envToken;
   }

@@ -25,6 +25,7 @@ import {
   type CapabilityConstraints,
 } from './model-registry.ts';
 import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
+import { filterDisabledModels } from './disabled-models.ts';
 
 export interface StageAwareConstraints {
   modelsAvailable?: string[];
@@ -795,36 +796,36 @@ export function routeStageAwareWithContext(
 ): StageAwareDecision | null {
   const { repoDir, routerConfig, records } = context;
   const plannerModels = filterDeepSeekModels(
-    getAvailableModelsForStage(routerConfig, 'planner') || [],
+    filterDisabledModels(getAvailableModelsForStage(routerConfig, 'planner') || []),
     repoDir,
     'planner',
   ).models;
   const coderModels = filterDeepSeekModels(
-    getAvailableModelsForStage(routerConfig, 'coder') || [],
+    filterDisabledModels(getAvailableModelsForStage(routerConfig, 'coder') || []),
     repoDir,
     'coder',
   ).models;
   const reviewerModels = filterDeepSeekModels(
-    getAvailableModelsForStage(routerConfig, 'reviewer') || [],
+    filterDisabledModels(getAvailableModelsForStage(routerConfig, 'reviewer') || []),
     repoDir,
     'reviewer',
   ).models;
   const filteredModelsAvailable = filterDeepSeekModels(
-    options.modelsAvailable || [],
+    filterDisabledModels(options.modelsAvailable || []),
     repoDir,
   ).models;
   const filteredPlannerOptions = filterDeepSeekModels(
-    options.plannerModelsAvailable || [],
+    filterDisabledModels(options.plannerModelsAvailable || []),
     repoDir,
     'planner',
   ).models;
   const filteredCoderOptions = filterDeepSeekModels(
-    options.coderModelsAvailable || [],
+    filterDisabledModels(options.coderModelsAvailable || []),
     repoDir,
     'coder',
   ).models;
   const filteredReviewerOptions = filterDeepSeekModels(
-    options.reviewerModelsAvailable || [],
+    filterDisabledModels(options.reviewerModelsAvailable || []),
     repoDir,
     'reviewer',
   ).models;

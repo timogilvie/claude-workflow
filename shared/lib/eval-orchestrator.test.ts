@@ -182,7 +182,7 @@ describe('eval-orchestrator', () => {
     }));
     mock.method(evalOrchestratorDeps, 'computeWorkflowCost', () => costOutcome);
     mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => undefined);
-    mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => undefined);
+    mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => ({ status: 'disabled' }));
     mock.method(evalOrchestratorDeps, 'evaluateTask', async (input, outcomes) => {
       evaluateTaskInput = input as Record<string, unknown>;
       const timeSeconds =
@@ -432,6 +432,7 @@ describe('eval-orchestrator', () => {
       order.push('trigger');
       triggeredRecord = record;
       triggeredRepoDir = options.repoDir;
+      return { status: 'enqueued', drainStarted: true };
     });
 
     const record = await runEvaluation({
@@ -450,7 +451,7 @@ describe('eval-orchestrator', () => {
   });
 
   it('does not trigger Hokusai submission when persistence fails', async () => {
-    const trigger = mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => undefined);
+    const trigger = mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async () => ({ status: 'disabled' }));
     mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => {
       throw new Error('disk full');
     });
@@ -466,25 +467,32 @@ describe('eval-orchestrator', () => {
     assert.equal(trigger.mock.calls.length, 0);
   });
 
-  it('returns without waiting for the Hokusai trigger promise', async () => {
+  it('waits for the Hokusai trigger before returning', async () => {
     let resolveTrigger: (() => void) | undefined;
     mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', () => new Promise((resolve) => {
-      resolveTrigger = resolve;
+      resolveTrigger = () => resolve({ status: 'enqueued', drainStarted: true });
     }));
 
+    const run = runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'codex',
+    }).then(() => 'resolved');
+
     const result = await Promise.race([
-      runEvaluation({
-        issueId: 'HOK-1495',
-        prNumber: '1495',
-        repoDir,
-        worktreePath: repoDir,
-        agentType: 'codex',
-      }).then(() => 'resolved'),
+      run,
       new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 25)),
     ]);
 
-    assert.equal(result, 'resolved');
+    assert.equal(result, 'timeout');
     resolveTrigger?.();
+    const completed = await Promise.race([
+      run,
+      new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 25)),
+    ]);
+    assert.equal(completed, 'resolved');
   });
 
   it('logs and swallows trigger rejections', async () => {

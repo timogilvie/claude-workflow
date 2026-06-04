@@ -225,7 +225,7 @@ test('recommends stage-specific challenge when a stage lacks data', () => {
     assert.equal(result.reason, 'low-data-stage');
     assert.equal(result.stage, 'implementation');
     assert.equal(result.defaultModel, 'gpt-5.4');
-    assert.equal(result.challengerModel, 'gpt-5.3-codex');
+    assert.equal(result.challengerModel, 'claude-sonnet-4-5-20250929');
   } finally {
     cleanup();
   }

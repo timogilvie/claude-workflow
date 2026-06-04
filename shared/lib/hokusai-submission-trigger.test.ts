@@ -146,9 +146,8 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(readFileSync(pendingPath, 'utf-8').includes('HOK-1243'), false);
   });
 
-  it('skips ineligible records without warning', async () => {
+  it('enqueues missing cost as null without counting it under budget', async () => {
     const { repoDir, configDir } = makeRepo(true);
-    const warn = mock.method(console, 'warn', () => undefined);
 
     await triggerHokusaiSubmission(makeEligibleRecord({ workflowCost: undefined }), {
       repoDir,
@@ -156,8 +155,17 @@ describe('hokusai-submission-trigger', () => {
       redactionSalt: 'c'.repeat(64),
     });
 
-    assert.equal(existsSync(join(repoDir, '.wavemill', 'hokusai')), false);
-    assert.equal(warn.mock.calls.length, 0);
+    const pendingPath = join(repoDir, '.wavemill', 'hokusai', 'queue', 'pending.jsonl');
+    const [line] = readFileSync(pendingPath, 'utf-8').trim().split('\n');
+    const entry = JSON.parse(line) as {
+      row: {
+        actual_cost_usd?: number | null;
+        success_under_budget?: boolean;
+      };
+    };
+
+    assert.equal(entry.row.actual_cost_usd, null);
+    assert.equal(entry.row.success_under_budget, false);
   });
 
   it('warns and swallows redaction failures', async () => {

@@ -34,6 +34,7 @@ import type { RuntimeResourceSelection } from './resource-selection.ts';
 import type { RouteProvenance } from './route-artifact.ts';
 import { isDeepSeekLikeModelId } from './model-registry.ts';
 import { validateModelOrThrow } from './model-validator.ts';
+import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -431,7 +432,7 @@ function filterProviderPool(
   repoDir?: string,
   stage?: 'planner' | 'coder' | 'reviewer',
 ): ResolvedModelPool {
-  const filtered = filterDeepSeekModels(models, repoDir, stage);
+  const filtered = filterDeepSeekModels(filterDisabledModels(models), repoDir, stage);
   return {
     models: filtered.models,
     warnings: filtered.warnings,
@@ -1650,6 +1651,10 @@ export async function routeWorkflowHokusai(
     reviewerModels: policyResolution?.policyStagePools.reviewerModels,
   });
   if (!decision) {
+    return routeWorkflowStageAware(prompt, options);
+  }
+  if (isDisabledModel(decision.planner) || isDisabledModel(decision.coder) || isDisabledModel(decision.reviewer)) {
+    routerLog(`hokusai routing returned disabled model; falling back to local routing: planner=${decision.planner} coder=${decision.coder} reviewer=${decision.reviewer}`);
     return routeWorkflowStageAware(prompt, options);
   }
 

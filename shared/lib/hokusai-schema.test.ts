@@ -733,11 +733,14 @@ describe('hokusai-schema', () => {
       );
     });
 
-    it('returns eligibility failure when workflowCost is missing', () => {
-      expectFailure(
-        toHokusaiSubmission(makeRecord({ workflowCost: undefined })),
-        ['missing_cost'],
-      );
+    it('uses null actual_cost_usd when workflowCost is missing', () => {
+      const result = expectSuccess(toHokusaiSubmission(makeRecord({
+        workflowCost: undefined,
+        trainingEligible: true,
+        eligibilityErrors: ['missing_cost'],
+      })));
+
+      assert.equal(result.observed_outcomes.actual_cost_usd, null);
     });
 
     it('accepts zero timeSeconds and zero workflowCost as valid observed outcomes', () => {
@@ -1010,7 +1013,7 @@ describe('hokusai-schema', () => {
 
       assert.equal(result.valid, false);
       assert.deepEqual(result.errors, [
-        'observed_outcomes.actual_cost_usd must be a non-negative number',
+        'observed_outcomes.actual_cost_usd must be null or a non-negative number',
       ]);
     });
 
@@ -1044,7 +1047,7 @@ describe('hokusai-schema', () => {
         'route_taken.coder_model must be a non-empty string',
         'route_taken.reviewer_model must be a non-empty string',
         'observed_outcomes.completed_successfully must be a boolean',
-        'observed_outcomes.actual_cost_usd must be a non-negative number',
+        'observed_outcomes.actual_cost_usd must be null or a non-negative number',
         'observed_outcomes.actual_time_seconds must be null or a non-negative number',
         'observed_outcomes.intervention_count must be a non-negative integer',
         'constraints.max_cost_usd must be null or a non-negative number',

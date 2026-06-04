@@ -110,7 +110,6 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
       'claude-opus-4-6': 'claude',
       'claude-sonnet-4-5-20250929': 'claude',
       'claude-haiku-4-5-20251001': 'claude',
-      'gpt-5.3-codex': 'codex',
       'gpt-5.4': 'codex',
       'gpt-5.5': 'codex',
     },

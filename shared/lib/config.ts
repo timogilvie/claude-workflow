@@ -195,6 +195,7 @@ export interface EvalConfig {
   pricing?: Record<string, PricingEntry>;
   interventionPenalties?: InterventionPenaltiesConfig;
   successThreshold?: number;
+  postMergeTimeoutSeconds?: number;
   mintEligibility?: MintEligibilityConfig;
   maxPromptBytes?: number;
   oversizePolicy?: 'fail' | 'truncate';
@@ -1125,7 +1126,12 @@ export function getMergeQueueConfig(repoDir?: string): Required<MergeQueueConfig
  * Returns defaults when not configured.
  */
 export function getIntegrationConfig(repoDir?: string): IntegrationConfig {
-  return { ...INTEGRATION_DEFAULTS, ...(loadWavemillConfig(repoDir).integration ?? {}) };
+  const config = loadWavemillConfig(repoDir);
+  const integration = { ...INTEGRATION_DEFAULTS, ...(config.integration ?? {}) };
+  if (!config.integration?.integrationBranch && config.mill?.baseBranch) {
+    integration.integrationBranch = config.mill.baseBranch;
+  }
+  return integration;
 }
 
 /**
