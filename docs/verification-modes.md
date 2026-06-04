@@ -72,7 +72,7 @@ Running test: npm test
 
 ✓ All verification checks passed
 
-Second-pass review will be required (stronger reviewer available: claude-opus-4-7)
+Second-pass review will be required (stronger reviewer available: claude-opus-4-8)
 ```
 
 ### Mode 3: Weak Model + No Strong Reviewer (Degraded Mode)
@@ -296,7 +296,7 @@ To run verification manually:
 ```bash
 # Set up routing metadata
 export WAVEMILL_CODER_MODEL=claude-haiku-4-5-20251001
-export WAVEMILL_AVAILABLE_REVIEWERS=claude-opus-4-7,claude-sonnet-4-6
+export WAVEMILL_AVAILABLE_REVIEWERS=claude-opus-4-8,claude-sonnet-4-6
 export WAVEMILL_REPO_DIR=/path/to/repo
 
 # Run verification

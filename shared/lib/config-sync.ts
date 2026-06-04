@@ -30,7 +30,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
   plan: {
     maxDisplay: 9,
     research: false,
-    model: 'claude-opus-4-7',
+    model: 'claude-opus-4-8',
     interactive: true,
   },
   eval: {
@@ -45,6 +45,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     },
     pricing: {
       'claude-opus-4-6': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
+      'claude-opus-4-8': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       'claude-opus-4-7': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
       'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
@@ -76,14 +77,14 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     models: [
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
+      'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',
       'claude-haiku-4-5-20251001',
-      'gpt-5.3-codex',
       'gpt-5.4',
       'gpt-5.5',
     ],
-    comparisonModel: 'claude-opus-4-7',
+    comparisonModel: 'claude-opus-4-8',
     autoMergeWinner: false,
   },
   review: {
@@ -99,10 +100,11 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     minModels: 2,
     models: [],
     availableModels: {
-      planner: ['claude-opus-4-7', 'claude-sonnet-4-6', 'gpt-5.4', 'gpt-5.5'],
+      planner: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-4-6', 'gpt-5.4', 'gpt-5.5'],
     },
     defaultAgent: 'claude',
     agentMap: {
+      'claude-opus-4-8': 'claude',
       'claude-opus-4-7': 'claude',
       'claude-sonnet-4-6': 'claude',
       'claude-opus-4-6': 'claude',

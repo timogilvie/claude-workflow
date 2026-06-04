@@ -27,6 +27,7 @@ export interface RoutingPolicy {
 
 export type ExclusionReason =
   | 'quota-exhausted'
+  | 'disabled-by-policy'
   | 'below-difficulty-floor'
   | 'below-quality-threshold'
   | 'exceeds-cost-tier'
@@ -195,6 +196,10 @@ export function resolveModel(
       ? evaluateCapabilityConstraints(capabilities, policy.capabilityConstraints)
       : { satisfied: true, failedConstraints: [] };
     const exclusionReason = (() => {
+      if (capabilities.disabled === true) {
+        return 'disabled-by-policy' satisfies ExclusionReason;
+      }
+
       if (status === 'exhausted') {
         return 'quota-exhausted' satisfies ExclusionReason;
       }
