@@ -50,6 +50,7 @@ function makeRepo(configOverrides: Record<string, unknown> = {}): { repoDir: str
 const originalFetch = globalThis.fetch;
 const originalWarn = console.warn;
 const originalToken = process.env.TEST_HOKUSAI_TOKEN;
+const originalApiKey = process.env.HOKUSAI_API_KEY;
 
 console.log('\n--- hokusai-router Tests ---\n');
 
@@ -200,6 +201,36 @@ await test('missing auth fails fast and never sends a request', async () => {
   }
 });
 
+await test('loads bearer token from repo .env using HOKUSAI_API_KEY alias', async () => {
+  const { repoDir, cleanup } = makeRepo();
+  delete process.env.TEST_HOKUSAI_TOKEN;
+  delete process.env.HOKUSAI_API_KEY;
+  writeFileSync(join(repoDir, '.env'), 'HOKUSAI_API_KEY=repo-secret\n');
+  let authorization = '';
+  globalThis.fetch = async (_input, init) => {
+    authorization = String((init?.headers as Record<string, string>).authorization ?? '');
+    return new Response(JSON.stringify({
+      predictions: {
+        recommended_strategy: {
+          planner_model: 'planner',
+          coder_model: 'coder',
+          reviewer_model: 'reviewer',
+        },
+      },
+      metadata: {},
+    }), { status: 200 });
+  };
+
+  try {
+    const decision = await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
+    assert.ok(decision);
+    assert.equal(authorization, 'Bearer repo-secret');
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
 await test('timeout handling returns null and classifies timeout', async () => {
   const { repoDir, cleanup } = makeRepo();
   process.env.TEST_HOKUSAI_TOKEN = 'secret-token';
@@ -297,6 +328,11 @@ if (originalToken === undefined) {
   delete process.env.TEST_HOKUSAI_TOKEN;
 } else {
   process.env.TEST_HOKUSAI_TOKEN = originalToken;
+}
+if (originalApiKey === undefined) {
+  delete process.env.HOKUSAI_API_KEY;
+} else {
+  process.env.HOKUSAI_API_KEY = originalApiKey;
 }
 if (failed > 0) {
   process.exit(1);

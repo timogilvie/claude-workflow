@@ -81,11 +81,31 @@ describe('hokusai-contribution-builder', () => {
     });
   });
 
+  it('preserves null actual cost in submit-data rows', () => {
+    const row = buildSubmitDataContributionRow(makeProjection({
+      actualCostUsd: null,
+      budgetCompliant: false,
+    }));
+
+    assert.equal(row.actual_cost_usd, null);
+    assert.equal(row.success_under_budget, false);
+  });
+
   it('builds a benchmark row', () => {
     const row = buildTechnicalTaskRouterContributionRow(makeProjection());
     assert.equal(row.completion_result, 'success');
     assert.equal(row.success_under_budget, true);
     assert.equal(row.selected_models.coder, 'coder-a');
+  });
+
+  it('preserves null actual cost in benchmark rows', () => {
+    const row = buildTechnicalTaskRouterContributionRow(makeProjection({
+      actualCostUsd: null,
+      budgetCompliant: false,
+    }));
+
+    assert.equal(row.actual_cost_usd, null);
+    assert.equal(row.success_under_budget, false);
   });
 
   it('uses observed success plus budget compliance for success_under_budget', () => {

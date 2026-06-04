@@ -5,6 +5,7 @@ import {
   type ModelCapabilitiesOverride,
   type ModelRegistryConfig,
 } from './config.ts';
+import { filterDisabledModels } from './disabled-models.ts';
 
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
@@ -1023,12 +1024,19 @@ export function getConfiguredModelsForDescriptorStage(
   stage: DescriptorModelStage,
 ): string[] {
   const registry = getEffectiveRegistry(repoDir);
+  const filterDescriptorModels = (modelIds: string[]): string[] =>
+    filterDisabledModels(dedupeModelIds(modelIds))
+      .filter((modelId) => {
+        const capabilities = registry.models[modelId];
+        return capabilities === undefined || isModelEnabled(capabilities);
+      });
+
   const configuredModels = getAvailableModelsForStage(getRouterConfig(repoDir), stage);
   if (configuredModels && configuredModels.length > 0) {
-    return dedupeModelIds(configuredModels).filter((modelId) => isModelEnabled(registry.models[modelId]));
+    return filterDescriptorModels(configuredModels);
   }
 
-  return dedupeModelIds(getLadder(registry, DESCRIPTOR_STAGE_TO_TASK_TYPE[stage]));
+  return filterDescriptorModels(getLadder(registry, DESCRIPTOR_STAGE_TO_TASK_TYPE[stage]));
 }
 
 export function getConfiguredModelsForDescriptor(repoDir?: string): string[] {

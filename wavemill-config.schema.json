@@ -470,6 +470,13 @@
                     "maximum": 1,
                     "description": "Canonical score threshold used when eval outcomes.success is missing. Defaults to 0.8 when omitted."
                 },
+                "postMergeTimeoutSeconds": {
+                    "type": "integer",
+                    "minimum": 30,
+                    "maximum": 1800,
+                    "default": 180,
+                    "description": "Wall-clock timeout in seconds for detached post-merge eval hook processes. Defaults to 180 when omitted."
+                },
                 "maxPromptBytes": {
                     "type": "integer",
                     "minimum": 1024,

@@ -9,6 +9,7 @@ import {
 } from './stage-aware-router.ts';
 import { routeBatch, routeExpandedPackets, tasksFromPlan } from './route-batch.ts';
 import { routeWorkflowAuto } from './workflow-router.ts';
+import { withResolvedRouteBudget } from './route-artifact.ts';
 
 let passed = 0;
 let failed = 0;
@@ -251,7 +252,7 @@ await test('batch decisions match serial auto routing and reuse eval loading', a
         const { provenance: _provenance, ...rest } = decision as typeof decision & { provenance?: unknown };
         return rest;
       }),
-      serialDecisions.map((decision) => ({ ...decision, maxCostUsd: null })),
+      serialDecisions.map((decision) => withResolvedRouteBudget(decision, { repoDir })),
     );
     for (const { decision } of batchResults) {
       assert.ok(decision.provenance);

@@ -42,7 +42,7 @@ function shellHarness(overrides: {
   promotionHeadPushError?: string;
   fetchError?: string;
   integrationFetchError?: string;
-  mergeTreeResult?: 'clean' | 'conflicts' | 'unknown';
+  mergeTreeResult?: 'clean' | 'conflicts' | 'unknown' | 'conflicts-exit-status';
   statusPorcelain?: string;
   branchProtection?:
     | 'unprotected'
@@ -186,6 +186,13 @@ function shellHarness(overrides: {
       if (cmd === "git merge-tree --write-tree 'auto/integration' 'origin/main'") {
         if (overrides.mergeTreeResult === 'conflicts') throw new Error('merge-tree conflict');
         if (overrides.mergeTreeResult === 'unknown') throw new Error('merge-tree unavailable');
+        if (overrides.mergeTreeResult === 'conflicts-exit-status') {
+          // Mirror real execSync behaviour: git merge-tree exits 1 on conflict but
+          // writes the conflict list to stdout, so the error message has no "conflict".
+          const err = new Error("Command failed: git merge-tree --write-tree 'auto/integration' 'origin/main'") as Error & { status: number };
+          err.status = 1;
+          throw err;
+        }
         return 'merged-tree-sha\n';
       }
 
@@ -900,6 +907,32 @@ describe('runPromotion', () => {
       assert.match(result.blockSummary ?? '', /expected to conflict/);
       assert(!shell.calls.some((cmd) => cmd === "git switch 'auto/integration'"));
       assert(!shell.calls.some((cmd) => cmd === "git push origin 'auto/integration'"));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('classifies merge-tree exit status 1 as a conflict, not base-unknown', async () => {
+    const repo = makeRepo();
+    const shell = shellHarness({
+      baseIntegrated: false,
+      mergeTreeResult: 'conflicts-exit-status',
+    });
+
+    try {
+      const result = await runPromotion({
+        repoDir: repo.repoDir,
+        shellRunner: shell.shellRunner,
+        interactive: false,
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.blockReason, 'base-behind-conflicts');
+      assert.match(result.blockSummary ?? '', /expected to conflict/);
+      // The actionable remediation should be surfaced, not the cryptic
+      // "unable to verify or update protected base" message.
+      assert.match(result.blockSummary ?? '', /remediation:/);
+      assert.doesNotMatch(result.blockSummary ?? '', /unable to verify/);
     } finally {
       repo.cleanup();
     }

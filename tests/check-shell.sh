@@ -1037,6 +1037,14 @@ else
   fail "mill is missing detached post-merge eval helper"
 fi
 
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
+  && grep -qE '^post_merge_eval_timeout_seconds\(\) \{' "$LIB_DIR/wavemill-mill.sh" \
+  && grep -q '.eval.postMergeTimeoutSeconds // 180' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "mill defines configurable post-merge eval timeout with 180s default"
+else
+  fail "mill is missing configurable post-merge eval timeout"
+fi
+
 MERGED_BLOCK=$(awk '
   /log "status" "\$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
   in_block { print }
@@ -1052,6 +1060,18 @@ if ! grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"' <<< "$ME
   pass "merged PR path no longer runs eval inline"
 else
   fail "merged PR path still runs eval inline"
+fi
+
+POST_MERGE_EVAL_BLOCK=$(awk '
+  /^launch_background_post_merge_eval\(\) \{/ { in_block=1 }
+  in_block { print }
+  in_block && /^}/ { exit }
+' "$LIB_DIR/wavemill-mill.sh")
+if grep -q '_with_timeout "\$eval_timeout" npx tsx "\$TOOLS_DIR/run-eval-hook.ts"' <<< "$POST_MERGE_EVAL_BLOCK" \
+  && ! grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"' <<< "$POST_MERGE_EVAL_BLOCK"; then
+  pass "detached post-merge eval uses configurable timeout"
+else
+  fail "detached post-merge eval does not use configurable timeout"
 fi
 
 if awk '

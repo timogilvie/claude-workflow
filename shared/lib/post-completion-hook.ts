@@ -28,6 +28,7 @@ import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
 import { attachPhaseDurations, attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getEvalContextUpdatesConfig, getMaxCostUsd } from './config.ts';
+import { formatHokusaiSubmissionTriggerResult, triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 import { getCurrentOperatingMode } from './operating-mode.ts';
 import { finalizeEvalSuccess } from './eval-success-policy.ts';
@@ -180,9 +181,19 @@ export const postCompletionHookDeps = {
   collectDeliveryOutcome,
   getEvalContextUpdatesConfig,
   getCurrentOperatingMode,
+  triggerHokusaiSubmission,
   runContextUpdateWork: updateProjectContext,
   appendContextUpdateWarning,
 };
+
+async function triggerHokusaiSubmissionAfterPersistence(record: EvalRecord, repoDir: string): Promise<void> {
+  try {
+    const result = await postCompletionHookDeps.triggerHokusaiSubmission(record, { repoDir });
+    console.log(`Post-completion eval: Hokusai submission ${formatHokusaiSubmissionTriggerResult(result)}`);
+  } catch (error) {
+    console.warn(`Post-completion eval: Hokusai submission failed (${errorMessage(error)})`);
+  }
+}
 
 export function collectPostCompletionOutcomes(input: PostCompletionOutcomeInput): Outcomes {
   const {
@@ -630,10 +641,13 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     postCompletionHookDeps.appendEvalRecord(record, { dir: evalsDir });
     persisted = true;
 
-    // 8. Run bounded best-effort project context and subsystem updates
+    // 8. Enqueue Hokusai contribution before optional post-eval work.
+    await triggerHokusaiSubmissionAfterPersistence(record, repoDir);
+
+    // 9. Run bounded best-effort project context and subsystem updates
     await runPostEvalContextUpdates(ctx, record, evalContext.prDiff, evalContext.taskPrompt);
 
-    // 9. Print summary
+    // 10. Print summary
     printEvalSummary(record);
     return true;
   } catch (error: unknown) {

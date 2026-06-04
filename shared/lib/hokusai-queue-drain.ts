@@ -1,4 +1,5 @@
 import { getHokusaiContributionsConfig } from './config.ts';
+import { resolveEnvValue } from './env-file.ts';
 import { getContributionConsentStatus } from './hokusai-consent.ts';
 import { appendHokusaiLedgerEntry, type HokusaiRewardStatus } from './hokusai-ledger.ts';
 import {
@@ -123,7 +124,7 @@ async function postBatch(
   const fetchImpl = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-  const token = config.endpointTokenEnv ? process.env[config.endpointTokenEnv] : '';
+  const token = resolveEnvValue([config.endpointTokenEnv, 'HOKUSAI_API_KEY'], opts.repoDir) || '';
 
   try {
     const response = await fetchImpl(config.endpoint!, {
@@ -239,6 +240,10 @@ export async function drainContributionQueue(
       rewardStatus: deriveRewardStatus(posted.tokenReward),
       ...(posted.tokenReward !== undefined ? { tokenReward: posted.tokenReward } : {}),
     }, opts);
+    console.log(
+      `[hokusai] contribution drain accepted rows=${batch.entries.length}` +
+      `${posted.jobIds.length > 0 ? ` jobs=${posted.jobIds.join(',')}` : ''}`,
+    );
     return {
       status: 'uploaded',
       uploadedCount: batch.entries.length,
@@ -271,6 +276,9 @@ export async function drainContributionQueue(
       errorCode: 'permanent_http_failure',
       summary: posted.error,
     }, opts);
+    console.warn(
+      `[hokusai] contribution drain rejected rows=${batch.entries.length} error=${posted.error}`,
+    );
     return {
       status: 'permanent_failure',
       error: posted.error,
@@ -310,6 +318,13 @@ export async function drainContributionQueue(
       errorCode: 'transient_exhausted',
       summary: 'Contribution submission retries exhausted',
     }, opts);
+    console.warn(
+      `[hokusai] contribution drain rejected rows=${batch.entries.length} error=Contribution submission retries exhausted`,
+    );
+  } else {
+    console.warn(
+      `[hokusai] contribution drain retry_scheduled rows=${batch.entries.length} nextAttemptAt=${nextAttemptAt} error=${posted.error}`,
+    );
   }
 
   return {

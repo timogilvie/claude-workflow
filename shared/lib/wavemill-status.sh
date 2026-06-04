@@ -815,7 +815,11 @@ is_actionable_state() {
 
 task_window_target() {
   local issue="$1" slug="$2" worktree="$3"
-  local stored_target="" canonical target target_path
+  local stored_target="" canonical target target_path worktree_real target_real
+
+  if [[ -n "$worktree" ]]; then
+    worktree_real="$(cd -P "$worktree" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$worktree")"
+  fi
 
   if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
     stored_target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$STATE_FILE" 2>/dev/null || true)"
@@ -824,7 +828,8 @@ task_window_target() {
   for target in "$stored_target" "$SESSION:$issue-$slug"; do
     [[ -n "$target" ]] || continue
     target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-    if [[ -z "$worktree" || "$target_path" == "$worktree" ]]; then
+    target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
+    if [[ -z "$worktree" || "$target_real" == "$worktree_real" ]]; then
       tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null || true
       return 0
     fi
@@ -835,7 +840,8 @@ task_window_target() {
     | awk -F'|' -v name="$canonical" '$2 == name { print $1; exit }')"
   if [[ -n "$target" ]]; then
     target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-    if [[ -z "$worktree" || "$target_path" == "$worktree" ]]; then
+    target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
+    if [[ -z "$worktree" || "$target_real" == "$worktree_real" ]]; then
       printf '%s\n' "$target"
       return 0
     fi
@@ -845,7 +851,8 @@ task_window_target() {
     while IFS='|' read -r target _name; do
       [[ -n "$target" ]] || continue
       target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-      if [[ "$target_path" == "$worktree" ]]; then
+      target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
+      if [[ "$target_real" == "$worktree_real" ]]; then
         printf '%s\n' "$target"
         return 0
       fi

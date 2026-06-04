@@ -15,6 +15,7 @@ import { loadConfiguredPricingTable } from './workflow-cost.ts';
 import type { StageAwareDecision } from './stage-aware-router.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 import { loadRouterConfig } from './model-router.ts';
+import { filterDisabledModels } from './disabled-models.ts';
 
 export type ChallengeReason = 'low-confidence' | 'new-model' | 'low-data-stage' | 'disabled';
 export type ChallengeStage = 'plan' | 'implementation' | 'review';
@@ -113,14 +114,14 @@ function getAvailableModels(
 ): string[] {
   const routerConfig = loadRouterConfig(repoDir);
   const pricingModels = Object.keys(loadConfiguredPricingTable(repoDir));
-  return [...new Set([
+  return filterDisabledModels([...new Set([
     ...(routerConfig.models || []),
     ...pricingModels,
     routingDecision.planner,
     routingDecision.coder,
     routingDecision.reviewer,
     routerConfig.defaultModel || '',
-  ].filter(Boolean))];
+  ].filter(Boolean))]);
 }
 
 function chooseLeastTestedModel(

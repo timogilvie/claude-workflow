@@ -259,7 +259,7 @@ replay_route_transparency_logs() {
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in
-      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*)
+      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*|"[hokusai-router]"*)
         log "info" "$line"
         ;;
     esac
@@ -1770,7 +1770,7 @@ if (( ${#TASKS[@]} > 0 )); then
 
   # ── Phase 2: Write task packets (no expansion — agent expands in-pane) ────
   # If the Linear description is already a task packet, use it directly.
-  # Otherwise, write the raw description — the planning agent will expand later.
+  # Otherwise, write the title plus raw description — the planning agent will expand later.
   for t in "${TASKS[@]}"; do
     IFS='|' read -r ISSUE SLUG TITLE <<<"$t"
     PACKET_FILE="/tmp/${SESSION}-${ISSUE}-taskpacket.md"
@@ -1779,10 +1779,15 @@ if (( ${#TASKS[@]} > 0 )); then
 
     if is_task_packet "$current_desc"; then
       log "info" "$ISSUE has task packet"
+      printf '%s\n' "$current_desc" > "$PACKET_FILE"
     else
-      log "info" "$ISSUE raw description saved (agent will expand)"
+      log "info" "$ISSUE title and raw description saved (agent will expand)"
+      if [[ -n "$current_desc" ]]; then
+        printf '%s\n\n%s\n' "$TITLE" "$current_desc" > "$PACKET_FILE"
+      else
+        printf '%s\n' "$TITLE" > "$PACKET_FILE"
+      fi
     fi
-    echo "$current_desc" > "$PACKET_FILE"
   done
 fi
 
@@ -2212,7 +2217,7 @@ replay_route_transparency_logs() {
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in
-      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*)
+      "[router]"*|"[coder]"*|"[planner]"*|"[reviewer]"*|"[classifier]"*|"[hokusai-router]"*)
         log "info" "$line"
         ;;
     esac
@@ -4041,14 +4046,16 @@ _ensure_window_exists() {
 
 _tmux_window_target_exists() {
   local session="$1" target="$2" expected_path="${3:-}"
-  local target_session target_path
+  local target_session target_path expected_real target_real
 
   [[ -n "$session" && -n "$target" ]] || return 1
   target_session="$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null || true)"
   [[ "$target_session" == "$session" ]] || return 1
   if [[ -n "$expected_path" ]]; then
     target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
-    [[ "$target_path" == "$expected_path" ]] || return 1
+    expected_real="$(cd -P "$expected_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$expected_path")"
+    target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
+    [[ "$target_real" == "$expected_real" ]] || return 1
   fi
   return 0
 }
@@ -5790,9 +5797,19 @@ maybe_run_challenge_eval() {
   log "status" "  📊 Challenge eval running in background for $issue (pid $pid)"
 }
 
+post_merge_eval_timeout_seconds() {
+  local timeout
+  timeout=$(wavemill_load_config "$REPO_DIR" | jq -r '.eval.postMergeTimeoutSeconds // 180' 2>/dev/null || echo "180")
+  if [[ "$timeout" =~ ^[0-9]+$ ]] && (( timeout >= 30 )); then
+    echo "$timeout"
+  else
+    echo "180"
+  fi
+}
+
 launch_background_post_merge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4" issue_ref="$5" reason="$6" preresolved_agent="${7:-}"
-  local eval_agent eval_log rc
+  local eval_agent eval_log eval_timeout rc
 
   if [[ -n "$preresolved_agent" ]]; then
     eval_agent="$preresolved_agent"
@@ -5803,13 +5820,14 @@ launch_background_post_merge_eval() {
   fi
 
   eval_log="/tmp/${SESSION}-eval-${issue}.log"
+  eval_timeout="$(post_merge_eval_timeout_seconds)"
   : >"$eval_log"
 
   (
     {
       printf 'Launching %s eval in background\n' "$reason"
       if [[ -n "$pr" ]]; then
-        if _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+        if _with_timeout "$eval_timeout" npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$issue_ref" --pr "$pr" --branch "$branch" \
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
@@ -5820,7 +5838,7 @@ launch_background_post_merge_eval() {
           rc=$?
         fi
       else
-        if _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
+        if _with_timeout "$eval_timeout" npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$issue_ref" --branch "$branch" \
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
@@ -7042,17 +7060,22 @@ launch_task() {
   local issue_desc
   issue_desc=$(echo "$issue_json" | jq -r '.description // ""' 2>/dev/null || echo "")
 
-  # Task packet handling — write raw description (agent will expand in-pane)
+  # Task packet handling — write title plus raw description (agent will expand in-pane)
   local packet_file="/tmp/${SESSION}-${issue}-taskpacket.md"
   if [[ -f "$packet_file" ]]; then
     :
   else
     if is_task_packet "$issue_desc"; then
       log "info" "$issue has task packet"
+      printf '%s\n' "$issue_desc" > "$packet_file"
     else
-      log "info" "$issue raw description saved (agent will expand)"
+      log "info" "$issue title and raw description saved (agent will expand)"
+      if [[ -n "$issue_desc" ]]; then
+        printf '%s\n\n%s\n' "$title" "$issue_desc" > "$packet_file"
+      else
+        printf '%s\n' "$title" > "$packet_file"
+      fi
     fi
-    echo "$issue_desc" > "$packet_file"
   fi
   local packet_content
   packet_content=$(cat "$packet_file" 2>/dev/null || echo "")

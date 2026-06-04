@@ -272,7 +272,7 @@ export interface HokusaiSubmissionRoutes {
 
 export interface HokusaiSubmissionOutcomes {
   completed_successfully: boolean;
-  actual_cost_usd: number;
+  actual_cost_usd: number | null;
   actual_time_seconds: number | null;
   intervention_count: number;
 }
@@ -788,15 +788,12 @@ export function toHokusaiSubmission(
     };
   }
 
-  if (
-    typeof record.workflowCost !== 'number'
-    || !Number.isFinite(record.workflowCost)
-  ) {
-    return {
-      ok: false,
-      reasons: filterEligibilityReasons(record, ['missing_cost'], 'missing_cost'),
-    };
-  }
+  const actualCostUsd =
+    typeof record.workflowCost === 'number'
+    && Number.isFinite(record.workflowCost)
+    && record.workflowCost >= 0
+      ? record.workflowCost
+      : null;
 
   const actualTimeSeconds =
     typeof record.timeSeconds === 'number'
@@ -829,7 +826,7 @@ export function toHokusaiSubmission(
       route_taken: routeTaken,
       observed_outcomes: {
         completed_successfully: isEvalSuccess(record),
-        actual_cost_usd: record.workflowCost,
+        actual_cost_usd: actualCostUsd,
         actual_time_seconds: actualTimeSeconds,
         intervention_count: record.interventionCount ?? 0,
       },
@@ -894,12 +891,11 @@ export function validateHokusaiSubmission(
   }
 
   if (
-    typeof submission.observed_outcomes?.actual_cost_usd !== 'number'
-    || !Number.isFinite(submission.observed_outcomes.actual_cost_usd)
-    || submission.observed_outcomes.actual_cost_usd < 0
+    submission.observed_outcomes?.actual_cost_usd !== null
+    && !isNonNegativeFiniteNumber(submission.observed_outcomes?.actual_cost_usd)
   ) {
     errors.push(
-      'observed_outcomes.actual_cost_usd must be a non-negative number',
+      'observed_outcomes.actual_cost_usd must be null or a non-negative number',
     );
   }
 
