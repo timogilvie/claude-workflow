@@ -45,6 +45,26 @@ export function isEvalSuccess(
   return false;
 }
 
+/**
+ * Finalizes success for freshly built eval records whose outcome collector
+ * pre-populates outcomes.success with a placeholder before scoring completes.
+ */
+export function finalizeEvalSuccess(
+  record: EvalSuccessRecord | null | undefined,
+  options?: { threshold?: number; repoDir?: string },
+): boolean {
+  if (!record) {
+    return false;
+  }
+
+  return isEvalSuccess({
+    ...record,
+    outcomes: record.outcomes
+      ? { ...record.outcomes, success: undefined }
+      : record.outcomes,
+  }, options);
+}
+
 function isFiniteThreshold(value: unknown): value is number {
   return typeof value === 'number'
     && Number.isFinite(value)

@@ -398,7 +398,7 @@ await test('routeBatch keeps explicit per-task selectors over inherited parent m
       additionalEvalsPaths: [],
     });
 
-    assert.equal(result.decision.coder, 'claude-opus-4-7');
+    assert.equal(result.decision.coder, 'claude-opus-4-8');
   } finally {
     cleanup();
   }

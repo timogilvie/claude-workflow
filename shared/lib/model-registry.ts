@@ -33,6 +33,7 @@ export interface ModelCapabilities {
   class: ModelClass;
   strengths: string[];
   weaknesses: string[];
+  disabled?: boolean;
   qualityScores: Record<RegistryTaskType, number>;
   pricing?: {
     inputCostPerMTok: number;
@@ -102,6 +103,7 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     class: capabilities.class,
     strengths: [...capabilities.strengths],
     weaknesses: [...capabilities.weaknesses],
+    disabled: capabilities.disabled,
     qualityScores: { ...capabilities.qualityScores },
     pricing: capabilities.pricing ? { ...capabilities.pricing } : undefined,
     defaultLadderEligible: capabilities.defaultLadderEligible,
@@ -225,6 +227,7 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
     class: override?.class ?? 'strong_generalist',
     strengths: override?.strengths ? [...override.strengths] : [],
     weaknesses: override?.weaknesses ? [...override.weaknesses] : [],
+    disabled: override?.disabled,
     qualityScores: {
       routing: 0,
       planning: 0,
@@ -257,6 +260,7 @@ function mergeCapabilities(
     class: override.class ?? seed.class,
     strengths: override.strengths ? [...override.strengths] : seed.strengths,
     weaknesses: override.weaknesses ? [...override.weaknesses] : seed.weaknesses,
+    disabled: override.disabled ?? seed.disabled,
     qualityScores: {
       ...seed.qualityScores,
       ...override.qualityScores,
@@ -381,7 +385,7 @@ export class ModelResolutionError extends Error {
 export const FAMILY_ALIASES = Object.freeze({
   opus: Object.freeze({
     channels: Object.freeze({
-      stable: 'claude-opus-4-7',
+      stable: 'claude-opus-4-8',
     }),
     description: 'Stable Anthropic frontier alias for the Opus family.',
   }),
@@ -636,6 +640,27 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
 
 export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
   models: {
+    'claude-opus-4-8': {
+      vendor: 'anthropic',
+      class: 'frontier',
+      strengths: ['long-horizon reasoning', 'code review', 'architecture', 'agentic coding'],
+      weaknesses: ['higher cost', 'slower'],
+      qualityScores: scores(62, 97, 88, 96, 62),
+      pricing: {
+        inputCostPerMTok: 5,
+        outputCostPerMTok: 25,
+        cacheWriteCostPerMTok: 6.25,
+        cacheReadCostPerMTok: 0.5,
+      },
+      // Anthropic's June 2026 Opus 4.8 product page advertises a 1M context window.
+      contextWindowTokens: 1_000_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 5,
+      costPerMillionOutputTokensUsd: 25,
+    },
     'claude-opus-4-7': {
       vendor: 'anthropic',
       class: 'frontier',
@@ -773,6 +798,29 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 2.5,
       costPerMillionOutputTokensUsd: 15,
     },
+    'gpt-5.3-codex': {
+      vendor: 'openai',
+      class: 'strong_generalist',
+      strengths: ['cost-efficient coding', 'fast edits'],
+      weaknesses: ['ChatGPT Codex account incompatibility', 'disabled for active routing'],
+      disabled: true,
+      qualityScores: scores(56, 68, 84, 62, 52),
+      pricing: {
+        inputCostPerMTok: 1.75,
+        outputCostPerMTok: 14,
+        cacheWriteCostPerMTok: 2.1875,
+        cacheReadCostPerMTok: 0.44,
+      },
+      defaultLadderEligible: false,
+      contextWindowTokens: 256_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 1.75,
+      costPerMillionOutputTokensUsd: 14,
+      agent: 'codex',
+    },
     'deepseek-v4-pro': {
       vendor: 'deepseek',
       class: 'strong_generalist',
@@ -885,13 +933,17 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     },
   },
   ladders: {
-    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-opus-4-7'],
-    planning: ['gpt-5.5', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    coding: ['gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
-    review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
+    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-opus-4-8', 'claude-opus-4-7'],
+    planning: ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    coding: ['gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
+    review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
     classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
   },
 };
+
+export function isModelEnabled(capabilities: ModelCapabilities | undefined): boolean {
+  return capabilities !== undefined && capabilities.disabled !== true;
+}
 
 export function getModel(registry: ModelRegistry, modelId: string): ModelCapabilities | undefined {
   if (!modelId) {
@@ -904,8 +956,11 @@ export function getLadder(registry: ModelRegistry, taskType: RegistryTaskType): 
   const configured = registry.ladders[taskType];
   if (configured) {
     return configured.filter((modelId) => {
-      if (registry.models[modelId]) {
+      if (isModelEnabled(registry.models[modelId])) {
         return true;
+      }
+      if (registry.models[modelId]) {
+        return false;
       }
       warnUnknownModel(taskType, modelId);
       return false;
@@ -913,6 +968,7 @@ export function getLadder(registry: ModelRegistry, taskType: RegistryTaskType): 
   }
 
   return Object.entries(registry.models)
+    .filter(([, capabilities]) => isModelEnabled(capabilities))
     .filter(([, capabilities]) => capabilities.defaultLadderEligible !== false)
     .filter(([, capabilities]) => Number.isFinite(capabilities.qualityScores[taskType]))
     .sort((left, right) => compareModels(taskType, left, right))
@@ -967,12 +1023,20 @@ export function getConfiguredModelsForDescriptorStage(
   repoDir: string | undefined,
   stage: DescriptorModelStage,
 ): string[] {
+  const registry = getEffectiveRegistry(repoDir);
+  const filterDescriptorModels = (modelIds: string[]): string[] =>
+    filterDisabledModels(dedupeModelIds(modelIds))
+      .filter((modelId) => {
+        const capabilities = registry.models[modelId];
+        return capabilities === undefined || isModelEnabled(capabilities);
+      });
+
   const configuredModels = getAvailableModelsForStage(getRouterConfig(repoDir), stage);
   if (configuredModels && configuredModels.length > 0) {
-    return filterDisabledModels(dedupeModelIds(configuredModels));
+    return filterDescriptorModels(configuredModels);
   }
 
-  return filterDisabledModels(dedupeModelIds(getLadder(getEffectiveRegistry(repoDir), DESCRIPTOR_STAGE_TO_TASK_TYPE[stage])));
+  return filterDescriptorModels(getLadder(registry, DESCRIPTOR_STAGE_TO_TASK_TYPE[stage]));
 }
 
 export function getConfiguredModelsForDescriptor(repoDir?: string): string[] {
