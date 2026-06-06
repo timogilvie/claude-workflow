@@ -34,6 +34,7 @@ import { getLatestSession } from './session.ts';
 import { attachEligibility, attachManifestRef } from './eval-record-builder.ts';
 import { attachPromptSizeDiagnostic } from './eval-record-builder.ts';
 import {
+  applyEvalPromptSizeEnv,
   enforcePromptSizeLimit,
   resolveEvalPromptSizeConfig,
   type EvalOversizePolicy,
@@ -614,7 +615,8 @@ export async function evaluateTask(
     planContent,
     selfReviewSummary,
   });
-  const { limitBytes, policy } = resolveEvalPromptSizeConfig(_promptSizeConfig ?? getEvalConfig());
+  const promptSizeConfig = applyEvalPromptSizeEnv(_promptSizeConfig ?? getEvalConfig(), process.env);
+  const { limitBytes, policy } = resolveEvalPromptSizeConfig(promptSizeConfig);
   const enforcement = enforcePromptSizeLimit({
     components: rawComponents,
     limitBytes,

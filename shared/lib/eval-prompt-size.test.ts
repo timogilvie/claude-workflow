@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  applyEvalPromptSizeEnv,
   enforcePromptSizeLimit,
   measurePromptComponents,
   resolveEvalPromptSizeConfig,
@@ -104,5 +105,17 @@ describe('eval prompt size enforcement', () => {
       () => resolveEvalPromptSizeConfig({ oversizePolicy: 'compress' }),
       /Invalid eval\.oversizePolicy/,
     );
+  });
+
+  it('applies environment overrides before resolving prompt size config', () => {
+    const config = applyEvalPromptSizeEnv(
+      { maxPromptBytes: 9000, oversizePolicy: 'fail' },
+      { EVAL_MAX_PROMPT_BYTES: '2048', EVAL_OVERSIZE_POLICY: 'truncate' },
+    );
+
+    assert.deepEqual(resolveEvalPromptSizeConfig(config), {
+      limitBytes: 2048,
+      policy: 'truncate',
+    });
   });
 });

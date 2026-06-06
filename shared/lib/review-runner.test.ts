@@ -168,6 +168,54 @@ describe('review-runner', () => {
       assert.equal(result.codeReviewFindings[0].category, 'cross-pr-revert');
       assert.match(result.codeReviewFindings[0].description, /Reverts #437/);
     });
+
+    it('skips cross-PR revert detection when the integration branch is missing', async () => {
+      mock.method(reviewRunnerDeps, 'getCurrentBranch', () => 'task/no-integration-branch');
+      mock.method(reviewRunnerDeps, 'getGitDiff', () => 'diff --git a/app.ts b/app.ts');
+      mock.method(reviewRunnerDeps, 'assertReviewableDiff', () => undefined);
+      mock.method(reviewRunnerDeps, 'ensureClaudeAvailable', async () => undefined);
+      mock.method(reviewRunnerDeps, 'gatherReviewContextAsync', async () => ({
+        diff: 'diff --git a/app.ts b/app.ts',
+        plan: 'plan',
+        taskPacket: 'packet',
+        designContext: null,
+        metadata: {
+          branch: 'task/no-integration-branch',
+          files: ['app.ts'],
+          hasUiChanges: false,
+        },
+      }));
+      mock.method(reviewRunnerDeps, 'execShellCommand', (command: string) => {
+        if (command.includes('git merge-base')) {
+          throw new Error('fatal: Not a valid object name auto/integration');
+        }
+        throw new Error(`unexpected command: ${command}`);
+      });
+      mock.method(reviewRunnerDeps, 'detectCrossPrReverts', () => {
+        throw new Error('detectCrossPrReverts should not run when integration ref is missing');
+      });
+      mock.method(reviewRunnerDeps, 'runReview', async (context) => {
+        assert.doesNotMatch(context.diff, /Cross-PR revert detector findings/);
+        return {
+          verdict: 'ready',
+          codeReviewFindings: [],
+          metadata: {
+            branch: 'task/no-integration-branch',
+            files: ['app.ts'],
+            hasUiChanges: false,
+            designContextAvailable: false,
+            uiVerificationRun: false,
+          },
+        };
+      });
+
+      const result = await reviewChanges({
+        repoDir: TEST_DIR,
+      });
+
+      assert.equal(result.verdict, 'ready');
+      assert.equal(result.codeReviewFindings.length, 0);
+    });
   });
 
   describe('Review Result Parsing', () => {

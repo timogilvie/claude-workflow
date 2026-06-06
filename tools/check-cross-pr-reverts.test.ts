@@ -120,6 +120,35 @@ test('runCrossPrRevertCheck reports disabled status when config disables the gua
   }
 });
 
+test('runCrossPrRevertCheck skips when the configured integration branch is missing', () => {
+  const { repoDir, cleanup } = makeRepo();
+  const execMock = mock.method(crossPrRevertCheckDeps, 'execShellCommand', (command: string) => {
+    if (command.includes('git merge-base')) {
+      throw new Error('fatal: Not a valid object name auto/integration');
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
+  const detectMock = mock.method(crossPrRevertCheckDeps, 'detectCrossPrReverts', () => {
+    throw new Error('detectCrossPrReverts should not run when integration ref is missing');
+  });
+
+  try {
+    const result = runCrossPrRevertCheck({
+      repoDir,
+      acknowledgementText: '',
+    });
+
+    assert.equal(result.blocked, false);
+    assert.equal(result.reverts.length, 0);
+    assert.equal(result.acknowledged.length, 0);
+    assert.equal(result.unacknowledged.length, 0);
+  } finally {
+    detectMock.mock.restore();
+    execMock.mock.restore();
+    cleanup();
+  }
+});
+
 test('runCrossPrRevertCheck falls back to recent commit messages when gh metadata is unavailable', () => {
   const { repoDir, cleanup } = makeRepo();
   const execMock = mock.method(crossPrRevertCheckDeps, 'execShellCommand', (command: string, options?: { cwd?: string; encoding?: string }) => {
