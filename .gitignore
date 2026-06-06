@@ -37,6 +37,7 @@ npm-debug.log*
 .claude/scheduled_tasks.lock
 
 # Workspace artifacts
+docs/hokusai-second-model-data-plan.md
 features/*/
 bugs/*/
 epics/*/

@@ -170,22 +170,38 @@ async function collectCrossPrRevertReviewFindings(input: {
   }
 
   const integrationBranch = getIntegrationConfig(input.repoDir).integrationBranch;
-  const baseRef = input.sinceCommit || String(reviewRunnerDeps.execShellCommand(
-    `git merge-base ${escapeShellArg(integrationBranch)} HEAD`,
-    { cwd: input.repoDir, encoding: 'utf-8' },
-  )).trim();
+  let baseRef: string;
+  let findings: CrossPrRevertFinding[];
 
-  const findings = reviewRunnerDeps.detectCrossPrReverts({
-    repoDir: input.repoDir,
-    baseRef,
-    headRef: 'HEAD',
-    integrationRef: integrationBranch,
-    maxRecentMerges: reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
-  });
+  try {
+    baseRef = input.sinceCommit || String(reviewRunnerDeps.execShellCommand(
+      `git merge-base ${escapeShellArg(integrationBranch)} HEAD`,
+      { cwd: input.repoDir, encoding: 'utf-8' },
+    )).trim();
+
+    findings = reviewRunnerDeps.detectCrossPrReverts({
+      repoDir: input.repoDir,
+      baseRef,
+      headRef: 'HEAD',
+      integrationRef: integrationBranch,
+      maxRecentMerges: reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
+    });
+  } catch (error) {
+    if (isMissingIntegrationRefError(error)) {
+      return [];
+    }
+    throw error;
+  }
+
   const acknowledgements = parseRevertAcknowledgements(loadRevertAcknowledgementText(input.repoDir));
   const unacknowledged = filterUnacknowledgedReverts(findings, acknowledgements);
 
   return unacknowledged.map(buildCrossPrRevertReviewFinding);
+}
+
+function isMissingIntegrationRefError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not a valid object name|bad revision|ambiguous argument|unknown revision/i.test(message);
 }
 
 function loadRevertAcknowledgementText(repoDir: string): string {

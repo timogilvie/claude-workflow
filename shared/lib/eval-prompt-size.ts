@@ -47,6 +47,11 @@ export interface PromptSizeConfig {
   policy: EvalOversizePolicy;
 }
 
+export interface EvalPromptSizeEnv {
+  EVAL_MAX_PROMPT_BYTES?: string;
+  EVAL_OVERSIZE_POLICY?: string;
+}
+
 export const DEFAULT_EVAL_MAX_PROMPT_BYTES = 9 * 1024 * 1024;
 export const DEFAULT_EVAL_OVERSIZE_POLICY: EvalOversizePolicy = 'fail';
 
@@ -125,6 +130,24 @@ export function resolveEvalPromptSizeConfig(evalConfig: {
     limitBytes: Math.floor(limitBytes),
     policy,
   };
+}
+
+export function applyEvalPromptSizeEnv(
+  evalConfig: { maxPromptBytes?: unknown; oversizePolicy?: unknown } = {},
+  env: EvalPromptSizeEnv = {},
+): { maxPromptBytes?: unknown; oversizePolicy?: unknown } {
+  const next = { ...evalConfig };
+
+  if (env.EVAL_MAX_PROMPT_BYTES !== undefined && env.EVAL_MAX_PROMPT_BYTES.trim() !== '') {
+    const parsed = Number(env.EVAL_MAX_PROMPT_BYTES);
+    next.maxPromptBytes = parsed;
+  }
+
+  if (env.EVAL_OVERSIZE_POLICY !== undefined && env.EVAL_OVERSIZE_POLICY.trim() !== '') {
+    next.oversizePolicy = env.EVAL_OVERSIZE_POLICY;
+  }
+
+  return next;
 }
 
 function makeMarker(name: EvalPromptComponentName, removedBytes: number): string {

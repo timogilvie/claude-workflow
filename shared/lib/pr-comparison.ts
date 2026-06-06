@@ -134,6 +134,98 @@ Challenger diff:
 ${input.challengerDiff}`;
 }
 
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+function prefixWithinByteBudget(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return '';
+  if (byteLength(text) <= maxBytes) return text;
+
+  let low = 0;
+  let high = text.length;
+  let best = '';
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = text.slice(0, mid);
+    if (byteLength(candidate) <= maxBytes) {
+      best = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best;
+}
+
+function truncateDiffForPrompt(text: string, label: string, maxBytes: number): string {
+  if (byteLength(text) <= maxBytes) return text;
+
+  let kept = prefixWithinByteBudget(text, maxBytes);
+  for (let i = 0; i < 8; i++) {
+    const marker = `\n[... TRUNCATED ${label} diff from ${byteLength(text)} bytes to fit comparison prompt ...]\n`;
+    const remainingForContent = maxBytes - byteLength(marker);
+    const nextKept = prefixWithinByteBudget(text, remainingForContent);
+    if (nextKept === kept) {
+      return `${kept}${marker}`;
+    }
+    kept = nextKept;
+  }
+
+  return kept;
+}
+
+export function buildCappedComparisonPrompt(
+  input: Parameters<typeof buildComparisonPrompt>[0],
+  maxPromptBytes: number,
+): { prompt: string; truncated: boolean; originalBytes: number; finalBytes: number } {
+  const originalPrompt = buildComparisonPrompt(input);
+  const originalBytes = byteLength(originalPrompt);
+  if (!Number.isFinite(maxPromptBytes) || maxPromptBytes <= 0 || originalBytes <= maxPromptBytes) {
+    return { prompt: originalPrompt, truncated: false, originalBytes, finalBytes: originalBytes };
+  }
+
+  const scaffoldBytes = byteLength(buildComparisonPrompt({
+    ...input,
+    primaryDiff: '',
+    challengerDiff: '',
+  }));
+  let availableDiffBytes = Math.max(0, maxPromptBytes - scaffoldBytes);
+  const primaryBytes = byteLength(input.primaryDiff);
+  const challengerBytes = byteLength(input.challengerDiff);
+  const totalDiffBytes = primaryBytes + challengerBytes;
+  const primaryBudget = totalDiffBytes > 0
+    ? Math.floor(availableDiffBytes * (primaryBytes / totalDiffBytes))
+    : 0;
+  const challengerBudget = Math.max(0, availableDiffBytes - primaryBudget);
+
+  let prompt = buildComparisonPrompt({
+    ...input,
+    primaryDiff: truncateDiffForPrompt(input.primaryDiff, 'primary', primaryBudget),
+    challengerDiff: truncateDiffForPrompt(input.challengerDiff, 'challenger', challengerBudget),
+  });
+
+  while (byteLength(prompt) > maxPromptBytes && availableDiffBytes > 0) {
+    availableDiffBytes = Math.floor(availableDiffBytes * 0.9);
+    const nextPrimaryBudget = totalDiffBytes > 0
+      ? Math.floor(availableDiffBytes * (primaryBytes / totalDiffBytes))
+      : 0;
+    const nextChallengerBudget = Math.max(0, availableDiffBytes - nextPrimaryBudget);
+    prompt = buildComparisonPrompt({
+      ...input,
+      primaryDiff: truncateDiffForPrompt(input.primaryDiff, 'primary', nextPrimaryBudget),
+      challengerDiff: truncateDiffForPrompt(input.challengerDiff, 'challenger', nextChallengerBudget),
+    });
+  }
+
+  return {
+    prompt,
+    truncated: true,
+    originalBytes,
+    finalBytes: byteLength(prompt),
+  };
+}
+
 /**
  * Validate and normalize the LLM comparison response payload.
  */

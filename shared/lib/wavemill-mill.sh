@@ -3790,6 +3790,62 @@ validate_coding_phase_output() {
   return 0
 }
 
+recover_misplaced_coding_complete_marker() {
+  local issue="$1" worktree="$2" feature_dir="$3" slug="$4"
+  local expected_marker misplaced_marker rel_marker audit_path audit_tmp recovered_at
+
+  expected_marker="$feature_dir/.coding-complete"
+  [[ -f "$expected_marker" ]] && return 1
+  [[ -d "$worktree" ]] || return 1
+
+  misplaced_marker="$(
+    find "$worktree" \
+      -path "$expected_marker" -prune -o \
+      -path "*/features/$slug/.coding-complete" -type f -print -quit 2>/dev/null || true
+  )"
+  [[ -n "$misplaced_marker" ]] || return 1
+  [[ "$misplaced_marker" != "$expected_marker" ]] || return 1
+
+  rel_marker="${misplaced_marker#"$worktree"/}"
+  recovered_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  audit_path="$feature_dir/.coding-marker-recovered.json"
+  audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
+    log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not create recovery audit"
+    return 1
+  }
+
+  jq -n \
+    --arg issue "$issue" \
+    --arg expected "features/$slug/.coding-complete" \
+    --arg found "$rel_marker" \
+    --arg timestamp "$recovered_at" \
+    '{
+      issue: $issue,
+      type: "misplaced-coding-complete-marker",
+      expected: $expected,
+      found: $found,
+      recoveredAt: $timestamp
+    }' > "$audit_tmp" || {
+      rm -f "$audit_tmp"
+      log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not write recovery audit"
+      return 1
+    }
+
+  if ! mv "$audit_tmp" "$audit_path"; then
+    rm -f "$audit_tmp"
+    log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not finalize recovery audit"
+    return 1
+  fi
+
+  if ! touch "$expected_marker"; then
+    log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not create expected marker"
+    return 1
+  fi
+
+  log_warn "$issue → Recovered misplaced .coding-complete from $rel_marker"
+  return 0
+}
+
 # Reject a plan: transition planning from awaiting_user to failed.
 # Usage: reject_plan <feature_dir> [agent] [model]
 reject_plan() {
@@ -9125,6 +9181,7 @@ monitor_issue_state() {
           local coding_status
           coding_status=$(read_stage_status "$FEATURE_DIR" "coding")
           if [[ "$coding_status" == "running" ]]; then
+            recover_misplaced_coding_complete_marker "$ISSUE" "${WORKTREE_ROOT}/${SLUG}" "$FEATURE_DIR" "$SLUG" || true
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
               validate_coding_phase_output "$BRANCH"
               log "status" "$ISSUE → .coding-complete detected, marking coding as completed"

@@ -15,7 +15,7 @@ import { loadWavemillConfig } from '../shared/lib/config.ts';
 import { resolveEvalsDir } from '../shared/lib/evals-paths.ts';
 import {
   buildChallengeCommentBody,
-  buildComparisonPrompt,
+  buildCappedComparisonPrompt,
   formatRoutingSummary,
   prNumberFromValue,
   prUrlFromNumber,
@@ -127,7 +127,8 @@ runTool({
         reviewMode: (args['challenger-review-mode'] as string) || '',
       } : undefined;
 
-      const prompt = buildComparisonPrompt({
+      const promptLimit = Number.parseInt(process.env.CHALLENGE_COMPARISON_MAX_PROMPT_BYTES || '500000', 10);
+      const cappedPrompt = buildCappedComparisonPrompt({
         issuePrompt,
         primaryDiff,
         challengerDiff,
@@ -135,7 +136,13 @@ runTool({
         challengerEvalScore: challengerEval.score,
         primaryRouting,
         challengerRouting,
-      });
+      }, Number.isFinite(promptLimit) ? promptLimit : 500000);
+      if (cappedPrompt.truncated) {
+        console.warn(
+          `Comparison prompt truncated from ${cappedPrompt.originalBytes} to ${cappedPrompt.finalBytes} bytes`,
+        );
+      }
+      const prompt = cappedPrompt.prompt;
       let response = await callClaude(prompt, {
         mode: 'sync',
         model: comparisonModel,

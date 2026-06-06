@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildChallengeCommentBody,
+  buildCappedComparisonPrompt,
   buildComparisonPrompt,
   formatRoutingSummary,
   prNumberFromValue,
@@ -42,6 +43,23 @@ test('buildComparisonPrompt includes workflow context when routing metadata diff
   assert.match(prompt, /Variables that differed: planner/);
   assert.match(prompt, /intervention_impact/);
   assert.doesNotMatch(prompt, /scopeDiscipline/);
+});
+
+test('buildCappedComparisonPrompt truncates oversized diff bodies', () => {
+  const result = buildCappedComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'p'.repeat(4000),
+    challengerDiff: 'c'.repeat(4000),
+    primaryEvalScore: 0.5,
+    challengerEvalScore: 0.75,
+  }, 3000);
+
+  assert.equal(result.truncated, true);
+  assert.ok(result.finalBytes <= 3000);
+  assert.match(result.prompt, /TRUNCATED primary diff/);
+  assert.match(result.prompt, /TRUNCATED challenger diff/);
+  assert.match(result.prompt, /Primary eval score: 0.5/);
+  assert.match(result.prompt, /Challenger eval score: 0.75/);
 });
 
 test('validateComparisonJson trims fields and rejects invalid score payloads', () => {
