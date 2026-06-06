@@ -42,18 +42,35 @@ export function runCrossPrRevertCheck(input: {
   }
 
   const integrationRef = input.integrationRef || getIntegrationConfig(input.repoDir).integrationBranch;
-  const baseRef = input.baseRef || String(crossPrRevertCheckDeps.execShellCommand(
-    `git merge-base ${escapeShellArg(integrationRef)} ${escapeShellArg(input.headRef || 'HEAD')}`,
-    { cwd: input.repoDir, encoding: 'utf-8' },
-  )).trim();
   const headRef = input.headRef || 'HEAD';
-  const reverts = crossPrRevertCheckDeps.detectCrossPrReverts({
-    repoDir: input.repoDir,
-    baseRef,
-    headRef,
-    integrationRef,
-    maxRecentMerges: input.maxRecentMerges ?? reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
-  });
+  let baseRef: string;
+  let reverts: ReturnType<typeof detectCrossPrReverts>;
+
+  try {
+    baseRef = input.baseRef || String(crossPrRevertCheckDeps.execShellCommand(
+      `git merge-base ${escapeShellArg(integrationRef)} ${escapeShellArg(headRef)}`,
+      { cwd: input.repoDir, encoding: 'utf-8' },
+    )).trim();
+
+    reverts = crossPrRevertCheckDeps.detectCrossPrReverts({
+      repoDir: input.repoDir,
+      baseRef,
+      headRef,
+      integrationRef,
+      maxRecentMerges: input.maxRecentMerges ?? reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
+    });
+  } catch (error) {
+    if (isMissingIntegrationRefError(error)) {
+      return {
+        blocked: false,
+        reverts: [],
+        acknowledged: [],
+        unacknowledged: [],
+      };
+    }
+    throw error;
+  }
+
   const acknowledgements = parseRevertAcknowledgements(
     input.acknowledgementText ?? loadAcknowledgementText(input.repoDir),
   );
@@ -66,6 +83,11 @@ export function runCrossPrRevertCheck(input: {
     acknowledged,
     unacknowledged,
   };
+}
+
+function isMissingIntegrationRefError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not a valid object name|bad revision|ambiguous argument|unknown revision/i.test(message);
 }
 
 function loadAcknowledgementText(repoDir: string): string {
