@@ -148,6 +148,7 @@ harness_extract_real_functions() {
     complete_coding_advance \
     auto_advance_blocked_completion \
     emit_blocked_completion_attention \
+    recover_misplaced_coding_complete_marker \
     handle_planning_overreach_rejection \
     validate_coding_phase_output \
     resolve_phase \
@@ -624,7 +625,7 @@ test_claude_local_settings_allowed() {
   repo="$(harness_init_repo "$slug")"
   mkdir -p "$repo/.claude"
   printf '{}\n' > "$repo/.claude/settings.local.json"
-  git -C "$repo" add ".claude/settings.local.json"
+  git -C "$repo" add -f ".claude/settings.local.json"
   git -C "$repo" commit -q -m "Track local Claude settings"
 
   harness_setup_planning_state "$repo" "$slug" "awaiting_user"
@@ -1347,6 +1348,27 @@ EOF
   check_not_contains "no-stat dedupe: second poll emits no duplicate log" "$(kv_value "$tick2" log_output)" "needs attention:"
 }
 
+test_misplaced_coding_complete_marker_is_recovered() {
+  local slug="misplaced-coding-complete"
+  local issue="HOK-1642-MISPLACED"
+  local repo feature_dir misplaced_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  misplaced_dir="$repo/services/contract-deployer/features/$slug"
+  mkdir -p "$misplaced_dir"
+  touch "$misplaced_dir/.coding-complete"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "misplaced marker: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_file_exists "misplaced marker: expected marker recovered" "$feature_dir/.coding-complete"
+  check_file_exists "misplaced marker: recovery audit written" "$feature_dir/.coding-marker-recovered.json"
+  check_eq "misplaced marker: audit found path" "services/contract-deployer/features/$slug/.coding-complete" "$(jq -r '.found' "$feature_dir/.coding-marker-recovered.json")"
+  check_contains "misplaced marker: warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -1375,6 +1397,7 @@ test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance
 test_coding_blocked_completion_stale_commit_does_not_auto_advance
 test_coding_blocked_completion_dirty_worktree_does_not_auto_advance
 test_coding_blocked_completion_dedupes_when_stat_unavailable
+test_misplaced_coding_complete_marker_is_recovered
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then
