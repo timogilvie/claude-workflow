@@ -3792,7 +3792,7 @@ validate_coding_phase_output() {
 
 recover_misplaced_coding_complete_marker() {
   local issue="$1" worktree="$2" feature_dir="$3" slug="$4"
-  local expected_marker misplaced_marker rel_marker audit_path audit_tmp
+  local expected_marker misplaced_marker rel_marker audit_path audit_tmp recovered_at
 
   expected_marker="$feature_dir/.coding-complete"
   [[ -f "$expected_marker" ]] && return 1
@@ -3807,6 +3807,7 @@ recover_misplaced_coding_complete_marker() {
   [[ "$misplaced_marker" != "$expected_marker" ]] || return 1
 
   rel_marker="${misplaced_marker#"$worktree"/}"
+  recovered_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   audit_path="$feature_dir/.coding-marker-recovered.json"
   audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
     log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not create recovery audit"
@@ -3817,7 +3818,7 @@ recover_misplaced_coding_complete_marker() {
     --arg issue "$issue" \
     --arg expected "features/$slug/.coding-complete" \
     --arg found "$rel_marker" \
-    --arg timestamp "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    --arg timestamp "$recovered_at" \
     '{
       issue: $issue,
       type: "misplaced-coding-complete-marker",
