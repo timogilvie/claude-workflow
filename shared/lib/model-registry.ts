@@ -417,6 +417,10 @@ export const FAMILY_ALIASES = Object.freeze({
   Record<string, { channels: Readonly<Partial<Record<Channel, string>>>; description?: string }>
 >;
 
+export const REVIEWER_ALIAS_MAP = Object.freeze({
+  deep: 'claude-opus-4-8',
+}) satisfies Readonly<Record<string, string>>;
+
 function makeModelSelectorParseError(
   code: ModelSelectorParseErrorCode,
   input: string,
@@ -565,6 +569,27 @@ export function configuredDeepSeekModelIds(registry: ModelRegistry): string[] {
 
 export function isKnownModelId(registry: ModelRegistry, modelId: string): boolean {
   return Object.hasOwn(registry.models, modelId);
+}
+
+export function normalizeReviewerModelId(
+  input: string,
+  registry: ModelRegistry,
+): string | null {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  if (isKnownModelId(registry, trimmed)) {
+    return trimmed;
+  }
+
+  const aliased = REVIEWER_ALIAS_MAP[trimmed as keyof typeof REVIEWER_ALIAS_MAP];
+  if (aliased && isKnownModelId(registry, aliased)) {
+    return aliased;
+  }
+
+  return null;
 }
 
 export function validateModelId(modelId: string): void {

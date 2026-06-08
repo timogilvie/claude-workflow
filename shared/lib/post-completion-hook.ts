@@ -638,7 +638,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
 
     // 7. Persist
     const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
-    postCompletionHookDeps.appendEvalRecord(record, { dir: evalsDir });
+    postCompletionHookDeps.appendEvalRecord(record, { dir: evalsDir, repoDir });
     persisted = true;
 
     // 8. Enqueue Hokusai contribution before optional post-eval work.

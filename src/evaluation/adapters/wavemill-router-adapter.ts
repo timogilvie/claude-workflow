@@ -14,6 +14,7 @@ import { buildRoutePrediction } from '../../../shared/lib/route-artifact.ts';
 import { routeBatch, type RouteBatchOptions } from '../../../shared/lib/route-batch.ts';
 import { meetsMintEligibility, type MintEligibilityEvaluation } from '../../../shared/lib/eval-aggregator.ts';
 import { getMintEligibilityConfig } from '../../../shared/lib/config.ts';
+import { buildTaskDescriptor } from '../../../shared/lib/task-descriptor-builder.ts';
 import {
   scoreWavemillSuccessRateUnderBudget,
   type WavemillRouterScoreRecord,
@@ -440,6 +441,7 @@ function buildHemRecord(
   policy: WavemillRouterMeasurementPolicy,
   score: WavemillRouterScoreResult,
   mintEligibility: MintEligibilityEvaluation,
+  modelsAvailable?: string[],
 ): EvalRecord {
   const aggregateScore = score.workflow_success_rate_under_budget;
 
@@ -469,6 +471,16 @@ function buildHemRecord(
       repoDir: relative(process.cwd(), repoDir) || '.',
       mintEligibility,
     },
+    taskDescriptor: buildTaskDescriptor({
+      originalPrompt: `Wavemill router eval (${policy})`,
+      score: aggregateScore,
+      timeSeconds: undefined,
+      interventionCount: score.wavemill_router_diagnostics.intervention_count,
+      modelsAvailable: modelsAvailable && modelsAvailable.length > 0
+        ? modelsAvailable
+        : [score.wavemill_router_scoring.scorer_id],
+      objective: 'balanced',
+    }),
   };
 }
 
@@ -586,7 +598,13 @@ export async function runWavemillRouterEval(
     score.wavemill_router_diagnostics,
     getMintEligibilityConfig(repoDir),
   );
-  const hemRecord = buildHemRecord(repoDir, options.policy, score, mintEligibility);
+  const hemRecord = buildHemRecord(
+    repoDir,
+    options.policy,
+    score,
+    mintEligibility,
+    options.modelsAvailable,
+  );
 
   if (persist) {
     appendEvalRecord(
