@@ -230,6 +230,26 @@ interface MigrationGraphCycle {
   files: string[];
 }
 
+interface MergeTreeMigrationFile {
+  file: string;
+  content: string;
+}
+
+type MergeTreeCollectionResult =
+  | { kind: 'ok'; treeOid: string; files: MergeTreeMigrationFile[] }
+  | { kind: 'unavailable'; reason: string }
+  | { kind: 'conflict'; reason: string };
+
+interface MigrationChainDetailsBase {
+  evaluatedAgainst: 'merge-tree' | 'worktree';
+  baseRef?: string;
+  treeOid?: string;
+  mergeContext?: {
+    source: 'worktree-fallback';
+    reason: string;
+  };
+}
+
 const DEFAULT_SCHEMA_PATTERNS = [
   /\.prisma$/,
   /schema\.sql$/,
@@ -395,6 +415,122 @@ async function collectMigrationFiles(repoDir: string, migrationPatterns: RegExp[
 
   matchedFiles.sort();
   return matchedFiles;
+}
+
+function describeCommandFailure(error: unknown): { status?: number; reason: string } {
+  if (!(error instanceof Error)) {
+    return { reason: String(error) };
+  }
+
+  const commandError = error as Error & { status?: number; stderr?: string | Buffer };
+  const stderr = typeof commandError.stderr === 'string'
+    ? commandError.stderr.trim()
+    : Buffer.isBuffer(commandError.stderr)
+      ? commandError.stderr.toString('utf-8').trim()
+      : '';
+  const message = stderr || commandError.message;
+  return {
+    status: commandError.status,
+    reason: message,
+  };
+}
+
+async function collectMigrationFilesFromMergeTree(
+  repoDir: string,
+  baseRef: string,
+  migrationPatterns: RegExp[],
+): Promise<MergeTreeCollectionResult> {
+  try {
+    readyStageDeps.execShellCommand(
+      `git fetch --quiet origin ${escapeShellArg(baseRef)}`,
+      { encoding: 'utf-8', cwd: repoDir }
+    );
+  } catch {
+    // Best-effort only; local refs may still be usable.
+  }
+
+  const candidateBaseRefs = [`origin/${baseRef}`, baseRef];
+  let lastUnavailableReason = `Unable to resolve merge base for ${baseRef}`;
+
+  for (const candidateBaseRef of candidateBaseRefs) {
+    let treeOid: string;
+    try {
+      const mergeTreeOutput = readyStageDeps.execShellCommand(
+        `git merge-tree --write-tree ${escapeShellArg(candidateBaseRef)} HEAD`,
+        { encoding: 'utf-8', cwd: repoDir }
+      );
+      treeOid = mergeTreeOutput.toString().trim();
+      if (!treeOid) {
+        lastUnavailableReason = `git merge-tree returned no tree for ${candidateBaseRef}`;
+        continue;
+      }
+    } catch (error) {
+      const { status, reason } = describeCommandFailure(error);
+      if (status === 1) {
+        return { kind: 'conflict', reason };
+      }
+      if (candidateBaseRef === `origin/${baseRef}` && /unknown revision|not a valid object name/i.test(reason)) {
+        lastUnavailableReason = reason;
+        continue;
+      }
+      return { kind: 'unavailable', reason };
+    }
+
+    try {
+      const lsTreeOutput = readyStageDeps.execShellCommand(
+        `git ls-tree -r --name-only ${escapeShellArg(treeOid)}`,
+        { encoding: 'utf-8', cwd: repoDir }
+      );
+      const matchedFiles = lsTreeOutput
+        .toString()
+        .split('\n')
+        .map(file => file.trim())
+        .filter(file =>
+          file.length > 0 &&
+          file.endsWith('.py') &&
+          !MIGRATION_CHAIN_IGNORED_FILES.has(path.posix.basename(file)) &&
+          migrationPatterns.some(pattern => pattern.test(file))
+        )
+        .sort();
+
+      const files = await Promise.all(
+        matchedFiles.map(async file => {
+          const content = readyStageDeps.execShellCommand(
+            `git show ${escapeShellArg(`${treeOid}:${file}`)}`,
+            { encoding: 'utf-8', cwd: repoDir }
+          ).toString();
+          return { file, content };
+        })
+      );
+
+      return { kind: 'ok', treeOid, files };
+    } catch (error) {
+      return { kind: 'unavailable', reason: describeCommandFailure(error).reason };
+    }
+  }
+
+  return { kind: 'unavailable', reason: lastUnavailableReason };
+}
+
+function formatMigrationList(items: string[], limit = 5): string {
+  if (items.length <= limit) {
+    return items.join(', ');
+  }
+  return `${items.slice(0, limit).join(', ')}, ...`;
+}
+
+function formatRevisionWithFile(revision: string, file: string): string {
+  return `${revision} (${file})`;
+}
+
+function buildMigrationChainDetails(
+  detailsBase: MigrationChainDetailsBase,
+  details: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...details,
+    ...detailsBase,
+  };
 }
 
 function parseMigrationRevision(file: string, content: string): MigrationRevision | { error: string; details: Record<string, unknown> } {
@@ -843,7 +979,8 @@ function checkReleaseRequirements(
 export async function checkMigrationChainIntegrity(
   repoDir: string,
   migrationPatternSources: string[] = [...DEFAULT_READY_MIGRATION_PATTERNS],
-  migrationKind?: 'alembic' | 'sql' | 'none'
+  migrationKind?: 'alembic' | 'sql' | 'none',
+  options?: { baseRef?: string },
 ): Promise<ReadyCheck> {
   if (migrationKind !== undefined && migrationKind !== 'alembic') {
     const kind = migrationKind ?? 'unspecified';
@@ -865,13 +1002,47 @@ export async function checkMigrationChainIntegrity(
     return migrationPatternsOrCheck;
   }
 
-  const migrationFiles = await collectMigrationFiles(repoDir, migrationPatternsOrCheck);
+  let migrationFiles: string[];
+  let migrationFileContents: MergeTreeMigrationFile[] | null = null;
+  let detailsBase: MigrationChainDetailsBase = {
+    evaluatedAgainst: 'worktree',
+  };
+
+  if (options?.baseRef) {
+    const mergeTreeFiles = await collectMigrationFilesFromMergeTree(
+      repoDir,
+      options.baseRef,
+      migrationPatternsOrCheck
+    );
+    if (mergeTreeFiles.kind === 'ok') {
+      migrationFileContents = mergeTreeFiles.files;
+      migrationFiles = mergeTreeFiles.files.map(file => file.file);
+      detailsBase = {
+        evaluatedAgainst: 'merge-tree',
+        baseRef: options.baseRef,
+        treeOid: mergeTreeFiles.treeOid,
+      };
+    } else {
+      migrationFiles = await collectMigrationFiles(repoDir, migrationPatternsOrCheck);
+      detailsBase = {
+        evaluatedAgainst: 'worktree',
+        baseRef: options.baseRef,
+        mergeContext: {
+          source: 'worktree-fallback',
+          reason: mergeTreeFiles.kind === 'conflict' ? 'merge-conflict' : 'git-unavailable',
+        },
+      };
+    }
+  } else {
+    migrationFiles = await collectMigrationFiles(repoDir, migrationPatternsOrCheck);
+  }
+
   if (migrationFiles.length === 0) {
     return {
       name: 'migration-chain-integrity',
       status: 'skip',
       message: 'No migration files found in repository',
-      details: {},
+      details: buildMigrationChainDetails(detailsBase, {}),
     };
   }
 
@@ -880,8 +1051,16 @@ export async function checkMigrationChainIntegrity(
   const skippedFiles: Array<{ file: string; reason: string }> = [];
 
   for (const relativeFile of migrationFiles) {
-    const filePath = path.join(repoDir, relativeFile);
-    const content = await fs.readFile(filePath, 'utf-8');
+    const content = migrationFileContents
+      ? migrationFileContents.find(file => file.file === relativeFile)?.content
+      : await fs.readFile(path.join(repoDir, relativeFile), 'utf-8');
+    if (content === undefined) {
+      skippedFiles.push({
+        file: relativeFile,
+        reason: 'Migration file content was unavailable',
+      });
+      continue;
+    }
     const parsed = parseMigrationRevision(relativeFile, content);
     if ('error' in parsed) {
       skippedFiles.push({
@@ -906,26 +1085,29 @@ export async function checkMigrationChainIntegrity(
       name: 'migration-chain-integrity',
       status: 'skip',
       message: 'No Alembic revision files found in repository',
-      details: {
+      details: buildMigrationChainDetails(detailsBase, {
         migrationFiles,
         skippedFiles,
-      },
+      }),
     };
   }
 
   if (duplicateRevisions.size > 0) {
+    const duplicateEntries = [...duplicateRevisions.entries()].map(([revision, files]) => ({
+      revision,
+      files,
+    }));
     return {
       name: 'migration-chain-integrity',
       status: 'fail',
-      message: 'Duplicate migration revision IDs found',
-      details: {
+      message: `Duplicate migration revision IDs found: ${formatMigrationList(
+        duplicateEntries.map(entry => `${entry.revision} (${entry.files.join(', ')})`)
+      )}`,
+      details: buildMigrationChainDetails(detailsBase, {
         migrationFiles: revisionFiles,
         skippedFiles,
-        duplicateRevisions: [...duplicateRevisions.entries()].map(([revision, files]) => ({
-          revision,
-          files,
-        })),
-      },
+        duplicateRevisions: duplicateEntries,
+      }),
     };
   }
 
@@ -940,12 +1122,16 @@ export async function checkMigrationChainIntegrity(
     return {
       name: 'migration-chain-integrity',
       status: 'fail',
-      message: 'Migration chain has unresolved down_revision references',
-      details: {
+      message: `Migration chain has unresolved down_revision references: ${formatMigrationList(
+        missingDownRevisions.map(revision =>
+          `${formatRevisionWithFile(revision.revision, revision.file)} -> ${revision.downRevision}`
+        )
+      )}`,
+      details: buildMigrationChainDetails(detailsBase, {
         migrationFiles: revisionFiles,
         skippedFiles,
         missingDownRevisions,
-      },
+      }),
     };
   }
 
@@ -954,12 +1140,14 @@ export async function checkMigrationChainIntegrity(
     return {
       name: 'migration-chain-integrity',
       status: 'fail',
-      message: 'Migration chain contains a cycle',
-      details: {
+      message: `Migration chain contains a cycle: ${formatMigrationList([
+        cycle.revisions.join(' -> '),
+      ])}`,
+      details: buildMigrationChainDetails(detailsBase, {
         migrationFiles: revisionFiles,
         skippedFiles,
         cycle,
-      },
+      }),
     };
   }
 
@@ -975,12 +1163,14 @@ export async function checkMigrationChainIntegrity(
     return {
       name: 'migration-chain-integrity',
       status: 'fail',
-      message: `Migration chain must have exactly one head, found ${heads.length}`,
-      details: {
+      message: `Migration chain must have exactly one head, found ${heads.length}: ${formatMigrationList(
+        heads.map(head => formatRevisionWithFile(head.revision, head.file))
+      )}`,
+      details: buildMigrationChainDetails(detailsBase, {
         migrationFiles: revisionFiles,
         skippedFiles,
         heads,
-      },
+      }),
     };
   }
 
@@ -991,12 +1181,14 @@ export async function checkMigrationChainIntegrity(
     return {
       name: 'migration-chain-integrity',
       status: 'fail',
-      message: `Migration chain must have exactly one root, found ${roots.length}`,
-      details: {
+      message: `Migration chain must have exactly one root, found ${roots.length}: ${formatMigrationList(
+        roots.map(root => formatRevisionWithFile(root.revision, root.file))
+      )}`,
+      details: buildMigrationChainDetails(detailsBase, {
         migrationFiles: revisionFiles,
         skippedFiles,
         roots,
-      },
+      }),
     };
   }
 
@@ -1004,12 +1196,12 @@ export async function checkMigrationChainIntegrity(
     name: 'migration-chain-integrity',
     status: 'pass',
     message: 'Migration chain is well-formed',
-    details: {
+    details: buildMigrationChainDetails(detailsBase, {
       migrationFiles: revisionFiles,
       skippedFiles,
       heads,
       roots,
-    },
+    }),
   };
 }
 
@@ -1788,7 +1980,12 @@ export async function runReadyStage(options: {
       continue;
     }
     if (checkName === 'migration-chain-integrity') {
-      checks.push(await checkMigrationChainIntegrity(repoDir, policy.migrationPatterns, policy.migrationKind));
+      checks.push(await checkMigrationChainIntegrity(
+        repoDir,
+        policy.migrationPatterns,
+        policy.migrationKind,
+        { baseRef: prContext.baseBranch }
+      ));
       continue;
     }
     if (checkName === 'forbidden-ddl') {
@@ -1852,7 +2049,7 @@ async function checkBaselineDiscovery(repoDir: string): Promise<ReadyCheck> {
   if (await fileExists(alembicDir)) {
     suggestions.push(
       'ready.checks: schema-migrations, migration-chain-integrity, migration-reversibility, forbidden-ddl',
-      'ready.requiredChecks: schema-migrations, migration-chain-integrity',
+      'ready.requiredChecks: schema-migrations, migration-chain-integrity, migration-reversibility',
       'ready.migrationKind: alembic',
       'ready.migrationPatterns: alembic/versions/.*\\.py$'
     );

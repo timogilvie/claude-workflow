@@ -193,6 +193,9 @@ export function collectCiOutcome(
           const start = new Date(check.startedAt).getTime();
           const end = new Date(check.completedAt).getTime();
           durationSeconds = Math.round((end - start) / 1000);
+          if (durationSeconds < 0) {
+            durationSeconds = undefined;
+          }
         } catch {
           // Ignore parse errors
         }
