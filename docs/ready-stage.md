@@ -225,6 +225,42 @@ Reported merge states:
 - `UNKNOWN`: GitHub is still computing mergeability after retries
 - `ERROR`: GitHub CLI failed or returned an unexpected state
 
+## Migration Base Freshness Check (`migration-base-freshness`)
+
+The `migration-base-freshness` check catches a specific Alembic failure mode:
+the branch migration head was valid when authored, but `origin/<base>` gained a
+new migration before the PR reached ready. In that case the branch can still
+look locally correct while the merge ref would create a stale `down_revision`
+chain and fail later in CI.
+
+### When it runs
+
+- The check only applies to `ready.migrationKind = "alembic"`.
+- It only fetches `origin/<base>` when the PR actually changed files matching
+  `ready.migrationPatterns`.
+- If no migration files changed, the check returns `skip` and does not hit the
+  network.
+
+### What it verifies
+
+1. Fetch the latest `origin/<base>`.
+2. Read Alembic revisions from that base ref and identify the current base head.
+3. Read Alembic revisions from the branch worktree and identify the branch head.
+4. Walk the branch head's `down_revision` chain and confirm the current base
+   head is reachable.
+
+If the branch head is not based on the current base head, the check fails with
+targeted remediation. The message includes both revision IDs verbatim:
+
+```text
+Branch migration head `<branchHead>` is not based on the current base head `<baseHead>`. Rebase onto `origin/<base>` and update `down_revision` to `<baseHead>` (or a descendant) before retrying.
+```
+
+If the base branch cannot be inspected cleanly, the check degrades to `warn`
+instead of crashing. If the branch already has multiple Alembic heads, the
+check returns `skip` and lets `migration-chain-integrity` produce the primary
+diagnostic.
+
 ## Migration Reversibility Check (`migration-reversibility`)
 
 The `migration-reversibility` check inspects every migration file added or
@@ -508,6 +544,7 @@ Use this when the repository stores Alembic revisions under `alembic/versions/` 
       "merge-conflict",
       "ci-status",
       "schema-migrations",
+      "migration-base-freshness",
       "migration-chain-integrity",
       "migration-reversibility",
       "forbidden-ddl"
@@ -516,6 +553,7 @@ Use this when the repository stores Alembic revisions under `alembic/versions/` 
       "pr-exists",
       "merge-conflict",
       "ci-status",
+      "migration-base-freshness",
       "migration-chain-integrity",
       "migration-reversibility"
     ],
@@ -527,6 +565,9 @@ Use this when the repository stores Alembic revisions under `alembic/versions/` 
 
 Behavior notes:
 
+- `migration-base-freshness` fetches `origin/<base>` only when the PR changed
+  migration files, then verifies the branch head is still descended from the
+  latest base head before later merge-ref validation runs.
 - `migration-chain-integrity` evaluates the merged tree of `origin/<base>` plus `HEAD` when run through `wavemill ready <pr>`, so a branch-local single head can still fail if the merge result would create two heads.
 - If git cannot build that merge tree, the check falls back to the worktree scan and records `details.mergeContext = { "source": "worktree-fallback", "reason": "merge-conflict" | "git-unavailable" }`.
 - Head failures name the revision IDs and files inline, for example: `Migration chain must have exactly one head, found 2: 044 (alembic/versions/044_main.py), 045 (alembic/versions/045_branch.py)`.
@@ -708,6 +749,7 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
       "merge-conflict",
       "ci-status",
       "schema-migrations",
+      "migration-base-freshness",
       "migration-chain-integrity",
       "forbidden-ddl",
       "migration-reversibility"
@@ -717,6 +759,7 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
       "merge-conflict",
       "ci-status",
       "schema-migrations",
+      "migration-base-freshness",
       "migration-chain-integrity",
       "migration-reversibility"
     ],

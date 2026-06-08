@@ -236,6 +236,11 @@ interface MigrationGraphCycle {
   files: string[];
 }
 
+interface MigrationHead {
+  revision: string;
+  file: string;
+}
+
 interface MergeTreeMigrationFile {
   file: string;
   content: string;
@@ -685,6 +690,53 @@ function detectMigrationCycle(revisions: Map<string, MigrationRevision>): Migrat
   }
 
   return null;
+}
+
+function findMigrationHeads(revisions: Iterable<MigrationRevision>): MigrationHead[] {
+  const revisionList = [...revisions];
+  const referencedDownRevisions = new Set(
+    revisionList
+      .map(revision => revision.downRevision)
+      .filter((revision): revision is string => revision !== null)
+  );
+
+  return revisionList
+    .filter(revision => !referencedDownRevisions.has(revision.revision))
+    .map(revision => ({ revision: revision.revision, file: revision.file }))
+    .sort((left, right) => left.revision.localeCompare(right.revision));
+}
+
+async function collectBaseMigrationFiles(
+  repoDir: string,
+  baseBranch: string,
+  migrationPatterns: RegExp[],
+): Promise<MergeTreeMigrationFile[]> {
+  const baseRef = `origin/${baseBranch}`;
+  const lsTreeOutput = readyStageDeps.execShellCommand(
+    `git ls-tree -r --name-only ${escapeShellArg(baseRef)}`,
+    { encoding: 'utf-8', cwd: repoDir }
+  );
+  const matchedFiles = lsTreeOutput
+    .toString()
+    .split('\n')
+    .map(file => file.trim())
+    .filter(file =>
+      file.length > 0 &&
+      file.endsWith('.py') &&
+      !MIGRATION_CHAIN_IGNORED_FILES.has(path.posix.basename(file)) &&
+      migrationPatterns.some(pattern => pattern.test(file))
+    )
+    .sort();
+
+  return Promise.all(
+    matchedFiles.map(async file => {
+      const content = readyStageDeps.execShellCommand(
+        `git show ${escapeShellArg(`${baseRef}:${file}`)}`,
+        { encoding: 'utf-8', cwd: repoDir }
+      ).toString();
+      return { file, content };
+    })
+  );
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1264,6 +1316,229 @@ export async function checkMigrationChainIntegrity(
       heads,
       roots,
     }),
+  };
+}
+
+/**
+ * Check whether the branch migration head is still based on the latest base
+ * branch migration head.
+ *
+ * This only runs for Alembic repositories when the PR changed migration files.
+ * It fetches the current `origin/<base>` ref, identifies the latest base head,
+ * identifies the branch head from the worktree, then walks the branch chain to
+ * confirm the base head is still reachable.
+ */
+export async function checkMigrationBaseFreshness(options: {
+  repoDir: string;
+  changedFiles: string[];
+  baseBranch: string;
+  migrationPatternSources?: string[];
+  migrationKind?: 'alembic' | 'sql' | 'none';
+}): Promise<ReadyCheck> {
+  const {
+    repoDir,
+    changedFiles,
+    baseBranch,
+    migrationPatternSources = [...DEFAULT_READY_MIGRATION_PATTERNS],
+    migrationKind,
+  } = options;
+
+  if (!baseBranch) {
+    return {
+      name: 'migration-base-freshness',
+      status: 'skip',
+      message: 'Base branch unknown',
+      details: {},
+    };
+  }
+
+  if (migrationKind !== undefined && migrationKind !== 'alembic') {
+    const kind = migrationKind ?? 'unspecified';
+    return {
+      name: 'migration-base-freshness',
+      status: 'skip',
+      message: `migration-base-freshness unsupported for ${kind} migrations`,
+      details: {
+        migrationKind: kind,
+      },
+    };
+  }
+
+  const migrationPatternsOrCheck = getMigrationPatternsOrCheck(
+    migrationPatternSources,
+    'migration-base-freshness'
+  );
+  if (!Array.isArray(migrationPatternsOrCheck)) {
+    return migrationPatternsOrCheck;
+  }
+
+  const migrationFilesChanged = findMigrationFiles(changedFiles, migrationPatternsOrCheck);
+  if (migrationFilesChanged.length === 0) {
+    return {
+      name: 'migration-base-freshness',
+      status: 'skip',
+      message: 'No migration files changed in this PR',
+      details: {},
+    };
+  }
+
+  try {
+    readyStageDeps.execShellCommand(
+      `git fetch --quiet origin ${escapeShellArg(baseBranch)}`,
+      { encoding: 'utf-8', cwd: repoDir }
+    );
+  } catch (error) {
+    const { status, reason } = describeCommandFailure(error);
+    return {
+      name: 'migration-base-freshness',
+      status: 'warn',
+      message: 'Could not verify base migration head',
+      details: {
+        baseBranch,
+        fetchError: reason,
+        fetchStatus: status,
+      },
+    };
+  }
+
+  let baseMigrationFiles: MergeTreeMigrationFile[];
+  try {
+    baseMigrationFiles = await collectBaseMigrationFiles(repoDir, baseBranch, migrationPatternsOrCheck);
+  } catch (error) {
+    const { status, reason } = describeCommandFailure(error);
+    return {
+      name: 'migration-base-freshness',
+      status: 'warn',
+      message: 'Could not verify base migration head',
+      details: {
+        baseBranch,
+        fetchError: reason,
+        fetchStatus: status,
+      },
+    };
+  }
+
+  const baseRevisions = new Map<string, MigrationRevision>();
+  const baseParseErrors: Array<{ file: string; reason: string; details: Record<string, unknown> }> = [];
+  for (const migrationFile of baseMigrationFiles) {
+    const parsed = parseMigrationRevision(migrationFile.file, migrationFile.content);
+    if ('error' in parsed) {
+      baseParseErrors.push({
+        file: migrationFile.file,
+        reason: parsed.error,
+        details: parsed.details,
+      });
+      continue;
+    }
+    baseRevisions.set(parsed.revision, parsed);
+  }
+
+  if (baseParseErrors.length > 0) {
+    return {
+      name: 'migration-base-freshness',
+      status: 'warn',
+      message: 'Could not verify base migration head',
+      details: {
+        baseBranch,
+        parseErrors: baseParseErrors,
+      },
+    };
+  }
+
+  const baseHeads = findMigrationHeads(baseRevisions.values());
+  if (baseHeads.length !== 1) {
+    return {
+      name: 'migration-base-freshness',
+      status: 'warn',
+      message: 'Base branch has ambiguous Alembic heads - cannot verify freshness',
+      details: {
+        baseBranch,
+        baseHeads,
+      },
+    };
+  }
+
+  const branchMigrationFiles = await collectMigrationFiles(repoDir, migrationPatternsOrCheck);
+  const branchRevisions = new Map<string, MigrationRevision>();
+  for (const relativeFile of branchMigrationFiles) {
+    const content = await fs.readFile(path.join(repoDir, relativeFile), 'utf-8');
+    const parsed = parseMigrationRevision(relativeFile, content);
+    if ('error' in parsed) {
+      return {
+        name: 'migration-base-freshness',
+        status: 'warn',
+        message: 'Could not parse branch migration metadata',
+        details: {
+          file: relativeFile,
+          parseError: parsed.error,
+          ...parsed.details,
+        },
+      };
+    }
+    branchRevisions.set(parsed.revision, parsed);
+  }
+
+  const branchHeads = findMigrationHeads(branchRevisions.values());
+  if (branchHeads.length !== 1) {
+    return {
+      name: 'migration-base-freshness',
+      status: 'skip',
+      message: 'Branch has no single Alembic head; deferring to migration-chain-integrity',
+      details: {
+        branchHeads,
+      },
+    };
+  }
+
+  const combinedRevisions = new Map<string, MigrationRevision>(baseRevisions);
+  for (const [revision, migration] of branchRevisions.entries()) {
+    combinedRevisions.set(revision, migration);
+  }
+
+  const baseHead = baseHeads[0]!.revision;
+  const branchHeadRevision = branchHeads[0]!.revision;
+  const branchHead = branchRevisions.get(branchHeadRevision)!;
+
+  const branchChain: string[] = [];
+  const branchChainSet = new Set<string>();
+  const visited = new Set<string>();
+  let currentRevision: string | null = branchHeadRevision;
+
+  while (currentRevision && !visited.has(currentRevision)) {
+    visited.add(currentRevision);
+    branchChain.push(currentRevision);
+    branchChainSet.add(currentRevision);
+    currentRevision = combinedRevisions.get(currentRevision)?.downRevision ?? null;
+  }
+
+  if (baseHead === branchHeadRevision || branchChainSet.has(baseHead)) {
+    return {
+      name: 'migration-base-freshness',
+      status: 'pass',
+      message: 'Branch migration head is based on the current base head',
+      details: {
+        baseHead,
+        branchHead: branchHeadRevision,
+        branchDownRevision: branchHead.downRevision,
+        branchChain,
+        baseBranch,
+        migrationFilesChanged,
+      },
+    };
+  }
+
+  return {
+    name: 'migration-base-freshness',
+    status: 'fail',
+    message: `Branch migration head ${branchHeadRevision} is not based on the current base head ${baseHead}. Rebase onto origin/${baseBranch} and update down_revision to ${baseHead} (or a descendant) before retrying.`,
+    details: {
+      baseHead,
+      branchHead: branchHeadRevision,
+      branchDownRevision: branchHead.downRevision,
+      branchChain,
+      baseBranch,
+      migrationFilesChanged,
+    },
   };
 }
 
@@ -2046,6 +2321,16 @@ export async function runReadyStage(options: {
       checks.push(checkSchemaMigrations(prContext.changedFiles, repoDir));
       continue;
     }
+    if (checkName === 'migration-base-freshness') {
+      checks.push(await checkMigrationBaseFreshness({
+        repoDir,
+        changedFiles: prContext.changedFiles,
+        baseBranch: prContext.baseBranch,
+        migrationPatternSources: policy.migrationPatterns,
+        migrationKind: policy.migrationKind,
+      }));
+      continue;
+    }
     if (checkName === 'migration-chain-integrity') {
       checks.push(await checkMigrationChainIntegrity(
         repoDir,
@@ -2127,13 +2412,13 @@ async function checkBaselineDiscovery(repoDir: string, migrationChainAutoEnabled
   if (await fileExists(alembicDir)) {
     if (migrationChainAutoEnabled) {
       suggestions.push(
-        'ready.checks: schema-migrations, migration-reversibility, forbidden-ddl',
-        'ready.requiredChecks: schema-migrations'
+        'ready.checks: schema-migrations, migration-base-freshness, migration-reversibility, forbidden-ddl',
+        'ready.requiredChecks: schema-migrations, migration-base-freshness'
       );
     } else {
       suggestions.push(
-        'ready.checks: schema-migrations, migration-chain-integrity, migration-reversibility, forbidden-ddl',
-        'ready.requiredChecks: schema-migrations, migration-chain-integrity, migration-reversibility',
+        'ready.checks: schema-migrations, migration-base-freshness, migration-chain-integrity, migration-reversibility, forbidden-ddl',
+        'ready.requiredChecks: schema-migrations, migration-base-freshness, migration-chain-integrity, migration-reversibility',
         'ready.migrationKind: alembic',
         'ready.migrationPatterns: alembic/versions/.*\\.py$'
       );
