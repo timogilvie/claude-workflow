@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
+  getReadyRemediationConfig,
   getReadyWatchdogConfig,
   type ReadyWatchdogConfig,
 } from './config.ts';
@@ -15,6 +16,7 @@ import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResu
 
 const execFileAsync = promisify(execFile);
 const MAX_AUTO_UPDATE_ATTEMPTS = 3;
+const FAILING_CHECK_STABILITY_THRESHOLD = 2;
 
 export type ReadyWatchdogClassificationKind =
   | 'fresh'
@@ -74,6 +76,7 @@ export interface ReadyWatchdogClassification {
   autoRecoverable?: boolean;
   remediationCategories?: string[];
   consecutiveFailurePolls?: number;
+  autoRemediable?: boolean;
 }
 
 export interface ReadyWatchdogAuditRecord {
@@ -107,6 +110,8 @@ export interface ReadyWatchdogStateEntry {
   lastReportedAction?: string;
   remediationCategories?: string[];
   consecutiveFailurePolls?: number;
+  failingChecksFingerprint?: string;
+  failingChecksObservedCount?: number;
 }
 
 export interface ReadyWatchdogStateFile {
@@ -128,7 +133,22 @@ export interface ReadyWatchdogDeps {
     githubTruth: GitHubPRTruth,
     repoDir: string,
   ) => Promise<BranchBaseUpdateResult>;
+  launchReadyRemediation: (
+    snapshot: ReadyTaskSnapshot,
+    failedCheckSummary: string,
+    failedCheckNames: string[],
+    attemptNumber: number,
+    maxAttempts: number,
+    repoDir: string,
+  ) => Promise<ReadyRemediationLaunchResult>;
   now: () => Date;
+}
+
+export interface ReadyRemediationLaunchResult {
+  status: 'launched' | 'skipped-in-flight' | 'skipped-max-attempts' | 'failed';
+  detail: string;
+  attemptNumber: number;
+  launchHead?: string;
 }
 
 export interface TickReadyWatchdogOptions {
@@ -207,6 +227,42 @@ const defaultDeps: ReadyWatchdogDeps = {
 
     return updateBranchWithBase(branch, baseBranch, snapshot.worktree);
   },
+  async launchReadyRemediation(snapshot, failedCheckSummary, failedCheckNames, attemptNumber, maxAttempts, repoDir) {
+    const toolPath = path.join(repoDir, 'tools', 'ready-watchdog.ts');
+    try {
+      const { stdout } = await execFileAsync(
+        'npx',
+        [
+          'tsx',
+          toolPath,
+          '--repo-dir',
+          repoDir,
+          '--launch-remediation',
+          snapshot.issueId,
+          '--failed-check-summary',
+          failedCheckSummary,
+          '--failed-check-names-json',
+          JSON.stringify(failedCheckNames),
+          '--attempt-number',
+          String(attemptNumber),
+          '--max-attempts',
+          String(maxAttempts),
+        ],
+        {
+          cwd: repoDir,
+          encoding: 'utf-8',
+          maxBuffer: 1024 * 1024,
+        },
+      );
+      return JSON.parse(stdout) as ReadyRemediationLaunchResult;
+    } catch (error) {
+      return {
+        status: 'failed',
+        detail: `Ready watchdog could not launch remediation tool: ${errorMessage(error)}`,
+        attemptNumber,
+      };
+    }
+  },
   now: () => new Date(),
 };
 
@@ -254,6 +310,15 @@ function summarizeChecks(checks: NormalizedCheckSummary[]): {
   }
 
   return { failures, pending, successes };
+}
+
+function buildFailingChecksFingerprint(checks: NormalizedCheckSummary[]): string | undefined {
+  const fingerprint = checks
+    .filter((check) => check.status === 'failure')
+    .map((check) => `${check.name.trim().toLowerCase()}:${(check.rawStatus || 'FAILURE').trim().toLowerCase()}`)
+    .sort()
+    .join(',');
+  return fingerprint || undefined;
 }
 
 function displayLabel(kind: Exclude<ReadyWatchdogClassificationKind, 'fresh'>): string {
@@ -470,6 +535,15 @@ export function classifyReadyTask(
   const checkSummary = summarizeChecks(githubTruth.checks);
   if (checkSummary.failures.length > 0) {
     const detail = `Failing checks: ${checkSummary.failures.join(', ')}.`;
+    if (checkSummary.pending.length > 0) {
+      return {
+        kind: 'waiting-on-ci',
+        detail,
+        consecutiveFailurePolls: 1,
+        autoRemediable: false,
+      };
+    }
+
     const prStateKey = buildPrStateKey(githubTruth);
     const sameFailureState = prior !== undefined
       && prior.prStateKey === prStateKey
@@ -490,6 +564,7 @@ export function classifyReadyTask(
         detail,
         remediationCategories: failureClassification.remediableNames,
         consecutiveFailurePolls,
+        autoRemediable: true,
       };
     }
 
@@ -506,6 +581,7 @@ export function classifyReadyTask(
       kind: 'waiting-on-ci',
       detail,
       consecutiveFailurePolls,
+      autoRemediable: checkSummary.pending.length === 0,
     };
   }
 
@@ -707,7 +783,11 @@ function materiallyChanged(
     || prior.lastAutoUpdateError !== next.lastAutoUpdateError
     || prior.lastReportedAction !== next.lastReportedAction
     || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
-    || prior.recoveryCommand !== next.recoveryCommand;
+    || prior.recoveryCommand !== next.recoveryCommand
+    || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
+    || JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])
+    || prior.failingChecksFingerprint !== next.failingChecksFingerprint
+    || prior.failingChecksObservedCount !== next.failingChecksObservedCount;
 }
 
 function buildFindingEntry(input: {
@@ -723,6 +803,8 @@ function buildFindingEntry(input: {
   lastAutoUpdateError?: string;
   remediationCategories?: string[];
   consecutiveFailurePolls?: number;
+  failingChecksFingerprint?: string;
+  failingChecksObservedCount?: number;
 }): ReadyWatchdogStateEntry {
   return {
     issueId: input.issueId,
@@ -743,6 +825,8 @@ function buildFindingEntry(input: {
     lastReportedAction: input.action,
     remediationCategories: input.remediationCategories,
     consecutiveFailurePolls: input.consecutiveFailurePolls,
+    failingChecksFingerprint: input.failingChecksFingerprint,
+    failingChecksObservedCount: input.failingChecksObservedCount,
   };
 }
 
@@ -787,6 +871,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   const priorState = await loadPriorWatchdogState(options.repoDir);
   const priorTasks = priorState?.tasks ?? {};
   const nextTasks = { ...priorTasks };
+  const remediationConfig = getReadyRemediationConfig(options.repoDir);
   const workflowState = await deps.readWorkflowState(options.stateFile);
   const tasks = workflowState.tasks ?? {};
   const jobs = normalizeJobs(workflowState);
@@ -833,6 +918,12 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       };
     }
 
+    const failingChecksFingerprint = buildFailingChecksFingerprint(githubTruth?.checks ?? []);
+    const failingChecksObservedCount = failingChecksFingerprint
+      ? prior?.failingChecksFingerprint === failingChecksFingerprint
+        ? (prior.failingChecksObservedCount ?? 0) + 1
+        : 1
+      : 0;
     if (classification.kind === 'fresh') {
       continue;
     }
@@ -905,7 +996,65 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     } else {
       let action = 'reported';
       let recoveryCommand = classification.recoveryCommand;
-      if (classification.kind === 'stuck') {
+      if (
+        (classification.kind === 'waiting-on-ci' || classification.kind === 'stable-failing-safe')
+        && classification.autoRemediable
+        && githubTruth
+        && remediationConfig.enabled
+      ) {
+        const attempts = snapshot.readyArtifacts?.remediationAttempts ?? 0;
+        if (failingChecksObservedCount < FAILING_CHECK_STABILITY_THRESHOLD) {
+          action = 'waiting-on-ci-stabilizing';
+          classification = {
+            ...classification,
+            detail: `Failing checks remain unstable (${failingChecksObservedCount}/${FAILING_CHECK_STABILITY_THRESHOLD}): ${classification.detail}`,
+          };
+        } else if (attempts >= remediationConfig.maxAttempts) {
+          action = 'remediation-exhausted';
+          classification = {
+            ...classification,
+            detail: `Ready remediation capped at ${attempts}/${remediationConfig.maxAttempts} attempts for PR #${snapshot.prNumber}.`,
+          };
+        } else if (
+          snapshot.remediationLaunchHead
+          && snapshot.currentHead
+          && snapshot.remediationLaunchHead === snapshot.currentHead
+        ) {
+          action = 'remediation-in-flight';
+          classification = {
+            ...classification,
+            detail: `Ready remediation is already running for PR #${snapshot.prNumber} at ${snapshot.currentHead}.`,
+          };
+        } else {
+          const checkSummary = summarizeChecks(githubTruth.checks);
+          const failedCheckNames = githubTruth.checks
+            .filter((check) => check.status === 'failure')
+            .map((check) => check.name);
+          const launchResult = await deps.launchReadyRemediation(
+            snapshot,
+            checkSummary.failures.join(', '),
+            failedCheckNames,
+            attempts + 1,
+            remediationConfig.maxAttempts,
+            options.repoDir,
+          );
+
+          if (launchResult.status === 'launched') {
+            action = 'launched-remediation';
+          } else if (launchResult.status === 'skipped-in-flight') {
+            action = 'remediation-in-flight';
+          } else if (launchResult.status === 'skipped-max-attempts') {
+            action = 'remediation-exhausted';
+          } else {
+            action = 'remediation-launch-failed';
+          }
+
+          classification = {
+            ...classification,
+            detail: launchResult.detail,
+          };
+        }
+      } else if (classification.kind === 'stuck') {
         recoveryCommand = makeRecoveryCommand(options.repoDir, options.stateFile, issueId);
         const canRecover = (options.forceRecover || config.autoRecover)
           && classification.autoRecoverable
@@ -924,12 +1073,14 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         snapshot,
         classification: classification.kind,
         detail: classification.detail,
-        action: classification.kind === 'stable-failing-safe' ? 'queue-remediation' : action,
+        action,
         now,
         recoveryCommand,
         githubTruth,
         remediationCategories: classification.remediationCategories,
         consecutiveFailurePolls: classification.consecutiveFailurePolls,
+        failingChecksFingerprint,
+        failingChecksObservedCount,
       });
     }
 

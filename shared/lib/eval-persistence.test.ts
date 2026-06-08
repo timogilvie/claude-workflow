@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
-import { appendEvalRecord, hasChallengeEvalRecord, hasChallengeEvalRecordPair, readEvalRecords } from './eval-persistence.ts';
+import { appendEvalRecord, EvalValidationError, hasChallengeEvalRecord, hasChallengeEvalRecordPair, readEvalRecords } from './eval-persistence.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Test Harness
@@ -51,6 +51,34 @@ function makeRecord(overrides?: Partial<EvalRecord>): EvalRecord {
     rationale: 'Task completed autonomously.',
     issueId: 'HOK-500',
     prUrl: 'https://github.com/org/repo/pull/42',
+    taskDescriptor: {
+      schema_version: '1.0',
+      signals: {
+        heuristic: {
+          task_type: 'feature',
+          languages: ['typescript'],
+          framework_tags: [],
+          files_touched: 1,
+          repo_size_loc: 100,
+          description_tokens: 10,
+          is_greenfield: false,
+          has_migration: false,
+          has_ui: false,
+          has_tests: true,
+          cross_service: false,
+        },
+        learned: {
+          complexity: 3,
+          domain: 'backend',
+          risk_flags: [],
+        },
+      },
+      constraints: {
+        models_available: ['claude-opus-4-6'],
+        objective: 'balanced',
+      },
+      stages: {},
+    },
     ...overrides,
   };
 }
@@ -113,6 +141,35 @@ test('multiple appends produce multiple lines', () => {
 
     const ids = lines.map((l) => JSON.parse(l).id);
     assert.deepEqual(ids, ['id-1', 'id-2', 'id-3']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('append rejects records that fail write-time validation', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    assert.throws(
+      () => appendEvalRecord(makeRecord({ taskDescriptor: undefined }), { dir: evalsDir }),
+      (error) => error instanceof EvalValidationError
+        && error.issues.some((issue) => issue.code === 'EVAL_MISSING_TASK_DESCRIPTOR'),
+    );
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('append skipValidation bypasses the write-time gate for fixtures', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    appendEvalRecord(makeRecord({ taskDescriptor: undefined }), {
+      dir: evalsDir,
+      skipValidation: true,
+    });
+    const records = readEvalRecords({ dir: evalsDir });
+    assert.equal(records.length, 1);
   } finally {
     cleanUp(tmp);
   }

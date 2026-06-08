@@ -766,7 +766,7 @@ function validPromptSizeDiagnostic() {
   };
 }
 
-test('SCHEMA_VERSION is bumped for nullable timeSeconds', () => {
+test('SCHEMA_VERSION is bumped for eval schema updates', () => {
   assert.equal(SCHEMA_VERSION, '1.28.0');
 });
 
@@ -1706,7 +1706,7 @@ test('phaseDurationsSeconds validates when present', () => {
 test('timeSeconds accepts null for unknown duration', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
-    schemaVersion: '1.27.0',
+    schemaVersion: '1.28.0',
     timeSeconds: null,
   };
 
