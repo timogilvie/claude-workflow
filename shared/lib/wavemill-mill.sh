@@ -5484,17 +5484,16 @@ launch_ready_phase() {
 
     failed_check_summary=$(ready_failed_check_summary "$result")
     [[ -n "$failed_check_summary" ]] || failed_check_summary="${failed_check_names}: checks failing"
-    if _launch_ready_remediation_attempt \
+    _launch_ready_remediation_attempt \
       "$issue" "$slug" "$wt_dir" "$branch" "$base_branch" "$pr_number" \
       "$state_dir" "$win" "$status_file" "$current_agent" "$current_model" \
       "$current_head" "${checks_run:-0}" "${checks_passed:-0}" "${merge_status:-UNKNOWN}" \
       "$(( remediation_attempts + 1 ))" "$remediation_max_attempts" \
-      "$failed_check_names_json" "$failed_check_summary" "$ready_result_file"; then
-      return 5
-    fi
-
+      "$failed_check_names_json" "$failed_check_summary" "$ready_result_file"
     launch_rc=$?
-    if [[ "$launch_rc" -eq 2 ]]; then
+    if [[ "$launch_rc" -eq 0 ]]; then
+      return 5
+    elif [[ "$launch_rc" -eq 2 ]]; then
       return 2
     fi
     return 1

@@ -47,18 +47,18 @@ async function launchRemediation(args: {
   const scriptPath = path.join(args.repoDir, 'shared/lib/wavemill-mill.sh');
   const launchCommand = `
     set -euo pipefail
-    source ${JSON.stringify(scriptPath)}
+    source "$WAVEMILL_SCRIPT_PATH"
     launch_ready_watchdog_remediation \
-      ${JSON.stringify(args.issueId)} \
-      ${JSON.stringify(slug)} \
-      ${JSON.stringify(worktree)} \
-      ${JSON.stringify(branch)} \
-      ${JSON.stringify(baseBranch)} \
-      ${JSON.stringify(String(prNumber))} \
-      ${JSON.stringify(args.failedCheckSummary)} \
-      ${JSON.stringify(String(args.attemptNumber))} \
-      ${JSON.stringify(String(args.maxAttempts))} \
-      ${JSON.stringify(args.failedCheckNamesJson)}
+      "$WAVEMILL_ISSUE_ID" \
+      "$WAVEMILL_SLUG" \
+      "$WAVEMILL_WORKTREE" \
+      "$WAVEMILL_BRANCH" \
+      "$WAVEMILL_BASE_BRANCH" \
+      "$WAVEMILL_PR_NUMBER" \
+      "$WAVEMILL_FAILED_CHECK_SUMMARY" \
+      "$WAVEMILL_ATTEMPT_NUMBER" \
+      "$WAVEMILL_MAX_ATTEMPTS" \
+      "$WAVEMILL_FAILED_CHECK_NAMES_JSON"
   `;
   try {
     const { stdout } = await execFile('bash', ['-lc', launchCommand], {
@@ -67,6 +67,17 @@ async function launchRemediation(args: {
       env: {
         ...process.env,
         SESSION: process.env.SESSION || 'wavemill',
+        WAVEMILL_SCRIPT_PATH: scriptPath,
+        WAVEMILL_ISSUE_ID: args.issueId,
+        WAVEMILL_SLUG: slug,
+        WAVEMILL_WORKTREE: worktree,
+        WAVEMILL_BRANCH: branch,
+        WAVEMILL_BASE_BRANCH: baseBranch,
+        WAVEMILL_PR_NUMBER: String(prNumber),
+        WAVEMILL_FAILED_CHECK_SUMMARY: args.failedCheckSummary,
+        WAVEMILL_ATTEMPT_NUMBER: String(args.attemptNumber),
+        WAVEMILL_MAX_ATTEMPTS: String(args.maxAttempts),
+        WAVEMILL_FAILED_CHECK_NAMES_JSON: args.failedCheckNamesJson,
       },
       maxBuffer: 1024 * 1024,
     });

@@ -224,32 +224,40 @@ const defaultDeps: ReadyWatchdogDeps = {
   },
   async launchReadyRemediation(snapshot, failedCheckSummary, failedCheckNames, attemptNumber, maxAttempts, repoDir) {
     const toolPath = path.join(repoDir, 'tools', 'ready-watchdog.ts');
-    const { stdout } = await execFileAsync(
-      'npx',
-      [
-        'tsx',
-        toolPath,
-        '--repo-dir',
-        repoDir,
-        '--launch-remediation',
-        snapshot.issueId,
-        '--failed-check-summary',
-        failedCheckSummary,
-        '--failed-check-names-json',
-        JSON.stringify(failedCheckNames),
-        '--attempt-number',
-        String(attemptNumber),
-        '--max-attempts',
-        String(maxAttempts),
-        '--json',
-      ],
-      {
-        cwd: repoDir,
-        encoding: 'utf-8',
-        maxBuffer: 1024 * 1024,
-      },
-    );
-    return JSON.parse(stdout) as ReadyRemediationLaunchResult;
+    try {
+      const { stdout } = await execFileAsync(
+        'npx',
+        [
+          'tsx',
+          toolPath,
+          '--repo-dir',
+          repoDir,
+          '--launch-remediation',
+          snapshot.issueId,
+          '--failed-check-summary',
+          failedCheckSummary,
+          '--failed-check-names-json',
+          JSON.stringify(failedCheckNames),
+          '--attempt-number',
+          String(attemptNumber),
+          '--max-attempts',
+          String(maxAttempts),
+          '--json',
+        ],
+        {
+          cwd: repoDir,
+          encoding: 'utf-8',
+          maxBuffer: 1024 * 1024,
+        },
+      );
+      return JSON.parse(stdout) as ReadyRemediationLaunchResult;
+    } catch (error) {
+      return {
+        status: 'failed',
+        detail: `Ready watchdog could not launch remediation tool: ${errorMessage(error)}`,
+        attemptNumber,
+      };
+    }
   },
   now: () => new Date(),
 };
