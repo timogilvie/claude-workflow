@@ -6044,17 +6044,17 @@ maybe_run_challenge_eval() {
 
 post_merge_eval_timeout_seconds() {
   local timeout
-  timeout=$(wavemill_load_config "$REPO_DIR" | jq -r '.eval.postMergeTimeoutSeconds // 180' 2>/dev/null || echo "180")
+  timeout=$(wavemill_load_config "$REPO_DIR" | jq -r '.eval.postMergeTimeoutSeconds // 600' 2>/dev/null || echo "600")
   if [[ "$timeout" =~ ^[0-9]+$ ]] && (( timeout >= 30 )); then
     echo "$timeout"
   else
-    echo "180"
+    echo "600"
   fi
 }
 
 launch_background_post_merge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4" issue_ref="$5" reason="$6" preresolved_agent="${7:-}"
-  local eval_agent eval_log eval_timeout rc
+  local eval_agent eval_log eval_timeout rc result_path persisted
 
   if [[ -n "$preresolved_agent" ]]; then
     eval_agent="$preresolved_agent"
@@ -6065,8 +6065,10 @@ launch_background_post_merge_eval() {
   fi
 
   eval_log="/tmp/${SESSION}-eval-${issue}.log"
+  result_path="/tmp/${SESSION:-wavemill}-eval-${issue}-result.json"
   eval_timeout="$(post_merge_eval_timeout_seconds)"
   : >"$eval_log"
+  rm -f "$result_path"
 
   (
     {
@@ -6077,6 +6079,7 @@ launch_background_post_merge_eval() {
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
           --agent "$eval_agent" \
+          --result-file "$result_path" \
           --debug; then
           rc=0
         else
@@ -6088,6 +6091,7 @@ launch_background_post_merge_eval() {
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
           --agent "$eval_agent" \
+          --result-file "$result_path" \
           --debug; then
           rc=0
         else
@@ -6095,10 +6099,12 @@ launch_background_post_merge_eval() {
         fi
       fi
       printf 'Eval process exited with code %s\n' "$rc"
-      if [[ "$rc" -eq 0 ]]; then
+      persisted=$(jq -r '.persisted // false' "$result_path" 2>/dev/null || echo "false")
+      rm -f "$result_path"
+      if [[ "$persisted" == "true" ]]; then
         mark_eval_completed "$issue"
       else
-        printf 'WARN: Eval failed for %s; setting evalFailed=true\n' "$issue"
+        printf 'WARN: Eval not persisted for %s (rc=%s); setting evalFailed=true\n' "$issue" "$rc"
         mark_eval_failed "$issue"
       fi
     } >>"$eval_log" 2>&1

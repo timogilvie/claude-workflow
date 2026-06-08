@@ -1039,8 +1039,8 @@ fi
 
 if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
   && grep -qE '^post_merge_eval_timeout_seconds\(\) \{' "$LIB_DIR/wavemill-mill.sh" \
-  && grep -q '.eval.postMergeTimeoutSeconds // 180' "$LIB_DIR/wavemill-mill.sh"; then
-  pass "mill defines configurable post-merge eval timeout with 180s default"
+  && grep -q '.eval.postMergeTimeoutSeconds // 600' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "mill defines configurable post-merge eval timeout with 600s default"
 else
   fail "mill is missing configurable post-merge eval timeout"
 fi
@@ -1072,6 +1072,14 @@ if grep -q '_with_timeout "\$eval_timeout" npx tsx "\$TOOLS_DIR/run-eval-hook.ts
   pass "detached post-merge eval uses configurable timeout"
 else
   fail "detached post-merge eval does not use configurable timeout"
+fi
+
+if grep -q -- '--result-file "\$result_path"' <<< "$POST_MERGE_EVAL_BLOCK" \
+  && grep -q 'persisted=$(jq -r '\''.persisted // false'\''' <<< "$POST_MERGE_EVAL_BLOCK" \
+  && grep -q 'if \[\[ "\$persisted" == "true" \]\]; then' <<< "$POST_MERGE_EVAL_BLOCK"; then
+  pass "detached post-merge eval completion is based on persisted result files"
+else
+  fail "detached post-merge eval is missing persisted result file handling"
 fi
 
 if awk '
