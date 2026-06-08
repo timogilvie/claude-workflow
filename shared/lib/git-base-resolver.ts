@@ -30,10 +30,8 @@ export function resolveDefaultBaseRef(
     if (headRef) {
       return headRef;
     }
-  } catch (error) {
-    if (!/not found|not a git repository|command not found|enoent/i.test(String(error))) {
-      // Ignore resolver probe failures and continue to the next fallback.
-    }
+  } catch {
+    // Ignore probe failures (missing symbolic ref, non-git dir, etc.) and fall through.
   }
 
   try {
