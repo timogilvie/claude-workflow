@@ -11,6 +11,38 @@ import {
   validateEvalsStore,
 } from './eval-validator.ts';
 
+function makeTaskDescriptor(overrides: Partial<NonNullable<EvalRecord['taskDescriptor']>> = {}): NonNullable<EvalRecord['taskDescriptor']> {
+  return {
+    schema_version: '1.0',
+    signals: {
+      heuristic: {
+        task_type: 'feature',
+        languages: ['typescript'],
+        framework_tags: [],
+        files_touched: 1,
+        repo_size_loc: 100,
+        description_tokens: 10,
+        is_greenfield: false,
+        has_migration: false,
+        has_ui: false,
+        has_tests: true,
+        cross_service: false,
+      },
+      learned: {
+        complexity: 3,
+        domain: 'backend',
+        risk_flags: [],
+      },
+    },
+    constraints: {
+      models_available: ['gpt-5.4'],
+      objective: 'balanced',
+    },
+    stages: {},
+    ...overrides,
+  };
+}
+
 function makeRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
   return {
     id: 'eval-1',
@@ -26,6 +58,7 @@ function makeRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
     interventionCount: 0,
     interventionDetails: [],
     rationale: 'Judge result is present.',
+    taskDescriptor: makeTaskDescriptor(),
     ...overrides,
   };
 }
@@ -220,5 +253,217 @@ describe('eval-validator', () => {
       { file: 'evals.jsonl', line: 1 },
     );
     assert.ok(stringIssues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'timeSeconds'));
+  });
+
+  it('reports missing taskDescriptor variants', () => {
+    const missingIssues = validateEvalRecord(
+      makeRecord({ taskDescriptor: undefined }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(missingIssues.some((issue) => issue.code === 'EVAL_MISSING_TASK_DESCRIPTOR'));
+
+    const nullIssues = validateEvalRecord(
+      makeRecord({ taskDescriptor: null as unknown as EvalRecord['taskDescriptor'] }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(nullIssues.some((issue) => issue.code === 'EVAL_MISSING_TASK_DESCRIPTOR'));
+
+    const stringIssues = validateEvalRecord(
+      { ...makeRecord(), taskDescriptor: '   ' },
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(stringIssues.some((issue) => issue.code === 'EVAL_MISSING_TASK_DESCRIPTOR'));
+  });
+
+  it('reports empty models_available variants', () => {
+    const missingIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          constraints: {
+            objective: 'balanced',
+          } as NonNullable<EvalRecord['taskDescriptor']>['constraints'],
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(missingIssues.some((issue) => issue.code === 'EVAL_EMPTY_MODELS_AVAILABLE'));
+
+    const nonArrayIssues = validateEvalRecord(
+      {
+        ...makeRecord(),
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          constraints: {
+            ...makeTaskDescriptor().constraints,
+            models_available: 'gpt-5.4' as unknown as string[],
+          },
+        },
+      },
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(nonArrayIssues.some((issue) => issue.code === 'EVAL_EMPTY_MODELS_AVAILABLE'));
+
+    const emptyIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          constraints: {
+            ...makeTaskDescriptor().constraints,
+            models_available: [],
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(emptyIssues.some((issue) => issue.code === 'EVAL_EMPTY_MODELS_AVAILABLE'));
+  });
+
+  it('reports unknown non-reviewer stage models', () => {
+    const issues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          stages: {
+            planner: { model: 'missing-model' },
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(issues.some((issue) => issue.code === 'EVAL_UNKNOWN_STAGE_MODEL'));
+  });
+
+  it('accepts aliased and canonical reviewer models and rejects stray reviewer text', () => {
+    const aliasedIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          stages: {
+            reviewer: { model: 'deep' },
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(!aliasedIssues.some((issue) => issue.code === 'EVAL_NONCANONICAL_REVIEWER'));
+
+    const canonicalIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          stages: {
+            reviewer: { model: 'gpt-5.4' },
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(!canonicalIssues.some((issue) => issue.code === 'EVAL_NONCANONICAL_REVIEWER'));
+
+    const strayIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          stages: {
+            reviewer: { model: 'some-reviewer' },
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(strayIssues.some((issue) => issue.code === 'EVAL_NONCANONICAL_REVIEWER'));
+  });
+
+  it('SCHEMA_VIOLATION nonRewardReason message includes failing schema paths', () => {
+    const issues = validateEvalRecord(
+      makeRecord({
+        routeProvenance: {
+          bootstrapRoute: {
+            coder: 1 as unknown as string,
+            codeDepth: 'medium',
+            reviewer: 'claude-opus-4-6',
+            reviewMode: 'llm',
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+
+    const reason = deriveNonRewardReasonFromIssues(issues);
+    assert.equal(reason?.code, 'SCHEMA_VIOLATION');
+    assert.match(reason?.message ?? '', /routeProvenance\.bootstrapRoute\.coder/);
+  });
+
+  it('Record with valid full routeProvenance does not get SCHEMA_VIOLATION', () => {
+    const issues = validateEvalRecord(
+      makeRecord({
+        routeProvenance: {
+          decisionSource: 'expanded',
+          bootstrapRoute: {
+            coder: 'claude-sonnet-4-6',
+            codeDepth: 'medium',
+            reviewer: 'claude-opus-4-6',
+            reviewMode: 'llm',
+            planner: 'claude-sonnet-4-6',
+            planDepth: 'deep',
+            artifactPath: 'features/HOK-2071/.initial-route.json',
+            artifactHash: 'a'.repeat(64),
+            inputHash: 'b'.repeat(64),
+            source: 'bootstrap',
+            cacheHit: false,
+            routeSource: 'batch',
+            routerMode: 'normal',
+            routingMode: 'stage-aware',
+            expectedMetrics: { expectedSuccess: 0.92 },
+          },
+          expandedRoute: {
+            coder: 'gpt-5.4',
+            codeDepth: 'deep',
+            reviewer: 'claude-sonnet-4-6',
+            reviewMode: 'static',
+            planner: 'gpt-5.4',
+            planDepth: 'deep',
+            artifactPath: 'features/HOK-2071/.post-expansion-route.json',
+            artifactHash: 'c'.repeat(64),
+            inputHash: 'd'.repeat(64),
+            source: 'expanded',
+            cacheHit: true,
+            routeSource: 'cache',
+            routerMode: 'survival',
+            routingMode: 'stage-aware',
+            expectedMetrics: { expectedSuccess: 0.97 },
+          },
+          activeRoute: {
+            coder: 'gpt-5.4',
+            codeDepth: 'deep',
+            reviewer: 'claude-sonnet-4-6',
+            reviewMode: 'static',
+            planner: 'gpt-5.4',
+            planDepth: 'deep',
+            artifactPath: 'features/HOK-2071/.routing-complete.json',
+            artifactHash: 'e'.repeat(64),
+            inputHash: 'f'.repeat(64),
+            source: 'active',
+            cacheHit: true,
+            routeSource: 'single',
+            routerMode: 'constrained',
+            routingMode: 'stage-aware',
+            expectedMetrics: { expectedSuccess: 0.95 },
+          },
+          routeChanged: true,
+          expandedCacheHit: true,
+          packetHash: '1'.repeat(64),
+          routeSource: 'cache',
+          routerMode: 'survival',
+          routingMode: 'stage-aware',
+          artifactPath: 'features/HOK-2071',
+          artifactHash: '2'.repeat(64),
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+
+    assert.ok(!issues.some((issue) => issue.code === 'SCHEMA_VIOLATION'));
   });
 });

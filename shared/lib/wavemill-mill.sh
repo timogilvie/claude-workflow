@@ -3103,9 +3103,9 @@ ready_watchdog_config_json() {
     --argjson repo "$repo_json" \
     --argjson local "$local_json" \
     '
-    ({ready:{watchdog:{enabled:true,thresholdMinutes:10,autoRecover:true,timeoutSeconds:30}}} * $user * $repo * $local) as $merged
+    ({ready:{watchdog:{enabled:true,thresholdMinutes:10,autoRecover:true,timeoutSeconds:30,stableFailureConsecutivePolls:2,stableFailureEscalateAfterPolls:4,safeRemediationCategories:["lint","type","test","build","migration-chain","alembic"]}}} * $user * $repo * $local) as $merged
     | (($merged.monitor.readyWatchdog // {}) + ($merged.ready.watchdog // {}))
-    ' 2>/dev/null || echo '{"enabled":true,"thresholdMinutes":10,"autoRecover":true,"timeoutSeconds":30}'
+    ' 2>/dev/null || echo '{"enabled":true,"thresholdMinutes":10,"autoRecover":true,"timeoutSeconds":30,"stableFailureConsecutivePolls":2,"stableFailureEscalateAfterPolls":4,"safeRemediationCategories":["lint","type","test","build","migration-chain","alembic"]}'
 }
 
 run_ready_watchdog_tick() {
@@ -3130,12 +3130,29 @@ run_ready_watchdog_tick() {
 
   while IFS= read -r finding; do
     [[ -n "$finding" ]] || continue
-    local issue label detail action
+    local issue label detail action slug branch base_branch pr_number title wt_dir state_dir remediation_categories
     issue=$(printf '%s' "$finding" | jq -r '.issueId // empty' 2>/dev/null || echo "")
     label=$(printf '%s' "$finding" | jq -r '.displayLabel // empty' 2>/dev/null || echo "")
     detail=$(printf '%s' "$finding" | jq -r '.detail // empty' 2>/dev/null || echo "")
     action=$(printf '%s' "$finding" | jq -r '.action // empty' 2>/dev/null || echo "")
     [[ -n "$issue" && -n "$label" && -n "$detail" ]] || continue
+    if [[ "$action" == "queue-remediation" ]]; then
+      slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // ""')
+      branch=$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // ""')
+      base_branch=$(read_state_value "" --arg i "$issue" '.tasks[$i].baseBranch // ""')
+      pr_number=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // ""')
+      title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // "Task"')
+      wt_dir=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // ""')
+      [[ -z "$wt_dir" && -n "$slug" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
+      if [[ -n "$slug" && -n "$branch" && -n "$base_branch" && -n "$pr_number" ]]; then
+        state_dir=$(ready_state_dir "$wt_dir" "$slug")
+        remediation_categories=$(printf '%s' "$finding" | jq -c '.remediationCategories // []' 2>/dev/null || echo '[]')
+        mkdir -p "$state_dir"
+        printf '%s\n' "$(jq -cn --argjson categories "$remediation_categories" --arg detail "$detail" '{categories:$categories, detail:$detail}')" \
+          > "$state_dir/.ready-watchdog-stable-failure.json"
+        launch_ready_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$pr_number" >/dev/null 2>&1 || true
+      fi
+    fi
     log "status" "ready watchdog: $issue $label ($action) - $detail"
   done < <(printf '%s' "$watchdog_output" | jq -c '.findings[]?' 2>/dev/null)
 }
@@ -4960,15 +4977,58 @@ write_ready_attention_file() {
   printf '%s\n' "$message" > "$state_dir/.needs-attention"
 }
 
-cross_pr_revert_gate_allows_merge() {
-  local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4"
-  local result rc prs files message
+_write_cross_pr_diagnostic() {
+  local state_dir="$1" ref_name="$2" cmd_class="$3" diag_stderr="$4"
+  local result_file="$state_dir/.ready-result.json"
+  local diag_json
+  diag_json=$(jq -cn \
+    --arg ref "$ref_name" \
+    --arg commandClass "$cmd_class" \
+    --arg stderr "$diag_stderr" \
+    '{commandClass: $commandClass, ref: $ref, stderr: $stderr}') || return 0
 
-  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" 2>/dev/null); then
-    return 0
+  mkdir -p "$state_dir"
+  local tmp
+  tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || return 0
+
+  if [[ -f "$result_file" ]]; then
+    jq --argjson diag "$diag_json" '. + {crossPrDiagnostic: $diag}' "$result_file" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$result_file"
+  else
+    printf '{"crossPrDiagnostic":%s}\n' "$diag_json" > "$tmp" \
+      && mv "$tmp" "$result_file"
+  fi
+  rm -f "$tmp"
+}
+
+cross_pr_revert_gate_allows_merge() {
+  local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4" base_branch="${5-}"
+  local result rc prs files message stderr_file raw_error classification
+  local tool_stderr=""
+  local extra_args=()
+  raw_error=""
+
+  [[ -n "$base_branch" ]] && extra_args+=(--base-ref "$base_branch" --integration-ref "$base_branch")
+  stderr_file=$(mktemp 2>/dev/null) || stderr_file=""
+
+  if [[ -n "$stderr_file" ]]; then
+    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" "${extra_args[@]}" 2>"$stderr_file"); then
+      rc=0
+    else
+      rc=$?
+    fi
+    raw_error=$(cat "$stderr_file" 2>/dev/null || echo "")
+    rm -f "$stderr_file"
+  elif result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" "${extra_args[@]}" 2>/dev/null); then
+    rc=0
   else
     rc=$?
   fi
+
+  if [[ "$rc" -eq 0 ]]; then
+    return 0
+  fi
+  tool_stderr="$raw_error"
 
   if [[ "$rc" -eq 1 ]]; then
     prs=$(printf '%s' "$result" | jq -r '[.unacknowledged[]?.prNumber] | reduce .[] as $item ([]; if index($item) then . else . + [$item] end) | map("#" + tostring) | join(", ")' 2>/dev/null || echo "")
@@ -4979,11 +5039,61 @@ cross_pr_revert_gate_allows_merge() {
       message="$message Affected files: $files."
     fi
     write_ready_attention_file "$state_dir" "$message"
+    npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
+      --state-dir "$state_dir" \
+      --stage "cross-pr-guard" \
+      --tool "check-cross-pr-reverts" \
+      --classification "preflight-failure" \
+      --reason "$message" \
+      --raw-error "$raw_error" \
+      --exit-code "$rc" >/dev/null 2>&1 || true
     log "status" "⛔ $issue → Cross-PR revert guard blocked ready phase for PR #$pr_number"
     return 1
   fi
 
+  if [[ "$rc" -eq 2 ]] && printf '%s' "$result" | jq -e '.toolError' >/dev/null 2>&1; then
+    local ref_name cmd_class diag_stderr
+    ref_name=$(printf '%s' "$result" | jq -r '.toolError.ref // ""' 2>/dev/null || echo "")
+    cmd_class=$(printf '%s' "$result" | jq -r '.toolError.commandClass // ""' 2>/dev/null || echo "")
+    diag_stderr=$(printf '%s' "$result" | jq -r '.toolError.stderr // ""' 2>/dev/null || echo "")
+    [[ -n "$diag_stderr" ]] || diag_stderr="${tool_stderr:0:2048}"
+    [[ -z "$ref_name" && -n "$tool_stderr" ]] && ref_name="${tool_stderr:0:200}"
+    [[ -z "$ref_name" ]] && ref_name="unknown ref"
+    [[ -z "$cmd_class" ]] && cmd_class="unknown command"
+
+    message="Cross-PR revert guard tool failure for PR #$pr_number: $cmd_class failed on ref '$ref_name'."
+    if [[ -n "$diag_stderr" ]]; then
+      message="$message Diagnostic: $diag_stderr"
+    fi
+
+    write_ready_attention_file "$state_dir" "$message"
+    _write_cross_pr_diagnostic "$state_dir" "$ref_name" "$cmd_class" "$diag_stderr"
+    npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
+      --state-dir "$state_dir" \
+      --stage "cross-pr-guard" \
+      --tool "check-cross-pr-reverts" \
+      --classification "preflight-failure" \
+      --reason "$message" \
+      --raw-error "${diag_stderr:-$raw_error}" \
+      --exit-code "$rc" >/dev/null 2>&1 || true
+    log_error "  Cross-PR revert guard tool failure for $issue (PR #$pr_number): $cmd_class on '$ref_name'"
+    return 1
+  fi
+
+  classification="preflight-failure"
+  if [[ "$raw_error" == *"not a valid object name"* ]] || [[ "$raw_error" == *"bad revision"* ]] || [[ "$raw_error" == *"does not exist"* ]]; then
+    classification="ref-missing"
+  fi
+
   write_ready_attention_file "$state_dir" "Cross-PR revert guard failed for PR #$pr_number."
+  npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
+    --state-dir "$state_dir" \
+    --stage "cross-pr-guard" \
+    --tool "check-cross-pr-reverts" \
+    --classification "$classification" \
+    --reason "Cross-PR revert guard failed for PR #$pr_number." \
+    --raw-error "$raw_error" \
+    --exit-code "$rc" >/dev/null 2>&1 || true
   log_error "  Cross-PR revert guard failed for $issue (PR #$pr_number)"
   return 1
 }
@@ -5059,11 +5169,16 @@ log_ready_unparseable_result() {
 }
 
 ready_failure_is_actionable_for_remediation() {
-  local verdict="${1-}"
-  local failed_check_names="${2-}"
-  local ready_result="${3-}"
+  local state_dir="${1-}"
+  local verdict="${2-}"
+  local failed_check_names="${3-}"
+  local ready_result="${4-}"
   local actionable_names failed_check_name failed_check_name_lc
   local IFS=','
+
+  if [[ -f "$state_dir/.ready-watchdog-stable-failure.json" ]]; then
+    return 0
+  fi
 
   [[ "$verdict" == "fail" ]] || return 1
   [[ -n "$failed_check_names" ]] || return 1
@@ -5124,6 +5239,130 @@ set_ready_pass_labels() {
   (cd "$wt_dir" && npx tsx "$TOOLS_DIR/set-pr-ready-label.ts" "$pr_number")
 }
 
+_launch_ready_remediation_attempt() {
+  local issue="$1" slug="$2" wt_dir="$3" branch="$4" base_branch="$5" pr_number="$6"
+  local state_dir="$7" win="$8" status_file="$9" current_agent="${10}" current_model="${11}"
+  local current_head="${12}" checks_run="${13}" checks_passed="${14}" merge_status="${15}"
+  local remediation_attempt_number="${16}" remediation_max_attempts="${17}"
+  local failed_check_names_json="${18}" failed_check_summary="${19}" ready_result_file="${20}"
+  local remediation_agent prompt_file launch_rc remediation_artifacts_json remediation_failed_artifacts_json
+
+  remediation_agent=$(ready_remediation_agent_cmd "$wt_dir")
+  [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
+  [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
+
+  prompt_file="/tmp/${SESSION}-${issue}-ready-remediation-prompt.txt"
+  build_ready_remediation_prompt \
+    "$pr_number" \
+    "$branch" \
+    "$wt_dir" \
+    "$status_file" \
+    "$base_branch" \
+    "$remediation_attempt_number" \
+    "$remediation_max_attempts" \
+    "$failed_check_summary" \
+    "$ready_result_file" > "$prompt_file"
+
+  _launch_agent_in_pane "$win" "$remediation_agent" "$current_model" "$prompt_file" "$slug" "$issue"
+  launch_rc=$?
+
+  if [[ "$launch_rc" -eq 0 ]]; then
+    remediation_artifacts_json=$(jq -cn \
+      --arg merge_status "${merge_status:-UNKNOWN}" \
+      --arg launch_head "$current_head" \
+      --argjson pr_number "${pr_number}" \
+      --argjson checks_run "${checks_run:-0}" \
+      --argjson checks_passed "${checks_passed:-0}" \
+      --argjson attempts "$remediation_attempt_number" \
+      --argjson remediation_failures "$failed_check_names_json" \
+      '{
+        type: "ready",
+        verdict: "fail",
+        checksRun: $checks_run,
+        checksPassed: $checks_passed,
+        mergeConflict: $merge_status,
+        prNumber: $pr_number,
+        remediationAttempts: $attempts,
+        remediationLaunchHead: $launch_head,
+        remediationFailures: $remediation_failures
+      }')
+    remediation_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$remediation_artifacts_json" "candidate-progress")
+    write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$current_model" \
+      "Ready remediation in progress for PR #$pr_number" \
+      "$remediation_artifacts_json"
+    rm -f "$state_dir/.needs-attention"
+    log "status" "⚙ $issue → Launched ready remediation (attempt ${remediation_attempt_number}/${remediation_max_attempts}) for PR #$pr_number"
+    return 0
+  fi
+
+  if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+    return 2
+  fi
+
+  remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+    "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":$(( remediation_attempt_number - 1 )),\"remediationFailures\":${failed_check_names_json}}" \
+    "candidate-progress")
+  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+    "Could not launch ready remediation agent" \
+    "$remediation_failed_artifacts_json"
+  write_ready_attention_file "$state_dir" "Could not launch remediation agent for PR #$pr_number."
+  log_error "  Failed to launch ready remediation agent for $issue"
+  return 1
+}
+
+launch_ready_watchdog_remediation() {
+  local issue="$1" slug="$2" wt_dir="$3" branch="$4" base_branch="$5" pr_number="$6"
+  local failed_check_summary="$7" attempt_number="$8" max_attempts="$9" failed_check_names_json="${10}"
+  local win state_dir status_file current_agent current_model current_head remediation_attempts remediation_launch_head
+  local ready_status checks_run checks_passed merge_status ready_result_file helper_rc
+
+  : "${SESSION:=wavemill}"
+  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
+  persist_task_window_id "$issue" "$win"
+  state_dir="$(ready_state_dir "$wt_dir" "$slug")"
+  status_file="/tmp/${SESSION}-${issue}-status.txt"
+  current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
+  current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
+  [[ -z "$current_agent" ]] && current_agent="$AGENT_CMD"
+  current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
+  remediation_attempts=$(ready_remediation_attempts "$state_dir")
+  remediation_launch_head=$(ready_remediation_launch_head "$state_dir")
+  ready_status=$(read_stage_status "$state_dir" "ready")
+  ready_result_file="$state_dir/.ready-result.json"
+  checks_run=$(jq -r '.artifacts.checksRun // 0' "$ready_result_file" 2>/dev/null || echo "0")
+  checks_passed=$(jq -r '.artifacts.checksPassed // 0' "$ready_result_file" 2>/dev/null || echo "0")
+  merge_status=$(jq -r '.artifacts.mergeConflict // "UNKNOWN"' "$ready_result_file" 2>/dev/null || echo "UNKNOWN")
+
+  if [[ "$ready_status" == "running" ]] && [[ -n "$remediation_launch_head" ]] && [[ "$remediation_launch_head" == "$current_head" ]]; then
+    jq -cn --arg detail "Ready remediation is already running for PR #$pr_number at $current_head." --argjson attempt "$remediation_attempts" \
+      '{status:"skipped-in-flight", detail:$detail, attemptNumber:$attempt}'
+    return 0
+  fi
+
+  if (( remediation_attempts >= max_attempts )); then
+    jq -cn --arg detail "Ready remediation capped at ${remediation_attempts}/${max_attempts} attempts for PR #$pr_number." --argjson attempt "$remediation_attempts" \
+      '{status:"skipped-max-attempts", detail:$detail, attemptNumber:$attempt}'
+    return 0
+  fi
+
+  _launch_ready_remediation_attempt \
+    "$issue" "$slug" "$wt_dir" "$branch" "$base_branch" "$pr_number" \
+    "$state_dir" "$win" "$status_file" "$current_agent" "$current_model" \
+    "$current_head" "$checks_run" "$checks_passed" "$merge_status" \
+    "$attempt_number" "$max_attempts" "$failed_check_names_json" "$failed_check_summary" "$ready_result_file"
+  helper_rc=$?
+
+  if [[ "$helper_rc" -eq 0 ]]; then
+    jq -cn --arg detail "Launched ready remediation attempt ${attempt_number}/${max_attempts} for failing checks: $failed_check_summary." --arg head "$current_head" --argjson attempt "$attempt_number" \
+      '{status:"launched", detail:$detail, attemptNumber:$attempt, launchHead:$head}'
+    return 0
+  fi
+
+  jq -cn --arg detail "Failed to launch ready remediation attempt ${attempt_number}/${max_attempts} for PR #$pr_number." --argjson attempt "$attempt_number" \
+    '{status:"failed", detail:$detail, attemptNumber:$attempt}'
+  return 0
+}
+
 launch_ready_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
   local pr_number="$7"
@@ -5152,7 +5391,7 @@ launch_ready_phase() {
 
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
-  if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number"; then
+  if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number" "$base_branch"; then
     return 1
   fi
 
@@ -5161,7 +5400,7 @@ launch_ready_phase() {
     ready_stderr_file=""
   }
   if [[ -n "$ready_stderr_file" ]]; then
-    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" 2>"$ready_stderr_file"); then
+    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" --state-dir "$state_dir" 2>"$ready_stderr_file"); then
       ready_rc=0
     else
       ready_rc=$?
@@ -5177,7 +5416,7 @@ launch_ready_phase() {
     fi
     rm -f "$ready_stderr_file"
   else
-    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" 2>/dev/null); then
+    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" --state-dir "$state_dir" 2>/dev/null); then
       ready_rc=0
     else
       ready_rc=$?
@@ -5340,7 +5579,7 @@ launch_ready_phase() {
   remediation_max_attempts=$(ready_remediation_max_attempts "$wt_dir")
   current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
 
-  if [[ "$remediation_enabled" == "true" ]] && ready_failure_is_actionable_for_remediation "$verdict" "$failed_check_names" "$result"; then
+  if [[ "$remediation_enabled" == "true" ]] && ready_failure_is_actionable_for_remediation "$state_dir" "$verdict" "$failed_check_names" "$result"; then
     if [[ "$ready_status" == "running" ]] && [[ -n "$remediation_launch_head" ]] && [[ "$remediation_launch_head" == "$current_head" ]]; then
       return 5
     fi
@@ -5358,70 +5597,20 @@ launch_ready_phase() {
       return 1
     fi
 
-    remediation_agent=$(ready_remediation_agent_cmd "$wt_dir")
-    [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
-    [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
-
     failed_check_summary=$(ready_failed_check_summary "$result")
     [[ -n "$failed_check_summary" ]] || failed_check_summary="${failed_check_names}: checks failing"
-
-    prompt_file="/tmp/${SESSION}-${issue}-ready-remediation-prompt.txt"
-    build_ready_remediation_prompt \
-      "$pr_number" \
-      "$branch" \
-      "$wt_dir" \
-      "$status_file" \
-      "$base_branch" \
-      "$(( remediation_attempts + 1 ))" \
-      "$remediation_max_attempts" \
-      "$failed_check_summary" \
-      "$ready_result_file" > "$prompt_file"
-
-    _launch_agent_in_pane "$win" "$remediation_agent" "$current_model" "$prompt_file" "$slug" "$issue"
+    _launch_ready_remediation_attempt \
+      "$issue" "$slug" "$wt_dir" "$branch" "$base_branch" "$pr_number" \
+      "$state_dir" "$win" "$status_file" "$current_agent" "$current_model" \
+      "$current_head" "${checks_run:-0}" "${checks_passed:-0}" "${merge_status:-UNKNOWN}" \
+      "$(( remediation_attempts + 1 ))" "$remediation_max_attempts" \
+      "$failed_check_names_json" "$failed_check_summary" "$ready_result_file"
     launch_rc=$?
-
     if [[ "$launch_rc" -eq 0 ]]; then
-      remediation_artifacts_json=$(jq -cn \
-        --arg merge_status "${merge_status:-UNKNOWN}" \
-        --arg launch_head "$current_head" \
-        --argjson pr_number "${pr_number}" \
-        --argjson checks_run "${checks_run:-0}" \
-        --argjson checks_passed "${checks_passed:-0}" \
-        --argjson attempts "$(( remediation_attempts + 1 ))" \
-        --argjson remediation_failures "$failed_check_names_json" \
-        '{
-          type: "ready",
-          verdict: "fail",
-          checksRun: $checks_run,
-          checksPassed: $checks_passed,
-          mergeConflict: $merge_status,
-          prNumber: $pr_number,
-          remediationAttempts: $attempts,
-          remediationLaunchHead: $launch_head,
-          remediationFailures: $remediation_failures
-        }')
-      remediation_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$remediation_artifacts_json" "candidate-progress")
-      write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$current_model" \
-        "Ready remediation in progress for PR #$pr_number" \
-        "$remediation_artifacts_json"
-      rm -f "$state_dir/.needs-attention"
-      log "status" "⚙ $issue → Launched ready remediation (attempt $(( remediation_attempts + 1 ))/$remediation_max_attempts) for PR #$pr_number"
       return 5
-    fi
-
-    if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+    elif [[ "$launch_rc" -eq 2 ]]; then
       return 2
     fi
-
-    local remediation_failed_artifacts_json
-    remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempts},\"remediationFailures\":${failed_check_names_json}}" \
-      "candidate-progress")
-    write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
-      "Could not launch ready remediation agent" \
-      "$remediation_failed_artifacts_json"
-    write_ready_attention_file "$state_dir" "Could not launch remediation agent for PR #$pr_number."
-    log_error "  Failed to launch ready remediation agent for $issue"
     return 1
   fi
 
@@ -5855,17 +6044,17 @@ maybe_run_challenge_eval() {
 
 post_merge_eval_timeout_seconds() {
   local timeout
-  timeout=$(wavemill_load_config "$REPO_DIR" | jq -r '.eval.postMergeTimeoutSeconds // 180' 2>/dev/null || echo "180")
+  timeout=$(wavemill_load_config "$REPO_DIR" | jq -r '.eval.postMergeTimeoutSeconds // 600' 2>/dev/null || echo "600")
   if [[ "$timeout" =~ ^[0-9]+$ ]] && (( timeout >= 30 )); then
     echo "$timeout"
   else
-    echo "180"
+    echo "600"
   fi
 }
 
 launch_background_post_merge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4" issue_ref="$5" reason="$6" preresolved_agent="${7:-}"
-  local eval_agent eval_log eval_timeout rc
+  local eval_agent eval_log eval_timeout rc result_path persisted
 
   if [[ -n "$preresolved_agent" ]]; then
     eval_agent="$preresolved_agent"
@@ -5876,8 +6065,10 @@ launch_background_post_merge_eval() {
   fi
 
   eval_log="/tmp/${SESSION}-eval-${issue}.log"
+  result_path="/tmp/${SESSION:-wavemill}-eval-${issue}-result.json"
   eval_timeout="$(post_merge_eval_timeout_seconds)"
   : >"$eval_log"
+  rm -f "$result_path"
 
   (
     {
@@ -5888,6 +6079,7 @@ launch_background_post_merge_eval() {
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
           --agent "$eval_agent" \
+          --result-file "$result_path" \
           --debug; then
           rc=0
         else
@@ -5899,6 +6091,7 @@ launch_background_post_merge_eval() {
           --worktree "${WORKTREE_ROOT}/${slug}" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
           --agent "$eval_agent" \
+          --result-file "$result_path" \
           --debug; then
           rc=0
         else
@@ -5906,10 +6099,12 @@ launch_background_post_merge_eval() {
         fi
       fi
       printf 'Eval process exited with code %s\n' "$rc"
-      if [[ "$rc" -eq 0 ]]; then
+      persisted=$(jq -r '.persisted // false' "$result_path" 2>/dev/null || echo "false")
+      rm -f "$result_path"
+      if [[ "$persisted" == "true" ]]; then
         mark_eval_completed "$issue"
       else
-        printf 'WARN: Eval failed for %s; setting evalFailed=true\n' "$issue"
+        printf 'WARN: Eval not persisted for %s (rc=%s); setting evalFailed=true\n' "$issue" "$rc"
         mark_eval_failed "$issue"
       fi
     } >>"$eval_log" 2>&1

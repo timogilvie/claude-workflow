@@ -40,6 +40,7 @@ export interface SubsystemUpdateContext {
 export interface SubsystemUpdateExecutionOptions {
   timeoutMs?: number;
   maxRetries?: number;
+  signal?: AbortSignal;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -121,6 +122,7 @@ export async function updateSubsystemSpec(
     issueDescription,
     timeoutMs: options.timeoutMs,
     maxRetries: options.maxRetries,
+    signal: options.signal,
   });
 
   // Write updated spec
@@ -140,6 +142,7 @@ async function generateSubsystemUpdate(opts: {
   issueDescription: string;
   timeoutMs?: number;
   maxRetries?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const promptPath = join(dirname(dirname(__dirname)), 'tools', 'prompts', 'subsystem-update-template.md');
   const promptTemplate = readFileSync(promptPath, 'utf-8');
@@ -167,6 +170,7 @@ async function generateSubsystemUpdate(opts: {
     activityTimeout: opts.timeoutMs ?? 60_000,
     retry: (opts.maxRetries ?? 1) > 0,
     maxRetries: opts.maxRetries ?? 1,
+    signal: opts.signal,
     cliFlags: [
       '--tools', '',
       '--append-system-prompt',
