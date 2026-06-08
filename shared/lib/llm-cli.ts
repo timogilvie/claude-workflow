@@ -82,6 +82,8 @@ export interface LLMCallOptions {
   logFallbackEvents?: boolean;
   /** Lifecycle hooks for progress reporting */
   observer?: LLMCallObserver;
+  /** Optional abort signal to terminate the spawned CLI process. */
+  signal?: AbortSignal;
 }
 
 export interface LLMCallResult {
@@ -752,6 +754,11 @@ async function executeStream(
     const cwd = options.cwd || process.cwd();
     const cliCmd = getCliCommand(provider, options);
 
+    if (options.signal?.aborted) {
+      reject(withElapsed(new Error('LLM call aborted'), 0));
+      return;
+    }
+
     const config = getProviderConfig(provider);
     const env = buildProviderEnv(config);
 
@@ -782,6 +789,19 @@ async function executeStream(
       if (activityTimeoutId) {
         clearTimeout(activityTimeoutId);
       }
+      if (abortListener) {
+        options.signal?.removeEventListener('abort', abortListener);
+      }
+    };
+
+    const abortListener = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval, activityTimeoutId);
+      llmProcess.kill('SIGTERM');
+      reject(withElapsed(new Error('LLM call aborted'), Date.now() - startedAt));
     };
 
     void options.observer?.onAttemptStart?.({
@@ -873,6 +893,8 @@ async function executeStream(
     if (activityTimeout) {
       resetActivityTimeout();
     }
+
+    options.signal?.addEventListener('abort', abortListener, { once: true });
 
     llmProcess.stdout?.on('data', (data) => {
       stdout += data.toString();

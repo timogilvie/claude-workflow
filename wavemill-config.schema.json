@@ -474,8 +474,8 @@
                     "type": "integer",
                     "minimum": 30,
                     "maximum": 1800,
-                    "default": 180,
-                    "description": "Wall-clock timeout in seconds for detached post-merge eval hook processes. Defaults to 180 when omitted."
+                    "default": 600,
+                    "description": "Wall-clock timeout in seconds for detached post-merge eval hook processes. Defaults to 600 when omitted."
                 },
                 "maxPromptBytes": {
                     "type": "integer",

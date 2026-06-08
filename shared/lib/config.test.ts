@@ -325,10 +325,10 @@ test('eval postMergeTimeoutSeconds is accepted by schema validation', () => {
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
-      eval: { postMergeTimeoutSeconds: 180 },
+      eval: { postMergeTimeoutSeconds: 600 },
     }));
 
-    assert.equal(getEvalConfig(tmp).postMergeTimeoutSeconds, 180);
+    assert.equal(getEvalConfig(tmp).postMergeTimeoutSeconds, 600);
   } finally {
     cleanUp(tmp);
   }
