@@ -766,8 +766,8 @@ function validPromptSizeDiagnostic() {
   };
 }
 
-test('SCHEMA_VERSION is bumped for nullable timeSeconds', () => {
-  assert.equal(SCHEMA_VERSION, '1.27.0');
+test('SCHEMA_VERSION is bumped for eval schema updates', () => {
+  assert.equal(SCHEMA_VERSION, '1.28.0');
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1136,6 +1136,29 @@ test('Record with outcomes field validates', () => {
   } as unknown as Record<string, unknown>;
   const result = validateAgainstSchema(record);
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with negative CI durationSeconds fails schema', () => {
+  const record = {
+    ...scenarios[0].record,
+    outcomes: {
+      success: true,
+      ci: {
+        ran: true,
+        passed: false,
+        checks: [
+          { name: 'build', status: 'pending', durationSeconds: -1 },
+        ],
+      },
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.errors.some((error) => error.includes('outcomes.ci.checks[0].durationSeconds')),
+    `Expected durationSeconds schema error, got: ${result.errors.join('; ')}`,
+  );
 });
 
 test('Record without outcomes field validates (backward compat)', () => {
@@ -1549,6 +1572,87 @@ test('routeProvenance validates when present', () => {
   assert.equal(properties.routeProvenance?.type, 'object');
 });
 
+test('routeProvenance with full route artifact fields validates', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: SCHEMA_VERSION,
+    routeProvenance: {
+      decisionSource: 'expanded',
+      bootstrapRoute: {
+        coder: 'claude-sonnet-4-6',
+        codeDepth: 'medium',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'llm',
+        planner: 'claude-sonnet-4-6',
+        planDepth: 'deep',
+        artifactPath: 'features/HOK-2071/.initial-route.json',
+        artifactHash: 'a'.repeat(64),
+        inputHash: 'b'.repeat(64),
+        source: 'bootstrap',
+        cacheHit: false,
+        routeSource: 'batch',
+        routerMode: 'normal',
+        routingMode: 'stage-aware',
+        expectedMetrics: {
+          expectedSuccess: 0.93,
+          expectedCostUsd: 0.41,
+        },
+      },
+      expandedRoute: {
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-sonnet-4-6',
+        reviewMode: 'static',
+        planner: 'gpt-5.4',
+        planDepth: 'deep',
+        artifactPath: 'features/HOK-2071/.post-expansion-route.json',
+        artifactHash: 'c'.repeat(64),
+        inputHash: 'd'.repeat(64),
+        source: 'expanded',
+        cacheHit: true,
+        routeSource: 'cache',
+        routerMode: 'survival',
+        routingMode: 'stage-aware',
+        expectedMetrics: {
+          expectedSuccess: 0.97,
+          expectedCostUsd: 0.55,
+        },
+      },
+      activeRoute: {
+        coder: 'gpt-5.4',
+        codeDepth: 'deep',
+        reviewer: 'claude-sonnet-4-6',
+        reviewMode: 'static',
+        planner: 'gpt-5.4',
+        planDepth: 'deep',
+        artifactPath: 'features/HOK-2071/.routing-complete.json',
+        artifactHash: 'e'.repeat(64),
+        inputHash: 'f'.repeat(64),
+        source: 'active',
+        cacheHit: true,
+        routeSource: 'single',
+        routerMode: 'constrained',
+        routingMode: 'stage-aware',
+        expectedMetrics: {
+          expectedSuccess: 0.95,
+          expectedCostUsd: 0.48,
+        },
+      },
+      routeChanged: true,
+      expandedCacheHit: true,
+      packetHash: '1'.repeat(64),
+      routeSource: 'cache',
+      routerMode: 'survival',
+      routingMode: 'stage-aware',
+      artifactPath: 'features/HOK-2071',
+      artifactHash: '2'.repeat(64),
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
 test('executedPlanning remains optional for legacy records', () => {
   const record = scenarios[0].record as unknown as Record<string, unknown>;
   const result = validateAgainstSchema(record);
@@ -1602,7 +1706,7 @@ test('phaseDurationsSeconds validates when present', () => {
 test('timeSeconds accepts null for unknown duration', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
-    schemaVersion: '1.27.0',
+    schemaVersion: '1.28.0',
     timeSeconds: null,
   };
 
@@ -1647,8 +1751,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.27.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.27.0');
+test('Schema version constant is 1.28.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.28.0');
 });
 
 test('Record with resolved-model routing validates', () => {

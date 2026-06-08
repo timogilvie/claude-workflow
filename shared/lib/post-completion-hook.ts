@@ -97,6 +97,7 @@ export interface PostCompletionContext {
   agentType?: string;
   solutionModel?: string;
   challengePairId?: string;
+  onPersisted?: () => void;
 }
 
 interface PostCompletionOutcomeInput {
@@ -139,6 +140,7 @@ interface ContextUpdateWarningRecord {
 interface ContextUpdateExecutionOptions {
   timeoutMs: number;
   maxRetries: number;
+  signal?: AbortSignal;
 }
 
 function defaultReviewOutcome(interventionSummary: InterventionSummary) {
@@ -638,8 +640,9 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
 
     // 7. Persist
     const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
-    postCompletionHookDeps.appendEvalRecord(record, { dir: evalsDir });
+    postCompletionHookDeps.appendEvalRecord(record, { dir: evalsDir, repoDir });
     persisted = true;
+    ctx.onPersisted?.();
 
     // 8. Enqueue Hokusai contribution before optional post-eval work.
     await triggerHokusaiSubmissionAfterPersistence(record, repoDir);
@@ -662,22 +665,6 @@ function makeContextUpdateTimeoutError(timeoutMs: number): Error {
   const error = new Error(`post-eval context updates timed out after ${seconds}s`);
   error.name = 'TimeoutError';
   return error;
-}
-
-async function runWithTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
-  let timeoutId: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<T>((_, reject) => {
-        timeoutId = setTimeout(() => reject(makeContextUpdateTimeoutError(timeoutMs)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
 }
 
 function isTimeoutError(err: unknown): boolean {
@@ -768,11 +755,16 @@ export async function runPostEvalContextUpdates(
 
     while (attempt < attempts) {
       attempt += 1;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(
+        () => controller.abort(makeContextUpdateTimeoutError(executionOptions.timeoutMs)),
+        executionOptions.timeoutMs,
+      );
       try {
-        await runWithTimeout(
-          postCompletionHookDeps.runContextUpdateWork(ctx, prDiff, issueContext, executionOptions),
-          executionOptions.timeoutMs,
-        );
+        await postCompletionHookDeps.runContextUpdateWork(ctx, prDiff, issueContext, {
+          ...executionOptions,
+          signal: controller.signal,
+        });
         outcome = {
           ran: true,
           durationMs: Date.now() - startedAt,
@@ -781,14 +773,15 @@ export async function runPostEvalContextUpdates(
         };
         break;
       } catch (err) {
-        const timedOut = isTimeoutError(err);
+        const timeoutReason = controller.signal.reason;
+        const timedOut = controller.signal.aborted || isTimeoutError(err) || isTimeoutError(timeoutReason);
         if (attempt >= attempts) {
           outcome = {
             ran: true,
             reason: timedOut ? 'timeout' : 'error',
             durationMs: Date.now() - startedAt,
             retryCount: attempt - 1,
-            errorMessage: errorMessage(err),
+            errorMessage: errorMessage(timedOut && timeoutReason ? timeoutReason : err),
             operatingMode,
           };
           break;
@@ -796,6 +789,9 @@ export async function runPostEvalContextUpdates(
         console.warn(
           `Post-completion eval: context update attempt ${attempt}/${attempts} failed - ${errorMessage(err)}`
         );
+      } finally {
+        clearTimeout(timeoutId);
+        controller.abort();
       }
     }
   }
@@ -843,6 +839,7 @@ async function updateProjectContext(
     issueContext,
     timeoutMs: executionOptions.timeoutMs,
     maxRetries: 0,
+    signal: executionOptions.signal,
   });
 
   // Append to project-context.md
@@ -934,6 +931,7 @@ async function updateSubsystemSpecs(
   }, {
     timeoutMs: executionOptions.timeoutMs,
     maxRetries: 0,
+    signal: executionOptions.signal,
   });
 }
 
@@ -947,6 +945,7 @@ async function generateContextUpdate(opts: {
   issueContext: string;
   timeoutMs?: number;
   maxRetries?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const promptPath = resolve(__dirname, '../../tools/prompts/context-update-template.md');
   const promptTemplate = readFileSync(promptPath, 'utf-8');
@@ -975,6 +974,7 @@ async function generateContextUpdate(opts: {
     activityTimeout: opts.timeoutMs ?? 60_000,
     retry: (opts.maxRetries ?? 1) > 0,
     maxRetries: opts.maxRetries ?? 1,
+    signal: opts.signal,
     cliFlags: [
       '--tools', '',
       '--append-system-prompt',

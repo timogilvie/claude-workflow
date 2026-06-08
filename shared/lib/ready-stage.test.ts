@@ -8,6 +8,7 @@ import {
   checkMergeConflicts,
   checkCIStatus,
   checkSchemaMigrations,
+  checkMigrationBaseFreshness,
   checkMigrationChainIntegrity,
   checkForbiddenDDL,
   checkMigrationReversibility,
@@ -58,6 +59,13 @@ function makePrContext(changedFiles: string[], labels: string[] = []) {
 
 async function loadMigrationFixture(name: string): Promise<string> {
   return fs.readFile(path.join(migrationFixturesDir, name), 'utf-8');
+}
+
+function makeExecError(message: string, status: number, stderr?: string) {
+  const error = new Error(message) as Error & { status?: number; stderr?: string };
+  error.status = status;
+  error.stderr = stderr ?? message;
+  return error;
 }
 
 describe('ready-stage', () => {
@@ -347,6 +355,7 @@ describe('ready-stage', () => {
       const result = await checkMigrationChainIntegrity(repoDir);
       assert.equal(result.status, 'fail');
       assert.match(result.message, /Duplicate migration revision IDs/);
+      assert.match(result.message, /001 .*001_base\.py, migrations\/versions\/001_duplicate\.py/);
       assert.ok(Array.isArray(result.details?.duplicateRevisions));
     });
 
@@ -370,6 +379,8 @@ describe('ready-stage', () => {
       const result = await checkMigrationChainIntegrity(repoDir);
       assert.equal(result.status, 'fail');
       assert.match(result.message, /exactly one head/);
+      assert.match(result.message, /002_a \(migrations\/versions\/002_a\.py\)/);
+      assert.match(result.message, /002_b \(migrations\/versions\/002_b\.py\)/);
       assert.equal((result.details?.heads as unknown[])?.length, 2);
     });
 
@@ -436,9 +447,10 @@ describe('ready-stage', () => {
 
       try {
         const result = await runReadyStage({ prNumber: 42, repoDir });
-        assert.equal(result.verdict, 'pass');
-        assert.equal(result.checks[0]?.name, 'migration-chain-integrity');
-        assert.equal(result.checks[0]?.status, 'pass');
+        assert.equal(result.verdict, 'warn');
+        assert.equal(result.checks.find((check) => check.name === 'migration-base-refresh')?.status, 'warn');
+        const migrationCheck = result.checks.find((check) => check.name === 'migration-chain-integrity');
+        assert.equal(migrationCheck?.status, 'pass');
       } finally {
         execMock.mock.restore();
       }
@@ -448,6 +460,515 @@ describe('ready-stage', () => {
       const result = await checkMigrationChainIntegrity(repoDir, ['migrations/.*\\.sql$'], 'sql');
       assert.equal(result.status, 'skip');
       assert.match(result.message, /unsupported.*sql/i);
+    });
+
+    it('evaluates against the merge tree and names both heads', async () => {
+      const commands: string[] = [];
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        commands.push(cmd);
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git merge-tree --write-tree 'origin/main' HEAD") return 'merge-tree-oid\n';
+        if (cmd === "git ls-tree -r --name-only 'merge-tree-oid'") {
+          return [
+            'alembic/versions/043_base.py',
+            'alembic/versions/044_main.py',
+            'alembic/versions/045_branch.py',
+          ].join('\n');
+        }
+        if (cmd === "git show 'merge-tree-oid:alembic/versions/043_base.py'") {
+          return 'revision = "043"\ndown_revision = None\n';
+        }
+        if (cmd === "git show 'merge-tree-oid:alembic/versions/044_main.py'") {
+          return 'revision = "044"\ndown_revision = "043"\n';
+        }
+        if (cmd === "git show 'merge-tree-oid:alembic/versions/045_branch.py'") {
+          return 'revision = "045"\ndown_revision = "043"\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationChainIntegrity(
+          repoDir,
+          ['alembic/versions/.*\\.py$'],
+          'alembic',
+          { baseRef: 'main' }
+        );
+        assert.equal(result.status, 'fail');
+        assert.equal(result.details?.evaluatedAgainst, 'merge-tree');
+        assert.equal(result.details?.baseRef, 'main');
+        assert.equal(result.details?.treeOid, 'merge-tree-oid');
+        assert.match(result.message, /found 2: 044 \(alembic\/versions\/044_main\.py\), 045 \(alembic\/versions\/045_branch\.py\)/);
+        assert.ok(commands.some(cmd => cmd.includes("git merge-tree --write-tree 'origin/main' HEAD")));
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('falls back to the worktree when merge-tree reports conflicts', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git merge-tree --write-tree 'origin/main' HEAD") {
+          throw makeExecError('merge conflict', 1, 'merge conflict');
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationChainIntegrity(
+          repoDir,
+          ['migrations/versions/.*\\.py$'],
+          'alembic',
+          { baseRef: 'main' }
+        );
+        assert.equal(result.status, 'pass');
+        assert.equal(result.details?.evaluatedAgainst, 'worktree');
+        assert.deepEqual(result.details?.mergeContext, {
+          source: 'worktree-fallback',
+          reason: 'merge-conflict',
+        });
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('falls back to the worktree when merge-tree is unavailable', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git merge-tree --write-tree 'origin/main' HEAD") {
+          throw makeExecError('git merge-tree unsupported', 128, 'git: merge-tree unsupported');
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationChainIntegrity(
+          repoDir,
+          ['migrations/versions/.*\\.py$'],
+          'alembic',
+          { baseRef: 'main' }
+        );
+        assert.equal(result.status, 'pass');
+        assert.equal(result.details?.evaluatedAgainst, 'worktree');
+        assert.deepEqual(result.details?.mergeContext, {
+          source: 'worktree-fallback',
+          reason: 'git-unavailable',
+        });
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('keeps the old worktree-only behavior when baseRef is omitted', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const commands: string[] = [];
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        commands.push(cmd);
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationChainIntegrity(repoDir);
+        assert.equal(result.status, 'pass');
+        assert.equal(result.details?.evaluatedAgainst, 'worktree');
+        assert.deepEqual(commands, []);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+  });
+
+  describe('checkMigrationBaseFreshness', () => {
+    let repoDir: string;
+
+    beforeEach(async () => {
+      repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-migration-freshness-'));
+    });
+
+    afterEach(async () => {
+      await fs.rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('detects when the base branch advanced after branch creation', async () => {
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/043_base.py': 'revision = "043"\ndown_revision = None\n',
+        'alembic/versions/045_branch.py': 'revision = "045"\ndown_revision = "043"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git ls-tree -r --name-only 'origin/main'") {
+          return 'alembic/versions/043_base.py\nalembic/versions/044_main.py\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/043_base.py'") {
+          return 'revision = "043"\ndown_revision = None\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/044_main.py'") {
+          return 'revision = "044"\ndown_revision = "043"\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationBaseFreshness({
+          repoDir,
+          changedFiles: ['alembic/versions/045_branch.py'],
+          baseBranch: 'main',
+          migrationPatternSources: ['alembic/versions/.*\\.py$'],
+          migrationKind: 'alembic',
+        });
+        assert.equal(result.status, 'fail');
+        assert.match(result.message, /044/);
+        assert.match(result.message, /045/);
+        assert.equal(result.details?.baseHead, '044');
+        assert.equal(result.details?.branchHead, '045');
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('names both revisions verbatim in the remediation prompt', async () => {
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/a1b2c3d4e5f6_base.py': 'revision = "a1b2c3d4e5f6"\ndown_revision = None\n',
+        'alembic/versions/9f8e7d6c5b4a_branch.py': 'revision = "9f8e7d6c5b4a"\ndown_revision = "a1b2c3d4e5f6"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git ls-tree -r --name-only 'origin/main'") {
+          return 'alembic/versions/a1b2c3d4e5f6_base.py\nalembic/versions/0aaabbbcccdd_main.py\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/a1b2c3d4e5f6_base.py'") {
+          return 'revision = "a1b2c3d4e5f6"\ndown_revision = None\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/0aaabbbcccdd_main.py'") {
+          return 'revision = "0aaabbbcccdd"\ndown_revision = "a1b2c3d4e5f6"\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationBaseFreshness({
+          repoDir,
+          changedFiles: ['alembic/versions/9f8e7d6c5b4a_branch.py'],
+          baseBranch: 'main',
+          migrationPatternSources: ['alembic/versions/.*\\.py$'],
+          migrationKind: 'alembic',
+        });
+        assert.equal(result.status, 'fail');
+        assert.match(result.message, /0aaabbbcccdd/);
+        assert.match(result.message, /9f8e7d6c5b4a/);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('passes when the branch head is based on the current base head', async () => {
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/043_base.py': 'revision = "043"\ndown_revision = None\n',
+        'alembic/versions/044_main.py': 'revision = "044"\ndown_revision = "043"\n',
+        'alembic/versions/045_branch.py': 'revision = "045"\ndown_revision = "044"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git ls-tree -r --name-only 'origin/main'") {
+          return 'alembic/versions/043_base.py\nalembic/versions/044_main.py\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/043_base.py'") {
+          return 'revision = "043"\ndown_revision = None\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/044_main.py'") {
+          return 'revision = "044"\ndown_revision = "043"\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationBaseFreshness({
+          repoDir,
+          changedFiles: ['alembic/versions/045_branch.py'],
+          baseBranch: 'main',
+          migrationPatternSources: ['alembic/versions/.*\\.py$'],
+          migrationKind: 'alembic',
+        });
+        assert.equal(result.status, 'pass');
+        assert.match(result.message, /based on the current base head/);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('passes when the branch migration head matches the base head', async () => {
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/043_base.py': 'revision = "043"\ndown_revision = None\n',
+        'alembic/versions/044_main.py': 'revision = "044"\ndown_revision = "043"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git ls-tree -r --name-only 'origin/main'") {
+          return 'alembic/versions/043_base.py\nalembic/versions/044_main.py\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/043_base.py'") {
+          return 'revision = "043"\ndown_revision = None\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/044_main.py'") {
+          return 'revision = "044"\ndown_revision = "043"\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationBaseFreshness({
+          repoDir,
+          changedFiles: ['alembic/versions/044_main.py'],
+          baseBranch: 'main',
+          migrationPatternSources: ['alembic/versions/.*\\.py$'],
+          migrationKind: 'alembic',
+        });
+        assert.equal(result.status, 'pass');
+        assert.equal(result.details?.baseHead, '044');
+        assert.equal(result.details?.branchHead, '044');
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('does not fetch when no migration files changed', async () => {
+      const commands: string[] = [];
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        commands.push(cmd);
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationBaseFreshness({
+          repoDir,
+          changedFiles: ['src/app.ts'],
+          baseBranch: 'main',
+          migrationPatternSources: ['alembic/versions/.*\\.py$'],
+          migrationKind: 'alembic',
+        });
+        assert.equal(result.status, 'skip');
+        assert.match(result.message, /No migration files changed/i);
+        assert.equal(commands.filter(cmd => cmd.startsWith('git fetch')).length, 0);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('fetches exactly once when migration files changed', async () => {
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/043_base.py': 'revision = "043"\ndown_revision = None\n',
+        'alembic/versions/044_branch.py': 'revision = "044"\ndown_revision = "043"\n',
+      });
+
+      const commands: string[] = [];
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        commands.push(cmd);
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git ls-tree -r --name-only 'origin/main'") {
+          return 'alembic/versions/043_base.py\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/043_base.py'") {
+          return 'revision = "043"\ndown_revision = None\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationBaseFreshness({
+          repoDir,
+          changedFiles: ['alembic/versions/044_branch.py'],
+          baseBranch: 'main',
+          migrationPatternSources: ['alembic/versions/.*\\.py$'],
+          migrationKind: 'alembic',
+        });
+        assert.equal(result.status, 'pass');
+        assert.equal(commands.filter(cmd => cmd.startsWith('git fetch --quiet origin')).length, 1);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('warns gracefully when fetch fails', async () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") {
+          throw makeExecError('fetch denied', 128);
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationBaseFreshness({
+          repoDir,
+          changedFiles: ['alembic/versions/045_branch.py'],
+          baseBranch: 'main',
+          migrationPatternSources: ['alembic/versions/.*\\.py$'],
+          migrationKind: 'alembic',
+        });
+        assert.equal(result.status, 'warn');
+        assert.match(result.message, /could not verify base migration head/i);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('warns when the base branch has ambiguous heads', async () => {
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/043_base.py': 'revision = "043"\ndown_revision = None\n',
+        'alembic/versions/045_branch.py': 'revision = "045"\ndown_revision = "043"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git ls-tree -r --name-only 'origin/main'") {
+          return [
+            'alembic/versions/043_base.py',
+            'alembic/versions/044_a.py',
+            'alembic/versions/044_b.py',
+          ].join('\n');
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/043_base.py'") {
+          return 'revision = "043"\ndown_revision = None\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/044_a.py'") {
+          return 'revision = "044_a"\ndown_revision = "043"\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/044_b.py'") {
+          return 'revision = "044_b"\ndown_revision = "043"\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationBaseFreshness({
+          repoDir,
+          changedFiles: ['alembic/versions/045_branch.py'],
+          baseBranch: 'main',
+          migrationPatternSources: ['alembic/versions/.*\\.py$'],
+          migrationKind: 'alembic',
+        });
+        assert.equal(result.status, 'warn');
+        assert.equal((result.details?.baseHeads as unknown[])?.length, 2);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('warns when a branch migration cannot be parsed', async () => {
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/043_base.py': 'revision = "043"\ndown_revision = None\n',
+        'alembic/versions/045_branch.py': 'revision = "045"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git ls-tree -r --name-only 'origin/main'") {
+          return 'alembic/versions/043_base.py\nalembic/versions/044_main.py\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/043_base.py'") {
+          return 'revision = "043"\ndown_revision = None\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/044_main.py'") {
+          return 'revision = "044"\ndown_revision = "043"\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationBaseFreshness({
+          repoDir,
+          changedFiles: ['alembic/versions/045_branch.py'],
+          baseBranch: 'main',
+          migrationPatternSources: ['alembic/versions/.*\\.py$'],
+          migrationKind: 'alembic',
+        });
+        assert.equal(result.status, 'warn');
+        assert.equal(result.details?.file, 'alembic/versions/045_branch.py');
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('skips for non-alembic migration kinds', async () => {
+      const result = await checkMigrationBaseFreshness({
+        repoDir,
+        changedFiles: ['migrations/001.sql'],
+        baseBranch: 'main',
+        migrationPatternSources: ['migrations/.*\\.sql$'],
+        migrationKind: 'sql',
+      });
+      assert.equal(result.status, 'skip');
+      assert.match(result.message, /unsupported.*sql/i);
+    });
+
+    it('wires migration-base-freshness through runReadyStage', async () => {
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            checks: ['migration-base-freshness'],
+            requiredChecks: ['migration-base-freshness'],
+            migrationKind: 'alembic',
+            migrationPatterns: ['alembic/versions/.*\\.py$'],
+          },
+        }),
+        'alembic/versions/043_base.py': 'revision = "043"\ndown_revision = None\n',
+        'alembic/versions/045_branch.py': 'revision = "045"\ndown_revision = "043"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view') && !cmd.includes('mergeable,mergeStateStatus')) {
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [{ path: 'alembic/versions/045_branch.py' }],
+            labels: [],
+          });
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([]);
+        }
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git ls-tree -r --name-only 'origin/main'") {
+          return 'alembic/versions/043_base.py\nalembic/versions/044_main.py\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/043_base.py'") {
+          return 'revision = "043"\ndown_revision = None\n';
+        }
+        if (cmd === "git show 'origin/main:alembic/versions/044_main.py'") {
+          return 'revision = "044"\ndown_revision = "043"\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        const check = result.checks.find(entry => entry.name === 'migration-base-freshness');
+        assert.ok(check);
+        assert.equal(check.status, 'fail');
+        assert.match(check.message, /044/);
+        assert.match(check.message, /045/);
+      } finally {
+        execMock.mock.restore();
+      }
     });
   });
 
@@ -974,9 +1495,10 @@ describe('ready-stage', () => {
 
       try {
         const result = await runReadyStage({ prNumber: 42, repoDir });
-        assert.deepEqual(result.checks.map(c => c.name), ['migration-reversibility']);
-        assert.equal(result.checks[0]?.status, 'pass');
-        assert.equal(result.checks[0]?.details?.overrideApplied, true);
+        assert.equal(result.checks.some((check) => check.name === 'migration-base-refresh'), true);
+        const reversibilityCheck = result.checks.find((check) => check.name === 'migration-reversibility');
+        assert.equal(reversibilityCheck?.status, 'pass');
+        assert.equal(reversibilityCheck?.details?.overrideApplied, true);
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });
@@ -1023,8 +1545,8 @@ describe('ready-stage', () => {
 
       try {
         const result = await runReadyStage({ prNumber: 42, repoDir });
-        assert.deepEqual(result.checks.map(c => c.name), ['migration-reversibility']);
-        assert.equal(result.checks[0]?.status, 'fail');
+        assert.equal(result.checks.some((check) => check.name === 'migration-base-refresh'), true);
+        assert.equal(result.checks.find((check) => check.name === 'migration-reversibility')?.status, 'fail');
         assert.equal(result.verdict, 'fail');
       } finally {
         execMock.mock.restore();
@@ -1554,6 +2076,45 @@ describe('ready-stage', () => {
       }
     });
 
+    it('adds migration freshness and reversibility to Alembic baseline suggestions', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-baseline-'));
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+          }
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [{ path: 'src/app.ts' }],
+          });
+        }
+        if (cmd.includes('gh pr checks')) return JSON.stringify([]);
+        if (cmd.includes('git fetch --quiet origin')) return '';
+        if (cmd.includes('git merge-tree --write-tree')) return '';
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        const baseline = result.checks.find(check => check.name === 'baseline-discovery');
+        assert.equal(baseline?.status, 'warn');
+        assert.deepEqual((baseline?.details?.suggestions as string[]) ?? [], [
+          'ready.checks: schema-migrations, migration-base-freshness, migration-reversibility, forbidden-ddl',
+          'ready.requiredChecks: schema-migrations, migration-base-freshness',
+        ]);
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
     it('suppresses gh stderr while gathering PR context CI metadata', async () => {
       const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
       await fs.writeFile(
@@ -1768,6 +2329,102 @@ describe('ready-stage', () => {
       }
     });
 
+    it('auto-enables alembic migration-chain checks when no ready checks are configured', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'alembic/versions/002_a.py': 'revision = "002_a"\ndown_revision = "001"\n',
+        'alembic/versions/002_b.py': 'revision = "002_b"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+            });
+          }
+
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return '';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.equal(result.verdict, 'fail');
+        assert.equal(result.checks.some((check) => check.name === 'migration-chain-auto-enabled'), true);
+        assert.equal(result.checks.some((check) => check.name === 'migration-base-refresh'), true);
+        assert.equal(result.checks.find((check) => check.name === 'migration-chain-integrity')?.status, 'fail');
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('skips alembic auto-detection when migration checks are disabled', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            migrationChecks: {
+              enabled: false,
+            },
+          },
+        }),
+        'alembic/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'alembic/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+            });
+          }
+
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return '';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.equal(result.checks.some((check) => check.name === 'migration-chain-integrity'), false);
+        assert.equal(result.checks.some((check) => check.name === 'migration-chain-auto-enabled'), false);
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
     it('can run only the migration-reversibility check through the allowlist', async () => {
       const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
       await writeRepoFiles(repoDir, {
@@ -1809,8 +2466,8 @@ describe('ready-stage', () => {
 
       try {
         const result = await runReadyStage({ prNumber: 42, repoDir });
-        assert.deepEqual(result.checks.map(check => check.name), ['migration-reversibility']);
-        assert.equal(result.checks[0]?.status, 'fail');
+        assert.equal(result.checks.some((check) => check.name === 'migration-base-refresh'), true);
+        assert.equal(result.checks.find((check) => check.name === 'migration-reversibility')?.status, 'fail');
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });

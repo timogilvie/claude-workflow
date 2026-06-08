@@ -119,6 +119,12 @@ function readWarningLines(repoDir: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line));
 }
 
+function timeoutError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'TimeoutError';
+  return error;
+}
+
 function stubBaseEvalDeps(executionModel = 'gpt-5.4'): void {
   postCompletionHookDeps.gatherEvalContext = () => ({
     taskPrompt: 'Persist outcomes in post-completion evals',
@@ -703,7 +709,12 @@ await test('runPostCompletionEval keeps eval persisted when context updates time
         timeoutSeconds: 0.01,
         maxRetries: 0,
       });
-      postCompletionHookDeps.runContextUpdateWork = async () => await new Promise<void>(() => {});
+      postCompletionHookDeps.runContextUpdateWork = async (_ctx, _prDiff, _issueContext, executionOptions) =>
+        await new Promise<void>((_resolve, reject) => {
+          executionOptions.signal?.addEventListener('abort', () => {
+            reject(executionOptions.signal?.reason ?? timeoutError('aborted'));
+          }, { once: true });
+        });
 
       const persisted = await runPostCompletionEval({
         issueId: 'HOK-1577',
@@ -728,6 +739,144 @@ await test('runPostCompletionEval keeps eval persisted when context updates time
     assert.equal(warnings[0].issueId, 'HOK-1577');
     assert.equal(warnings[0].retryCount, 0);
     assert.equal(typeof warnings[0].durationMs, 'number');
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval fires onPersisted before optional context updates begin timing out', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-on-persisted-'));
+  makeContextUpdateRepo(repoDir, 'on-persisted', 'HOK-2048');
+  clearConfigCache(repoDir);
+  const events: string[] = [];
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.getEvalContextUpdatesConfig = () => ({
+        enabled: true,
+        timeoutSeconds: 0.01,
+        maxRetries: 0,
+      });
+      postCompletionHookDeps.appendEvalRecord = (record, options) => {
+        events.push('persist');
+        defaultPostCompletionHookDeps.appendEvalRecord(record, options);
+      };
+      postCompletionHookDeps.runContextUpdateWork = async (_ctx, _prDiff, _issueContext, executionOptions) => {
+        events.push('context-start');
+        return await new Promise<void>((_resolve, reject) => {
+          executionOptions.signal?.addEventListener('abort', () => {
+            events.push('context-abort');
+            reject(executionOptions.signal?.reason ?? timeoutError('aborted'));
+          }, { once: true });
+        });
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-2048',
+        prNumber: '2048',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/on-persisted',
+        worktreePath: repoDir,
+        agentType: 'codex',
+        onPersisted: () => {
+          events.push('callback');
+        },
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    assert.deepEqual(events.slice(0, 3), ['persist', 'callback', 'context-start']);
+    assert.ok(events.includes('context-abort'));
+    assert.equal(readWarningLines(repoDir)[0]?.reason, 'timeout');
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval returns false when judge times out before persistence', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-judge-timeout-'));
+  makeContextUpdateRepo(repoDir, 'judge-timeout', 'HOK-2028');
+  clearConfigCache(repoDir);
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.evaluateTask = async () => {
+        throw timeoutError('judge timed out before persistence');
+      };
+      postCompletionHookDeps.runContextUpdateWork = async () => {
+        throw new Error('should not reach context updates');
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-2028',
+        prNumber: '2028',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/judge-timeout',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, false);
+    });
+
+    assert.equal(existsSync(join(repoDir, '.wavemill', 'evals', 'evals.jsonl')), false);
+    assert.deepEqual(readWarningLines(repoDir), []);
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval aborts underlying context update work when timeout elapses', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-abort-'));
+  makeContextUpdateRepo(repoDir, 'context-abort', 'HOK-2033');
+  clearConfigCache(repoDir);
+  let abortObserved = false;
+  let abortReason = '';
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.getEvalContextUpdatesConfig = () => ({
+        enabled: true,
+        timeoutSeconds: 0.01,
+        maxRetries: 0,
+      });
+      postCompletionHookDeps.runContextUpdateWork = async (_ctx, _prDiff, _issueContext, executionOptions) => {
+        return await new Promise<void>((_resolve, reject) => {
+          executionOptions.signal?.addEventListener('abort', () => {
+            abortObserved = executionOptions.signal?.aborted === true;
+            abortReason = String(executionOptions.signal?.reason instanceof Error
+              ? executionOptions.signal.reason.message
+              : executionOptions.signal?.reason ?? '');
+            reject(executionOptions.signal?.reason ?? timeoutError('aborted'));
+          }, { once: true });
+        });
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-2033',
+        prNumber: '2033',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/context-abort',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    assert.equal(abortObserved, true);
+    assert.match(abortReason, /timed out/);
+    assert.equal(readWarningLines(repoDir)[0]?.reason, 'timeout');
   } finally {
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });

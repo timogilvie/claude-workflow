@@ -26,6 +26,16 @@ Merge behavior for local overrides:
 - Arrays replace the base array.
 - Primitive values in local override win.
 
+### Cross-PR Revert Checker
+
+`tools/check-cross-pr-reverts.ts` resolves the integration branch in this order:
+
+1. `--integration-ref <ref>` when the CLI argument is non-empty.
+2. `.wavemill-config.json` / `.wavemill-config.local.json` `integration.integrationBranch`.
+3. Default `auto/integration`.
+
+If the resolved integration ref does not exist in the repo, the checker skips gracefully instead of blocking ready on a config lookup failure.
+
 ## Recommended Placement by Category
 
 Use `.wavemill-config.json` for:
@@ -61,6 +71,26 @@ When new model/router config fields are added in future versions:
 
 - Relative paths shared by the team can live in `.wavemill-config.json`.
 - Absolute machine paths (for example `/Users/...` or `C:\\Users\\...`) should stay local-only or env-backed.
+
+## Ready Stage Settings
+
+`ready.watchdog` controls how mill reacts to stale or failing ready states:
+
+- `thresholdMinutes`: stale-local-state threshold before the watchdog intervenes.
+- `autoRecover`: allows local stale-state cleanup when GitHub is clean and green.
+- `timeoutSeconds`: watchdog subprocess timeout per monitor tick.
+- `stableFailureConsecutivePolls`: identical safe failures required before queueing remediation.
+- `stableFailureEscalateAfterPolls`: identical unsafe failures required before escalating to operator attention.
+- `safeRemediationCategories`: allowlist for watchdog-driven remediation, defaulting to `lint`, `type`, `test`, `build`, `migration-chain`, and `alembic`.
+
+`ready.migrationChecks` controls automatic migration validation:
+
+- `enabled`: master switch for automatic migration integrity checks.
+- `autoDetectAlembic`: auto-enables `migration-chain-integrity` when `alembic/versions/` exists and `ready.checks` is otherwise empty.
+- `baseRefresh.enabled`: fetches the PR base branch before local migration validation.
+- `baseRefresh.timeoutSeconds`: timeout for that fetch.
+
+These settings are additive and optional. Repositories that do nothing keep the defaults.
 
 ## How sync-config Interacts with Config Files
 

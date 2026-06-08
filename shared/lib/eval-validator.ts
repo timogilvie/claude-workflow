@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline';
 import { BUDGET_MISSING, SCHEMA_VERSION } from './eval-schema.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
+import { getEffectiveRegistry, normalizeReviewerModelId } from './model-registry.ts';
 import {
   EVAL_ERROR_CODES,
   EVAL_ERROR_SEVERITY_ORDER,
@@ -62,6 +63,7 @@ export interface ValidationReport {
 interface ValidationLocation {
   file: string;
   line: number;
+  repoDir?: string;
 }
 
 function makeIssue(
@@ -106,9 +108,18 @@ function compareSemver(a: string, b: string): number {
   return 0;
 }
 
-function toDetail(instancePath: string, missingProperty?: string): string | undefined {
+function toDetail(
+  instancePath: string,
+  missingProperty?: string,
+  additionalProperty?: string,
+): string | undefined {
   if (missingProperty) {
     return missingProperty;
+  }
+
+  if (additionalProperty) {
+    const prefix = instancePath.replace(/^\//, '').replace(/\//g, '.');
+    return prefix ? `${prefix}.${additionalProperty}` : additionalProperty;
   }
 
   const cleaned = instancePath.replace(/^\//, '').replace(/\//g, '.');
@@ -127,6 +138,93 @@ function buildCounts(issues: ValidationIssue[]): Record<string, number> {
   return counts;
 }
 
+function getTaskDescriptor(record: Record<string, unknown>): Record<string, unknown> | null {
+  return isPlainObject(record.taskDescriptor) ? record.taskDescriptor : null;
+}
+
+function hasMissingTaskDescriptor(record: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(record, 'taskDescriptor')) {
+    return true;
+  }
+
+  const descriptor = record.taskDescriptor;
+  if (descriptor === null || descriptor === undefined) {
+    return true;
+  }
+
+  if (typeof descriptor === 'string') {
+    return descriptor.trim().length === 0;
+  }
+
+  return !isPlainObject(descriptor);
+}
+
+function getModelsAvailable(taskDescriptor: Record<string, unknown> | null): unknown {
+  if (!taskDescriptor) {
+    return undefined;
+  }
+
+  const constraints = taskDescriptor.constraints;
+  return isPlainObject(constraints) ? constraints.models_available : undefined;
+}
+
+function collectStageModelIssues(
+  record: Record<string, unknown>,
+  opts: ValidationLocation,
+  recordId?: string,
+): ValidationIssue[] {
+  const taskDescriptor = getTaskDescriptor(record);
+  if (!taskDescriptor) {
+    return [];
+  }
+
+  const stages = taskDescriptor.stages;
+  if (!isPlainObject(stages)) {
+    return [];
+  }
+
+  const registry = getEffectiveRegistry(opts.repoDir);
+  const issues: ValidationIssue[] = [];
+
+  for (const [stageName, stageValue] of Object.entries(stages)) {
+    if (!isPlainObject(stageValue) || typeof stageValue.model !== 'string') {
+      continue;
+    }
+
+    const modelId = stageValue.model.trim();
+    if (!modelId) {
+      continue;
+    }
+
+    if (stageName === 'reviewer') {
+      if (normalizeReviewerModelId(modelId, registry) === null) {
+        issues.push(
+          makeIssue(
+            'EVAL_NONCANONICAL_REVIEWER',
+            opts,
+            `taskDescriptor.stages.${stageName}.model`,
+            recordId,
+          ),
+        );
+      }
+      continue;
+    }
+
+    if (!Object.hasOwn(registry.models, modelId)) {
+      issues.push(
+        makeIssue(
+          'EVAL_UNKNOWN_STAGE_MODEL',
+          opts,
+          `taskDescriptor.stages.${stageName}.model`,
+          recordId,
+        ),
+      );
+    }
+  }
+
+  return issues;
+}
+
 export function validateEvalRecord(
   record: unknown,
   opts: ValidationLocation,
@@ -137,6 +235,7 @@ export function validateEvalRecord(
 
   const issues: ValidationIssue[] = [];
   const recordId = getRecordId(record);
+  const taskDescriptor = getTaskDescriptor(record);
 
   for (const field of REQUIRED_FIELDS) {
     if (!(field in record)) {
@@ -154,6 +253,9 @@ export function validateEvalRecord(
         typeof error.params?.missingProperty === 'string'
           ? error.params.missingProperty
           : undefined,
+        typeof error.params?.additionalProperty === 'string'
+          ? error.params.additionalProperty
+          : undefined,
       );
       issues.push(makeIssue('SCHEMA_VIOLATION', opts, detail, recordId));
     }
@@ -162,6 +264,24 @@ export function validateEvalRecord(
   if (isKnownSchemaVersion(record.schemaVersion) && compareSemver(record.schemaVersion, SCHEMA_VERSION) > 0) {
     issues.push(makeIssue('UNKNOWN_SCHEMA_VERSION', opts, 'schemaVersion', recordId));
   }
+
+  if (hasMissingTaskDescriptor(record)) {
+    issues.push(makeIssue('EVAL_MISSING_TASK_DESCRIPTOR', opts, 'taskDescriptor', recordId));
+  }
+
+  const modelsAvailable = getModelsAvailable(taskDescriptor);
+  if (taskDescriptor && (!Array.isArray(modelsAvailable) || modelsAvailable.length === 0)) {
+    issues.push(
+      makeIssue(
+        'EVAL_EMPTY_MODELS_AVAILABLE',
+        opts,
+        'taskDescriptor.constraints.models_available',
+        recordId,
+      ),
+    );
+  }
+
+  issues.push(...collectStageModelIssues(record, opts, recordId));
 
   if (
     record.score === null ||
@@ -195,6 +315,18 @@ export function deriveNonRewardReasonFromIssues(
     (a, b) =>
       EVAL_ERROR_SEVERITY_ORDER.indexOf(a.code) - EVAL_ERROR_SEVERITY_ORDER.indexOf(b.code),
   )[0];
+
+  if (highestSeverity.code === 'SCHEMA_VIOLATION') {
+    const paths = issues
+      .filter((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail)
+      .map((issue) => issue.detail as string)
+      .join(', ');
+
+    return {
+      code: highestSeverity.code,
+      message: paths ? `${highestSeverity.message} Paths: ${paths}` : highestSeverity.message,
+    };
+  }
 
   return {
     code: highestSeverity.code,

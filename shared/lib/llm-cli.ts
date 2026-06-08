@@ -28,6 +28,7 @@ import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getEffectiveRegistry, getLadder, getModel, rankCandidates, type RegistryTaskType } from './model-registry.ts';
 import { getModelStatus, markExhausted, readQuotaSnapshot, recordSuccess } from './quota-state.ts';
 import { fallbackLog } from './router-log.ts';
+import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -81,6 +82,8 @@ export interface LLMCallOptions {
   logFallbackEvents?: boolean;
   /** Lifecycle hooks for progress reporting */
   observer?: LLMCallObserver;
+  /** Optional abort signal to terminate the spawned CLI process. */
+  signal?: AbortSignal;
 }
 
 export interface LLMCallResult {
@@ -316,6 +319,12 @@ function buildFallbackEventRecord(input: {
   costUsd: number | null;
 }): EvalRecord {
   const score = input.outcome === 'success' ? 1.0 : 0.0;
+  const modelsAvailable = Array.from(
+    new Set(
+      [input.preferredModel, input.fallbackModel, ...input.fallbackChain.map((entry) => entry.model)]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+    ),
+  );
   const fallbackEvent: FallbackEventMetadata = {
     schema_version: FALLBACK_EVENT_SCHEMA_VERSION,
     preferred_model: input.preferredModel,
@@ -345,6 +354,15 @@ function buildFallbackEventRecord(input: {
     interventionDetails: [],
     rationale: `Cross-model fallback: ${input.preferredModel} -> ${input.fallbackModel ?? 'none'} (${input.outcome})`,
     agentType: 'llm-cli',
+    taskDescriptor: buildTaskDescriptor({
+      originalPrompt: summarizePrompt(input.prompt),
+      score,
+      timeSeconds: Math.max(0, input.endedAt - input.startedAt) / 1000,
+      interventionCount: 0,
+      modelsAvailable,
+      objective: 'balanced',
+      workflowCost: typeof input.costUsd === 'number' ? input.costUsd : undefined,
+    }),
   };
 
   attachFallbackEvent(record, fallbackEvent);
@@ -355,7 +373,7 @@ function emitFallbackEvent(input: Parameters<typeof buildFallbackEventRecord>[0]
   try {
     const record = buildFallbackEventRecord(input);
     const evalsDir = resolveEvalsDir(undefined, input.repoDir).dir;
-    appendEvalRecord(record, { dir: evalsDir });
+    appendEvalRecord(record, { dir: evalsDir, repoDir: input.repoDir });
   } catch (error) {
     console.warn(
       `[llm-cli] failed to persist fallback eval: ${error instanceof Error ? error.message : String(error)}`,
@@ -736,6 +754,11 @@ async function executeStream(
     const cwd = options.cwd || process.cwd();
     const cliCmd = getCliCommand(provider, options);
 
+    if (options.signal?.aborted) {
+      reject(withElapsed(new Error('LLM call aborted'), 0));
+      return;
+    }
+
     const config = getProviderConfig(provider);
     const env = buildProviderEnv(config);
 
@@ -766,6 +789,19 @@ async function executeStream(
       if (activityTimeoutId) {
         clearTimeout(activityTimeoutId);
       }
+      if (abortListener) {
+        options.signal?.removeEventListener('abort', abortListener);
+      }
+    };
+
+    const abortListener = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(timeoutId, slowInterval, activityTimeoutId);
+      llmProcess.kill('SIGTERM');
+      reject(withElapsed(new Error('LLM call aborted'), Date.now() - startedAt));
     };
 
     void options.observer?.onAttemptStart?.({
@@ -857,6 +893,8 @@ async function executeStream(
     if (activityTimeout) {
       resetActivityTimeout();
     }
+
+    options.signal?.addEventListener('abort', abortListener, { once: true });
 
     llmProcess.stdout?.on('data', (data) => {
       stdout += data.toString();

@@ -67,6 +67,7 @@ extract_function "$MILL_SCRIPT" "transient_mergeability_count" >> "$LAUNCH_FUNC_
 extract_function "$MILL_SCRIPT" "increment_transient_mergeability_count" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "_write_cross_pr_diagnostic" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "cross_pr_revert_gate_allows_merge" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_transient_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "log_ready_failure_result" >> "$LAUNCH_FUNC_FILE"
@@ -74,6 +75,8 @@ extract_function "$MILL_SCRIPT" "log_ready_unparseable_result" >> "$LAUNCH_FUNC_
 extract_function "$MILL_SCRIPT" "ready_failure_is_actionable_for_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_failed_check_summary" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "set_ready_pass_labels" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "_launch_ready_remediation_attempt" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "launch_ready_watchdog_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "launch_ready_phase" >> "$LAUNCH_FUNC_FILE"
 
 if [[ ! -s "$LAUNCH_FUNC_FILE" ]]; then
@@ -214,23 +217,26 @@ run_launch_case() {
       mkdir -p "$1"
       printf "%s\n" "$2" > "$1/.needs-attention"
     }
-    cross_pr_revert_gate_allows_merge() {
-      case "$TEST_CASE" in
-        cross_pr_revert_blocked)
-          write_ready_attention_file "$2" "PR #$4 removes files from #437 without explicit acknowledgement. Affected files: strategy.txt."
-          log "status" "⛔ $1 → Cross-PR revert guard blocked ready phase for PR #$4"
-          return 1
-          ;;
-        cross_pr_revert_error)
-          write_ready_attention_file "$2" "Cross-PR revert guard failed for PR #$4."
-          log_error "  Cross-PR revert guard failed for $1 (PR #$4)"
-          return 1
-          ;;
-        *)
-          return 0
-          ;;
-      esac
-    }
+    if [[ "$TEST_CASE" != "cross_pr_revert_tool_error_direct" ]]; then
+      cross_pr_revert_gate_allows_merge() {
+        case "$TEST_CASE" in
+          cross_pr_revert_blocked)
+            write_ready_attention_file "$2" "PR #$4 removes files from #437 without explicit acknowledgement. Affected files: strategy.txt."
+            log "status" "⛔ $1 → Cross-PR revert guard blocked ready phase for PR #$4"
+            return 1
+            ;;
+          cross_pr_revert_error)
+            local diag_msg="Cross-PR revert guard tool failure for PR #$4: git-merge-base failed on ref '\''auto/integration'\''. Diagnostic: fatal: Not a valid object name '\''auto/integration'\''"
+            write_ready_attention_file "$2" "$diag_msg"
+            log_error "  Cross-PR revert guard tool failure for $1 (PR #$4): git-merge-base on '\''auto/integration'\''"
+            return 1
+            ;;
+          *)
+            return 0
+            ;;
+        esac
+      }
+    fi
     npx() {
       if [[ "${1:-}" != "tsx" ]]; then
         return 1
@@ -243,6 +249,10 @@ run_launch_case() {
             return 1
             ;;
           cross_pr_revert_error)
+            return 2
+            ;;
+          cross_pr_revert_tool_error_direct)
+            printf "%s\n" "{\"blocked\":false,\"reverts\":[],\"acknowledged\":[],\"unacknowledged\":[],\"toolError\":{\"commandClass\":\"git-merge-base\",\"command\":\"git merge-base auto/integration HEAD\",\"ref\":\"auto/integration\",\"stderr\":\"fatal: Not a valid object name '\''auto/integration'\''\"}}"
             return 2
             ;;
           *)
@@ -348,18 +358,188 @@ run_launch_case() {
     [[ -f "$STATE_DIR/.needs-attention-transient" ]] && transient_attention="present"
     transient_count="$(cat "$STATE_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
     ready_label_calls="$(cat "$READY_LABEL_COUNT_FILE" 2>/dev/null || echo "0")"
+    ready_result_payload=""
+    [[ -f "$STATE_DIR/.ready-result.json" ]] && ready_result_payload=$(cat "$STATE_DIR/.ready-result.json")
 
     debug_line_count=0
     [[ -f "$DEBUG_FILE" ]] && debug_line_count=$(wc -l < "$DEBUG_FILE" | tr -d " ")
     debug_payload=""
     [[ -f "$DEBUG_FILE" ]] && debug_payload=$(cat "$DEBUG_FILE")
 
-    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\n" \
-      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count"
+    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\nready_result_payload=%s\n" \
+      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count" "$ready_result_payload"
     printf "ready_label_calls=%s\n" "$ready_label_calls"
     printf "prompt_summary=%s\n" "$READY_PROMPT_SUMMARY"
   ' 2>&1
 }
+
+run_watchdog_launch_case() {
+  local test_case="$1"
+  local case_dir="$TEST_TMP/watchdog-$test_case"
+  mkdir -p "$case_dir"
+
+  CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" TEST_CASE="$test_case" bash -lc '
+    set -euo pipefail
+    source "$COMMON_SCRIPT"
+    source "$LAUNCH_FUNC_FILE"
+
+    SESSION="ready-watchdog-test-$TEST_CASE"
+    AGENT_CMD="codex"
+    STATE_DIR="$CASE_DIR/feature/ready"
+    WT_DIR="$CASE_DIR/worktree"
+    mkdir -p "$STATE_DIR" "$WT_DIR"
+    printf "%s\n" "{\"stage\":\"ready\",\"status\":\"running\",\"startedAt\":\"2026-05-05T11:55:00.000Z\",\"finishedAt\":null,\"agent\":\"codex\",\"model\":\"gpt-5.5\",\"notes\":null,\"artifacts\":{\"type\":\"ready\",\"verdict\":\"fail\",\"prNumber\":304,\"checksRun\":3,\"checksPassed\":2,\"mergeConflict\":\"CLEAN\"}}" > "$STATE_DIR/.ready-result.json"
+
+    WRITE_STAGE_CALLS=""
+    READY_PROMPT_CALLS=0
+    READY_PROMPT_SUMMARY=""
+    LAUNCH_AGENT_CALLS=0
+
+    _ensure_task_window_exists() { printf "%s\n" "win-1"; }
+    persist_task_window_id() { :; }
+    ready_state_dir() { printf "%s\n" "$STATE_DIR"; }
+    read_state_value() {
+      if [[ "${4:-}" == *".agent"* ]]; then
+        printf "%s\n" "codex"
+      elif [[ "${4:-}" == *".model"* ]]; then
+        printf "%s\n" "gpt-5.5"
+      else
+        printf "\n"
+      fi
+    }
+    read_stage_status() {
+      case "$TEST_CASE" in
+        inflight_same_head) printf "%s\n" "running" ;;
+        *) printf "\n" ;;
+      esac
+    }
+    ready_remediation_attempts() {
+      case "$TEST_CASE" in
+        max_attempts) printf "%s\n" "3" ;;
+        *) printf "%s\n" "0" ;;
+      esac
+    }
+    ready_remediation_launch_head() {
+      case "$TEST_CASE" in
+        inflight_same_head) printf "%s\n" "abc123" ;;
+        *) printf "\n" ;;
+      esac
+    }
+    ready_remediation_agent_cmd() { printf "\n"; }
+    build_ready_remediation_prompt() {
+      READY_PROMPT_CALLS=$((READY_PROMPT_CALLS + 1))
+      READY_PROMPT_SUMMARY="${8-}"
+      printf "prompt\n"
+    }
+    _launch_agent_in_pane() {
+      LAUNCH_AGENT_CALLS=$((LAUNCH_AGENT_CALLS + 1))
+      return 0
+    }
+    check_stage_aborted() { return 1; }
+    git() {
+      if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]; then
+        printf "%s\n" "abc123"
+        return 0
+      fi
+      return 1
+    }
+    merge_queue_enrich_ready_artifacts() { printf "%s\n" "$2"; }
+    write_stage_result() {
+      printf -v WRITE_STAGE_CALLS "%s%s|%s|%s|%s|%s|%s|%s\n" \
+        "$WRITE_STAGE_CALLS" "${1-}" "${2-}" "${3-}" "${4-}" "${5-}" "${6-}" "${7-}"
+    }
+    write_ready_attention_file() { :; }
+    log() { :; }
+    log_error() { :; }
+
+    output_file="$CASE_DIR/watchdog-output.json"
+    launch_ready_watchdog_remediation \
+      "HOK-1300" \
+      "fix-failing-ci-tests" \
+      "$WT_DIR" \
+      "task/fix-failing-ci-tests" \
+      "main" \
+      "304" \
+      "Alembic Check (FAILURE)" \
+      "1" \
+      "3" \
+      "[\"Alembic Check\"]" > "$output_file"
+    output=$(cat "$output_file")
+
+    stage_summary=$(printf "%s" "$WRITE_STAGE_CALLS" | tr "\n" ";")
+    printf "output=%s\nstage_calls=%s\nlaunch_calls=%s\nprompt_calls=%s\nprompt_summary=%s\n" \
+      "$output" "$stage_summary" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$READY_PROMPT_SUMMARY"
+  ' 2>&1
+}
+
+run_cross_pr_gate_case() {
+  local test_case="$1"
+  local case_dir="$TEST_TMP/gate-$test_case"
+  mkdir -p "$case_dir"
+
+  CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" TEST_CASE="$test_case" bash -lc '
+    set -euo pipefail
+    source "$COMMON_SCRIPT"
+    source "$LAUNCH_FUNC_FILE"
+
+    TOOLS_DIR="$CASE_DIR/tools"
+    mkdir -p "$TOOLS_DIR"
+
+    STATE_DIR="$CASE_DIR/state"
+    WT_DIR="$CASE_DIR/worktree"
+    mkdir -p "$STATE_DIR" "$WT_DIR"
+
+    CAPTURED_NPX_ARGS_FILE="$CASE_DIR/npx-args.txt"
+    LOG_OUTPUT=""
+    LOG_ERROR_OUTPUT=""
+
+    log() { LOG_OUTPUT+="$*\n"; }
+    log_error() { LOG_ERROR_OUTPUT+="$*\n"; }
+    npx() {
+      printf "%s\n" "$*" > "$CAPTURED_NPX_ARGS_FILE"
+      printf "%s\n" "{\"blocked\":false,\"reverts\":[],\"acknowledged\":[],\"unacknowledged\":[]}"
+      return 0
+    }
+
+    case "$TEST_CASE" in
+      passes_base_branch)
+        set +e
+        cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304" "main"
+        rc=$?
+        set -e
+        ;;
+      empty_base_branch)
+        set +e
+        cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304" ""
+        rc=$?
+        set -e
+        ;;
+      omitted_base_branch)
+        set +e
+        cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304"
+        rc=$?
+        set -e
+        ;;
+    esac
+
+    printf "rc=%s\nargs=%s\nlogs=%s\nerrors=%s\n" "$rc" "$(cat "$CAPTURED_NPX_ARGS_FILE" 2>/dev/null || true)" "$LOG_OUTPUT" "$LOG_ERROR_OUTPUT"
+  ' 2>&1
+}
+
+echo "=== Cross-PR Revert Gate ==="
+
+output="$(run_cross_pr_gate_case passes_base_branch)"
+check_contains "gate includes integration ref flag" "$output" "--integration-ref main"
+check_contains "gate invokes revert checker" "$output" "check-cross-pr-reverts.ts --repo-dir"
+check_contains "gate passes explicit integration ref rc" "$output" "rc=0"
+
+output="$(run_cross_pr_gate_case empty_base_branch)"
+check_contains "gate omits empty integration ref rc" "$output" "rc=0"
+check_not_contains "gate omits empty integration ref flag" "$output" "--integration-ref"
+
+output="$(run_cross_pr_gate_case omitted_base_branch)"
+check_contains "gate supports omitted base branch rc" "$output" "rc=0"
+check_not_contains "gate omits missing integration ref flag" "$output" "--integration-ref"
 
 echo "=== Launch Ready Phase ==="
 
@@ -391,10 +571,20 @@ check_not_contains "cross-pr revert block does not run ready tool" "$output" "\"
 
 output="$(run_launch_case cross_pr_revert_error)"
 check_contains "cross-pr revert tool error returns failure" "$output" "rc=1"
-check_contains "cross-pr revert tool error writes attention" "$output" "Cross-PR revert guard failed for PR #304."
+check_contains "cross-pr revert tool error writes attention" "$output" "Cross-PR revert guard tool failure for PR #304: git-merge-base failed on ref 'auto/integration'"
 check_contains "cross-pr revert tool error skips ready result writes" "$output" "stage_calls="
-check_contains "cross-pr revert tool error logs failure" "$output" "Cross-PR revert guard failed for HOK-1300 (PR #304)"
+check_contains "cross-pr revert tool error logs failure" "$output" "Cross-PR revert guard tool failure for HOK-1300 (PR #304): git-merge-base on 'auto/integration'"
 check_not_contains "cross-pr revert error does not run ready tool" "$output" "\"verdict\":"
+
+output="$(run_launch_case cross_pr_revert_tool_error_direct)"
+check_contains "direct cross-pr tool error returns failure" "$output" "rc=1"
+check_contains "direct cross-pr tool error writes attention" "$output" "Cross-PR revert guard tool failure for PR #304: git-merge-base failed on ref 'auto/integration'"
+check_contains "direct cross-pr tool error includes diagnostic" "$output" "Diagnostic: fatal: Not a valid object name 'auto/integration'"
+check_contains "direct cross-pr tool error writes ready diagnostic" "$output" "\"crossPrDiagnostic\""
+check_contains "direct cross-pr tool error records command class" "$output" "\"commandClass\":\"git-merge-base\""
+check_contains "direct cross-pr tool error logs failure" "$output" "Cross-PR revert guard tool failure for HOK-1300 (PR #304): git-merge-base on 'auto/integration'"
+check_contains "direct cross-pr tool error skips ready result writes" "$output" "stage_calls="
+check_not_contains "direct cross-pr tool error does not run ready tool" "$output" "\"verdict\":"
 
 output="$(run_launch_case unknown_first)"
 check_contains "unknown first poll returns retry code" "$output" "rc=4"
@@ -533,6 +723,24 @@ check_not_contains "success path does not log ready stderr" "$output" "[ready st
 output="$(run_launch_case fail_with_stderr)"
 check_contains "failure stderr is logged as error" "$output" "error_payload=  [ready stderr] TypeError: ready crashed"
 check_not_contains "failure stderr does not leak to terminal" "$output" $'\nTypeError: ready crashed\n'
+
+echo "=== Watchdog Launch Helper ==="
+
+output="$(run_watchdog_launch_case success)"
+check_contains "watchdog launch succeeds" "$output" '"status":"launched"'
+check_contains "watchdog launch writes running stage" "$output" "|ready|running|"
+check_contains "watchdog launch invokes agent" "$output" "launch_calls=1"
+check_contains "watchdog launch reuses prompt summary" "$output" "prompt_summary=Alembic Check (FAILURE)"
+
+output="$(run_watchdog_launch_case max_attempts)"
+check_contains "watchdog max attempts skips launch" "$output" '"status":"skipped-max-attempts"'
+check_contains "watchdog max attempts does not relaunch agent" "$output" "launch_calls=0"
+check_contains "watchdog max attempts does not rewrite stage" "$output" "stage_calls="
+
+output="$(run_watchdog_launch_case inflight_same_head)"
+check_contains "watchdog inflight skips launch" "$output" '"status":"skipped-in-flight"'
+check_contains "watchdog inflight does not relaunch agent" "$output" "launch_calls=0"
+check_contains "watchdog inflight does not rewrite stage" "$output" "stage_calls="
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -89,6 +89,15 @@
  * - **1.27.0**: `timeSeconds` now accepts `null` so eval records can preserve
  *   indeterminate wall-clock duration instead of coercing unknown time to `0`
  *   (HOK-1926)
+ * - **1.28.0**: Added optional `quarantine_reason` and write-time eval corpus
+ *   validation for `taskDescriptor`, non-empty `models_available`, and
+ *   canonical reviewer/stage model IDs (HOK-2072); expanded
+ *   `$defs.RouteArtifact` (HOK-2071) to accept all
+ *   route-artifact fields that Wavemill emits (`planner`, `planDepth`,
+ *   `artifactPath`, `artifactHash`, `inputHash`, `source`, `cacheHit`,
+ *   `routeSource`, `routerMode`, `routingMode`, `expectedMetrics`). Old
+ *   `RouteArtifact` mirrored an early stale snapshot that never got updated
+ *   to match `ChallengeRouteArtifact`.
  *
  * @module eval-schema
  */
@@ -98,7 +107,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.27.0';
+export const SCHEMA_VERSION = '1.28.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1192,18 +1201,8 @@ export interface WavemillRouterScoringMetadata {
 
 export interface EvalChallengeRouteContext {
   decisionSource: 'bootstrap' | 'expanded' | 'preserved';
-  bootstrapRoute?: {
-    coder: string;
-    codeDepth: string;
-    reviewer: string;
-    reviewMode: string;
-  };
-  expandedRoute?: {
-    coder: string;
-    codeDepth: string;
-    reviewer: string;
-    reviewMode: string;
-  };
+  bootstrapRoute?: EvalRouteArtifact;
+  expandedRoute?: EvalRouteArtifact;
   refreshRationale?: string;
 }
 
@@ -1373,6 +1372,9 @@ export interface EvalRecord {
     code: string;
     message: string;
   };
+
+  /** Provenance for records quarantined during corpus hygiene migration. */
+  quarantine_reason?: string;
 
   /** Stable machine-readable eval failure reason for fast-fail records. */
   failureReason?: EvalFailureReason;
