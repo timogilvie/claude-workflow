@@ -1110,6 +1110,15 @@ export function getReadyWatchdogConfig(repoDir?: string): Required<ReadyWatchdog
   };
 }
 
+export function getReadyRemediationConfig(repoDir?: string): Required<ReadyRemediationConfig> {
+  const remediation = loadWavemillConfig(repoDir).ready?.remediation ?? {};
+  return {
+    enabled: remediation.enabled ?? true,
+    maxAttempts: remediation.maxAttempts ?? 3,
+    agentCmd: remediation.agentCmd ?? '',
+  };
+}
+
 export function getMergeQueueConfig(repoDir?: string): Required<MergeQueueConfig> {
   const config = loadWavemillConfig(repoDir).mergeQueue ?? {};
   return {
