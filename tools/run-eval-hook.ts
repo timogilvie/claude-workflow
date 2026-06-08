@@ -115,6 +115,7 @@ runTool({
 
     try {
       context.onPersisted = () => {
+        persisted = true;
         writeResultFile(0);
       };
       persisted = await runPostCompletionEval(context);
