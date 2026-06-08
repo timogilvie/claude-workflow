@@ -242,7 +242,6 @@ const defaultDeps: ReadyWatchdogDeps = {
           String(attemptNumber),
           '--max-attempts',
           String(maxAttempts),
-          '--json',
         ],
         {
           cwd: repoDir,

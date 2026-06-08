@@ -528,6 +528,71 @@ test('tick respects remediation max attempts', async () => {
   }
 });
 
+test('tick relaunches remediation when head advances past prior launch head', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2039', 2039);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: null,
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'fail', prNumber: 2039, remediationAttempts: 1, remediationLaunchHead: 'head-1' },
+  }, null, 2));
+  writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-2039': {
+        issueId: 'HOK-2039',
+        slug: 'ready-watchdog-task',
+        prNumber: 2039,
+        classification: 'waiting-on-ci',
+        displayLabel: 'waiting on CI',
+        detail: 'prior',
+        action: 'reported',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+        failingChecksFingerprint: 'alembic check:failure',
+        failingChecksObservedCount: 1,
+      },
+    },
+  }, null, 2));
+  const launches: Array<{ attemptNumber: number }> = [];
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE' }],
+        }),
+        getCurrentHead: async () => 'head-2',
+        launchReadyRemediation: async (_snapshot, _summary, _names, attemptNumber, maxAttempts) => {
+          launches.push({ attemptNumber });
+          return {
+            status: 'launched' as const,
+            detail: `Launched ready remediation attempt ${attemptNumber}/${maxAttempts} for PR #2039.`,
+            attemptNumber,
+            launchHead: 'head-2',
+          };
+        },
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].action, 'launched-remediation');
+    assert.equal(launches.length, 1);
+    assert.equal(launches[0].attemptNumber, 2);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('tick surfaces remediation launch failures', async () => {
   const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2039', 2039);
   writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
