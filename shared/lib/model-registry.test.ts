@@ -19,8 +19,10 @@ import {
   isKnownModelId,
   mergeModelRegistry,
   ModelResolutionError,
+  normalizeReviewerModelId,
   parseModelSelector,
   rankCandidates,
+  REVIEWER_ALIAS_MAP,
   resolveSelector,
   satisfiesCapabilities,
   validateModelId,
@@ -170,6 +172,14 @@ describe('model-registry', () => {
   it('getModel returns undefined for unknown or empty IDs', () => {
     assert.equal(getModel(DEFAULT_MODEL_REGISTRY, 'missing-model'), undefined);
     assert.equal(getModel(DEFAULT_MODEL_REGISTRY, ''), undefined);
+  });
+
+  it('normalizes reviewer aliases deterministically', () => {
+    assert.equal(REVIEWER_ALIAS_MAP.deep, 'claude-opus-4-8');
+    assert.equal(normalizeReviewerModelId(' deep ', DEFAULT_MODEL_REGISTRY), 'claude-opus-4-8');
+    assert.equal(normalizeReviewerModelId('gpt-5.4', DEFAULT_MODEL_REGISTRY), 'gpt-5.4');
+    assert.equal(normalizeReviewerModelId('unknown-reviewer', DEFAULT_MODEL_REGISTRY), null);
+    assert.equal(normalizeReviewerModelId('   ', DEFAULT_MODEL_REGISTRY), null);
   });
 
   it('getLadder returns configured default ladders', () => {
