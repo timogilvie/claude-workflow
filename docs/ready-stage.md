@@ -496,6 +496,41 @@ Configuration cases:
 - `ready.migrationPatterns`: overrides the regex patterns used to discover migration files for migration-related checks (including `migration-reversibility`)
 - `ready.migrationKind`: declares migration format (`alembic`, `sql`, `none`) for migration-specific checks
 
+### Recommended Alembic Configuration (Hokusai-style)
+
+Use this when the repository stores Alembic revisions under `alembic/versions/` and wants local ready checks to match GitHub's merge-context behavior:
+
+```json
+{
+  "ready": {
+    "checks": [
+      "pr-exists",
+      "merge-conflict",
+      "ci-status",
+      "schema-migrations",
+      "migration-chain-integrity",
+      "migration-reversibility",
+      "forbidden-ddl"
+    ],
+    "requiredChecks": [
+      "pr-exists",
+      "merge-conflict",
+      "ci-status",
+      "migration-chain-integrity",
+      "migration-reversibility"
+    ],
+    "migrationKind": "alembic",
+    "migrationPatterns": ["alembic/versions/.*\\.py$"]
+  }
+}
+```
+
+Behavior notes:
+
+- `migration-chain-integrity` evaluates the merged tree of `origin/<base>` plus `HEAD` when run through `wavemill ready <pr>`, so a branch-local single head can still fail if the merge result would create two heads.
+- If git cannot build that merge tree, the check falls back to the worktree scan and records `details.mergeContext = { "source": "worktree-fallback", "reason": "merge-conflict" | "git-unavailable" }`.
+- Head failures name the revision IDs and files inline, for example: `Migration chain must have exactly one head, found 2: 044 (alembic/versions/044_main.py), 045 (alembic/versions/045_branch.py)`.
+
 Workflow expectations:
 
 - the ready contract remains stable even as checks are added
@@ -649,6 +684,7 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
 |---------|------|---------|---------|
 | `ready.checks` | `string[]` | `[]` | Checks to run. Missing/empty uses universal defaults (`pr-exists`, `merge-conflict`, `ci-status`). |
 | `ready.requiredChecks` | `string[]` | `[]` | Subset of `ready.checks` that must pass. Required `skip` is non-blocking and reported as warning. |
+| `ready.migrationPatterns` | `string[]` | repo defaults | Regex patterns used to discover migration files for migration-related checks. |
 | `ready.migrationKind` | `"alembic" \| "sql" \| "none"` | unset | Migration format hint for migration-specific checks; unsupported kinds are skipped instead of failed parsing. |
 
 ### Minimal Configuration
@@ -681,7 +717,8 @@ Ready-stage settings live in `.wavemill-config.json` under `ready`.
       "merge-conflict",
       "ci-status",
       "schema-migrations",
-      "migration-chain-integrity"
+      "migration-chain-integrity",
+      "migration-reversibility"
     ],
     "migrationKind": "alembic",
     "migrationPatterns": ["alembic/versions/.*\\.py$"]
