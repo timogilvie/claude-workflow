@@ -23,6 +23,7 @@ export type ReadyWatchdogClassificationKind =
   | 'auto-update'
   | 'stuck'
   | 'waiting-on-ci'
+  | 'stable-failing-safe'
   | 'waiting-on-eval-comparison'
   | 'needs-user';
 
@@ -73,6 +74,8 @@ export interface ReadyWatchdogClassification {
   detail: string;
   recoveryCommand?: string;
   autoRecoverable?: boolean;
+  remediationCategories?: string[];
+  consecutiveFailurePolls?: number;
   autoRemediable?: boolean;
 }
 
@@ -105,6 +108,8 @@ export interface ReadyWatchdogStateEntry {
   autoUpdateAttempts?: number;
   lastAutoUpdateError?: string;
   lastReportedAction?: string;
+  remediationCategories?: string[];
+  consecutiveFailurePolls?: number;
   failingChecksFingerprint?: string;
   failingChecksObservedCount?: number;
 }
@@ -319,9 +324,36 @@ function buildFailingChecksFingerprint(checks: NormalizedCheckSummary[]): string
 function displayLabel(kind: Exclude<ReadyWatchdogClassificationKind, 'fresh'>): string {
   if (kind === 'auto-update') return 'auto update';
   if (kind === 'waiting-on-ci') return 'waiting on CI';
+  if (kind === 'stable-failing-safe') return 'stable failing safe';
   if (kind === 'waiting-on-eval-comparison') return 'waiting on eval/comparison';
   if (kind === 'needs-user') return 'needs user';
   return 'stuck';
+}
+
+function classifyFailingChecks(
+  failures: string[],
+  safeCategories: string[],
+): { kind: 'stable-failing-safe'; remediableNames: string[] } | { kind: 'waiting-on-ci' } {
+  const normalizedCategories = safeCategories.map((category) => category.trim().toLowerCase()).filter(Boolean);
+  const remediableNames = failures.filter((failure) => normalizedCategories.some((category) => {
+    const lower = failure.toLowerCase();
+    if (category === 'type') {
+      return lower.includes('type') || lower.includes('typecheck');
+    }
+    if (category === 'test') {
+      return lower.includes('test') || lower.includes('unit') || lower.includes('shell');
+    }
+    if (category === 'migration-chain') {
+      return lower.includes('migration-chain') || lower.includes('migration chain');
+    }
+    return lower.includes(category);
+  }));
+
+  if (failures.length > 0 && remediableNames.length === failures.length) {
+    return { kind: 'stable-failing-safe', remediableNames };
+  }
+
+  return { kind: 'waiting-on-ci' };
 }
 
 function readyStateDir(worktree: string, slug: string): string {
@@ -428,8 +460,19 @@ export function classifyReadyTask(
   snapshot: ReadyTaskSnapshot,
   githubTruth: GitHubPRTruth | null,
   now: Date,
-  config: Required<ReadyWatchdogConfig>,
+  config: ReadyWatchdogConfig,
+  prior?: ReadyWatchdogStateEntry,
 ): ReadyWatchdogClassification {
+  const normalizedConfig = {
+    enabled: true,
+    thresholdMinutes: 10,
+    autoRecover: true,
+    timeoutSeconds: 30,
+    stableFailureConsecutivePolls: 2,
+    stableFailureEscalateAfterPolls: 4,
+    safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    ...config,
+  };
   if (snapshot.lastProgressAt === null || snapshot.idleMinutes === null) {
     return {
       kind: 'needs-user',
@@ -437,7 +480,7 @@ export function classifyReadyTask(
     };
   }
 
-  if (snapshot.idleMinutes < config.thresholdMinutes) {
+  if (snapshot.idleMinutes < normalizedConfig.thresholdMinutes) {
     return {
       kind: 'fresh',
       detail: `Ready stage idle for ${snapshot.idleMinutes}m, below threshold.`,
@@ -491,9 +534,53 @@ export function classifyReadyTask(
 
   const checkSummary = summarizeChecks(githubTruth.checks);
   if (checkSummary.failures.length > 0) {
+    const detail = `Failing checks: ${checkSummary.failures.join(', ')}.`;
+    if (checkSummary.pending.length > 0) {
+      return {
+        kind: 'waiting-on-ci',
+        detail,
+        consecutiveFailurePolls: 1,
+        autoRemediable: false,
+      };
+    }
+
+    const prStateKey = buildPrStateKey(githubTruth);
+    const sameFailureState = prior !== undefined
+      && prior.prStateKey === prStateKey
+      && prior.detailFingerprint === normalizeDetailFingerprint(detail)
+      && ['waiting-on-ci', 'stable-failing-safe', 'needs-user'].includes(prior.classification);
+    const consecutiveFailurePolls = sameFailureState
+      ? (prior.consecutiveFailurePolls ?? 1) + 1
+      : 1;
+    const failureClassification = classifyFailingChecks(
+      checkSummary.failures,
+      normalizedConfig.safeRemediationCategories,
+    );
+
+    if (failureClassification.kind === 'stable-failing-safe'
+      && consecutiveFailurePolls >= normalizedConfig.stableFailureConsecutivePolls) {
+      return {
+        kind: 'stable-failing-safe',
+        detail,
+        remediationCategories: failureClassification.remediableNames,
+        consecutiveFailurePolls,
+        autoRemediable: true,
+      };
+    }
+
+    if (failureClassification.kind === 'waiting-on-ci'
+      && consecutiveFailurePolls >= normalizedConfig.stableFailureEscalateAfterPolls) {
+      return {
+        kind: 'needs-user',
+        detail: `Failing checks remained unsafe for automatic remediation: ${checkSummary.failures.join(', ')}.`,
+        consecutiveFailurePolls,
+      };
+    }
+
     return {
       kind: 'waiting-on-ci',
-      detail: `Failing checks: ${checkSummary.failures.join(', ')}.`,
+      detail,
+      consecutiveFailurePolls,
       autoRemediable: checkSummary.pending.length === 0,
     };
   }
@@ -695,7 +782,10 @@ function materiallyChanged(
     || prior.autoUpdateAttempts !== next.autoUpdateAttempts
     || prior.lastAutoUpdateError !== next.lastAutoUpdateError
     || prior.lastReportedAction !== next.lastReportedAction
+    || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
     || prior.recoveryCommand !== next.recoveryCommand
+    || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
+    || JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])
     || prior.failingChecksFingerprint !== next.failingChecksFingerprint
     || prior.failingChecksObservedCount !== next.failingChecksObservedCount;
 }
@@ -711,6 +801,8 @@ function buildFindingEntry(input: {
   githubTruth?: GitHubPRTruth | null;
   autoUpdateAttempts?: number;
   lastAutoUpdateError?: string;
+  remediationCategories?: string[];
+  consecutiveFailurePolls?: number;
   failingChecksFingerprint?: string;
   failingChecksObservedCount?: number;
 }): ReadyWatchdogStateEntry {
@@ -731,6 +823,8 @@ function buildFindingEntry(input: {
     autoUpdateAttempts: input.autoUpdateAttempts,
     lastAutoUpdateError: input.lastAutoUpdateError,
     lastReportedAction: input.action,
+    remediationCategories: input.remediationCategories,
+    consecutiveFailurePolls: input.consecutiveFailurePolls,
     failingChecksFingerprint: input.failingChecksFingerprint,
     failingChecksObservedCount: input.failingChecksObservedCount,
   };
@@ -812,9 +906,10 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     let githubTruth: GitHubPRTruth | null = null;
     let classification: ReadyWatchdogClassification;
     let fetchError: string | undefined;
+    const prior = priorTasks[issueId];
     try {
       githubTruth = await deps.fetchGitHubTruth(snapshot.prNumber, options.repoDir);
-      classification = classifyReadyTask(snapshot, githubTruth, now, config);
+      classification = classifyReadyTask(snapshot, githubTruth, now, config, prior);
     } catch (error) {
       fetchError = errorMessage(error);
       classification = {
@@ -823,7 +918,6 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       };
     }
 
-    const prior = priorTasks[issueId];
     const failingChecksFingerprint = buildFailingChecksFingerprint(githubTruth?.checks ?? []);
     const failingChecksObservedCount = failingChecksFingerprint
       ? prior?.failingChecksFingerprint === failingChecksFingerprint
@@ -903,7 +997,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       let action = 'reported';
       let recoveryCommand = classification.recoveryCommand;
       if (
-        classification.kind === 'waiting-on-ci'
+        (classification.kind === 'waiting-on-ci' || classification.kind === 'stable-failing-safe')
         && classification.autoRemediable
         && githubTruth
         && remediationConfig.enabled
@@ -983,6 +1077,8 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         now,
         recoveryCommand,
         githubTruth,
+        remediationCategories: classification.remediationCategories,
+        consecutiveFailurePolls: classification.consecutiveFailurePolls,
         failingChecksFingerprint,
         failingChecksObservedCount,
       });

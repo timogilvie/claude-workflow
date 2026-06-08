@@ -173,6 +173,118 @@ test('classify completed failing CI as auto-remediable waiting-on-ci', () => {
   assert.equal(classification.autoRemediable, true);
 });
 
+test('classify stable safe failing CI as stable-failing-safe after repeated polls', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot(),
+    makeTruth({
+      checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE' }],
+    }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+      stableFailureConsecutivePolls: 2,
+      stableFailureEscalateAfterPolls: 4,
+      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    },
+    {
+      issueId: 'HOK-1579',
+      slug: 'ready-watchdog-task',
+      prNumber: 528,
+      classification: 'waiting-on-ci',
+      displayLabel: 'waiting on CI',
+      detail: 'Failing checks: lint (FAILURE).',
+      action: 'reported',
+      updatedAt: '2026-05-05T12:20:00.000Z',
+      idleMinutes: 20,
+      lastProgressAt: '2026-05-05T12:00:00.000Z',
+      prStateKey: 'OPEN|MERGEABLE|CLEAN',
+      detailFingerprint: 'Failing checks: lint (FAILURE).',
+      consecutiveFailurePolls: 1,
+    },
+  );
+
+  assert.equal(classification.kind, 'stable-failing-safe');
+  assert.deepEqual(classification.remediationCategories, ['lint (FAILURE)']);
+  assert.equal(classification.autoRemediable, true);
+});
+
+test('classify resets consecutiveFailurePolls when prStateKey changes between polls', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot(),
+    makeTruth({
+      checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE' }],
+    }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+      stableFailureConsecutivePolls: 2,
+      stableFailureEscalateAfterPolls: 4,
+      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    },
+    {
+      issueId: 'HOK-1579',
+      slug: 'ready-watchdog-task',
+      prNumber: 528,
+      classification: 'waiting-on-ci',
+      displayLabel: 'waiting on CI',
+      detail: 'Failing checks: lint (FAILURE).',
+      action: 'reported',
+      updatedAt: '2026-05-05T12:20:00.000Z',
+      idleMinutes: 20,
+      lastProgressAt: '2026-05-05T12:00:00.000Z',
+      prStateKey: 'OPEN|UNKNOWN|UNKNOWN',
+      detailFingerprint: 'Failing checks: lint (FAILURE).',
+      consecutiveFailurePolls: 5,
+    },
+  );
+
+  assert.equal(classification.kind, 'waiting-on-ci');
+  assert.equal(classification.consecutiveFailurePolls, 1);
+});
+
+test('classify repeated unsafe failing CI as needs-user after the escalation threshold', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot(),
+    makeTruth({
+      checks: [{ name: 'deploy', status: 'failure', rawStatus: 'FAILURE' }],
+    }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+      stableFailureConsecutivePolls: 2,
+      stableFailureEscalateAfterPolls: 3,
+      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    },
+    {
+      issueId: 'HOK-1579',
+      slug: 'ready-watchdog-task',
+      prNumber: 528,
+      classification: 'waiting-on-ci',
+      displayLabel: 'waiting on CI',
+      detail: 'Failing checks: deploy (FAILURE).',
+      action: 'reported',
+      updatedAt: '2026-05-05T12:20:00.000Z',
+      idleMinutes: 20,
+      lastProgressAt: '2026-05-05T12:00:00.000Z',
+      prStateKey: 'OPEN|MERGEABLE|CLEAN',
+      detailFingerprint: 'Failing checks: deploy (FAILURE).',
+      consecutiveFailurePolls: 2,
+    },
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /unsafe/);
+});
+
 test('classify active eval or comparison as waiting-on-eval-comparison', () => {
   const classification = classifyReadyTask(
     makeSnapshot({

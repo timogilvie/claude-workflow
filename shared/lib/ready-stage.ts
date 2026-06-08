@@ -17,7 +17,12 @@
 
 import { execShellCommand, escapeShellArg } from './shell-utils.ts';
 import { extractReleaseReadiness, type ReleaseReadiness } from './task-packet-utils.ts';
-import { DEFAULT_READY_MIGRATION_PATTERNS, getReadyConfig, loadWavemillConfig } from './config.ts';
+import {
+  DEFAULT_READY_MIGRATION_PATTERNS,
+  getMigrationChecksConfig,
+  getReadyConfig,
+  loadWavemillConfig,
+} from './config.ts';
 import {
   classifyDowngradeBody,
   extractOperationCalls,
@@ -30,6 +35,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { refreshBaseForMigration } from './ready-migration-base.ts';
 
 /**
  * Status of an individual ready check.
@@ -282,6 +288,7 @@ interface ResolvedReadyPolicy {
   migrationKind?: 'alembic' | 'sql' | 'none';
   migrationPatterns: string[];
   hasExplicitReadyConfig: boolean;
+  migrationChainAutoEnabled: boolean;
 }
 
 function canonicalizeReadyCheckName(name: string): string {
@@ -300,6 +307,38 @@ function uniqueOrdered(values: string[]): string[] {
   return ordered;
 }
 
+function extendUniversalChecksForRepo(
+  repoDir: string,
+  baseChecks: readonly string[],
+): Pick<ResolvedReadyPolicy, 'checks' | 'requiredChecks' | 'migrationKind' | 'migrationPatterns' | 'migrationChainAutoEnabled'> {
+  const readyConfig = getReadyConfig(repoDir);
+  const migrationChecks = getMigrationChecksConfig(repoDir);
+  const checks = [...baseChecks];
+  const hasAlembicDir = existsSync(path.join(repoDir, 'alembic', 'versions'));
+  const canAutoEnable = hasAlembicDir
+    && migrationChecks.enabled
+    && migrationChecks.autoDetectAlembic
+    && (readyConfig.migrationKind === undefined || readyConfig.migrationKind === 'alembic');
+
+  if (!canAutoEnable) {
+    return {
+      checks,
+      requiredChecks: [...UNIVERSAL_REQUIRED_CHECKS],
+      migrationKind: readyConfig.migrationKind,
+      migrationPatterns: readyConfig.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+      migrationChainAutoEnabled: false,
+    };
+  }
+
+  return {
+    checks: uniqueOrdered([...checks, 'migration-chain-integrity']),
+    requiredChecks: uniqueOrdered([...UNIVERSAL_REQUIRED_CHECKS, 'migration-chain-integrity']),
+    migrationKind: 'alembic',
+    migrationPatterns: ['alembic/versions/.*\\.py$'],
+    migrationChainAutoEnabled: true,
+  };
+}
+
 function resolveReadyPolicy(repoDir: string): ResolvedReadyPolicy {
   const rawConfig = loadWavemillConfig(repoDir);
   const readyConfig = getReadyConfig(repoDir);
@@ -312,12 +351,14 @@ function resolveReadyPolicy(repoDir: string): ResolvedReadyPolicy {
     : [];
 
   if (configuredChecks.length === 0) {
+    const universal = extendUniversalChecksForRepo(repoDir, UNIVERSAL_READY_CHECKS);
     return {
-      checks: [...UNIVERSAL_READY_CHECKS],
-      requiredChecks: [...UNIVERSAL_REQUIRED_CHECKS],
-      migrationKind: readyConfig.migrationKind,
-      migrationPatterns: readyConfig.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+      checks: universal.checks,
+      requiredChecks: universal.requiredChecks,
+      migrationKind: universal.migrationKind,
+      migrationPatterns: universal.migrationPatterns,
       hasExplicitReadyConfig,
+      migrationChainAutoEnabled: universal.migrationChainAutoEnabled,
     };
   }
 
@@ -332,6 +373,27 @@ function resolveReadyPolicy(repoDir: string): ResolvedReadyPolicy {
     migrationKind: readyConfig.migrationKind,
     migrationPatterns: readyConfig.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
     hasExplicitReadyConfig,
+    migrationChainAutoEnabled: false,
+  };
+}
+
+function isMigrationRelatedCheck(checkName: string): boolean {
+  return ['migration-chain-integrity', 'migration-reversibility', 'schema-migrations'].includes(checkName);
+}
+
+async function buildMigrationBaseRefreshCheck(repoDir: string, baseRef: string): Promise<ReadyCheck> {
+  const migrationChecks = getMigrationChecksConfig(repoDir);
+  const outcome = await refreshBaseForMigration(repoDir, baseRef, migrationChecks.baseRefresh);
+  return {
+    name: 'migration-base-refresh',
+    status: outcome.refreshed ? 'pass' : 'warn',
+    message: outcome.refreshed
+      ? `Fetched origin/${baseRef} before migration validation`
+      : `Skipped migration base refresh: ${outcome.reason ?? 'unknown'}`,
+    details: {
+      baseRef,
+      ...outcome,
+    },
   };
 }
 
@@ -2224,6 +2286,7 @@ export async function runReadyStage(options: {
     ? loadDeployConfig(repoDir)
     : {};
   let mergeConflict: MergeConflictResult | undefined;
+  let migrationBaseRefreshCheck: ReadyCheck | null = null;
   if (policy.checks.includes('merge-conflict')) {
     mergeConflict = await checkMergeConflicts(prNumber, repoDir);
     checks.push({
@@ -2245,6 +2308,10 @@ export async function runReadyStage(options: {
   for (const checkName of policy.checks) {
     if (checkName === 'pr-exists' || checkName === 'merge-conflict') {
       continue;
+    }
+    if (isMigrationRelatedCheck(checkName) && migrationBaseRefreshCheck === null) {
+      migrationBaseRefreshCheck = await buildMigrationBaseRefreshCheck(repoDir, prContext.baseBranch);
+      checks.push(migrationBaseRefreshCheck);
     }
     if (checkName === 'ci-status') {
       checks.push(checkCIStatus(prNumber, repoDir));
@@ -2298,7 +2365,18 @@ export async function runReadyStage(options: {
   }
 
   if (!policy.hasExplicitReadyConfig) {
-    checks.push(await checkBaselineDiscovery(repoDir));
+    if (policy.migrationChainAutoEnabled) {
+      checks.push({
+        name: 'migration-chain-auto-enabled',
+        status: 'pass',
+        message: 'Auto-enabled Alembic migration chain integrity checks',
+        details: {
+          migrationKind: policy.migrationKind,
+          migrationPatterns: policy.migrationPatterns,
+        },
+      });
+    }
+    checks.push(await checkBaselineDiscovery(repoDir, policy.migrationChainAutoEnabled));
   }
 
   // 4. Compute verdict
@@ -2328,16 +2406,23 @@ export async function runReadyStage(options: {
   };
 }
 
-async function checkBaselineDiscovery(repoDir: string): Promise<ReadyCheck> {
+async function checkBaselineDiscovery(repoDir: string, migrationChainAutoEnabled = false): Promise<ReadyCheck> {
   const suggestions: string[] = [];
   const alembicDir = path.join(repoDir, 'alembic', 'versions');
   if (await fileExists(alembicDir)) {
-    suggestions.push(
-      'ready.checks: schema-migrations, migration-base-freshness, migration-chain-integrity, migration-reversibility, forbidden-ddl',
-      'ready.requiredChecks: schema-migrations, migration-base-freshness, migration-chain-integrity, migration-reversibility',
-      'ready.migrationKind: alembic',
-      'ready.migrationPatterns: alembic/versions/.*\\.py$'
-    );
+    if (migrationChainAutoEnabled) {
+      suggestions.push(
+        'ready.checks: schema-migrations, migration-base-freshness, migration-reversibility, forbidden-ddl',
+        'ready.requiredChecks: schema-migrations, migration-base-freshness'
+      );
+    } else {
+      suggestions.push(
+        'ready.checks: schema-migrations, migration-base-freshness, migration-chain-integrity, migration-reversibility, forbidden-ddl',
+        'ready.requiredChecks: schema-migrations, migration-base-freshness, migration-chain-integrity, migration-reversibility',
+        'ready.migrationKind: alembic',
+        'ready.migrationPatterns: alembic/versions/.*\\.py$'
+      );
+    }
   }
 
   const sqlMigrationsDir = path.join(repoDir, 'migrations');
