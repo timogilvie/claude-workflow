@@ -7,6 +7,9 @@
 
 import { describe, it, mock, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   collectCiOutcome,
   collectTestsOutcome,
@@ -23,6 +26,27 @@ beforeEach(() => {
   clearPrChecksCache();
 });
 
+function withFakeGh(checks: unknown[], run: (repoDir: string) => void): void {
+  const tempDir = mkdtempSync(join(tmpdir(), 'ci-checks-'));
+  const repoDir = join(tempDir, 'repo');
+  const binDir = join(tempDir, 'bin');
+  const ghPath = join(binDir, 'gh');
+  const originalPath = process.env.PATH ?? '';
+
+  mkdirSync(repoDir, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(ghPath, `#!/bin/bash\nprintf '%s' '${JSON.stringify(checks)}'\n`, 'utf-8');
+  chmodSync(ghPath, 0o755);
+  process.env.PATH = `${binDir}:${originalPath}`;
+
+  try {
+    run(repoDir);
+  } finally {
+    process.env.PATH = originalPath;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 describe('collectCiOutcome', () => {
   it('returns ran=false when no checks exist', () => {
     const outcome = collectCiOutcome('999', '/nonexistent');
@@ -36,6 +60,60 @@ describe('collectCiOutcome', () => {
     assert.ok('ran' in outcome);
     assert.ok('passed' in outcome);
     assert.ok(Array.isArray(outcome.checks));
+  });
+
+  it('omits durationSeconds when completedAt is Go zero-time', () => {
+    withFakeGh(
+      [
+        {
+          name: 'build',
+          state: 'completed',
+          bucket: 'pending',
+          startedAt: '2026-06-08T12:00:00Z',
+          completedAt: '0001-01-01T00:00:00Z',
+        },
+      ],
+      (repoDir) => {
+        const outcome = collectCiOutcome('123', repoDir);
+        assert.deepEqual(outcome.checks, [{ name: 'build', status: 'pending' }]);
+      },
+    );
+  });
+
+  it('omits durationSeconds when completedAt is before startedAt', () => {
+    withFakeGh(
+      [
+        {
+          name: 'lint',
+          state: 'completed',
+          bucket: 'fail',
+          startedAt: '2026-06-08T12:00:10Z',
+          completedAt: '2026-06-08T12:00:00Z',
+        },
+      ],
+      (repoDir) => {
+        const outcome = collectCiOutcome('124', repoDir);
+        assert.deepEqual(outcome.checks, [{ name: 'lint', status: 'failure' }]);
+      },
+    );
+  });
+
+  it('retains durationSeconds for successful checks', () => {
+    withFakeGh(
+      [
+        {
+          name: 'test',
+          state: 'completed',
+          bucket: 'pass',
+          startedAt: '2026-06-08T12:00:00Z',
+          completedAt: '2026-06-08T12:01:05Z',
+        },
+      ],
+      (repoDir) => {
+        const outcome = collectCiOutcome('125', repoDir);
+        assert.deepEqual(outcome.checks, [{ name: 'test', status: 'success', durationSeconds: 65 }]);
+      },
+    );
   });
 });
 
