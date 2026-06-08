@@ -9,6 +9,7 @@
 
 import { errorMessage } from '../shared/lib/error-utils.ts';
 import { writeJobResultFile } from '../shared/lib/job-tracker.ts';
+import type { PostCompletionContext } from '../shared/lib/post-completion-hook.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { runPostCompletionEval } from '../shared/lib/post-completion-hook.ts';
 
@@ -61,7 +62,7 @@ runTool({
       console.error('[DEBUG_COST] ========================================');
     }
 
-    const context = {
+    const context: PostCompletionContext = {
       issueId: args.issue,
       prNumber: args.pr,
       prUrl: args['pr-url'],
@@ -93,8 +94,29 @@ runTool({
     let persisted = false;
     let exitCode = 0;
     let failureMessage = '';
+    const writeResultFile = (code: number) => {
+      if (!resultFile) {
+        return;
+      }
+      writeJobResultFile(resultFile, {
+        ok: persisted,
+        persisted,
+        exitCode: code,
+        reason: persisted ? undefined : 'eval_not_persisted',
+        error: failureMessage || undefined,
+      });
+    };
+    const handleSigterm = () => {
+      writeResultFile(143);
+      process.exit(143);
+    };
+
+    process.once('SIGTERM', handleSigterm);
 
     try {
+      context.onPersisted = () => {
+        writeResultFile(0);
+      };
       persisted = await runPostCompletionEval(context);
       if (!persisted) {
         exitCode = 1;
@@ -106,19 +128,10 @@ runTool({
       exitCode = 1;
       failureMessage = message;
     } finally {
-      if (resultFile) {
-        writeJobResultFile(resultFile, {
-          ok: persisted,
-          persisted,
-          exitCode,
-          reason: persisted ? undefined : 'eval_not_persisted',
-          error: failureMessage || undefined,
-        });
-      }
+      process.removeListener('SIGTERM', handleSigterm);
+      writeResultFile(exitCode);
     }
 
-    if (exitCode !== 0) {
-      process.exit(exitCode);
-    }
+    process.exit(exitCode);
   },
 });
