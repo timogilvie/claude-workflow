@@ -402,10 +402,22 @@ export interface ReadyConfig {
   requiredChecks?: string[];
   migrationKind?: 'alembic' | 'sql' | 'none';
   migrationPatterns?: string[];
+  migrationChecks?: ReadyMigrationChecksConfig;
   migrationDangerLabels?: Record<string, string>;
   migrationForbiddenPatterns?: string[];
   remediation?: ReadyRemediationConfig;
   watchdog?: ReadyWatchdogConfig;
+}
+
+export interface ReadyMigrationBaseRefreshConfig {
+  enabled?: boolean;
+  timeoutSeconds?: number;
+}
+
+export interface ReadyMigrationChecksConfig {
+  enabled?: boolean;
+  autoDetectAlembic?: boolean;
+  baseRefresh?: ReadyMigrationBaseRefreshConfig;
 }
 
 export interface ReadyRemediationConfig {
@@ -419,6 +431,9 @@ export interface ReadyWatchdogConfig {
   thresholdMinutes?: number;
   autoRecover?: boolean;
   timeoutSeconds?: number;
+  stableFailureConsecutivePolls?: number;
+  stableFailureEscalateAfterPolls?: number;
+  safeRemediationCategories?: string[];
 }
 
 export interface MergeQueueConfig {
@@ -1079,6 +1094,7 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
     requiredChecks: config.ready?.requiredChecks ?? [],
     migrationKind: config.ready?.migrationKind,
     migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
+    migrationChecks: getMigrationChecksConfig(repoDir),
     migrationDangerLabels: {
       ...DEFAULT_READY_MIGRATION_DANGER_LABELS,
       ...(config.ready?.migrationDangerLabels ?? {}),
@@ -1107,6 +1123,26 @@ export function getReadyWatchdogConfig(repoDir?: string): Required<ReadyWatchdog
     thresholdMinutes: merged.thresholdMinutes ?? 10,
     autoRecover: merged.autoRecover ?? true,
     timeoutSeconds: merged.timeoutSeconds ?? 30,
+    stableFailureConsecutivePolls: merged.stableFailureConsecutivePolls ?? 2,
+    stableFailureEscalateAfterPolls: merged.stableFailureEscalateAfterPolls ?? 4,
+    safeRemediationCategories: merged.safeRemediationCategories ?? ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+  };
+}
+
+export function getMigrationChecksConfig(repoDir?: string): Required<ReadyMigrationChecksConfig> & {
+  baseRefresh: Required<ReadyMigrationBaseRefreshConfig>;
+} {
+  const config = loadWavemillConfig(repoDir);
+  const migrationChecks = config.ready?.migrationChecks ?? {};
+  const baseRefresh = migrationChecks.baseRefresh ?? {};
+
+  return {
+    enabled: migrationChecks.enabled ?? true,
+    autoDetectAlembic: migrationChecks.autoDetectAlembic ?? true,
+    baseRefresh: {
+      enabled: baseRefresh.enabled ?? true,
+      timeoutSeconds: baseRefresh.timeoutSeconds ?? 30,
+    },
   };
 }
 

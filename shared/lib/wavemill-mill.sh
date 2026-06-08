@@ -3103,9 +3103,9 @@ ready_watchdog_config_json() {
     --argjson repo "$repo_json" \
     --argjson local "$local_json" \
     '
-    ({ready:{watchdog:{enabled:true,thresholdMinutes:10,autoRecover:true,timeoutSeconds:30}}} * $user * $repo * $local) as $merged
+    ({ready:{watchdog:{enabled:true,thresholdMinutes:10,autoRecover:true,timeoutSeconds:30,stableFailureConsecutivePolls:2,stableFailureEscalateAfterPolls:4,safeRemediationCategories:["lint","type","test","build","migration-chain","alembic"]}}} * $user * $repo * $local) as $merged
     | (($merged.monitor.readyWatchdog // {}) + ($merged.ready.watchdog // {}))
-    ' 2>/dev/null || echo '{"enabled":true,"thresholdMinutes":10,"autoRecover":true,"timeoutSeconds":30}'
+    ' 2>/dev/null || echo '{"enabled":true,"thresholdMinutes":10,"autoRecover":true,"timeoutSeconds":30,"stableFailureConsecutivePolls":2,"stableFailureEscalateAfterPolls":4,"safeRemediationCategories":["lint","type","test","build","migration-chain","alembic"]}'
 }
 
 run_ready_watchdog_tick() {
@@ -3130,12 +3130,29 @@ run_ready_watchdog_tick() {
 
   while IFS= read -r finding; do
     [[ -n "$finding" ]] || continue
-    local issue label detail action
+    local issue label detail action slug branch base_branch pr_number title wt_dir state_dir remediation_categories
     issue=$(printf '%s' "$finding" | jq -r '.issueId // empty' 2>/dev/null || echo "")
     label=$(printf '%s' "$finding" | jq -r '.displayLabel // empty' 2>/dev/null || echo "")
     detail=$(printf '%s' "$finding" | jq -r '.detail // empty' 2>/dev/null || echo "")
     action=$(printf '%s' "$finding" | jq -r '.action // empty' 2>/dev/null || echo "")
     [[ -n "$issue" && -n "$label" && -n "$detail" ]] || continue
+    if [[ "$action" == "queue-remediation" ]]; then
+      slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // ""')
+      branch=$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // ""')
+      base_branch=$(read_state_value "" --arg i "$issue" '.tasks[$i].baseBranch // ""')
+      pr_number=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // ""')
+      title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // "Task"')
+      wt_dir=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // ""')
+      [[ -z "$wt_dir" && -n "$slug" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
+      if [[ -n "$slug" && -n "$branch" && -n "$base_branch" && -n "$pr_number" ]]; then
+        state_dir=$(ready_state_dir "$wt_dir" "$slug")
+        remediation_categories=$(printf '%s' "$finding" | jq -c '.remediationCategories // []' 2>/dev/null || echo '[]')
+        mkdir -p "$state_dir"
+        printf '%s\n' "$(jq -cn --argjson categories "$remediation_categories" --arg detail "$detail" '{categories:$categories, detail:$detail}')" \
+          > "$state_dir/.ready-watchdog-stable-failure.json"
+        launch_ready_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$pr_number" >/dev/null 2>&1 || true
+      fi
+    fi
     log "status" "ready watchdog: $issue $label ($action) - $detail"
   done < <(printf '%s' "$watchdog_output" | jq -c '.findings[]?' 2>/dev/null)
 }
@@ -4962,20 +4979,30 @@ write_ready_attention_file() {
 
 cross_pr_revert_gate_allows_merge() {
   local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4" base_branch="${5-}"
-  local result rc prs files message stderr_file stderr_content diag
+  local result rc prs files message stderr_file raw_error classification diag
   local extra_args=()
+  raw_error=""
 
-  [[ -n "$base_branch" ]] && extra_args+=(--integration-ref "$base_branch")
+  [[ -n "$base_branch" ]] && extra_args+=(--base-ref "$base_branch" --integration-ref "$base_branch")
+  stderr_file=$(mktemp) || stderr_file=""
 
-  stderr_file=$(mktemp)
-  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" "${extra_args[@]}" 2>"$stderr_file"); then
+  if [[ -n "$stderr_file" ]]; then
+    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" "${extra_args[@]}" 2>"$stderr_file"); then
+      rc=0
+    else
+      rc=$?
+    fi
+    raw_error=$(cat "$stderr_file" 2>/dev/null || echo "")
     rm -f "$stderr_file"
-    return 0
+  elif result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" "${extra_args[@]}" 2>/dev/null); then
+    rc=0
   else
     rc=$?
   fi
-  stderr_content=$(cat "$stderr_file" 2>/dev/null || echo "")
-  rm -f "$stderr_file"
+
+  if [[ "$rc" -eq 0 ]]; then
+    return 0
+  fi
 
   if [[ "$rc" -eq 1 ]]; then
     prs=$(printf '%s' "$result" | jq -r '[.unacknowledged[]?.prNumber] | reduce .[] as $item ([]; if index($item) then . else . + [$item] end) | map("#" + tostring) | join(", ")' 2>/dev/null || echo "")
@@ -4986,17 +5013,38 @@ cross_pr_revert_gate_allows_merge() {
       message="$message Affected files: $files."
     fi
     write_ready_attention_file "$state_dir" "$message"
+    npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
+      --state-dir "$state_dir" \
+      --stage "cross-pr-guard" \
+      --tool "check-cross-pr-reverts" \
+      --classification "preflight-failure" \
+      --reason "$message" \
+      --raw-error "$raw_error" \
+      --exit-code "$rc" >/dev/null 2>&1 || true
     log "status" "⛔ $issue → Cross-PR revert guard blocked ready phase for PR #$pr_number"
     return 1
   fi
 
-  diag=$(printf '%s' "$stderr_content" | grep -m1 '.' | cut -c1-200 || echo "")
+  diag=$(printf '%s' "$raw_error" | grep -m1 '.' | cut -c1-200 || echo "")
   if [[ -n "$diag" ]]; then
     message="Cross-PR revert guard failed (tool error) for PR #$pr_number: $diag"
   else
     message="Cross-PR revert guard failed (tool error) for PR #$pr_number."
   fi
+  classification="preflight-failure"
+  if [[ "$raw_error" == *"not a valid object name"* ]] || [[ "$raw_error" == *"bad revision"* ]] || [[ "$raw_error" == *"does not exist"* ]]; then
+    classification="ref-missing"
+  fi
+
   write_ready_attention_file "$state_dir" "$message"
+  npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
+    --state-dir "$state_dir" \
+    --stage "cross-pr-guard" \
+    --tool "check-cross-pr-reverts" \
+    --classification "$classification" \
+    --reason "Cross-PR revert guard failed for PR #$pr_number." \
+    --raw-error "$raw_error" \
+    --exit-code "$rc" >/dev/null 2>&1 || true
   log_error "  Cross-PR revert guard failed for $issue (PR #$pr_number): ${diag:-no diagnostics captured}"
   return 1
 }
@@ -5072,11 +5120,16 @@ log_ready_unparseable_result() {
 }
 
 ready_failure_is_actionable_for_remediation() {
-  local verdict="${1-}"
-  local failed_check_names="${2-}"
-  local ready_result="${3-}"
+  local state_dir="${1-}"
+  local verdict="${2-}"
+  local failed_check_names="${3-}"
+  local ready_result="${4-}"
   local actionable_names failed_check_name failed_check_name_lc
   local IFS=','
+
+  if [[ -f "$state_dir/.ready-watchdog-stable-failure.json" ]]; then
+    return 0
+  fi
 
   [[ "$verdict" == "fail" ]] || return 1
   [[ -n "$failed_check_names" ]] || return 1
@@ -5298,7 +5351,7 @@ launch_ready_phase() {
     ready_stderr_file=""
   }
   if [[ -n "$ready_stderr_file" ]]; then
-    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" 2>"$ready_stderr_file"); then
+    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" --state-dir "$state_dir" 2>"$ready_stderr_file"); then
       ready_rc=0
     else
       ready_rc=$?
@@ -5314,7 +5367,7 @@ launch_ready_phase() {
     fi
     rm -f "$ready_stderr_file"
   else
-    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" 2>/dev/null); then
+    if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/ready.ts" "$pr_number" --state-dir "$state_dir" 2>/dev/null); then
       ready_rc=0
     else
       ready_rc=$?
@@ -5477,7 +5530,7 @@ launch_ready_phase() {
   remediation_max_attempts=$(ready_remediation_max_attempts "$wt_dir")
   current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
 
-  if [[ "$remediation_enabled" == "true" ]] && ready_failure_is_actionable_for_remediation "$verdict" "$failed_check_names" "$result"; then
+  if [[ "$remediation_enabled" == "true" ]] && ready_failure_is_actionable_for_remediation "$state_dir" "$verdict" "$failed_check_names" "$result"; then
     if [[ "$ready_status" == "running" ]] && [[ -n "$remediation_launch_head" ]] && [[ "$remediation_launch_head" == "$current_head" ]]; then
       return 5
     fi
