@@ -12,12 +12,33 @@ import { join, resolve } from 'node:path';
 import type { EvalRecord } from './eval-schema.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
 import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
+import { validateEvalRecord, type ValidationIssue } from './eval-validator.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
 
 const EVALS_FILENAME = 'evals.jsonl';
+const WRITE_BLOCKING_CODES = new Set([
+  'MISSING_REQUIRED_FIELD',
+  'SCHEMA_VIOLATION',
+  'EVAL_MISSING_TASK_DESCRIPTOR',
+  'EVAL_EMPTY_MODELS_AVAILABLE',
+  'EVAL_UNKNOWN_STAGE_MODEL',
+  'EVAL_NONCANONICAL_REVIEWER',
+] as const);
+
+export class EvalValidationError extends Error {
+  readonly issues: ValidationIssue[];
+
+  constructor(issues: ValidationIssue[]) {
+    super(
+      `Eval record failed write-time validation: ${issues.map((issue) => `${issue.code}${issue.detail ? `(${issue.detail})` : ''}`).join(', ')}`,
+    );
+    this.name = 'EvalValidationError';
+    this.issues = issues;
+  }
+}
 
 // ────────────────────────────────────────────────────────────────
 // Config
@@ -27,6 +48,10 @@ const EVALS_FILENAME = 'evals.jsonl';
 export interface PersistenceOptions {
   /** Override directory for eval storage. Resolved relative to cwd. */
   dir?: string;
+  /** Repository root used to resolve the effective model registry during write-time validation. */
+  repoDir?: string;
+  /** Internal opt-out for unit-test fixtures that intentionally persist invalid records. */
+  skipValidation?: boolean;
 }
 
 /** Options for querying stored eval records. */
@@ -87,6 +112,18 @@ export function appendEvalRecord(
 ): void {
   const { dir: evalsDir, fromConfig } = resolveEvalsDir(options?.dir);
   if (fromConfig) assertSafePath(evalsDir);
+
+  if (!options?.skipValidation) {
+    const issues = validateEvalRecord(record, {
+      file: '<inline>',
+      line: 0,
+      repoDir: options?.repoDir,
+    }).filter((issue) => WRITE_BLOCKING_CODES.has(issue.code));
+    if (issues.length > 0) {
+      throw new EvalValidationError(issues);
+    }
+  }
+
   appendJsonlRecord(join(evalsDir, EVALS_FILENAME), record);
 }
 
