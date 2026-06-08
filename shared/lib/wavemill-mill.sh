@@ -4961,11 +4961,14 @@ write_ready_attention_file() {
 }
 
 cross_pr_revert_gate_allows_merge() {
-  local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4"
+  local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4" base_branch="${5-}"
   local result rc prs files message stderr_file stderr_content diag
+  local extra_args=()
+
+  [[ -n "$base_branch" ]] && extra_args+=(--integration-ref "$base_branch")
 
   stderr_file=$(mktemp)
-  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" 2>"$stderr_file"); then
+  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" "${extra_args[@]}" 2>"$stderr_file"); then
     rm -f "$stderr_file"
     return 0
   else
@@ -5162,7 +5165,7 @@ launch_ready_phase() {
 
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
-  if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number"; then
+  if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number" "$base_branch"; then
     return 1
   fi
 

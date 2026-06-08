@@ -377,6 +377,7 @@ run_cross_pr_case() {
     WT_DIR="$CASE_DIR/worktree"
     mkdir -p "$TOOLS_DIR" "$STATE_DIR" "$WT_DIR"
 
+    CAPTURED_NPX_ARGS_FILE="$CASE_DIR/npx-args.txt"
     READY_ATTENTION_CALLS=""
     LOG_OUTPUT=""
     LOG_ERROR_OUTPUT=""
@@ -389,6 +390,7 @@ run_cross_pr_case() {
       printf "%s\n" "$2" > "$1/.needs-attention"
     }
     npx() {
+      printf "%s\n" "$*" > "$CAPTURED_NPX_ARGS_FILE"
       if [[ "${1:-}" != "tsx" || "${2:-}" != "$TOOLS_DIR/check-cross-pr-reverts.ts" ]]; then
         return 1
       fi
@@ -405,21 +407,56 @@ run_cross_pr_case() {
         rc2_no_diag)
           return 2
           ;;
+        *)
+          printf "%s\n" "{\"blocked\":false,\"reverts\":[],\"acknowledged\":[],\"unacknowledged\":[]}"
+          return 0
+          ;;
       esac
     }
 
-    set +e
-    cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304"
-    rc=$?
-    set -e
+    case "$TEST_CASE" in
+      passes_base_branch)
+        set +e
+        cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304" "main"
+        rc=$?
+        set -e
+        ;;
+      empty_base_branch)
+        set +e
+        cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304" ""
+        rc=$?
+        set -e
+        ;;
+      omitted_base_branch|*)
+        set +e
+        cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304"
+        rc=$?
+        set -e
+        ;;
+    esac
 
     attention_contents=""
     [[ -f "$STATE_DIR/.needs-attention" ]] && attention_contents=$(cat "$STATE_DIR/.needs-attention")
 
-    printf "rc=%s\nattention_calls=%s\nattention_file=%s\nlogs=%s\nerror_logs=%s\n" \
-      "$rc" "$READY_ATTENTION_CALLS" "$attention_contents" "$LOG_OUTPUT" "$LOG_ERROR_OUTPUT"
+    printf "rc=%s\nargs=%s\nattention_calls=%s\nattention_file=%s\nlogs=%s\nerror_logs=%s\n" \
+      "$rc" "$(cat "$CAPTURED_NPX_ARGS_FILE" 2>/dev/null || true)" "$READY_ATTENTION_CALLS" "$attention_contents" "$LOG_OUTPUT" "$LOG_ERROR_OUTPUT"
   ' 2>&1
 }
+
+echo "=== Cross-PR Revert Gate ==="
+
+output="$(run_cross_pr_case passes_base_branch)"
+check_contains "gate includes integration ref flag" "$output" "--integration-ref main"
+check_contains "gate invokes revert checker" "$output" "check-cross-pr-reverts.ts --repo-dir"
+check_contains "gate passes explicit integration ref rc" "$output" "rc=0"
+
+output="$(run_cross_pr_case empty_base_branch)"
+check_contains "gate omits empty integration ref rc" "$output" "rc=0"
+check_not_contains "gate omits empty integration ref flag" "$output" "--integration-ref"
+
+output="$(run_cross_pr_case omitted_base_branch)"
+check_contains "gate supports omitted base branch rc" "$output" "rc=0"
+check_not_contains "gate omits missing integration ref flag" "$output" "--integration-ref"
 
 echo "=== Launch Ready Phase ==="
 
