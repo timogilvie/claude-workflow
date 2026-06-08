@@ -1,17 +1,26 @@
 #!/usr/bin/env -S npx tsx
 import { runTool, resolveRepoDir } from '../shared/lib/tool-runner.ts';
 import { fileURLToPath } from 'node:url';
-import { getIntegrationConfig, getReviewMergeConfig } from '../shared/lib/config.ts';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import {
+  INTEGRATION_DEFAULTS,
+  loadWavemillConfig,
+  getIntegrationConfig,
+  getReviewMergeConfig,
+} from '../shared/lib/config.ts';
 import {
   detectCrossPrReverts,
   filterUnacknowledgedReverts,
   parseRevertAcknowledgements,
 } from '../shared/lib/cross-pr-revert-detector.ts';
 import { escapeShellArg, execShellCommand } from '../shared/lib/shell-utils.ts';
+import { resolveDefaultBaseRef } from '../shared/lib/git-base-resolver.ts';
 
 export const crossPrRevertCheckDeps = {
   detectCrossPrReverts,
   execShellCommand,
+  resolveDefaultBaseRef,
 };
 
 // Exit-code contract:
@@ -63,7 +72,17 @@ export function runCrossPrRevertCheck(input: {
     };
   }
 
-  const integrationRef = input.integrationRef || getIntegrationConfig(input.repoDir).integrationBranch;
+  const rawConfig = loadWavemillConfig(input.repoDir);
+  const integrationConfig = getIntegrationConfig(input.repoDir);
+  const hasLocalConfigFile = existsSync(path.join(input.repoDir, '.wavemill-config.json'))
+    || existsSync(path.join(input.repoDir, '.wavemill-config.local.json'));
+  let integrationRef = input.integrationRef || integrationConfig.integrationBranch;
+  if (!input.integrationRef
+    && integrationRef === INTEGRATION_DEFAULTS.integrationBranch
+    && !rawConfig.integration?.integrationBranch
+    && !hasLocalConfigFile) {
+    integrationRef = crossPrRevertCheckDeps.resolveDefaultBaseRef(input.repoDir) ?? integrationRef;
+  }
   const headRef = input.headRef || 'HEAD';
   let baseRef: string;
   let reverts: ReturnType<typeof detectCrossPrReverts>;

@@ -197,6 +197,30 @@ test('runCrossPrRevertCheck bounds tool error stderr', () => {
   }
 });
 
+test('runCrossPrRevertCheck resolves the default base branch when config is absent', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'cross-pr-revert-no-config-'));
+  const detectMock = mock.method(crossPrRevertCheckDeps, 'detectCrossPrReverts', (input) => {
+    assert.equal(input.integrationRef, 'main');
+    return [];
+  });
+  const resolveMock = mock.method(crossPrRevertCheckDeps, 'resolveDefaultBaseRef', () => 'main');
+
+  try {
+    const result = runCrossPrRevertCheck({
+      repoDir,
+      baseRef: 'abc123',
+      acknowledgementText: '',
+    });
+
+    assert.equal(result.blocked, false);
+    assert.equal(result.reverts.length, 0);
+  } finally {
+    resolveMock.mock.restore();
+    detectMock.mock.restore();
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('runCrossPrRevertCheck uses explicit integrationRef for config-less repos', () => {
   const { repoDir, cleanup } = makeRepoWithoutConfig();
 
@@ -219,6 +243,33 @@ test('runCrossPrRevertCheck uses explicit integrationRef for config-less repos',
   }
 });
 
+test('runCrossPrRevertCheck prefers configured integration branches over resolver fallback', () => {
+  const { repoDir, cleanup } = makeRepo({
+    integration: {
+      integrationBranch: 'release/integration',
+    },
+  });
+  const detectMock = mock.method(crossPrRevertCheckDeps, 'detectCrossPrReverts', (input) => {
+    assert.equal(input.integrationRef, 'release/integration');
+    return [];
+  });
+  const resolveMock = mock.method(crossPrRevertCheckDeps, 'resolveDefaultBaseRef', () => 'main');
+
+  try {
+    const result = runCrossPrRevertCheck({
+      repoDir,
+      baseRef: 'abc123',
+      acknowledgementText: '',
+    });
+
+    assert.equal(result.blocked, false);
+  } finally {
+    resolveMock.mock.restore();
+    detectMock.mock.restore();
+    cleanup();
+  }
+});
+
 test('runCrossPrRevertCheck skips when an explicit integrationRef is missing', () => {
   const { repoDir, cleanup } = makeRepoWithoutConfig();
 
@@ -234,6 +285,34 @@ test('runCrossPrRevertCheck skips when an explicit integrationRef is missing', (
     assert.equal(result.acknowledged.length, 0);
     assert.equal(result.unacknowledged.length, 0);
   } finally {
+    cleanup();
+  }
+});
+
+test('runCrossPrRevertCheck honors an explicit baseRef without calling git merge-base', () => {
+  const { repoDir, cleanup } = makeRepo();
+  const execMock = mock.method(crossPrRevertCheckDeps, 'execShellCommand', (command: string) => {
+    if (command.includes('git merge-base')) {
+      throw new Error('git merge-base should not run when baseRef is provided');
+    }
+    return '';
+  });
+  const detectMock = mock.method(crossPrRevertCheckDeps, 'detectCrossPrReverts', (input) => {
+    assert.equal(input.baseRef, 'explicit-base');
+    return [];
+  });
+
+  try {
+    const result = runCrossPrRevertCheck({
+      repoDir,
+      baseRef: 'explicit-base',
+      acknowledgementText: '',
+    });
+
+    assert.equal(result.blocked, false);
+  } finally {
+    detectMock.mock.restore();
+    execMock.mock.restore();
     cleanup();
   }
 });
@@ -271,6 +350,38 @@ test('runCrossPrRevertCheck treats empty integrationRef like no explicit overrid
     cleanup();
   }
 });
+
+for (const message of [
+  'fatal: couldn\'t find remote ref auto/integration',
+  'error: origin/auto/integration does not exist',
+]) {
+  test(`runCrossPrRevertCheck treats "${message}" as a missing integration ref`, () => {
+    const { repoDir, cleanup } = makeRepo();
+    const execMock = mock.method(crossPrRevertCheckDeps, 'execShellCommand', (command: string) => {
+      if (command.includes('git merge-base')) {
+        throw new Error(message);
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const detectMock = mock.method(crossPrRevertCheckDeps, 'detectCrossPrReverts', () => {
+      throw new Error('detectCrossPrReverts should not run when integration ref is missing');
+    });
+
+    try {
+      const result = runCrossPrRevertCheck({
+        repoDir,
+        acknowledgementText: '',
+      });
+
+      assert.equal(result.blocked, false);
+      assert.equal(result.reverts.length, 0);
+    } finally {
+      detectMock.mock.restore();
+      execMock.mock.restore();
+      cleanup();
+    }
+  });
+}
 
 test('runCrossPrRevertCheck falls back to recent commit messages when gh metadata is unavailable', () => {
   const { repoDir, cleanup } = makeRepo();
