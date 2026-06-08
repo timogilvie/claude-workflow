@@ -62,6 +62,26 @@ When new model/router config fields are added in future versions:
 - Relative paths shared by the team can live in `.wavemill-config.json`.
 - Absolute machine paths (for example `/Users/...` or `C:\\Users\\...`) should stay local-only or env-backed.
 
+## Ready Stage Settings
+
+`ready.watchdog` controls how mill reacts to stale or failing ready states:
+
+- `thresholdMinutes`: stale-local-state threshold before the watchdog intervenes.
+- `autoRecover`: allows local stale-state cleanup when GitHub is clean and green.
+- `timeoutSeconds`: watchdog subprocess timeout per monitor tick.
+- `stableFailureConsecutivePolls`: identical safe failures required before queueing remediation.
+- `stableFailureEscalateAfterPolls`: identical unsafe failures required before escalating to operator attention.
+- `safeRemediationCategories`: allowlist for watchdog-driven remediation, defaulting to `lint`, `type`, `test`, `build`, `migration-chain`, and `alembic`.
+
+`ready.migrationChecks` controls automatic migration validation:
+
+- `enabled`: master switch for automatic migration integrity checks.
+- `autoDetectAlembic`: auto-enables `migration-chain-integrity` when `alembic/versions/` exists and `ready.checks` is otherwise empty.
+- `baseRefresh.enabled`: fetches the PR base branch before local migration validation.
+- `baseRefresh.timeoutSeconds`: timeout for that fetch.
+
+These settings are additive and optional. Repositories that do nothing keep the defaults.
+
 ## How sync-config Interacts with Config Files
 
 `npx tsx tools/sync-config.ts` syncs canonical fields into `.wavemill-config.json`.

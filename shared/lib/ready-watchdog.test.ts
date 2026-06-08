@@ -133,6 +133,80 @@ test('classify failing CI as waiting-on-ci', () => {
   assert.match(classification.detail, /Failing checks/);
 });
 
+test('classify stable safe failing CI as stable-failing-safe after repeated polls', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot(),
+    makeTruth({
+      checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE' }],
+    }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+      stableFailureConsecutivePolls: 2,
+      stableFailureEscalateAfterPolls: 4,
+      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    },
+    {
+      issueId: 'HOK-1579',
+      slug: 'ready-watchdog-task',
+      prNumber: 528,
+      classification: 'waiting-on-ci',
+      displayLabel: 'waiting on CI',
+      detail: 'Failing checks: lint (FAILURE).',
+      action: 'reported',
+      updatedAt: '2026-05-05T12:20:00.000Z',
+      idleMinutes: 20,
+      lastProgressAt: '2026-05-05T12:00:00.000Z',
+      prStateKey: 'OPEN|MERGEABLE|CLEAN',
+      detailFingerprint: 'Failing checks: lint (FAILURE).',
+      consecutiveFailurePolls: 1,
+    },
+  );
+
+  assert.equal(classification.kind, 'stable-failing-safe');
+  assert.deepEqual(classification.remediationCategories, ['lint (FAILURE)']);
+});
+
+test('classify repeated unsafe failing CI as needs-user after the escalation threshold', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot(),
+    makeTruth({
+      checks: [{ name: 'e2e', status: 'failure', rawStatus: 'FAILURE' }],
+    }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+      stableFailureConsecutivePolls: 2,
+      stableFailureEscalateAfterPolls: 3,
+      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    },
+    {
+      issueId: 'HOK-1579',
+      slug: 'ready-watchdog-task',
+      prNumber: 528,
+      classification: 'waiting-on-ci',
+      displayLabel: 'waiting on CI',
+      detail: 'Failing checks: e2e (FAILURE).',
+      action: 'reported',
+      updatedAt: '2026-05-05T12:20:00.000Z',
+      idleMinutes: 20,
+      lastProgressAt: '2026-05-05T12:00:00.000Z',
+      prStateKey: 'OPEN|MERGEABLE|CLEAN',
+      detailFingerprint: 'Failing checks: e2e (FAILURE).',
+      consecutiveFailurePolls: 2,
+    },
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /unsafe/);
+});
+
 test('classify pending CI as waiting-on-ci', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
@@ -300,6 +374,57 @@ test('tick auto-recovers stale local state for clean green PRs', async () => {
   assert.equal(watchdogState.tasks['HOK-1579'].action, 'auto-recovered');
 
   await rm(repoDir, { recursive: true, force: true });
+});
+
+test('tick queues remediation for stable safe CI failures', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-1717', 717);
+  const watchdogStatePath = path.join(stateDir, 'ready-watchdog-state.json');
+  writeFileSync(watchdogStatePath, JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-1717': {
+        issueId: 'HOK-1717',
+        slug: 'ready-watchdog-task',
+        prNumber: 717,
+        classification: 'waiting-on-ci',
+        displayLabel: 'waiting on CI',
+        detail: 'Failing checks: lint (FAILURE).',
+        action: 'reported',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+        prStateKey: 'OPEN|MERGEABLE|CLEAN',
+        detailFingerprint: 'Failing checks: lint (FAILURE).',
+        consecutiveFailurePolls: 1,
+      },
+    },
+  }, null, 2));
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: true,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE' }],
+        }),
+        getCurrentHead: async () => 'head',
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'stable-failing-safe');
+    assert.equal(result.findings[0].action, 'queue-remediation');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
 });
 
 test('tick suppresses repeated needs-user when classification and detail are unchanged', async () => {

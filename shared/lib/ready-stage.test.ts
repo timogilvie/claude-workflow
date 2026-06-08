@@ -436,9 +436,10 @@ describe('ready-stage', () => {
 
       try {
         const result = await runReadyStage({ prNumber: 42, repoDir });
-        assert.equal(result.verdict, 'pass');
-        assert.equal(result.checks[0]?.name, 'migration-chain-integrity');
-        assert.equal(result.checks[0]?.status, 'pass');
+        assert.equal(result.verdict, 'warn');
+        assert.equal(result.checks.find((check) => check.name === 'migration-base-refresh')?.status, 'warn');
+        const migrationCheck = result.checks.find((check) => check.name === 'migration-chain-integrity');
+        assert.equal(migrationCheck?.status, 'pass');
       } finally {
         execMock.mock.restore();
       }
@@ -974,9 +975,10 @@ describe('ready-stage', () => {
 
       try {
         const result = await runReadyStage({ prNumber: 42, repoDir });
-        assert.deepEqual(result.checks.map(c => c.name), ['migration-reversibility']);
-        assert.equal(result.checks[0]?.status, 'pass');
-        assert.equal(result.checks[0]?.details?.overrideApplied, true);
+        assert.equal(result.checks.some((check) => check.name === 'migration-base-refresh'), true);
+        const reversibilityCheck = result.checks.find((check) => check.name === 'migration-reversibility');
+        assert.equal(reversibilityCheck?.status, 'pass');
+        assert.equal(reversibilityCheck?.details?.overrideApplied, true);
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });
@@ -1023,8 +1025,8 @@ describe('ready-stage', () => {
 
       try {
         const result = await runReadyStage({ prNumber: 42, repoDir });
-        assert.deepEqual(result.checks.map(c => c.name), ['migration-reversibility']);
-        assert.equal(result.checks[0]?.status, 'fail');
+        assert.equal(result.checks.some((check) => check.name === 'migration-base-refresh'), true);
+        assert.equal(result.checks.find((check) => check.name === 'migration-reversibility')?.status, 'fail');
         assert.equal(result.verdict, 'fail');
       } finally {
         execMock.mock.restore();
@@ -1768,6 +1770,102 @@ describe('ready-stage', () => {
       }
     });
 
+    it('auto-enables alembic migration-chain checks when no ready checks are configured', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'alembic/versions/002_a.py': 'revision = "002_a"\ndown_revision = "001"\n',
+        'alembic/versions/002_b.py': 'revision = "002_b"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+            });
+          }
+
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return '';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.equal(result.verdict, 'fail');
+        assert.equal(result.checks.some((check) => check.name === 'migration-chain-auto-enabled'), true);
+        assert.equal(result.checks.some((check) => check.name === 'migration-base-refresh'), true);
+        assert.equal(result.checks.find((check) => check.name === 'migration-chain-integrity')?.status, 'fail');
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('skips alembic auto-detection when migration checks are disabled', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
+      await writeRepoFiles(repoDir, {
+        '.wavemill-config.json': JSON.stringify({
+          ready: {
+            migrationChecks: {
+              enabled: false,
+            },
+          },
+        }),
+        'alembic/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'alembic/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+            });
+          }
+
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [],
+          });
+        }
+        if (cmd.includes('gh pr diff')) {
+          return '';
+        }
+        if (cmd.includes('gh pr checks')) {
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'SUCCESS' }]);
+        }
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        assert.equal(result.checks.some((check) => check.name === 'migration-chain-integrity'), false);
+        assert.equal(result.checks.some((check) => check.name === 'migration-chain-auto-enabled'), false);
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
     it('can run only the migration-reversibility check through the allowlist', async () => {
       const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-'));
       await writeRepoFiles(repoDir, {
@@ -1809,8 +1907,8 @@ describe('ready-stage', () => {
 
       try {
         const result = await runReadyStage({ prNumber: 42, repoDir });
-        assert.deepEqual(result.checks.map(check => check.name), ['migration-reversibility']);
-        assert.equal(result.checks[0]?.status, 'fail');
+        assert.equal(result.checks.some((check) => check.name === 'migration-base-refresh'), true);
+        assert.equal(result.checks.find((check) => check.name === 'migration-reversibility')?.status, 'fail');
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });
