@@ -371,7 +371,7 @@ function emitFallbackEvent(input: Parameters<typeof buildFallbackEventRecord>[0]
   try {
     const record = buildFallbackEventRecord(input);
     const evalsDir = resolveEvalsDir(undefined, input.repoDir).dir;
-    appendEvalRecord(record, { dir: evalsDir });
+    appendEvalRecord(record, { dir: evalsDir, repoDir: input.repoDir });
   } catch (error) {
     console.warn(
       `[llm-cli] failed to persist fallback eval: ${error instanceof Error ? error.message : String(error)}`,

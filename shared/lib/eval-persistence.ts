@@ -48,6 +48,8 @@ export class EvalValidationError extends Error {
 export interface PersistenceOptions {
   /** Override directory for eval storage. Resolved relative to cwd. */
   dir?: string;
+  /** Repository root used to resolve the effective model registry during write-time validation. */
+  repoDir?: string;
   /** Internal opt-out for unit-test fixtures that intentionally persist invalid records. */
   skipValidation?: boolean;
 }
@@ -115,6 +117,7 @@ export function appendEvalRecord(
     const issues = validateEvalRecord(record, {
       file: '<inline>',
       line: 0,
+      repoDir: options?.repoDir,
     }).filter((issue) => WRITE_BLOCKING_CODES.has(issue.code));
     if (issues.length > 0) {
       throw new EvalValidationError(issues);
