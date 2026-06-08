@@ -371,6 +371,75 @@ run_launch_case() {
   ' 2>&1
 }
 
+run_cross_pr_gate_case() {
+  local test_case="$1"
+  local case_dir="$TEST_TMP/gate-$test_case"
+  mkdir -p "$case_dir"
+
+  CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" TEST_CASE="$test_case" bash -lc '
+    set -euo pipefail
+    source "$COMMON_SCRIPT"
+    source "$LAUNCH_FUNC_FILE"
+
+    TOOLS_DIR="$CASE_DIR/tools"
+    mkdir -p "$TOOLS_DIR"
+
+    STATE_DIR="$CASE_DIR/state"
+    WT_DIR="$CASE_DIR/worktree"
+    mkdir -p "$STATE_DIR" "$WT_DIR"
+
+    CAPTURED_NPX_ARGS_FILE="$CASE_DIR/npx-args.txt"
+    LOG_OUTPUT=""
+    LOG_ERROR_OUTPUT=""
+
+    log() { LOG_OUTPUT+="$*\n"; }
+    log_error() { LOG_ERROR_OUTPUT+="$*\n"; }
+    npx() {
+      printf "%s\n" "$*" > "$CAPTURED_NPX_ARGS_FILE"
+      printf "%s\n" "{\"blocked\":false,\"reverts\":[],\"acknowledged\":[],\"unacknowledged\":[]}"
+      return 0
+    }
+
+    case "$TEST_CASE" in
+      passes_base_branch)
+        set +e
+        cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304" "main"
+        rc=$?
+        set -e
+        ;;
+      empty_base_branch)
+        set +e
+        cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304" ""
+        rc=$?
+        set -e
+        ;;
+      omitted_base_branch)
+        set +e
+        cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304"
+        rc=$?
+        set -e
+        ;;
+    esac
+
+    printf "rc=%s\nargs=%s\nlogs=%s\nerrors=%s\n" "$rc" "$(cat "$CAPTURED_NPX_ARGS_FILE" 2>/dev/null || true)" "$LOG_OUTPUT" "$LOG_ERROR_OUTPUT"
+  ' 2>&1
+}
+
+echo "=== Cross-PR Revert Gate ==="
+
+output="$(run_cross_pr_gate_case passes_base_branch)"
+check_contains "gate includes integration ref flag" "$output" "--integration-ref main"
+check_contains "gate invokes revert checker" "$output" "check-cross-pr-reverts.ts --repo-dir"
+check_contains "gate passes explicit integration ref rc" "$output" "rc=0"
+
+output="$(run_cross_pr_gate_case empty_base_branch)"
+check_contains "gate omits empty integration ref rc" "$output" "rc=0"
+check_not_contains "gate omits empty integration ref flag" "$output" "--integration-ref"
+
+output="$(run_cross_pr_gate_case omitted_base_branch)"
+check_contains "gate supports omitted base branch rc" "$output" "rc=0"
+check_not_contains "gate omits missing integration ref flag" "$output" "--integration-ref"
+
 echo "=== Launch Ready Phase ==="
 
 output="$(run_launch_case pending)"

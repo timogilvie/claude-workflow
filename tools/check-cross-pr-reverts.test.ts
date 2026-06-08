@@ -53,6 +53,19 @@ function makeRepo(config: Record<string, unknown> = {}): { repoDir: string; clea
   };
 }
 
+function makeRepoWithoutConfig(): { repoDir: string; cleanup: () => void } {
+  const repoDir = mkdtempSync(join(tmpdir(), 'cross-pr-revert-cli-'));
+  git(repoDir, 'init -b main');
+  git(repoDir, 'config user.name "Test User"');
+  git(repoDir, 'config user.email "test@example.com"');
+  commitFile(repoDir, 'README.md', 'base\n', 'Initial commit');
+
+  return {
+    repoDir,
+    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+  };
+}
+
 test('runCrossPrRevertCheck blocks unacknowledged cross-PR deletions', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
@@ -179,6 +192,81 @@ test('runCrossPrRevertCheck bounds tool error stderr', () => {
     assert.match(result.toolError.stderr, /…\[truncated\]$/);
   } finally {
     detectMock.mock.restore();
+    execMock.mock.restore();
+    cleanup();
+  }
+});
+
+test('runCrossPrRevertCheck uses explicit integrationRef for config-less repos', () => {
+  const { repoDir, cleanup } = makeRepoWithoutConfig();
+
+  try {
+    const result = runCrossPrRevertCheck({
+      repoDir,
+      integrationRef: 'main',
+      acknowledgementText: '',
+    });
+
+    assert.equal(result.blocked, false);
+    assert.equal(result.reverts.length, 0);
+    assert.equal(result.unacknowledged.length, 0);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    assert.equal(message.includes('auto/integration'), false);
+    assert.fail(`expected explicit integrationRef to avoid auto/integration fallback, got: ${message}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('runCrossPrRevertCheck skips when an explicit integrationRef is missing', () => {
+  const { repoDir, cleanup } = makeRepoWithoutConfig();
+
+  try {
+    const result = runCrossPrRevertCheck({
+      repoDir,
+      integrationRef: 'does-not-exist',
+      acknowledgementText: '',
+    });
+
+    assert.equal(result.blocked, false);
+    assert.equal(result.reverts.length, 0);
+    assert.equal(result.acknowledged.length, 0);
+    assert.equal(result.unacknowledged.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('runCrossPrRevertCheck treats empty integrationRef like no explicit override', () => {
+  const { repoDir, cleanup } = makeRepo({
+    integration: {
+      integrationBranch: 'main',
+    },
+  });
+  const mergeBaseCommands: string[] = [];
+  const execMock = mock.method(crossPrRevertCheckDeps, 'execShellCommand', (command: string, options?: { cwd?: string; encoding?: string }) => {
+    if (command.includes('git merge-base')) {
+      mergeBaseCommands.push(command);
+    }
+    return execSync(command, {
+      cwd: options?.cwd ?? repoDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trimEnd();
+  });
+
+  try {
+    const result = runCrossPrRevertCheck({
+      repoDir,
+      integrationRef: '',
+      acknowledgementText: '',
+    });
+
+    assert.equal(result.blocked, false);
+    assert.equal(mergeBaseCommands.length > 0, true);
+    assert.equal(mergeBaseCommands.some((command) => command.includes("'main'")), true);
+  } finally {
     execMock.mock.restore();
     cleanup();
   }
