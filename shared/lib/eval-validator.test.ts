@@ -11,6 +11,38 @@ import {
   validateEvalsStore,
 } from './eval-validator.ts';
 
+function makeTaskDescriptor(overrides: Partial<NonNullable<EvalRecord['taskDescriptor']>> = {}): NonNullable<EvalRecord['taskDescriptor']> {
+  return {
+    schema_version: '1.0',
+    signals: {
+      heuristic: {
+        task_type: 'feature',
+        languages: ['typescript'],
+        framework_tags: [],
+        files_touched: 1,
+        repo_size_loc: 100,
+        description_tokens: 10,
+        is_greenfield: false,
+        has_migration: false,
+        has_ui: false,
+        has_tests: true,
+        cross_service: false,
+      },
+      learned: {
+        complexity: 3,
+        domain: 'backend',
+        risk_flags: [],
+      },
+    },
+    constraints: {
+      models_available: ['gpt-5.4'],
+      objective: 'balanced',
+    },
+    stages: {},
+    ...overrides,
+  };
+}
+
 function makeRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
   return {
     id: 'eval-1',
@@ -26,6 +58,7 @@ function makeRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
     interventionCount: 0,
     interventionDetails: [],
     rationale: 'Judge result is present.',
+    taskDescriptor: makeTaskDescriptor(),
     ...overrides,
   };
 }
@@ -220,5 +253,125 @@ describe('eval-validator', () => {
       { file: 'evals.jsonl', line: 1 },
     );
     assert.ok(stringIssues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'timeSeconds'));
+  });
+
+  it('reports missing taskDescriptor variants', () => {
+    const missingIssues = validateEvalRecord(
+      makeRecord({ taskDescriptor: undefined }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(missingIssues.some((issue) => issue.code === 'EVAL_MISSING_TASK_DESCRIPTOR'));
+
+    const nullIssues = validateEvalRecord(
+      makeRecord({ taskDescriptor: null as unknown as EvalRecord['taskDescriptor'] }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(nullIssues.some((issue) => issue.code === 'EVAL_MISSING_TASK_DESCRIPTOR'));
+
+    const stringIssues = validateEvalRecord(
+      { ...makeRecord(), taskDescriptor: '   ' },
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(stringIssues.some((issue) => issue.code === 'EVAL_MISSING_TASK_DESCRIPTOR'));
+  });
+
+  it('reports empty models_available variants', () => {
+    const missingIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          constraints: {
+            objective: 'balanced',
+          } as NonNullable<EvalRecord['taskDescriptor']>['constraints'],
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(missingIssues.some((issue) => issue.code === 'EVAL_EMPTY_MODELS_AVAILABLE'));
+
+    const nonArrayIssues = validateEvalRecord(
+      {
+        ...makeRecord(),
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          constraints: {
+            ...makeTaskDescriptor().constraints,
+            models_available: 'gpt-5.4' as unknown as string[],
+          },
+        },
+      },
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(nonArrayIssues.some((issue) => issue.code === 'EVAL_EMPTY_MODELS_AVAILABLE'));
+
+    const emptyIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          constraints: {
+            ...makeTaskDescriptor().constraints,
+            models_available: [],
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(emptyIssues.some((issue) => issue.code === 'EVAL_EMPTY_MODELS_AVAILABLE'));
+  });
+
+  it('reports unknown non-reviewer stage models', () => {
+    const issues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          stages: {
+            planner: { model: 'missing-model' },
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(issues.some((issue) => issue.code === 'EVAL_UNKNOWN_STAGE_MODEL'));
+  });
+
+  it('accepts aliased and canonical reviewer models and rejects stray reviewer text', () => {
+    const aliasedIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          stages: {
+            reviewer: { model: 'deep' },
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(!aliasedIssues.some((issue) => issue.code === 'EVAL_NONCANONICAL_REVIEWER'));
+
+    const canonicalIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          stages: {
+            reviewer: { model: 'gpt-5.4' },
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(!canonicalIssues.some((issue) => issue.code === 'EVAL_NONCANONICAL_REVIEWER'));
+
+    const strayIssues = validateEvalRecord(
+      makeRecord({
+        taskDescriptor: {
+          ...makeTaskDescriptor(),
+          stages: {
+            reviewer: { model: 'some-reviewer' },
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(strayIssues.some((issue) => issue.code === 'EVAL_NONCANONICAL_REVIEWER'));
   });
 });

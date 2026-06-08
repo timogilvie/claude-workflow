@@ -288,6 +288,10 @@
         }
       }
     },
+    "quarantine_reason": {
+      "type": "string",
+      "description": "Provenance for records quarantined during corpus hygiene migration."
+    },
     "failureReason": {
       "type": "string",
       "enum": ["eval_prompt_too_large"],
@@ -545,6 +549,10 @@
           "minimum": 0,
           "maximum": 100,
           "description": "Module hotspot score based on git history (optional)."
+        },
+        "diffUncertain": {
+          "type": "boolean",
+          "description": "True when diff parsing returned suspicious results (e.g. 0 LOC with files present)."
         }
       },
       "required": [
@@ -672,6 +680,30 @@
         "decisionPolicyVersion"
       ],
       "additionalProperties": false
+    },
+    "promptArtifacts": {
+      "type": "array",
+      "description": "Prompt artifacts used during workflow execution.",
+      "items": {
+        "type": "object",
+        "required": [
+          "templateName",
+          "templateHash",
+          "filledPromptHash"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "templateName": {
+            "type": "string"
+          },
+          "templateHash": {
+            "type": "string"
+          },
+          "filledPromptHash": {
+            "type": "string"
+          }
+        }
+      }
     },
     "stageOutcomes": {
       "type": "object",
@@ -1251,7 +1283,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Models available for routing consideration."
+              "description": "Models available for routing consideration. Historical records may contain an empty array, but the write path rejects empty values."
             },
             "objective": {
               "type": "string",
@@ -2011,6 +2043,49 @@
         },
         "reviewMode": {
           "type": "string"
+        },
+        "planner": {
+          "type": "string"
+        },
+        "planDepth": {
+          "type": "string"
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "artifactHash": {
+          "type": "string"
+        },
+        "inputHash": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "cacheHit": {
+          "type": "boolean"
+        },
+        "routeSource": {
+          "type": "string",
+          "enum": [
+            "batch",
+            "single",
+            "cache"
+          ]
+        },
+        "routerMode": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "constrained",
+            "survival"
+          ]
+        },
+        "routingMode": {
+          "type": "string"
+        },
+        "expectedMetrics": {
+          "type": "object"
         }
       },
       "required": [

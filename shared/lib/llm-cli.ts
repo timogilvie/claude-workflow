@@ -28,6 +28,7 @@ import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getEffectiveRegistry, getLadder, getModel, rankCandidates, type RegistryTaskType } from './model-registry.ts';
 import { getModelStatus, markExhausted, readQuotaSnapshot, recordSuccess } from './quota-state.ts';
 import { fallbackLog } from './router-log.ts';
+import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -316,6 +317,12 @@ function buildFallbackEventRecord(input: {
   costUsd: number | null;
 }): EvalRecord {
   const score = input.outcome === 'success' ? 1.0 : 0.0;
+  const modelsAvailable = Array.from(
+    new Set(
+      [input.preferredModel, input.fallbackModel, ...input.fallbackChain.map((entry) => entry.model)]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+    ),
+  );
   const fallbackEvent: FallbackEventMetadata = {
     schema_version: FALLBACK_EVENT_SCHEMA_VERSION,
     preferred_model: input.preferredModel,
@@ -345,6 +352,15 @@ function buildFallbackEventRecord(input: {
     interventionDetails: [],
     rationale: `Cross-model fallback: ${input.preferredModel} -> ${input.fallbackModel ?? 'none'} (${input.outcome})`,
     agentType: 'llm-cli',
+    taskDescriptor: buildTaskDescriptor({
+      originalPrompt: summarizePrompt(input.prompt),
+      score,
+      timeSeconds: Math.max(0, input.endedAt - input.startedAt) / 1000,
+      interventionCount: 0,
+      modelsAvailable,
+      objective: 'balanced',
+      workflowCost: typeof input.costUsd === 'number' ? input.costUsd : undefined,
+    }),
   };
 
   attachFallbackEvent(record, fallbackEvent);

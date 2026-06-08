@@ -766,8 +766,8 @@ function validPromptSizeDiagnostic() {
   };
 }
 
-test('SCHEMA_VERSION is bumped for nullable timeSeconds', () => {
-  assert.equal(SCHEMA_VERSION, '1.27.0');
+test('SCHEMA_VERSION is bumped for corpus hygiene schema lock', () => {
+  assert.equal(SCHEMA_VERSION, '1.28.0');
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1602,7 +1602,7 @@ test('phaseDurationsSeconds validates when present', () => {
 test('timeSeconds accepts null for unknown duration', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
-    schemaVersion: '1.27.0',
+    schemaVersion: '1.28.0',
     timeSeconds: null,
   };
 
@@ -1647,8 +1647,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.27.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.27.0');
+test('Schema version constant is 1.28.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.28.0');
 });
 
 test('Record with resolved-model routing validates', () => {
