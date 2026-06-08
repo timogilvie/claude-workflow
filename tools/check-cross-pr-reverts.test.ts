@@ -120,7 +120,7 @@ test('runCrossPrRevertCheck reports disabled status when config disables the gua
   }
 });
 
-test('runCrossPrRevertCheck skips when the configured integration branch is missing', () => {
+test('runCrossPrRevertCheck returns tool error when integration ref is missing', () => {
   const { repoDir, cleanup } = makeRepo();
   const execMock = mock.method(crossPrRevertCheckDeps, 'execShellCommand', (command: string) => {
     if (command.includes('git merge-base')) {
@@ -142,6 +142,41 @@ test('runCrossPrRevertCheck skips when the configured integration branch is miss
     assert.equal(result.reverts.length, 0);
     assert.equal(result.acknowledged.length, 0);
     assert.equal(result.unacknowledged.length, 0);
+    assert.ok(result.toolError);
+    assert.equal(result.toolError.commandClass, 'git-merge-base');
+    assert.equal(result.toolError.ref, 'auto/integration');
+    assert.match(result.toolError.command, /git merge-base auto\/integration HEAD/);
+    assert.match(result.toolError.stderr, /Not a valid object name/);
+  } finally {
+    detectMock.mock.restore();
+    execMock.mock.restore();
+    cleanup();
+  }
+});
+
+test('runCrossPrRevertCheck bounds tool error stderr', () => {
+  const { repoDir, cleanup } = makeRepo();
+  const longMessage = `fatal: ${'x'.repeat(3000)}`;
+  const execMock = mock.method(crossPrRevertCheckDeps, 'execShellCommand', (command: string) => {
+    if (command.includes('git merge-base')) {
+      throw new Error(longMessage);
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
+  const detectMock = mock.method(crossPrRevertCheckDeps, 'detectCrossPrReverts', () => {
+    throw new Error('detectCrossPrReverts should not run when merge-base fails');
+  });
+
+  try {
+    const result = runCrossPrRevertCheck({
+      repoDir,
+      acknowledgementText: '',
+    });
+
+    assert.ok(result.toolError);
+    assert.equal(result.toolError.commandClass, 'git-merge-base');
+    assert.ok(result.toolError.stderr.length < longMessage.length);
+    assert.match(result.toolError.stderr, /…\[truncated\]$/);
   } finally {
     detectMock.mock.restore();
     execMock.mock.restore();

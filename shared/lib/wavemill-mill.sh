@@ -4960,15 +4960,47 @@ write_ready_attention_file() {
   printf '%s\n' "$message" > "$state_dir/.needs-attention"
 }
 
+_write_cross_pr_diagnostic() {
+  local state_dir="$1" ref_name="$2" cmd_class="$3" diag_stderr="$4"
+  local result_file="$state_dir/.ready-result.json"
+  local diag_json
+  diag_json=$(jq -cn \
+    --arg ref "$ref_name" \
+    --arg commandClass "$cmd_class" \
+    --arg stderr "$diag_stderr" \
+    '{commandClass: $commandClass, ref: $ref, stderr: $stderr}') || return 0
+
+  mkdir -p "$state_dir"
+  local tmp
+  tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || return 0
+
+  if [[ -f "$result_file" ]]; then
+    jq --argjson diag "$diag_json" '. + {crossPrDiagnostic: $diag}' "$result_file" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$result_file"
+  else
+    printf '{"crossPrDiagnostic":%s}\n' "$diag_json" > "$tmp" \
+      && mv "$tmp" "$result_file"
+  fi
+  rm -f "$tmp"
+}
+
 cross_pr_revert_gate_allows_merge() {
   local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4"
   local result rc prs files message
+  local stderr_file
+  stderr_file=$(mktemp 2>/dev/null) || stderr_file=""
 
-  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" 2>/dev/null); then
+  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" \
+    --repo-dir "$wt_dir" 2>"${stderr_file:-/dev/null}"); then
+    rm -f "$stderr_file"
     return 0
   else
     rc=$?
   fi
+
+  local tool_stderr=""
+  [[ -n "$stderr_file" && -f "$stderr_file" ]] && tool_stderr=$(cat "$stderr_file" 2>/dev/null || echo "")
+  rm -f "$stderr_file"
 
   if [[ "$rc" -eq 1 ]]; then
     prs=$(printf '%s' "$result" | jq -r '[.unacknowledged[]?.prNumber] | reduce .[] as $item ([]; if index($item) then . else . + [$item] end) | map("#" + tostring) | join(", ")' 2>/dev/null || echo "")
@@ -4980,6 +5012,27 @@ cross_pr_revert_gate_allows_merge() {
     fi
     write_ready_attention_file "$state_dir" "$message"
     log "status" "⛔ $issue → Cross-PR revert guard blocked ready phase for PR #$pr_number"
+    return 1
+  fi
+
+  if [[ "$rc" -eq 2 ]]; then
+    local ref_name cmd_class diag_stderr
+    ref_name=$(printf '%s' "$result" | jq -r '.toolError.ref // ""' 2>/dev/null || echo "")
+    cmd_class=$(printf '%s' "$result" | jq -r '.toolError.commandClass // ""' 2>/dev/null || echo "")
+    diag_stderr=$(printf '%s' "$result" | jq -r '.toolError.stderr // ""' 2>/dev/null || echo "")
+    [[ -n "$diag_stderr" ]] || diag_stderr="${tool_stderr:0:2048}"
+    [[ -z "$ref_name" && -n "$tool_stderr" ]] && ref_name="${tool_stderr:0:200}"
+    [[ -z "$ref_name" ]] && ref_name="unknown ref"
+    [[ -z "$cmd_class" ]] && cmd_class="unknown command"
+
+    message="Cross-PR revert guard tool failure for PR #$pr_number: $cmd_class failed on ref '$ref_name'."
+    if [[ -n "$diag_stderr" ]]; then
+      message="$message Diagnostic: $diag_stderr"
+    fi
+
+    write_ready_attention_file "$state_dir" "$message"
+    _write_cross_pr_diagnostic "$state_dir" "$ref_name" "$cmd_class" "$diag_stderr"
+    log_error "  Cross-PR revert guard tool failure for $issue (PR #$pr_number): $cmd_class on '$ref_name'"
     return 1
   fi
 

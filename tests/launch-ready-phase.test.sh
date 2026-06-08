@@ -67,6 +67,7 @@ extract_function "$MILL_SCRIPT" "transient_mergeability_count" >> "$LAUNCH_FUNC_
 extract_function "$MILL_SCRIPT" "increment_transient_mergeability_count" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "_write_cross_pr_diagnostic" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "cross_pr_revert_gate_allows_merge" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_transient_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "log_ready_failure_result" >> "$LAUNCH_FUNC_FILE"
@@ -214,23 +215,26 @@ run_launch_case() {
       mkdir -p "$1"
       printf "%s\n" "$2" > "$1/.needs-attention"
     }
-    cross_pr_revert_gate_allows_merge() {
-      case "$TEST_CASE" in
-        cross_pr_revert_blocked)
-          write_ready_attention_file "$2" "PR #$4 removes files from #437 without explicit acknowledgement. Affected files: strategy.txt."
-          log "status" "⛔ $1 → Cross-PR revert guard blocked ready phase for PR #$4"
-          return 1
-          ;;
-        cross_pr_revert_error)
-          write_ready_attention_file "$2" "Cross-PR revert guard failed for PR #$4."
-          log_error "  Cross-PR revert guard failed for $1 (PR #$4)"
-          return 1
-          ;;
-        *)
-          return 0
-          ;;
-      esac
-    }
+    if [[ "$TEST_CASE" != "cross_pr_revert_tool_error_direct" ]]; then
+      cross_pr_revert_gate_allows_merge() {
+        case "$TEST_CASE" in
+          cross_pr_revert_blocked)
+            write_ready_attention_file "$2" "PR #$4 removes files from #437 without explicit acknowledgement. Affected files: strategy.txt."
+            log "status" "⛔ $1 → Cross-PR revert guard blocked ready phase for PR #$4"
+            return 1
+            ;;
+          cross_pr_revert_error)
+            local diag_msg="Cross-PR revert guard tool failure for PR #$4: git-merge-base failed on ref '\''auto/integration'\''. Diagnostic: fatal: Not a valid object name '\''auto/integration'\''"
+            write_ready_attention_file "$2" "$diag_msg"
+            log_error "  Cross-PR revert guard tool failure for $1 (PR #$4): git-merge-base on '\''auto/integration'\''"
+            return 1
+            ;;
+          *)
+            return 0
+            ;;
+        esac
+      }
+    fi
     npx() {
       if [[ "${1:-}" != "tsx" ]]; then
         return 1
@@ -243,6 +247,10 @@ run_launch_case() {
             return 1
             ;;
           cross_pr_revert_error)
+            return 2
+            ;;
+          cross_pr_revert_tool_error_direct)
+            printf "%s\n" "{\"blocked\":false,\"reverts\":[],\"acknowledged\":[],\"unacknowledged\":[],\"toolError\":{\"commandClass\":\"git-merge-base\",\"command\":\"git merge-base auto/integration HEAD\",\"ref\":\"auto/integration\",\"stderr\":\"fatal: Not a valid object name '\''auto/integration'\''\"}}"
             return 2
             ;;
           *)
@@ -348,14 +356,16 @@ run_launch_case() {
     [[ -f "$STATE_DIR/.needs-attention-transient" ]] && transient_attention="present"
     transient_count="$(cat "$STATE_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
     ready_label_calls="$(cat "$READY_LABEL_COUNT_FILE" 2>/dev/null || echo "0")"
+    ready_result_payload=""
+    [[ -f "$STATE_DIR/.ready-result.json" ]] && ready_result_payload=$(cat "$STATE_DIR/.ready-result.json")
 
     debug_line_count=0
     [[ -f "$DEBUG_FILE" ]] && debug_line_count=$(wc -l < "$DEBUG_FILE" | tr -d " ")
     debug_payload=""
     [[ -f "$DEBUG_FILE" ]] && debug_payload=$(cat "$DEBUG_FILE")
 
-    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\n" \
-      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count"
+    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\nready_result_payload=%s\n" \
+      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count" "$ready_result_payload"
     printf "ready_label_calls=%s\n" "$ready_label_calls"
     printf "prompt_summary=%s\n" "$READY_PROMPT_SUMMARY"
   ' 2>&1
@@ -391,10 +401,20 @@ check_not_contains "cross-pr revert block does not run ready tool" "$output" "\"
 
 output="$(run_launch_case cross_pr_revert_error)"
 check_contains "cross-pr revert tool error returns failure" "$output" "rc=1"
-check_contains "cross-pr revert tool error writes attention" "$output" "Cross-PR revert guard failed for PR #304."
+check_contains "cross-pr revert tool error writes attention" "$output" "Cross-PR revert guard tool failure for PR #304: git-merge-base failed on ref 'auto/integration'"
 check_contains "cross-pr revert tool error skips ready result writes" "$output" "stage_calls="
-check_contains "cross-pr revert tool error logs failure" "$output" "Cross-PR revert guard failed for HOK-1300 (PR #304)"
+check_contains "cross-pr revert tool error logs failure" "$output" "Cross-PR revert guard tool failure for HOK-1300 (PR #304): git-merge-base on 'auto/integration'"
 check_not_contains "cross-pr revert error does not run ready tool" "$output" "\"verdict\":"
+
+output="$(run_launch_case cross_pr_revert_tool_error_direct)"
+check_contains "direct cross-pr tool error returns failure" "$output" "rc=1"
+check_contains "direct cross-pr tool error writes attention" "$output" "Cross-PR revert guard tool failure for PR #304: git-merge-base failed on ref 'auto/integration'"
+check_contains "direct cross-pr tool error includes diagnostic" "$output" "Diagnostic: fatal: Not a valid object name 'auto/integration'"
+check_contains "direct cross-pr tool error writes ready diagnostic" "$output" "\"crossPrDiagnostic\""
+check_contains "direct cross-pr tool error records command class" "$output" "\"commandClass\":\"git-merge-base\""
+check_contains "direct cross-pr tool error logs failure" "$output" "Cross-PR revert guard tool failure for HOK-1300 (PR #304): git-merge-base on 'auto/integration'"
+check_contains "direct cross-pr tool error skips ready result writes" "$output" "stage_calls="
+check_not_contains "direct cross-pr tool error does not run ready tool" "$output" "\"verdict\":"
 
 output="$(run_launch_case unknown_first)"
 check_contains "unknown first poll returns retry code" "$output" "rc=4"

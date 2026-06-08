@@ -14,12 +14,34 @@ export const crossPrRevertCheckDeps = {
   execShellCommand,
 };
 
+// Exit-code contract:
+// 0: pass, 1: unacknowledged cross-PR revert, 2: tool/config/infrastructure failure.
+const EXIT_OK = 0;
+const EXIT_POLICY = 1;
+const EXIT_TOOL = 2;
+const STDERR_TRUNCATE_MAX = 2048;
+
+export interface ToolFailureDiagnostic {
+  commandClass: string;
+  command: string;
+  ref: string;
+  stderr: string;
+}
+
 export interface CrossPrRevertCheckResult {
   blocked: boolean;
   disabled?: boolean;
   reverts: ReturnType<typeof detectCrossPrReverts>;
   acknowledged: ReturnType<typeof detectCrossPrReverts>;
   unacknowledged: ReturnType<typeof detectCrossPrReverts>;
+  toolError?: ToolFailureDiagnostic;
+}
+
+function truncateOutput(text: string, max = STDERR_TRUNCATE_MAX): string {
+  if (text.length <= max) {
+    return text;
+  }
+  return `${text.slice(-max)}…[truncated]`;
 }
 
 export function runCrossPrRevertCheck(input: {
@@ -51,25 +73,29 @@ export function runCrossPrRevertCheck(input: {
       `git merge-base ${escapeShellArg(integrationRef)} ${escapeShellArg(headRef)}`,
       { cwd: input.repoDir, encoding: 'utf-8' },
     )).trim();
-
-    reverts = crossPrRevertCheckDeps.detectCrossPrReverts({
-      repoDir: input.repoDir,
-      baseRef,
-      headRef,
-      integrationRef,
-      maxRecentMerges: input.maxRecentMerges ?? reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
-    });
   } catch (error) {
-    if (isMissingIntegrationRefError(error)) {
-      return {
-        blocked: false,
-        reverts: [],
-        acknowledged: [],
-        unacknowledged: [],
-      };
-    }
-    throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      blocked: false,
+      reverts: [],
+      acknowledged: [],
+      unacknowledged: [],
+      toolError: {
+        commandClass: 'git-merge-base',
+        command: `git merge-base ${integrationRef} ${headRef}`,
+        ref: integrationRef,
+        stderr: truncateOutput(message),
+      },
+    };
   }
+
+  reverts = crossPrRevertCheckDeps.detectCrossPrReverts({
+    repoDir: input.repoDir,
+    baseRef,
+    headRef,
+    integrationRef,
+    maxRecentMerges: input.maxRecentMerges ?? reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
+  });
 
   const acknowledgements = parseRevertAcknowledgements(
     input.acknowledgementText ?? loadAcknowledgementText(input.repoDir),
@@ -83,11 +109,6 @@ export function runCrossPrRevertCheck(input: {
     acknowledged,
     unacknowledged,
   };
-}
-
-function isMissingIntegrationRefError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /not a valid object name|bad revision|ambiguous argument|unknown revision/i.test(message);
 }
 
 function loadAcknowledgementText(repoDir: string): string {
@@ -110,7 +131,10 @@ function loadAcknowledgementText(repoDir: string): string {
 
 function printResultAndExit(result: CrossPrRevertCheckResult): never {
   console.log(JSON.stringify(result, null, 2));
-  process.exit(result.blocked ? 1 : 0);
+  if (result.toolError) {
+    process.exit(EXIT_TOOL);
+  }
+  process.exit(result.blocked ? EXIT_POLICY : EXIT_OK);
 }
 
 const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
@@ -153,8 +177,20 @@ if (isMainModule) {
         printResultAndExit(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(message);
-        process.exit(2);
+        const errorResult: CrossPrRevertCheckResult = {
+          blocked: false,
+          reverts: [],
+          acknowledged: [],
+          unacknowledged: [],
+          toolError: {
+            commandClass: 'internal',
+            command: 'check-cross-pr-reverts',
+            ref: String(args['integration-ref'] ?? ''),
+            stderr: truncateOutput(message),
+          },
+        };
+        console.log(JSON.stringify(errorResult, null, 2));
+        process.exit(EXIT_TOOL);
       }
     },
   });
