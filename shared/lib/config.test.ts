@@ -47,6 +47,7 @@ import {
   getProvidersConfig,
   getReadyConfig,
   getReadyWatchdogConfig,
+  getMigrationChecksConfig,
   getMergeQueueConfig,
   getModelRegistryConfig,
   getMintEligibilityConfig,
@@ -376,6 +377,17 @@ test('ready watchdog defaults are returned when config is absent', () => {
       thresholdMinutes: 10,
       autoRecover: true,
       timeoutSeconds: 30,
+      stableFailureConsecutivePolls: 2,
+      stableFailureEscalateAfterPolls: 4,
+      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    });
+    assert.deepEqual(getMigrationChecksConfig(tmp), {
+      enabled: true,
+      autoDetectAlembic: true,
+      baseRefresh: {
+        enabled: true,
+        timeoutSeconds: 30,
+      },
     });
   } finally {
     cleanUp(tmp);
@@ -419,6 +431,15 @@ test('ready watchdog supports canonical and legacy alias config', () => {
         watchdog: {
           enabled: false,
           timeoutSeconds: 45,
+          stableFailureConsecutivePolls: 3,
+        },
+        migrationChecks: {
+          enabled: false,
+          autoDetectAlembic: false,
+          baseRefresh: {
+            enabled: false,
+            timeoutSeconds: 12,
+          },
         },
       },
     }));
@@ -428,6 +449,17 @@ test('ready watchdog supports canonical and legacy alias config', () => {
       thresholdMinutes: 20,
       autoRecover: false,
       timeoutSeconds: 45,
+      stableFailureConsecutivePolls: 3,
+      stableFailureEscalateAfterPolls: 4,
+      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    });
+    assert.deepEqual(getMigrationChecksConfig(tmp), {
+      enabled: false,
+      autoDetectAlembic: false,
+      baseRefresh: {
+        enabled: false,
+        timeoutSeconds: 12,
+      },
     });
   } finally {
     cleanUp(tmp);

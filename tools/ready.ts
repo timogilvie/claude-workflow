@@ -7,6 +7,30 @@ import { evaluateReady, type ReadyVerdict } from '../shared/lib/ready-engine.ts'
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { checkMergeConflicts, runReadyStage, type ReadyCheck, type ReadyResult } from '../shared/lib/ready-stage.ts';
 import { readChallengeComparisons } from '../shared/lib/challenge-comparison.ts';
+import { writePreflightDiagnostic } from '../shared/lib/ready-diagnostics.ts';
+import path from 'node:path';
+
+async function maybeWriteReadyDiagnostic(repoDir: string, diagnostic: {
+  stateDir?: string;
+  stage: string;
+  tool: string;
+  classification: 'preflight-failure' | 'ref-missing' | 'tool-error' | 'config-missing';
+  reason: string;
+  rawError?: string;
+}): Promise<void> {
+  const stateDir = diagnostic.stateDir ?? path.join(repoDir, 'features');
+  try {
+    await writePreflightDiagnostic(stateDir, {
+      stage: diagnostic.stage,
+      tool: diagnostic.tool,
+      classification: diagnostic.classification,
+      reason: diagnostic.reason,
+      rawError: diagnostic.rawError,
+    });
+  } catch {
+    // Diagnostics must never mask the original ready failure.
+  }
+}
 
 runTool({
   name: 'ready',
@@ -19,6 +43,10 @@ runTool({
     'repo-dir': {
       type: 'string',
       description: 'Repository directory (default: current directory)',
+    },
+    'state-dir': {
+      type: 'string',
+      description: 'Ready state directory for structured diagnostics',
     },
     json: {
       type: 'boolean',
@@ -42,50 +70,64 @@ runTool({
     const prNumber = extractPrNumber(prInput);
 
     const repoDir = args['repo-dir'] || process.cwd();
+    const stateDir = args['state-dir'] ? String(args['state-dir']) : undefined;
     const readyPolicy = getIntegrationReadyPolicy(repoDir);
     let verdict: ReadyVerdict;
     let output: ReadyResult;
 
     if (readyPolicy.enabled) {
       const pr = getPullRequest(prNumber);
-      verdict = await evaluateReady({
-        pr: {
-          number: pr.number,
-          url: pr.url,
-          baseBranch: pr.baseRefName,
-          body: pr.body || '',
-          labels: pr.labels.map((label) => label.name),
-          mergedAt: pr.mergedAt,
-        },
-        config: {
-          ...readyPolicy,
-          integrationBranch: readyPolicy.integrationBranch || 'auto/integration',
-        },
-        async fetchPrState(dependencyPrNumber) {
-          try {
-            const dependencyPr = getPullRequest(dependencyPrNumber);
-            const state = dependencyPr.mergedAt ? 'MERGED' : dependencyPr.state === 'OPEN' ? 'OPEN' : 'CLOSED';
-            return { state, mergedAt: dependencyPr.mergedAt };
-          } catch (error) {
-            if ((error as Error).message.includes('not found')) {
-              return null;
+      try {
+        verdict = await evaluateReady({
+          pr: {
+            number: pr.number,
+            url: pr.url,
+            baseBranch: pr.baseRefName,
+            body: pr.body || '',
+            labels: pr.labels.map((label) => label.name),
+            mergedAt: pr.mergedAt,
+          },
+          config: {
+            ...readyPolicy,
+            integrationBranch: readyPolicy.integrationBranch || 'auto/integration',
+          },
+          async fetchPrState(dependencyPrNumber) {
+            try {
+              const dependencyPr = getPullRequest(dependencyPrNumber);
+              const state = dependencyPr.mergedAt ? 'MERGED' : dependencyPr.state === 'OPEN' ? 'OPEN' : 'CLOSED';
+              return { state, mergedAt: dependencyPr.mergedAt };
+            } catch (error) {
+              if ((error as Error).message.includes('not found')) {
+                return null;
+              }
+              throw error;
             }
-            throw error;
-          }
-        },
-        async fetchLinearIssueState(identifier) {
-          try {
-            const issue = await getIssueCompletionState(identifier);
-            return { completedAt: issue.completedAt ?? null, canceledAt: issue.canceledAt ?? null };
-          } catch (error) {
-            if ((error as Error).message.includes('Issue not found')) {
-              return null;
+          },
+          async fetchLinearIssueState(identifier) {
+            try {
+              const issue = await getIssueCompletionState(identifier);
+              return { completedAt: issue.completedAt ?? null, canceledAt: issue.canceledAt ?? null };
+            } catch (error) {
+              if ((error as Error).message.includes('Issue not found')) {
+                return null;
+              }
+              throw error;
             }
-            throw error;
-          }
-        },
-        readChallengeComparisons,
-      });
+          },
+          readChallengeComparisons,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await maybeWriteReadyDiagnostic(repoDir, {
+          stateDir,
+          stage: 'ready',
+          tool: 'evaluateReady',
+          classification: 'tool-error',
+          reason: 'Ready policy evaluation failed',
+          rawError: message,
+        });
+        throw error;
+      }
 
       output = {
         prNumber,
@@ -96,7 +138,20 @@ runTool({
         mergeConflict: await checkMergeConflicts(prNumber, repoDir),
       };
     } else {
-      output = await runReadyStage({ prNumber, repoDir });
+      try {
+        output = await runReadyStage({ prNumber, repoDir });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await maybeWriteReadyDiagnostic(repoDir, {
+          stateDir,
+          stage: 'ready',
+          tool: 'runReadyStage',
+          classification: 'tool-error',
+          reason: 'Ready stage execution failed',
+          rawError: message,
+        });
+        throw error;
+      }
       verdict = {
         status: output.verdict,
         reasons: output.summary ? [output.summary] : [],

@@ -887,6 +887,41 @@
                     ],
                     "description": "Regex patterns used to identify migration files across the repository."
                 },
+                "migrationChecks": {
+                    "type": "object",
+                    "description": "Automatic migration-check discovery and base-refresh settings.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Enable automatic migration integrity checks when migration files are detected."
+                        },
+                        "autoDetectAlembic": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Auto-enable Alembic migration-chain checks when alembic/versions is present and ready.checks is empty."
+                        },
+                        "baseRefresh": {
+                            "type": "object",
+                            "description": "Refresh the base branch before local migration validation.",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "default": true,
+                                    "description": "Fetch the base branch before migration validation."
+                                },
+                                "timeoutSeconds": {
+                                    "type": "integer",
+                                    "default": 30,
+                                    "minimum": 1,
+                                    "description": "Timeout for the pre-migration base refresh fetch."
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "migrationDangerLabels": {
                     "type": "object",
                     "additionalProperties": {
@@ -955,6 +990,33 @@
                             "default": 30,
                             "minimum": 1,
                             "description": "Maximum watchdog subprocess runtime per monitor tick."
+                        },
+                        "stableFailureConsecutivePolls": {
+                            "type": "integer",
+                            "default": 2,
+                            "minimum": 1,
+                            "description": "Consecutive identical failing-check polls required before safe failures are treated as stable."
+                        },
+                        "stableFailureEscalateAfterPolls": {
+                            "type": "integer",
+                            "default": 4,
+                            "minimum": 1,
+                            "description": "Consecutive identical failing-check polls required before unsafe failures escalate to operator attention."
+                        },
+                        "safeRemediationCategories": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "default": [
+                                "lint",
+                                "type",
+                                "test",
+                                "build",
+                                "migration-chain",
+                                "alembic"
+                            ],
+                            "description": "Allowlisted failure categories that the watchdog may route into automatic remediation once stable."
                         }
                     },
                     "additionalProperties": false
@@ -1022,6 +1084,30 @@
                             "type": "integer",
                             "default": 30,
                             "minimum": 1
+                        },
+                        "stableFailureConsecutivePolls": {
+                            "type": "integer",
+                            "default": 2,
+                            "minimum": 1
+                        },
+                        "stableFailureEscalateAfterPolls": {
+                            "type": "integer",
+                            "default": 4,
+                            "minimum": 1
+                        },
+                        "safeRemediationCategories": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "default": [
+                                "lint",
+                                "type",
+                                "test",
+                                "build",
+                                "migration-chain",
+                                "alembic"
+                            ]
                         }
                     },
                     "additionalProperties": false
