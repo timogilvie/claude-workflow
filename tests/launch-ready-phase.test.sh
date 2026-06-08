@@ -74,6 +74,8 @@ extract_function "$MILL_SCRIPT" "log_ready_unparseable_result" >> "$LAUNCH_FUNC_
 extract_function "$MILL_SCRIPT" "ready_failure_is_actionable_for_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_failed_check_summary" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "set_ready_pass_labels" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "_launch_ready_remediation_attempt" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "launch_ready_watchdog_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "launch_ready_phase" >> "$LAUNCH_FUNC_FILE"
 
 if [[ ! -s "$LAUNCH_FUNC_FILE" ]]; then
@@ -361,6 +363,105 @@ run_launch_case() {
   ' 2>&1
 }
 
+run_watchdog_launch_case() {
+  local test_case="$1"
+  local case_dir="$TEST_TMP/watchdog-$test_case"
+  mkdir -p "$case_dir"
+
+  CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" TEST_CASE="$test_case" bash -lc '
+    set -euo pipefail
+    source "$COMMON_SCRIPT"
+    source "$LAUNCH_FUNC_FILE"
+
+    SESSION="ready-watchdog-test-$TEST_CASE"
+    AGENT_CMD="codex"
+    STATE_DIR="$CASE_DIR/feature/ready"
+    WT_DIR="$CASE_DIR/worktree"
+    mkdir -p "$STATE_DIR" "$WT_DIR"
+    printf "%s\n" "{\"stage\":\"ready\",\"status\":\"running\",\"startedAt\":\"2026-05-05T11:55:00.000Z\",\"finishedAt\":null,\"agent\":\"codex\",\"model\":\"gpt-5.5\",\"notes\":null,\"artifacts\":{\"type\":\"ready\",\"verdict\":\"fail\",\"prNumber\":304,\"checksRun\":3,\"checksPassed\":2,\"mergeConflict\":\"CLEAN\"}}" > "$STATE_DIR/.ready-result.json"
+
+    WRITE_STAGE_CALLS=""
+    READY_PROMPT_CALLS=0
+    READY_PROMPT_SUMMARY=""
+    LAUNCH_AGENT_CALLS=0
+
+    _ensure_task_window_exists() { printf "%s\n" "win-1"; }
+    persist_task_window_id() { :; }
+    ready_state_dir() { printf "%s\n" "$STATE_DIR"; }
+    read_state_value() {
+      if [[ "${4:-}" == *".agent"* ]]; then
+        printf "%s\n" "codex"
+      elif [[ "${4:-}" == *".model"* ]]; then
+        printf "%s\n" "gpt-5.5"
+      else
+        printf "\n"
+      fi
+    }
+    read_stage_status() {
+      case "$TEST_CASE" in
+        inflight_same_head) printf "%s\n" "running" ;;
+        *) printf "\n" ;;
+      esac
+    }
+    ready_remediation_attempts() {
+      case "$TEST_CASE" in
+        max_attempts) printf "%s\n" "3" ;;
+        *) printf "%s\n" "0" ;;
+      esac
+    }
+    ready_remediation_launch_head() {
+      case "$TEST_CASE" in
+        inflight_same_head) printf "%s\n" "abc123" ;;
+        *) printf "\n" ;;
+      esac
+    }
+    ready_remediation_agent_cmd() { printf "\n"; }
+    build_ready_remediation_prompt() {
+      READY_PROMPT_CALLS=$((READY_PROMPT_CALLS + 1))
+      READY_PROMPT_SUMMARY="${8-}"
+      printf "prompt\n"
+    }
+    _launch_agent_in_pane() {
+      LAUNCH_AGENT_CALLS=$((LAUNCH_AGENT_CALLS + 1))
+      return 0
+    }
+    check_stage_aborted() { return 1; }
+    git() {
+      if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]; then
+        printf "%s\n" "abc123"
+        return 0
+      fi
+      return 1
+    }
+    merge_queue_enrich_ready_artifacts() { printf "%s\n" "$2"; }
+    write_stage_result() {
+      printf -v WRITE_STAGE_CALLS "%s%s|%s|%s|%s|%s|%s|%s\n" \
+        "$WRITE_STAGE_CALLS" "${1-}" "${2-}" "${3-}" "${4-}" "${5-}" "${6-}" "${7-}"
+    }
+    write_ready_attention_file() { :; }
+    log() { :; }
+    log_error() { :; }
+
+    output_file="$CASE_DIR/watchdog-output.json"
+    launch_ready_watchdog_remediation \
+      "HOK-1300" \
+      "fix-failing-ci-tests" \
+      "$WT_DIR" \
+      "task/fix-failing-ci-tests" \
+      "main" \
+      "304" \
+      "Alembic Check (FAILURE)" \
+      "1" \
+      "3" \
+      "[\"Alembic Check\"]" > "$output_file"
+    output=$(cat "$output_file")
+
+    stage_summary=$(printf "%s" "$WRITE_STAGE_CALLS" | tr "\n" ";")
+    printf "output=%s\nstage_calls=%s\nlaunch_calls=%s\nprompt_calls=%s\nprompt_summary=%s\n" \
+      "$output" "$stage_summary" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$READY_PROMPT_SUMMARY"
+  ' 2>&1
+}
+
 echo "=== Launch Ready Phase ==="
 
 output="$(run_launch_case pending)"
@@ -533,6 +634,24 @@ check_not_contains "success path does not log ready stderr" "$output" "[ready st
 output="$(run_launch_case fail_with_stderr)"
 check_contains "failure stderr is logged as error" "$output" "error_payload=  [ready stderr] TypeError: ready crashed"
 check_not_contains "failure stderr does not leak to terminal" "$output" $'\nTypeError: ready crashed\n'
+
+echo "=== Watchdog Launch Helper ==="
+
+output="$(run_watchdog_launch_case success)"
+check_contains "watchdog launch succeeds" "$output" '"status":"launched"'
+check_contains "watchdog launch writes running stage" "$output" "|ready|running|"
+check_contains "watchdog launch invokes agent" "$output" "launch_calls=1"
+check_contains "watchdog launch reuses prompt summary" "$output" "prompt_summary=Alembic Check (FAILURE)"
+
+output="$(run_watchdog_launch_case max_attempts)"
+check_contains "watchdog max attempts skips launch" "$output" '"status":"skipped-max-attempts"'
+check_contains "watchdog max attempts does not relaunch agent" "$output" "launch_calls=0"
+check_contains "watchdog max attempts does not rewrite stage" "$output" "stage_calls="
+
+output="$(run_watchdog_launch_case inflight_same_head)"
+check_contains "watchdog inflight skips launch" "$output" '"status":"skipped-in-flight"'
+check_contains "watchdog inflight does not relaunch agent" "$output" "launch_calls=0"
+check_contains "watchdog inflight does not rewrite stage" "$output" "stage_calls="
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
