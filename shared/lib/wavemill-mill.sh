@@ -3144,12 +3144,12 @@ run_ready_watchdog_tick() {
       title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // "Task"')
       wt_dir=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // ""')
       [[ -z "$wt_dir" && -n "$slug" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
-      state_dir=$(ready_state_dir "$wt_dir" "$slug")
-      remediation_categories=$(printf '%s' "$finding" | jq -c '.remediationCategories // []' 2>/dev/null || echo '[]')
-      mkdir -p "$state_dir"
-      printf '%s\n' "$(jq -cn --argjson categories "$remediation_categories" --arg detail "$detail" '{categories:$categories, detail:$detail}')" \
-        > "$state_dir/.ready-watchdog-stable-failure.json"
       if [[ -n "$slug" && -n "$branch" && -n "$base_branch" && -n "$pr_number" ]]; then
+        state_dir=$(ready_state_dir "$wt_dir" "$slug")
+        remediation_categories=$(printf '%s' "$finding" | jq -c '.remediationCategories // []' 2>/dev/null || echo '[]')
+        mkdir -p "$state_dir"
+        printf '%s\n' "$(jq -cn --argjson categories "$remediation_categories" --arg detail "$detail" '{categories:$categories, detail:$detail}')" \
+          > "$state_dir/.ready-watchdog-stable-failure.json"
         launch_ready_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$pr_number" >/dev/null 2>&1 || true
       fi
     fi

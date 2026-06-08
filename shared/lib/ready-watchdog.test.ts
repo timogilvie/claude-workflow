@@ -170,6 +170,47 @@ test('classify stable safe failing CI as stable-failing-safe after repeated poll
   assert.deepEqual(classification.remediationCategories, ['lint (FAILURE)']);
 });
 
+test('classify resets consecutiveFailurePolls when prStateKey changes between polls', () => {
+  // Prior had UNKNOWN|UNKNOWN with a high consecutive count; current truth is the
+  // default MERGEABLE|CLEAN so prStateKey differs, sameFailureState is false, the
+  // counter resets to 1, and we should not yet qualify for stable-failing-safe
+  // (threshold is 2).
+  const classification = classifyReadyTask(
+    makeSnapshot(),
+    makeTruth({
+      checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE' }],
+    }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    {
+      enabled: true,
+      thresholdMinutes: 10,
+      autoRecover: true,
+      timeoutSeconds: 30,
+      stableFailureConsecutivePolls: 2,
+      stableFailureEscalateAfterPolls: 4,
+      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    },
+    {
+      issueId: 'HOK-1579',
+      slug: 'ready-watchdog-task',
+      prNumber: 528,
+      classification: 'waiting-on-ci',
+      displayLabel: 'waiting on CI',
+      detail: 'Failing checks: lint (FAILURE).',
+      action: 'reported',
+      updatedAt: '2026-05-05T12:20:00.000Z',
+      idleMinutes: 20,
+      lastProgressAt: '2026-05-05T12:00:00.000Z',
+      prStateKey: 'OPEN|UNKNOWN|UNKNOWN',
+      detailFingerprint: 'Failing checks: lint (FAILURE).',
+      consecutiveFailurePolls: 5,
+    },
+  );
+
+  assert.equal(classification.kind, 'waiting-on-ci');
+  assert.equal(classification.consecutiveFailurePolls, 1);
+});
+
 test('classify repeated unsafe failing CI as needs-user after the escalation threshold', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
