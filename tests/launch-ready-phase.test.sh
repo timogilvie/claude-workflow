@@ -222,7 +222,7 @@ run_launch_case() {
           return 1
           ;;
         cross_pr_revert_error)
-          write_ready_attention_file "$2" "Cross-PR revert guard failed for PR #$4."
+          write_ready_attention_file "$2" "Cross-PR revert guard failed (tool error) for PR #$4."
           log_error "  Cross-PR revert guard failed for $1 (PR #$4)"
           return 1
           ;;
@@ -361,6 +361,66 @@ run_launch_case() {
   ' 2>&1
 }
 
+run_cross_pr_case() {
+  local test_case="$1"
+  local case_dir="$TEST_TMP/cross-pr-$test_case"
+  mkdir -p "$case_dir"
+
+  CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" TEST_CASE="$test_case" bash -lc '
+    set -euo pipefail
+    source "$COMMON_SCRIPT"
+    source "$LAUNCH_FUNC_FILE"
+
+    SESSION="cross-pr-test-$TEST_CASE"
+    TOOLS_DIR="$CASE_DIR/tools"
+    STATE_DIR="$CASE_DIR/feature/ready"
+    WT_DIR="$CASE_DIR/worktree"
+    mkdir -p "$TOOLS_DIR" "$STATE_DIR" "$WT_DIR"
+
+    READY_ATTENTION_CALLS=""
+    LOG_OUTPUT=""
+    LOG_ERROR_OUTPUT=""
+
+    log() { LOG_OUTPUT+="$*\n"; }
+    log_error() { LOG_ERROR_OUTPUT+="$*\n"; }
+    write_ready_attention_file() {
+      printf -v READY_ATTENTION_CALLS "%s%s|%s\n" "$READY_ATTENTION_CALLS" "$1" "$2"
+      mkdir -p "$1"
+      printf "%s\n" "$2" > "$1/.needs-attention"
+    }
+    npx() {
+      if [[ "${1:-}" != "tsx" || "${2:-}" != "$TOOLS_DIR/check-cross-pr-reverts.ts" ]]; then
+        return 1
+      fi
+
+      case "$TEST_CASE" in
+        rc1_policy)
+          printf "%s\n" "{\"blocked\":true,\"reverts\":[{\"prNumber\":437,\"files\":[{\"path\":\"strategy.txt\"}]}],\"acknowledged\":[],\"unacknowledged\":[{\"prNumber\":437,\"files\":[{\"path\":\"strategy.txt\"}]}]}"
+          return 1
+          ;;
+        rc2_with_diag)
+          printf "%s\n" "fatal: Not a valid object name '\''auto/integration'\''" >&2
+          return 2
+          ;;
+        rc2_no_diag)
+          return 2
+          ;;
+      esac
+    }
+
+    set +e
+    cross_pr_revert_gate_allows_merge "HOK-1300" "$STATE_DIR" "$WT_DIR" "304"
+    rc=$?
+    set -e
+
+    attention_contents=""
+    [[ -f "$STATE_DIR/.needs-attention" ]] && attention_contents=$(cat "$STATE_DIR/.needs-attention")
+
+    printf "rc=%s\nattention_calls=%s\nattention_file=%s\nlogs=%s\nerror_logs=%s\n" \
+      "$rc" "$READY_ATTENTION_CALLS" "$attention_contents" "$LOG_OUTPUT" "$LOG_ERROR_OUTPUT"
+  ' 2>&1
+}
+
 echo "=== Launch Ready Phase ==="
 
 output="$(run_launch_case pending)"
@@ -391,10 +451,27 @@ check_not_contains "cross-pr revert block does not run ready tool" "$output" "\"
 
 output="$(run_launch_case cross_pr_revert_error)"
 check_contains "cross-pr revert tool error returns failure" "$output" "rc=1"
-check_contains "cross-pr revert tool error writes attention" "$output" "Cross-PR revert guard failed for PR #304."
+check_contains "cross-pr revert tool error writes attention" "$output" "Cross-PR revert guard failed (tool error) for PR #304."
 check_contains "cross-pr revert tool error skips ready result writes" "$output" "stage_calls="
 check_contains "cross-pr revert tool error logs failure" "$output" "Cross-PR revert guard failed for HOK-1300 (PR #304)"
 check_not_contains "cross-pr revert error does not run ready tool" "$output" "\"verdict\":"
+
+output="$(run_cross_pr_case rc1_policy)"
+check_contains "direct cross-pr policy returns failure" "$output" "rc=1"
+check_contains "direct cross-pr policy keeps acknowledgement message" "$output" "PR #304 removes files from #437 without explicit acknowledgement."
+check_contains "direct cross-pr policy includes affected files" "$output" "Affected files: strategy.txt."
+check_not_contains "direct cross-pr policy is not tagged as tool error" "$output" "tool error"
+
+output="$(run_cross_pr_case rc2_with_diag)"
+check_contains "direct cross-pr tool failure returns failure" "$output" "rc=1"
+check_contains "direct cross-pr tool failure tags tool error" "$output" "Cross-PR revert guard failed (tool error) for PR #304:"
+check_contains "direct cross-pr tool failure preserves diagnostic ref" "$output" "auto/integration"
+check_contains "direct cross-pr tool failure logs diagnostic" "$output" "Cross-PR revert guard failed for HOK-1300 (PR #304): fatal: Not a valid object name 'auto/integration'"
+
+output="$(run_cross_pr_case rc2_no_diag)"
+check_contains "direct cross-pr tool failure without stderr returns failure" "$output" "rc=1"
+check_contains "direct cross-pr tool failure without stderr stays concise" "$output" "Cross-PR revert guard failed (tool error) for PR #304."
+check_contains "direct cross-pr tool failure without stderr logs fallback" "$output" "Cross-PR revert guard failed for HOK-1300 (PR #304): no diagnostics captured"
 
 output="$(run_launch_case unknown_first)"
 check_contains "unknown first poll returns retry code" "$output" "rc=4"

@@ -4962,13 +4962,17 @@ write_ready_attention_file() {
 
 cross_pr_revert_gate_allows_merge() {
   local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4"
-  local result rc prs files message
+  local result rc prs files message stderr_file stderr_content diag
 
-  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" 2>/dev/null); then
+  stderr_file=$(mktemp)
+  if result=$(cd "$wt_dir" && npx tsx "$TOOLS_DIR/check-cross-pr-reverts.ts" --repo-dir "$wt_dir" 2>"$stderr_file"); then
+    rm -f "$stderr_file"
     return 0
   else
     rc=$?
   fi
+  stderr_content=$(cat "$stderr_file" 2>/dev/null || echo "")
+  rm -f "$stderr_file"
 
   if [[ "$rc" -eq 1 ]]; then
     prs=$(printf '%s' "$result" | jq -r '[.unacknowledged[]?.prNumber] | reduce .[] as $item ([]; if index($item) then . else . + [$item] end) | map("#" + tostring) | join(", ")' 2>/dev/null || echo "")
@@ -4983,8 +4987,14 @@ cross_pr_revert_gate_allows_merge() {
     return 1
   fi
 
-  write_ready_attention_file "$state_dir" "Cross-PR revert guard failed for PR #$pr_number."
-  log_error "  Cross-PR revert guard failed for $issue (PR #$pr_number)"
+  diag=$(printf '%s' "$stderr_content" | grep -m1 '.' | cut -c1-200 || echo "")
+  if [[ -n "$diag" ]]; then
+    message="Cross-PR revert guard failed (tool error) for PR #$pr_number: $diag"
+  else
+    message="Cross-PR revert guard failed (tool error) for PR #$pr_number."
+  fi
+  write_ready_attention_file "$state_dir" "$message"
+  log_error "  Cross-PR revert guard failed for $issue (PR #$pr_number): ${diag:-no diagnostics captured}"
   return 1
 }
 
