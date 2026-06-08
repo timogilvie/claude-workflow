@@ -2085,7 +2085,8 @@
           "type": "string"
         },
         "expectedMetrics": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": true
         }
       },
       "required": [

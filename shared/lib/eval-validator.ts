@@ -316,6 +316,18 @@ export function deriveNonRewardReasonFromIssues(
       EVAL_ERROR_SEVERITY_ORDER.indexOf(a.code) - EVAL_ERROR_SEVERITY_ORDER.indexOf(b.code),
   )[0];
 
+  if (highestSeverity.code === 'SCHEMA_VIOLATION') {
+    const paths = issues
+      .filter((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail)
+      .map((issue) => issue.detail as string)
+      .join(', ');
+
+    return {
+      code: highestSeverity.code,
+      message: paths ? `${highestSeverity.message} Paths: ${paths}` : highestSeverity.message,
+    };
+  }
+
   return {
     code: highestSeverity.code,
     message: highestSeverity.message,

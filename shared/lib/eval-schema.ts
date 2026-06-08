@@ -91,7 +91,13 @@
  *   (HOK-1926)
  * - **1.28.0**: Added optional `quarantine_reason` and write-time eval corpus
  *   validation for `taskDescriptor`, non-empty `models_available`, and
- *   canonical reviewer/stage model IDs (HOK-2072)
+ *   canonical reviewer/stage model IDs (HOK-2072); expanded
+ *   `$defs.RouteArtifact` (HOK-2071) to accept all
+ *   route-artifact fields that Wavemill emits (`planner`, `planDepth`,
+ *   `artifactPath`, `artifactHash`, `inputHash`, `source`, `cacheHit`,
+ *   `routeSource`, `routerMode`, `routingMode`, `expectedMetrics`). Old
+ *   `RouteArtifact` mirrored an early stale snapshot that never got updated
+ *   to match `ChallengeRouteArtifact`.
  *
  * @module eval-schema
  */
@@ -1195,18 +1201,8 @@ export interface WavemillRouterScoringMetadata {
 
 export interface EvalChallengeRouteContext {
   decisionSource: 'bootstrap' | 'expanded' | 'preserved';
-  bootstrapRoute?: {
-    coder: string;
-    codeDepth: string;
-    reviewer: string;
-    reviewMode: string;
-  };
-  expandedRoute?: {
-    coder: string;
-    codeDepth: string;
-    reviewer: string;
-    reviewMode: string;
-  };
+  bootstrapRoute?: EvalRouteArtifact;
+  expandedRoute?: EvalRouteArtifact;
   refreshRationale?: string;
 }
 

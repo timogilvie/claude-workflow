@@ -374,4 +374,96 @@ describe('eval-validator', () => {
     );
     assert.ok(strayIssues.some((issue) => issue.code === 'EVAL_NONCANONICAL_REVIEWER'));
   });
+
+  it('SCHEMA_VIOLATION nonRewardReason message includes failing schema paths', () => {
+    const issues = validateEvalRecord(
+      makeRecord({
+        routeProvenance: {
+          bootstrapRoute: {
+            coder: 1 as unknown as string,
+            codeDepth: 'medium',
+            reviewer: 'claude-opus-4-6',
+            reviewMode: 'llm',
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+
+    const reason = deriveNonRewardReasonFromIssues(issues);
+    assert.equal(reason?.code, 'SCHEMA_VIOLATION');
+    assert.match(reason?.message ?? '', /routeProvenance\.bootstrapRoute\.coder/);
+  });
+
+  it('Record with valid full routeProvenance does not get SCHEMA_VIOLATION', () => {
+    const issues = validateEvalRecord(
+      makeRecord({
+        routeProvenance: {
+          decisionSource: 'expanded',
+          bootstrapRoute: {
+            coder: 'claude-sonnet-4-6',
+            codeDepth: 'medium',
+            reviewer: 'claude-opus-4-6',
+            reviewMode: 'llm',
+            planner: 'claude-sonnet-4-6',
+            planDepth: 'deep',
+            artifactPath: 'features/HOK-2071/.initial-route.json',
+            artifactHash: 'a'.repeat(64),
+            inputHash: 'b'.repeat(64),
+            source: 'bootstrap',
+            cacheHit: false,
+            routeSource: 'batch',
+            routerMode: 'normal',
+            routingMode: 'stage-aware',
+            expectedMetrics: { expectedSuccess: 0.92 },
+          },
+          expandedRoute: {
+            coder: 'gpt-5.4',
+            codeDepth: 'deep',
+            reviewer: 'claude-sonnet-4-6',
+            reviewMode: 'static',
+            planner: 'gpt-5.4',
+            planDepth: 'deep',
+            artifactPath: 'features/HOK-2071/.post-expansion-route.json',
+            artifactHash: 'c'.repeat(64),
+            inputHash: 'd'.repeat(64),
+            source: 'expanded',
+            cacheHit: true,
+            routeSource: 'cache',
+            routerMode: 'survival',
+            routingMode: 'stage-aware',
+            expectedMetrics: { expectedSuccess: 0.97 },
+          },
+          activeRoute: {
+            coder: 'gpt-5.4',
+            codeDepth: 'deep',
+            reviewer: 'claude-sonnet-4-6',
+            reviewMode: 'static',
+            planner: 'gpt-5.4',
+            planDepth: 'deep',
+            artifactPath: 'features/HOK-2071/.routing-complete.json',
+            artifactHash: 'e'.repeat(64),
+            inputHash: 'f'.repeat(64),
+            source: 'active',
+            cacheHit: true,
+            routeSource: 'single',
+            routerMode: 'constrained',
+            routingMode: 'stage-aware',
+            expectedMetrics: { expectedSuccess: 0.95 },
+          },
+          routeChanged: true,
+          expandedCacheHit: true,
+          packetHash: '1'.repeat(64),
+          routeSource: 'cache',
+          routerMode: 'survival',
+          routingMode: 'stage-aware',
+          artifactPath: 'features/HOK-2071',
+          artifactHash: '2'.repeat(64),
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+
+    assert.ok(!issues.some((issue) => issue.code === 'SCHEMA_VIOLATION'));
+  });
 });
