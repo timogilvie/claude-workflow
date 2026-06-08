@@ -555,6 +555,76 @@ describe('eval-record-builder', () => {
         eligibilityErrors: record.eligibilityErrors,
       }).toEqual(once);
     });
+
+    it('does not mark valid full routeProvenance as a schema violation', () => {
+      const record = makeEligibleRecord();
+      record.routeProvenance = {
+        decisionSource: 'expanded',
+        bootstrapRoute: {
+          coder: 'claude-sonnet-4-6',
+          codeDepth: 'medium',
+          reviewer: 'claude-opus-4-6',
+          reviewMode: 'llm',
+          planner: 'claude-sonnet-4-6',
+          planDepth: 'deep',
+          artifactPath: 'features/HOK-2071/.initial-route.json',
+          artifactHash: 'a'.repeat(64),
+          inputHash: 'b'.repeat(64),
+          source: 'bootstrap',
+          cacheHit: false,
+          routeSource: 'batch',
+          routerMode: 'normal',
+          routingMode: 'stage-aware',
+          expectedMetrics: { expectedSuccess: 0.9 },
+        },
+        expandedRoute: {
+          coder: 'gpt-5.4',
+          codeDepth: 'deep',
+          reviewer: 'claude-sonnet-4-6',
+          reviewMode: 'static',
+          planner: 'gpt-5.4',
+          planDepth: 'deep',
+          artifactPath: 'features/HOK-2071/.post-expansion-route.json',
+          artifactHash: 'c'.repeat(64),
+          inputHash: 'd'.repeat(64),
+          source: 'expanded',
+          cacheHit: true,
+          routeSource: 'cache',
+          routerMode: 'survival',
+          routingMode: 'stage-aware',
+          expectedMetrics: { expectedSuccess: 0.95 },
+        },
+        activeRoute: {
+          coder: 'gpt-5.4',
+          codeDepth: 'deep',
+          reviewer: 'claude-sonnet-4-6',
+          reviewMode: 'static',
+          planner: 'gpt-5.4',
+          planDepth: 'deep',
+          artifactPath: 'features/HOK-2071/.routing-complete.json',
+          artifactHash: 'e'.repeat(64),
+          inputHash: 'f'.repeat(64),
+          source: 'active',
+          cacheHit: true,
+          routeSource: 'single',
+          routerMode: 'constrained',
+          routingMode: 'stage-aware',
+          expectedMetrics: { expectedSuccess: 0.94 },
+        },
+        routeChanged: true,
+        expandedCacheHit: true,
+        packetHash: '1'.repeat(64),
+        routeSource: 'cache',
+        routerMode: 'survival',
+        routingMode: 'stage-aware',
+        artifactPath: 'features/HOK-2071',
+        artifactHash: '2'.repeat(64),
+      };
+
+      attachEligibility(record);
+
+      assert.notEqual(record.nonRewardReason?.code, 'SCHEMA_VIOLATION');
+    });
   });
 
   describe('attachConstraints', () => {

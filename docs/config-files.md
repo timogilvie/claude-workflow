@@ -26,6 +26,16 @@ Merge behavior for local overrides:
 - Arrays replace the base array.
 - Primitive values in local override win.
 
+### Cross-PR Revert Checker
+
+`tools/check-cross-pr-reverts.ts` resolves the integration branch in this order:
+
+1. `--integration-ref <ref>` when the CLI argument is non-empty.
+2. `.wavemill-config.json` / `.wavemill-config.local.json` `integration.integrationBranch`.
+3. Default `auto/integration`.
+
+If the resolved integration ref does not exist in the repo, the checker skips gracefully instead of blocking ready on a config lookup failure.
+
 ## Recommended Placement by Category
 
 Use `.wavemill-config.json` for:

@@ -60,6 +60,13 @@ async function loadMigrationFixture(name: string): Promise<string> {
   return fs.readFile(path.join(migrationFixturesDir, name), 'utf-8');
 }
 
+function makeExecError(message: string, status: number, stderr?: string) {
+  const error = new Error(message) as Error & { status?: number; stderr?: string };
+  error.status = status;
+  error.stderr = stderr ?? message;
+  return error;
+}
+
 describe('ready-stage', () => {
   describe('ReadyCheck contract', () => {
     it('accepts passing check objects', () => {
@@ -347,6 +354,7 @@ describe('ready-stage', () => {
       const result = await checkMigrationChainIntegrity(repoDir);
       assert.equal(result.status, 'fail');
       assert.match(result.message, /Duplicate migration revision IDs/);
+      assert.match(result.message, /001 .*001_base\.py, migrations\/versions\/001_duplicate\.py/);
       assert.ok(Array.isArray(result.details?.duplicateRevisions));
     });
 
@@ -370,6 +378,8 @@ describe('ready-stage', () => {
       const result = await checkMigrationChainIntegrity(repoDir);
       assert.equal(result.status, 'fail');
       assert.match(result.message, /exactly one head/);
+      assert.match(result.message, /002_a \(migrations\/versions\/002_a\.py\)/);
+      assert.match(result.message, /002_b \(migrations\/versions\/002_b\.py\)/);
       assert.equal((result.details?.heads as unknown[])?.length, 2);
     });
 
@@ -449,6 +459,135 @@ describe('ready-stage', () => {
       const result = await checkMigrationChainIntegrity(repoDir, ['migrations/.*\\.sql$'], 'sql');
       assert.equal(result.status, 'skip');
       assert.match(result.message, /unsupported.*sql/i);
+    });
+
+    it('evaluates against the merge tree and names both heads', async () => {
+      const commands: string[] = [];
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        commands.push(cmd);
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git merge-tree --write-tree 'origin/main' HEAD") return 'merge-tree-oid\n';
+        if (cmd === "git ls-tree -r --name-only 'merge-tree-oid'") {
+          return [
+            'alembic/versions/043_base.py',
+            'alembic/versions/044_main.py',
+            'alembic/versions/045_branch.py',
+          ].join('\n');
+        }
+        if (cmd === "git show 'merge-tree-oid:alembic/versions/043_base.py'") {
+          return 'revision = "043"\ndown_revision = None\n';
+        }
+        if (cmd === "git show 'merge-tree-oid:alembic/versions/044_main.py'") {
+          return 'revision = "044"\ndown_revision = "043"\n';
+        }
+        if (cmd === "git show 'merge-tree-oid:alembic/versions/045_branch.py'") {
+          return 'revision = "045"\ndown_revision = "043"\n';
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationChainIntegrity(
+          repoDir,
+          ['alembic/versions/.*\\.py$'],
+          'alembic',
+          { baseRef: 'main' }
+        );
+        assert.equal(result.status, 'fail');
+        assert.equal(result.details?.evaluatedAgainst, 'merge-tree');
+        assert.equal(result.details?.baseRef, 'main');
+        assert.equal(result.details?.treeOid, 'merge-tree-oid');
+        assert.match(result.message, /found 2: 044 \(alembic\/versions\/044_main\.py\), 045 \(alembic\/versions\/045_branch\.py\)/);
+        assert.ok(commands.some(cmd => cmd.includes("git merge-tree --write-tree 'origin/main' HEAD")));
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('falls back to the worktree when merge-tree reports conflicts', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git merge-tree --write-tree 'origin/main' HEAD") {
+          throw makeExecError('merge conflict', 1, 'merge conflict');
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationChainIntegrity(
+          repoDir,
+          ['migrations/versions/.*\\.py$'],
+          'alembic',
+          { baseRef: 'main' }
+        );
+        assert.equal(result.status, 'pass');
+        assert.equal(result.details?.evaluatedAgainst, 'worktree');
+        assert.deepEqual(result.details?.mergeContext, {
+          source: 'worktree-fallback',
+          reason: 'merge-conflict',
+        });
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('falls back to the worktree when merge-tree is unavailable', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd === "git fetch --quiet origin 'main'") return '';
+        if (cmd === "git merge-tree --write-tree 'origin/main' HEAD") {
+          throw makeExecError('git merge-tree unsupported', 128, 'git: merge-tree unsupported');
+        }
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationChainIntegrity(
+          repoDir,
+          ['migrations/versions/.*\\.py$'],
+          'alembic',
+          { baseRef: 'main' }
+        );
+        assert.equal(result.status, 'pass');
+        assert.equal(result.details?.evaluatedAgainst, 'worktree');
+        assert.deepEqual(result.details?.mergeContext, {
+          source: 'worktree-fallback',
+          reason: 'git-unavailable',
+        });
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('keeps the old worktree-only behavior when baseRef is omitted', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
+      });
+
+      const commands: string[] = [];
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        commands.push(cmd);
+        throw new Error(`unexpected command: ${cmd}`);
+      });
+
+      try {
+        const result = await checkMigrationChainIntegrity(repoDir);
+        assert.equal(result.status, 'pass');
+        assert.equal(result.details?.evaluatedAgainst, 'worktree');
+        assert.deepEqual(commands, []);
+      } finally {
+        execMock.mock.restore();
+      }
     });
   });
 
@@ -1550,6 +1689,45 @@ describe('ready-stage', () => {
         assert.ok(names.includes('ci-status'));
         assert.ok(!names.includes('schema-migrations'));
         assert.ok(!names.includes('forbidden-ddl'));
+      } finally {
+        execMock.mock.restore();
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('adds migration-reversibility to Alembic baseline suggestions', async () => {
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-stage-baseline-'));
+      await writeRepoFiles(repoDir, {
+        'alembic/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+      });
+
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
+        if (cmd.includes('gh pr view')) {
+          if (cmd.includes('mergeable,mergeStateStatus')) {
+            return JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+          }
+          return JSON.stringify({
+            number: 42,
+            headRefName: 'feature-branch',
+            baseRefName: 'main',
+            url: 'https://github.com/test/repo/pull/42',
+            files: [{ path: 'src/app.ts' }],
+          });
+        }
+        if (cmd.includes('gh pr checks')) return JSON.stringify([]);
+        if (cmd.includes('git fetch --quiet origin')) return '';
+        if (cmd.includes('git merge-tree --write-tree')) return '';
+        return '';
+      });
+
+      try {
+        const result = await runReadyStage({ prNumber: 42, repoDir });
+        const baseline = result.checks.find(check => check.name === 'baseline-discovery');
+        assert.equal(baseline?.status, 'warn');
+        assert.deepEqual((baseline?.details?.suggestions as string[]) ?? [], [
+          'ready.checks: schema-migrations, migration-reversibility, forbidden-ddl',
+          'ready.requiredChecks: schema-migrations',
+        ]);
       } finally {
         execMock.mock.restore();
         await fs.rm(repoDir, { recursive: true, force: true });
