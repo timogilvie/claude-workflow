@@ -74,12 +74,15 @@ unset _git_dir _git_common_dir
 # Guard 2: Detect nested mill invocation via environment
 # Stores repo path so separate repos in separate terminals don't conflict
 if [[ -n "${WAVEMILL_MILL_ACTIVE:-}" ]]; then
-  echo "ERROR: wavemill mill is already running for: $WAVEMILL_MILL_ACTIVE" >&2
-  echo "  Nested mill invocations are not allowed." >&2
-  echo "  If this is unexpected, unset WAVEMILL_MILL_ACTIVE and retry." >&2
-  exit 1
+  if [[ "${WAVEMILL_READY_WATCHDOG_SOURCE_ONLY:-}" != "1" ]]; then
+    echo "ERROR: wavemill mill is already running for: $WAVEMILL_MILL_ACTIVE" >&2
+    echo "  Nested mill invocations are not allowed." >&2
+    echo "  If this is unexpected, unset WAVEMILL_MILL_ACTIVE and retry." >&2
+    exit 1
+  fi
+else
+  export WAVEMILL_MILL_ACTIVE="$REPO_DIR"
 fi
-export WAVEMILL_MILL_ACTIVE="$REPO_DIR"
 
 # ─────────────────────────────────────────────────────────────────
 
@@ -138,7 +141,9 @@ _update_effective_max_parallel() {
   esac
 }
 
-_update_effective_max_parallel
+if [[ "${WAVEMILL_READY_WATCHDOG_SOURCE_ONLY:-}" != "1" ]]; then
+  _update_effective_max_parallel
+fi
 
 FORCE_MODEL="$(trim_outer_whitespace "${FORCE_MODEL:-}")"
 if [[ -z "$FORCE_MODEL" ]]; then
@@ -161,23 +166,25 @@ if [[ -z "$WAVEMILL_REVIEWER_MODEL" ]]; then
 fi
 
 
-command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq)"; exit 1; }
-command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
-command -v git >/dev/null || { echo "Error: git required"; exit 1; }
-if [[ "$DRY_RUN" != "true" ]]; then
-  command -v gh >/dev/null || { echo "Error: gh required (install: brew install gh && gh auth login)"; exit 1; }
-  command -v tmux >/dev/null || { echo "Error: tmux required (install: brew install tmux)"; exit 1; }
-  agent_validate "$AGENT_CMD" || { echo "Error: agent '$AGENT_CMD' not found"; exit 1; }
-fi
+if [[ "${WAVEMILL_READY_WATCHDOG_SOURCE_ONLY:-}" != "1" ]]; then
+  command -v jq >/dev/null || { echo "Error: jq required (install: brew install jq)"; exit 1; }
+  command -v npx >/dev/null || { echo "Error: npx required (install: brew install node)"; exit 1; }
+  command -v git >/dev/null || { echo "Error: git required"; exit 1; }
+  if [[ "$DRY_RUN" != "true" ]]; then
+    command -v gh >/dev/null || { echo "Error: gh required (install: brew install gh && gh auth login)"; exit 1; }
+    command -v tmux >/dev/null || { echo "Error: tmux required (install: brew install tmux)"; exit 1; }
+    agent_validate "$AGENT_CMD" || { echo "Error: agent '$AGENT_CMD' not found"; exit 1; }
+  fi
 
-# Check agent authentication before launching tasks
-if [[ "$DRY_RUN" != "true" ]] && ! agent_check_auth "$AGENT_CMD"; then
-  exit 1
-fi
+  # Check agent authentication before launching tasks
+  if [[ "$DRY_RUN" != "true" ]] && ! agent_check_auth "$AGENT_CMD"; then
+    exit 1
+  fi
 
-if [[ -n "${FORCE_MODEL:-}" && (-n "${WAVEMILL_PLANNER_MODEL:-}" || -n "${WAVEMILL_CODER_MODEL:-}" || -n "${WAVEMILL_REVIEWER_MODEL:-}") ]]; then
-  log_error "FORCE_MODEL cannot be combined with planner/coder/reviewer model overrides"
-  exit 1
+  if [[ -n "${FORCE_MODEL:-}" && (-n "${WAVEMILL_PLANNER_MODEL:-}" || -n "${WAVEMILL_CODER_MODEL:-}" || -n "${WAVEMILL_REVIEWER_MODEL:-}") ]]; then
+    log_error "FORCE_MODEL cannot be combined with planner/coder/reviewer model overrides"
+    exit 1
+  fi
 fi
 
 
@@ -5362,6 +5369,10 @@ launch_ready_watchdog_remediation() {
     '{status:"failed", detail:$detail, attemptNumber:$attempt}'
   return 0
 }
+
+if [[ "${WAVEMILL_READY_WATCHDOG_SOURCE_ONLY:-}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 launch_ready_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
