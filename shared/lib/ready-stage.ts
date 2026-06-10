@@ -228,7 +228,7 @@ export const readyStageDeps = {
 interface MigrationRevision {
   file: string;
   revision: string;
-  downRevision: string | null;
+  downRevisions: string[];
 }
 
 interface MigrationGraphCycle {
@@ -601,7 +601,7 @@ function buildMigrationChainDetails(
 }
 
 function parseMigrationRevision(file: string, content: string): MigrationRevision | { error: string; details: Record<string, unknown> } {
-  const revisionMatch = content.match(/^\s*revision\s*=\s*(['"])([^'"]+)\1/m);
+  const revisionMatch = content.match(/^\s*revision\s*(?::\s*[^=]+)?=\s*(['"])([^'"]+)\1/m);
   if (!revisionMatch) {
     return {
       error: 'Migration file is missing a parseable revision',
@@ -609,7 +609,7 @@ function parseMigrationRevision(file: string, content: string): MigrationRevisio
     };
   }
 
-  const downRevisionLineMatch = content.match(/^\s*down_revision\s*=\s*(.+)$/m);
+  const downRevisionLineMatch = content.match(/^\s*down_revision\s*(?::\s*[^=]+)?=\s*(.+)$/m);
   if (!downRevisionLineMatch) {
     return {
       error: 'Migration file is missing down_revision',
@@ -618,12 +618,29 @@ function parseMigrationRevision(file: string, content: string): MigrationRevisio
   }
 
   const downRevisionValue = downRevisionLineMatch[1]?.trim() ?? '';
-  let downRevision: string | null;
+  let downRevisions: string[];
   if (downRevisionValue === 'None') {
-    downRevision = null;
+    downRevisions = [];
   } else {
     const downRevisionMatch = downRevisionValue.match(/^(['"])([^'"]+)\1$/);
-    if (!downRevisionMatch) {
+    if (downRevisionMatch) {
+      downRevisions = [downRevisionMatch[2]!];
+    } else if (
+      (downRevisionValue.startsWith('(') && downRevisionValue.endsWith(')')) ||
+      (downRevisionValue.startsWith('[') && downRevisionValue.endsWith(']'))
+    ) {
+      downRevisions = [...downRevisionValue.matchAll(/(['"])([^'"]+)\1/g)].map(match => match[2]!);
+      if (downRevisions.length === 0) {
+        return {
+          error: 'Migration file has an unsupported down_revision format',
+          details: {
+            file,
+            revision: revisionMatch[2],
+            downRevision: downRevisionValue,
+          },
+        };
+      }
+    } else {
       return {
         error: 'Migration file has an unsupported down_revision format',
         details: {
@@ -633,13 +650,12 @@ function parseMigrationRevision(file: string, content: string): MigrationRevisio
         },
       };
     }
-    downRevision = downRevisionMatch[2];
   }
 
   return {
     file,
     revision: revisionMatch[2]!,
-    downRevision,
+    downRevisions,
   };
 }
 
@@ -669,10 +685,14 @@ function detectMigrationCycle(revisions: Map<string, MigrationRevision>): Migrat
     stack.push(revisionId);
 
     const node = revisions.get(revisionId);
-    if (node?.downRevision && revisions.has(node.downRevision)) {
-      const cycle = visit(node.downRevision);
-      if (cycle) {
-        return cycle;
+    if (node) {
+      for (const downRevision of node.downRevisions) {
+        if (revisions.has(downRevision)) {
+          const cycle = visit(downRevision);
+          if (cycle) {
+            return cycle;
+          }
+        }
       }
     }
 
@@ -696,8 +716,7 @@ function findMigrationHeads(revisions: Iterable<MigrationRevision>): MigrationHe
   const revisionList = [...revisions];
   const referencedDownRevisions = new Set(
     revisionList
-      .map(revision => revision.downRevision)
-      .filter((revision): revision is string => revision !== null)
+      .flatMap(revision => revision.downRevisions)
   );
 
   return revisionList
@@ -1226,12 +1245,15 @@ export async function checkMigrationChainIntegrity(
   }
 
   const missingDownRevisions = [...revisions.values()]
-    .filter(revision => revision.downRevision !== null && !revisions.has(revision.downRevision))
-    .map(revision => ({
-      file: revision.file,
-      revision: revision.revision,
-      downRevision: revision.downRevision,
-    }));
+    .flatMap(revision =>
+      revision.downRevisions
+        .filter(downRevision => !revisions.has(downRevision))
+        .map(downRevision => ({
+          file: revision.file,
+          revision: revision.revision,
+          downRevision,
+        }))
+    );
   if (missingDownRevisions.length > 0) {
     return {
       name: 'migration-chain-integrity',
@@ -1267,8 +1289,7 @@ export async function checkMigrationChainIntegrity(
 
   const referencedDownRevisions = new Set(
     [...revisions.values()]
-      .map(revision => revision.downRevision)
-      .filter((revision): revision is string => revision !== null)
+      .flatMap(revision => revision.downRevisions)
   );
   const heads = [...revisions.values()]
     .filter(revision => !referencedDownRevisions.has(revision.revision))
@@ -1289,7 +1310,7 @@ export async function checkMigrationChainIntegrity(
   }
 
   const roots = [...revisions.values()]
-    .filter(revision => revision.downRevision === null)
+    .filter(revision => revision.downRevisions.length === 0)
     .map(revision => ({ revision: revision.revision, file: revision.file }));
   if (roots.length !== 1) {
     return {
@@ -1502,13 +1523,20 @@ export async function checkMigrationBaseFreshness(options: {
   const branchChain: string[] = [];
   const branchChainSet = new Set<string>();
   const visited = new Set<string>();
-  let currentRevision: string | null = branchHeadRevision;
+  const revisionsToVisit = [branchHeadRevision];
 
-  while (currentRevision && !visited.has(currentRevision)) {
+  while (revisionsToVisit.length > 0) {
+    const currentRevision = revisionsToVisit.pop()!;
+    if (visited.has(currentRevision)) {
+      continue;
+    }
     visited.add(currentRevision);
     branchChain.push(currentRevision);
     branchChainSet.add(currentRevision);
-    currentRevision = combinedRevisions.get(currentRevision)?.downRevision ?? null;
+    const currentMigration = combinedRevisions.get(currentRevision);
+    if (currentMigration) {
+      revisionsToVisit.push(...currentMigration.downRevisions);
+    }
   }
 
   if (baseHead === branchHeadRevision || branchChainSet.has(baseHead)) {
@@ -1519,7 +1547,7 @@ export async function checkMigrationBaseFreshness(options: {
       details: {
         baseHead,
         branchHead: branchHeadRevision,
-        branchDownRevision: branchHead.downRevision,
+        branchDownRevisions: branchHead.downRevisions,
         branchChain,
         baseBranch,
         migrationFilesChanged,
@@ -1534,7 +1562,7 @@ export async function checkMigrationBaseFreshness(options: {
     details: {
       baseHead,
       branchHead: branchHeadRevision,
-      branchDownRevision: branchHead.downRevision,
+      branchDownRevisions: branchHead.downRevisions,
       branchChain,
       baseBranch,
       migrationFilesChanged,
