@@ -4,6 +4,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { getMillConfig } from '../shared/lib/config.ts';
 import { errorMessage } from '../shared/lib/error-utils.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
@@ -11,6 +12,10 @@ import { tickReadyWatchdog } from '../shared/lib/ready-watchdog.ts';
 import type { WorkflowStateLike } from '../shared/lib/job-tracker.ts';
 
 const execFile = promisify(execFileCb);
+const READY_WATCHDOG_TOOL_PATH = fileURLToPath(import.meta.url);
+const WAVEMILL_TOOLS_DIR = path.dirname(READY_WATCHDOG_TOOL_PATH);
+const WAVEMILL_ROOT = path.dirname(WAVEMILL_TOOLS_DIR);
+const WAVEMILL_LIB_DIR = path.join(WAVEMILL_ROOT, 'shared', 'lib');
 
 async function launchRemediation(args: {
   repoDir: string;
@@ -44,10 +49,12 @@ async function launchRemediation(args: {
     };
   }
 
-  const scriptPath = path.join(args.repoDir, 'shared/lib/wavemill-mill.sh');
+  const session = process.env.SESSION || 'wavemill';
+  const scriptPath = `/tmp/${session}-monitor.sh`;
+  const monitorEnvPath = `/tmp/${session}-monitor.env`;
   const launchCommand = `
     set -euo pipefail
-    source "$WAVEMILL_SCRIPT_PATH"
+    source "$WAVEMILL_SCRIPT_PATH" "$WAVEMILL_MONITOR_ENV_PATH"
     launch_ready_watchdog_remediation \
       "$WAVEMILL_ISSUE_ID" \
       "$WAVEMILL_SLUG" \
@@ -61,24 +68,33 @@ async function launchRemediation(args: {
       "$WAVEMILL_FAILED_CHECK_NAMES_JSON"
   `;
   try {
-    const { stdout } = await execFile('bash', ['-lc', launchCommand], {
+    const childEnv = {
+      ...process.env,
+      SESSION: session,
+      TOOLS_DIR: WAVEMILL_TOOLS_DIR,
+      LIB_DIR: WAVEMILL_LIB_DIR,
+      WAVEMILL_READY_WATCHDOG_SOURCE_ONLY: '1',
+      WAVEMILL_MILL_LIB_DIR: WAVEMILL_LIB_DIR,
+      _WAVEMILL_MILL_REEXEC: process.env._WAVEMILL_MILL_REEXEC || '1',
+      WAVEMILL_SCRIPT_PATH: scriptPath,
+      WAVEMILL_MONITOR_ENV_PATH: monitorEnvPath,
+      WAVEMILL_ISSUE_ID: args.issueId,
+      WAVEMILL_SLUG: slug,
+      WAVEMILL_WORKTREE: worktree,
+      WAVEMILL_BRANCH: branch,
+      WAVEMILL_BASE_BRANCH: baseBranch,
+      WAVEMILL_PR_NUMBER: String(prNumber),
+      WAVEMILL_FAILED_CHECK_SUMMARY: args.failedCheckSummary,
+      WAVEMILL_ATTEMPT_NUMBER: String(args.attemptNumber),
+      WAVEMILL_MAX_ATTEMPTS: String(args.maxAttempts),
+      WAVEMILL_FAILED_CHECK_NAMES_JSON: args.failedCheckNamesJson,
+    };
+    delete childEnv.npm_config_prefix;
+
+    const { stdout } = await execFile('bash', ['-c', launchCommand], {
       cwd: args.repoDir,
       encoding: 'utf-8',
-      env: {
-        ...process.env,
-        SESSION: process.env.SESSION || 'wavemill',
-        WAVEMILL_SCRIPT_PATH: scriptPath,
-        WAVEMILL_ISSUE_ID: args.issueId,
-        WAVEMILL_SLUG: slug,
-        WAVEMILL_WORKTREE: worktree,
-        WAVEMILL_BRANCH: branch,
-        WAVEMILL_BASE_BRANCH: baseBranch,
-        WAVEMILL_PR_NUMBER: String(prNumber),
-        WAVEMILL_FAILED_CHECK_SUMMARY: args.failedCheckSummary,
-        WAVEMILL_ATTEMPT_NUMBER: String(args.attemptNumber),
-        WAVEMILL_MAX_ATTEMPTS: String(args.maxAttempts),
-        WAVEMILL_FAILED_CHECK_NAMES_JSON: args.failedCheckNamesJson,
-      },
+      env: childEnv,
       maxBuffer: 1024 * 1024,
     });
     const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
@@ -160,6 +176,7 @@ runTool({
       stateFile,
       issueFilter: args.recover,
       forceRecover: Boolean(args.recover),
+      readyWatchdogToolPath: READY_WATCHDOG_TOOL_PATH,
     });
 
     if (args.json) {
