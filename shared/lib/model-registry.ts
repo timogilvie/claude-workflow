@@ -383,6 +383,12 @@ export class ModelResolutionError extends Error {
 }
 
 export const FAMILY_ALIASES = Object.freeze({
+  fable: Object.freeze({
+    channels: Object.freeze({
+      stable: 'claude-fable-5',
+    }),
+    description: 'Stable Anthropic frontier alias for the Fable family.',
+  }),
   opus: Object.freeze({
     channels: Object.freeze({
       stable: 'claude-opus-4-8',
@@ -418,7 +424,7 @@ export const FAMILY_ALIASES = Object.freeze({
 >;
 
 export const REVIEWER_ALIAS_MAP = Object.freeze({
-  deep: 'claude-opus-4-8',
+  deep: 'claude-fable-5',
 }) satisfies Readonly<Record<string, string>>;
 
 function makeModelSelectorParseError(
@@ -665,6 +671,26 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
 
 export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
   models: {
+    'claude-fable-5': {
+      vendor: 'anthropic',
+      class: 'frontier',
+      strengths: ['frontier reasoning', 'long-horizon agentic work', 'code review', 'architecture'],
+      weaknesses: ['highest cost', 'slower', 'minutes-long turns on hard tasks'],
+      qualityScores: scores(62, 99, 95, 98, 62),
+      pricing: {
+        inputCostPerMTok: 10,
+        outputCostPerMTok: 50,
+        cacheWriteCostPerMTok: 12.5,
+        cacheReadCostPerMTok: 1,
+      },
+      contextWindowTokens: 1_000_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 10,
+      costPerMillionOutputTokensUsd: 50,
+    },
     'claude-opus-4-8': {
       vendor: 'anthropic',
       class: 'frontier',
@@ -958,11 +984,11 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     },
   },
   ladders: {
-    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-opus-4-8', 'claude-opus-4-7'],
-    planning: ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    coding: ['gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
-    review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
-    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
+    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'],
+    planning: ['claude-fable-5', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    coding: ['claude-fable-5', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
+    review: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
+    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
   },
 };
 

@@ -656,6 +656,7 @@ await test('auto mode uses degraded haiku-only routing in survival mode', async 
   });
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
@@ -691,6 +692,7 @@ await test('auto mode excludes opus in constrained mode', async () => {
   });
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'degrading',
     'claude-opus-4-8': 'degrading',
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
@@ -718,6 +720,7 @@ await test('auto mode emits a constrained router transparency line when quota is
   });
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'degrading',
     'claude-opus-4-8': 'degrading',
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
@@ -729,7 +732,7 @@ await test('auto mode emits a constrained router transparency line when quota is
     const { result, stderr } = await captureStderr(() =>
       routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir })
     );
-    assert.match(stderr, /\[router] constrained mode: gpt-5\.5 quota is degrading; reserving it for high-complexity steps/);
+    assert.match(stderr, /\[router] constrained mode: claude-fable-5 quota is degrading; reserving it for high-complexity steps/);
     assert.ok(result.reasoning[0].includes('Constrained mode'));
   } finally {
     cleanup();
@@ -815,6 +818,7 @@ await test('policy routing logs class downgrade without same-class metadata', as
   });
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'degrading',
     'claude-opus-4-8': 'degrading',
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
@@ -1005,6 +1009,7 @@ await test('emits constrained-mode banner when every frontier vendor is degradin
   const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'degrading',
     'claude-opus-4-8': 'degrading',
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
@@ -1028,6 +1033,7 @@ await test('emits survival-mode banner when every frontier vendor is exhausted (
   const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
