@@ -664,6 +664,31 @@
                     "maximum": 1,
                     "description": "Probability applied instead of 'rate' when the routing decision carries an exploration challenge recommendation (new-model or low-data-stage). Default 1 launches every recommended challenge when slots allow."
                 },
+                "stageWeights": {
+                    "type": "object",
+                    "description": "Relative weights for which workflow stage a challenge pair varies. Exactly one stage's model differs between primary and challenger. With no weights configured, challenges always vary the implementation (coder) stage, preserving legacy behavior. A low-data-stage scheduler recommendation overrides the weighted choice.",
+                    "properties": {
+                        "plan": {
+                            "type": "number",
+                            "minimum": 0,
+                            "default": 0,
+                            "description": "Relative weight for planner-varied challenges."
+                        },
+                        "implementation": {
+                            "type": "number",
+                            "minimum": 0,
+                            "default": 1,
+                            "description": "Relative weight for coder-varied challenges."
+                        },
+                        "review": {
+                            "type": "number",
+                            "minimum": 0,
+                            "default": 0,
+                            "description": "Relative weight for reviewer-varied challenges."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "models": {
                     "description": "Pool of model selectors eligible for challenge. Entries may be family aliases, 'inherit', or pinned model IDs. Null means use router.models.",
                     "oneOf": [

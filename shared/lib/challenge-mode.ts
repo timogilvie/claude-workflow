@@ -1,4 +1,5 @@
-import type { ChallengeRecommendation } from './challenge-scheduler.ts';
+import type { ChallengeRecommendation, ChallengeStage } from './challenge-scheduler.ts';
+export type { ChallengeStage } from './challenge-scheduler.ts';
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
@@ -32,6 +33,66 @@ export interface ChallengePairSelection {
   primary: ChallengeTaskEntry;
   challenger: ChallengeTaskEntry;
   routeContext?: ChallengeRouteContext;
+  /**
+   * Which workflow stage the pair varies. Exactly one stage's model differs
+   * between primary and challenger; the other two are shared so comparison
+   * outcomes attribute cleanly to the varied stage. Absent on legacy pairs
+   * (treat as 'implementation').
+   */
+  challengeStage?: ChallengeStage;
+}
+
+export interface ChallengeStageWeights {
+  plan?: number;
+  implementation?: number;
+  review?: number;
+}
+
+const CHALLENGE_STAGES: readonly ChallengeStage[] = ['plan', 'implementation', 'review'];
+
+/**
+ * Choose which stage a challenge pair should vary.
+ *
+ * A `low-data-stage` scheduler recommendation wins outright. Otherwise the
+ * stage is sampled from `challenge.stageWeights`; with no weights configured
+ * the result is always 'implementation', preserving coder-only behavior.
+ */
+export function chooseChallengeStage(opts: {
+  weights?: ChallengeStageWeights;
+  recommendedStage?: ChallengeStage;
+  randomFn?: () => number;
+} = {}): ChallengeStage {
+  if (opts.recommendedStage && CHALLENGE_STAGES.includes(opts.recommendedStage)) {
+    return opts.recommendedStage;
+  }
+
+  const randomFn = opts.randomFn || Math.random;
+  const weights = CHALLENGE_STAGES.map((stage) => {
+    const value = opts.weights?.[stage];
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+  });
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  if (total <= 0) {
+    return 'implementation';
+  }
+
+  let threshold = randomFn() * total;
+  for (let index = 0; index < CHALLENGE_STAGES.length; index += 1) {
+    threshold -= weights[index];
+    if (threshold <= 0) {
+      return CHALLENGE_STAGES[index];
+    }
+  }
+  return 'implementation';
+}
+
+/**
+ * The model occupying the pair's varied stage on the given entry.
+ */
+export function variedModelForStage(entry: ChallengeTaskEntry, stage: ChallengeStage | undefined): string {
+  if (stage === 'plan') return entry.planner || entry.model;
+  if (stage === 'review') return entry.reviewer || entry.model;
+  return entry.model;
 }
 
 export interface ChallengeRouteContext {
@@ -246,6 +307,24 @@ export function pickChallengeModels(
     return null;
   }
 
+  return {
+    ...buildChallengeEntries(opts, agentMap, defaultAgent, primaryModel, challengerModel),
+    challengeStage: 'implementation',
+  };
+}
+
+/**
+ * Build the bare primary/challenger entry pair for the given coder models.
+ * Does not enforce model distinctness — stage-varied pairs deliberately share
+ * the coder and differ on planner or reviewer instead.
+ */
+function buildChallengeEntries(
+  opts: { pairId: string; issueId: string; slug: string },
+  agentMap: Record<string, string>,
+  defaultAgent: string,
+  primaryModel: string,
+  challengerModel: string,
+): ChallengePairSelection {
   const primarySlug = deriveChallengeSlug(opts.slug, 'primary');
   const challengerSlug = deriveChallengeSlug(opts.slug, 'challenger');
 
@@ -286,6 +365,43 @@ export function pickChallengeModels(
   };
 }
 
+/**
+ * Override the challenger's varied stage model after route fields are applied,
+ * keeping the single-variable experiment property.
+ */
+function applyStageVariation(
+  pair: ChallengePairSelection,
+  stage: ChallengeStage,
+  challengerVaried: string,
+  agentMap: Record<string, string>,
+  defaultAgent: string,
+  repoDir?: string,
+): ChallengePairSelection {
+  if (stage === 'plan') {
+    return {
+      ...pair,
+      challengeStage: stage,
+      challenger: {
+        ...pair.challenger,
+        planner: challengerVaried,
+        plannerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir),
+      },
+    };
+  }
+  if (stage === 'review') {
+    return {
+      ...pair,
+      challengeStage: stage,
+      challenger: {
+        ...pair.challenger,
+        reviewer: challengerVaried,
+        reviewerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir),
+      },
+    };
+  }
+  return { ...pair, challengeStage: stage };
+}
+
 export function pickChallengeWorkflows(
   pool: string[],
   opts: {
@@ -295,6 +411,7 @@ export function pickChallengeWorkflows(
     prompt: string;
     primaryModel?: string;
     forcedChallengerModel?: string;
+    challengeStage?: ChallengeStage;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
@@ -307,8 +424,9 @@ export function pickChallengeWorkflows(
   const defaultAgent = opts.defaultAgent || 'claude';
   const agentMap = opts.agentMap || {};
   const routeFn = opts.routeFn || routeWorkflow;
+  const requestedStage = opts.challengeStage || 'implementation';
 
-  // First, get the base model selection (primary and challenger coders)
+  // First, get the base coder selection (shared when a non-coder stage varies)
   let primaryModel = opts.primaryModel?.trim() || '';
   if (!primaryModel) {
     if (!canRunChallenge(uniquePool)) {
@@ -322,21 +440,37 @@ export function pickChallengeWorkflows(
     return null;
   }
 
-  const challengerModel = resolveChallengerModel(uniquePool, primaryModel, opts.forcedChallengerModel, randomFn);
-  if (!challengerModel) {
-    return null;
-  }
-
   // Route the workflow once to get planner/reviewer/depths
   const routing = routeFn(opts.prompt, { repoDir: opts.repoDir });
 
-  // Both primary and challenger use the same planner/reviewer/depths
-  // but different coder models
+  // Fall back to coder variation when the route lacks the requested stage model
+  const stage: ChallengeStage = requestedStage === 'plan' && !(routing.planner || '').trim()
+    ? 'implementation'
+    : requestedStage === 'review' && !(routing.reviewer || '').trim()
+      ? 'implementation'
+      : requestedStage;
+  const primaryVaried = stage === 'plan'
+    ? routing.planner.trim()
+    : stage === 'review'
+      ? routing.reviewer.trim()
+      : primaryModel;
+
+  const challengerVaried = resolveChallengerModel(uniquePool, primaryVaried, opts.forcedChallengerModel, randomFn);
+  if (!challengerVaried) {
+    return null;
+  }
+
+  // Exactly one stage differs between primary and challenger; the other two
+  // stages (and all depths) are shared so outcomes attribute to one variable.
+  const challengerCoder = stage === 'implementation' ? challengerVaried : primaryModel;
+  const challengerPlanner = stage === 'plan' ? challengerVaried : routing.planner;
+  const challengerReviewer = stage === 'review' ? challengerVaried : routing.reviewer;
   const primarySlug = deriveChallengeSlug(opts.slug, 'primary');
   const challengerSlug = deriveChallengeSlug(opts.slug, 'challenger');
 
   return {
     pairId: opts.pairId,
+    challengeStage: stage,
     primary: {
       key: opts.issueId,
       issueId: opts.issueId,
@@ -359,12 +493,12 @@ export function pickChallengeWorkflows(
       slug: challengerSlug,
       branch: deriveChallengeBranch(opts.slug, 'challenger'),
       role: 'challenger',
-      model: challengerModel,
-      agent: resolveAgent(challengerModel, agentMap, defaultAgent),
-      planner: routing.planner,
-      plannerAgent: resolveAgent(routing.planner, agentMap, defaultAgent),
-      reviewer: routing.reviewer,
-      reviewerAgent: resolveAgent(routing.reviewer, agentMap, defaultAgent),
+      model: challengerCoder,
+      agent: resolveAgent(challengerCoder, agentMap, defaultAgent),
+      planner: challengerPlanner,
+      plannerAgent: resolveAgent(challengerPlanner, agentMap, defaultAgent),
+      reviewer: challengerReviewer,
+      reviewerAgent: resolveAgent(challengerReviewer, agentMap, defaultAgent),
       planDepth: routing.planDepth,
       codeDepth: routing.codeDepth,
       reviewMode: routing.reviewRecommended,
@@ -421,6 +555,7 @@ function buildPairFromRouteSnapshot(
     slug: string;
     primaryModel?: string;
     forcedChallengerModel?: string;
+    challengeStage?: ChallengeStage;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
@@ -429,29 +564,62 @@ function buildPairFromRouteSnapshot(
   route: RouteArtifactSnapshot,
   fallback?: RouteArtifactSnapshot | null,
 ): ChallengePairSelection | null {
-  const pair = pickChallengeModels(pool, {
-    pairId: opts.pairId,
-    issueId: opts.issueId,
-    slug: opts.slug,
-    primaryModel: opts.primaryModel?.trim() || route.coder,
-    forcedChallengerModel: opts.forcedChallengerModel,
-    agentMap: opts.agentMap,
-    defaultAgent: opts.defaultAgent,
-    randomFn: opts.randomFn,
-  });
+  const agentMap = opts.agentMap || {};
+  const defaultAgent = opts.defaultAgent || 'claude';
+  const requestedStage = opts.challengeStage || 'implementation';
+  const primaryCoder = opts.primaryModel?.trim() || route.coder;
 
-  if (!pair) {
+  // Fall back to coder variation when the route snapshot lacks the requested
+  // stage model (bootstrap artifacts may omit the planner).
+  const primaryVaried = requestedStage === 'plan'
+    ? (route.planner || fallback?.planner || '').trim()
+    : requestedStage === 'review'
+      ? (route.reviewer || '').trim()
+      : '';
+  const stage: ChallengeStage = requestedStage !== 'implementation' && primaryVaried
+    ? requestedStage
+    : 'implementation';
+
+  if (stage === 'implementation') {
+    const pair = pickChallengeModels(pool, {
+      pairId: opts.pairId,
+      issueId: opts.issueId,
+      slug: opts.slug,
+      primaryModel: primaryCoder,
+      forcedChallengerModel: opts.forcedChallengerModel,
+      agentMap: opts.agentMap,
+      defaultAgent: opts.defaultAgent,
+      randomFn: opts.randomFn,
+    });
+
+    if (!pair) {
+      return null;
+    }
+
+    return applyRouteSnapshot(pair, route, agentMap, defaultAgent, opts.repoDir, fallback);
+  }
+
+  const challengerVaried = resolveChallengerModel(
+    uniqueNonEmpty(pool),
+    primaryVaried,
+    opts.forcedChallengerModel,
+    opts.randomFn || Math.random,
+  );
+  if (!challengerVaried) {
     return null;
   }
 
-  return applyRouteSnapshot(
-    pair,
+  // Same coder on both sides; route fields applied, then the varied stage
+  // overridden on the challenger.
+  const pair = applyRouteSnapshot(
+    buildChallengeEntries(opts, agentMap, defaultAgent, primaryCoder, primaryCoder),
     route,
-    opts.agentMap || {},
-    opts.defaultAgent || 'claude',
+    agentMap,
+    defaultAgent,
     opts.repoDir,
     fallback,
   );
+  return applyStageVariation(pair, stage, challengerVaried, agentMap, defaultAgent, opts.repoDir);
 }
 
 export function pickChallengeWorkflowsWithContext(
@@ -463,6 +631,7 @@ export function pickChallengeWorkflowsWithContext(
     prompt: string;
     primaryModel?: string;
     forcedChallengerModel?: string;
+    challengeStage?: ChallengeStage;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;

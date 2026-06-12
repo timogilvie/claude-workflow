@@ -176,11 +176,19 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         });
         verdict = validateComparisonJson(parseJsonFromLLM(response.text));
       }
-      const winnerModel = verdict.winner === 'primary' ? primaryModel : challengerModel;
-
       // Compute enrichment fields
       const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
       const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
+
+      // Attribute the win to the varied stage's model. For planner/reviewer
+      // challenges the coder is shared, so crediting it would be meaningless.
+      const winnerRouting = verdict.winner === 'primary' ? primaryRouting : challengerRouting;
+      const winnerSolutionModel = verdict.winner === 'primary' ? primaryModel : challengerModel;
+      const winnerModel = challengeType === 'planner-only'
+        ? (winnerRouting?.planner || winnerSolutionModel)
+        : challengeType === 'reviewer-only'
+          ? (winnerRouting?.reviewer || winnerSolutionModel)
+          : winnerSolutionModel;
 
       const record: ChallengeComparison = {
         challengePairId: pairId,
