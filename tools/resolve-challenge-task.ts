@@ -8,6 +8,8 @@ import {
   pickChallengeWorkflowsWithContext,
   getChallengeModelPool,
   canRunChallenge,
+  decideChallengeLaunch,
+  extractChallengeRecommendation,
 } from '../shared/lib/challenge-mode.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
@@ -91,22 +93,40 @@ runTool({
       return;
     }
 
-    const rate = challenge.rate ?? 0.10;
-    if (Math.random() >= rate) {
-      console.log(JSON.stringify({ ...base, reason: 'roll_not_selected' }));
+    const routeArtifacts = featureDir
+      ? readBothRouteArtifacts(featureDir)
+      : { bootstrap: null, expanded: null };
+    const recommendation = extractChallengeRecommendation(routeArtifacts);
+
+    const launchDecision = decideChallengeLaunch({
+      pool,
+      primaryModel,
+      rate: challenge.rate ?? 0.10,
+      recommendationRate: challenge.recommendationRate,
+      recommendation,
+    });
+
+    if (!launchDecision.launch) {
+      console.log(JSON.stringify({
+        ...base,
+        reason: 'roll_not_selected',
+        selectionPath: launchDecision.selectionPath,
+      }));
       return;
     }
+
+    const forcedChallengerModel = launchDecision.forcedChallengerModel;
 
     // If task file provided, use workflow routing for both sides
     let pair;
     if (featureDir) {
-      const routeArtifacts = readBothRouteArtifacts(featureDir);
       pair = pickChallengeWorkflowsWithContext(pool, {
         pairId: issue,
         issueId: issue,
         slug,
         prompt: title,
         primaryModel,
+        forcedChallengerModel,
         agentMap: router.agentMap,
         defaultAgent,
         repoDir,
@@ -122,6 +142,7 @@ runTool({
           slug,
           prompt,
           primaryModel,
+          forcedChallengerModel,
           agentMap: router.agentMap,
           defaultAgent,
           repoDir,
@@ -134,17 +155,19 @@ runTool({
           issueId: issue,
           slug,
           primaryModel,
+          forcedChallengerModel,
           agentMap: router.agentMap,
           defaultAgent,
         });
       }
-    } else {
+    } else if (!pair) {
       // No task file provided - use model-only selection (backward compatibility)
       pair = pickChallengeModels(pool, {
         pairId: issue,
         issueId: issue,
         slug,
         primaryModel,
+        forcedChallengerModel,
         agentMap: router.agentMap,
         defaultAgent,
       });
@@ -155,6 +178,10 @@ runTool({
       return;
     }
 
+    const challengerSource = forcedChallengerModel && pair.challenger.model === forcedChallengerModel
+      ? 'recommendation'
+      : 'random';
+
     console.log(JSON.stringify({
       issue,
       slug,
@@ -164,6 +191,18 @@ runTool({
       decisionSource: pair.routeContext?.decisionSource || 'bootstrap',
       reason: 'selected',
       primaryModel,
+      selectionPath: launchDecision.selectionPath,
+      challengerSource,
+      ...(launchDecision.recommendation
+        ? {
+            challengeRecommendation: {
+              reason: launchDecision.recommendation.reason,
+              challengerModel: launchDecision.recommendation.challengerModel,
+              defaultModel: launchDecision.recommendation.defaultModel,
+              stage: launchDecision.recommendation.stage,
+            },
+          }
+        : {}),
       routeContext: pair.routeContext,
       entries: [pair.primary, pair.challenger],
     }));

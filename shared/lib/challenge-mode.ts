@@ -1,3 +1,4 @@
+import type { ChallengeRecommendation } from './challenge-scheduler.ts';
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
@@ -114,6 +115,101 @@ export function chooseDistinctChallengerModel(
   return candidates[index] || null;
 }
 
+function resolveChallengerModel(
+  pool: string[],
+  primaryModel: string,
+  forced: string | undefined,
+  randomFn: () => number,
+): string | null {
+  const trimmed = forced?.trim();
+  if (trimmed && trimmed !== primaryModel && pool.includes(trimmed)) {
+    return trimmed;
+  }
+  return chooseDistinctChallengerModel(pool, primaryModel, randomFn);
+}
+
+export type ChallengeSelectionPath = 'recommendation-driven' | 'random-roll';
+
+export interface ChallengeLaunchDecision {
+  launch: boolean;
+  selectionPath: ChallengeSelectionPath;
+  forcedChallengerModel?: string;
+  recommendation?: ChallengeRecommendation;
+}
+
+const RECOMMENDATION_REASONS = ['low-confidence', 'new-model', 'low-data-stage'] as const;
+
+/**
+ * Read the routing decision's scheduler recommendation from persisted route
+ * artifacts (expanded preferred over bootstrap). Returns null when neither
+ * artifact carries an actionable recommendation.
+ */
+export function extractChallengeRecommendation(artifacts: {
+  bootstrap: RouteArtifactSnapshot | null;
+  expanded: RouteArtifactSnapshot | null;
+}): ChallengeRecommendation | null {
+  for (const snapshot of [artifacts.expanded, artifacts.bootstrap]) {
+    const raw = snapshot?.expectedMetrics?.challengeRecommendation;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      continue;
+    }
+
+    const recommendation = raw as Partial<ChallengeRecommendation>;
+    if (
+      recommendation.shouldChallenge === true
+      && RECOMMENDATION_REASONS.includes(recommendation.reason as typeof RECOMMENDATION_REASONS[number])
+    ) {
+      return recommendation as ChallengeRecommendation;
+    }
+  }
+  return null;
+}
+
+/**
+ * Decide whether a mill task should launch in challenge mode.
+ *
+ * Exploration-driven recommendations (`new-model`, `low-data-stage`) fire at
+ * `recommendationRate` (default 1.0 — always, when slots allow) and force the
+ * scheduler's least-tested challenger when it is in the pool. A
+ * `low-confidence` recommendation keeps the configured random rate but still
+ * prefers the recommended challenger. Without a recommendation this is the
+ * plain random roll.
+ */
+export function decideChallengeLaunch(opts: {
+  pool: string[];
+  primaryModel?: string;
+  rate: number;
+  recommendationRate?: number;
+  recommendation?: ChallengeRecommendation | null;
+  randomFn?: () => number;
+}): ChallengeLaunchDecision {
+  const randomFn = opts.randomFn || Math.random;
+  const recommendation = opts.recommendation || undefined;
+
+  if (!recommendation) {
+    return {
+      launch: randomFn() < opts.rate,
+      selectionPath: 'random-roll',
+    };
+  }
+
+  const exploration = recommendation.reason === 'new-model' || recommendation.reason === 'low-data-stage';
+  const effectiveRate = exploration ? (opts.recommendationRate ?? 1) : opts.rate;
+  const challenger = recommendation.challengerModel?.trim();
+  const challengerUsable = Boolean(
+    challenger
+    && uniqueNonEmpty(opts.pool).includes(challenger as string)
+    && challenger !== (opts.primaryModel?.trim() || ''),
+  );
+
+  return {
+    launch: randomFn() < effectiveRate,
+    selectionPath: 'recommendation-driven',
+    ...(challengerUsable ? { forcedChallengerModel: challenger } : {}),
+    recommendation,
+  };
+}
+
 export function pickChallengeModels(
   pool: string[],
   opts: {
@@ -121,6 +217,7 @@ export function pickChallengeModels(
     issueId: string;
     slug: string;
     primaryModel?: string;
+    forcedChallengerModel?: string;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
@@ -144,7 +241,7 @@ export function pickChallengeModels(
     return null;
   }
 
-  const challengerModel = chooseDistinctChallengerModel(uniquePool, primaryModel, randomFn);
+  const challengerModel = resolveChallengerModel(uniquePool, primaryModel, opts.forcedChallengerModel, randomFn);
   if (!challengerModel) {
     return null;
   }
@@ -197,6 +294,7 @@ export function pickChallengeWorkflows(
     slug: string;
     prompt: string;
     primaryModel?: string;
+    forcedChallengerModel?: string;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
@@ -224,7 +322,7 @@ export function pickChallengeWorkflows(
     return null;
   }
 
-  const challengerModel = chooseDistinctChallengerModel(uniquePool, primaryModel, randomFn);
+  const challengerModel = resolveChallengerModel(uniquePool, primaryModel, opts.forcedChallengerModel, randomFn);
   if (!challengerModel) {
     return null;
   }
@@ -322,6 +420,7 @@ function buildPairFromRouteSnapshot(
     issueId: string;
     slug: string;
     primaryModel?: string;
+    forcedChallengerModel?: string;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
@@ -335,6 +434,7 @@ function buildPairFromRouteSnapshot(
     issueId: opts.issueId,
     slug: opts.slug,
     primaryModel: opts.primaryModel?.trim() || route.coder,
+    forcedChallengerModel: opts.forcedChallengerModel,
     agentMap: opts.agentMap,
     defaultAgent: opts.defaultAgent,
     randomFn: opts.randomFn,
@@ -362,6 +462,7 @@ export function pickChallengeWorkflowsWithContext(
     slug: string;
     prompt: string;
     primaryModel?: string;
+    forcedChallengerModel?: string;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
