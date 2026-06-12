@@ -16,6 +16,7 @@ import {
   routeStageAware,
   vectorizeDescriptor,
 } from './stage-aware-router.ts';
+import { resolveExplorationConfig } from './router-exploration.ts';
 import { clearConfigCache } from './config.ts';
 import { routeWorkflowAuto, routeWorkflowStageAware, summarizeWorkflowRoute } from './workflow-router.ts';
 
@@ -1298,6 +1299,128 @@ test('exploration cost guard reverts to exploit when the sampled combo exceeds m
     assert.equal(decision?.exploration?.costGuardReverted, true);
     assert.equal(decision?.exploration?.explored.length, 0);
     assert.ok(decision?.reasoning.some((line) => line.includes('exploration(epsilon) reverted')));
+  } finally {
+    cleanup();
+  }
+});
+
+
+
+const PRIORS_ON = resolveExplorationConfig({ priors: { enabled: true, blendSamples: 10 } });
+
+function priorNeighbors(modelId: string, count: number, planScore: number, recordScore = 0.8) {
+  return Array.from({ length: count }, (_, index) => ({
+    record: makeEvalRecord(`${modelId}-${index}`, modelId, {
+      plan: planScore,
+      implementation: planScore,
+      review: planScore,
+    }, { score: recordScore }),
+    descriptor: makeDescriptor(),
+    similarity: 0.95,
+  }));
+}
+
+test('priors seed zero-record allowlisted models and rank claude-fable-5 first for planning', () => {
+  const neighbors = priorNeighbors('claude-sonnet-4-5-20250929', 3, 0.9);
+  const allowlists = {
+    plannerModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
+    coderModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
+    reviewerModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
+  };
+
+  const withoutPriors = rankModelsPerStage(neighbors, allowlists, 0.3, 0);
+  assert.ok(!withoutPriors.rankings[0].candidates.some((candidate) => candidate.modelId === 'claude-fable-5'));
+
+  const withPriors = rankModelsPerStage(neighbors, allowlists, 0.3, 0, undefined, PRIORS_ON);
+  const plannerCandidates = withPriors.rankings[0].candidates;
+  const fable = plannerCandidates.find((candidate) => candidate.modelId === 'claude-fable-5');
+  assert.ok(fable, 'zero-record fable-5 should be seeded into planner candidates');
+  assert.equal(fable!.support, 0);
+  // Zero support means pure registry prior (planning quality 99 -> 0.99)
+  assert.ok(Math.abs(fable!.score - 0.99) < 1e-9, `expected prior score 0.99, got ${fable!.score}`);
+  assert.equal(plannerCandidates[0].modelId, 'claude-fable-5');
+  assert.equal(withPriors.selection?.planner.modelId, 'claude-fable-5');
+});
+
+test('blended score converges to empirical as support reaches blendSamples', () => {
+  const neighbors = [
+    // 10 fable records with weak plan outcomes: support >= blendSamples -> pure empirical 0.5
+    ...priorNeighbors('claude-fable-5', 10, 0.5, 0.5),
+    ...priorNeighbors('claude-sonnet-4-5-20250929', 3, 0.9),
+  ];
+  const allowlists = {
+    plannerModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
+    coderModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
+    reviewerModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
+  };
+
+  const { rankings, selection } = rankModelsPerStage(neighbors, allowlists, 0.3, 0, undefined, PRIORS_ON);
+  const fable = rankings[0].candidates.find((candidate) => candidate.modelId === 'claude-fable-5');
+  assert.ok(fable);
+  assert.equal(fable!.support, 10);
+  // Full support: the 0.99 registry prior no longer props up the weak empirical score
+  assert.ok(Math.abs(fable!.score - 0.5) < 1e-9, `expected converged empirical 0.5, got ${fable!.score}`);
+  assert.equal(selection?.planner.modelId, 'claude-sonnet-4-5-20250929');
+});
+
+test('ucbConstant boosts undersampled candidates in ranking without inflating reported score', () => {
+  const neighbors = [
+    ...priorNeighbors('claude-sonnet-4-5-20250929', 10, 0.8),
+    ...priorNeighbors('claude-opus-4-6', 1, 0.75),
+  ];
+  const ucbConfig = resolveExplorationConfig({ ucbConstant: 0.3 });
+
+  const baseline = rankModelsPerStage(neighbors, {}, 0.3, 0);
+  assert.equal(baseline.rankings[0].candidates[0].modelId, 'claude-sonnet-4-5-20250929');
+
+  const boosted = rankModelsPerStage(neighbors, {}, 0.3, 0, undefined, ucbConfig);
+  const [first, second] = boosted.rankings[0].candidates;
+  assert.equal(first.modelId, 'claude-opus-4-6');
+  // The bonus reorders selection, but the reported score stays bonus-free
+  assert.ok(first.score < second.score);
+  assert.equal(boosted.selection?.planner.modelId, 'claude-opus-4-6');
+  assert.ok(boosted.selection!.expectedSuccess <= 1);
+});
+
+test('routeStageAware with priors selects a zero-record allowlisted model end to end', () => {
+  const records = [
+    makeEvalRecord('s1', 'claude-sonnet-4-5-20250929', { plan: 0.85, implementation: 0.84, review: 0.86 }),
+    makeEvalRecord('s2', 'claude-sonnet-4-5-20250929', { plan: 0.86, implementation: 0.83, review: 0.85 }),
+    makeEvalRecord('g1', 'gpt-5.4', { plan: 0.8, implementation: 0.82, review: 0.79 }),
+    makeEvalRecord('g2', 'gpt-5.4', { plan: 0.81, implementation: 0.8, review: 0.8 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      stageBlendWeight: 0.3,
+      defaultAgent: 'claude',
+      availableModels: {
+        planner: ['claude-fable-5', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
+        coder: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
+        reviewer: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
+      },
+      exploration: { priors: { enabled: true, blendSamples: 10 } },
+    },
+  });
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+    });
+    assert.ok(decision);
+    assert.equal(decision?.routingMode, 'stage-aware');
+    // claude-fable-5 has zero eval records but the highest planning prior
+    assert.equal(decision?.planner, 'claude-fable-5');
+    // Stages without the new model in their allowlist keep empirical winners
+    assert.notEqual(decision?.coder, 'claude-fable-5');
+    assert.notEqual(decision?.reviewer, 'claude-fable-5');
   } finally {
     cleanup();
   }
