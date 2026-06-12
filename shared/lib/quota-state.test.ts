@@ -569,6 +569,10 @@ describe('quota-state', () => {
       },
       quota: {
         manualOverrides: {
+          'claude-fable-5': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
           'claude-opus-4-8': {
             status: 'degrading',
             reason: 'aggregate frontier capacity check',
@@ -658,6 +662,10 @@ describe('quota-state', () => {
     writeMultiFrontierConfig(repoDir);
 
     recordLimitError({
+      modelId: 'claude-fable-5',
+      reason: '429 rate_limit',
+    }, repoDir);
+    recordLimitError({
       modelId: 'claude-opus-4-8',
       reason: '429 rate_limit',
     }, repoDir);
@@ -688,6 +696,7 @@ describe('quota-state', () => {
   it('derives survival operating mode when every frontier vendor is exhausted', () => {
     writeMultiFrontierConfig(repoDir);
 
+    markExhausted({ modelId: 'claude-fable-5', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'claude-opus-4-8', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'claude-opus-4-7', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'claude-opus-4-6', reason: 'quota_exhausted' }, repoDir);
