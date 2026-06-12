@@ -3,6 +3,8 @@ import type { WorkflowRouteDecision } from './workflow-router.ts';
 import {
   canRunChallenge,
   chooseDistinctChallengerModel,
+  decideChallengeLaunch,
+  extractChallengeRecommendation,
   routeChangedMaterially,
   deriveChallengeBranch,
   deriveChallengeSlug,
@@ -528,6 +530,236 @@ test('pickChallengeWorkflowsWithContext treats absent invalid expanded snapshot 
   assert.equal(pair!.primary.model, 'claude-sonnet-4-6');
   assert.equal(pair!.primary.codeDepth, 'medium');
   assert.equal(pair!.primary.reviewMode, 'llm');
+});
+
+function snapshotWithRecommendation(
+  recommendation: Record<string, unknown> | undefined,
+  coder = 'claude-sonnet-4-6',
+): RouteArtifactSnapshot {
+  return {
+    coder,
+    codeDepth: 'medium',
+    reviewer: 'claude-sonnet-4-6',
+    reviewMode: 'llm',
+    ...(recommendation !== undefined
+      ? { expectedMetrics: { challengeRecommendation: recommendation } }
+      : {}),
+  };
+}
+
+test('extractChallengeRecommendation prefers the expanded artifact', () => {
+  const recommendation = extractChallengeRecommendation({
+    bootstrap: snapshotWithRecommendation({
+      shouldChallenge: true,
+      reason: 'low-confidence',
+      challengerModel: 'gpt-5.4',
+      priority: 300,
+    }),
+    expanded: snapshotWithRecommendation({
+      shouldChallenge: true,
+      reason: 'new-model',
+      challengerModel: 'claude-fable-5',
+      priority: 200,
+    }),
+  });
+  assert.equal(recommendation?.reason, 'new-model');
+  assert.equal(recommendation?.challengerModel, 'claude-fable-5');
+});
+
+test('extractChallengeRecommendation falls back to bootstrap and rejects non-actionable payloads', () => {
+  const fromBootstrap = extractChallengeRecommendation({
+    bootstrap: snapshotWithRecommendation({
+      shouldChallenge: true,
+      reason: 'low-data-stage',
+      challengerModel: 'claude-fable-5',
+      stage: 'review',
+      priority: 100,
+    }),
+    expanded: snapshotWithRecommendation(undefined),
+  });
+  assert.equal(fromBootstrap?.reason, 'low-data-stage');
+  assert.equal(fromBootstrap?.stage, 'review');
+
+  assert.equal(extractChallengeRecommendation({ bootstrap: null, expanded: null }), null);
+  assert.equal(
+    extractChallengeRecommendation({
+      bootstrap: snapshotWithRecommendation({ shouldChallenge: false, reason: 'disabled', priority: 0 }),
+      expanded: null,
+    }),
+    null,
+  );
+  assert.equal(
+    extractChallengeRecommendation({
+      bootstrap: snapshotWithRecommendation({ shouldChallenge: true, reason: 'mystery', priority: 1 }),
+      expanded: null,
+    }),
+    null,
+  );
+});
+
+test('decideChallengeLaunch without recommendation is a plain random roll', () => {
+  const win = decideChallengeLaunch({ pool: ['a-model-1', 'b-model-2'], rate: 0.3, randomFn: () => 0.2 });
+  assert.equal(win.launch, true);
+  assert.equal(win.selectionPath, 'random-roll');
+  assert.equal(win.forcedChallengerModel, undefined);
+
+  const lose = decideChallengeLaunch({ pool: ['a-model-1', 'b-model-2'], rate: 0.3, randomFn: () => 0.9 });
+  assert.equal(lose.launch, false);
+});
+
+test('decideChallengeLaunch fires exploration recommendations regardless of base rate', () => {
+  const decision = decideChallengeLaunch({
+    pool: ['claude-sonnet-4-6', 'claude-fable-5'],
+    primaryModel: 'claude-sonnet-4-6',
+    rate: 0.1,
+    recommendation: {
+      shouldChallenge: true,
+      reason: 'new-model',
+      challengerModel: 'claude-fable-5',
+      priority: 200,
+    },
+    randomFn: () => 0.99,
+  });
+  assert.equal(decision.launch, true);
+  assert.equal(decision.selectionPath, 'recommendation-driven');
+  assert.equal(decision.forcedChallengerModel, 'claude-fable-5');
+});
+
+test('decideChallengeLaunch honors a reduced recommendationRate', () => {
+  const decision = decideChallengeLaunch({
+    pool: ['claude-sonnet-4-6', 'claude-fable-5'],
+    rate: 0.1,
+    recommendationRate: 0.5,
+    recommendation: {
+      shouldChallenge: true,
+      reason: 'low-data-stage',
+      challengerModel: 'claude-fable-5',
+      priority: 100,
+    },
+    randomFn: () => 0.7,
+  });
+  assert.equal(decision.launch, false);
+  assert.equal(decision.selectionPath, 'recommendation-driven');
+});
+
+test('decideChallengeLaunch keeps the base rate for low-confidence recommendations', () => {
+  const decision = decideChallengeLaunch({
+    pool: ['claude-sonnet-4-6', 'gpt-5.4'],
+    rate: 0.3,
+    recommendation: {
+      shouldChallenge: true,
+      reason: 'low-confidence',
+      challengerModel: 'gpt-5.4',
+      priority: 300,
+    },
+    randomFn: () => 0.5,
+  });
+  assert.equal(decision.launch, false);
+  assert.equal(decision.selectionPath, 'recommendation-driven');
+  assert.equal(decision.forcedChallengerModel, 'gpt-5.4');
+});
+
+test('decideChallengeLaunch drops unusable recommended challengers', () => {
+  const notInPool = decideChallengeLaunch({
+    pool: ['claude-sonnet-4-6', 'gpt-5.4'],
+    rate: 0.1,
+    recommendation: {
+      shouldChallenge: true,
+      reason: 'new-model',
+      challengerModel: 'claude-fable-5',
+      priority: 200,
+    },
+    randomFn: () => 0,
+  });
+  assert.equal(notInPool.launch, true);
+  assert.equal(notInPool.forcedChallengerModel, undefined);
+
+  const samePrimary = decideChallengeLaunch({
+    pool: ['claude-sonnet-4-6', 'gpt-5.4'],
+    primaryModel: 'gpt-5.4',
+    rate: 0.1,
+    recommendation: {
+      shouldChallenge: true,
+      reason: 'new-model',
+      challengerModel: 'gpt-5.4',
+      priority: 200,
+    },
+    randomFn: () => 0,
+  });
+  assert.equal(samePrimary.forcedChallengerModel, undefined);
+});
+
+test('pickChallengeModels uses the forced challenger when usable', () => {
+  const pair = pickChallengeModels(
+    ['claude-sonnet-4-6', 'gpt-5.4', 'claude-fable-5'],
+    {
+      pairId: 'HOK-990',
+      issueId: 'HOK-990',
+      slug: 'forced-challenger',
+      primaryModel: 'claude-sonnet-4-6',
+      forcedChallengerModel: 'claude-fable-5',
+      randomFn: () => 0, // would otherwise pick gpt-5.4
+    },
+  );
+  assert.equal(pair?.challenger.model, 'claude-fable-5');
+  assert.equal(pair?.primary.model, 'claude-sonnet-4-6');
+});
+
+test('pickChallengeModels falls back to random when the forced challenger is unusable', () => {
+  const equalsPrimary = pickChallengeModels(
+    ['claude-sonnet-4-6', 'gpt-5.4'],
+    {
+      pairId: 'HOK-991',
+      issueId: 'HOK-991',
+      slug: 'forced-equals-primary',
+      primaryModel: 'claude-sonnet-4-6',
+      forcedChallengerModel: 'claude-sonnet-4-6',
+      randomFn: () => 0,
+    },
+  );
+  assert.equal(equalsPrimary?.challenger.model, 'gpt-5.4');
+
+  const notInPool = pickChallengeModels(
+    ['claude-sonnet-4-6', 'gpt-5.4'],
+    {
+      pairId: 'HOK-992',
+      issueId: 'HOK-992',
+      slug: 'forced-not-in-pool',
+      primaryModel: 'claude-sonnet-4-6',
+      forcedChallengerModel: 'claude-fable-5',
+      randomFn: () => 0,
+    },
+  );
+  assert.equal(notInPool?.challenger.model, 'gpt-5.4');
+});
+
+test('pickChallengeWorkflowsWithContext threads the forced challenger through route snapshots', () => {
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'claude-sonnet-4-6',
+    codeDepth: 'medium',
+    reviewer: 'claude-sonnet-4-6',
+    reviewMode: 'llm',
+    planner: 'claude-sonnet-4-6',
+    planDepth: 'light',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['claude-sonnet-4-6', 'gpt-5.4', 'claude-fable-5'],
+    {
+      pairId: 'HOK-993',
+      issueId: 'HOK-993',
+      slug: 'forced-with-context',
+      prompt: 'irrelevant',
+      forcedChallengerModel: 'claude-fable-5',
+      randomFn: () => 0, // would otherwise pick gpt-5.4
+    },
+    { bootstrap: null, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.primary.model, 'claude-sonnet-4-6');
+  assert.equal(pair!.challenger.model, 'claude-fable-5');
+  assert.equal(pair!.routeContext.decisionSource, 'expanded');
 });
 
 process.on('exit', () => {

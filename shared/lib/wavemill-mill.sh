@@ -7694,6 +7694,9 @@ EOF
       challenge_args=(--issue "$issue" --slug "$slug" --title "$title" --repo-dir "$REPO_DIR" --remaining-slots "$_dyn_rs")
       [[ -n "$task_model" ]] && challenge_args+=(--primary-model "$task_model")
       [[ -n "$packet_file" ]] && challenge_args+=(--file "$packet_file")
+      if [[ -d "${WORKTREE_ROOT}/${slug}/features/${slug}" ]]; then
+        challenge_args+=(--feature-dir "${WORKTREE_ROOT}/${slug}/features/${slug}")
+      fi
       challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
       challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
       challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
