@@ -28,7 +28,7 @@ agent_tmux_target() {
 agent_resolve_from_model() {
   local model="$1"
   case "$model" in
-    opus|sonnet|haiku|opus-*|sonnet-*|haiku-*) echo "claude" ;;
+    fable|opus|sonnet|haiku|fable-*|opus-*|sonnet-*|haiku-*) echo "claude" ;;
     gpt-5.5|gpt-5.5-*|gemini-pro|gemini-pro-*) echo "codex" ;;
     claude-*) echo "claude" ;;
     deepseek-*) echo "claude" ;;
