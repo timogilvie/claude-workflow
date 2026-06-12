@@ -395,6 +395,7 @@ write_launch_plan() {
     challenge_pair="${TASK_CHALLENGE_PAIR_BY_ISSUE[$issue]:-}"
     challenge_role="${TASK_CHALLENGE_ROLE_BY_ISSUE[$issue]:-}"
     challenge_model="${TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]:-}"
+    challenge_stage="${TASK_CHALLENGE_STAGE_BY_ISSUE[$issue]:-}"
     migration_number="$(jq -r --arg issue "$issue" '.migrationReservations[$issue] // empty' "$STATE_FILE" 2>/dev/null || echo "")"
     task_agent="${TASK_AGENT_BY_ISSUE[$issue]:-$AGENT_CMD}"
 
@@ -458,6 +459,7 @@ write_launch_plan() {
       --arg challengePairId "$challenge_pair" \
       --arg challengeRole "$challenge_role" \
       --arg challengeModel "$challenge_model" \
+      --arg challengeStage "$challenge_stage" \
       --arg migrationNumber "$migration_number" \
       --arg agent "$task_agent" \
       --argjson dependsOn "$depends_on" \
@@ -478,6 +480,7 @@ write_launch_plan() {
         challengePairId: (if $challengePairId == "" then null else $challengePairId end),
         challengeRole: (if $challengeRole == "" then null else $challengeRole end),
         challengeModel: (if $challengeModel == "" then null else $challengeModel end),
+        challengeStage: (if $challengeStage == "" then null else $challengeStage end),
         migrationNumber: (if $migrationNumber == "" then null else ($migrationNumber | tonumber) end),
         agent: $agent
       } + (if ($baseFromTask != "null" or ($dependsOn | length > 0)) then {dependsOn: $dependsOn, baseFromTask: (if $baseFromTask == "null" then null else $baseFromTask end)} else {} end)]')"
@@ -1723,6 +1726,7 @@ declare -A TASK_CHALLENGE_BY_ISSUE
 declare -A TASK_CHALLENGE_PAIR_BY_ISSUE
 declare -A TASK_CHALLENGE_ROLE_BY_ISSUE
 declare -A TASK_CHALLENGE_MODEL_BY_ISSUE
+declare -A TASK_CHALLENGE_STAGE_BY_ISSUE
 declare -A TASK_AGENT_BY_ISSUE
 declare -A TASK_PLANNER_MODEL_BY_ISSUE
 declare -A TASK_CODER_MODEL_BY_ISSUE
@@ -2063,6 +2067,9 @@ for t in "${TASKS[@]}"; do
     challenger_model=$(echo "$challenge_plan" | jq -r '.entries[1].model // empty' 2>/dev/null)
     challenger_agent=$(echo "$challenge_plan" | jq -r '.entries[1].agent // empty' 2>/dev/null)
     primary_agent=$(echo "$challenge_plan" | jq -r '.entries[0].agent // empty' 2>/dev/null)
+    challenge_stage=$(echo "$challenge_plan" | jq -r '.challengeStage // "implementation"' 2>/dev/null || echo "implementation")
+    challenger_entry_planner=$(echo "$challenge_plan" | jq -r '.entries[1].planner // empty' 2>/dev/null)
+    challenger_entry_reviewer=$(echo "$challenge_plan" | jq -r '.entries[1].reviewer // empty' 2>/dev/null)
 
     cp "/tmp/${SESSION}-${ISSUE}-taskpacket.md" "/tmp/${SESSION}-${challenger_key}-taskpacket.md" 2>/dev/null || true
     cp "/tmp/${SESSION}-${ISSUE}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
@@ -2073,6 +2080,7 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_PAIR_BY_ISSUE["$ISSUE"]="$ISSUE"
     TASK_CHALLENGE_ROLE_BY_ISSUE["$ISSUE"]="primary"
     TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
+    TASK_CHALLENGE_STAGE_BY_ISSUE["$ISSUE"]="$challenge_stage"
     TASK_AGENT_BY_ISSUE["$ISSUE"]="${primary_agent:-$rec_agent}"
     TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="$route_planner"
     TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
@@ -2086,10 +2094,12 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_PAIR_BY_ISSUE["$challenger_key"]="$ISSUE"
     TASK_CHALLENGE_ROLE_BY_ISSUE["$challenger_key"]="challenger"
     TASK_CHALLENGE_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
+    TASK_CHALLENGE_STAGE_BY_ISSUE["$challenger_key"]="$challenge_stage"
     TASK_AGENT_BY_ISSUE["$challenger_key"]="${challenger_agent:-$AGENT_CMD}"
-    TASK_PLANNER_MODEL_BY_ISSUE["$challenger_key"]="$route_planner"
+    # Stage-varied challengers carry their own planner/reviewer in the entry
+    TASK_PLANNER_MODEL_BY_ISSUE["$challenger_key"]="${challenger_entry_planner:-$route_planner}"
     TASK_CODER_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
-    TASK_REVIEWER_MODEL_BY_ISSUE["$challenger_key"]="$route_reviewer"
+    TASK_REVIEWER_MODEL_BY_ISSUE["$challenger_key"]="${challenger_entry_reviewer:-$route_reviewer}"
     TASK_PLAN_DEPTH_BY_ISSUE["$challenger_key"]="$route_plan_depth"
     TASK_CODE_DEPTH_BY_ISSUE["$challenger_key"]="$route_code_depth"
     TASK_REVIEW_MODE_BY_ISSUE["$challenger_key"]="$route_review_mode"
@@ -2097,7 +2107,9 @@ for t in "${TASKS[@]}"; do
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
     FINAL_LAUNCH_ARGS+=("$challenger_key|$challenger_slug|$TITLE")
     slots_used=$((slots_used + 1))  # Challenger is free overhead
-    log "status" "  $ISSUE: Challenge selected (${primary_model} vs ${challenger_model}) [challenger is extra pane]"
+    primary_varied=$(echo "$challenge_plan" | jq -r '.entries[0].variedModel // .entries[0].model // empty' 2>/dev/null)
+    challenger_varied=$(echo "$challenge_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null)
+    log "status" "  $ISSUE: Challenge selected (stage=${challenge_stage}: ${primary_varied} vs ${challenger_varied}) [challenger is extra pane]"
   else
     if [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
       log "debug" "  $ISSUE: Challenge skipped ($challenge_reason), launching single-model run"
@@ -2107,6 +2119,7 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_PAIR_BY_ISSUE["$ISSUE"]=""
     TASK_CHALLENGE_ROLE_BY_ISSUE["$ISSUE"]=""
     TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]=""
+    TASK_CHALLENGE_STAGE_BY_ISSUE["$ISSUE"]=""
     TASK_AGENT_BY_ISSUE["$ISSUE"]="$rec_agent"
     TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="$route_planner"
     TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$rec_model"
@@ -7681,7 +7694,7 @@ EOF
   fi
 
   if [[ -z "${WAVEMILL_DISABLE_CHALLENGE:-}" ]] && should_update_linear_state "$issue" && (( remaining_slots >= 1 )); then
-    local challenge_args challenge_plan challenge_mode challenge_reason
+    local challenge_args challenge_plan challenge_mode challenge_reason challenge_stage primary_varied challenger_varied
     # Challengers are free overhead — always pass remaining-slots >= 2
     challenge_mode="single"
     challenge_reason=""
@@ -7704,6 +7717,7 @@ EOF
     if [[ "$challenge_mode" == "challenge" ]]; then
       challenge_enabled_for_launch="true"
       challenge_pair="$issue"
+      challenge_stage=$(echo "$challenge_plan" | jq -r '.challengeStage // "implementation"' 2>/dev/null || echo "implementation")
       task_model=$(echo "$challenge_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
       task_agent_cmd=$(echo "$challenge_plan" | jq -r '.entries[0].agent // empty' 2>/dev/null)
 
@@ -7733,9 +7747,13 @@ EOF
 
       save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "true" "$challenge_pair" "primary" "$task_model" "$planner_model" "$task_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
       save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode"
+      state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$issue" --arg stage "$challenge_stage" || true
+      state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
       should_launch_challenger="true"
       LAST_LAUNCHED_SLOTS=1  # Challenger is free overhead, doesn't consume a slot
-      log "status" "  Challenge selected (${task_model} vs ${challenger_model}) [challenger is extra pane]"
+      primary_varied=$(echo "$challenge_plan" | jq -r '.entries[0].variedModel // .entries[0].model // empty' 2>/dev/null)
+      challenger_varied=$(echo "$challenge_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null)
+      log "status" "  Challenge selected (stage=${challenge_stage}: ${primary_varied} vs ${challenger_varied}) [challenger is extra pane]"
     elif [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
       log "debug" "  Challenge skipped ($challenge_reason), launching single-model run"
     fi
@@ -9151,7 +9169,10 @@ monitor_issue_state() {
               coder_model=$(read_phase_config "$FEATURE_DIR" "coding" "model")
               [[ -z "$coder_model" ]] && coder_model=$(get_task_meta "$ISSUE" "coderModel")
               challenge_coder=$(get_task_meta "$ISSUE" "challengeModel")
-              if [[ -n "$challenge_coder" ]] && [[ -f "$FEATURE_DIR/.post-expansion-route.json" ]]; then
+              challenge_stage_meta=$(get_task_meta "$ISSUE" "challengeStage")
+              # Post-expansion refresh re-pairs by coder; stage-varied pairs
+              # (plan/review) keep their original pairing.
+              if [[ -n "$challenge_coder" ]] && [[ -z "$challenge_stage_meta" || "$challenge_stage_meta" == "implementation" ]] && [[ -f "$FEATURE_DIR/.post-expansion-route.json" ]]; then
                 refresh_title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
                 if [[ -z "$refresh_title" ]]; then
                   issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")

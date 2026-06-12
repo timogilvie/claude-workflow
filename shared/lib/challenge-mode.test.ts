@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 import {
   canRunChallenge,
+  chooseChallengeStage,
   chooseDistinctChallengerModel,
   decideChallengeLaunch,
   extractChallengeRecommendation,
@@ -14,6 +15,7 @@ import {
   pickChallengeWorkflowsWithContext,
   pickChallengeModels,
   pickChallengeWorkflows,
+  variedModelForStage,
 } from './challenge-mode.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 
@@ -761,6 +763,180 @@ test('pickChallengeWorkflowsWithContext threads the forced challenger through ro
   assert.equal(pair!.challenger.model, 'claude-fable-5');
   assert.equal(pair!.routeContext.decisionSource, 'expanded');
 });
+
+
+test('chooseChallengeStage defaults to implementation and honors recommendations', () => {
+  assert.equal(chooseChallengeStage(), 'implementation');
+  assert.equal(chooseChallengeStage({ weights: {} }), 'implementation');
+  assert.equal(chooseChallengeStage({ weights: { plan: 0, review: 0 } }), 'implementation');
+  assert.equal(
+    chooseChallengeStage({ weights: { implementation: 1 }, recommendedStage: 'review' }),
+    'review',
+  );
+  assert.equal(chooseChallengeStage({ recommendedStage: 'plan' }), 'plan');
+});
+
+test('chooseChallengeStage samples stages by weight with a seeded randomFn', () => {
+  const weights = { plan: 1, implementation: 2, review: 1 };
+  // Cumulative mass: plan [0, 0.25), implementation [0.25, 0.75), review [0.75, 1)
+  assert.equal(chooseChallengeStage({ weights, randomFn: () => 0.1 }), 'plan');
+  assert.equal(chooseChallengeStage({ weights, randomFn: () => 0.5 }), 'implementation');
+  assert.equal(chooseChallengeStage({ weights, randomFn: () => 0.9 }), 'review');
+});
+
+test('variedModelForStage maps stage to the right entry field', () => {
+  const entry = {
+    key: 'K', issueId: 'K', slug: 's', branch: 'task/s', role: 'primary' as const,
+    model: 'coder-m', agent: 'claude',
+    planner: 'planner-m', plannerAgent: 'claude',
+    reviewer: 'reviewer-m', reviewerAgent: 'claude',
+    planDepth: '', codeDepth: '', reviewMode: '',
+  };
+  assert.equal(variedModelForStage(entry, 'plan'), 'planner-m');
+  assert.equal(variedModelForStage(entry, 'review'), 'reviewer-m');
+  assert.equal(variedModelForStage(entry, 'implementation'), 'coder-m');
+  assert.equal(variedModelForStage(entry, undefined), 'coder-m');
+});
+
+test('pickChallengeWorkflows varies only the planner for plan-stage challenges', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.3-codex'],
+    {
+      pairId: 'HOK-995',
+      issueId: 'HOK-995',
+      slug: 'plan-stage',
+      prompt: 'Implement user authentication with OAuth2',
+      primaryModel: 'claude-sonnet-4-5-20250929',
+      challengeStage: 'plan',
+      randomFn: () => 0,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.challengeStage, 'plan');
+  // Coder and reviewer are shared; only the planner differs
+  assert.equal(pair!.primary.model, 'claude-sonnet-4-5-20250929');
+  assert.equal(pair!.challenger.model, 'claude-sonnet-4-5-20250929');
+  assert.equal(pair!.primary.reviewer, pair!.challenger.reviewer);
+  assert.equal(pair!.primary.planner, 'claude-opus-4-6');
+  assert.notEqual(pair!.challenger.planner, pair!.primary.planner);
+  assert.equal(pair!.primary.planDepth, pair!.challenger.planDepth);
+});
+
+test('pickChallengeWorkflows varies only the reviewer for review-stage challenges', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.3-codex'],
+    {
+      pairId: 'HOK-996',
+      issueId: 'HOK-996',
+      slug: 'review-stage',
+      prompt: 'Implement user authentication with OAuth2',
+      primaryModel: 'claude-opus-4-6',
+      challengeStage: 'review',
+      forcedChallengerModel: 'gpt-5.3-codex',
+      randomFn: () => 0,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.challengeStage, 'review');
+  assert.equal(pair!.primary.model, pair!.challenger.model);
+  assert.equal(pair!.primary.planner, pair!.challenger.planner);
+  assert.equal(pair!.primary.reviewer, 'claude-sonnet-4-5-20250929');
+  // Forced challenger applies to the varied stage
+  assert.equal(pair!.challenger.reviewer, 'gpt-5.3-codex');
+});
+
+test('pickChallengeWorkflows falls back to coder variation when the route lacks the stage model', () => {
+  const plannerlessRoute = (): WorkflowRouteDecision => ({
+    ...mockRouteFn(),
+    planner: '',
+  });
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-997',
+      issueId: 'HOK-997',
+      slug: 'fallback-stage',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-opus-4-6',
+      challengeStage: 'plan',
+      randomFn: () => 0,
+      routeFn: plannerlessRoute,
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.challengeStage, 'implementation');
+  assert.notEqual(pair!.challenger.model, pair!.primary.model);
+});
+
+test('pickChallengeWorkflowsWithContext varies the planner from a route snapshot', () => {
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'claude-sonnet-4-5-20250929',
+    codeDepth: 'medium',
+    reviewer: 'claude-sonnet-4-5-20250929',
+    reviewMode: 'llm',
+    planner: 'claude-opus-4-6',
+    planDepth: 'deep',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.3-codex'],
+    {
+      pairId: 'HOK-998',
+      issueId: 'HOK-998',
+      slug: 'snapshot-plan-stage',
+      prompt: 'irrelevant',
+      challengeStage: 'plan',
+      randomFn: () => 0,
+    },
+    { bootstrap: null, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.challengeStage, 'plan');
+  assert.equal(pair!.routeContext.decisionSource, 'expanded');
+  // Coder shared from the route; planner varied on the challenger only
+  assert.equal(pair!.primary.model, 'claude-sonnet-4-5-20250929');
+  assert.equal(pair!.challenger.model, 'claude-sonnet-4-5-20250929');
+  assert.equal(pair!.primary.planner, 'claude-opus-4-6');
+  assert.notEqual(pair!.challenger.planner, 'claude-opus-4-6');
+  assert.equal(pair!.primary.reviewer, pair!.challenger.reviewer);
+  assert.equal(pair!.challenger.planDepth, 'deep');
+});
+
+test('pickChallengeWorkflowsWithContext keeps coder variation by default', () => {
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'claude-sonnet-4-5-20250929',
+    codeDepth: 'medium',
+    reviewer: 'claude-sonnet-4-5-20250929',
+    reviewMode: 'llm',
+    planner: 'claude-opus-4-6',
+    planDepth: 'light',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-999',
+      issueId: 'HOK-999',
+      slug: 'default-stage',
+      prompt: 'irrelevant',
+      randomFn: () => 0,
+    },
+    { bootstrap: null, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.challengeStage, 'implementation');
+  assert.notEqual(pair!.challenger.model, pair!.primary.model);
+  assert.equal(pair!.primary.planner, pair!.challenger.planner);
+  assert.equal(pair!.primary.reviewer, pair!.challenger.reviewer);
+});
+
 
 process.on('exit', () => {
   console.log(`\nPassed: ${passed}`);

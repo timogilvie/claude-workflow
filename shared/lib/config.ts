@@ -266,6 +266,11 @@ export interface ChallengeConfig {
   comparisonModel?: string;
   autoMergeWinner?: boolean;
   gate?: ChallengeGateConfig;
+  stageWeights?: {
+    plan?: number;
+    implementation?: number;
+    review?: number;
+  };
 }
 
 export interface ChallengeSchedulerConfig {

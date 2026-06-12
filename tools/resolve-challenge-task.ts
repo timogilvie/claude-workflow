@@ -8,8 +8,10 @@ import {
   pickChallengeWorkflowsWithContext,
   getChallengeModelPool,
   canRunChallenge,
+  chooseChallengeStage,
   decideChallengeLaunch,
   extractChallengeRecommendation,
+  variedModelForStage,
 } from '../shared/lib/challenge-mode.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
@@ -117,6 +119,15 @@ runTool({
 
     const forcedChallengerModel = launchDecision.forcedChallengerModel;
 
+    // A low-data-stage recommendation pins the varied stage; otherwise sample
+    // from the configured weights (implementation-only by default).
+    const challengeStage = chooseChallengeStage({
+      weights: challenge.stageWeights,
+      recommendedStage: launchDecision.recommendation?.reason === 'low-data-stage'
+        ? launchDecision.recommendation.stage
+        : undefined,
+    });
+
     // If task file provided, use workflow routing for both sides
     let pair;
     if (featureDir) {
@@ -127,6 +138,7 @@ runTool({
         prompt: title,
         primaryModel,
         forcedChallengerModel,
+        challengeStage,
         agentMap: router.agentMap,
         defaultAgent,
         repoDir,
@@ -143,6 +155,7 @@ runTool({
           prompt,
           primaryModel,
           forcedChallengerModel,
+          challengeStage,
           agentMap: router.agentMap,
           defaultAgent,
           repoDir,
@@ -178,7 +191,11 @@ runTool({
       return;
     }
 
-    const challengerSource = forcedChallengerModel && pair.challenger.model === forcedChallengerModel
+    // The pair may have fallen back to coder variation (no route context, or
+    // route missing the requested stage model) — report the effective stage.
+    const effectiveStage = pair.challengeStage || 'implementation';
+    const challengerVaried = variedModelForStage(pair.challenger, effectiveStage);
+    const challengerSource = forcedChallengerModel && challengerVaried === forcedChallengerModel
       ? 'recommendation'
       : 'random';
 
@@ -193,6 +210,7 @@ runTool({
       primaryModel,
       selectionPath: launchDecision.selectionPath,
       challengerSource,
+      challengeStage: effectiveStage,
       ...(launchDecision.recommendation
         ? {
             challengeRecommendation: {
@@ -204,7 +222,10 @@ runTool({
           }
         : {}),
       routeContext: pair.routeContext,
-      entries: [pair.primary, pair.challenger],
+      entries: [
+        { ...pair.primary, variedModel: variedModelForStage(pair.primary, effectiveStage) },
+        { ...pair.challenger, variedModel: challengerVaried },
+      ],
     }));
   },
 });
