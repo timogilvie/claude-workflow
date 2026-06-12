@@ -1511,6 +1511,31 @@
                             "minimum": 2,
                             "default": 3,
                             "description": "Number of top-ranked candidates eligible for sampling per stage."
+                        },
+                        "ucbConstant": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0,
+                            "description": "UCB-style uncertainty bonus constant. Candidate ranking adds c * sqrt(ln(totalObservations + 1) / max(support, 1)) so undersampled models get a temporary boost that decays as evidence accumulates. 0 disables the bonus."
+                        },
+                        "priors": {
+                            "type": "object",
+                            "description": "Registry-prior blending and candidate seeding for stage-aware routing. Seeds every eligible stage model into the candidate set (even with zero eval records) and blends empirical KNN scores with registry quality-score priors.",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "default": false,
+                                    "description": "Enable prior blending and zero-record candidate seeding."
+                                },
+                                "blendSamples": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "default": 10,
+                                    "description": "Records needed before a model's score is fully empirical. Blend weight is min(support / blendSamples, 1); zero records means pure registry prior."
+                                }
+                            },
+                            "additionalProperties": false
                         }
                     },
                     "additionalProperties": false

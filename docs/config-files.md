@@ -81,23 +81,42 @@ or undersampled models keep receiving routing traffic:
       "mode": "epsilon",
       "rate": 0.15,
       "temperature": 0.7,
-      "topK": 3
+      "topK": 3,
+      "ucbConstant": 0.05,
+      "priors": {
+        "enabled": true,
+        "blendSamples": 10
+      }
     }
   }
 }
 ```
 
-- `enabled` (default `false`): when off, routing is byte-identical to argmax.
+- `enabled` (default `false`): when off, sampling is byte-identical to argmax.
 - `mode`: `epsilon` picks a non-argmax candidate from the top-K window with
   probability `rate`; `softmax` samples the top-K window weighted by
   `exp(score / temperature)`.
 - `topK`: candidates eligible for sampling per stage (minimum 2, default 3).
+- `ucbConstant` (default `0` = off): adds a UCB-style uncertainty bonus
+  `c * sqrt(ln(totalObservations + 1) / max(support, 1))` to each candidate's
+  ranking key, so undersampled models get a temporary boost that decays as
+  eval records accumulate. The bonus affects selection order only — reported
+  expected success stays bonus-free.
+- `priors` (default disabled): seeds every eligible stage model into the
+  stage-aware candidate set even with zero eval records, scored by its
+  registry quality prior. Empirical KNN scores blend in as evidence
+  accumulates: weight `min(support / blendSamples, 1)` — zero records means
+  pure prior, `blendSamples` records means pure empirical. This is how a
+  brand-new registry model (e.g. a freshly released frontier model) becomes
+  routable before any challenge runs produce eval data for it.
 
-Sampling always happens inside the already-filtered candidate set (allowlists,
-capability constraints, disabled models), and a sampled stage-aware combination
-that would exceed `maxCostUsd` reverts to the exploit selection. Decisions
-record explore-vs-exploit attribution in `reasoning` and an `exploration` field
-that is persisted to route artifacts.
+Sampling, the UCB bonus, and prior seeding all operate inside the
+already-filtered candidate set (allowlists, capability constraints, disabled
+models, DeepSeek opt-in), and a sampled stage-aware combination that would
+exceed `maxCostUsd` reverts to the exploit selection. Decisions record
+explore-vs-exploit attribution in `reasoning` and an `exploration` field that
+is persisted to route artifacts. Zero-record candidates get cost estimates
+from the pricing table instead of reporting zero cost.
 
 ## Local Paths Guidance
 

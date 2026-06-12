@@ -13,12 +13,19 @@
 export type ExplorationMode = 'softmax' | 'epsilon';
 export type ExplorationRole = 'planner' | 'coder' | 'reviewer';
 
+export interface ExplorationPriorsConfig {
+  enabled?: boolean;
+  blendSamples?: number;
+}
+
 export interface ExplorationConfig {
   enabled?: boolean;
   mode?: ExplorationMode;
   rate?: number;
   temperature?: number;
   topK?: number;
+  ucbConstant?: number;
+  priors?: ExplorationPriorsConfig;
 }
 
 export interface ResolvedExplorationConfig {
@@ -27,6 +34,9 @@ export interface ResolvedExplorationConfig {
   rate: number;
   temperature: number;
   topK: number;
+  ucbConstant: number;
+  priorsEnabled: boolean;
+  priorBlendSamples: number;
 }
 
 export interface ExplorationPick {
@@ -43,6 +53,8 @@ export interface ExplorationAttribution {
 const DEFAULT_RATE = 0.15;
 const DEFAULT_TEMPERATURE = 0.7;
 const DEFAULT_TOP_K = 3;
+const DEFAULT_UCB_CONSTANT = 0;
+const DEFAULT_PRIOR_BLEND_SAMPLES = 10;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -61,7 +73,45 @@ export function resolveExplorationConfig(raw?: ExplorationConfig): ResolvedExplo
     topK: Number.isInteger(raw?.topK) && (raw?.topK as number) >= 2
       ? raw?.topK as number
       : DEFAULT_TOP_K,
+    ucbConstant: typeof raw?.ucbConstant === 'number' && Number.isFinite(raw.ucbConstant)
+      ? clamp(raw.ucbConstant, 0, 1)
+      : DEFAULT_UCB_CONSTANT,
+    priorsEnabled: raw?.priors?.enabled === true,
+    priorBlendSamples: Number.isInteger(raw?.priors?.blendSamples) && (raw?.priors?.blendSamples as number) >= 1
+      ? raw?.priors?.blendSamples as number
+      : DEFAULT_PRIOR_BLEND_SAMPLES,
   };
+}
+
+/**
+ * UCB-style uncertainty bonus: grows with total observations and shrinks with
+ * per-candidate support, so undersampled candidates get a temporary ranking
+ * boost that decays as evidence accumulates. A zero constant disables it.
+ */
+export function ucbBonus(
+  ucbConstant: number,
+  totalObservations: number,
+  support: number,
+): number {
+  if (ucbConstant <= 0) {
+    return 0;
+  }
+  return ucbConstant * Math.sqrt(Math.log(Math.max(totalObservations, 0) + 1) / Math.max(support, 1));
+}
+
+/**
+ * Blend an empirical score with a prior, weighted by how much evidence backs
+ * the empirical value: w = min(support / blendSamples, 1). Zero support means
+ * pure prior; support >= blendSamples means pure empirical.
+ */
+export function blendWithPrior(
+  empirical: number,
+  prior: number,
+  support: number,
+  blendSamples: number,
+): number {
+  const weight = clamp(support / Math.max(blendSamples, 1), 0, 1);
+  return clamp(weight * empirical + (1 - weight) * prior, 0, 1);
 }
 
 /**
