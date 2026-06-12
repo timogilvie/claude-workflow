@@ -1474,6 +1474,47 @@
                     },
                     "additionalProperties": false
                 },
+                "exploration": {
+                    "type": "object",
+                    "description": "Stochastic exploration for stage-aware and policy model selection. When enabled, per-stage picks are sampled from the top candidates instead of always taking the argmax, so newer or undersampled models keep receiving traffic.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Master toggle for exploration sampling. When false, routing is byte-identical to deterministic argmax selection."
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": [
+                                "softmax",
+                                "epsilon"
+                            ],
+                            "default": "epsilon",
+                            "description": "Sampling strategy: 'epsilon' picks a non-argmax candidate from the top-K window with probability 'rate'; 'softmax' samples the top-K window with probability proportional to exp(score / temperature)."
+                        },
+                        "rate": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.15,
+                            "description": "Per-stage exploration probability for epsilon mode."
+                        },
+                        "temperature": {
+                            "type": "number",
+                            "minimum": 0.01,
+                            "maximum": 10,
+                            "default": 0.7,
+                            "description": "Softmax temperature. Higher values flatten the distribution toward uniform sampling."
+                        },
+                        "topK": {
+                            "type": "integer",
+                            "minimum": 2,
+                            "default": 3,
+                            "description": "Number of top-ranked candidates eligible for sampling per stage."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "hokusai": {
                     "type": "object",
                     "description": "Hokusai API configuration for ML-based workflow routing. Hokusai is only available via API.",
