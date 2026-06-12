@@ -1350,6 +1350,61 @@ await test('includes budget rule in reasoning when triggered', () => {
   }
 });
 
+
+await test('tryPolicyResolution samples non-argmax candidates when exploration is enabled', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+      exploration: { enabled: true, mode: 'epsilon', rate: 1, topK: 2 },
+    },
+  });
+  writeQuotaState(repoDir, {});
+
+  try {
+    const decision = tryPolicyResolution('Implement a backend feature with tests and review.', {
+      repoDir,
+      taskDifficulty: 'moderate',
+      skipDifficultyClassification: true,
+      randomFn: () => 0,
+    });
+    assert.equal(decision?.routingMode, 'policy');
+    assert.equal(decision?.exploration?.mode, 'epsilon');
+    assert.ok((decision?.exploration?.explored.length ?? 0) > 0);
+    for (const entry of decision?.exploration?.explored ?? []) {
+      assert.notEqual(entry.sampled, entry.argmax);
+    }
+    assert.ok(decision?.reasoning[0].startsWith('exploration(epsilon'));
+  } finally {
+    cleanup();
+  }
+});
+
+await test('tryPolicyResolution stays deterministic with exploration disabled', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+  writeQuotaState(repoDir, {});
+
+  try {
+    const decision = tryPolicyResolution('Implement a backend feature with tests and review.', {
+      repoDir,
+      taskDifficulty: 'moderate',
+      skipDifficultyClassification: true,
+      randomFn: () => 0,
+    });
+    assert.equal(decision?.routingMode, 'policy');
+    assert.equal(decision?.exploration, undefined);
+    assert.ok(!decision?.reasoning.some((line) => line.startsWith('exploration(')));
+  } finally {
+    cleanup();
+  }
+});
+
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);

@@ -1168,6 +1168,142 @@ test('rubric-aware: comparison test non-regression on mixed dataset', () => {
   }
 });
 
+
+function explorationRouterConfig(exploration: Record<string, unknown>) {
+  return {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      stageBlendWeight: 0.3,
+      defaultAgent: 'claude',
+      agentMap: {
+        'claude-opus-4-6': 'claude',
+        'claude-sonnet-4-5-20250929': 'claude',
+      },
+      exploration,
+    },
+  };
+}
+
+function explorationRecords(): EvalRecord[] {
+  return [
+    makeEvalRecord('a1', 'claude-opus-4-6', { plan: 0.92, implementation: 0.9, review: 0.91 }),
+    makeEvalRecord('a2', 'claude-opus-4-6', { plan: 0.9, implementation: 0.88, review: 0.9 }),
+    makeEvalRecord('a3', 'claude-opus-4-6', { plan: 0.91, implementation: 0.89, review: 0.92 }),
+    makeEvalRecord('b1', 'claude-sonnet-4-5-20250929', { plan: 0.7, implementation: 0.68, review: 0.69 }),
+    makeEvalRecord('b2', 'claude-sonnet-4-5-20250929', { plan: 0.72, implementation: 0.7, review: 0.71 }),
+    makeEvalRecord('b3', 'claude-sonnet-4-5-20250929', { plan: 0.71, implementation: 0.69, review: 0.7 }),
+  ];
+}
+
+test('exploration disabled keeps stage-aware routing argmax with no attribution', () => {
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(
+    explorationRecords(),
+    explorationRouterConfig({ enabled: false }),
+  );
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+    });
+    assert.ok(decision);
+    assert.equal(decision?.routingMode, 'stage-aware');
+    assert.equal(decision?.planner, 'claude-opus-4-6');
+    assert.equal(decision?.coder, 'claude-opus-4-6');
+    assert.equal(decision?.reviewer, 'claude-opus-4-6');
+    assert.equal(decision?.exploration, undefined);
+    assert.ok(!decision?.reasoning.some((line) => line.startsWith('exploration(')));
+  } finally {
+    cleanup();
+  }
+});
+
+test('exploration samples non-argmax candidates with a seeded randomFn', () => {
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(
+    explorationRecords(),
+    explorationRouterConfig({ enabled: true, mode: 'epsilon', rate: 1, topK: 2 }),
+  );
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      randomFn: () => 0,
+    });
+    assert.ok(decision);
+    assert.equal(decision?.routingMode, 'stage-aware');
+    // rate=1 with two candidates per stage: every role samples the runner-up
+    assert.equal(decision?.planner, 'claude-sonnet-4-5-20250929');
+    assert.equal(decision?.coder, 'claude-sonnet-4-5-20250929');
+    assert.equal(decision?.reviewer, 'claude-sonnet-4-5-20250929');
+    assert.equal(decision?.exploration?.mode, 'epsilon');
+    assert.equal(decision?.exploration?.explored.length, 3);
+    for (const entry of decision?.exploration?.explored ?? []) {
+      assert.equal(entry.sampled, 'claude-sonnet-4-5-20250929');
+      assert.equal(entry.argmax, 'claude-opus-4-6');
+    }
+    assert.ok(decision?.reasoning[0].startsWith('exploration(epsilon'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('exploration cost guard reverts to exploit when the sampled combo exceeds maxCostUsd', () => {
+  const expensiveDescriptor = (modelId: string) => makeDescriptor({
+    stages: {
+      planner: { model: modelId, cost_usd: 20 },
+      coder: { model: modelId, cost_usd: 60 },
+      reviewer: { model: modelId, cost_usd: 20 },
+    },
+  });
+  const records = [
+    ...explorationRecords().slice(0, 3),
+    makeEvalRecord('b1', 'claude-sonnet-4-5-20250929', { plan: 0.7, implementation: 0.68, review: 0.69 }, {
+      taskDescriptor: expensiveDescriptor('claude-sonnet-4-5-20250929'),
+    }),
+    makeEvalRecord('b2', 'claude-sonnet-4-5-20250929', { plan: 0.72, implementation: 0.7, review: 0.71 }, {
+      taskDescriptor: expensiveDescriptor('claude-sonnet-4-5-20250929'),
+    }),
+    makeEvalRecord('b3', 'claude-sonnet-4-5-20250929', { plan: 0.71, implementation: 0.69, review: 0.7 }, {
+      taskDescriptor: expensiveDescriptor('claude-sonnet-4-5-20250929'),
+    }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(
+    records,
+    explorationRouterConfig({ enabled: true, mode: 'epsilon', rate: 1, topK: 2 }),
+  );
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      maxCostUsd: 20,
+      randomFn: () => 0,
+    });
+    assert.ok(decision);
+    // Sampled combo costs ~100; exploit combo costs ~9 and stays selected.
+    assert.equal(decision?.planner, 'claude-opus-4-6');
+    assert.equal(decision?.coder, 'claude-opus-4-6');
+    assert.equal(decision?.reviewer, 'claude-opus-4-6');
+    assert.equal(decision?.exploration?.costGuardReverted, true);
+    assert.equal(decision?.exploration?.explored.length, 0);
+    assert.ok(decision?.reasoning.some((line) => line.includes('exploration(epsilon) reverted')));
+  } finally {
+    cleanup();
+  }
+});
+
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);

@@ -237,6 +237,13 @@ export interface RouterConfig {
   capabilityFiltering?: {
     enabled?: boolean;
   };
+  exploration?: {
+    enabled?: boolean;
+    mode?: 'softmax' | 'epsilon';
+    rate?: number;
+    temperature?: number;
+    topK?: number;
+  };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
 }

@@ -26,6 +26,13 @@ import {
 } from './model-registry.ts';
 import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 import { filterDisabledModels } from './disabled-models.ts';
+import {
+  formatExplorationReasoning,
+  resolveExplorationConfig,
+  sampleCandidateIndex,
+  type ExplorationAttribution,
+  type ResolvedExplorationConfig,
+} from './router-exploration.ts';
 
 export interface StageAwareConstraints {
   modelsAvailable?: string[];
@@ -49,6 +56,7 @@ export interface StageAwareOptions extends StageAwareConstraints {
   additionalEvalsPaths?: string[];
   stageBlendWeight?: number;
   queryInput?: Partial<TaskDescriptorInput>;
+  randomFn?: () => number;
 }
 
 export interface StageAwareDecision extends WorkflowRouteDecision {
@@ -57,6 +65,7 @@ export interface StageAwareDecision extends WorkflowRouteDecision {
   neighborSimilarityRange: [number, number];
   expectedCost: number;
   shadowDecision?: StageAwareDecision | null;
+  exploration?: ExplorationAttribution;
 }
 
 export interface StageAwareRouterContext {
@@ -643,6 +652,66 @@ function pickBestCombination(rankings: RoleRanking[], maxCostUsd?: number): Comb
   return best;
 }
 
+/**
+ * Apply exploration sampling to the exploit (argmax) combination.
+ *
+ * Each role samples independently from its already-filtered candidate
+ * ranking. A sampled combination that violates maxCostUsd reverts to the
+ * exploit selection so exploration can never break the budget contract.
+ */
+function exploreSelection(
+  rankings: RoleRanking[],
+  exploit: CombinationDecision,
+  config: ResolvedExplorationConfig,
+  maxCostUsd: number | undefined,
+  randomFn: () => number,
+): { selection: CombinationDecision; attribution: ExplorationAttribution } {
+  const sampled: Record<'planner' | 'coder' | 'reviewer', ModelStageStats> = {
+    planner: exploit.planner,
+    coder: exploit.coder,
+    reviewer: exploit.reviewer,
+  };
+  const explored: ExplorationAttribution['explored'] = [];
+
+  for (const ranking of rankings) {
+    const pick = sampleCandidateIndex(
+      ranking.candidates.map((candidate) => candidate.score),
+      config,
+      randomFn,
+    );
+    const candidate = ranking.candidates[pick.index];
+    const exploitModel = sampled[ranking.role].modelId;
+    if (!pick.explored || !candidate || candidate.modelId === exploitModel) {
+      continue;
+    }
+    sampled[ranking.role] = candidate;
+    explored.push({ role: ranking.role, sampled: candidate.modelId, argmax: exploitModel });
+  }
+
+  if (explored.length === 0) {
+    return { selection: exploit, attribution: { mode: config.mode, explored } };
+  }
+
+  const expectedCost = sampled.planner.cost + sampled.coder.cost + sampled.reviewer.cost;
+  if (typeof maxCostUsd === 'number' && expectedCost > maxCostUsd) {
+    return {
+      selection: exploit,
+      attribution: { mode: config.mode, explored: [], costGuardReverted: true },
+    };
+  }
+
+  return {
+    selection: {
+      planner: sampled.planner,
+      coder: sampled.coder,
+      reviewer: sampled.reviewer,
+      expectedCost,
+      expectedSuccess: clamp((sampled.planner.score + sampled.coder.score + sampled.reviewer.score) / 3, 0, 1),
+    },
+    attribution: { mode: config.mode, explored },
+  };
+}
+
 function choosePlanDepthFromSuccess(expectedSuccess: number): PlanDepth {
   return expectedSuccess >= 0.85 ? 'deep' : 'light';
 }
@@ -943,7 +1012,34 @@ export function routeStageAwareWithContext(
     return partialDecision;
   }
 
-  const decision = buildStageAwareDecision(selection, neighbors, kNeighbors, repoDir);
+  // Exploration only applies to full stage-aware decisions: partial decisions
+  // get their models overlaid by heuristic selection downstream, so sampling
+  // here would be discarded.
+  const explorationConfig = resolveExplorationConfig(routerConfig.exploration);
+  let finalSelection = selection;
+  let explorationAttribution: ExplorationAttribution | undefined;
+  if (explorationConfig.enabled && hasModelDiversity) {
+    const explorationResult = exploreSelection(
+      rankings,
+      selection,
+      explorationConfig,
+      options.maxCostUsd,
+      options.randomFn || Math.random,
+    );
+    finalSelection = explorationResult.selection;
+    explorationAttribution = explorationResult.attribution;
+  }
+
+  const decision = buildStageAwareDecision(finalSelection, neighbors, kNeighbors, repoDir);
+  if (explorationAttribution) {
+    decision.exploration = explorationAttribution;
+    if (explorationAttribution.explored.length > 0 || explorationAttribution.costGuardReverted) {
+      decision.reasoning = [
+        formatExplorationReasoning(explorationAttribution, explorationConfig),
+        ...decision.reasoning,
+      ];
+    }
+  }
   if (options.maxCostUsd !== undefined) {
     decision.constraints = { maxCostUsd: options.maxCostUsd };
   }
