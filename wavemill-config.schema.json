@@ -657,6 +657,13 @@
                     "maximum": 1,
                     "description": "Probability that a selected mill task becomes a challenge task."
                 },
+                "recommendationRate": {
+                    "type": "number",
+                    "default": 1,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Probability applied instead of 'rate' when the routing decision carries an exploration challenge recommendation (new-model or low-data-stage). Default 1 launches every recommended challenge when slots allow."
+                },
                 "models": {
                     "description": "Pool of model selectors eligible for challenge. Entries may be family aliases, 'inherit', or pinned model IDs. Null means use router.models.",
                     "oneOf": [

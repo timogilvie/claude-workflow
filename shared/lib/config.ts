@@ -248,6 +248,7 @@ export interface ChallengeGateConfig {
 export interface ChallengeConfig {
   enabled?: boolean;
   rate?: number;
+  recommendationRate?: number;
   models?: string[] | null;
   allowDeepseek?: boolean;
   comparisonModel?: string;
