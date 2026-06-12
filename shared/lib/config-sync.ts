@@ -44,6 +44,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
       provider: 'anthropic',
     },
     pricing: {
+      'claude-fable-5': { inputCostPerMTok: 10, outputCostPerMTok: 50, cacheWriteCostPerMTok: 12.5, cacheReadCostPerMTok: 1 },
       'claude-opus-4-6': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       'claude-opus-4-8': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       'claude-opus-4-7': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
@@ -75,6 +76,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     enabled: true,
     rate: 0.1,
     models: [
+      'claude-fable-5',
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
       'claude-opus-4-8',
@@ -100,10 +102,11 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     minModels: 2,
     models: [],
     availableModels: {
-      planner: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-4-6', 'gpt-5.4', 'gpt-5.5'],
+      planner: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-4-6', 'gpt-5.4', 'gpt-5.5'],
     },
     defaultAgent: 'claude',
     agentMap: {
+      'claude-fable-5': 'claude',
       'claude-opus-4-8': 'claude',
       'claude-opus-4-7': 'claude',
       'claude-sonnet-4-6': 'claude',

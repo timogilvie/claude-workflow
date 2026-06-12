@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import {
   getReadyRemediationConfig,
   getReadyWatchdogConfig,
@@ -11,12 +12,15 @@ import {
 import { errorMessage } from './error-utils.ts';
 import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
 import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-controller.ts';
+import { escapeShellArg } from './shell-utils.ts';
 import { mutateJsonState } from './state-mutex.ts';
 import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResult } from './stage-result.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_AUTO_UPDATE_ATTEMPTS = 3;
 const FAILING_CHECK_STABILITY_THRESHOLD = 2;
+const WAVEMILL_TOOLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools');
+const READY_WATCHDOG_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'ready-watchdog.ts');
 
 export type ReadyWatchdogClassificationKind =
   | 'fresh'
@@ -140,6 +144,7 @@ export interface ReadyWatchdogDeps {
     attemptNumber: number,
     maxAttempts: number,
     repoDir: string,
+    readyWatchdogToolPath: string,
   ) => Promise<ReadyRemediationLaunchResult>;
   now: () => Date;
 }
@@ -157,6 +162,7 @@ export interface TickReadyWatchdogOptions {
   config?: ReadyWatchdogConfig;
   issueFilter?: string;
   forceRecover?: boolean;
+  readyWatchdogToolPath?: string;
   deps?: Partial<ReadyWatchdogDeps>;
 }
 
@@ -227,14 +233,13 @@ const defaultDeps: ReadyWatchdogDeps = {
 
     return updateBranchWithBase(branch, baseBranch, snapshot.worktree);
   },
-  async launchReadyRemediation(snapshot, failedCheckSummary, failedCheckNames, attemptNumber, maxAttempts, repoDir) {
-    const toolPath = path.join(repoDir, 'tools', 'ready-watchdog.ts');
+  async launchReadyRemediation(snapshot, failedCheckSummary, failedCheckNames, attemptNumber, maxAttempts, repoDir, readyWatchdogToolPath) {
     try {
       const { stdout } = await execFileAsync(
         'npx',
         [
           'tsx',
-          toolPath,
+          readyWatchdogToolPath,
           '--repo-dir',
           repoDir,
           '--launch-remediation',
@@ -452,8 +457,19 @@ function normalizeDetailFingerprint(detail: string): string {
   return detail.trim().replace(/\s+/g, ' ');
 }
 
-function makeRecoveryCommand(repoDir: string, stateFile: string, issueId: string): string {
-  return `npx tsx ${path.join(repoDir, 'tools/ready-watchdog.ts')} --repo-dir ${repoDir} --state-file ${stateFile} --recover ${issueId} --json`;
+function makeRecoveryCommand(repoDir: string, stateFile: string, issueId: string, readyWatchdogToolPath: string): string {
+  return [
+    'npx',
+    'tsx',
+    escapeShellArg(readyWatchdogToolPath),
+    '--repo-dir',
+    escapeShellArg(repoDir),
+    '--state-file',
+    escapeShellArg(stateFile),
+    '--recover',
+    escapeShellArg(issueId),
+    '--json',
+  ].join(' ');
 }
 
 export function classifyReadyTask(
@@ -872,6 +888,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   const priorTasks = priorState?.tasks ?? {};
   const nextTasks = { ...priorTasks };
   const remediationConfig = getReadyRemediationConfig(options.repoDir);
+  const readyWatchdogToolPath = options.readyWatchdogToolPath ?? READY_WATCHDOG_TOOL_PATH;
   const workflowState = await deps.readWorkflowState(options.stateFile);
   const tasks = workflowState.tasks ?? {};
   const jobs = normalizeJobs(workflowState);
@@ -1037,6 +1054,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
             attempts + 1,
             remediationConfig.maxAttempts,
             options.repoDir,
+            readyWatchdogToolPath,
           );
 
           if (launchResult.status === 'launched') {
@@ -1055,7 +1073,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           };
         }
       } else if (classification.kind === 'stuck') {
-        recoveryCommand = makeRecoveryCommand(options.repoDir, options.stateFile, issueId);
+        recoveryCommand = makeRecoveryCommand(options.repoDir, options.stateFile, issueId, readyWatchdogToolPath);
         const canRecover = (options.forceRecover || config.autoRecover)
           && classification.autoRecoverable
           && githubTruth !== null;
