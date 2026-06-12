@@ -576,7 +576,7 @@ startup_run_task_phases() {
   local task_json="$1" ordinal="${2:-}" total="${3:-}"
   local issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file
   local planner_model coder_model reviewer_model plan_depth code_depth review_mode route_max_cost_usd
-  local challenge challenge_pair challenge_role challenge_model task_agent win
+  local challenge challenge_pair challenge_role challenge_model challenge_stage task_agent win
   local depends_on base_from_task
   local packet_content issue_json issue_description issue_context details_context labels_json
   local feature_dir status_file planning_prompt instr_file created_window created_window_id state_written created_new=false planner_launch_model
@@ -608,6 +608,7 @@ startup_run_task_phases() {
   challenge_pair="$(echo "$task_json" | jq -r '.challengePairId // empty')"
   challenge_role="$(echo "$task_json" | jq -r '.challengeRole // empty')"
   challenge_model="$(echo "$task_json" | jq -r '.challengeModel // empty')"
+  challenge_stage="$(echo "$task_json" | jq -r '.challengeStage // empty')"
   task_agent="$(echo "$task_json" | jq -r '.agent // empty')"
   # Parsed but intentionally unused; behavior change ships in follow-up.
   depends_on="$(echo "$task_json" | jq -c '.dependsOn // []')"
@@ -854,6 +855,11 @@ $details_context"
     startup_phase_failed "$startup_id" agent "$issue" "saving workflow state"
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     return 1
+  fi
+
+  if [[ -n "$challenge_stage" ]]; then
+    wavemill_lock_run "state" state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' \
+      --arg issue "$issue" --arg stage "$challenge_stage" >/dev/null 2>&1 || true
   fi
 
   if ! wavemill_lock_run "state" set_task_phase_local "$issue" "$persisted_phase"; then
