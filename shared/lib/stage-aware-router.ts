@@ -20,16 +20,20 @@ import { filterDeepSeekModels } from './deepseek-provider.ts';
 import {
   evaluateCapabilityConstraints,
   getConfiguredModelsForDescriptor,
+  getConfiguredModelsForDescriptorStage,
   getEffectiveRegistry,
   hasCapabilityConstraints,
   type CapabilityConstraints,
+  type RegistryTaskType,
 } from './model-registry.ts';
 import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 import {
+  blendWithPrior,
   formatExplorationReasoning,
   resolveExplorationConfig,
   sampleCandidateIndex,
+  ucbBonus,
   type ExplorationAttribution,
   type ResolvedExplorationConfig,
 } from './router-exploration.ts';
@@ -85,6 +89,12 @@ interface ModelStageStats {
   score: number;
   cost: number;
   support: number;
+  /**
+   * Ranking/sampling key: the (possibly prior-blended) score plus the UCB
+   * uncertainty bonus. Equals `score` when priors and UCB are disabled.
+   * Never reported as expected success — only used to order and pick.
+   */
+  selectionScore: number;
 }
 
 interface RoleRanking {
@@ -542,6 +552,35 @@ function resolveCapabilityConstraintsForRole(
   return hasCapabilityConstraints(merged) ? merged : undefined;
 }
 
+const STAGE_KEY_TO_TASK_TYPE: Record<'plan' | 'implementation' | 'review', RegistryTaskType> = {
+  plan: 'planning',
+  implementation: 'coding',
+  review: 'review',
+};
+
+const STAGE_KEY_TO_COST_STAGE: Record<'plan' | 'implementation' | 'review', 'plan' | 'code' | 'review'> = {
+  plan: 'plan',
+  implementation: 'code',
+  review: 'review',
+};
+
+function resolveSeedModelsForRole(
+  allowedModels: Set<string> | null,
+  role: 'planner' | 'coder' | 'reviewer',
+  repoDir?: string,
+): string[] {
+  if (allowedModels) {
+    // Upstream stage pools are already disabled/DeepSeek filtered.
+    return [...allowedModels];
+  }
+
+  return filterDeepSeekModels(
+    filterDisabledModels(getConfiguredModelsForDescriptorStage(repoDir, role)),
+    repoDir,
+    role,
+  ).models;
+}
+
 function aggregateRoleRanking(
   neighbors: ScoredNeighbor[],
   role: 'planner' | 'coder' | 'reviewer',
@@ -550,6 +589,7 @@ function aggregateRoleRanking(
   stageBlendWeight: number,
   rubricWeight: number,
   repoDir?: string,
+  explorationConfig?: ResolvedExplorationConfig,
 ): RoleRanking {
   const allowedModels = resolveModelsForRole(constraints, role);
   const byModel = new Map<string, { scoreWeight: number; weightedScore: number; costWeight: number; weightedCost: number; support: number }>();
@@ -587,15 +627,49 @@ function aggregateRoleRanking(
     byModel.set(modelId, bucket);
   }
 
+  const priorsEnabled = explorationConfig?.priorsEnabled === true;
+  const ucbConstant = explorationConfig?.ucbConstant ?? 0;
+
+  // Seed every eligible model into the candidate set so zero-record models
+  // can rank via their registry prior instead of being invisible to the KNN.
+  if (priorsEnabled) {
+    for (const modelId of resolveSeedModelsForRole(allowedModels, role, repoDir)) {
+      if (!byModel.has(modelId)) {
+        byModel.set(modelId, { scoreWeight: 0, weightedScore: 0, costWeight: 0, weightedCost: 0, support: 0 });
+      }
+    }
+  }
+
+  const priorRegistry = priorsEnabled ? getEffectiveRegistry(repoDir) : null;
+  const taskType = STAGE_KEY_TO_TASK_TYPE[stageKey];
+  const totalObservations = neighbors.length;
+
   const candidates = [...byModel.entries()]
-    .map(([modelId, aggregate]) => ({
-      modelId,
-      score: aggregate.scoreWeight > 0 ? aggregate.weightedScore / aggregate.scoreWeight : 0,
-      cost: aggregate.costWeight > 0 ? aggregate.weightedCost / aggregate.costWeight : 0,
-      support: aggregate.support,
-    }))
+    .map(([modelId, aggregate]) => {
+      const empirical = aggregate.scoreWeight > 0 ? aggregate.weightedScore / aggregate.scoreWeight : 0;
+      const score = priorRegistry
+        ? blendWithPrior(
+            empirical,
+            clamp((priorRegistry.models[modelId]?.qualityScores[taskType] ?? 0) / 100, 0, 1),
+            aggregate.support,
+            explorationConfig?.priorBlendSamples ?? 1,
+          )
+        : empirical;
+      const observedCost = aggregate.costWeight > 0 ? aggregate.weightedCost / aggregate.costWeight : 0;
+      const cost = aggregate.support === 0 && observedCost === 0
+        ? estimateFallbackStageCost(modelId, STAGE_KEY_TO_COST_STAGE[stageKey], repoDir)
+        : observedCost;
+
+      return {
+        modelId,
+        score,
+        cost,
+        support: aggregate.support,
+        selectionScore: score + ucbBonus(ucbConstant, totalObservations, aggregate.support),
+      };
+    })
     .sort((left, right) => {
-      if (right.score !== left.score) return right.score - left.score;
+      if (right.selectionScore !== left.selectionScore) return right.selectionScore - left.selectionScore;
       if (left.cost !== right.cost) return left.cost - right.cost;
       return right.support - left.support;
     });
@@ -628,7 +702,11 @@ function pickBestCombination(rankings: RoleRanking[], maxCostUsd?: number): Comb
     return null;
   }
 
+  // Combinations are ranked by selectionScore (prior-blended score plus UCB
+  // bonus) so undersampled models can win, while expectedSuccess reports the
+  // bonus-free score. The two are identical when priors and UCB are disabled.
   let best: CombinationDecision | null = null;
+  let bestSelection = -Infinity;
   for (const planner of rankings[0].candidates) {
     for (const coder of rankings[1].candidates) {
       for (const reviewer of rankings[2].candidates) {
@@ -637,13 +715,15 @@ function pickBestCombination(rankings: RoleRanking[], maxCostUsd?: number): Comb
           continue;
         }
 
+        const selectionValue = (planner.selectionScore + coder.selectionScore + reviewer.selectionScore) / 3;
         const expectedSuccess = clamp((planner.score + coder.score + reviewer.score) / 3, 0, 1);
         if (
           !best ||
-          expectedSuccess > best.expectedSuccess ||
-          (expectedSuccess === best.expectedSuccess && expectedCost < best.expectedCost)
+          selectionValue > bestSelection ||
+          (selectionValue === bestSelection && expectedCost < best.expectedCost)
         ) {
           best = { planner, coder, reviewer, expectedCost, expectedSuccess };
+          bestSelection = selectionValue;
         }
       }
     }
@@ -675,7 +755,7 @@ function exploreSelection(
 
   for (const ranking of rankings) {
     const pick = sampleCandidateIndex(
-      ranking.candidates.map((candidate) => candidate.score),
+      ranking.candidates.map((candidate) => candidate.selectionScore),
       config,
       randomFn,
     );
@@ -734,15 +814,16 @@ export function rankModelsPerStage(
   stageBlendWeight = DEFAULT_STAGE_BLEND_WEIGHT,
   rubricWeight = 0,
   repoDir?: string,
+  explorationConfig?: ResolvedExplorationConfig,
 ): {
   rankings: RoleRanking[];
   selection: CombinationDecision | null;
 } {
   const boundedRubricWeight = clamp(rubricWeight, 0, 1);
   const rankings = [
-    aggregateRoleRanking(neighbors, 'planner', 'plan', constraints, stageBlendWeight, boundedRubricWeight, repoDir),
-    aggregateRoleRanking(neighbors, 'coder', 'implementation', constraints, stageBlendWeight, boundedRubricWeight, repoDir),
-    aggregateRoleRanking(neighbors, 'reviewer', 'review', constraints, stageBlendWeight, boundedRubricWeight, repoDir),
+    aggregateRoleRanking(neighbors, 'planner', 'plan', constraints, stageBlendWeight, boundedRubricWeight, repoDir, explorationConfig),
+    aggregateRoleRanking(neighbors, 'coder', 'implementation', constraints, stageBlendWeight, boundedRubricWeight, repoDir, explorationConfig),
+    aggregateRoleRanking(neighbors, 'reviewer', 'review', constraints, stageBlendWeight, boundedRubricWeight, repoDir, explorationConfig),
   ];
 
   return {
@@ -943,6 +1024,7 @@ export function routeStageAwareWithContext(
   const rubricActiveReason = `rubric-aware (mode=${rubricAwareMode}, coverage=${rubricCoverageLabel}, weight=${rubricWeightLabel})`;
   const rubricHasSufficientCoverage = rubricCoverage >= rubricAwareMinCoverage;
   const rubricScoringWeight = rubricAwareMode === 'on' && rubricHasSufficientCoverage ? rubricAwareWeight : 0;
+  const explorationConfig = resolveExplorationConfig(routerConfig.exploration);
 
   const constrainedRanking = rankModelsPerStage(neighbors, {
     modelsAvailable: filteredModelsAvailable,
@@ -954,7 +1036,7 @@ export function routeStageAwareWithContext(
     coderCapabilityConstraints: options.coderCapabilityConstraints,
     reviewerCapabilityConstraints: options.reviewerCapabilityConstraints,
     maxCostUsd: options.maxCostUsd,
-  }, stageBlendWeight, rubricScoringWeight, repoDir);
+  }, stageBlendWeight, rubricScoringWeight, repoDir, explorationConfig);
   const { rankings, selection } = constrainedRanking;
 
   if (!selection) {
@@ -971,7 +1053,8 @@ export function routeStageAwareWithContext(
     }
 
     // Preserve stage/depth calibration from similar tasks even when the active
-    // model allowlist filters every neighbor out of stage selection.
+    // model allowlist filters every neighbor out of stage selection. Priors
+    // are deliberately omitted here: this ranking only calibrates depth/cost.
     const { selection: unconstrainedSelection } = rankModelsPerStage(neighbors, {
       maxCostUsd: options.maxCostUsd,
     }, stageBlendWeight, rubricScoringWeight, repoDir);
@@ -1015,7 +1098,6 @@ export function routeStageAwareWithContext(
   // Exploration only applies to full stage-aware decisions: partial decisions
   // get their models overlaid by heuristic selection downstream, so sampling
   // here would be discarded.
-  const explorationConfig = resolveExplorationConfig(routerConfig.exploration);
   let finalSelection = selection;
   let explorationAttribution: ExplorationAttribution | undefined;
   if (explorationConfig.enabled && hasModelDiversity) {
@@ -1070,7 +1152,7 @@ export function routeStageAwareWithContext(
           coderCapabilityConstraints: options.coderCapabilityConstraints,
           reviewerCapabilityConstraints: options.reviewerCapabilityConstraints,
           maxCostUsd: options.maxCostUsd,
-        }, stageBlendWeight, rubricAwareWeight, repoDir);
+        }, stageBlendWeight, rubricAwareWeight, repoDir, explorationConfig);
         decision.shadowDecision = shadowSelection
           ? buildStageAwareDecision(shadowSelection, neighbors, kNeighbors, repoDir)
           : null;

@@ -4,9 +4,11 @@
 
 import assert from 'node:assert/strict';
 import {
+  blendWithPrior,
   formatExplorationReasoning,
   resolveExplorationConfig,
   sampleCandidateIndex,
+  ucbBonus,
 } from './router-exploration.ts';
 
 let passed = 0;
@@ -42,6 +44,9 @@ test('resolveExplorationConfig applies defaults and clamps values', () => {
   assert.equal(defaults.rate, 0.15);
   assert.equal(defaults.temperature, 0.7);
   assert.equal(defaults.topK, 3);
+  assert.equal(defaults.ucbConstant, 0);
+  assert.equal(defaults.priorsEnabled, false);
+  assert.equal(defaults.priorBlendSamples, 10);
 
   const clamped = resolveExplorationConfig({
     enabled: true,
@@ -49,12 +54,37 @@ test('resolveExplorationConfig applies defaults and clamps values', () => {
     rate: 7,
     temperature: 100,
     topK: 1,
+    ucbConstant: 5,
+    priors: { enabled: true, blendSamples: 0 },
   });
   assert.equal(clamped.enabled, true);
   assert.equal(clamped.mode, 'softmax');
   assert.equal(clamped.rate, 1);
   assert.equal(clamped.temperature, 10);
   assert.equal(clamped.topK, 3);
+  assert.equal(clamped.ucbConstant, 1);
+  assert.equal(clamped.priorsEnabled, true);
+  assert.equal(clamped.priorBlendSamples, 10);
+});
+
+test('ucbBonus decays with support and disables at zero constant', () => {
+  assert.equal(ucbBonus(0, 100, 1), 0);
+  const fresh = ucbBonus(0.3, 11, 1);
+  const seasoned = ucbBonus(0.3, 11, 10);
+  assert.ok(fresh > seasoned, 'low support should earn a larger bonus');
+  assert.ok(seasoned > 0);
+  // Zero support is treated as one trial, not infinity
+  assert.equal(ucbBonus(0.3, 11, 0), fresh);
+});
+
+test('blendWithPrior interpolates from pure prior to pure empirical', () => {
+  assert.equal(blendWithPrior(0.5, 0.99, 0, 10), 0.99);
+  assert.equal(blendWithPrior(0.5, 0.99, 10, 10), 0.5);
+  assert.equal(blendWithPrior(0.5, 0.99, 20, 10), 0.5);
+  const half = blendWithPrior(0.5, 0.99, 5, 10);
+  assert.ok(Math.abs(half - 0.745) < 1e-9, `expected 0.745, got ${half}`);
+  // Result stays clamped to [0, 1]
+  assert.equal(blendWithPrior(2, 2, 5, 10), 1);
 });
 
 test('sampleCandidateIndex returns argmax when disabled or trivial', () => {

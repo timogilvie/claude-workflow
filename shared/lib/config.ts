@@ -243,6 +243,11 @@ export interface RouterConfig {
     rate?: number;
     temperature?: number;
     topK?: number;
+    ucbConstant?: number;
+    priors?: {
+      enabled?: boolean;
+      blendSamples?: number;
+    };
   };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
