@@ -478,6 +478,7 @@ function readExpectedMetrics(artifact: Record<string, unknown>): Record<string, 
     'neighborSimilarityRange',
     'maxCostUsd',
     'challengeRecommendation',
+    'exploration',
     'signals',
     'reasoning',
   ] as const;

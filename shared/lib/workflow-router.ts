@@ -15,6 +15,12 @@ import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
+import {
+  formatExplorationReasoning,
+  resolveExplorationConfig,
+  sampleCandidateIndex,
+  type ExplorationAttribution,
+} from './router-exploration.ts';
 import { resolveModel, viableCandidatesInPool } from './routing-policy.ts';
 import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
@@ -103,6 +109,7 @@ export interface RouteWorkflowOptions {
   packetContent?: string;
   skipDifficultyClassification?: boolean;
   additionalEvalsPaths?: string[];
+  randomFn?: () => number;
 }
 
 function withSignals(
@@ -1275,6 +1282,7 @@ function routeWorkflowStageAwareInternal(
       reviewerCapabilityConstraints: policyResolution?.stageCapabilityConstraints.reviewer,
       maxCostUsd: options?.maxCostUsd,
       additionalEvalsPaths: options?.additionalEvalsPaths,
+      randomFn: options?.randomFn,
       queryInput: {
         capabilityConstraints: combineStageCapabilityConstraints(policyResolution?.stageCapabilityConstraints || {}),
       },
@@ -1569,9 +1577,34 @@ export function tryPolicyResolution(
     taskType: 'review',
     capabilityConstraints: stageCapabilityConstraints.reviewer,
   }, pool);
-  const plannerModel = plannerCandidates.modelIds[0] ?? null;
-  const coderModel = coderCandidates.modelIds[0] ?? null;
-  const reviewerModel = reviewerCandidates.modelIds[0] ?? null;
+  // Exploration sampling: pick from the ranked viable candidates instead of
+  // always taking the argmax. Scores come from registry quality for the task
+  // type, matching the ordering produced by the policy resolver.
+  const explorationConfig = resolveExplorationConfig(getRouterConfig(repoDir).exploration);
+  const randomFn = options?.randomFn || Math.random;
+  const registry = getEffectiveRegistry(repoDir);
+  const explorationEntries: ExplorationAttribution['explored'] = [];
+  const samplePolicyModel = (
+    candidates: string[],
+    role: 'planner' | 'coder' | 'reviewer',
+    taskType: 'planning' | 'coding' | 'review',
+  ): string | null => {
+    const argmax = candidates[0] ?? null;
+    if (!explorationConfig.enabled || !argmax || candidates.length <= 1) {
+      return argmax;
+    }
+    const scores = candidates.map((modelId) => (registry.models[modelId]?.qualityScores[taskType] ?? 0) / 100);
+    const pick = sampleCandidateIndex(scores, explorationConfig, randomFn);
+    const sampled = candidates[pick.index] ?? argmax;
+    if (pick.explored && sampled !== argmax) {
+      explorationEntries.push({ role, sampled, argmax });
+    }
+    return sampled;
+  };
+
+  const plannerModel = samplePolicyModel(plannerCandidates.modelIds, 'planner', 'planning');
+  const coderModel = samplePolicyModel(coderCandidates.modelIds, 'coder', 'coding');
+  const reviewerModel = samplePolicyModel(reviewerCandidates.modelIds, 'reviewer', 'review');
 
   if (!plannerModel || !coderModel || !reviewerModel) {
     console.warn(
@@ -1579,6 +1612,10 @@ export function tryPolicyResolution(
     );
     return null;
   }
+
+  const explorationAttribution: ExplorationAttribution | undefined = explorationConfig.enabled
+    ? { mode: explorationConfig.mode, explored: explorationEntries }
+    : undefined;
 
   logPolicyAdjustment('planning', plannerModel, pool, quotaState, repoDir);
   logPolicyAdjustment('coding', coderModel, pool, quotaState, repoDir);
@@ -1619,6 +1656,9 @@ export function tryPolicyResolution(
     expectedCostCode,
     expectedCostReview,
     reasoning: [
+      ...(explorationAttribution && explorationAttribution.explored.length > 0
+        ? [formatExplorationReasoning(explorationAttribution, explorationConfig)]
+        : []),
       'Policy resolver selected models using registry capability scores and quota state.',
       `Task difficulty ${taskDifficulty} applied the routing floor before ranking candidates.`,
       `Planner=${plannerModel}, coder=${coderModel}, reviewer=${reviewerModel} are the top viable in-pool candidates.`,
@@ -1642,6 +1682,7 @@ export function tryPolicyResolution(
     constraints: options?.maxCostUsd === undefined
       ? undefined
       : { maxCostUsd: options.maxCostUsd },
+    ...(explorationAttribution ? { exploration: explorationAttribution } : {}),
   };
 }
 

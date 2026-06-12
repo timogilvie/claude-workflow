@@ -67,6 +67,38 @@ When new model/router config fields are added in future versions:
 - Keep personal model trials and developer-specific provider preferences in `.wavemill-config.local.json`.
 - Keep provider credentials in environment variables, not config files.
 
+### Router Exploration Sampling
+
+`router.exploration` converts deterministic argmax model selection (stage-aware
+KNN routing and the Layer 3 policy resolver) into stochastic sampling so newer
+or undersampled models keep receiving routing traffic:
+
+```json
+{
+  "router": {
+    "exploration": {
+      "enabled": true,
+      "mode": "epsilon",
+      "rate": 0.15,
+      "temperature": 0.7,
+      "topK": 3
+    }
+  }
+}
+```
+
+- `enabled` (default `false`): when off, routing is byte-identical to argmax.
+- `mode`: `epsilon` picks a non-argmax candidate from the top-K window with
+  probability `rate`; `softmax` samples the top-K window weighted by
+  `exp(score / temperature)`.
+- `topK`: candidates eligible for sampling per stage (minimum 2, default 3).
+
+Sampling always happens inside the already-filtered candidate set (allowlists,
+capability constraints, disabled models), and a sampled stage-aware combination
+that would exceed `maxCostUsd` reverts to the exploit selection. Decisions
+record explore-vs-exploit attribution in `reasoning` and an `exploration` field
+that is persisted to route artifacts.
+
 ## Local Paths Guidance
 
 - Relative paths shared by the team can live in `.wavemill-config.json`.
