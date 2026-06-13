@@ -27,7 +27,7 @@ import {
   type RegistryTaskType,
 } from './model-registry.ts';
 import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
-import { filterDisabledModels } from './disabled-models.ts';
+import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import {
   blendWithPrior,
   formatExplorationReasoning,
@@ -487,6 +487,22 @@ function stageModelFromRecord(
   return null;
 }
 
+/**
+ * Whether a record can contribute to all three per-stage rankings.
+ *
+ * Legacy records without stage attribution are valid KNN matches but get
+ * skipped by aggregateRoleRanking, so letting them occupy the neighbor
+ * window starves stage selection. Their pre-task-style descriptors (empty
+ * languages, zero file counts) also make them spuriously similar to fresh
+ * query descriptors, which are built before the task runs — so without
+ * filtering they systematically crowd out every usable neighbor.
+ */
+export function hasFullStageAttribution(record: EvalRecord): boolean {
+  return stageModelFromRecord(record, 'planner') !== null
+    && stageModelFromRecord(record, 'coder') !== null
+    && stageModelFromRecord(record, 'reviewer') !== null;
+}
+
 function stageCostFromRecord(
   record: EvalRecord,
   role: 'planner' | 'coder' | 'reviewer',
@@ -600,6 +616,11 @@ function aggregateRoleRanking(
       // Record has no real per-stage attribution. Skipping here prevents
       // legacy records from mis-attributing plan/code/review scores to their
       // solution/coder model.
+      continue;
+    }
+    // Historical records can reference since-disabled models; configured
+    // pools are filtered upstream, but record-derived candidates are not.
+    if (isDisabledModel(modelId)) {
       continue;
     }
     if (allowedModels && !allowedModels.has(modelId)) {
@@ -1010,7 +1031,13 @@ export function routeStageAwareWithContext(
     return null;
   }
 
-  const neighbors = findKNearest(queryDescriptor, records, kNeighbors);
+  // Restrict the KNN pool to records that can actually feed per-stage
+  // rankings. Fall back to the full corpus only when too few attributed
+  // records exist (young repos keep their previous behavior).
+  const rankableRecords = records.filter(hasFullStageAttribution);
+  const knnRecords = rankableRecords.length >= minRecords ? rankableRecords : records;
+
+  const neighbors = findKNearest(queryDescriptor, knnRecords, kNeighbors);
   if (neighbors.length === 0) {
     return null;
   }
