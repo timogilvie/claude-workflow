@@ -50,6 +50,12 @@ export interface ModelCapabilities {
   costPerMillionInputTokensUsd: number;
   costPerMillionOutputTokensUsd: number;
   agent?: string;
+  /**
+   * ISO date the model became generally available. Drives the recency-aware
+   * exploration boost (router.exploration.newModelBoost) and challenge
+   * scheduler prioritization. Unset means no recency treatment.
+   */
+  releasedAt?: string;
 }
 
 export interface ModelRegistry {
@@ -115,6 +121,7 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     costPerMillionInputTokensUsd: capabilities.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: capabilities.costPerMillionOutputTokensUsd,
     agent: capabilities.agent,
+    releasedAt: capabilities.releasedAt,
   };
 }
 
@@ -246,6 +253,7 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
     costPerMillionInputTokensUsd: override?.costPerMillionInputTokensUsd ?? 0,
     costPerMillionOutputTokensUsd: override?.costPerMillionOutputTokensUsd ?? 0,
     agent: override?.agent,
+    releasedAt: override?.releasedAt,
   };
 }
 
@@ -275,6 +283,7 @@ function mergeCapabilities(
     costPerMillionInputTokensUsd: override.costPerMillionInputTokensUsd ?? seed.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: override.costPerMillionOutputTokensUsd ?? seed.costPerMillionOutputTokensUsd,
     agent: override.agent ?? seed.agent,
+    releasedAt: override.releasedAt ?? seed.releasedAt,
   };
 }
 
@@ -676,6 +685,9 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       class: 'frontier',
       strengths: ['frontier reasoning', 'long-horizon agentic work', 'code review', 'architecture'],
       weaknesses: ['highest cost', 'slower', 'minutes-long turns on hard tasks'],
+      // Seed dates are approximate; override via modelRegistry config if exact
+      // launch dates matter for the recency boost window.
+      releasedAt: '2026-06-10',
       qualityScores: scores(62, 99, 95, 98, 62),
       pricing: {
         inputCostPerMTok: 10,
@@ -696,6 +708,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       class: 'frontier',
       strengths: ['long-horizon reasoning', 'code review', 'architecture', 'agentic coding'],
       weaknesses: ['higher cost', 'slower'],
+      releasedAt: '2026-05-20',
       qualityScores: scores(62, 97, 88, 96, 62),
       pricing: {
         inputCostPerMTok: 5,
@@ -817,6 +830,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       class: 'frontier',
       strengths: ['frontier reasoning', 'code generation', 'architecture'],
       weaknesses: ['higher cost'],
+      releasedAt: '2026-05-01',
       qualityScores: scores(62, 96, 92, 94, 62),
       pricing: {
         inputCostPerMTok: 5,

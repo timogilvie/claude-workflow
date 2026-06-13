@@ -1290,6 +1290,11 @@
                             "agent": {
                                 "type": "string",
                                 "minLength": 1
+                            },
+                            "releasedAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}",
+                                "description": "ISO date the model became generally available. Drives the recency-aware exploration boost (router.exploration.newModelBoost) and challenge scheduler prioritization."
                             }
                         },
                         "additionalProperties": false
@@ -1558,6 +1563,26 @@
                                     "minimum": 1,
                                     "default": 10,
                                     "description": "Records needed before a model's score is fully empirical. Blend weight is min(support / blendSamples, 1); zero records means pure registry prior."
+                                }
+                            },
+                            "additionalProperties": false
+                        },
+                        "newModelBoost": {
+                            "type": "object",
+                            "description": "Recency-aware exploration boost. Models whose registry releasedAt falls inside the window get a selection-probability multiplier during exploration sampling, decaying linearly to 1.0 at the window edge. Long-term ranking always comes from accumulated evals.",
+                            "properties": {
+                                "windowDays": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "default": 45,
+                                    "description": "Days after releasedAt during which a model counts as recent. Also used by the challenge scheduler to prioritize recent under-covered models."
+                                },
+                                "multiplier": {
+                                    "type": "number",
+                                    "minimum": 1,
+                                    "maximum": 10,
+                                    "default": 1,
+                                    "description": "Sampling-weight multiplier at release time. 1 disables the sampling boost (scheduler recency prioritization still applies)."
                                 }
                             },
                             "additionalProperties": false

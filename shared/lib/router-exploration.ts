@@ -18,6 +18,11 @@ export interface ExplorationPriorsConfig {
   blendSamples?: number;
 }
 
+export interface NewModelBoostConfig {
+  windowDays?: number;
+  multiplier?: number;
+}
+
 export interface ExplorationConfig {
   enabled?: boolean;
   mode?: ExplorationMode;
@@ -26,6 +31,7 @@ export interface ExplorationConfig {
   topK?: number;
   ucbConstant?: number;
   priors?: ExplorationPriorsConfig;
+  newModelBoost?: NewModelBoostConfig;
 }
 
 export interface ResolvedExplorationConfig {
@@ -37,6 +43,8 @@ export interface ResolvedExplorationConfig {
   ucbConstant: number;
   priorsEnabled: boolean;
   priorBlendSamples: number;
+  boostWindowDays: number;
+  boostMultiplier: number;
 }
 
 export interface ExplorationPick {
@@ -46,7 +54,7 @@ export interface ExplorationPick {
 
 export interface ExplorationAttribution {
   mode: ExplorationMode;
-  explored: Array<{ role: ExplorationRole; sampled: string; argmax: string }>;
+  explored: Array<{ role: ExplorationRole; sampled: string; argmax: string; recencyBoosted?: boolean }>;
   costGuardReverted?: boolean;
 }
 
@@ -55,6 +63,9 @@ const DEFAULT_TEMPERATURE = 0.7;
 const DEFAULT_TOP_K = 3;
 const DEFAULT_UCB_CONSTANT = 0;
 const DEFAULT_PRIOR_BLEND_SAMPLES = 10;
+const DEFAULT_BOOST_WINDOW_DAYS = 45;
+const DEFAULT_BOOST_MULTIPLIER = 1;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -80,7 +91,64 @@ export function resolveExplorationConfig(raw?: ExplorationConfig): ResolvedExplo
     priorBlendSamples: Number.isInteger(raw?.priors?.blendSamples) && (raw?.priors?.blendSamples as number) >= 1
       ? raw?.priors?.blendSamples as number
       : DEFAULT_PRIOR_BLEND_SAMPLES,
+    boostWindowDays: Number.isInteger(raw?.newModelBoost?.windowDays) && (raw?.newModelBoost?.windowDays as number) >= 1
+      ? raw?.newModelBoost?.windowDays as number
+      : DEFAULT_BOOST_WINDOW_DAYS,
+    boostMultiplier: typeof raw?.newModelBoost?.multiplier === 'number'
+      && Number.isFinite(raw.newModelBoost.multiplier)
+      && raw.newModelBoost.multiplier >= 1
+      ? clamp(raw.newModelBoost.multiplier, 1, 10)
+      : DEFAULT_BOOST_MULTIPLIER,
   };
+}
+
+/**
+ * Whether a model's release date falls inside the recency window. Unset or
+ * unparsable dates (and future dates) are never recent.
+ */
+export function isWithinRecencyWindow(
+  releasedAt: string | undefined,
+  windowDays: number,
+  nowMs: number = Date.now(),
+): boolean {
+  if (!releasedAt || windowDays <= 0) {
+    return false;
+  }
+  const releasedMs = Date.parse(releasedAt);
+  if (!Number.isFinite(releasedMs) || releasedMs > nowMs) {
+    return false;
+  }
+  return (nowMs - releasedMs) / MS_PER_DAY < windowDays;
+}
+
+/**
+ * Recency multiplier for a model's exploration sampling weight.
+ *
+ * Returns `boostMultiplier` at release time, decaying linearly to 1.0 at the
+ * end of the window — and exactly 1.0 outside the window, with an unset or
+ * unparsable releasedAt, or when the boost is configured off (multiplier 1).
+ * No permanent thumb on the scale: long-term ranking comes from evals.
+ */
+export function recencyMultiplier(
+  releasedAt: string | undefined,
+  config: ResolvedExplorationConfig,
+  nowMs: number = Date.now(),
+): number {
+  if (config.boostMultiplier <= 1 || !releasedAt) {
+    return 1;
+  }
+
+  const releasedMs = Date.parse(releasedAt);
+  if (!Number.isFinite(releasedMs) || releasedMs > nowMs) {
+    return 1;
+  }
+
+  const ageDays = (nowMs - releasedMs) / MS_PER_DAY;
+  if (ageDays >= config.boostWindowDays) {
+    return 1;
+  }
+
+  return 1 + (config.boostMultiplier - 1) * (1 - ageDays / config.boostWindowDays);
 }
 
 /**
@@ -128,25 +196,40 @@ export function sampleCandidateIndex(
   scores: number[],
   config: ResolvedExplorationConfig,
   randomFn: () => number = Math.random,
+  multipliers?: number[],
 ): ExplorationPick {
   if (!config.enabled || scores.length <= 1) {
     return { index: 0, explored: false };
   }
 
   const windowSize = Math.min(config.topK, scores.length);
+  const multiplierAt = (index: number): number => {
+    const value = multipliers?.[index];
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1;
+  };
 
   if (config.mode === 'epsilon') {
     const alternatives = windowSize - 1;
     if (alternatives <= 0 || randomFn() >= config.rate) {
       return { index: 0, explored: false };
     }
-    const offset = Math.min(Math.floor(randomFn() * alternatives), alternatives - 1);
-    return { index: 1 + offset, explored: true };
+    // Sample non-argmax candidates proportionally to their recency multiplier
+    // (uniform when no multipliers are supplied).
+    const weights = Array.from({ length: alternatives }, (_, offset) => multiplierAt(1 + offset));
+    const total = weights.reduce((sum, weight) => sum + weight, 0);
+    let threshold = randomFn() * total;
+    for (let offset = 0; offset < alternatives; offset += 1) {
+      threshold -= weights[offset];
+      if (threshold <= 0) {
+        return { index: 1 + offset, explored: true };
+      }
+    }
+    return { index: windowSize - 1, explored: true };
   }
 
   const window = scores.slice(0, windowSize);
   const maxScore = Math.max(...window);
-  const weights = window.map((score) => Math.exp((score - maxScore) / config.temperature));
+  const weights = window.map((score, index) => Math.exp((score - maxScore) / config.temperature) * multiplierAt(index));
   const total = weights.reduce((sum, weight) => sum + weight, 0);
   let threshold = randomFn() * total;
   for (let index = 0; index < weights.length; index += 1) {
@@ -167,7 +250,7 @@ export function formatExplorationReasoning(
   }
 
   const details = attribution.explored
-    .map((entry) => `${entry.role}=${entry.sampled} (argmax ${entry.argmax})`)
+    .map((entry) => `${entry.role}=${entry.sampled} (argmax ${entry.argmax})${entry.recencyBoosted ? ' [recency-boosted]' : ''}`)
     .join(', ');
   const parameter = config.mode === 'epsilon'
     ? `rate=${config.rate}`
